@@ -1,0 +1,111 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.8",
+    "lastTouchedAt": "2026-03-12T00:00:00.000Z"
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": { "provider": "anthropic", "mode": "api_key" }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "anthropic/claude-sonnet-4-6" },
+      "models": {
+        "anthropic/claude-sonnet-4-6": { "alias": "sonnet", "params": { "cacheRetention": "short" } }
+      },
+      "workspace": "/home/node/.openclaw/workspace",
+      "contextPruning": { "mode": "cache-ttl", "ttl": "1h" },
+      "compaction": { "mode": "safeguard" },
+      "heartbeat": { "every": "30m" },
+      "maxConcurrent": 8,
+      "subagents": {
+        "maxConcurrent": 8,
+        "model": "anthropic/claude-sonnet-4-6",
+        "runTimeoutSeconds": 900
+      }
+    },
+    "list": [
+      {
+        "id": "mac",
+        "default": true,
+        "name": "Mac (Octogee Ops)",
+        "workspace": "/home/node/.openclaw/workspace/ops",
+        "agentDir": "/home/node/.openclaw/agents/mac/agent",
+        "model": "anthropic/claude-sonnet-4-6",
+        "heartbeat": { "every": "30m" },
+        "identity": { "name": "Mac", "emoji": "🔧" }
+      }
+    ]
+  },
+  "tools": {
+    "elevated": { "enabled": false },
+    "subagents": { "tools": { "deny": [] } }
+  },
+  "bindings": [
+    {
+      "agentId": "mac",
+      "match": {
+        "channel": "discord",
+        "accountId": "default",
+        "peer": { "kind": "channel", "id": "${OCTOGEE_OPS_CHANNEL_ID}" }
+      }
+    }
+  ],
+  "messages": { "ackReactionScope": "group-mentions" },
+  "commands": { "native": "auto", "nativeSkills": "auto", "restart": true, "ownerDisplay": "raw" },
+  "session": { "dmScope": "per-channel-peer" },
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "allowBots": true,
+      "groupPolicy": "allowlist",
+      "streaming": "block",
+      "accounts": {
+        "default": {
+          "enabled": true,
+          "token": "${DISCORD_MAC_TOKEN}",
+          "allowBots": true,
+          "groupPolicy": "allowlist",
+          "streaming": "block",
+          "dmPolicy": "disabled",
+          "guilds": { "${OCTOGEE_GUILD_ID}": { "channels": { "${OCTOGEE_OPS_CHANNEL_ID}": { "allow": true, "requireMention": true } } } }
+        },
+        "octogee-coach": {
+          "enabled": true,
+          "token": "${DISCORD_OCTO_TOKEN}",
+          "allowBots": true,
+          "groupPolicy": "allowlist",
+          "streaming": "block",
+          "dmPolicy": "disabled",
+          "guilds": { "${OCTOGEE_GUILD_ID}": {} }
+        }
+      }
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "lan",
+    "auth": {
+      "mode": "token",
+      "token": "${GATEWAY_TOKEN}",
+      "rateLimit": { "maxAttempts": 10, "windowMs": 60000, "lockoutMs": 300000 }
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": ["discord", "octogee-router"],
+    "entries": {
+      "discord": { "enabled": true },
+      "octogee-router": {
+        "enabled": true,
+        "config": {
+          "enforcement": "soft",
+          "advisorySlugs": [],
+          "enforcementOverrides": {}
+        }
+      }
+    }
+  }
+}

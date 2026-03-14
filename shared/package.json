@@ -1,0 +1,10 @@
+{
+  "name": "@octogee/shared",
+  "version": "1.0.0",
+  "private": true,
+  "main": "types/index.ts",
+  "types": "types/index.ts",
+  "peerDependencies": {
+    "firebase": "^11.0.0"
+  }
+}

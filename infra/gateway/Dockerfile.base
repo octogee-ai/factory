@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# octogee-gateway-base — OpenClaw runtime + all heavy/stable deps
+#
+# Rebuild this ONLY when upgrading OpenClaw or changing system packages:
+#   gcloud builds submit --config cloudbuild-base.yaml \
+#     --substitutions=_OPENCLAW_VERSION=<version> --project=octogee
+#
+# What lives here (changes rarely → cached across gateway builds):
+#   - OpenClaw npm install
+#   - All apt packages (curl, jq, python3, chromium, git, vim, sqlite3, etc.)
+#   - @huggingface/transformers (1.2GB — heaviest dep, almost never changes)
+#   - octogee-router npm install (node_modules for the classifier extension)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-slim
+
+# ── All system packages in one layer ────────────────────────────────────────
+# Combining apt runs avoids duplicate update overhead and saves ~30s per build.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Runtime essentials
+    curl jq python3 \
+    sqlite3 xxd rsync \
+    ca-certificates \
+    # Headless browser (Puppeteer screenshots)
+    chromium \
+    # Developer experience (available in running pod)
+    bash-completion git vim less \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tell Puppeteer to use system Chromium (skip its own download)
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# ── OpenClaw from npm ────────────────────────────────────────────────────────
+ARG OPENCLAW_VERSION=latest
+RUN npm install -g openclaw@${OPENCLAW_VERSION} && openclaw --version
+
+# ── Non-root user ────────────────────────────────────────────────────────────
+RUN groupadd -r node 2>/dev/null || true && \
+    useradd -r -g node -d /home/node -m node 2>/dev/null || true
+
+ENV HOME=/home/node
+
+# ── Heavy extension deps — pre-installed in base (1.2GB, changes rarely) ────
+# octogee-router needs @huggingface/transformers for the NN classifier.
+# Installing here means gateway builds skip this entirely.
+# Entrypoint symlinks /octogee/extensions/octogee-router/node_modules → here.
+COPY infra/gateway/extensions/octogee-router/package.json \
+     infra/gateway/extensions/octogee-router/package-lock.json* \
+     /opt/octogee-router-deps/
+RUN cd /opt/octogee-router-deps && npm install --production 2>&1 | tail -5 \
+    && chown -R node:node /opt/octogee-router-deps
+
+# ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────
+RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm
