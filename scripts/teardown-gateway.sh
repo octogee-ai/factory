@@ -125,8 +125,15 @@ info "Deleting gateway deployment..."
 kubectl delete deployment "$K8S_DEPLOYMENT" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deployment deleted" || warn "No deployment found"
 kubectl delete service octogee-gateway -n "$K8S_NAMESPACE" 2>/dev/null && ok "Service deleted" || warn "No service found"
 
-if confirm "Delete PVC 'octogee-data'? (all customer workspaces will be lost)"; then
-  kubectl delete pvc octogee-data -n "$K8S_NAMESPACE" 2>/dev/null && ok "PVC deleted" || warn "No PVC found"
+# PVC name matches deployment manifest
+if [[ "$ENV" == "test" ]]; then
+  PVC_NAME="octogee-test-data"
+else
+  PVC_NAME="octogee-data"
+fi
+
+if confirm "Delete PVC '$PVC_NAME'? (all customer workspaces will be lost)"; then
+  kubectl delete pvc "$PVC_NAME" -n "$K8S_NAMESPACE" 2>/dev/null && ok "PVC deleted" || warn "No PVC found"
 else
   info "Keeping PVC"
 fi
