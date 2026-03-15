@@ -28,7 +28,6 @@
     "list": [
       {
         "id": "mac",
-        "default": true,
         "name": "Mac (Octogee Ops)",
         "workspace": "/home/node/.openclaw/workspace/ops",
         "agentDir": "/home/node/.openclaw/agents/mac/agent",

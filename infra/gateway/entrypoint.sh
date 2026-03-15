@@ -38,6 +38,11 @@ try:
     if mm.get("allowFrom") != ["*"]:
         mm["allowFrom"] = ["*"]
         changed = True
+    # Remove default:true from Mac — only bound agents should respond
+    for agent in c.get("agents", {}).get("list", []):
+        if agent.get("id") == "mac" and agent.get("default"):
+            del agent["default"]
+            changed = True
     if changed:
         with open(cfg_path, "w") as f:
             json.dump(c, f, indent=2)
