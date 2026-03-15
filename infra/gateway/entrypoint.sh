@@ -23,6 +23,28 @@ export MM_URL="${MM_URL:-}"
 export GATEWAY_TOKEN="${GATEWAY_TOKEN:-$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 48)}"
 if [ -f "$OPENCLAW_DIR/openclaw.json" ]; then
   log "openclaw.json already exists — preserving (provisioner is source of truth)"
+  # Patch missing Mattermost fields (migration for pods with stale config)
+  python3 - <<'PYEOF'
+import json, os, sys
+cfg_path = os.environ.get("OPENCLAW_DIR", "/home/node/.openclaw") + "/openclaw.json"
+try:
+    with open(cfg_path) as f:
+        c = json.load(f)
+    mm = c.setdefault("channels", {}).setdefault("mattermost", {})
+    changed = False
+    if mm.get("groupPolicy") != "open":
+        mm["groupPolicy"] = "open"
+        changed = True
+    if mm.get("allowFrom") != ["*"]:
+        mm["allowFrom"] = ["*"]
+        changed = True
+    if changed:
+        with open(cfg_path, "w") as f:
+            json.dump(c, f, indent=2)
+        print("[entrypoint] Patched openclaw.json: groupPolicy=open, allowFrom=[*]", flush=True)
+except Exception as e:
+    print(f"[entrypoint] Config patch skipped: {e}", flush=True)
+PYEOF
 else
   envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
   chmod 600 "$OPENCLAW_DIR/openclaw.json"

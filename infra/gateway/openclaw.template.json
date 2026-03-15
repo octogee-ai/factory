@@ -54,6 +54,7 @@
       "chatmode": "onmessage",
       "dmPolicy": "disabled",
       "groupPolicy": "open",
+      "allowFrom": ["*"],
       "threading": "off"
     }
   },
