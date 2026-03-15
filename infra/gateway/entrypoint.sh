@@ -32,9 +32,6 @@ try:
         c = json.load(f)
     mm = c.setdefault("channels", {}).setdefault("mattermost", {})
     changed = False
-    if mm.get("dmPolicy") == "disabled":
-        mm["dmPolicy"] = "pairing"
-        changed = True
     if mm.get("groupPolicy") != "open":
         mm["groupPolicy"] = "open"
         changed = True

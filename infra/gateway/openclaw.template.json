@@ -51,7 +51,7 @@
       "botToken": "${MM_BOT_TOKEN}",
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
-      "dmPolicy": "pairing",
+      "dmPolicy": "disabled",
       "groupPolicy": "open",
       "allowFrom": ["*"],
       "threading": "off"
