@@ -52,7 +52,7 @@
       "botToken": "${MM_BOT_TOKEN}",
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
-      "dmPolicy": "open",
+      "dmPolicy": "disabled",
       "threading": "off"
     }
   },
