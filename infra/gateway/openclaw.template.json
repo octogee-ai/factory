@@ -42,16 +42,7 @@
     "elevated": { "enabled": false },
     "subagents": { "tools": { "deny": [] } }
   },
-  "bindings": [
-    {
-      "agentId": "mac",
-      "match": {
-        "channel": "discord",
-        "accountId": "default",
-        "peer": { "kind": "channel", "id": "${OCTOGEE_OPS_CHANNEL_ID}" }
-      }
-    }
-  ],
+  "bindings": [],
   "messages": { "ackReactionScope": "group-mentions" },
   "commands": { "native": "auto", "nativeSkills": "auto", "restart": true, "ownerDisplay": "raw" },
   "session": { "dmScope": "per-channel-peer" },
@@ -63,32 +54,6 @@
       "chatmode": "onmessage",
       "dmPolicy": "open",
       "threading": "off"
-    },
-    "discord": {
-      "enabled": true,
-      "allowBots": true,
-      "groupPolicy": "allowlist",
-      "streaming": "block",
-      "accounts": {
-        "default": {
-          "enabled": true,
-          "token": "${DISCORD_MAC_TOKEN}",
-          "allowBots": true,
-          "groupPolicy": "allowlist",
-          "streaming": "block",
-          "dmPolicy": "disabled",
-          "guilds": { "${OCTOGEE_GUILD_ID}": { "channels": { "${OCTOGEE_OPS_CHANNEL_ID}": { "allow": true, "requireMention": true } } } }
-        },
-        "octogee-coach": {
-          "enabled": true,
-          "token": "${DISCORD_OCTO_TOKEN}",
-          "allowBots": true,
-          "groupPolicy": "allowlist",
-          "streaming": "block",
-          "dmPolicy": "disabled",
-          "guilds": { "${OCTOGEE_GUILD_ID}": {} }
-        }
-      }
     }
   },
   "gateway": {
@@ -103,9 +68,8 @@
   },
   "plugins": {
     "enabled": true,
-    "allow": ["discord", "mattermost", "octogee-router"],
+    "allow": ["mattermost", "octogee-router"],
     "entries": {
-      "discord": { "enabled": true },
       "octogee-router": {
         "enabled": true,
         "config": {

@@ -18,24 +18,16 @@ mkdir -p "$OPENCLAW_DIR/agents"
 # ── Bootstrap openclaw.json from env vars ───────────────────────────────────
 # Always regenerate on boot — no stale config from prior deploys.
 # envsubst replaces ${VAR} placeholders in the template. One line. No sed.
-export DISCORD_OCTO_TOKEN="${DISCORD_OCTO_TOKEN:-$DISCORD_COACH_TOKEN}"
-export DISCORD_MAC_TOKEN="${DISCORD_MAC_TOKEN:-$DISCORD_OCTO_TOKEN}"
-export OCTOGEE_GUILD_ID="${OCTOGEE_GUILD_ID:-1474614086288408791}"
-export OCTOGEE_OPS_CHANNEL_ID="${OCTOGEE_OPS_CHANNEL_ID:-noop}"
 export MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
 export MM_URL="${MM_URL:-}"
 export GATEWAY_TOKEN="${GATEWAY_TOKEN:-$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 48)}"
-if [ -n "$DISCORD_OCTO_TOKEN" ]; then
-  if [ -f "$OPENCLAW_DIR/openclaw.json" ]; then
-    log "openclaw.json already exists — preserving (provisioner is source of truth)"
-  else
-    envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
-    chmod 600 "$OPENCLAW_DIR/openclaw.json"
-    GW_SHORT=$(echo "$GATEWAY_TOKEN" | cut -c1-8)
-    log "openclaw.json generated (guild=$OCTOGEE_GUILD_ID, gw=${GW_SHORT}...)"
-  fi
+if [ -f "$OPENCLAW_DIR/openclaw.json" ]; then
+  log "openclaw.json already exists — preserving (provisioner is source of truth)"
 else
-  log "⚠ No Discord token set — skipping openclaw.json generation"
+  envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
+  chmod 600 "$OPENCLAW_DIR/openclaw.json"
+  GW_SHORT=$(echo "$GATEWAY_TOKEN" | cut -c1-8)
+  log "openclaw.json generated (gw=${GW_SHORT}...)"
 fi
 
 # ── Provision Mac's workspace if missing ────────────────────────────────────
