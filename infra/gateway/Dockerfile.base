@@ -50,5 +50,8 @@ COPY infra/gateway/extensions/octogee-router/package.json \
 RUN cd /opt/octogee-router-deps && npm install --production 2>&1 | tail -5 \
     && chown -R node:node /opt/octogee-router-deps
 
+# ── OpenClaw Mattermost plugin ───────────────────────────────────────────────
+RUN openclaw plugins install @openclaw/mattermost 2>&1 | tail -3
+
 # ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────
 RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm

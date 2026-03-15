@@ -22,6 +22,8 @@ export DISCORD_OCTO_TOKEN="${DISCORD_OCTO_TOKEN:-$DISCORD_COACH_TOKEN}"
 export DISCORD_MAC_TOKEN="${DISCORD_MAC_TOKEN:-$DISCORD_OCTO_TOKEN}"
 export OCTOGEE_GUILD_ID="${OCTOGEE_GUILD_ID:-1474614086288408791}"
 export OCTOGEE_OPS_CHANNEL_ID="${OCTOGEE_OPS_CHANNEL_ID:-noop}"
+export MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
+export MM_URL="${MM_URL:-}"
 export GATEWAY_TOKEN="${GATEWAY_TOKEN:-$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 48)}"
 if [ -n "$DISCORD_OCTO_TOKEN" ]; then
   if [ -f "$OPENCLAW_DIR/openclaw.json" ]; then

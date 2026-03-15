@@ -56,6 +56,13 @@
   "commands": { "native": "auto", "nativeSkills": "auto", "restart": true, "ownerDisplay": "raw" },
   "session": { "dmScope": "per-channel-peer" },
   "channels": {
+    "mattermost": {
+      "enabled": true,
+      "botToken": "${MM_BOT_TOKEN}",
+      "baseUrl": "${MM_URL}",
+      "chatmode": "oncall",
+      "dmPolicy": "pairing"
+    },
     "discord": {
       "enabled": true,
       "allowBots": true,
@@ -95,7 +102,7 @@
   },
   "plugins": {
     "enabled": true,
-    "allow": ["discord", "octogee-router"],
+    "allow": ["discord", "mattermost", "octogee-router"],
     "entries": {
       "discord": { "enabled": true },
       "octogee-router": {
