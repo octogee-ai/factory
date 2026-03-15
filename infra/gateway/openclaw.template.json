@@ -53,6 +53,7 @@
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
       "dmPolicy": "disabled",
+      "groupPolicy": "open",
       "threading": "off"
     }
   },
