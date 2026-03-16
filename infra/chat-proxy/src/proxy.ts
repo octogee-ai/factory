@@ -121,26 +121,20 @@ async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: str
 
 async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
   const authHeader = req.headers.authorization;
-  console.log(`[proxy] auth header: ${authHeader ? authHeader.slice(0, 30) + "..." : "(missing)"}`);
   
-  // Client4 SDK sends "Bearer <token>" — accept both "Bearer" and "Token" prefixes
+  // MM Client4 SDK sends "BEARER" (uppercase), standard is "Bearer"
   let token: string | null = null;
   if (authHeader?.startsWith("Bearer ")) token = authHeader.slice(7);
-  else if (authHeader?.startsWith("Token ")) token = authHeader.slice(6);
   else if (authHeader?.startsWith("BEARER ")) token = authHeader.slice(7);
+  else if (authHeader?.startsWith("Token ")) token = authHeader.slice(6);
   
-  if (!token) {
-    console.log(`[proxy] no valid token prefix found`);
-    return null;
-  }
+  if (!token) return null;
 
   try {
-    console.log(`[proxy] verifying token (len=${token.length}, prefix=${token.slice(0, 20)}...)`);
     const decoded = await admin.auth().verifyIdToken(token);
-    console.log(`[proxy] token verified: uid=${decoded.uid}`);
     return decoded.uid;
   } catch (e: any) {
-    console.log(`[proxy] verifyIdToken FAILED: ${e.code || ""} ${e.message || String(e)}`);
+    console.error(`[proxy] auth failed: ${e.code || e.message}`);
     return null;
   }
 }
@@ -195,14 +189,10 @@ async function handleRest(
   // Auth
   const uid = await verifyAuth(req);
   if (!uid) {
-    const hasAuthHeader = !!req.headers.authorization;
-    console.log(`[proxy] 401: hasAuthHeader=${hasAuthHeader}, url=${req.url}`);
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Unauthenticated" }));
     return;
   }
-
-  console.log(`[proxy] Auth OK: uid=${uid}, method=${req.method}, url=${req.url}`);
 
   // Route check
   const urlPath = (req.url || "").split("?")[0];
@@ -303,58 +293,45 @@ function handleWsUpgrade(
     socket.destroy();
     return;
   }
-  console.log(`[proxy] WS: ticket=${ticket.slice(0, 8)}...`);
-
   (async () => {
     try {
-      // Validate + consume ticket (one-time use)
       const ticketRef = db.doc(`wsTickets/${ticket}`);
-      console.log(`[proxy] WS: reading ticket from project=${FIREBASE_PROJECT}`);
       const ticketDoc = await ticketRef.get();
 
       if (!ticketDoc.exists) {
-        console.log(`[proxy] WS: ticket not found in ${FIREBASE_PROJECT}`);
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
       }
 
       const ticketData = ticketDoc.data()!;
-      await ticketRef.delete(); // consume immediately
+      await ticketRef.delete();
 
       if (ticketData.expiresAt < Date.now()) {
-        console.log(`[proxy] WS: ticket expired`);
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
       }
 
       const uid = ticketData.uid;
-      console.log(`[proxy] WS: ticket valid, uid=${uid}`);
-
       const creds = await getMmToken(uid);
       if (!creds) {
-        console.log(`[proxy] WS: no MM credentials for uid=${uid}`);
         socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
         socket.destroy();
         return;
       }
 
-      // Connect to MM WebSocket backend
       const mmWsUrl = MM_INTERNAL_URL!.replace(/^http/, "ws");
       const mmWs = new WebSocket(`${mmWsUrl}/api/v4/websocket`);
 
       mmWs.on("open", () => {
-        console.log(`[proxy] WS: MM connected, sending auth`);
         mmWs.send(JSON.stringify({
           seq: 1,
           action: "authentication_challenge",
           data: { token: creds.mmToken },
         }));
 
-        // Accept client WebSocket and pipe bidirectionally
         wss.handleUpgrade(req, socket, head, (clientWs) => {
-          console.log(`[proxy] WS: client upgraded, piping`);
           clientWs.on("message", (data, isBinary) => {
             if (mmWs.readyState === WebSocket.OPEN) {
               mmWs.send(isBinary ? data : data.toString(), { binary: isBinary });
@@ -374,12 +351,12 @@ function handleWsUpgrade(
       });
 
       mmWs.on("error", (err) => {
-        console.log(`[proxy] WS: MM error: ${err.message}`);
+        console.error(`[proxy] WS MM error: ${err.message}`);
         socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
         socket.destroy();
       });
     } catch (e: any) {
-      console.log(`[proxy] WS: error: ${e.message}`);
+      console.error(`[proxy] WS error: ${e.message}`);
       socket.write("HTTP/1.1 500 Internal Error\r\n\r\n");
       socket.destroy();
     }
@@ -393,11 +370,9 @@ const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
   const urlPath = (req.url || "").split("?")[0];
-  console.log(`[proxy] WS upgrade: ${urlPath}`);
   if (urlPath.startsWith("/api/v4/websocket")) {
     handleWsUpgrade(wss, req, socket, head);
   } else {
-    console.log(`[proxy] WS upgrade rejected: ${urlPath}`);
     socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
     socket.destroy();
   }
