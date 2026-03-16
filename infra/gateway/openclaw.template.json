@@ -52,7 +52,6 @@
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
       "requireMention": false,
-      "dmPolicy": "disabled",
       "groupPolicy": "open",
       "allowFrom": ["*"],
       "threading": "off"
