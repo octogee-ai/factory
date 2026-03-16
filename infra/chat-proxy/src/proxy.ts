@@ -114,9 +114,11 @@ async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
   if (!authHeader?.startsWith("Bearer ")) return null;
 
   try {
-    const decoded = await admin.auth().verifyIdToken(authHeader.slice(7));
+    const token = authHeader.slice(7);
+    const decoded = await admin.auth().verifyIdToken(token);
     return decoded.uid;
-  } catch {
+  } catch (e: any) {
+    console.error(`[proxy] verifyIdToken failed: ${e.code || e.message}`);
     return null;
   }
 }
