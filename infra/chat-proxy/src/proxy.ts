@@ -355,8 +355,17 @@ function handleWsUpgrade(
         // Accept client WebSocket and pipe bidirectionally
         wss.handleUpgrade(req, socket, head, (clientWs) => {
           console.log(`[proxy] WS: client upgraded, piping`);
-          clientWs.on("message", (data) => { if (mmWs.readyState === WebSocket.OPEN) mmWs.send(data); });
-          mmWs.on("message", (data) => { if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data); });
+          clientWs.on("message", (data, isBinary) => {
+            if (mmWs.readyState === WebSocket.OPEN) {
+              mmWs.send(isBinary ? data : data.toString(), { binary: isBinary });
+            }
+          });
+          mmWs.on("message", (data, isBinary) => {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              // MM sends JSON as text frames — ensure we forward as text, not binary
+              clientWs.send(isBinary ? data : data.toString(), { binary: isBinary });
+            }
+          });
           clientWs.on("close", () => mmWs.close());
           mmWs.on("close", () => clientWs.close());
           clientWs.on("error", () => mmWs.close());
