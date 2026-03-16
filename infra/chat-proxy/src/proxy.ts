@@ -41,9 +41,8 @@ const db = admin.firestore();
 // ── Allowed Endpoints (whitelist) ─────────────────────────────────────────────
 
 const ALLOWED_ROUTES: Array<{ method: string; pattern: RegExp }> = [
-  // Channel listing
-  { method: "GET", pattern: /^\/api\/v4\/users\/me\/teams\/[a-z0-9]+\/channels/ },
-  // Also allow the variant without team ID (Client4.getMyChannels('') hits this)
+  // Channel listing (with or without team ID — Client4.getMyChannels('') sends empty team)
+  { method: "GET", pattern: /^\/api\/v4\/users\/me\/teams\/[a-z0-9]*\/channels/ },
   { method: "GET", pattern: /^\/api\/v4\/users\/me\/channels/ },
   // Profile lookup
   { method: "POST", pattern: /^\/api\/v4\/users\/ids$/ },
