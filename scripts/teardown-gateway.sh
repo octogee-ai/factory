@@ -36,9 +36,9 @@ FORCE=false
 for arg in "$@"; do
   case $arg in
     --env=*)  ENV="${arg#*=}" ;;
-    --force)  FORCE=true ;;
+    --force|--yes|-y) FORCE=true ;;
     --help|-h)
-      echo "Usage: $0 [--env=prod|test] [--force]"
+      echo "Usage: $0 [--env=prod|test] [--force|--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -103,7 +103,12 @@ echo "    • Discord bots (reuse them — rotate secrets in setup)"
 echo "    • Discord guild (you keep the server)"
 echo ""
 
-if [[ "$ENV" == "prod" ]] && ! $FORCE; then
+if [[ "$ENV" == "prod" ]] && $FORCE; then
+  echo -e "  ${RED}${BOLD}--force/--yes cannot be used with prod. Refusing.${NC}"
+  exit 1
+fi
+
+if [[ "$ENV" == "prod" ]]; then
   echo -e "  ${RED}${BOLD}⚠️  YOU ARE ABOUT TO TEAR DOWN PRODUCTION${NC}"
   echo ""
   echo -ne "  ${RED}${BOLD}Type 'DESTROY PROD' to confirm:${NC} "
