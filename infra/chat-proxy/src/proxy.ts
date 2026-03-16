@@ -162,7 +162,7 @@ async function handleRest(
   }
 
   // Health check
-  if (req.url === "/healthz") {
+  if (req.url === "/healthz" || req.url === "/health" || req.url === "/_health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok" }));
     return;
