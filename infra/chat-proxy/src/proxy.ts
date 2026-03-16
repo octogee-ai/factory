@@ -172,10 +172,14 @@ async function handleRest(
   // Auth
   const uid = await verifyAuth(req);
   if (!uid) {
+    const hasAuthHeader = !!req.headers.authorization;
+    console.log(`[proxy] 401: hasAuthHeader=${hasAuthHeader}, url=${req.url}`);
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Unauthenticated" }));
     return;
   }
+
+  console.log(`[proxy] Auth OK: uid=${uid}, method=${req.method}, url=${req.url}`);
 
   // Route check
   const urlPath = (req.url || "").split("?")[0];
