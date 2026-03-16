@@ -220,8 +220,12 @@ async function handleRest(
     return;
   }
 
+  // Rewrite double-slash in team channel listing (Client4.getMyChannels('') sends empty team ID)
+  let proxyUrl = req.url || "";
+  proxyUrl = proxyUrl.replace(/\/teams\/\/channels/, "/channels");
+
   // Proxy to MM
-  const targetUrl = `${MM_INTERNAL_URL}${req.url}`;
+  const targetUrl = `${MM_INTERNAL_URL}${proxyUrl}`;
   try {
     const body = await readBody(req);
     const headers: Record<string, string> = {
