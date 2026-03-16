@@ -26,7 +26,6 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-GCP_PROJECT="octogee"
 K8S_DEPLOYMENT="octogee-gateway"
 REGION="us-central1"
 
@@ -47,12 +46,14 @@ done
 
 case "$ENV" in
   prod)
+    GCP_PROJECT="octogee"
     K8S_NAMESPACE="octogee"
     ENV_FILE="$REPO_DIR/.env"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
     ENV_LABEL="🔴 PRODUCTION"
     ;;
   test)
+    GCP_PROJECT="octogee-test"
     K8S_NAMESPACE="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
