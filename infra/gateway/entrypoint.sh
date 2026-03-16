@@ -32,6 +32,9 @@ try:
         c = json.load(f)
     mm = c.setdefault("channels", {}).setdefault("mattermost", {})
     changed = False
+    if mm.get("requireMention") is not False:
+        mm["requireMention"] = False
+        changed = True
     if mm.get("groupPolicy") != "open":
         mm["groupPolicy"] = "open"
         changed = True

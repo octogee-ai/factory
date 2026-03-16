@@ -51,6 +51,7 @@
       "botToken": "${MM_BOT_TOKEN}",
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
+      "requireMention": false,
       "dmPolicy": "disabled",
       "groupPolicy": "open",
       "allowFrom": ["*"],
