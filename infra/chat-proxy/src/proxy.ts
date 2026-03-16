@@ -115,10 +115,12 @@ async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
 
   try {
     const token = authHeader.slice(7);
+    console.log(`[proxy] verifying token (len=${token.length}, prefix=${token.slice(0, 20)}...)`);
     const decoded = await admin.auth().verifyIdToken(token);
+    console.log(`[proxy] token verified: uid=${decoded.uid}`);
     return decoded.uid;
   } catch (e: any) {
-    console.error(`[proxy] verifyIdToken failed: ${e.code || e.message}`);
+    console.log(`[proxy] verifyIdToken FAILED: ${e.code || ""} ${e.message || String(e)}`);
     return null;
   }
 }
