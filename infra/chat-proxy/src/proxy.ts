@@ -308,18 +308,24 @@ function handleWsUpgrade(
     .auth()
     .verifyIdToken(firebaseToken)
     .then(async (decoded) => {
+      console.log(`[proxy] WS: Firebase auth OK, uid=${decoded.uid}`);
       const creds = await getMmToken(decoded.uid);
       if (!creds) {
+        console.log(`[proxy] WS: no MM credentials for uid=${decoded.uid}`);
         socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
         socket.destroy();
         return;
       }
+      console.log(`[proxy] WS: MM token found, connecting to backend...`);
 
       // Connect to MM WebSocket
       const mmWsUrl = MM_INTERNAL_URL!.replace(/^http/, "ws");
-      const mmWs = new WebSocket(`${mmWsUrl}/api/v4/websocket`);
+      const mmWsTarget = `${mmWsUrl}/api/v4/websocket`;
+      console.log(`[proxy] WS: connecting to ${mmWsTarget}`);
+      const mmWs = new WebSocket(mmWsTarget);
 
       mmWs.on("open", () => {
+        console.log(`[proxy] WS: MM backend connected, sending auth challenge`);
         // Authenticate with MM
         mmWs.send(
           JSON.stringify({
@@ -331,6 +337,7 @@ function handleWsUpgrade(
 
         // Accept the client connection
         wss.handleUpgrade(req, socket, head, (clientWs) => {
+          console.log(`[proxy] WS: client upgraded, piping bidirectional`);
           // Pipe: client ↔ MM
           clientWs.on("message", (data) => {
             if (mmWs.readyState === WebSocket.OPEN) {
@@ -344,21 +351,34 @@ function handleWsUpgrade(
             }
           });
 
-          clientWs.on("close", () => mmWs.close());
-          mmWs.on("close", () => clientWs.close());
+          clientWs.on("close", (code: number) => {
+            console.log(`[proxy] WS: client closed (code=${code})`);
+            mmWs.close();
+          });
+          mmWs.on("close", (code: number) => {
+            console.log(`[proxy] WS: MM closed (code=${code})`);
+            clientWs.close();
+          });
 
-          clientWs.on("error", () => mmWs.close());
-          mmWs.on("error", () => clientWs.close());
+          clientWs.on("error", (err: Error) => {
+            console.log(`[proxy] WS: client error: ${err.message}`);
+            mmWs.close();
+          });
+          mmWs.on("error", (err: Error) => {
+            console.log(`[proxy] WS: MM error: ${err.message}`);
+            clientWs.close();
+          });
         });
       });
 
       mmWs.on("error", (err) => {
-        console.error(`[proxy] MM WebSocket error: ${err.message}`);
+        console.log(`[proxy] WS: MM connect error: ${err.message}`);
         socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
         socket.destroy();
       });
     })
-    .catch(() => {
+    .catch((e: any) => {
+      console.log(`[proxy] WS: Firebase auth failed: ${e.message}`);
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
     });
