@@ -28,14 +28,24 @@ import admin from "firebase-admin";
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL; // e.g. http://mattermost.octogee-test.svc.cluster.local:8065
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
+const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
 if (!MM_INTERNAL_URL) {
   console.error("FATAL: MM_INTERNAL_URL is required");
   process.exit(1);
 }
 
-// Initialize Firebase Admin
-admin.initializeApp({ projectId: FIREBASE_PROJECT });
+// Initialize Firebase Admin — use explicit SA key if provided (cross-project),
+// otherwise fall back to ADC (same-project).
+if (SA_KEY_PATH) {
+  const fs = await import("node:fs");
+  const sa = JSON.parse(fs.readFileSync(SA_KEY_PATH, "utf-8"));
+  admin.initializeApp({ credential: admin.credential.cert(sa), projectId: FIREBASE_PROJECT });
+  console.log(`[chat-proxy] Using SA key: ${SA_KEY_PATH}`);
+} else {
+  admin.initializeApp({ projectId: FIREBASE_PROJECT });
+  console.log(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
+}
 const db = admin.firestore();
 
 // ── Allowed Endpoints (whitelist) ─────────────────────────────────────────────
