@@ -307,10 +307,11 @@ function handleWsUpgrade(
     try {
       // Validate + consume ticket (one-time use)
       const ticketRef = db.doc(`wsTickets/${ticket}`);
+      console.log(`[proxy] WS: reading ticket from project=${db.projectId}`);
       const ticketDoc = await ticketRef.get();
 
       if (!ticketDoc.exists) {
-        console.log(`[proxy] WS: ticket not found`);
+        console.log(`[proxy] WS: ticket not found in ${db.projectId}`);
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
