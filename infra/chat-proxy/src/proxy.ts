@@ -290,17 +290,19 @@ function handleWsUpgrade(
   socket: any,
   head: Buffer
 ): void {
-  // Extract Firebase token from query string (?token=xxx) or Sec-WebSocket-Protocol
+  console.log(`[proxy] WS handleUpgrade called, url=${req.url?.slice(0, 80)}`);
+  
+  // Extract Firebase token from query string (?firebase_token=xxx)
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
-  const firebaseToken =
-    url.searchParams.get("firebase_token") ||
-    req.headers["sec-websocket-protocol"]?.split(",").map((s) => s.trim()).find((s) => s.startsWith("firebase_"))?.slice(9);
+  const firebaseToken = url.searchParams.get("firebase_token");
 
   if (!firebaseToken) {
+    console.log(`[proxy] WS: no firebase_token in query string`);
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return;
   }
+  console.log(`[proxy] WS: token found (len=${firebaseToken.length})`);
 
   admin
     .auth()
@@ -369,9 +371,11 @@ const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
   const urlPath = (req.url || "").split("?")[0];
+  console.log(`[proxy] WS upgrade: ${urlPath}`);
   if (urlPath === "/api/v4/websocket") {
     handleWsUpgrade(wss, req, socket, head);
   } else {
+    console.log(`[proxy] WS upgrade rejected: ${urlPath}`);
     socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
     socket.destroy();
   }
