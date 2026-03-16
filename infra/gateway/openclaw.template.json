@@ -28,7 +28,6 @@
     "list": [
       {
         "id": "mac",
-        "default": true,
         "name": "Mac (Octogee Ops)",
         "workspace": "/home/node/.openclaw/workspace/ops",
         "agentDir": "/home/node/.openclaw/agents/mac/agent",
@@ -42,45 +41,20 @@
     "elevated": { "enabled": false },
     "subagents": { "tools": { "deny": [] } }
   },
-  "bindings": [
-    {
-      "agentId": "mac",
-      "match": {
-        "channel": "discord",
-        "accountId": "default",
-        "peer": { "kind": "channel", "id": "${OCTOGEE_OPS_CHANNEL_ID}" }
-      }
-    }
-  ],
+  "bindings": [],
   "messages": { "ackReactionScope": "group-mentions" },
   "commands": { "native": "auto", "nativeSkills": "auto", "restart": true, "ownerDisplay": "raw" },
   "session": { "dmScope": "per-channel-peer" },
   "channels": {
-    "discord": {
+    "mattermost": {
       "enabled": true,
-      "allowBots": true,
-      "groupPolicy": "allowlist",
-      "streaming": "block",
-      "accounts": {
-        "default": {
-          "enabled": true,
-          "token": "${DISCORD_MAC_TOKEN}",
-          "allowBots": true,
-          "groupPolicy": "allowlist",
-          "streaming": "block",
-          "dmPolicy": "disabled",
-          "guilds": { "${OCTOGEE_GUILD_ID}": { "channels": { "${OCTOGEE_OPS_CHANNEL_ID}": { "allow": true, "requireMention": true } } } }
-        },
-        "octogee-coach": {
-          "enabled": true,
-          "token": "${DISCORD_OCTO_TOKEN}",
-          "allowBots": true,
-          "groupPolicy": "allowlist",
-          "streaming": "block",
-          "dmPolicy": "disabled",
-          "guilds": { "${OCTOGEE_GUILD_ID}": {} }
-        }
-      }
+      "botToken": "${MM_BOT_TOKEN}",
+      "baseUrl": "${MM_URL}",
+      "chatmode": "onmessage",
+      "requireMention": false,
+      "groupPolicy": "open",
+      "allowFrom": ["*"],
+      "threading": "off"
     }
   },
   "gateway": {
@@ -95,9 +69,8 @@
   },
   "plugins": {
     "enabled": true,
-    "allow": ["discord", "octogee-router"],
+    "allow": ["mattermost", "octogee-router"],
     "entries": {
-      "discord": { "enabled": true },
       "octogee-router": {
         "enabled": true,
         "config": {

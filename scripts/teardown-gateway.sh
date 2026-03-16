@@ -26,7 +26,6 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-GCP_PROJECT="octogee"
 K8S_DEPLOYMENT="octogee-gateway"
 REGION="us-central1"
 
@@ -36,9 +35,9 @@ FORCE=false
 for arg in "$@"; do
   case $arg in
     --env=*)  ENV="${arg#*=}" ;;
-    --force)  FORCE=true ;;
+    --force|--yes|-y) FORCE=true ;;
     --help|-h)
-      echo "Usage: $0 [--env=prod|test] [--force]"
+      echo "Usage: $0 [--env=prod|test] [--force|--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -47,12 +46,14 @@ done
 
 case "$ENV" in
   prod)
+    GCP_PROJECT="octogee"
     K8S_NAMESPACE="octogee"
     ENV_FILE="$REPO_DIR/.env"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
     ENV_LABEL="🔴 PRODUCTION"
     ;;
   test)
+    GCP_PROJECT="octogee-test"
     K8S_NAMESPACE="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
@@ -103,7 +104,12 @@ echo "    • Discord bots (reuse them — rotate secrets in setup)"
 echo "    • Discord guild (you keep the server)"
 echo ""
 
-if [[ "$ENV" == "prod" ]] && ! $FORCE; then
+if [[ "$ENV" == "prod" ]] && $FORCE; then
+  echo -e "  ${RED}${BOLD}--force/--yes cannot be used with prod. Refusing.${NC}"
+  exit 1
+fi
+
+if [[ "$ENV" == "prod" ]]; then
   echo -e "  ${RED}${BOLD}⚠️  YOU ARE ABOUT TO TEAR DOWN PRODUCTION${NC}"
   echo ""
   echo -ne "  ${RED}${BOLD}Type 'DESTROY PROD' to confirm:${NC} "
@@ -241,6 +247,5 @@ echo -e "${BOLD}  Teardown complete${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 echo "  Next steps:"
-echo "    1. Rotate bot tokens in Discord Developer Portal (optional)"
-echo "    2. Run: ./scripts/setup-gateway.sh --env=$ENV"
+echo "    1. Run: ./scripts/setup-gateway.sh --env=$ENV"
 echo ""
