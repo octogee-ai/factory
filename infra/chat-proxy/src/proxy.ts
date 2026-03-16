@@ -111,10 +111,20 @@ async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: str
 
 async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) return null;
+  console.log(`[proxy] auth header: ${authHeader ? authHeader.slice(0, 30) + "..." : "(missing)"}`);
+  
+  // Client4 SDK sends "Bearer <token>" — accept both "Bearer" and "Token" prefixes
+  let token: string | null = null;
+  if (authHeader?.startsWith("Bearer ")) token = authHeader.slice(7);
+  else if (authHeader?.startsWith("Token ")) token = authHeader.slice(6);
+  else if (authHeader?.startsWith("BEARER ")) token = authHeader.slice(7);
+  
+  if (!token) {
+    console.log(`[proxy] no valid token prefix found`);
+    return null;
+  }
 
   try {
-    const token = authHeader.slice(7);
     console.log(`[proxy] verifying token (len=${token.length}, prefix=${token.slice(0, 20)}...)`);
     const decoded = await admin.auth().verifyIdToken(token);
     console.log(`[proxy] token verified: uid=${decoded.uid}`);
