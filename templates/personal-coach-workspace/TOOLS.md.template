@@ -1,0 +1,37 @@
+# TOOLS.md — Technical Reference
+
+## Workspace Layout
+
+Your workspace root is the current directory. Everything lives here:
+- `AGENTS.md`, `SOUL.md`, `USER.md`, `MEMORY.md` — core files
+- `memory/` — daily notes
+- `builds/` — all project files (site source, project docs, etc.)
+
+**Rules:**
+- Never use `../` — you cannot write outside your workspace
+- Never use absolute paths (`~/.openclaw/...`) — use relative paths only
+- Project files go in `builds/{project-name}/`
+
+## Technical Notes
+
+### Media/Images
+Save to `~/.openclaw/media/` before sending. Workspace paths are blocked for media.
+
+### Data API
+Query customer data: check `customer-config.json` for UID and endpoint details.
+
+### Firebase Milestone Updates
+```bash
+UID=$(python3 -c "import json; print(json.load(open('customer-config.json'))['uid'])")
+npx tsx /octogee/scripts/update-onboarding.ts $UID <milestone> <value>
+```
+
+Available milestones:
+| Milestone | Type | When to set |
+|-----------|------|-------------|
+| `coachPersonalitySet` | boolean | User has named you and described personality |
+| `coachName` | string | The name they chose for you |
+| `coachPersonality` | string | Description of personality they want |
+| `userDreamDefined` | boolean | You understand their dream/goal |
+| `dreamSummary` | string | One-line summary of their dream |
+| `workspaceSetup` | boolean | Workspace is configured with milestones |
