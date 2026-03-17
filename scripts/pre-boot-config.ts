@@ -17,8 +17,8 @@ const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
   : "/home/node/.openclaw";
 const CONFIG_PATH = path.join(OPENCLAW_DIR, "openclaw.json");
-const SA_KEY_PATH = process.env.SA_KEY_PATH || path.join(OPENCLAW_DIR, "secrets", "octogee-test-sa-key.json");
-const PROJECT = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "octogee";
+const SA_KEY_PATH = process.env.SA_KEY_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS || path.join(OPENCLAW_DIR, "secrets", "octogee-test-sa-key.json");
+const PROJECT = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "octogee";
 
 function log(msg: string): void {
   const ts = new Date().toISOString().replace("Z", "+00:00");
@@ -30,16 +30,16 @@ async function main(): Promise<void> {
     log("No openclaw.json found — skipping pre-boot config");
     return;
   }
-  if (!fs.existsSync(SA_KEY_PATH)) {
-    log("No SA key found — skipping pre-boot config");
-    return;
+  // Init Firebase — use SA key if available, otherwise ADC (Workload Identity)
+  if (fs.existsSync(SA_KEY_PATH)) {
+    admin.initializeApp({
+      credential: admin.credential.cert(SA_KEY_PATH),
+      projectId: PROJECT,
+    });
+  } else {
+    log("No SA key file — using Application Default Credentials (Workload Identity)");
+    admin.initializeApp({ projectId: PROJECT });
   }
-
-  // Init Firebase
-  admin.initializeApp({
-    credential: admin.credential.cert(SA_KEY_PATH),
-    projectId: PROJECT,
-  });
   const db = admin.firestore();
 
   // Read current config
