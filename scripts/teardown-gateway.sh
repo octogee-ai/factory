@@ -6,14 +6,13 @@ set -euo pipefail
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Tears down an environment so setup-gateway.sh can rebuild from scratch.
-# Does NOT delete: GCP project, GKE cluster, AR repo, Firebase projects,
-# Discord bots (you reuse those — just rotate secrets).
+# Does NOT delete: GCP projects, GKE clusters, AR repos, Firebase projects,
+# GCP Service Accounts, IAM bindings (Workload Identity).
 #
 # Usage:
-#   ./scripts/teardown-prod.sh                  # Prod (default)
-#   ./scripts/teardown-prod.sh --env=test       # Test environment
-#   ./scripts/teardown-prod.sh --env=prod       # Explicit prod
-#   ./scripts/teardown-prod.sh --force          # Skip confirmations
+#   ./scripts/teardown-gateway.sh --env=test       # Test environment
+#   ./scripts/teardown-gateway.sh --env=test --yes # Non-interactive (test only)
+#   ./scripts/teardown-gateway.sh --env=prod       # Prod (interactive, requires DESTROY PROD)
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -47,17 +46,21 @@ done
 case "$ENV" in
   prod)
     GCP_PROJECT="octogee"
+    FIREBASE_PROJECT="octogee"
     K8S_NAMESPACE="octogee"
     ENV_FILE="$REPO_DIR/.env"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
     ENV_LABEL="🔴 PRODUCTION"
+    CHAT_PROXY_SERVICE="octogee-chat-proxy"
     ;;
   test)
     GCP_PROJECT="octogee-test"
+    FIREBASE_PROJECT="octogee-test"
     K8S_NAMESPACE="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
     ENV_LABEL="🟡 TEST"
+    CHAT_PROXY_SERVICE="octogee-chat-proxy-test"
     ;;
   *)
     echo "Unknown environment: $ENV (use prod or test)"
@@ -92,16 +95,18 @@ echo -e "  K8s Namespace:  ${BOLD}$K8S_NAMESPACE${NC}"
 echo -e "  Env File:       ${BOLD}$ENV_FILE${NC}"
 echo ""
 echo "  This will:"
-echo "    • Delete all K8s secrets in namespace '$K8S_NAMESPACE'"
-echo "    • Delete the gateway deployment + PVC"
-echo "    • Destroy all GCP Secret Manager versions"
-echo "    • Clean Firestore user docs (provisioned users)"
+echo "    • Delete gateway deployment, service, PVC"
+echo "    • Delete Mattermost deployment, postgres, PVCs"
+echo "    • Delete all K8s secrets + ServiceAccount + network policies"
+echo "    • Uninstall monitoring stack (Prometheus + Grafana)"
+echo "    • Delete Chat Proxy (Cloud Run)"
+echo "    • Destroy GCP Secret Manager secret versions"
+echo "    • Wipe Firestore, Cloud Functions, Auth users"
 echo ""
 echo "  This will NOT delete:"
-echo "    • GCP project, GKE cluster, AR repo"
+echo "    • GCP projects, GKE clusters, AR repos"
 echo "    • Firebase projects"
-echo "    • Discord bots (reuse them — rotate secrets in setup)"
-echo "    • Discord guild (you keep the server)"
+echo "    • GCP Service Accounts or IAM bindings"
 echo ""
 
 if [[ "$ENV" == "prod" ]] && $FORCE; then
@@ -139,67 +144,106 @@ else
 fi
 
 if confirm "Delete PVC '$PVC_NAME'? (all customer workspaces will be lost)"; then
+  # Wait for pods to terminate before PVC deletion
+  info "Waiting for gateway pod to terminate..."
+  kubectl wait --for=delete pod -l app=octogee-gateway -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null || true
   kubectl delete pvc "$PVC_NAME" -n "$K8S_NAMESPACE" 2>/dev/null && ok "PVC deleted" || warn "No PVC found"
 else
   info "Keeping PVC"
 fi
 
-# ── 2. Delete K8s Secrets ─────────────────────────────────────────────────
+# ── 2. Delete Mattermost ─────────────────────────────────────────────────
+
+echo ""
+info "Deleting Mattermost..."
+kubectl delete deployment mattermost -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost deployment deleted" || warn "No Mattermost deployment found"
+kubectl delete deployment mattermost-postgres -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost Postgres deleted" || warn "No Postgres deployment found"
+kubectl delete service mattermost -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost service deleted" || true
+kubectl delete service mattermost-postgres -n "$K8S_NAMESPACE" 2>/dev/null && ok "Postgres service deleted" || true
+
+if confirm "Delete Mattermost PVCs? (chat history + DB will be lost)"; then
+  info "Waiting for MM pods to terminate..."
+  kubectl wait --for=delete pod -l app=mattermost -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null || true
+  kubectl wait --for=delete pod -l app=mattermost-postgres -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null || true
+  kubectl delete pvc mattermost-data -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-data" || true
+  kubectl delete pvc mattermost-postgres-data -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-postgres-data" || true
+else
+  info "Keeping Mattermost PVCs"
+fi
+
+# ── 3. Delete K8s Secrets ─────────────────────────────────────────────────
 
 echo ""
 info "Deleting K8s secrets..."
-for secret in octogee-discord octogee-anthropic octogee-github octogee-sa-key octogee-brave; do
+for secret in mattermost-gateway mattermost-db octogee-anthropic octogee-github octogee-brave octogee-sa-key octogee-discord; do
   kubectl delete secret "$secret" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted $secret" || true
 done
 
-# ── 3. Destroy GCP Secret Manager Versions ────────────────────────────────
+# ── 4. Delete Network Policies + ServiceAccount ──────────────────────────
 
 echo ""
-info "Destroying Secret Manager secret versions..."
-SECRETS=$(gcloud secrets list --project="$GCP_PROJECT" --format="value(name)" 2>/dev/null || true)
+info "Deleting network policies..."
+kubectl delete networkpolicy gateway-egress -n "$K8S_NAMESPACE" 2>/dev/null && ok "Network policy deleted" || warn "No network policy found"
+info "Deleting K8s ServiceAccount..."
+kubectl delete sa octogee-gateway -n "$K8S_NAMESPACE" 2>/dev/null && ok "ServiceAccount deleted" || warn "No ServiceAccount found"
+
+# ── 5. Uninstall Monitoring ───────────────────────────────────────────────
+
+echo ""
+if confirm "Uninstall monitoring stack (Prometheus + Grafana)?"; then
+  info "Uninstalling monitoring..."
+  helm uninstall prometheus -n monitoring 2>/dev/null && ok "Prometheus uninstalled" || warn "Prometheus not found"
+  helm uninstall grafana -n monitoring 2>/dev/null && ok "Grafana uninstalled" || warn "Grafana not found"
+  kubectl delete -f k8s/monitoring/service-monitors.yaml 2>/dev/null || true
+  kubectl delete pvc --all -n monitoring 2>/dev/null && ok "Monitoring PVCs deleted" || true
+else
+  info "Keeping monitoring stack"
+fi
+
+# ── 6. Delete Chat Proxy (Cloud Run) ─────────────────────────────────────
+
+echo ""
+if confirm "Delete Chat Proxy (Cloud Run service)?"; then
+  info "Deleting Chat Proxy..."
+  gcloud run services delete "$CHAT_PROXY_SERVICE" \
+    --region="$REGION" --project="$GCP_PROJECT" --quiet 2>/dev/null \
+    && ok "Chat Proxy deleted" || warn "Chat Proxy not found"
+else
+  info "Keeping Chat Proxy"
+fi
+
+# ── 7. Destroy GCP Secret Manager Versions ────────────────────────────────
+
+echo ""
+info "Deleting Secret Manager secrets..."
+SECRETS=$(gcloud secrets list --project="$FIREBASE_PROJECT" --format="value(name)" 2>/dev/null || true)
 for secret in $SECRETS; do
-  # Destroy all versions (not delete the secret — setup-prod will create new versions)
-  VERSIONS=$(gcloud secrets versions list "$secret" --project="$GCP_PROJECT" --format="value(name)" --filter="state=enabled OR state=disabled" 2>/dev/null || true)
-  for ver in $VERSIONS; do
-    gcloud secrets versions destroy "$ver" --secret="$secret" --project="$GCP_PROJECT" --quiet 2>/dev/null || true
-  done
-  ok "$secret — all versions destroyed"
+  gcloud secrets delete "$secret" --project="$FIREBASE_PROJECT" --quiet 2>/dev/null \
+    && ok "Deleted $secret" || true
 done
 
-# ── 4. Clean Firestore ────────────────────────────────────────────────────
+# ── 8. Clean Firestore ───────────────────────────────────────────────────
 
 echo ""
 if confirm "Wipe ALL Firestore collections? (users, invites, everything)"; then
-  FIREBASE_TARGET=""
-  case "$ENV" in
-    prod) FIREBASE_TARGET="octogee" ;;
-    test) FIREBASE_TARGET="octogee-test" ;;
-  esac
-
-  info "Deleting all Firestore collections in '$FIREBASE_TARGET'..."
-  firebase firestore:delete --all-collections --project "$FIREBASE_TARGET" --force
+  info "Deleting all Firestore collections in '$FIREBASE_PROJECT'..."
+  firebase firestore:delete --all-collections --project "$FIREBASE_PROJECT" --force
   ok "Firestore wiped clean"
 else
   info "Keeping Firestore data"
 fi
 
-# ── 5. Delete Cloud Functions ─────────────────────────────────────────────
+# ── 9. Delete Cloud Functions ─────────────────────────────────────────────
 
 echo ""
 if confirm "Delete all Cloud Functions?"; then
-  FIREBASE_TARGET=""
-  case "$ENV" in
-    prod) FIREBASE_TARGET="octogee" ;;
-    test) FIREBASE_TARGET="octogee-test" ;;
-  esac
-
-  FN_LIST=$(gcloud functions list --project="$FIREBASE_TARGET" --region="$REGION" --format="value(name)" 2>/dev/null || true)
+  FN_LIST=$(gcloud functions list --project="$FIREBASE_PROJECT" --region="$REGION" --format="value(name)" 2>/dev/null || true)
   FN_COUNT=$(echo "$FN_LIST" | grep -c . || true)
 
   if [[ "$FN_COUNT" -gt 0 ]]; then
-    info "Deleting $FN_COUNT Cloud Functions in '$FIREBASE_TARGET'..."
+    info "Deleting $FN_COUNT Cloud Functions in '$FIREBASE_PROJECT'..."
     echo "$FN_LIST" | while read -r fn; do
-      gcloud functions delete "$fn" --project="$FIREBASE_TARGET" --region="$REGION" --quiet --gen2 2>&1 &
+      gcloud functions delete "$fn" --project="$FIREBASE_PROJECT" --region="$REGION" --quiet --gen2 2>&1 &
     done
     wait
     ok "All Cloud Functions deleted"
@@ -210,7 +254,7 @@ else
   info "Keeping Cloud Functions"
 fi
 
-# ── 6. Clean Firebase Auth ────────────────────────────────────────────────
+# ── 10. Clean Firebase Auth ───────────────────────────────────────────────
 
 echo ""
 if confirm "Delete all Firebase Auth users?"; then
@@ -247,5 +291,8 @@ echo -e "${BOLD}  Teardown complete${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 echo "  Next steps:"
-echo "    1. Run: ./scripts/setup-gateway.sh --env=$ENV"
+echo "    1. Run: ./scripts/setup-mattermost.sh --env=$ENV"
+echo "    2. Run: ./scripts/setup-gateway.sh --env=$ENV"
+echo "    3. Run: ./scripts/setup-monitoring.sh --env=$ENV (optional)"
+echo "    4. Run: ./scripts/setup-chat-proxy.sh --env=$ENV (optional)"
 echo ""
