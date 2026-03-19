@@ -10,12 +10,26 @@
  * Endpoints proxied:
  *   GET  /api/v4/users/me/teams/{id}/channels  (list channels)
  *   POST /api/v4/users/ids                      (profile lookup)
+ *   GET  /api/v4/users/{id}                     (single user profile)
+ *   GET  /api/v4/users/{id}/image               (profile avatar)
+ *   POST /api/v4/users/status/ids               (bulk user status)
  *   GET  /api/v4/channels/{id}/posts            (message history)
  *   POST /api/v4/posts                          (send message)
  *   GET  /api/v4/files/{id}                     (file download)
  *   GET  /api/v4/files/{id}/thumbnail           (file thumbnail)
  *   GET  /api/v4/posts/{id}/files/info          (file metadata)
  *   POST /api/v4/files                          (file upload)
+ *   POST /api/v4/reactions                      (add reaction)
+ *   DELETE /api/v4/users/{uid}/posts/{id}/reactions/{emoji}  (remove reaction)
+ *   GET  /api/v4/posts/{id}/reactions           (list reactions on a post)
+ *   POST /api/v4/channels/direct               (create DM channel)
+ *   POST /api/v4/users/search                   (user search for DM creation)
+ *   DELETE /api/v4/channels/{id}/members/{uid}  (remove channel member)
+ *   PUT  /api/v4/channels/{id}/members/{uid}/notify_props  (notification prefs)
+ *   PUT  /api/v4/users/{id}/status              (set own status)
+ *   PUT  /api/v4/users/{id}/image               (upload avatar)
+ *   PUT  /api/v4/users/{id}/patch               (update profile)
+ *   POST /api/v4/opengraph                      (OpenGraph link previews)
  *   WS   /api/v4/websocket                      (real-time events)
  */
 
@@ -58,6 +72,10 @@ const ALLOWED_ROUTES: Array<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: /^\/api\/v4\/users\/ids$/ },
   // Get single user profile
   { method: "GET", pattern: /^\/api\/v4\/users\/[a-z0-9]+$/ },
+  // Profile avatar image
+  { method: "GET", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/image$/ },
+  // Bulk user status (online/away/offline/dnd)
+  { method: "POST", pattern: /^\/api\/v4\/users\/status\/ids$/ },
   // Message history
   { method: "GET", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/posts/ },
   // Send message
@@ -66,6 +84,22 @@ const ALLOWED_ROUTES: Array<{ method: string; pattern: RegExp }> = [
   { method: "GET", pattern: /^\/api\/v4\/files\/[a-z0-9]+(\/(thumbnail|preview))?$/ },
   { method: "GET", pattern: /^\/api\/v4\/posts\/[a-z0-9]+\/files\/info$/ },
   { method: "POST", pattern: /^\/api\/v4\/files$/ },
+  // Reactions
+  { method: "POST", pattern: /^\/api\/v4\/reactions$/ },
+  { method: "DELETE", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/posts\/[a-z0-9]+\/reactions\/[a-z0-9_+-]+$/ },
+  { method: "GET", pattern: /^\/api\/v4\/posts\/[a-z0-9]+\/reactions$/ },
+  // DM creation + user search
+  { method: "POST", pattern: /^\/api\/v4\/channels\/direct$/ },
+  { method: "POST", pattern: /^\/api\/v4\/users\/search$/ },
+  // Channel member management
+  { method: "DELETE", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members\/[a-z0-9]+$/ },
+  { method: "PUT", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members\/[a-z0-9]+\/notify_props$/ },
+  // User profile + status
+  { method: "PUT", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/status$/ },
+  { method: "PUT", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/image$/ },
+  { method: "PUT", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/patch$/ },
+  // OpenGraph link previews
+  { method: "POST", pattern: /^\/api\/v4\/opengraph$/ },
 ];
 
 function isAllowedRoute(method: string, path: string): boolean {
@@ -229,8 +263,26 @@ async function handleRest(
     const mmResp = await fetch(targetUrl, {
       method: req.method || "GET",
       headers,
+      redirect: "manual", // Don't follow redirects — forward them to the client
       ...(body.length > 0 ? { body: new Uint8Array(body) } : {}),
     });
+
+    // Forward redirects (e.g. MM /users/{id}/image → default avatar)
+    if (mmResp.status >= 300 && mmResp.status < 400) {
+      const location = mmResp.headers.get("location");
+      if (location) {
+        // If redirect points to internal MM, rewrite to proxy-relative path
+        const mmBase = MM_INTERNAL_URL!.replace(/\/$/, "");
+        const rewritten = location.startsWith(mmBase)
+          ? location.slice(mmBase.length)
+          : location;
+        res.writeHead(mmResp.status, { Location: rewritten });
+      } else {
+        res.writeHead(mmResp.status);
+      }
+      res.end();
+      return;
+    }
 
     // Forward response headers
     const respCt = mmResp.headers.get("content-type");
@@ -258,8 +310,12 @@ async function handleRest(
     }
   } catch (e: any) {
     console.error(`[proxy] REST error: ${e.message}`);
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Upstream error" }));
+    if (!res.headersSent) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Upstream error" }));
+    } else {
+      res.end();
+    }
   }
 }
 

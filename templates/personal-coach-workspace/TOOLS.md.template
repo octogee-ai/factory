@@ -21,9 +21,19 @@ Save to `~/.openclaw/media/` before sending. Workspace paths are blocked for med
 Query customer data: check `customer-config.json` for UID and endpoint details.
 
 ### Firebase Milestone Updates
+
+Do NOT use `npx tsx` or `update-onboarding.ts` — you don't have exec permissions.
+
+Write `_pending_milestones.json` in your workspace root. The provisioner picks it up within 10 seconds and syncs to Firebase automatically.
+
 ```bash
-UID=$(python3 -c "import json; print(json.load(open('customer-config.json'))['uid'])")
-npx tsx /octogee/scripts/update-onboarding.ts $UID <milestone> <value>
+cat > _pending_milestones.json << 'EOF'
+{
+  "coachPersonalitySet": true,
+  "coachName": "TheirName",
+  "coachPersonality": "Their described personality"
+}
+EOF
 ```
 
 Available milestones:
