@@ -40,7 +40,7 @@ fi
 
 case "$ENV" in
   prod) PROMETHEUS_VALUES="k8s/monitoring/prometheus-values-autopilot.yaml"; ENV_FILE="$REPO_DIR/.env" ;;
-  test) PROMETHEUS_VALUES="k8s/monitoring/prometheus-values.yaml"; ENV_FILE="$REPO_DIR/.env.test" ;;
+  test) PROMETHEUS_VALUES="k8s/monitoring/prometheus-values-autopilot.yaml"; ENV_FILE="$REPO_DIR/.env.test" ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
 
