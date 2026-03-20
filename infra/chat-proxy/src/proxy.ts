@@ -7,8 +7,14 @@
  * 3. Proxies whitelisted MM REST endpoints + WebSocket
  * 4. Mattermost stays fully internal (no public exposure)
  *
+ * Team model: single-team for v1.0. All customers share one MM team.
+ * The team ID is baked into the client (PUBLIC_MM_TEAM_ID) and passed
+ * explicitly — no rewriting or fallback needed.
+ * Multi-team: when needed, validate request team ID against user's
+ * provisioned team (stored in Firestore users/{uid}.mattermost.teamId).
+ *
  * Endpoints proxied:
- *   GET  /api/v4/users/me/teams/{id}/channels  (list channels)
+ *   GET  /api/v4/users/me/teams/{id}/channels  (list channels — team-scoped, includes private)
  *   POST /api/v4/users/ids                      (profile lookup)
  *   GET  /api/v4/users/{id}                     (single user profile)
  *   GET  /api/v4/users/{id}/image               (profile avatar)
@@ -40,7 +46,8 @@ import admin from "firebase-admin";
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
-const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL; // e.g. http://mattermost.octogee-test.svc.cluster.local:8065
+const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL; // e.g. http://mattermost.octogee.svc.cluster.local:8065
+const MM_TEAM_ID = process.env.MM_TEAM_ID || ""; // Mattermost team ID — single team for v1.0
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
@@ -65,9 +72,8 @@ const db = admin.firestore();
 // ── Allowed Endpoints (whitelist) ─────────────────────────────────────────────
 
 const ALLOWED_ROUTES: Array<{ method: string; pattern: RegExp }> = [
-  // Channel listing (with or without team ID — Client4.getMyChannels('') sends empty team)
-  { method: "GET", pattern: /^\/api\/v4\/users\/me\/teams\/[a-z0-9]*\/channels/ },
-  { method: "GET", pattern: /^\/api\/v4\/users\/me\/channels/ },
+  // Channel listing — team ID required (PUBLIC_MM_TEAM_ID in client build)
+  { method: "GET", pattern: /^\/api\/v4\/users\/me\/teams\/[a-z0-9]+\/channels/ },
   // Profile lookup
   { method: "POST", pattern: /^\/api\/v4\/users\/ids$/ },
   // Get single user profile
@@ -244,11 +250,8 @@ async function handleRest(
     return;
   }
 
-  // Rewrite double-slash in team channel listing (Client4.getMyChannels('') sends empty team ID)
-  let proxyUrl = req.url || "";
-  proxyUrl = proxyUrl.replace(/\/teams\/\/channels/, "/channels");
-
   // Proxy to MM
+  const proxyUrl = req.url || "";
   const targetUrl = `${MM_INTERNAL_URL}${proxyUrl}`;
   try {
     const body = await readBody(req);
@@ -437,5 +440,6 @@ server.on("upgrade", (req, socket, head) => {
 server.listen(PORT, () => {
   console.log(`[chat-proxy] listening on :${PORT}`);
   console.log(`[chat-proxy] MM backend: ${MM_INTERNAL_URL}`);
+  console.log(`[chat-proxy] MM team: ${MM_TEAM_ID || "(not set — multi-team not enforced)"}`);
   console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
 });
