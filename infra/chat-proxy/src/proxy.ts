@@ -126,6 +126,26 @@ const tokenCache = new Map<string, CachedToken>();
 const TOKEN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const ADMIN_CACHE_KEY = "__admin__";
 
+// ── Role Cache ────────────────────────────────────────────────────────────────
+
+interface CachedRole {
+  isAdmin: boolean;
+  expiresAt: number;
+}
+
+const roleCache = new Map<string, CachedRole>();
+const ROLE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function isAdminUser(uid: string): Promise<boolean> {
+  const cached = roleCache.get(uid);
+  if (cached && cached.expiresAt > Date.now()) return cached.isAdmin;
+
+  const doc = await db.doc(`users/${uid}`).get();
+  const isAdmin = doc.data()?.role === "admin";
+  roleCache.set(uid, { isAdmin, expiresAt: Date.now() + ROLE_CACHE_TTL });
+  return isAdmin;
+}
+
 async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: string } | null> {
   const cached = tokenCache.get(uid);
   if (cached && cached.expiresAt > Date.now()) {
@@ -277,9 +297,7 @@ async function handleRest(
   }
 
   // Get MM token — admin users get octogee-admin credentials
-  const userDoc = await db.doc(`users/${uid}`).get();
-  const isAdmin = userDoc.data()?.role === "admin";
-  const creds = isAdmin ? await getAdminMmToken() : await getMmToken(uid);
+  const creds = await isAdminUser(uid) ? await getAdminMmToken() : await getMmToken(uid);
   if (!creds) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Chat not provisioned" }));
