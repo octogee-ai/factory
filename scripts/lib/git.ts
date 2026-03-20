@@ -65,8 +65,6 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     "# Build artifacts",
     "projects/*/preview/",
     "projects/*/src/node_modules/",
-    "projects/site-versions/",
-    "projects/*.bak",
     "node_modules/",
     "",
     "# User-visible files are tracked:",
