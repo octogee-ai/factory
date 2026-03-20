@@ -124,6 +124,7 @@ interface CachedToken {
 
 const tokenCache = new Map<string, CachedToken>();
 const TOKEN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const ADMIN_CACHE_KEY = "__admin__";
 
 async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: string } | null> {
   const cached = tokenCache.get(uid);
@@ -153,6 +154,39 @@ async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: str
     return { mmToken, mmUserId };
   } catch (e: any) {
     console.error(`[proxy] Failed to load MM token for ${uid}: ${e.message}`);
+    return null;
+  }
+}
+
+// Admin token — reads from system/mattermostAdmin (platform admin MM user)
+async function getAdminMmToken(): Promise<{ mmToken: string; mmUserId: string } | null> {
+  const cached = tokenCache.get(ADMIN_CACHE_KEY);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { mmToken: cached.mmToken, mmUserId: cached.mmUserId };
+  }
+
+  try {
+    const adminDoc = await db.doc("system/mattermostAdmin").get();
+    if (!adminDoc.exists) {
+      console.error("[proxy] system/mattermostAdmin not found");
+      return null;
+    }
+
+    const data = adminDoc.data()!;
+    const mmUserId = data.userId;
+    const mmToken = data.personalToken;
+
+    if (!mmUserId || !mmToken) return null;
+
+    tokenCache.set(ADMIN_CACHE_KEY, {
+      mmToken,
+      mmUserId,
+      expiresAt: Date.now() + TOKEN_CACHE_TTL,
+    });
+
+    return { mmToken, mmUserId };
+  } catch (e: any) {
+    console.error(`[proxy] Failed to load admin MM token: ${e.message}`);
     return null;
   }
 }
@@ -199,7 +233,7 @@ function setCors(req: http.IncomingMessage, res: http.ServerResponse): void {
     }
   }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Admin-Session");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Max-Age", "86400");
 }
@@ -242,8 +276,10 @@ async function handleRest(
     return;
   }
 
-  // Get MM token
-  const creds = await getMmToken(uid);
+  // Get MM token — admin users get octogee-admin credentials
+  const userDoc = await db.doc(`users/${uid}`).get();
+  const isAdmin = userDoc.data()?.role === "admin";
+  const creds = isAdmin ? await getAdminMmToken() : await getMmToken(uid);
   if (!creds) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Chat not provisioned" }));
@@ -373,7 +409,9 @@ function handleWsUpgrade(
       }
 
       const uid = ticketData.uid;
-      const creds = await getMmToken(uid);
+      // Admin tickets use octogee-admin credentials
+      const isAdminTicket = ticketData.isAdminTicket === true;
+      const creds = isAdminTicket ? await getAdminMmToken() : await getMmToken(uid);
       if (!creds) {
         socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
         socket.destroy();
