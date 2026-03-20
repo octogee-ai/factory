@@ -47,7 +47,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     "TOOLS.md",
     "PROJECTS.md",
     "HEARTBEAT.md",
-    "IDENTITY.md",
+    // IDENTITY.md removed (Issue #23) — not used by OpenClaw, redundant with SOUL.md
     "_throttle.json",
     "customer-config.json",
     "crew-webhooks.json",
