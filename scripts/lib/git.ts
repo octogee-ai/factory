@@ -316,3 +316,27 @@ export async function archiveProjectRepo(slug: string, projectName: string): Pro
     log(`⚠ [git] Failed to archive project repo ${repoName}: ${err}`);
   }
 }
+
+// ── Delete Repo (Nuke) ──────────────────────────────────────────────────────
+
+/**
+ * Permanently delete a GitHub repo. Irreversible.
+ * Idempotent: 404 is treated as success.
+ */
+export async function deleteRepo(repoName: string): Promise<void> {
+  if (!GITHUB_TOKEN || !GITHUB_ORG) return;
+
+  const resp = await fetch(`https://api.github.com/repos/${GITHUB_ORG}/${repoName}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github+json",
+    },
+  });
+
+  if (resp.status === 204 || resp.status === 404) {
+    log(`[git-nuke] Repo ${GITHUB_ORG}/${repoName} deleted (or already gone)`);
+  } else {
+    log(`⚠ [git-nuke] Failed to delete repo ${repoName}: ${resp.status}`);
+  }
+}
