@@ -517,3 +517,21 @@ export async function syncProfileToMattermost(uid: string, data: any): Promise<v
 
   await db.doc(`users/${uid}`).update({ "_profileSync": FieldValue.delete() });
 }
+
+// ── Coach Profile Sync ───────────────────────────────────────────────────────
+
+export async function syncCoachProfileToMattermost(
+  slug: string,
+  coachMmUserId: string,
+  coachName: string
+): Promise<void> {
+  if (!process.env.MM_URL || !coachMmUserId || !coachName) return;
+
+  const patch = { first_name: coachName, nickname: coachName };
+  const result = await mmApiCall("PUT", `/users/${coachMmUserId}/patch`, patch);
+  if (result) {
+    log(`[coach-sync] ${slug}: updated coach display name → ${coachName}`);
+  } else {
+    log(`[coach-sync] ${slug}: ⚠ failed to update coach display name`);
+  }
+}
