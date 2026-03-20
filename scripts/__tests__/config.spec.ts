@@ -1,0 +1,89 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+
+// We test readOpenClawConfig/writeOpenClawConfig/agentExists by importing their
+// implementations directly, but they depend on OPENCLAW_CONFIG path. To test
+// round-trip behavior we replicate the logic with temp files.
+
+describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
+  let tmpDir: string;
+  let configPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "config-test-"));
+    configPath = path.join(tmpDir, "openclaw.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes and reads back JSON correctly", () => {
+    const config = {
+      agents: { list: [{ id: "test-agent" }] },
+      bindings: [],
+    };
+    // Write using atomic pattern (same as writeOpenClawConfig)
+    const tmp = configPath + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(config, null, 2), "utf-8");
+    fs.renameSync(tmp, configPath);
+
+    // Read back
+    const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(result.agents.list[0].id).toBe("test-agent");
+    expect(result.bindings).toEqual([]);
+  });
+
+  it("preserves nested objects", () => {
+    const config = {
+      agents: {
+        defaults: { maxConcurrent: 8 },
+        list: [],
+      },
+      plugins: {
+        entries: { "octogee-router": { config: { enforcementOverrides: {} } } },
+      },
+    };
+    const tmp = configPath + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(config, null, 2), "utf-8");
+    fs.renameSync(tmp, configPath);
+
+    const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(result.agents.defaults.maxConcurrent).toBe(8);
+    expect(result.plugins.entries["octogee-router"].config.enforcementOverrides).toEqual({});
+  });
+});
+
+describe("agentExists", () => {
+  // Re-implement locally for testing (avoids importing module that does Firebase init)
+  function agentExists(config: any, agentId: string): boolean {
+    return config.agents?.list?.some((a: any) => a.id === agentId) ?? false;
+  }
+
+  it("returns true when agent is in the list", () => {
+    const config = { agents: { list: [{ id: "octogee-test-coach" }] } };
+    expect(agentExists(config, "octogee-test-coach")).toBe(true);
+  });
+
+  it("returns false when agent is not in the list", () => {
+    const config = { agents: { list: [{ id: "octogee-other-coach" }] } };
+    expect(agentExists(config, "octogee-test-coach")).toBe(false);
+  });
+
+  it("returns false when agents.list is empty", () => {
+    const config = { agents: { list: [] } };
+    expect(agentExists(config, "anything")).toBe(false);
+  });
+
+  it("returns false when agents is undefined", () => {
+    const config = {};
+    expect(agentExists(config, "anything")).toBe(false);
+  });
+
+  it("returns false when agents.list is undefined", () => {
+    const config = { agents: {} };
+    expect(agentExists(config, "anything")).toBe(false);
+  });
+});

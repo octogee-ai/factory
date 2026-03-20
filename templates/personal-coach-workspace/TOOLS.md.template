@@ -5,12 +5,12 @@
 Your workspace root is the current directory. Everything lives here:
 - `AGENTS.md`, `SOUL.md`, `USER.md`, `MEMORY.md` — core files
 - `memory/` — daily notes
-- `builds/` — all project files (site source, project docs, etc.)
+- `projects/` — all project files (site source, project docs, etc.)
 
 **Rules:**
 - Never use `../` — you cannot write outside your workspace
 - Never use absolute paths (`~/.openclaw/...`) — use relative paths only
-- Project files go in `builds/{project-name}/`
+- Project files go in `projects/{project-name}/`
 
 ## Technical Notes
 

@@ -1,9 +1,9 @@
 /**
  * pre-boot-config.ts — Pre-seed restart-triggering config before OpenClaw starts.
  *
- * Queries Firestore for advisory slugs and enforcement overrides, then patches
- * openclaw.json BEFORE the gateway boots. This eliminates post-boot config writes
- * that would trigger SIGUSR1 restarts.
+ * Queries Firestore for enforcement overrides, then patches openclaw.json
+ * BEFORE the gateway boots. This eliminates post-boot config writes that
+ * would trigger SIGUSR1 restarts.
  *
  * Runs once at container startup (called from entrypoint.sh).
  * The provisioner's Firestore watchers still handle runtime changes.
@@ -47,13 +47,12 @@ async function main(): Promise<void> {
 
   let changed = false;
 
-  // ── Advisory slugs ─────────────────────────────────────────────────────
+  // ── Enforcement overrides ───────────────────────────────────────────────
   const snap = await db
     .collection("users")
     .where("provisioning.openclaw.status", "==", "complete")
     .get();
 
-  const advisorySlugs: string[] = [];
   const enforcementOverrides: Record<string, string> = {};
 
   for (const doc of snap.docs) {
@@ -61,12 +60,6 @@ async function main(): Promise<void> {
     const slug = data.provisioning?.openclaw?.slug;
     if (!slug) continue;
 
-    // Advisory mode
-    if (data.faceBrainMode === "advisory") {
-      advisorySlugs.push(slug);
-    }
-
-    // Enforcement overrides
     const enforcement = data.faceBrainEnforcement;
     if (enforcement && ["off", "soft", "hard"].includes(enforcement)) {
       enforcementOverrides[slug] = enforcement;
@@ -79,11 +72,11 @@ async function main(): Promise<void> {
   config.plugins.entries["octogee-router"] ??= {};
   config.plugins.entries["octogee-router"].config ??= {};
 
-  const currentSlugs: string[] = config.plugins.entries["octogee-router"].config.advisorySlugs ?? [];
-  if (JSON.stringify(advisorySlugs.sort()) !== JSON.stringify([...currentSlugs].sort())) {
-    config.plugins.entries["octogee-router"].config.advisorySlugs = advisorySlugs;
+  // Clean up stale advisorySlugs key if present (advisory mode removed)
+  if (config.plugins.entries["octogee-router"].config.advisorySlugs !== undefined) {
+    delete config.plugins.entries["octogee-router"].config.advisorySlugs;
     changed = true;
-    log(`advisory slugs: [${advisorySlugs.join(", ") || "none"}]`);
+    log("removed stale advisorySlugs from config");
   }
 
   const currentOverrides = config.plugins.entries["octogee-router"].config.enforcementOverrides ?? {};

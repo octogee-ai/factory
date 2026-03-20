@@ -29,6 +29,7 @@ COPY --chown=node:node scripts/update-onboarding.ts /octogee/scripts/
 COPY --chown=node:node scripts/get-customer-uid.ts /octogee/scripts/
 COPY --chown=node:node scripts/report-usage.ts /octogee/scripts/
 COPY --chown=node:node scripts/pre-boot-config.ts /octogee/scripts/
+COPY --chown=node:node scripts/trial-expiry-cron.ts /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 

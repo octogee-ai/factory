@@ -9,6 +9,6 @@
     "rootDir": ".",
     "skipLibCheck": true
   },
-  "include": ["*.ts"],
+  "include": ["*.ts", "lib/**/*.ts"],
   "exclude": ["node_modules", "dist", "seed-*.ts", "generate-*.ts", "setup-*.ts"]
 }
