@@ -8,8 +8,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-PROJECT="octogee"
-CLUSTER="octogee-gateway"
+PROJECT="octogee"          # GCP project for secrets + Cloud SQL (always octogee)
+CLUSTER="octogee-gateway"  # overridden per-env below
 REGION="us-central1"
 
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
@@ -33,12 +33,15 @@ case "$ENV" in
     VALUES_EXTRA=""
     GITEA_DOMAIN="git.octogee.com"
     DB_NAME="gitea_prod"
+    CLUSTER_PROJECT="octogee"
     ;;
   test)
     NAMESPACE="octogee-test"
     VALUES_EXTRA="-f infra/helm/gitea-values.test.yaml"
     GITEA_DOMAIN="git-test.octogee.com"
     DB_NAME="gitea_test"
+    CLUSTER="octogee-test"
+    CLUSTER_PROJECT="octogee-test"
     ;;
   *) fail "Unknown environment: $ENV" ;;
 esac
@@ -48,7 +51,7 @@ log "Preflight checks..."
 command -v helm >/dev/null || fail "helm not found"
 command -v kubectl >/dev/null || fail "kubectl not found"
 
-gcloud container clusters get-credentials "$CLUSTER" --region "$REGION" --project "$PROJECT"
+gcloud container clusters get-credentials "$CLUSTER" --region "$REGION" --project "$CLUSTER_PROJECT"
 
 # ── Helm repo ─────────────────────────────────────────────────────────────────
 log "Adding Gitea Helm repo..."
@@ -103,7 +106,6 @@ helm upgrade --install gitea gitea-charts/gitea \
   --set gitea.config.security.SECRET_KEY="$GITEA_SECRET_KEY" \
   --set gitea.config.security.INTERNAL_TOKEN="$GITEA_INTERNAL_TOKEN" \
   --set gitea.admin.password="$GITEA_ADMIN_PASS" \
-  --set "extraContainers[0].args[2]=$CLOUD_SQL_CONN" \
   --wait --timeout=5m
 
 ok "Gitea deployed to $NAMESPACE"
