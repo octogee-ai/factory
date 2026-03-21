@@ -210,6 +210,18 @@ if [[ -n "$CLOUD_SQL_INSTANCE" ]]; then
   kubectl create secret generic mattermost-cloud-sql -n "$K8S_NAMESPACE" \
     --from-literal=password="$MM_DB_PASSWORD"
   ok "mattermost-cloud-sql secret created"
+
+  # Sync password to Cloud SQL user — K8s secret and Cloud SQL MUST match
+  # Always from octogee project (Cloud SQL lives there for both envs)
+  info "Syncing DB password to Cloud SQL user '${MM_DB_USER}'..."
+  if gcloud sql users set-password "$MM_DB_USER" \
+      --instance=octogee-pg \
+      --project=octogee \
+      --password="$MM_DB_PASSWORD" 2>&1; then
+    ok "Cloud SQL user '${MM_DB_USER}' password synced"
+  else
+    warn "Could not sync Cloud SQL password — check IAM and try: gcloud sql users set-password $MM_DB_USER --instance=octogee-pg --project=octogee --password=\$MM_DB_PASSWORD"
+  fi
 else
   # Test environment: create mattermost-db secret for in-cluster postgres
   info "Creating mattermost-db K8s secret (test env)..."
