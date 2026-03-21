@@ -116,16 +116,24 @@ if [ -f "$OPENCLAW_DIR/openclaw.json" ] && [ -f "${SA_KEY_PATH:-$OPENCLAW_DIR/se
 fi
 
 # ── Start provisioner in background with auto-restart ───────────────────────
-(
-  while true; do
-    log "Starting Octogee provisioner..."
-    /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/local-provisioner.ts \
-      || true
-    log "Provisioner exited — restarting in 5s..."
-    sleep 5
-  done
-) &
+# OpenClaw (PID 1) may restart the entrypoint on config reload, creating
+# duplicate provisioner processes. Use a lock file to ensure only one runs.
+PROVISIONER_LOCK="/tmp/octogee-provisioner.lock"
+if [ -f "$PROVISIONER_LOCK" ] && kill -0 "$(cat "$PROVISIONER_LOCK")" 2>/dev/null; then
+  log "Provisioner already running (PID $(cat "$PROVISIONER_LOCK")) — skipping"
+else
+  (
+    echo $$ > "$PROVISIONER_LOCK"
+    while true; do
+      log "Starting Octogee provisioner..."
+      /octogee/scripts/node_modules/.bin/tsx \
+        /octogee/scripts/local-provisioner.ts \
+        || true
+      log "Provisioner exited — restarting in 5s..."
+      sleep 5
+    done
+  ) &
+fi
 
 # ── Start site API in background with auto-restart ──────────────────────────
 (
