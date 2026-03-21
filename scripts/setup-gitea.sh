@@ -61,12 +61,16 @@ ok "Repo ready"
 
 # ── Read secrets from Secret Manager ─────────────────────────────────────────
 log "Reading credentials from Secret Manager..."
+# Use separate secrets per env — prevents cross-env password clobbering
+GITEA_DB_SECRET="gitea-db-password"
+[[ "$ENV" == "test" ]] && GITEA_DB_SECRET="gitea-db-password-test"
+
 GITEA_DB_PASS=$(gcloud secrets versions access latest \
-  --secret=gitea-db-password --project="$PROJECT" 2>/dev/null || echo "")
+  --secret="$GITEA_DB_SECRET" --project="$PROJECT" 2>/dev/null || echo "")
 CLOUD_SQL_CONN=$(gcloud secrets versions access latest \
   --secret=cloud-sql-connection-name --project="$PROJECT" 2>/dev/null || echo "")
 
-[[ -z "$GITEA_DB_PASS" ]] && fail "gitea-db-password secret not found. Run setup-cloud-sql.sh first."
+[[ -z "$GITEA_DB_PASS" ]] && fail "$GITEA_DB_SECRET secret not found. Run setup-cloud-sql.sh first."
 [[ -z "$CLOUD_SQL_CONN" ]] && fail "cloud-sql-connection-name secret not found. Run setup-cloud-sql.sh first."
 
 # ── Create k8s secrets ───────────────────────────────────────────────────────
