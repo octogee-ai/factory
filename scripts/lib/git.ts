@@ -5,7 +5,7 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { log, GITHUB_TOKEN, GITHUB_ORG, CUSTOMERS_DIR } from "./config.js";
+import { log, GIT_API_URL, GIT_API_TOKEN, GIT_ORG, CUSTOMERS_DIR } from "./config.js";
 
 // ── Git Exec ────────────────────────────────────────────────────────────────────
 
@@ -29,10 +29,10 @@ export function gitExec(cwd: string, args: string): string | null {
 
 // ── Workspace Repo ──────────────────────────────────────────────────────────────
 
-/** Initialize a git repo for a customer workspace and push to GitHub. */
+/** Initialize a git repo for a customer workspace and push to Gitea. */
 export async function initWorkspaceRepo(coachDir: string, slug: string): Promise<string | null> {
-  if (!GITHUB_TOKEN) {
-    log(`[git] Skipping repo init for ${slug} — GITHUB_TOKEN not set`);
+  if (!GIT_API_TOKEN) {
+    log(`[git] Skipping repo init for ${slug} — GIT_API_TOKEN not set`);
     return null;
   }
 
@@ -82,14 +82,14 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   const commitResult = gitExec(coachDir, 'commit -m "initial: workspace provisioned"');
   log(`[git] commit: ${commitResult?.substring(0, 80) ?? "FAILED"}`);
 
-  // Create GitHub repo
+  // Create Gitea repo
   try {
-    const resp = await fetch(`https://api.github.com/orgs/${GITHUB_ORG}/repos`, {
+    const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Authorization: `token ${GIT_API_TOKEN}`,
         "Content-Type": "application/json",
-        Accept: "application/vnd.github+json",
+        Accept: "application/json",
       },
       body: JSON.stringify({
         name: repoName,
@@ -99,18 +99,19 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
       }),
     });
 
-    if (!resp.ok && resp.status !== 422) {
+    if (!resp.ok && resp.status !== 409) { // Gitea uses 409 for existing repo
       const body = await resp.text();
-      log(`⚠ [git] Failed to create repo ${GITHUB_ORG}/${repoName}: ${resp.status} ${body}`);
+      log(`⚠ [git] Failed to create repo ${GIT_ORG}/${repoName}: ${resp.status} ${body}`);
       return null;
     }
   } catch (err) {
-    log(`⚠ [git] GitHub API error creating repo: ${err}`);
+    log(`⚠ [git] Gitea API error creating repo: ${err}`);
     return null;
   }
 
-  // Add remote + push
-  const remoteUrl = `https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_ORG}/${repoName}.git`;
+  // Add remote + push (Gitea internal URL with auth)
+  const gitHost = new URL(GIT_API_URL).origin;
+  const remoteUrl = `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
   const remoteResult = gitExec(coachDir, `remote add origin ${remoteUrl}`);
   log(`[git] remote add: ${remoteResult === "" ? "OK" : remoteResult ?? "FAILED"}`);
   const pushResult = gitExec(coachDir, "push -u origin main");
@@ -121,14 +122,14 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     return null;
   }
 
-  const repoUrl = `https://github.com/${GITHUB_ORG}/${repoName}`;
+  const repoUrl = `${gitHost}/${GIT_ORG}/${repoName}`;
   log(`[git] ✅ Workspace repo created: ${repoUrl}`);
   return repoUrl;
 }
 
 // ── Project Repo ────────────────────────────────────────────────────────────────
 
-/** Initialize a git repo for a project and push to GitHub. */
+/** Initialize a git repo for a project and push to Gitea. */
 export async function initProjectRepo(
   projectDir: string,
   slug: string,
@@ -136,8 +137,8 @@ export async function initProjectRepo(
   committerName = "Octogee",
   committerEmail = "octo@octogee.com",
 ): Promise<string | null> {
-  if (!GITHUB_TOKEN) {
-    log(`[git] Skipping project repo init for ${slug}/${projectName} — GITHUB_TOKEN not set`);
+  if (!GIT_API_TOKEN) {
+    log(`[git] Skipping project repo init for ${slug}/${projectName} — GIT_API_TOKEN not set`);
     return null;
   }
 
@@ -165,14 +166,14 @@ export async function initProjectRepo(
     return null;
   }
 
-  // Create GitHub repo
+  // Create Gitea repo
   try {
-    const resp = await fetch(`https://api.github.com/orgs/${GITHUB_ORG}/repos`, {
+    const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Authorization: `token ${GIT_API_TOKEN}`,
         "Content-Type": "application/json",
-        Accept: "application/vnd.github+json",
+        Accept: "application/json",
       },
       body: JSON.stringify({
         name: repoName,
@@ -182,17 +183,18 @@ export async function initProjectRepo(
       }),
     });
 
-    if (!resp.ok && resp.status !== 422) {
+    if (!resp.ok && resp.status !== 409) { // Gitea uses 409 for existing repo
       const body = await resp.text();
-      log(`⚠ [git] Failed to create project repo ${GITHUB_ORG}/${repoName}: ${resp.status} ${body}`);
+      log(`⚠ [git] Failed to create project repo ${GIT_ORG}/${repoName}: ${resp.status} ${body}`);
       return null;
     }
   } catch (err) {
-    log(`⚠ [git] GitHub API error creating project repo: ${err}`);
+    log(`⚠ [git] Gitea API error creating project repo: ${err}`);
     return null;
   }
 
-  const remoteUrl = `https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_ORG}/${repoName}.git`;
+  const gitHost = new URL(GIT_API_URL).origin;
+  const remoteUrl = `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
   gitExec(projectDir, `remote add origin ${remoteUrl}`);
   const pushResult = gitExec(projectDir, "push -u origin main");
   log(`[git] project push: ${pushResult !== null ? "OK" : "FAILED"}`);
@@ -202,7 +204,7 @@ export async function initProjectRepo(
     return null;
   }
 
-  const repoUrl = `https://github.com/${GITHUB_ORG}/${repoName}`;
+  const repoUrl = `${gitHost}/${GIT_ORG}/${repoName}`;
   log(`[git] ✅ Project repo created: ${repoUrl}`);
   return repoUrl;
 }
@@ -211,8 +213,8 @@ export async function initProjectRepo(
 
 /** Stage all changes, commit, and push to origin main. Returns true on success. */
 export async function commitAndPush(repoDir: string, message: string): Promise<boolean> {
-  if (!GITHUB_TOKEN) {
-    log(`[git] Skipping commitAndPush — GITHUB_TOKEN not set`);
+  if (!GIT_API_TOKEN) {
+    log(`[git] Skipping commitAndPush — GIT_API_TOKEN not set`);
     return false;
   }
   const status = gitExec(repoDir, "status --porcelain");
@@ -237,9 +239,9 @@ export async function commitAndPush(repoDir: string, message: string): Promise<b
 
 // ── Sync All Workspaces ─────────────────────────────────────────────────────────
 
-/** Sync all dirty workspaces to GitHub. Pulls remote changes. */
+/** Sync all dirty workspaces to Gitea. Pulls remote changes. */
 export async function syncAllWorkspaces(): Promise<void> {
-  if (!GITHUB_TOKEN) return;
+  if (!GIT_API_TOKEN) return;
 
   if (!fs.existsSync(CUSTOMERS_DIR)) return;
 
@@ -275,43 +277,43 @@ export async function syncAllWorkspaces(): Promise<void> {
 
 // ── Archive Repos ───────────────────────────────────────────────────────────────
 
-/** Archive a GitHub workspace repo. */
+/** Archive a Gitea workspace repo. */
 export async function archiveWorkspaceRepo(slug: string): Promise<void> {
-  if (!GITHUB_TOKEN) return;
+  if (!GIT_API_TOKEN) return;
 
   const repoName = `${slug}-workspace`;
   try {
-    await fetch(`https://api.github.com/repos/${GITHUB_ORG}/${repoName}`, {
+    await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
       method: "PATCH",
       headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Authorization: `token ${GIT_API_TOKEN}`,
         "Content-Type": "application/json",
-        Accept: "application/vnd.github+json",
+        Accept: "application/json",
       },
       body: JSON.stringify({ archived: true }),
     });
-    log(`[git] Archived repo: ${GITHUB_ORG}/${repoName}`);
+    log(`[git] Archived repo: ${GIT_ORG}/${repoName}`);
   } catch (err) {
     log(`⚠ [git] Failed to archive repo ${repoName}: ${err}`);
   }
 }
 
-/** Archive a project GitHub repo. */
+/** Archive a project Gitea repo. */
 export async function archiveProjectRepo(slug: string, projectName: string): Promise<void> {
-  if (!GITHUB_TOKEN) return;
+  if (!GIT_API_TOKEN) return;
 
   const repoName = `${slug}-${projectName}`;
   try {
-    await fetch(`https://api.github.com/repos/${GITHUB_ORG}/${repoName}`, {
+    await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
       method: "PATCH",
       headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Authorization: `token ${GIT_API_TOKEN}`,
         "Content-Type": "application/json",
-        Accept: "application/vnd.github+json",
+        Accept: "application/json",
       },
       body: JSON.stringify({ archived: true }),
     });
-    log(`[git] Archived project repo: ${GITHUB_ORG}/${repoName}`);
+    log(`[git] Archived project repo: ${GIT_ORG}/${repoName}`);
   } catch (err) {
     log(`⚠ [git] Failed to archive project repo ${repoName}: ${err}`);
   }
@@ -320,22 +322,22 @@ export async function archiveProjectRepo(slug: string, projectName: string): Pro
 // ── Delete Repo (Nuke) ──────────────────────────────────────────────────────
 
 /**
- * Permanently delete a GitHub repo. Irreversible.
+ * Permanently delete a Gitea repo. Irreversible.
  * Idempotent: 404 is treated as success.
  */
 export async function deleteRepo(repoName: string): Promise<void> {
-  if (!GITHUB_TOKEN || !GITHUB_ORG) return;
+  if (!GIT_API_TOKEN || !GIT_ORG) return;
 
-  const resp = await fetch(`https://api.github.com/repos/${GITHUB_ORG}/${repoName}`, {
+  const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
     method: "DELETE",
     headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      Accept: "application/vnd.github+json",
+      Authorization: `token ${GIT_API_TOKEN}`,
+      Accept: "application/json",
     },
   });
 
   if (resp.status === 204 || resp.status === 404) {
-    log(`[git-nuke] Repo ${GITHUB_ORG}/${repoName} deleted (or already gone)`);
+    log(`[git-nuke] Repo ${GIT_ORG}/${repoName} deleted (or already gone)`);
   } else {
     log(`⚠ [git-nuke] Failed to delete repo ${repoName}: ${resp.status}`);
   }
