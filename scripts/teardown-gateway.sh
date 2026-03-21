@@ -56,6 +56,9 @@ case "$ENV" in
   prod)
     GCP_PROJECT="octogee"
     FIREBASE_PROJECT="octogee"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     K8S_NAMESPACE="octogee"
     ENV_FILE="$REPO_DIR/.env"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
@@ -64,6 +67,9 @@ case "$ENV" in
   test)
     GCP_PROJECT="octogee-test"
     FIREBASE_PROJECT="octogee-test"
+    CLUSTER_PROJECT="octogee-test"
+    CLUSTER_NAME="octogee-test"
+    K8S_CONTEXT="gke_octogee-test_us-central1_octogee-test"
     K8S_NAMESPACE="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
@@ -97,8 +103,20 @@ echo -e "${RED}═════════════════════�
 echo -e "${BOLD}  ⚠️  Octogee Teardown — ${ENV_LABEL}${NC}"
 echo -e "${RED}═══════════════════════════════════════════════════════════${NC}"
 echo ""
+
+# ── Context guard ─────────────────────────────────────────────────────────
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+kubectl config use-context "$K8S_CONTEXT" >/dev/null
+CURRENT_CTX=$(kubectl config current-context)
+if [[ "$CURRENT_CTX" != "$K8S_CONTEXT" ]]; then
+  echo -e "  ${RED}❌ kubectl context is '$CURRENT_CTX', expected '$K8S_CONTEXT'. Aborting.${NC}"
+  exit 1
+fi
+echo -e "  ✅ kubectl context: $CURRENT_CTX"
+
 echo -e "  Environment:    ${BOLD}$ENV${NC}"
 echo -e "  K8s Namespace:  ${BOLD}$K8S_NAMESPACE${NC}"
+echo -e "  K8s Context:    ${BOLD}$K8S_CONTEXT${NC}"
 echo -e "  Env File:       ${BOLD}$ENV_FILE${NC}"
 if $FULL; then
   echo -e "  Mode:           ${RED}${BOLD}FULL (persistent infra included)${NC}"

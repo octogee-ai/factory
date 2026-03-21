@@ -58,6 +58,9 @@ case "$ENV" in
   prod)
     K8S_NAMESPACE="octogee"
     GCP_PROJECT="octogee"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env"
     ENV_LABEL="🔴 PRODUCTION"
     CLOUD_SQL_INSTANCE="octogee:us-central1:octogee-pg"
@@ -67,12 +70,15 @@ case "$ENV" in
   test)
     K8S_NAMESPACE="octogee-test"
     GCP_PROJECT="octogee-test"
+    CLUSTER_PROJECT="octogee-test"
+    CLUSTER_NAME="octogee-test"
+    K8S_CONTEXT="gke_octogee-test_us-central1_octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
-    # Test still uses in-cluster postgres (Cloud SQL not provisioned for test)
-    CLOUD_SQL_INSTANCE=""
-    MM_DB_NAME="mattermost"
-    MM_DB_USER="mmuser"
+    # Cloud SQL (octogee-pg in octogee project) via public IP cloud-sql-proxy
+    CLOUD_SQL_INSTANCE="octogee:us-central1:octogee-pg"
+    MM_DB_NAME="mattermost_test"
+    MM_DB_USER="mattermost"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
@@ -124,6 +130,17 @@ echo -e "${CYAN}═════════════════════�
 echo -e "${BOLD}  Mattermost Setup — ${ENV_LABEL}${NC}"
 echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
+
+# ── 0. Set kubectl context ────────────────────────────────────────────────
+info "Setting kubectl context: $K8S_CONTEXT"
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+kubectl config use-context "$K8S_CONTEXT"
+CURRENT_CTX=$(kubectl config current-context)
+if [[ "$CURRENT_CTX" != "$K8S_CONTEXT" ]]; then
+  fail "kubectl context is '$CURRENT_CTX', expected '$K8S_CONTEXT'. Aborting."
+  exit 1
+fi
+ok "kubectl context: $CURRENT_CTX"
 
 # ── 1. Collect MM admin credentials ──────────────────────────────────────
 
