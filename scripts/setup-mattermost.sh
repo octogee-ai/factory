@@ -2,11 +2,17 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Octogee Mattermost Setup — Deploy + Bootstrap
+# Octogee Mattermost Setup — Cloud SQL + Bootstrap
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Deploys Mattermost (postgres + server) and bootstraps admin/team/bot
-# if this is a fresh instance. Saves all credentials to the env file.
+# Deploys Mattermost connected to Cloud SQL (via cloud-sql-proxy) and
+# bootstraps admin/team/bot if this is a fresh instance.
+# Saves all credentials to the env file.
+#
+# Prerequisites:
+#   - Cloud SQL instance `octogee-pg` with `mattermost_prod` database
+#   - cloud-sql-proxy deployment running (applied if missing)
+#   - MM_DB_PASSWORD in .env or Secret Manager
 #
 # Run this BEFORE setup-gateway.sh. The gateway needs MM credentials
 # in .env to create K8s secrets and connect.
@@ -51,13 +57,22 @@ fi
 case "$ENV" in
   prod)
     K8S_NAMESPACE="octogee"
+    GCP_PROJECT="octogee"
     ENV_FILE="$REPO_DIR/.env"
     ENV_LABEL="🔴 PRODUCTION"
+    CLOUD_SQL_INSTANCE="octogee:us-central1:octogee-pg"
+    MM_DB_NAME="mattermost_prod"
+    MM_DB_USER="mattermost"
     ;;
   test)
     K8S_NAMESPACE="octogee-test"
+    GCP_PROJECT="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
+    # Test still uses in-cluster postgres (Cloud SQL not provisioned for test)
+    CLOUD_SQL_INSTANCE=""
+    MM_DB_NAME="mattermost"
+    MM_DB_USER="mmuser"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
@@ -130,34 +145,79 @@ if [[ -z "${MM_ADMIN_PASS:-}" ]]; then
 fi
 save_env "MM_ADMIN_PASS" "$MM_ADMIN_PASS"
 
+# DB password: try Secret Manager first (prod), then .env, then generate
 if [[ -z "${MM_DB_PASSWORD:-}" ]]; then
-  MM_DB_PASSWORD=$(openssl rand -hex 24)
-  info "Generated URL-safe DB password"
+  if [[ -n "$CLOUD_SQL_INSTANCE" ]]; then
+    # Try to fetch from Secret Manager
+    SM_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project="$GCP_PROJECT" 2>/dev/null || echo "")
+    if [[ -n "$SM_PASS" ]]; then
+      MM_DB_PASSWORD="$SM_PASS"
+      info "Using MM_DB_PASSWORD from Secret Manager"
+    else
+      MM_DB_PASSWORD=$(openssl rand -hex 24)
+      info "Generated new DB password (save to Secret Manager for persistence)"
+    fi
+  else
+    MM_DB_PASSWORD=$(openssl rand -hex 24)
+    info "Generated URL-safe DB password"
+  fi
 fi
 save_env "MM_DB_PASSWORD" "$MM_DB_PASSWORD"
 set -u
 
-# ── 2. Create mattermost-db K8s secret ──────────────────────────────────
+# ── 2. Ensure cloud-sql-proxy is running (prod) ──────────────────────────
 
-info "Creating mattermost-db K8s secret..."
-kubectl delete secret mattermost-db -n "$K8S_NAMESPACE" 2>/dev/null || true
-kubectl create secret generic mattermost-db -n "$K8S_NAMESPACE" \
-  --from-literal=password="$MM_DB_PASSWORD"
-ok "mattermost-db secret created"
+if [[ -n "$CLOUD_SQL_INSTANCE" ]]; then
+  info "Checking cloud-sql-proxy deployment..."
+  if kubectl get deployment cloud-sql-proxy -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
+    ok "cloud-sql-proxy deployment exists"
+  else
+    info "Deploying cloud-sql-proxy..."
+    kubectl apply -f "k8s/$K8S_NAMESPACE/cloud-sql-proxy.yaml"
+    ok "cloud-sql-proxy deployed"
+  fi
+
+  info "Waiting for cloud-sql-proxy (up to 60s)..."
+  if kubectl wait --for=condition=available deployment/cloud-sql-proxy \
+      -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null; then
+    ok "cloud-sql-proxy ready"
+  else
+    fail "cloud-sql-proxy not ready after 60s"
+    kubectl get pods -n "$K8S_NAMESPACE" -l app=cloud-sql-proxy
+    exit 1
+  fi
+
+  # Create mattermost-cloud-sql secret (used by mattermost.yaml)
+  info "Creating mattermost-cloud-sql K8s secret..."
+  kubectl delete secret mattermost-cloud-sql -n "$K8S_NAMESPACE" 2>/dev/null || true
+  kubectl create secret generic mattermost-cloud-sql -n "$K8S_NAMESPACE" \
+    --from-literal=password="$MM_DB_PASSWORD"
+  ok "mattermost-cloud-sql secret created"
+else
+  # Test environment: create mattermost-db secret for in-cluster postgres
+  info "Creating mattermost-db K8s secret (test env)..."
+  kubectl delete secret mattermost-db -n "$K8S_NAMESPACE" 2>/dev/null || true
+  kubectl create secret generic mattermost-db -n "$K8S_NAMESPACE" \
+    --from-literal=password="$MM_DB_PASSWORD"
+  ok "mattermost-db secret created"
+fi
 
 # ── 3. Deploy Mattermost ────────────────────────────────────────────────
 
-info "Deploying Mattermost (postgres + server)..."
+info "Deploying Mattermost..."
 kubectl apply -f "k8s/$K8S_NAMESPACE/mattermost.yaml"
 
-info "Waiting for PostgreSQL (up to 120s)..."
-if kubectl wait --for=condition=available deployment/mattermost-postgres \
-    -n "$K8S_NAMESPACE" --timeout=120s 2>/dev/null; then
-  ok "PostgreSQL ready"
-else
-  fail "PostgreSQL not ready after 120s"
-  kubectl get pods -n "$K8S_NAMESPACE" -l app=mattermost-postgres
-  exit 1
+# For test env with in-cluster postgres, wait for postgres first
+if [[ -z "$CLOUD_SQL_INSTANCE" ]]; then
+  info "Waiting for PostgreSQL (up to 120s)..."
+  if kubectl wait --for=condition=available deployment/mattermost-postgres \
+      -n "$K8S_NAMESPACE" --timeout=120s 2>/dev/null; then
+    ok "PostgreSQL ready"
+  else
+    fail "PostgreSQL not ready after 120s"
+    kubectl get pods -n "$K8S_NAMESPACE" -l app=mattermost-postgres
+    exit 1
+  fi
 fi
 
 info "Waiting for Mattermost (up to 120s)..."
@@ -168,6 +228,24 @@ else
   fail "Mattermost not ready after 120s"
   kubectl get pods -n "$K8S_NAMESPACE" -l app=mattermost
   exit 1
+fi
+
+# ── 3b. Verify Cloud SQL connectivity (prod) ────────────────────────────
+
+if [[ -n "$CLOUD_SQL_INSTANCE" ]]; then
+  info "Verifying Cloud SQL connectivity via proxy..."
+  # Check MM can reach the database by looking for successful startup in logs
+  for attempt in $(seq 1 6); do
+    if kubectl logs deployment/mattermost -n "$K8S_NAMESPACE" 2>/dev/null | grep -q "Server is listening"; then
+      ok "Mattermost connected to Cloud SQL"
+      break
+    fi
+    if [[ $attempt -eq 6 ]]; then
+      warn "Could not confirm Cloud SQL connection — check MM logs"
+      kubectl logs deployment/mattermost -n "$K8S_NAMESPACE" --tail=10 2>/dev/null || true
+    fi
+    sleep 5
+  done
 fi
 
 # ── 4. Bootstrap (via kubectl exec — no port-forward needed) ─────────────

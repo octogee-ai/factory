@@ -2,16 +2,21 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Octogee Environment Teardown — Clean Slate
+# Octogee Environment Teardown — Per-Deploy Resources
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Tears down an environment so setup-gateway.sh can rebuild from scratch.
-# Does NOT delete: GCP projects, GKE clusters, AR repos, Firebase projects,
+# Tears down PER-DEPLOY resources so setup-gateway.sh can rebuild from scratch.
+# Persistent services (Cloud SQL, Mattermost, Gitea, Chat Proxy) are preserved.
+#
+# Use --full to also tear down persistent infrastructure (clean-slate rebuild).
+#
+# Does NOT delete (ever): GCP projects, GKE clusters, AR repos, Firebase projects,
 # GCP Service Accounts, IAM bindings (Workload Identity).
 #
 # Usage:
-#   ./scripts/teardown-gateway.sh --env=test       # Test environment
+#   ./scripts/teardown-gateway.sh --env=test       # Per-deploy teardown
 #   ./scripts/teardown-gateway.sh --env=test --yes # Non-interactive (test only)
+#   ./scripts/teardown-gateway.sh --env=test --full # Full teardown (persistent infra too)
 #   ./scripts/teardown-gateway.sh --env=prod       # Prod (interactive, requires DESTROY PROD)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -30,13 +35,17 @@ REGION="us-central1"
 
 ENV="prod"
 FORCE=false
+FULL=false
 
 for arg in "$@"; do
   case $arg in
     --env=*)  ENV="${arg#*=}" ;;
     --force|--yes|-y) FORCE=true ;;
+    --full) FULL=true ;;
     --help|-h)
-      echo "Usage: $0 [--env=prod|test] [--force|--yes]"
+      echo "Usage: $0 [--env=prod|test] [--force|--yes] [--full]"
+      echo ""
+      echo "  --full    Also tear down persistent infra (Mattermost, Gitea, Cloud SQL Proxy)"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -51,7 +60,6 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
     ENV_LABEL="🔴 PRODUCTION"
-    CHAT_PROXY_SERVICE="octogee-chat-proxy"
     ;;
   test)
     GCP_PROJECT="octogee-test"
@@ -60,7 +68,6 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
     ENV_LABEL="🟡 TEST"
-    CHAT_PROXY_SERVICE="octogee-chat-proxy-test"
     ;;
   *)
     echo "Unknown environment: $ENV (use prod or test)"
@@ -93,20 +100,38 @@ echo ""
 echo -e "  Environment:    ${BOLD}$ENV${NC}"
 echo -e "  K8s Namespace:  ${BOLD}$K8S_NAMESPACE${NC}"
 echo -e "  Env File:       ${BOLD}$ENV_FILE${NC}"
+if $FULL; then
+  echo -e "  Mode:           ${RED}${BOLD}FULL (persistent infra included)${NC}"
+else
+  echo -e "  Mode:           ${BOLD}Per-deploy only${NC}"
+fi
 echo ""
-echo "  This will:"
-echo "    • Delete gateway deployment, service, PVC"
-echo "    • Delete Mattermost deployment, postgres, PVCs"
-echo "    • Delete all K8s secrets + ServiceAccount + network policies"
-echo "    • Uninstall monitoring stack (Prometheus + Grafana)"
-echo "    • Delete Chat Proxy (Cloud Run)"
-echo "    • Destroy GCP Secret Manager secret versions"
-echo "    • Wipe Firestore, Cloud Functions, Auth users"
+echo "  This will DELETE (per-deploy resources):"
+echo "    • Gateway deployment, service, PVC (customer workspaces)"
+echo "    • K8s secrets (gitea-token, mattermost-gateway, octogee-anthropic, etc.)"
+echo "    • K8s ServiceAccount + network policies"
+echo "    • GCP Secret Manager secret versions"
+echo "    • Firestore data, Cloud Functions, Auth users"
 echo ""
-echo "  This will NOT delete:"
+if $FULL; then
+  echo -e "  ${RED}--full mode: ALSO deleting persistent infrastructure:${NC}"
+  echo "    • Mattermost deployment + PVC (chat history)"
+  echo "    • cloud-sql-proxy deployment"
+  echo "    • Monitoring stack (Prometheus + Grafana)"
+  echo ""
+fi
+echo "  This will PRESERVE (persistent services):"
+if ! $FULL; then
+  echo "    • Cloud SQL instance (octogee-pg) + databases"
+  echo "    • cloud-sql-proxy deployment + service"
+  echo "    • Mattermost deployment + PVC (chat history)"
+  echo "    • Gitea deployment + PVC (git repos)"
+  echo "    • Chat Proxy (Cloud Run at chat.octogee.com)"
+  echo "    • Monitoring namespace (Prometheus + Grafana)"
+fi
 echo "    • GCP projects, GKE clusters, AR repos"
 echo "    • Firebase projects"
-echo "    • GCP Service Accounts or IAM bindings"
+echo "    • GCP Service Accounts, IAM bindings"
 echo ""
 
 if [[ "$ENV" == "prod" ]] && $FORCE; then
@@ -152,32 +177,46 @@ else
   info "Keeping PVC"
 fi
 
-# ── 2. Delete Mattermost ─────────────────────────────────────────────────
+# ── 2. Delete Mattermost (--full only) ───────────────────────────────────
 
-echo ""
-info "Deleting Mattermost..."
-kubectl delete deployment mattermost -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost deployment deleted" || warn "No Mattermost deployment found"
-kubectl delete deployment mattermost-postgres -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost Postgres deleted" || warn "No Postgres deployment found"
-kubectl delete service mattermost -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost service deleted" || true
-kubectl delete service mattermost-postgres -n "$K8S_NAMESPACE" 2>/dev/null && ok "Postgres service deleted" || true
+if $FULL; then
+  echo ""
+  info "Deleting Mattermost (--full mode)..."
+  kubectl delete deployment mattermost -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost deployment deleted" || warn "No Mattermost deployment found"
+  kubectl delete service mattermost -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost service deleted" || true
+  kubectl delete service mattermost-ilb -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost ILB deleted" || true
 
-if confirm "Delete Mattermost PVCs? (chat history + DB will be lost)"; then
-  info "Waiting for MM pods to terminate..."
-  kubectl wait --for=delete pod -l app=mattermost -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null || true
-  kubectl wait --for=delete pod -l app=mattermost-postgres -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null || true
-  kubectl delete pvc mattermost-data -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-data" || true
-  kubectl delete pvc mattermost-postgres-data -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-postgres-data" || true
+  if confirm "Delete Mattermost PVC? (chat history + file uploads will be lost)"; then
+    info "Waiting for MM pod to terminate..."
+    kubectl wait --for=delete pod -l app=mattermost -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null || true
+    kubectl delete pvc mattermost-data -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-data" || true
+  else
+    info "Keeping Mattermost PVC"
+  fi
+
+  info "Deleting cloud-sql-proxy..."
+  kubectl delete deployment cloud-sql-proxy -n "$K8S_NAMESPACE" 2>/dev/null && ok "cloud-sql-proxy deleted" || warn "No cloud-sql-proxy found"
+  kubectl delete service cloud-sql-proxy -n "$K8S_NAMESPACE" 2>/dev/null && ok "cloud-sql-proxy service deleted" || true
 else
-  info "Keeping Mattermost PVCs"
+  echo ""
+  info "Skipping Mattermost (persistent — use --full to include)"
 fi
 
-# ── 3. Delete K8s Secrets ─────────────────────────────────────────────────
+# ── 3. Delete K8s Secrets (per-deploy) ────────────────────────────────────
 
 echo ""
-info "Deleting K8s secrets..."
-for secret in mattermost-gateway mattermost-db octogee-anthropic octogee-github octogee-brave octogee-sa-key octogee-discord; do
+info "Deleting K8s secrets (per-deploy)..."
+# Per-deploy secrets: gateway creds, API keys, tokens
+# Note: mattermost-cloud-sql is persistent (Cloud SQL password) — only delete with --full
+for secret in mattermost-gateway gitea-token octogee-anthropic octogee-brave octogee-sa-key octogee-discord; do
   kubectl delete secret "$secret" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted $secret" || true
 done
+
+if $FULL; then
+  info "Deleting persistent secrets (--full mode)..."
+  kubectl delete secret mattermost-cloud-sql -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-cloud-sql" || true
+  kubectl delete secret mattermost-db -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-db" || true
+fi
 
 # ── 4. Delete Network Policies + ServiceAccount ──────────────────────────
 
@@ -187,30 +226,28 @@ kubectl delete networkpolicy gateway-egress -n "$K8S_NAMESPACE" 2>/dev/null && o
 info "Deleting K8s ServiceAccount..."
 kubectl delete sa octogee-gateway -n "$K8S_NAMESPACE" 2>/dev/null && ok "ServiceAccount deleted" || warn "No ServiceAccount found"
 
-# ── 5. Uninstall Monitoring ───────────────────────────────────────────────
+# ── 5. Uninstall Monitoring (--full only) ─────────────────────────────────
 
-echo ""
-if confirm "Uninstall monitoring stack (Prometheus + Grafana)?"; then
-  info "Uninstalling monitoring..."
-  helm uninstall prometheus -n monitoring 2>/dev/null && ok "Prometheus uninstalled" || warn "Prometheus not found"
-  helm uninstall grafana -n monitoring 2>/dev/null && ok "Grafana uninstalled" || warn "Grafana not found"
-  kubectl delete -f k8s/monitoring/service-monitors.yaml 2>/dev/null || true
-  kubectl delete pvc --all -n monitoring 2>/dev/null && ok "Monitoring PVCs deleted" || true
+if $FULL; then
+  echo ""
+  if confirm "Uninstall monitoring stack (Prometheus + Grafana)?"; then
+    info "Uninstalling monitoring..."
+    helm uninstall prometheus -n monitoring 2>/dev/null && ok "Prometheus uninstalled" || warn "Prometheus not found"
+    helm uninstall grafana -n monitoring 2>/dev/null && ok "Grafana uninstalled" || warn "Grafana not found"
+    kubectl delete -f k8s/monitoring/service-monitors.yaml 2>/dev/null || true
+    kubectl delete pvc --all -n monitoring 2>/dev/null && ok "Monitoring PVCs deleted" || true
+  else
+    info "Keeping monitoring stack"
+  fi
 else
-  info "Keeping monitoring stack"
+  echo ""
+  info "Skipping monitoring (persistent — use --full to include)"
 fi
 
-# ── 6. Delete Chat Proxy (Cloud Run) ─────────────────────────────────────
+# ── 6. Chat Proxy — Skipped (persistent) ─────────────────────────────────
 
 echo ""
-if confirm "Delete Chat Proxy (Cloud Run service)?"; then
-  info "Deleting Chat Proxy..."
-  gcloud run services delete "$CHAT_PROXY_SERVICE" \
-    --region="$REGION" --project="$GCP_PROJECT" --quiet 2>/dev/null \
-    && ok "Chat Proxy deleted" || warn "Chat Proxy not found"
-else
-  info "Keeping Chat Proxy"
-fi
+info "Skipping Chat Proxy (persistent Cloud Run service at chat.octogee.com)"
 
 # ── 7. Destroy GCP Secret Manager Versions ────────────────────────────────
 
@@ -290,9 +327,23 @@ echo -e "${GREEN}═════════════════════
 echo -e "${BOLD}  Teardown complete${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
-echo "  Next steps:"
-echo "    1. Run: ./scripts/setup-mattermost.sh --env=$ENV"
-echo "    2. Run: ./scripts/setup-gateway.sh --env=$ENV"
-echo "    3. Run: ./scripts/setup-monitoring.sh --env=$ENV (optional)"
-echo "    4. Run: ./scripts/setup-chat-proxy.sh --env=$ENV (optional)"
+if $FULL; then
+  echo "  Full teardown completed. Persistent infrastructure was removed."
+  echo ""
+  echo "  To rebuild from scratch:"
+  echo "    1. ./scripts/setup-mattermost.sh --env=$ENV    # Mattermost + bootstrap"
+  echo "    2. ./scripts/setup-gitea.sh --env=$ENV         # Gitea (if needed)"
+  echo "    3. ./scripts/setup-gateway.sh --env=$ENV       # Gateway + Site + Functions"
+  echo "    4. ./scripts/setup-monitoring.sh --env=$ENV    # Prometheus + Grafana"
+else
+  echo "  Per-deploy resources removed. Persistent services preserved:"
+  echo "    • Cloud SQL (octogee-pg), cloud-sql-proxy"
+  echo "    • Mattermost (chat history intact)"
+  echo "    • Gitea (git repos intact)"
+  echo "    • Chat Proxy (chat.octogee.com)"
+  echo "    • Monitoring (Prometheus + Grafana)"
+  echo ""
+  echo "  To redeploy gateway:"
+  echo "    ./scripts/setup-gateway.sh --env=$ENV"
+fi
 echo ""
