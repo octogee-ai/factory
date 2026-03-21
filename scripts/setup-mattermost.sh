@@ -78,7 +78,7 @@ case "$ENV" in
     # Cloud SQL (octogee-pg in octogee project) via public IP cloud-sql-proxy
     CLOUD_SQL_INSTANCE="octogee:us-central1:octogee-pg"
     MM_DB_NAME="mattermost_test"
-    MM_DB_USER="mattermost"
+    MM_DB_USER="mattermost_test"  # separate user from prod — never touches prod password
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
