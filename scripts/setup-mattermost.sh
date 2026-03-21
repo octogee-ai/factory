@@ -78,7 +78,7 @@ case "$ENV" in
     # Cloud SQL (octogee-pg in octogee project) via public IP cloud-sql-proxy
     CLOUD_SQL_INSTANCE="octogee:us-central1:octogee-pg"
     MM_DB_NAME="mattermost_test"
-    MM_DB_USER="mattermost_test"  # separate user from prod — never touches prod password
+    MM_DB_USER="mattermost"  # shared user, separate DB (mattermost_test) — passwords kept in sync per-env
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
@@ -162,17 +162,20 @@ if [[ -z "${MM_ADMIN_PASS:-}" ]]; then
 fi
 save_env "MM_ADMIN_PASS" "$MM_ADMIN_PASS"
 
-# DB password: try Secret Manager first (prod), then .env, then generate
+# DB password: for Cloud SQL envs, always read from the octogee (prod) project
+# The 'mattermost' Cloud SQL user password is managed in the prod project's Secret Manager.
+# Test and prod share the same Cloud SQL user but use different databases.
+# This ensures setup-mattermost never generates a NEW password that breaks the shared user.
 if [[ -z "${MM_DB_PASSWORD:-}" ]]; then
   if [[ -n "$CLOUD_SQL_INSTANCE" ]]; then
-    # Try to fetch from Secret Manager
-    SM_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project="$GCP_PROJECT" 2>/dev/null || echo "")
+    # Always read from octogee project (Cloud SQL lives there for both envs)
+    SM_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project=octogee 2>/dev/null || echo "")
     if [[ -n "$SM_PASS" ]]; then
       MM_DB_PASSWORD="$SM_PASS"
-      info "Using MM_DB_PASSWORD from Secret Manager"
+      info "Using MM_DB_PASSWORD from Secret Manager (octogee project)"
     else
       MM_DB_PASSWORD=$(openssl rand -hex 24)
-      info "Generated new DB password (save to Secret Manager for persistence)"
+      warn "MM_DB_PASSWORD not in Secret Manager — generated new. Run: printf '%s' \"\$MM_DB_PASSWORD\" | gcloud secrets create MM_DB_PASSWORD --data-file=- --project=octogee"
     fi
   else
     MM_DB_PASSWORD=$(openssl rand -hex 24)
