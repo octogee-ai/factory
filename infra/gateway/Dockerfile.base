@@ -20,15 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl jq python3 \
     sqlite3 xxd rsync \
     ca-certificates \
-    # Headless browser (Puppeteer screenshots)
-    chromium \
     # Developer experience (available in running pod)
     bash-completion git vim less \
     && rm -rf /var/lib/apt/lists/*
-
-# Tell Puppeteer to use system Chromium (skip its own download)
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # ── OpenClaw from npm ────────────────────────────────────────────────────────
 ARG OPENCLAW_VERSION=latest
