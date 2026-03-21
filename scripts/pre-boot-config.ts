@@ -87,6 +87,21 @@ async function main(): Promise<void> {
     log(`enforcement overrides: ${entries.length ? entries.map(([s, e]) => `${s}=${e}`).join(", ") : "(all observe)"}`);
   }
 
+  // ── MM bot token sync ───────────────────────────────────────────────────
+  // OpenClaw uses BOTH `channels.mattermost.botToken` AND `channels.mattermost.token`.
+  // If MM was re-bootstrapped (new token in K8s secret), both fields must be updated
+  // or the gateway will send the stale token and get 401 on every WebSocket connect.
+  const envBotToken = process.env.MM_BOT_TOKEN;
+  if (envBotToken && config.channels?.mattermost) {
+    const mm = config.channels.mattermost;
+    if (mm.botToken !== envBotToken || mm.token !== envBotToken) {
+      mm.botToken = envBotToken;
+      mm.token = envBotToken;
+      changed = true;
+      log(`MM bot token synced from MM_BOT_TOKEN env var`);
+    }
+  }
+
   if (changed) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
     log("openclaw.json patched with Firestore state");
