@@ -63,10 +63,11 @@ ok "Repo ready"
 log "Reading credentials from Secret Manager..."
 # Use separate secrets per env — prevents cross-env password clobbering
 GITEA_DB_SECRET="gitea-db-password"
-[[ "$ENV" == "test" ]] && GITEA_DB_SECRET="gitea-db-password-test"
+[[ "$ENV" == "test" ]] && GITEA_DB_SECRET="gitea-db-password" # same secret, shared user
+# test uses same gitea-db-password secret (shared Cloud SQL user, separate DB)
 
 GITEA_DB_PASS=$(gcloud secrets versions access latest \
-  --secret="$GITEA_DB_SECRET" --project="$PROJECT" 2>/dev/null || echo "")
+  --secret="$GITEA_DB_SECRET" --project="octogee" 2>/dev/null || echo "")
 CLOUD_SQL_CONN=$(gcloud secrets versions access latest \
   --secret=cloud-sql-connection-name --project="$PROJECT" 2>/dev/null || echo "")
 
