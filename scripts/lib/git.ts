@@ -255,6 +255,15 @@ export async function syncAllWorkspaces(): Promise<void> {
 
     if (!fs.existsSync(gitDir)) continue;
 
+    // If no remote is set, the workspace was provisioned before Gitea was available.
+    // Initialize the remote now so subsequent syncs work correctly.
+    const remoteCheck = gitExec(coachDir, "remote get-url origin");
+    if (remoteCheck === null) {
+      log(`[git-sync] ${slug}: no remote — initializing Gitea repo`);
+      await initWorkspaceRepo(coachDir, slug);
+      continue; // initWorkspaceRepo commits + pushes; skip normal sync this cycle
+    }
+
     const status = gitExec(coachDir, "status --porcelain");
     let committed = false;
     if (status) {

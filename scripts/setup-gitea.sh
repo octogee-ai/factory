@@ -115,6 +115,14 @@ helm upgrade --install gitea gitea-charts/gitea \
 
 ok "Gitea deployed to $NAMESPACE"
 
+# Deploy Gitea ILB so Cloud Functions can reach it via internal IP
+REPO_DIR="$(dirname "$(dirname "$0")")"
+if [[ -f "$REPO_DIR/k8s/$NAMESPACE/gitea-ilb.yaml" ]]; then
+  log "Deploying Gitea ILB..."
+  kubectl apply -f "$REPO_DIR/k8s/$NAMESPACE/gitea-ilb.yaml" 2>/dev/null || true
+  ok "Gitea ILB deployed"
+fi
+
 # ── Create octogee org ───────────────────────────────────────────────────────
 log "Setting up Gitea organization..."
 GITEA_SVC="gitea-http.$NAMESPACE.svc.cluster.local:3000"
