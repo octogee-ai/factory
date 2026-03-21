@@ -38,8 +38,6 @@ RUN npx tsc -p tsconfig.json --noEmit 2>&1; \
     EXIT=$?; \
     if [ $EXIT -ne 0 ]; then echo "❌ Type-check failed — fix errors before deploying"; exit $EXIT; fi
 
-COPY --chown=node:node scripts/send-as-crew.sh /octogee/scripts/
-RUN chmod +x /octogee/scripts/send-as-crew.sh
 
 # ── Workspace templates ─────────────────────────────────────────────────────
 COPY --chown=node:node templates/ /octogee/templates/
