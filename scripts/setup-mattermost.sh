@@ -238,6 +238,10 @@ fi
 
 info "Deploying Mattermost..."
 kubectl apply -f "k8s/$K8S_NAMESPACE/mattermost.yaml"
+# Deploy ILB if manifest exists (needed by chat proxy)
+if [[ -f "k8s/$K8S_NAMESPACE/mattermost-ilb.yaml" ]]; then
+  kubectl apply -f "k8s/$K8S_NAMESPACE/mattermost-ilb.yaml" 2>/dev/null || true
+fi
 
 # For test env with in-cluster postgres, wait for postgres first
 if [[ -z "$CLOUD_SQL_INSTANCE" ]]; then
