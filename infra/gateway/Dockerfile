@@ -68,6 +68,9 @@ USER node
 
 ENV OCTOGEE_TEMPLATES_DIR=/octogee/templates
 
+# Suppress Node.js deprecation warnings (punycode etc.) from third-party deps
+ENV NODE_OPTIONS=--no-deprecation
+
 # Build SHA — injected by Cloud Build via --build-arg
 ARG BUILD_SHA=unknown
 ENV BUILD_SHA=${BUILD_SHA}
