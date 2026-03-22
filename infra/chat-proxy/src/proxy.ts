@@ -296,13 +296,11 @@ async function handleRest(
     return;
   }
 
-  // X-Admin-Mode header (set by admin chat panel) → use system admin token.
-  // This lets admin see ALL customer channels.
-  // Personal workspace chat → personal token (no header set).
-  // Header is only trusted after Firebase auth passes above.
-  const wantsAdminMode = req.headers["x-admin-mode"] === "1";
-  const useAdminToken = wantsAdminMode && await isAdminUser(uid);
-  const creds = useAdminToken ? await getAdminMmToken() : await getMmToken(uid);
+  // Admin users always get the system admin token (octogee-admin).
+  // octogee-admin is a member of ALL customer channels → full visibility.
+  // Personal workspace chat works too since octogee-admin is also in that channel.
+  // Regular users get their personal token.
+  const creds = await isAdminUser(uid) ? await getAdminMmToken() : await getMmToken(uid);
   if (!creds) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Chat not provisioned" }));
