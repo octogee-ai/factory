@@ -71,8 +71,9 @@ if $UNINSTALL; then
   helm uninstall prometheus -n monitoring 2>/dev/null && ok "Prometheus uninstalled" || warn "Not found"
   info "Uninstalling Grafana..."
   helm uninstall grafana -n monitoring 2>/dev/null && ok "Grafana uninstalled" || warn "Not found"
-  info "Deleting ServiceMonitors..."
+  info "Deleting ServiceMonitors + alert rules..."
   kubectl delete -f "$REPO_DIR/helm/monitoring/service-monitors.yaml" 2>/dev/null || true
+  kubectl delete -f "$REPO_DIR/helm/monitoring/alert-rules.yaml" 2>/dev/null || true
   info "Deleting monitoring namespace..."
   kubectl delete namespace monitoring 2>/dev/null && ok "Namespace deleted" || warn "Not found"
   echo ""
@@ -127,6 +128,11 @@ ok "Grafana deployed"
 info "Applying ServiceMonitors..."
 kubectl apply -f "$REPO_DIR/helm/monitoring/service-monitors.yaml"
 ok "ServiceMonitors applied"
+
+# ── Alert Rules ───────────────────────────────────────────────────────────
+info "Applying alert rules..."
+kubectl apply -f "$REPO_DIR/helm/monitoring/alert-rules.yaml"
+ok "Alert rules applied"
 
 # ── Done ──────────────────────────────────────────────────────────────────
 echo ""

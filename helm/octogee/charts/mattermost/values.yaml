@@ -29,3 +29,7 @@ resources:
     cpu: "2000m"
     memory: "2Gi"
     ephemeral-storage: "5Gi"
+
+pdb:
+  enabled: true
+  minAvailable: 1

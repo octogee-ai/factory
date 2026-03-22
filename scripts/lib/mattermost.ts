@@ -5,8 +5,11 @@
 import { randomBytes } from "crypto";
 import * as crypto from "crypto";
 import { FieldValue } from "firebase-admin/firestore";
+import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { log } from "./config.js";
 import { db } from "./firebase.js";
+
+const secretClient = new SecretManagerServiceClient();
 
 // ── Admin Token ─────────────────────────────────────────────────────────────────
 
@@ -484,9 +487,36 @@ export async function ensureAdminCredentials(): Promise<void> {
 
   const proxyUrl = process.env.CHAT_PROXY_URL || "";
 
+  // Write token to Secret Manager (not Firestore — it's a credential)
+  const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "octogee";
+  const secretName = `projects/${project}/secrets/MM_ADMIN_TOKEN`;
+  try {
+    await secretClient.addSecretVersion({
+      parent: secretName,
+      payload: { data: Buffer.from(token) },
+    });
+    log(`[admin-creds] MM_ADMIN_TOKEN written to Secret Manager`);
+  } catch (err: any) {
+    if (err?.code === 5) {
+      // Secret doesn't exist yet — create it
+      await secretClient.createSecret({
+        parent: `projects/${project}`,
+        secretId: "MM_ADMIN_TOKEN",
+        secret: { replication: { automatic: {} } },
+      });
+      await secretClient.addSecretVersion({
+        parent: secretName,
+        payload: { data: Buffer.from(token) },
+      });
+      log(`[admin-creds] MM_ADMIN_TOKEN created in Secret Manager`);
+    } else {
+      log(`[admin-creds] ⚠ failed to write MM_ADMIN_TOKEN to Secret Manager: ${err?.message}`);
+    }
+  }
+
+  // Write non-sensitive metadata to Firestore (userId, proxyUrl — no token)
   await db.doc("system/mattermostAdmin").set({
     userId: adminUserId,
-    personalToken: token,
     proxyUrl,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
