@@ -2,22 +2,24 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Octogee Environment Teardown — Per-Deploy Resources
+# Octogee Environment Teardown
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Tears down PER-DEPLOY resources so setup-gateway.sh can rebuild from scratch.
-# Persistent services (Cloud SQL, Mattermost, Gitea, Chat Proxy) are preserved.
+# Default (no flags): tears down the Helm release only.
+#   helm uninstall + PVC delete + K8s secrets delete
+#   Preserves: Cloud SQL data, Secret Manager secrets, Firestore, Functions, Auth
 #
-# Use --full to also tear down persistent infrastructure (clean-slate rebuild).
+# --full: also wipes Cloud SQL DBs, Firestore, Cloud Functions, Firebase Auth,
+#         and Secret Manager secrets. Full clean-slate rebuild.
 #
-# Does NOT delete (ever): GCP projects, GKE clusters, AR repos, Firebase projects,
-# GCP Service Accounts, IAM bindings (Workload Identity).
+# Does NOT delete (ever): GCP projects, GKE clusters, AR repos,
+#   Firebase projects, GCP Service Accounts, IAM bindings.
 #
 # Usage:
-#   ./scripts/teardown-gateway.sh --env=test       # Per-deploy teardown
-#   ./scripts/teardown-gateway.sh --env=test --yes # Non-interactive (test only)
-#   ./scripts/teardown-gateway.sh --env=test --full # Full teardown (persistent infra too)
-#   ./scripts/teardown-gateway.sh --env=prod       # Prod (interactive, requires DESTROY PROD)
+#   ./scripts/teardown-gateway.sh --env=test           # Helm uninstall only
+#   ./scripts/teardown-gateway.sh --env=test --yes     # Non-interactive (test only)
+#   ./scripts/teardown-gateway.sh --env=test --full    # Full clean slate
+#   ./scripts/teardown-gateway.sh --env=prod           # Prod (interactive, requires "DESTROY PROD")
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -30,22 +32,21 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-K8S_DEPLOYMENT="octogee-gateway"
-REGION="us-central1"
-
 ENV="prod"
 FORCE=false
 FULL=false
+PROXY_PID=""
 
 for arg in "$@"; do
   case $arg in
-    --env=*)  ENV="${arg#*=}" ;;
+    --env=*)        ENV="${arg#*=}" ;;
     --force|--yes|-y) FORCE=true ;;
-    --full) FULL=true ;;
+    --full)         FULL=true ;;
     --help|-h)
       echo "Usage: $0 [--env=prod|test] [--force|--yes] [--full]"
       echo ""
-      echo "  --full    Also tear down persistent infra (Mattermost, Gitea, Cloud SQL Proxy)"
+      echo "  (default)  Helm uninstall + PVCs + K8s secrets"
+      echo "  --full     Also wipe Cloud SQL DBs, Firestore, Functions, Auth, Secret Manager"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -63,6 +64,9 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
     ENV_LABEL="🔴 PRODUCTION"
+    MM_DB_NAME="mattermost_prod"
+    GITEA_DB_NAME="gitea_prod"
+    GATEWAY_PVC="octogee-data"
     ;;
   test)
     GCP_PROJECT="octogee-test"
@@ -74,6 +78,9 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
     ENV_LABEL="🟡 TEST"
+    MM_DB_NAME="mattermost_test"
+    GITEA_DB_NAME="gitea_test"
+    GATEWAY_PVC="octogee-test-data"
     ;;
   *)
     echo "Unknown environment: $ENV (use prod or test)"
@@ -81,77 +88,58 @@ case "$ENV" in
     ;;
 esac
 
-confirm() {
-  if $FORCE; then return 0; fi
-  if [[ "$ENV" == "test" ]]; then
-    echo -ne "  ${YELLOW}$1 [Y/n]:${NC} "
-    read -r yn
-    [[ ! "$yn" =~ ^[Nn]$ ]]  # Default yes for test
-  else
-    echo -ne "  ${YELLOW}$1 [y/N]:${NC} "
-    read -r yn
-    [[ "$yn" =~ ^[Yy]$ ]]  # Default no for prod
-  fi
-}
-
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 
+confirm() {
+  $FORCE && return 0
+  if [[ "$ENV" == "test" ]]; then
+    echo -ne "  ${YELLOW}$1 [Y/n]:${NC} "
+    read -r yn
+    [[ ! "$yn" =~ ^[Nn]$ ]]
+  else
+    echo -ne "  ${YELLOW}$1 [y/N]:${NC} "
+    read -r yn
+    [[ "$yn" =~ ^[Yy]$ ]]
+  fi
+}
+
+cleanup_proxy() {
+  [[ -n "$PROXY_PID" ]] && kill "$PROXY_PID" 2>/dev/null || true
+}
+trap cleanup_proxy EXIT
+
+# ── Banner ────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${RED}═══════════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}  ⚠️  Octogee Teardown — ${ENV_LABEL}${NC}"
 echo -e "${RED}═══════════════════════════════════════════════════════════${NC}"
 echo ""
-
-# ── Context guard ─────────────────────────────────────────────────────────
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
-kubectl config use-context "$K8S_CONTEXT" >/dev/null
-CURRENT_CTX=$(kubectl config current-context)
-if [[ "$CURRENT_CTX" != "$K8S_CONTEXT" ]]; then
-  echo -e "  ${RED}❌ kubectl context is '$CURRENT_CTX', expected '$K8S_CONTEXT'. Aborting.${NC}"
-  exit 1
-fi
-echo -e "  ✅ kubectl context: $CURRENT_CTX"
-
-echo -e "  Environment:    ${BOLD}$ENV${NC}"
-echo -e "  K8s Namespace:  ${BOLD}$K8S_NAMESPACE${NC}"
-echo -e "  K8s Context:    ${BOLD}$K8S_CONTEXT${NC}"
-echo -e "  Env File:       ${BOLD}$ENV_FILE${NC}"
+echo -e "  Mode: ${BOLD}$(if $FULL; then echo "FULL (clean slate)"; else echo "Helm release only"; fi)${NC}"
+echo ""
+echo "  Will remove:"
+echo "    • Helm release 'octogee' (all managed resources)"
+echo "    • PVCs: $GATEWAY_PVC, mattermost-data, gitea-shared-storage"
+echo "    • K8s secrets in namespace $K8S_NAMESPACE"
 if $FULL; then
-  echo -e "  Mode:           ${RED}${BOLD}FULL (persistent infra included)${NC}"
-else
-  echo -e "  Mode:           ${BOLD}Per-deploy only${NC}"
+  echo -e "  ${RED}  + Cloud SQL DBs: $MM_DB_NAME, $GITEA_DB_NAME (data wiped)${NC}"
+  echo -e "  ${RED}  + Firestore collections${NC}"
+  echo -e "  ${RED}  + Cloud Functions${NC}"
+  echo -e "  ${RED}  + Firebase Auth users${NC}"
+  echo -e "  ${RED}  + Secret Manager secrets (in $FIREBASE_PROJECT project)${NC}"
 fi
 echo ""
-echo "  This will DELETE (per-deploy resources):"
-echo "    • Gateway deployment, service, PVC (customer workspaces)"
-echo "    • K8s secrets (gitea-token, mattermost-gateway, octogee-anthropic, etc.)"
-echo "    • K8s ServiceAccount + network policies"
-echo "    • GCP Secret Manager secret versions"
-echo "    • Firestore data, Cloud Functions, Auth users"
-echo ""
-if $FULL; then
-  echo -e "  ${RED}--full mode: ALSO deleting persistent infrastructure:${NC}"
-  echo "    • Mattermost deployment + PVC (chat history)"
-  echo "    • cloud-sql-proxy deployment"
-  echo "    • Monitoring stack (Prometheus + Grafana)"
-  echo ""
-fi
-echo "  This will PRESERVE (persistent services):"
+echo "  Will preserve:"
+echo "    • Cloud SQL instance (octogee-pg)"
+echo "    • GCP projects, GKE cluster, AR repo"
+echo "    • Firebase project, IAM, Service Accounts"
 if ! $FULL; then
-  echo "    • Cloud SQL instance (octogee-pg) + databases"
-  echo "    • cloud-sql-proxy deployment + service"
-  echo "    • Mattermost deployment + PVC (chat history)"
-  echo "    • Gitea deployment + PVC (git repos)"
-  echo "    • Chat Proxy (Cloud Run at chat.octogee.com)"
-  echo "    • Monitoring namespace (Prometheus + Grafana)"
+  echo "    • Cloud SQL data, Firestore, Functions, Auth, Secret Manager"
 fi
-echo "    • GCP projects, GKE clusters, AR repos"
-echo "    • Firebase projects"
-echo "    • GCP Service Accounts, IAM bindings"
 echo ""
 
+# ── Prod safety ───────────────────────────────────────────────────────────
 if [[ "$ENV" == "prod" ]] && $FORCE; then
   echo -e "  ${RED}${BOLD}--force/--yes cannot be used with prod. Refusing.${NC}"
   exit 1
@@ -162,206 +150,237 @@ if [[ "$ENV" == "prod" ]]; then
   echo ""
   echo -ne "  ${RED}${BOLD}Type 'DESTROY PROD' to confirm:${NC} "
   read -r confirmation
-  if [[ "$confirmation" != "DESTROY PROD" ]]; then
-    echo ""
-    echo "  Cancelled. (You typed: '$confirmation')"
-    exit 1
-  fi
+  [[ "$confirmation" == "DESTROY PROD" ]] || { echo "  Cancelled."; exit 1; }
 elif ! confirm "Proceed with $ENV teardown?"; then
   echo "  Cancelled."
   exit 0
 fi
 
-# ── 1. Delete Gateway Deployment ──────────────────────────────────────────
-
+# ── Context guard ─────────────────────────────────────────────────────────
 echo ""
-info "Deleting gateway deployment..."
-kubectl delete deployment "$K8S_DEPLOYMENT" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deployment deleted" || warn "No deployment found"
-kubectl delete service octogee-gateway -n "$K8S_NAMESPACE" 2>/dev/null && ok "Service deleted" || warn "No service found"
+info "Setting kubectl context..."
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+kubectl config use-context "$K8S_CONTEXT" >/dev/null
+CURRENT_CTX=$(kubectl config current-context)
+[[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || { echo -e "  ${RED}❌ Wrong context: $CURRENT_CTX${NC}"; exit 1; }
+ok "kubectl context: $CURRENT_CTX"
 
-# PVC name matches deployment manifest
-if [[ "$ENV" == "test" ]]; then
-  PVC_NAME="octogee-test-data"
+# ── 1. Helm uninstall ─────────────────────────────────────────────────────
+echo ""
+info "Uninstalling Helm release 'octogee'..."
+if helm status octogee -n "$K8S_NAMESPACE" \
+    --kube-context "$K8S_CONTEXT" >/dev/null 2>&1; then
+  helm uninstall octogee -n "$K8S_NAMESPACE" \
+    --kube-context "$K8S_CONTEXT" \
+    --wait --timeout=3m 2>&1
+  ok "Helm release uninstalled"
 else
-  PVC_NAME="octogee-data"
+  warn "No Helm release found — skipping"
 fi
 
-if confirm "Delete PVC '$PVC_NAME'? (all customer workspaces will be lost)"; then
-  # Wait for pods to terminate before PVC deletion
-  info "Waiting for gateway pod to terminate..."
-  kubectl wait --for=delete pod -l app=octogee-gateway -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null || true
-  kubectl delete pvc "$PVC_NAME" -n "$K8S_NAMESPACE" 2>/dev/null && ok "PVC deleted" || warn "No PVC found"
-else
-  info "Keeping PVC"
-fi
+# Wait for pods to terminate (PVCs can't delete while pods are running)
+info "Waiting for pods to terminate..."
+kubectl wait --for=delete pod --all -n "$K8S_NAMESPACE" \
+  --timeout=90s 2>/dev/null || true
+ok "Pods terminated"
 
-# ── 2. Delete Mattermost (--full only) ───────────────────────────────────
-
-if $FULL; then
-  echo ""
-  info "Deleting Mattermost (--full mode)..."
-  kubectl delete deployment mattermost -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost deployment deleted" || warn "No Mattermost deployment found"
-  kubectl delete service mattermost -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost service deleted" || true
-  kubectl delete service mattermost-ilb -n "$K8S_NAMESPACE" 2>/dev/null && ok "Mattermost ILB deleted" || true
-
-  if confirm "Delete Mattermost PVC? (chat history + file uploads will be lost)"; then
-    info "Waiting for MM pod to terminate..."
-    kubectl wait --for=delete pod -l app=mattermost -n "$K8S_NAMESPACE" --timeout=60s 2>/dev/null || true
-    kubectl delete pvc mattermost-data -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-data" || true
+# ── 2. Delete PVCs ────────────────────────────────────────────────────────
+# Helm leaves PVCs intentionally (data safety). We delete them explicitly.
+echo ""
+info "Deleting PVCs..."
+for pvc in "$GATEWAY_PVC" mattermost-data gitea-shared-storage; do
+  if kubectl get pvc "$pvc" -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
+    kubectl delete pvc "$pvc" -n "$K8S_NAMESPACE" 2>/dev/null && ok "PVC deleted: $pvc" || warn "Could not delete: $pvc"
   else
-    info "Keeping Mattermost PVC"
+    info "PVC not found (already gone): $pvc"
   fi
-
-  info "Deleting cloud-sql-proxy..."
-  kubectl delete deployment cloud-sql-proxy -n "$K8S_NAMESPACE" 2>/dev/null && ok "cloud-sql-proxy deleted" || warn "No cloud-sql-proxy found"
-  kubectl delete service cloud-sql-proxy -n "$K8S_NAMESPACE" 2>/dev/null && ok "cloud-sql-proxy service deleted" || true
-else
-  echo ""
-  info "Skipping Mattermost (persistent — use --full to include)"
-fi
-
-# ── 3. Delete K8s Secrets (per-deploy) ────────────────────────────────────
-
-echo ""
-info "Deleting K8s secrets (per-deploy)..."
-# Per-deploy secrets: gateway creds, API keys, tokens
-# Note: mattermost-cloud-sql is persistent (Cloud SQL password) — only delete with --full
-for secret in mattermost-gateway gitea-token octogee-anthropic octogee-brave octogee-sa-key octogee-discord; do
-  kubectl delete secret "$secret" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted $secret" || true
 done
 
-if $FULL; then
-  info "Deleting persistent secrets (--full mode)..."
-  kubectl delete secret mattermost-cloud-sql -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-cloud-sql" || true
-  kubectl delete secret mattermost-db -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted mattermost-db" || true
-fi
-
-# ── 4. Delete Network Policies + ServiceAccount ──────────────────────────
-
+# ── 3. Delete K8s secrets ─────────────────────────────────────────────────
 echo ""
-info "Deleting network policies..."
-kubectl delete networkpolicy gateway-egress -n "$K8S_NAMESPACE" 2>/dev/null && ok "Network policy deleted" || warn "No network policy found"
-info "Deleting K8s ServiceAccount..."
-kubectl delete sa octogee-gateway -n "$K8S_NAMESPACE" 2>/dev/null && ok "ServiceAccount deleted" || warn "No ServiceAccount found"
-
-# ── 5. Uninstall Monitoring (--full only) ─────────────────────────────────
-
-if $FULL; then
-  echo ""
-  if confirm "Uninstall monitoring stack (Prometheus + Grafana)?"; then
-    info "Uninstalling monitoring..."
-    helm uninstall prometheus -n monitoring 2>/dev/null && ok "Prometheus uninstalled" || warn "Prometheus not found"
-    helm uninstall grafana -n monitoring 2>/dev/null && ok "Grafana uninstalled" || warn "Grafana not found"
-    kubectl delete -f k8s/monitoring/service-monitors.yaml 2>/dev/null || true
-    kubectl delete pvc --all -n monitoring 2>/dev/null && ok "Monitoring PVCs deleted" || true
-  else
-    info "Keeping monitoring stack"
-  fi
-else
-  echo ""
-  info "Skipping monitoring (persistent — use --full to include)"
-fi
-
-# ── 6. Chat Proxy — Skipped (persistent) ─────────────────────────────────
-
-echo ""
-info "Skipping Chat Proxy (persistent Cloud Run service at chat.octogee.com)"
-
-# ── 7. Destroy GCP Secret Manager Versions ────────────────────────────────
-
-echo ""
-info "Deleting Secret Manager secrets..."
-SECRETS=$(gcloud secrets list --project="$FIREBASE_PROJECT" --format="value(name)" 2>/dev/null || true)
-for secret in $SECRETS; do
-  gcloud secrets delete "$secret" --project="$FIREBASE_PROJECT" --quiet 2>/dev/null \
-    && ok "Deleted $secret" || true
+info "Deleting K8s secrets..."
+for secret in \
+  mattermost-gateway mattermost-cloud-sql mattermost-db \
+  gitea-token gitea-admin gitea-credentials \
+  octogee-anthropic octogee-brave octogee-sa-key octogee-discord octogee-github \
+  cloud-sql-sa; do
+  kubectl delete secret "$secret" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted: $secret" || true
 done
 
-# ── 8. Clean Firestore ───────────────────────────────────────────────────
+# Delete any remaining secrets in namespace
+REMAINING=$(kubectl get secrets -n "$K8S_NAMESPACE" \
+  --field-selector type!=kubernetes.io/service-account-token \
+  -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+for s in $REMAINING; do
+  [[ "$s" == "sh.helm.release"* ]] && continue  # skip helm history
+  kubectl delete secret "$s" -n "$K8S_NAMESPACE" 2>/dev/null || true
+done
+ok "K8s secrets cleared"
 
+# ── 4. Delete namespace ───────────────────────────────────────────────────
 echo ""
-if confirm "Wipe ALL Firestore collections? (users, invites, everything)"; then
-  info "Deleting all Firestore collections in '$FIREBASE_PROJECT'..."
-  firebase firestore:delete --all-collections --project "$FIREBASE_PROJECT" --force
-  ok "Firestore wiped clean"
-else
-  info "Keeping Firestore data"
-fi
+info "Deleting namespace $K8S_NAMESPACE..."
+kubectl delete namespace "$K8S_NAMESPACE" --timeout=60s 2>/dev/null && ok "Namespace deleted" || warn "Namespace not found"
 
-# ── 9. Delete Cloud Functions ─────────────────────────────────────────────
+# ── 5. Full: Cloud SQL DBs ────────────────────────────────────────────────
+if $FULL; then
+  echo ""
+  info "Resetting Cloud SQL databases ($MM_DB_NAME, $GITEA_DB_NAME)..."
 
-echo ""
-if confirm "Delete all Cloud Functions?"; then
-  FN_LIST=$(gcloud functions list --project="$FIREBASE_PROJECT" --region="$REGION" --format="value(name)" 2>/dev/null || true)
-  FN_COUNT=$(echo "$FN_LIST" | grep -c . || true)
+  MM_DB_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project=octogee 2>/dev/null || echo "")
+  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee 2>/dev/null || echo "")
 
-  if [[ "$FN_COUNT" -gt 0 ]]; then
-    info "Deleting $FN_COUNT Cloud Functions in '$FIREBASE_PROJECT'..."
-    echo "$FN_LIST" | while read -r fn; do
-      gcloud functions delete "$fn" --project="$FIREBASE_PROJECT" --region="$REGION" --quiet --gen2 2>&1 &
+  PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || \
+    ls ~/Downloads/google-cloud-sdk/bin/cloud-sql-proxy 2>/dev/null || \
+    ls /opt/homebrew/share/google-cloud-sdk/bin/cloud-sql-proxy 2>/dev/null || \
+    echo "")
+
+  if [[ -z "$PROXY_BIN" ]]; then
+    warn "cloud-sql-proxy not found — skipping DB reset. Run manually:"
+    warn "  PGPASSWORD=\$MM_DB_PASS psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres -c 'DROP DATABASE IF EXISTS $MM_DB_NAME; CREATE DATABASE $MM_DB_NAME;'"
+    warn "  PGPASSWORD=\$GITEA_DB_PASS psql -h 127.0.0.1 -p 5433 -U gitea -d postgres -c 'DROP DATABASE IF EXISTS $GITEA_DB_NAME; CREATE DATABASE $GITEA_DB_NAME;'"
+  elif [[ -z "$MM_DB_PASS" || -z "$GITEA_DB_PASS" ]]; then
+    warn "Could not read DB passwords from Secret Manager — skipping DB reset"
+  else
+    "$PROXY_BIN" octogee:us-central1:octogee-pg --port=5433 &
+    PROXY_PID=$!
+    sleep 4
+
+    # Terminate active connections then drop/create
+    for attempt in 1 2 3; do
+      PGPASSWORD=$MM_DB_PASS psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres \
+        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$MM_DB_NAME';" >/dev/null 2>&1 && break
+      sleep 2
     done
-    wait
-    ok "All Cloud Functions deleted"
-  else
-    info "No Cloud Functions found"
+    PGPASSWORD=$MM_DB_PASS psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres \
+      -c "DROP DATABASE IF EXISTS $MM_DB_NAME;" 2>&1
+    PGPASSWORD=$MM_DB_PASS psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres \
+      -c "CREATE DATABASE $MM_DB_NAME;" 2>&1
+    ok "Mattermost DB reset: $MM_DB_NAME"
+
+    PGPASSWORD=$GITEA_DB_PASS psql -h 127.0.0.1 -p 5433 -U gitea -d postgres \
+      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$GITEA_DB_NAME';" >/dev/null 2>&1 || true
+    PGPASSWORD=$GITEA_DB_PASS psql -h 127.0.0.1 -p 5433 -U gitea -d postgres \
+      -c "DROP DATABASE IF EXISTS $GITEA_DB_NAME;" 2>&1
+    PGPASSWORD=$GITEA_DB_PASS psql -h 127.0.0.1 -p 5433 -U gitea -d postgres \
+      -c "CREATE DATABASE $GITEA_DB_NAME;" 2>&1
+    ok "Gitea DB reset: $GITEA_DB_NAME"
+
+    kill "$PROXY_PID" 2>/dev/null || true
+    PROXY_PID=""
   fi
-else
-  info "Keeping Cloud Functions"
 fi
 
-# ── 10. Clean Firebase Auth ───────────────────────────────────────────────
+# ── 6. Full: Secret Manager ───────────────────────────────────────────────
+if $FULL; then
+  echo ""
+  if confirm "Delete all Secret Manager secrets in project '$FIREBASE_PROJECT'?"; then
+    SECRETS=$(gcloud secrets list --project="$FIREBASE_PROJECT" \
+      --format="value(name)" 2>/dev/null || true)
+    for secret in $SECRETS; do
+      gcloud secrets delete "$secret" --project="$FIREBASE_PROJECT" --quiet 2>/dev/null \
+        && ok "Deleted SM secret: $secret" || true
+    done
+    ok "Secret Manager cleared"
+  else
+    info "Keeping Secret Manager secrets"
+  fi
+fi
 
-echo ""
-if confirm "Delete all Firebase Auth users?"; then
-  SA_KEY="${SA_KEY_PATH:-$SA_KEY_DEFAULT}"
-  if [[ -f "$SA_KEY" ]]; then
-    cd "$REPO_DIR/functions"
-    node -e "
-const admin = require('firebase-admin');
-const sa = require('$SA_KEY');
-admin.initializeApp({ credential: admin.credential.cert(sa) });
+# ── 7. Full: Firestore ────────────────────────────────────────────────────
+if $FULL; then
+  echo ""
+  if confirm "Wipe ALL Firestore collections in '$FIREBASE_PROJECT'?"; then
+    firebase firestore:delete --all-collections --project "$FIREBASE_PROJECT" --force
+    ok "Firestore wiped"
+  else
+    info "Keeping Firestore data"
+  fi
+fi
 
+# ── 8. Full: Cloud Functions ──────────────────────────────────────────────
+if $FULL; then
+  echo ""
+  if confirm "Delete all Cloud Functions in '$FIREBASE_PROJECT'?"; then
+    FN_LIST=$(gcloud run services list \
+      --project="$FIREBASE_PROJECT" --region="$REGION" \
+      --format="value(name)" 2>/dev/null || true)
+    FN_COUNT=$(echo "$FN_LIST" | grep -c . 2>/dev/null || echo 0)
+    if [[ "$FN_COUNT" -gt 0 ]]; then
+      info "Deleting $FN_COUNT Cloud Run services..."
+      echo "$FN_LIST" | while read -r fn; do
+        [[ -z "$fn" ]] && continue
+        gcloud run services delete "$fn" \
+          --project="$FIREBASE_PROJECT" --region="$REGION" --quiet 2>/dev/null &
+      done
+      wait
+      ok "Cloud Functions deleted"
+    else
+      info "No Cloud Functions found"
+    fi
+  else
+    info "Keeping Cloud Functions"
+  fi
+fi
+
+# ── 9. Full: Firebase Auth ────────────────────────────────────────────────
+if $FULL; then
+  echo ""
+  if confirm "Delete all Firebase Auth users in '$FIREBASE_PROJECT'?"; then
+    SA_KEY="${SA_KEY_PATH:-$SA_KEY_DEFAULT}"
+    if [[ -f "$SA_KEY" ]]; then
+      cd "$REPO_DIR/functions"
+      npx tsx -e "
+import * as admin from 'firebase-admin';
+import * as fs from 'fs';
+const sa = JSON.parse(fs.readFileSync('$SA_KEY', 'utf8'));
+admin.initializeApp({ credential: admin.credential.cert(sa as any), projectId: '$FIREBASE_PROJECT' });
 (async () => {
   const list = await admin.auth().listUsers(1000);
-  for (const u of list.users) {
-    await admin.auth().deleteUser(u.uid);
-  }
+  await Promise.all(list.users.map(u => admin.auth().deleteUser(u.uid)));
   console.log('Deleted ' + list.users.length + ' auth users');
   process.exit(0);
 })();
-"
-    ok "Auth users deleted"
+" 2>&1 | grep -v "DeprecationWarning\|punycode"
+      ok "Auth users deleted"
+      cd "$REPO_DIR"
+    else
+      warn "SA key not found at $SA_KEY — skipping Auth cleanup"
+    fi
   else
-    warn "SA key not found — skip Auth cleanup"
+    info "Keeping Auth users"
   fi
-else
-  info "Keeping Auth users"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────
-
+REGION="us-central1"
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-echo -e "${BOLD}  Teardown complete${NC}"
+echo -e "${BOLD}  Teardown complete — ${ENV_LABEL}${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 if $FULL; then
-  echo "  Full teardown completed. Persistent infrastructure was removed."
+  echo "  Clean slate. To rebuild:"
   echo ""
-  echo "  To rebuild from scratch:"
-  echo "    1. ./scripts/setup-mattermost.sh --env=$ENV    # Mattermost + bootstrap"
-  echo "    2. ./scripts/setup-gitea.sh --env=$ENV         # Gitea (if needed)"
-  echo "    3. ./scripts/setup-gateway.sh --env=$ENV       # Gateway + Site + Functions"
-  echo "    4. ./scripts/setup-monitoring.sh --env=$ENV    # Prometheus + Grafana"
+  echo "  1. ./scripts/setup-mattermost.sh --env=$ENV --yes   # creds + K8s secrets"
+  echo "  2. helm upgrade --install octogee helm/octogee \\   # deploy everything"
+  echo "       -f helm/octogee/values.${ENV}.yaml \\"
+  echo "       -n $K8S_NAMESPACE --create-namespace \\"
+  echo "       --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
+  echo "       --kube-context $K8S_CONTEXT \\"
+  echo "       --wait --timeout=10m"
+  echo "  3. ./scripts/setup-mattermost.sh --env=$ENV --yes   # bootstrap MM"
+  echo "  4. ./scripts/setup-gitea.sh --env=$ENV --yes        # org + token"
+  echo "  5. ./scripts/setup-gateway.sh --env=$ENV --yes      # deploy gateway"
+  echo "  6. firebase deploy --project $FIREBASE_PROJECT      # functions + hosting"
+  echo "  7. ./scripts/verify-env.sh --env=$ENV               # verify"
 else
-  echo "  Per-deploy resources removed. Persistent services preserved:"
-  echo "    • Cloud SQL (octogee-pg), cloud-sql-proxy"
-  echo "    • Mattermost (chat history intact)"
-  echo "    • Gitea (git repos intact)"
-  echo "    • Chat Proxy (chat.octogee.com)"
-  echo "    • Monitoring (Prometheus + Grafana)"
+  echo "  Helm release uninstalled. To redeploy:"
   echo ""
-  echo "  To redeploy gateway:"
-  echo "    ./scripts/setup-gateway.sh --env=$ENV"
+  echo "  helm upgrade --install octogee helm/octogee \\"
+  echo "    -f helm/octogee/values.${ENV}.yaml \\"
+  echo "    -n $K8S_NAMESPACE --create-namespace \\"
+  echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
+  echo "    --kube-context $K8S_CONTEXT"
 fi
 echo ""
