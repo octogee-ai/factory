@@ -194,7 +194,23 @@ fi
 info "Pre-creating Firebase function secrets in Secret Manager (suppress deploy prompts)..."
 SM_PROJECT_CF="$CLUSTER_PROJECT"  # Functions run in the Firebase project (same as CLUSTER_PROJECT for each env)
 
-for sm_secret in MM_ADMIN_TOKEN GITHUB_TOKEN GITEA_TOKEN; do
+# Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy
+for sm_secret in \
+  MM_ADMIN_TOKEN \
+  GITEA_TOKEN \
+  GITHUB_TOKEN \
+  STRIPE_SECRET_KEY \
+  STRIPE_WEBHOOK_SECRET \
+  GOOGLE_CLIENT_ID \
+  GOOGLE_CLIENT_SECRET \
+  MICROSOFT_CLIENT_ID \
+  MICROSOFT_CLIENT_SECRET \
+  DISCORD_MAC_TOKEN \
+  DISCORD_COACH_TOKEN \
+  DISCORD_BOT_APP_ID \
+  DISCORD_CLIENT_SECRET \
+  ANTHROPIC_API_KEY \
+  OCTOGEE_GUILD_ID; do
   if gcloud secrets describe "$sm_secret" --project="$SM_PROJECT_CF" >/dev/null 2>&1; then
     info "  $sm_secret already exists in SM ($SM_PROJECT_CF)"
   else
