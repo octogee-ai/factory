@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ⚠️  INCOMPLETE — depends on setup-monitoring.sh which references deleted
 # k8s/monitoring/ files. Fix setup-monitoring.sh first.
-# TODO: tracked in TECH-DEBT.md
 # ─────────────────────────────────────────────────────────────────────────────
 # setup-monitoring-iap.sh — Expose Grafana at https://monitoring.octogee.com
 #                            behind Google IAP
@@ -108,7 +106,7 @@ ok "Secret '${SECRET_NAME}' created in namespace '${NAMESPACE}'"
 # ── Step 5: Apply Ingress manifests ──────────────────────────────────────────
 step 5 "Apply Ingress, BackendConfig, ManagedCertificate"
 
-kubectl apply -f k8s/monitoring/grafana-ingress.yaml
+kubectl apply -f "$REPO_DIR/helm/monitoring/grafana-ingress.yaml"
 ok "Ingress manifests applied"
 
 # ── Step 6: DNS instruction ───────────────────────────────────────────────────
