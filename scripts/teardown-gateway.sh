@@ -333,6 +333,7 @@ if $FULL; then
       done
       wait
       ok "Cloud Functions deleted (chat proxy preserved)"
+      warn "After 'firebase deploy --only functions', run scripts/fix-functions-iam.sh to restore allUsers invoker binding (firebase deploy doesn't restore IAM)"
     else
       info "No Cloud Functions found"
     fi
