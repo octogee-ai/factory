@@ -296,8 +296,10 @@ async function handleRest(
     return;
   }
 
-  // Get MM token — admin users get octogee-admin credentials
-  const creds = await isAdminUser(uid) ? await getAdminMmToken() : await getMmToken(uid);
+  // Always use the user's personal MM token for REST requests.
+  // Admin role does NOT get the system admin token here — that's only for the
+  // admin chat panel which uses a separate WS ticket (isAdminTicket path below).
+  const creds = await getMmToken(uid);
   if (!creds) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Chat not provisioned" }));
