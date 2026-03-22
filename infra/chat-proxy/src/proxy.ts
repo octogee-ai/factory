@@ -186,17 +186,17 @@ async function getAdminMmToken(): Promise<{ mmToken: string; mmUserId: string } 
   }
 
   try {
+    // MM_ADMIN_TOKEN injected as Cloud Run env var from Secret Manager at deploy time.
+    // Non-sensitive metadata (userId) still from Firestore.
+    const mmToken = process.env.MM_ADMIN_TOKEN || "";
+
     const adminDoc = await db.doc("system/mattermostAdmin").get();
-    if (!adminDoc.exists) {
-      console.error("[proxy] system/mattermostAdmin not found");
+    const mmUserId = adminDoc.data()?.userId || "";
+
+    if (!mmUserId || !mmToken) {
+      console.error(`[proxy] Admin MM credentials missing — mmUserId=${!!mmUserId} mmToken=${!!mmToken}`);
       return null;
     }
-
-    const data = adminDoc.data()!;
-    const mmUserId = data.userId;
-    const mmToken = data.personalToken;
-
-    if (!mmUserId || !mmToken) return null;
 
     tokenCache.set(ADMIN_CACHE_KEY, {
       mmToken,
