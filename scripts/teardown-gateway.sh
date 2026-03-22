@@ -36,6 +36,7 @@ ENV="prod"
 FORCE=false
 FULL=false
 PROXY_PID=""
+REGION="us-central1"
 
 for arg in "$@"; do
   case $arg in
@@ -353,7 +354,6 @@ admin.initializeApp({ credential: admin.credential.cert(sa as any), projectId: '
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────
-REGION="us-central1"
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}  Teardown complete — ${ENV_LABEL}${NC}"
