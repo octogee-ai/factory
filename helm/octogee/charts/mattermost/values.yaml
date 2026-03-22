@@ -1,0 +1,31 @@
+image:
+  repository: mattermost/mattermost-enterprise-edition
+  tag: "release-9.11"
+
+db:
+  user: mattermost
+  name: mattermost_prod
+  passwordSecret: mattermost-cloud-sql
+  passwordKey: password
+
+siteUrl: "https://chat.octogee.com"
+allowedInternalConnections: "octogee-gateway.octogee.svc.cluster.local"
+
+serviceAccountName: octogee-gateway
+
+pvc:
+  size: 20Gi
+  storageClass: standard-rwo
+
+ilb:
+  enabled: true
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+    ephemeral-storage: "1Gi"
+  limits:
+    cpu: "2000m"
+    memory: "2Gi"
+    ephemeral-storage: "5Gi"

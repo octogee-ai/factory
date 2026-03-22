@@ -1,0 +1,16 @@
+image:
+  repository: gcr.io/cloud-sql-connectors/cloud-sql-proxy
+  tag: "2.11.4"
+
+connectionName: "octogee:us-central1:octogee-pg"
+usePrivateIp: true
+
+serviceAccountName: octogee-gateway
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

@@ -1,0 +1,116 @@
+# ── Octogee Umbrella Chart — Shared Defaults ────────────────────────────────
+# Override per-environment in values.prod.yaml / values.test.yaml
+
+# ── cloud-sql-proxy ─────────────────────────────────────────────────────────
+cloud-sql-proxy:
+  image:
+    repository: gcr.io/cloud-sql-connectors/cloud-sql-proxy
+    tag: "2.11.4"
+  connectionName: "octogee:us-central1:octogee-pg"
+  usePrivateIp: true
+  serviceAccountName: octogee-gateway
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ── mattermost ──────────────────────────────────────────────────────────────
+mattermost:
+  enabled: true
+  image:
+    repository: mattermost/mattermost-enterprise-edition
+    tag: "release-9.11"
+  db:
+    user: mattermost
+    name: mattermost_prod
+    passwordSecret: mattermost-cloud-sql
+    passwordKey: password
+  siteUrl: "https://chat.octogee.com"
+  allowedInternalConnections: "octogee-gateway.octogee.svc.cluster.local"
+  serviceAccountName: octogee-gateway
+  pvc:
+    size: 20Gi
+    storageClass: standard-rwo
+  ilb:
+    enabled: true
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+      ephemeral-storage: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+      ephemeral-storage: "5Gi"
+
+# ── gitea (upstream chart) ──────────────────────────────────────────────────
+gitea:
+  gitea:
+    admin:
+      username: octogee-admin
+      email: ops@octogee.com
+      existingSecret: gitea-admin
+    config:
+      database:
+        DB_TYPE: postgres
+        HOST: cloud-sql-proxy:5432
+        NAME: gitea_prod
+        USER: gitea
+      server:
+        DOMAIN: git.octogee.com
+        ROOT_URL: https://git.octogee.com
+      repository:
+        DEFAULT_PRIVATE: "true"
+      service:
+        DISABLE_REGISTRATION: "true"
+        REQUIRE_SIGNIN_VIEW: "true"
+  postgresql:
+    enabled: false
+  postgresql-ha:
+    enabled: false
+  redis-cluster:
+    enabled: false
+  valkey-cluster:
+    enabled: false
+  valkey:
+    enabled: false
+  redis:
+    enabled: false
+  persistence:
+    enabled: true
+    storageClass: premium-rwo
+    size: 50Gi
+  strategy:
+    type: Recreate
+
+# ── gateway ─────────────────────────────────────────────────────────────────
+gateway:
+  image:
+    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway
+    tag: latest
+  serviceAccountName: octogee-gateway
+  env:
+    gcloudProject: "octogee"
+    firebaseProjectId: "octogee"
+    agentPrefix: "octogee-"
+    githubOrg: "octogee"
+    mmUrl: "http://mattermost.octogee.svc.cluster.local:8065"
+    chatProxyUrl: "https://chat.octogee.com"
+  pvc:
+    name: octogee-data
+    size: 50Gi
+    storageClass: standard-rwo
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "2560Mi"
+      ephemeral-storage: "1Gi"
+    limits:
+      cpu: "4000m"
+      memory: "4Gi"
+      ephemeral-storage: "5Gi"
+  networkPolicy:
+    enabled: true

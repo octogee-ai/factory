@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mattermost
+  labels:
+    app: mattermost
+    {{- include "mattermost.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mattermost
+  template:
+    metadata:
+      labels:
+        app: mattermost
+    spec:
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      securityContext:
+        fsGroup: 2000
+      containers:
+        - name: mattermost
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - containerPort: 8065
+              name: http
+            - containerPort: 8067
+              name: metrics
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              export MM_SQLSETTINGS_DATASOURCE="postgres://{{ .Values.db.user }}:${MM_DB_PASSWORD}@cloud-sql-proxy:5432/{{ .Values.db.name }}?sslmode=disable&connect_timeout=10"
+              exec /entrypoint.sh mattermost
+          env:
+            - name: MM_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.passwordSecret }}
+                  key: {{ .Values.db.passwordKey }}
+            - name: MM_SQLSETTINGS_DRIVERNAME
+              value: postgres
+            - name: MM_SERVICESETTINGS_SITEURL
+              value: {{ .Values.siteUrl | quote }}
+            - name: MM_TEAMSETTINGS_ENABLEOPENSERVER
+              value: "true"
+            - name: MM_TEAMSETTINGS_ENABLEUSERCREATION
+              value: "true"
+            - name: MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION
+              value: "true"
+            - name: MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS
+              value: "true"
+            - name: MM_FILESETTINGS_DRIVERNAME
+              value: local
+            - name: MM_FILESETTINGS_DIRECTORY
+              value: /mattermost/data
+            - name: MM_EMAILSETTINGS_SENDEMAILNOTIFICATIONS
+              value: "false"
+            - name: MM_EMAILSETTINGS_REQUIREEMAILVERIFICATION
+              value: "false"
+            - name: MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS
+              value: {{ .Values.allowedInternalConnections | quote }}
+            - name: MM_PLUGINSETTINGS_ENABLEUPLOADS
+              value: "true"
+            - name: MM_METRICSSETTINGS_ENABLE
+              value: "true"
+            - name: MM_METRICSSETTINGS_LISTENADDRESS
+              value: ":8067"
+          volumeMounts:
+            - name: data
+              mountPath: /mattermost/data
+            - name: config
+              mountPath: /mattermost/config
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mattermost-data
+        - name: config
+          emptyDir: {}

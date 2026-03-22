@@ -92,13 +92,19 @@ async function main(): Promise<void> {
   // If MM was re-bootstrapped (new token in K8s secret), both fields must be updated
   // or the gateway will send the stale token and get 401 on every WebSocket connect.
   const envBotToken = process.env.MM_BOT_TOKEN;
-  if (envBotToken && config.channels?.mattermost) {
+  const envMmUrl = process.env.MM_URL;
+  if (config.channels?.mattermost) {
     const mm = config.channels.mattermost;
-    if (mm.botToken !== envBotToken || mm.token !== envBotToken) {
+    if (envBotToken && (mm.botToken !== envBotToken || mm.token !== envBotToken)) {
       mm.botToken = envBotToken;
       mm.token = envBotToken;
       changed = true;
       log(`MM bot token synced from MM_BOT_TOKEN env var`);
+    }
+    if (envMmUrl && mm.baseUrl !== envMmUrl) {
+      mm.baseUrl = envMmUrl;
+      changed = true;
+      log(`MM baseUrl synced from MM_URL env var: ${envMmUrl}`);
     }
   }
 

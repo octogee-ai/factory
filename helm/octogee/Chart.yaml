@@ -1,0 +1,24 @@
+apiVersion: v2
+name: octogee
+description: Octogee platform umbrella chart — deploys the full stack
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
+dependencies:
+  - name: cloud-sql-proxy
+    version: "0.1.0"
+    repository: "file://charts/cloud-sql-proxy"
+
+  - name: mattermost
+    version: "0.1.0"
+    repository: "file://charts/mattermost"
+    condition: mattermost.enabled
+
+  - name: gitea
+    version: "12.5.0"
+    repository: "https://dl.gitea.com/charts/"
+
+  - name: gateway
+    version: "0.1.0"
+    repository: "file://charts/gateway"

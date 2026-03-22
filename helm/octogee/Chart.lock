@@ -1,0 +1,15 @@
+dependencies:
+- name: cloud-sql-proxy
+  repository: file://charts/cloud-sql-proxy
+  version: 0.1.0
+- name: mattermost
+  repository: file://charts/mattermost
+  version: 0.1.0
+- name: gitea
+  repository: https://dl.gitea.com/charts/
+  version: 12.5.0
+- name: gateway
+  repository: file://charts/gateway
+  version: 0.1.0
+digest: sha256:af43ba311f0baa7eaf3869a75ba818a9b6ffe6044888017a69d70f13df04c499
+generated: "2026-03-21T16:50:33.508441-07:00"
