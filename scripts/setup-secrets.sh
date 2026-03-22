@@ -73,7 +73,14 @@ sm_get() {
 }
 
 # Load env file
-[[ -f "$ENV_FILE" ]] && { set +u; source <(grep -v '^#' "$ENV_FILE" | grep '='); set -u; } || true
+if [[ -f "$ENV_FILE" ]]; then
+  set +u
+  while IFS='=' read -r key val; do
+    [[ -z "$key" || "$key" == \#* || -z "$val" ]] && continue
+    export "$key=$val"
+  done < <(grep -v '^#' "$ENV_FILE" | grep -v '^[[:space:]]*$')
+  set -u
+fi
 
 [[ "$ENV" == "prod" && "$YES" == "true" ]] && fail "--yes cannot be used with prod."
 
