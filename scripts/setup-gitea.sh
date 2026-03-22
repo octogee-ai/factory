@@ -137,7 +137,9 @@ trap "kill $PF_PID 2>/dev/null || true" EXIT
 # Wait for Gitea HTTP
 GITEA_READY=false
 for attempt in $(seq 1 20); do
+  # Use basic auth — Gitea may have REQUIRE_SIGNIN_VIEW=true which blocks unauthenticated API calls
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -u "octogee-admin:$GITEA_ADMIN_PASS" \
     "http://localhost:13000/api/v1/version" 2>/dev/null || echo "000")
   [[ "$STATUS" == "200" ]] && { GITEA_READY=true; break; }
   sleep 3
