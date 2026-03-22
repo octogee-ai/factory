@@ -296,10 +296,10 @@ async function handleRest(
     return;
   }
 
-  // Always use the user's personal MM token for REST requests.
-  // Admin role does NOT get the system admin token here — that's only for the
-  // admin chat panel which uses a separate WS ticket (isAdminTicket path below).
-  const creds = await getMmToken(uid);
+  // Admin users use the system admin token (octogee-admin) for REST requests.
+  // This lets admin see ALL customer channels, not just their own.
+  // Regular users always get their personal token.
+  const creds = await isAdminUser(uid) ? await getAdminMmToken() : await getMmToken(uid);
   if (!creds) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Chat not provisioned" }));
