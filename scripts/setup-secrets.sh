@@ -192,7 +192,7 @@ fi
 #   MM_ADMIN_TOKEN: overwritten by provisioner on every gateway startup
 #   GITHUB_TOKEN:   optional, set manually if GitHub org integration is needed
 info "Pre-creating Firebase function secrets in Secret Manager (suppress deploy prompts)..."
-SM_PROJECT_CF="$GCP_PROJECT"  # Functions run in the Firebase project (same as GCP_PROJECT for each env)
+SM_PROJECT_CF="$CLUSTER_PROJECT"  # Functions run in the Firebase project (same as CLUSTER_PROJECT for each env)
 
 for sm_secret in MM_ADMIN_TOKEN GITHUB_TOKEN; do
   if gcloud secrets describe "$sm_secret" --project="$SM_PROJECT_CF" >/dev/null 2>&1; then
