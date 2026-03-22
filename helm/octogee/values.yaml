@@ -114,3 +114,7 @@ gateway:
       ephemeral-storage: "5Gi"
   networkPolicy:
     enabled: true
+
+# ── Service Account ──────────────────────────────────────────────────────────
+serviceAccount:
+  gcpServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"
