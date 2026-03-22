@@ -217,10 +217,11 @@ export async function provisionMattermostUser(
 
     // Create private channel for customer
     const channelName = `octogee-${slug}`;
+    const channelDisplayName = firstName ? `${firstName}'s Workspace` : `${slug} Workspace`;
     let channel = await mmApiCall("POST", "/channels", {
       team_id: MM_TEAM_ID,
       name: channelName,
-      display_name: "Octogee",
+      display_name: channelDisplayName,
       type: "P",
       purpose: `${firstName || slug}'s Octogee workspace`,
     });
