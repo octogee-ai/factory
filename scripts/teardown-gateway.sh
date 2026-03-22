@@ -128,7 +128,7 @@ if $FULL; then
   echo -e "  ${RED}  + Firestore collections${NC}"
   echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
   echo -e "  ${RED}  + Firebase Auth users${NC}"
-  echo -e "  ${RED}  + Secret Manager secrets (in $FIREBASE_PROJECT project)${NC}"
+  echo -e "  ${RED}  + Secret Manager secrets (per-env only — DB passwords preserved)${NC}"
 fi
 echo ""
 echo "  Will preserve:"
@@ -273,16 +273,30 @@ if $FULL; then
 fi
 
 # ── 6. Full: Secret Manager ───────────────────────────────────────────────
+# PRESERVED (never deleted — shared infrastructure across both envs):
+#   MM_DB_PASSWORD       — Cloud SQL mattermost user password
+#   gitea-db-password    — Cloud SQL gitea user password
+#   gitea-admin-password-{prod,test} — Gitea admin passwords
+#   gitea-api-token-{prod,test}      — Gitea API tokens
+# DELETED: per-env app secrets (MM tokens, API keys, Stripe, OAuth, etc.)
+PRESERVED_SECRETS="MM_DB_PASSWORD gitea-db-password gitea-admin-password-prod gitea-admin-password-test gitea-api-token-prod gitea-api-token-test"
+
 if $FULL; then
   echo ""
-  if confirm "Delete all Secret Manager secrets in project '$FIREBASE_PROJECT'?"; then
+  if confirm "Delete per-env Secret Manager secrets in project '$FIREBASE_PROJECT'? (infrastructure secrets preserved)"; then
     SECRETS=$(gcloud secrets list --project="$FIREBASE_PROJECT" \
       --format="value(name)" 2>/dev/null || true)
     for secret in $SECRETS; do
+      # Skip preserved infrastructure secrets
+      SKIP=false
+      for preserved in $PRESERVED_SECRETS; do
+        [[ "$secret" == "$preserved" ]] && SKIP=true && break
+      done
+      $SKIP && info "  Preserving: $secret" && continue
       gcloud secrets delete "$secret" --project="$FIREBASE_PROJECT" --quiet 2>/dev/null \
         && ok "Deleted SM secret: $secret" || true
     done
-    ok "Secret Manager cleared"
+    ok "Secret Manager cleared (infrastructure secrets preserved)"
   else
     info "Keeping Secret Manager secrets"
   fi
