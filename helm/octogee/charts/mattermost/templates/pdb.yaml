@@ -2,7 +2,7 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "mattermost.fullname" . }}
+  name: mattermost
   namespace: {{ .Release.Namespace }}
   labels:
     app: mattermost
