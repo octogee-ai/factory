@@ -186,6 +186,26 @@ else
   ksecret octogee-github --from-literal=token=""
 fi
 
+# ── Firebase / Cloud Functions secrets (must exist before firebase deploy) ───
+# Firebase prompts interactively if these secrets don't exist in Secret Manager.
+# Pre-create them with placeholder values — the real values are set at runtime:
+#   MM_ADMIN_TOKEN: overwritten by provisioner on every gateway startup
+#   GITHUB_TOKEN:   optional, set manually if GitHub org integration is needed
+info "Pre-creating Firebase function secrets in Secret Manager (suppress deploy prompts)..."
+SM_PROJECT_CF="${FIREBASE_PROJECT:-$GCP_PROJECT}"  # Functions run in Firebase project
+
+for sm_secret in MM_ADMIN_TOKEN GITHUB_TOKEN; do
+  if gcloud secrets describe "$sm_secret" --project="$SM_PROJECT_CF" >/dev/null 2>&1; then
+    info "  $sm_secret already exists in SM ($SM_PROJECT_CF)"
+  else
+    echo -n "placeholder" | gcloud secrets create "$sm_secret" \
+      --data-file=- \
+      --project="$SM_PROJECT_CF" \
+      --replication-policy=automatic \
+      --quiet 2>/dev/null && ok "  Created SM secret: $sm_secret" || warn "  Could not create $sm_secret"
+  fi
+done
+
 # ── Done ──────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
