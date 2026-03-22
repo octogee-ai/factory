@@ -46,6 +46,10 @@ mattermost:
       memory: "2Gi"
       ephemeral-storage: "5Gi"
 
+# ── Gitea ILB (internal load balancer for CF/VPC connector access) ──────────
+giteaIlb:
+  enabled: true
+
 # ── gitea (upstream chart) ──────────────────────────────────────────────────
 gitea:
   gitea:
