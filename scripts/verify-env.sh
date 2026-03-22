@@ -232,7 +232,8 @@ elif [[ "${GW_READY:-0}" -ge 1 ]]; then
   fi
   # Check openclaw config valid
   CONFIG_ERROR=$(kubectl logs deployment/octogee-gateway -n "$NAMESPACE" -c gateway \
-    --tail=30 2>/dev/null | grep -i "invalid\|config invalid\|additionalProperties" | head -1 || echo "")
+    --tail=30 2>/dev/null | grep -i "config invalid\|additionalProperties\|openclaw.json" | \
+    grep -v "onnxruntime\|pthread\|affinity" | head -1 || echo "")
   if [[ -n "$CONFIG_ERROR" ]]; then
     warn "Config issue detected in logs: $CONFIG_ERROR"
   else
@@ -301,6 +302,9 @@ if [[ "$PROXY_STATUS" == "True" ]]; then
   pass "$CHAT_PROXY_SERVICE: ready"
   info "URL: $PROXY_URL"
   info "Image: $PROXY_IMAGE_TAG"
+elif [[ "$ENV" == "test" && "$PROXY_STATUS" == "NotFound" ]]; then
+  # Chat proxy is not auto-deployed on test — it's a manual step run once per env lifetime
+  warn "$CHAT_PROXY_SERVICE: not deployed (run ./scripts/setup-chat-proxy.sh --env=test to deploy)"
 else
   fail "$CHAT_PROXY_SERVICE: status=$PROXY_STATUS"
   if $FIX; then
