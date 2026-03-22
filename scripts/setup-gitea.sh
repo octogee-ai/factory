@@ -1,166 +1,233 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
-# setup-gitea.sh — Deploy Gitea to GKE via Helm
-#
-# Usage:
-#   ./scripts/setup-gitea.sh --env=prod
-#   ./scripts/setup-gitea.sh --env=test
-# ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-PROJECT="octogee"          # GCP project for secrets + Cloud SQL (always octogee)
-CLUSTER="octogee-gateway"  # overridden per-env below
-REGION="us-central1"
+# ═══════════════════════════════════════════════════════════════════════════
+# Octogee Gitea Setup — Bootstrap org, API token + K8s secrets
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# NOTE: Gitea is deployed by Helm (umbrella chart), NOT by this script.
+# This script's job is:
+#   1. Wait for Gitea to be ready (Helm must be deployed first)
+#   2. Create the 'octogee' org if it doesn't exist
+#   3. Create an admin API token (scoped)
+#   4. Create K8s secrets consumed by the gateway
+#   5. Save token to .env file and Secret Manager
+#
+# Usage:
+#   ./scripts/setup-gitea.sh --env=test [--yes]
+#   ./scripts/setup-gitea.sh --env=prod
+# ═══════════════════════════════════════════════════════════════════════════
 
-GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
-log()  { echo -e "${BLUE}[gitea]${NC} $*"; }
-ok()   { echo -e "${GREEN}[gitea]${NC} ✅ $*"; }
-warn() { echo -e "${YELLOW}[gitea]${NC} ⚠️  $*"; }
-fail() { echo -e "\033[0;31m[gitea]${NC} ❌ $*"; exit 1; }
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
 
 ENV=""
+YES=false
+
 for arg in "$@"; do
   case $arg in
     --env=*) ENV="${arg#*=}" ;;
+    --yes|-y) YES=true ;;
+    --help|-h)
+      echo "Usage: $0 --env=prod|test [--yes]"
+      exit 0
+      ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test"; exit 1; }
+
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test [--yes]"; exit 1; }
 
 case "$ENV" in
   prod)
-    NAMESPACE="octogee"
-    VALUES_EXTRA=""
-    GITEA_DOMAIN="git.octogee.com"
-    DB_NAME="gitea_prod"
+    K8S_NAMESPACE="octogee"
+    GCP_PROJECT="octogee"
     CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    ENV_FILE="$REPO_DIR/.env"
+    ENV_LABEL="🔴 PRODUCTION"
+    GITEA_SVC="octogee-gitea-http"
     ;;
   test)
-    NAMESPACE="octogee-test"
-    VALUES_EXTRA="-f infra/helm/gitea-values.test.yaml"
-    GITEA_DOMAIN="git-test.octogee.com"
-    DB_NAME="gitea_test"
-    CLUSTER="octogee-test"
+    K8S_NAMESPACE="octogee-test"
+    GCP_PROJECT="octogee-test"
     CLUSTER_PROJECT="octogee-test"
+    CLUSTER_NAME="octogee-test"
+    K8S_CONTEXT="gke_octogee-test_us-central1_octogee-test"
+    ENV_FILE="$REPO_DIR/.env.test"
+    ENV_LABEL="🟡 TEST"
+    GITEA_SVC="octogee-gitea-http"
     ;;
-  *) fail "Unknown environment: $ENV" ;;
+  *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
 
-# ── Preflight ─────────────────────────────────────────────────────────────────
-log "Preflight checks..."
-command -v helm >/dev/null || fail "helm not found"
-command -v kubectl >/dev/null || fail "kubectl not found"
+ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
+warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
+fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
+info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
 
-gcloud container clusters get-credentials "$CLUSTER" --region "$REGION" --project "$CLUSTER_PROJECT"
+save_env() {
+  local key="$1" val="$2"
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    local tmpfile; tmpfile=$(mktemp)
+    grep -v "^${key}=" "$ENV_FILE" > "$tmpfile"
+    echo "${key}=${val}" >> "$tmpfile"
+    mv "$tmpfile" "$ENV_FILE"
+  else
+    echo "${key}=${val}" >> "$ENV_FILE"
+  fi
+}
 
-# ── Helm repo ─────────────────────────────────────────────────────────────────
-log "Adding Gitea Helm repo..."
-helm repo add gitea-charts https://dl.gitea.com/charts/ 2>/dev/null || true
-helm repo update gitea-charts
-ok "Repo ready"
+echo ""
+echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}  Gitea Setup — ${ENV_LABEL}${NC}"
+echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
+echo ""
 
-# ── Read secrets from Secret Manager ─────────────────────────────────────────
-log "Reading credentials from Secret Manager..."
-# Use separate secrets per env — prevents cross-env password clobbering
-GITEA_DB_SECRET="gitea-db-password"
-[[ "$ENV" == "test" ]] && GITEA_DB_SECRET="gitea-db-password" # same secret, shared user
-# test uses same gitea-db-password secret (shared Cloud SQL user, separate DB)
+# ── 0. kubectl context ────────────────────────────────────────────────────
+info "Setting kubectl context: $K8S_CONTEXT"
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+kubectl config use-context "$K8S_CONTEXT"
+CURRENT_CTX=$(kubectl config current-context)
+[[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context mismatch: '$CURRENT_CTX'"
+ok "kubectl context: $CURRENT_CTX"
 
-GITEA_DB_PASS=$(gcloud secrets versions access latest \
-  --secret="$GITEA_DB_SECRET" --project="octogee" 2>/dev/null || echo "")
-CLOUD_SQL_CONN=$(gcloud secrets versions access latest \
-  --secret=cloud-sql-connection-name --project="$PROJECT" 2>/dev/null || echo "")
+# ── 1. Get Gitea admin password ───────────────────────────────────────────
+info "Reading Gitea admin password from Secret Manager..."
+GITEA_ADMIN_PASS=$(gcloud secrets versions access latest \
+  --secret="gitea-admin-password-${ENV}" --project=octogee 2>/dev/null || echo "")
 
-[[ -z "$GITEA_DB_PASS" ]] && fail "$GITEA_DB_SECRET secret not found. Run setup-cloud-sql.sh first."
-[[ -z "$CLOUD_SQL_CONN" ]] && fail "cloud-sql-connection-name secret not found. Run setup-cloud-sql.sh first."
-
-# ── Create k8s secrets ───────────────────────────────────────────────────────
-log "Creating Kubernetes secrets..."
-GITEA_ADMIN_PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
-GITEA_SECRET_KEY=$(openssl rand -hex 32)
-GITEA_INTERNAL_TOKEN=$(openssl rand -hex 64)
-
-kubectl create secret generic gitea-credentials \
-  --namespace="$NAMESPACE" \
-  --from-literal=admin-password="$GITEA_ADMIN_PASS" \
-  --from-literal=db-password="$GITEA_DB_PASS" \
-  --from-literal=secret-key="$GITEA_SECRET_KEY" \
-  --from-literal=internal-token="$GITEA_INTERNAL_TOKEN" \
-  --dry-run=client -o yaml | kubectl apply -f -
-ok "Secrets created/updated"
-
-# Store admin password in Secret Manager too
-echo -n "$GITEA_ADMIN_PASS" | gcloud secrets versions add "gitea-admin-password-${ENV}" \
-  --data-file=- --project="$PROJECT" 2>/dev/null || \
-echo -n "$GITEA_ADMIN_PASS" | gcloud secrets create "gitea-admin-password-${ENV}" \
-  --data-file=- --project="$PROJECT" \
-  --replication-policy=user-managed --locations="$REGION"
-ok "Admin password stored in Secret Manager: gitea-admin-password-${ENV}"
-
-# ── Deploy ───────────────────────────────────────────────────────────────────
-log "Deploying Gitea to $NAMESPACE..."
-
-# Patch values with actual secrets and connection name
-helm upgrade --install gitea gitea-charts/gitea \
-  -f infra/helm/gitea-values.yaml \
-  $VALUES_EXTRA \
-  --namespace "$NAMESPACE" \
-  --create-namespace \
-  --set gitea.config.database.PASSWD="$GITEA_DB_PASS" \
-  --set gitea.config.database.NAME="$DB_NAME" \
-  --set gitea.config.security.SECRET_KEY="$GITEA_SECRET_KEY" \
-  --set gitea.config.security.INTERNAL_TOKEN="$GITEA_INTERNAL_TOKEN" \
-  --set gitea.admin.password="$GITEA_ADMIN_PASS" \
-  --wait --timeout=5m
-
-ok "Gitea deployed to $NAMESPACE"
-
-# Deploy Gitea ILB so Cloud Functions can reach it via internal IP
-REPO_DIR="$(dirname "$(dirname "$0")")"
-if [[ -f "$REPO_DIR/k8s/$NAMESPACE/gitea-ilb.yaml" ]]; then
-  log "Deploying Gitea ILB..."
-  kubectl apply -f "$REPO_DIR/k8s/$NAMESPACE/gitea-ilb.yaml" 2>/dev/null || true
-  ok "Gitea ILB deployed"
+if [[ -z "$GITEA_ADMIN_PASS" ]]; then
+  # Fall back to the secret embedded in the K8s secret
+  GITEA_ADMIN_PASS=$(kubectl get secret gitea-admin -n "$K8S_NAMESPACE" \
+    -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 fi
 
-# ── Create octogee org ───────────────────────────────────────────────────────
-log "Setting up Gitea organization..."
-GITEA_SVC="gitea-http.$NAMESPACE.svc.cluster.local:3000"
+[[ -n "$GITEA_ADMIN_PASS" ]] || fail "Could not find Gitea admin password. Check Secret Manager: gitea-admin-password-${ENV}"
+ok "Admin password retrieved"
 
-# Port-forward to call the API
-kubectl port-forward svc/gitea-http -n "$NAMESPACE" 13000:3000 &
+# ── 2. Wait for Gitea ────────────────────────────────────────────────────
+info "Checking if Gitea is deployed..."
+kubectl get deployment -n "$K8S_NAMESPACE" -l "app.kubernetes.io/name=gitea" >/dev/null 2>&1 || \
+  fail "Gitea not deployed. Run: helm upgrade --install octogee helm/octogee ... first."
+
+info "Waiting for Gitea (up to 120s)..."
+kubectl wait --for=condition=available \
+  deployment -l "app.kubernetes.io/name=gitea" \
+  -n "$K8S_NAMESPACE" --timeout=120s 2>/dev/null || fail "Gitea not ready after 120s"
+ok "Gitea ready"
+
+# ── 3. Port-forward + API calls ──────────────────────────────────────────
+info "Port-forwarding Gitea (localhost:13000)..."
+pkill -f "port-forward svc/$GITEA_SVC" 2>/dev/null || true
+sleep 1
+kubectl port-forward "svc/$GITEA_SVC" -n "$K8S_NAMESPACE" 13000:3000 &
 PF_PID=$!
-sleep 3
+trap "kill $PF_PID 2>/dev/null || true" EXIT
 
+# Wait for Gitea HTTP
+GITEA_READY=false
+for attempt in $(seq 1 20); do
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    "http://localhost:13000/api/v1/version" 2>/dev/null || echo "000")
+  [[ "$STATUS" == "200" ]] && { GITEA_READY=true; break; }
+  sleep 3
+  info "  Waiting for Gitea HTTP (attempt $attempt/20, status=$STATUS)..."
+done
+$GITEA_READY || fail "Gitea HTTP not responding after 60s"
+ok "Gitea HTTP ready"
+
+# Fix must_change_password (fresh installs set this by default)
+info "Ensuring admin account is accessible..."
+MUST_CHANGE=$(kubectl exec -n "$K8S_NAMESPACE" \
+  "$(kubectl get pod -n "$K8S_NAMESPACE" -l "app.kubernetes.io/name=gitea" -o jsonpath='{.items[0].metadata.name}')" \
+  -- /bin/sh -c "gitea admin user list 2>/dev/null | grep octogee-admin | awk '{print \$5}'" 2>/dev/null || echo "")
+
+# Reset must_change_password via API config (tolerant — if it fails we continue)
+curl -s -X PATCH "http://localhost:13000/api/v1/admin/users/octogee-admin" \
+  -u "octogee-admin:$GITEA_ADMIN_PASS" \
+  -H "Content-Type: application/json" \
+  -d '{"login_name":"octogee-admin","source_id":0,"must_change_password":false}' >/dev/null 2>&1 || true
+
+# ── 4. Create org ─────────────────────────────────────────────────────────
+info "Checking 'octogee' org..."
 ORG_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
   -u "octogee-admin:$GITEA_ADMIN_PASS" \
-  "http://localhost:13000/api/v1/orgs/octogee")
+  "http://localhost:13000/api/v1/orgs/octogee" 2>/dev/null || echo "000")
 
-if [[ "$ORG_STATUS" == "404" ]]; then
-  curl -s -X POST \
+if [[ "$ORG_STATUS" == "200" ]]; then
+  ok "Org 'octogee' already exists"
+else
+  ORG_RESP=$(curl -s -w "\n%{http_code}" -X POST \
     -u "octogee-admin:$GITEA_ADMIN_PASS" \
     -H "Content-Type: application/json" \
     "http://localhost:13000/api/v1/orgs" \
-    -d '{"username":"octogee","visibility":"private","repo_admin_change_team_access":true}'
-  ok "Created 'octogee' organization"
-else
-  ok "Organization 'octogee' already exists"
+    -d '{"username":"octogee","visibility":"private","repo_admin_change_team_access":true}' 2>/dev/null)
+  ORG_CODE=$(echo "$ORG_RESP" | tail -1)
+  [[ "$ORG_CODE" == "201" ]] || fail "Failed to create org (HTTP $ORG_CODE): $ORG_RESP"
+  ok "Org 'octogee' created"
 fi
 
-kill $PF_PID 2>/dev/null || true
+# ── 5. Create API token ───────────────────────────────────────────────────
+info "Creating Gitea API token..."
+# Delete existing token with same name (idempotent)
+curl -s -X DELETE \
+  -u "octogee-admin:$GITEA_ADMIN_PASS" \
+  "http://localhost:13000/api/v1/users/octogee-admin/tokens/octogee-gateway-token" >/dev/null 2>&1 || true
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+TOKEN_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+  -u "octogee-admin:$GITEA_ADMIN_PASS" \
+  -H "Content-Type: application/json" \
+  "http://localhost:13000/api/v1/users/octogee-admin/tokens" \
+  -d '{"name":"octogee-gateway-token","scopes":["write:repository","write:organization","write:user"]}' 2>/dev/null)
+TOKEN_CODE=$(echo "$TOKEN_RESP" | tail -1)
+TOKEN_BODY=$(echo "$TOKEN_RESP" | head -1)
+
+[[ "$TOKEN_CODE" == "201" ]] || fail "Failed to create token (HTTP $TOKEN_CODE): $TOKEN_BODY"
+GIT_API_TOKEN=$(echo "$TOKEN_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha1',''))" 2>/dev/null || echo "")
+[[ -n "$GIT_API_TOKEN" ]] || fail "Token created but sha1 missing: $TOKEN_BODY"
+ok "API token created"
+
+# ── 6. Save token ─────────────────────────────────────────────────────────
+save_env "GIT_API_TOKEN" "$GIT_API_TOKEN"
+ok "Token saved to $ENV_FILE"
+
+# Store in Secret Manager
+echo -n "$GIT_API_TOKEN" | gcloud secrets versions add "gitea-api-token-${ENV}" \
+  --data-file=- --project=octogee 2>/dev/null || \
+echo -n "$GIT_API_TOKEN" | gcloud secrets create "gitea-api-token-${ENV}" \
+  --data-file=- --project=octogee \
+  --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
+warn "Could not save token to Secret Manager — it's in .env file"
+ok "Token saved to Secret Manager: gitea-api-token-${ENV}"
+
+# ── 7. Create K8s secret ──────────────────────────────────────────────────
+info "Creating gitea-token K8s secret..."
+kubectl delete secret gitea-token -n "$K8S_NAMESPACE" 2>/dev/null || true
+kubectl create secret generic gitea-token -n "$K8S_NAMESPACE" \
+  --from-literal=token="$GIT_API_TOKEN"
+ok "gitea-token K8s secret created"
+
+# Kill port-forward
+kill $PF_PID 2>/dev/null || true
+trap - EXIT
+
 echo ""
-echo -e "${BOLD}${GREEN}  Gitea deployed! ($ENV)${NC}"
+echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}  Gitea setup complete! (${ENV_LABEL})${NC}"
+echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
-echo "  Namespace:  $NAMESPACE"
-echo "  Domain:     https://$GITEA_DOMAIN (configure DNS)"
-echo "  Database:   $DB_NAME on octogee-pg (Cloud SQL)"
-echo "  Admin:      octogee-admin (password in Secret Manager: gitea-admin-password-${ENV})"
+echo "  Org:    octogee"
+echo "  Token:  saved to $ENV_FILE + Secret Manager"
 echo ""
-echo "  Port-forward to admin UI:"
-echo "  kubectl port-forward svc/gitea-http -n $NAMESPACE 13000:3000"
-echo "  → http://localhost:13000"
-echo ""
-echo "  Next: Update GITHUB_BASE_URL in provisioner to use Gitea API"
+echo "  Next: ./scripts/setup-gateway.sh --env=$ENV"
 echo ""
