@@ -237,7 +237,7 @@ else
   ADMIN_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
     curl -s -X POST "http://localhost:8065/api/v4/users" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"admin@octogee.com\",\"username\":\"$MM_ADMIN_USER\",\"password\":\"$MM_ADMIN_PASS\"}" 2>/dev/null)
+    -d "{\"email\":\"admin@octogee.com\",\"username\":\"$MM_ADMIN_USER\",\"password\":\"$MM_ADMIN_PASS\",\"first_name\":\"Octogee\",\"last_name\":\"Admin\",\"nickname\":\"Octogee Admin\"}" 2>/dev/null)
   MM_ADMIN_USER_ID=$(echo "$ADMIN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
   [[ -n "$MM_ADMIN_USER_ID" ]] || fail "Failed to create admin user: $ADMIN_RESP"
   save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID"

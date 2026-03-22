@@ -164,6 +164,7 @@ export async function provisionMattermostUser(
       password: generatePassword(),
       first_name: firstName,
       last_name: lastName || "",
+      nickname: firstName || slug,
     });
 
     if (!mmUser) {
@@ -265,6 +266,7 @@ export async function provisionMattermostUser(
       password: generatePassword(),
       first_name: "Octo",
       last_name: "",
+      nickname: "Octo",
     });
     if (!coachMmUser) {
       coachMmUser = await mmApiCall("GET", `/users/username/${coachUsername}`);
