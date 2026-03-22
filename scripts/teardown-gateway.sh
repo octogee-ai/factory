@@ -126,7 +126,7 @@ echo "    • K8s secrets in namespace $K8S_NAMESPACE"
 if $FULL; then
   echo -e "  ${RED}  + Cloud SQL DBs: $MM_DB_NAME, $GITEA_DB_NAME (data wiped)${NC}"
   echo -e "  ${RED}  + Firestore collections${NC}"
-  echo -e "  ${RED}  + Cloud Functions${NC}"
+  echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
   echo -e "  ${RED}  + Firebase Auth users${NC}"
   echo -e "  ${RED}  + Secret Manager secrets (in $FIREBASE_PROJECT project)${NC}"
 fi
@@ -136,7 +136,7 @@ echo "    • Cloud SQL instance (octogee-pg)"
 echo "    • GCP projects, GKE cluster, AR repo"
 echo "    • Firebase project, IAM, Service Accounts"
 if ! $FULL; then
-  echo "    • Cloud SQL data, Firestore, Functions, Auth, Secret Manager"
+  echo "    • Cloud SQL data, Firestore, Functions (excl. chat proxy), Auth, Secret Manager"
 fi
 echo ""
 
@@ -300,22 +300,25 @@ if $FULL; then
 fi
 
 # ── 8. Full: Cloud Functions ──────────────────────────────────────────────
+# NOTE: Chat proxy is persistent infrastructure (like Cloud SQL) — NOT deleted here.
+# It lives as a Cloud Run service but is deployed/managed by setup-chat-proxy.sh,
+# not firebase deploy. Deleting it would break chat until manually redeployed.
 if $FULL; then
   echo ""
-  if confirm "Delete all Cloud Functions in '$FIREBASE_PROJECT'?"; then
+  if confirm "Delete all Cloud Functions in '$FIREBASE_PROJECT'? (chat proxy preserved)"; then
     FN_LIST=$(gcloud run services list \
       --project="$FIREBASE_PROJECT" --region="$REGION" \
-      --format="value(name)" 2>/dev/null || true)
+      --format="value(name)" 2>/dev/null | grep -v "octogee-chat-proxy" || true)
     FN_COUNT=$(echo "$FN_LIST" | grep -c . 2>/dev/null || echo 0)
     if [[ "$FN_COUNT" -gt 0 ]]; then
-      info "Deleting $FN_COUNT Cloud Run services..."
+      info "Deleting $FN_COUNT Cloud Run services (preserving chat proxy)..."
       echo "$FN_LIST" | while read -r fn; do
         [[ -z "$fn" ]] && continue
         gcloud run services delete "$fn" \
           --project="$FIREBASE_PROJECT" --region="$REGION" --quiet 2>/dev/null &
       done
       wait
-      ok "Cloud Functions deleted"
+      ok "Cloud Functions deleted (chat proxy preserved)"
     else
       info "No Cloud Functions found"
     fi
