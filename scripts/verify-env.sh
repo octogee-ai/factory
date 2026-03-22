@@ -163,12 +163,14 @@ fi
 
 # ── 4. Gitea ──────────────────────────────────────────────────────────────────
 header "4. Gitea"
-GITEA_READY=$(kubectl get deployment gitea -n "$NAMESPACE" \
+# Gitea deployment name varies: "gitea" (standalone) or "octogee-gitea" (Helm umbrella)
+GITEA_DEPLOY=$(kubectl get deployment -n "$NAMESPACE" -o name 2>/dev/null | grep gitea | head -1 | sed 's|deployment.apps/||' || echo "")
+GITEA_READY=$(kubectl get deployment "$GITEA_DEPLOY" -n "$NAMESPACE" \
   -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-GITEA_IMAGE=$(kubectl get deployment gitea -n "$NAMESPACE" \
+GITEA_IMAGE=$(kubectl get deployment "$GITEA_DEPLOY" -n "$NAMESPACE" \
   -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
 GITEA_CHART=$(helm list -n "$NAMESPACE" -o json 2>/dev/null \
-  | python3 -c "import json,sys; charts=[r for r in json.load(sys.stdin) if r['name']=='gitea']; print(charts[0]['chart'] if charts else 'not installed')" 2>/dev/null || echo "unknown")
+  | python3 -c "import json,sys; charts=[r for r in json.load(sys.stdin) if 'gitea' in r['name']]; print(charts[0]['chart'] if charts else 'not installed')" 2>/dev/null || echo "unknown")
 
 if [[ "${GITEA_READY:-0}" -ge 1 ]]; then
   pass "Running (image: $GITEA_IMAGE, chart: $GITEA_CHART)"
