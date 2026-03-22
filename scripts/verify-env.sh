@@ -131,7 +131,7 @@ if [[ "${PROXY_READY:-0}" -ge 1 ]]; then
 else
   fail "cloud-sql-proxy not ready (readyReplicas=${PROXY_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} kubectl apply -f k8s/${NAMESPACE}/cloud-sql-proxy.yaml"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f helm/octogee/values.${ENV}.yaml -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 

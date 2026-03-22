@@ -2,6 +2,12 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
+# ⚠️  INCOMPLETE — k8s/monitoring/ Helm values were deleted in the k8s→Helm
+# migration. This script references missing files and will fail.
+# TODO: Move monitoring config into helm/octogee or a dedicated monitoring
+# Helm chart. Tracked in TECH-DEBT.md.
+# ═══════════════════════════════════════════════════════════════════════════
+#
 # Octogee Monitoring Setup — Prometheus + Grafana
 # ═══════════════════════════════════════════════════════════════════════════
 #

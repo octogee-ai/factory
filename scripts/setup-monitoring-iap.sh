@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# ⚠️  INCOMPLETE — depends on setup-monitoring.sh which references deleted
+# k8s/monitoring/ files. Fix setup-monitoring.sh first.
+# TODO: tracked in TECH-DEBT.md
 # ─────────────────────────────────────────────────────────────────────────────
 # setup-monitoring-iap.sh — Expose Grafana at https://monitoring.octogee.com
 #                            behind Google IAP
