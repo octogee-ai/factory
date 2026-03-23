@@ -296,11 +296,14 @@ async function handleRest(
     return;
   }
 
-  // Admin users always get the system admin token (octogee-admin).
-  // octogee-admin is a member of ALL customer channels → full visibility.
-  // Personal workspace chat works too since octogee-admin is also in that channel.
-  // Regular users get their personal token.
-  const creds = await isAdminUser(uid) ? await getAdminMmToken() : await getMmToken(uid);
+  // Admin users: system admin token for reads (GET — see all channels),
+  // personal token for writes (POST/PUT/DELETE — posts show as their name, not octogee-admin).
+  // Regular users always use their personal token.
+  const isAdmin = await isAdminUser(uid);
+  const isRead = req.method === "GET" || req.method === "HEAD";
+  const creds = isAdmin
+    ? (isRead ? await getAdminMmToken() : await getMmToken(uid))
+    : await getMmToken(uid);
   if (!creds) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Chat not provisioned" }));
