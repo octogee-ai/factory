@@ -380,55 +380,6 @@ export async function createProjectChannel(
   return channel.id;
 }
 
-// ── Channel Invites ─────────────────────────────────────────────────────────────
-
-export async function processInvite(inviteId: string, data: any): Promise<void> {
-  const { channelId, inviteeMmUserId, inviteeEmail, inviteeFirstName } = data;
-
-  if (!channelId || !inviteeMmUserId) {
-    log(`[invite] ⚠ invite ${inviteId} missing channelId or inviteeMmUserId`);
-    await db.doc(`invites/${inviteId}`).update({
-      status: "failed",
-      error: "Missing channel or user info",
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    return;
-  }
-
-  try {
-    const result = await mmApiCall("POST", `/channels/${channelId}/members`, {
-      user_id: inviteeMmUserId,
-    });
-
-    if (result) {
-      log(`[invite] ✅ added ${inviteeFirstName || inviteeEmail} to channel ${channelId}`);
-      await db.doc(`invites/${inviteId}`).update({
-        status: "completed",
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    } else {
-      const members = await mmApiCall("GET", `/channels/${channelId}/members`);
-      const alreadyMember = Array.isArray(members) && members.some((m: any) => m.user_id === inviteeMmUserId);
-
-      if (alreadyMember) {
-        log(`[invite] ${inviteeFirstName || inviteeEmail} already in channel ${channelId}`);
-        await db.doc(`invites/${inviteId}`).update({
-          status: "completed",
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      } else {
-        throw new Error("MM API returned null — add member failed");
-      }
-    }
-  } catch (err: any) {
-    log(`[invite] ⚠ failed to add ${inviteeEmail} to channel: ${err.message}`);
-    await db.doc(`invites/${inviteId}`).update({
-      status: "failed",
-      error: err.message || "Failed to add user to channel",
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-  }
-}
 
 // ── Community Channels ──────────────────────────────────────────────────────────
 
