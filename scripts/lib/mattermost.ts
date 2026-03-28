@@ -242,6 +242,32 @@ export async function provisionMattermostUser(
       log(`[mattermost] admin added to channel ${channelName}`);
     }
 
+    // Create admin channel — founder-to-agent guidance, customer NOT invited (#170)
+    const adminChannelName = `octogee-${slug}-admin`;
+    const adminDisplayName = `Admin — ${firstName || slug}`;
+    let adminChannel = await mmApiCall("POST", "/channels", {
+      team_id: MM_TEAM_ID,
+      name: adminChannelName,
+      display_name: adminDisplayName,
+      type: "P",
+      purpose: `Founder-to-agent guidance for ${firstName || slug}. Customer not a member.`,
+    });
+    if (!adminChannel) {
+      adminChannel = await mmApiCall("GET", `/teams/${MM_TEAM_ID}/channels/name/${adminChannelName}`);
+    }
+    let adminChannelId: string | null = null;
+    if (adminChannel) {
+      adminChannelId = adminChannel.id;
+      // Add bot + coach bot + admin — NOT the customer
+      await mmApiCall("POST", `/channels/${adminChannel.id}/members`, { user_id: MM_BOT_USER_ID });
+      if (MM_ADMIN_USER_ID) {
+        await mmApiCall("POST", `/channels/${adminChannel.id}/members`, { user_id: MM_ADMIN_USER_ID });
+      }
+      log(`[mattermost] admin channel created: #${adminChannelName} (${adminChannel.id})`);
+    } else {
+      log(`[mattermost] ⚠ failed to create admin channel for ${slug} — non-fatal`);
+    }
+
     // Create personal access token
     const tokenResult = await mmApiCall("POST", `/users/${mmUser.id}/tokens`, {
       description: "Octogee workspace chat",
@@ -281,6 +307,10 @@ export async function provisionMattermostUser(
         user_id: coachMmUser.id,
       });
       await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: coachMmUser.id });
+      // Add coach bot to admin channel too (#170)
+      if (adminChannelId) {
+        await mmApiCall("POST", `/channels/${adminChannelId}/members`, { user_id: coachMmUser.id });
+      }
       log(`[mattermost] coach user created: ${coachUsername} (${coachMmUser.id})`);
     } else {
       log(`[mattermost] ⚠ failed to create coach user ${coachUsername} — coach identity will use defaults`);
@@ -294,6 +324,7 @@ export async function provisionMattermostUser(
       "mattermost.dmChannelId": channel.id,
       "mattermost.proxyUrl": process.env.CHAT_PROXY_URL || "",
       ...(coachMmUserId ? { "mattermost.coachUserId": coachMmUserId } : {}),
+      ...(adminChannelId ? { "mattermost.adminChannelId": adminChannelId } : {}),
     };
   } catch (e: any) {
     log(`[mattermost] ⚠ provisioning failed: ${e.message} — continuing without chat`);
