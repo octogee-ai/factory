@@ -19,6 +19,7 @@ pvc:
 
 ilb:
   enabled: true
+  staticIp: ""  # Set via terraform output mattermost_ilb_ip
 
 resources:
   requests:

@@ -46,9 +46,10 @@ mattermost:
       memory: "2Gi"
       ephemeral-storage: "5Gi"
 
-# ── Gitea ILB (internal load balancer for CF/VPC connector access) ──────────
+# ── Gitea ILB (internal load balancer for workspace-api/VPC connector access)
 giteaIlb:
   enabled: true
+  staticIp: ""  # Set via terraform output gitea_ilb_ip
 
 # ── gitea (upstream chart) ──────────────────────────────────────────────────
 gitea:
