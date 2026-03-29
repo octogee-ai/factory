@@ -74,7 +74,7 @@
       "octogee-router": {
         "enabled": true,
         "config": {
-          "enforcement": "soft",
+          "enforcement": "hard",
           "advisorySlugs": [],
           "enforcementOverrides": {}
         }
