@@ -19,6 +19,10 @@ dependencies:
     version: "12.5.0"
     repository: "https://dl.gitea.com/charts/"
 
+  - name: workspace-api
+    version: "0.1.0"
+    repository: "file://charts/workspace-api"
+
   - name: gateway
     version: "0.1.0"
     repository: "file://charts/gateway"

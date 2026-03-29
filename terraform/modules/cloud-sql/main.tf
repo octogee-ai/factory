@@ -17,9 +17,10 @@ terraform {
 
 # ── Data: existing Cloud SQL instance (imported) ────────────────────────────
 resource "google_sql_database_instance" "main" {
-  name    = var.instance_name
-  project = var.project_id
-  region  = var.region
+  name             = var.instance_name
+  project          = var.project_id
+  region           = var.region
+  database_version = var.database_version
 
   # Settings are imported from existing instance — do not modify here
   # unless intentionally changing instance config.

@@ -31,6 +31,12 @@ variable "gitea_db_name" {
   type        = string
 }
 
+variable "database_version" {
+  description = "Cloud SQL database version"
+  type        = string
+  default     = "POSTGRES_16"
+}
+
 variable "create_users" {
   description = "Whether to create SQL users (true for prod, false for test since users are shared)"
   type        = bool

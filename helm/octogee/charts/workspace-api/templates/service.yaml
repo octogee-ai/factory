@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-api
+  labels:
+    {{- include "workspace-api.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: workspace-api
+  ports:
+    - port: {{ .Values.port }}
+      targetPort: {{ .Values.port }}
+      name: http
+  type: ClusterIP

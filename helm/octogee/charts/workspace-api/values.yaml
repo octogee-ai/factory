@@ -1,0 +1,80 @@
+image:
+  repository: us-central1-docker.pkg.dev/octogee/octogee/workspace-api
+  tag: latest
+
+replicas: 1
+port: 3001
+
+serviceAccountName: octogee-gateway
+
+env:
+  # K8s DNS — no hardcoded IPs
+  GITEA_URL: ""  # leave empty to auto-compute from K8S_NAMESPACE
+  GITEA_ORG: "octogee"
+  MM_URL: ""  # leave empty to auto-compute from K8S_NAMESPACE
+  FIREBASE_PROJECT_ID: "octogee"
+  GCLOUD_PROJECT: "octogee"
+  APP_URL: "https://octogee.com"
+  CHAT_PROXY_URL: "https://chat.octogee.com"
+  SITE_URL: "https://octogee.com"
+  K8S_NAMESPACE: "octogee"
+
+secrets:
+  # References to K8s Secret objects
+  - envName: STRIPE_SECRET_KEY
+    secretName: stripe-secrets
+    secretKey: secret_key
+  - envName: STRIPE_WEBHOOK_SECRET
+    secretName: stripe-secrets
+    secretKey: webhook_secret
+  - envName: GITEA_TOKEN
+    secretName: gitea-token
+    secretKey: token
+  - envName: MM_ADMIN_TOKEN
+    secretName: mattermost-gateway
+    secretKey: admin_token
+    optional: true
+  - envName: GITHUB_TOKEN
+    secretName: octogee-github
+    secretKey: token
+    optional: true
+  - envName: GOOGLE_CLIENT_ID
+    secretName: google-oauth
+    secretKey: client_id
+    optional: true
+  - envName: GOOGLE_CLIENT_SECRET
+    secretName: google-oauth
+    secretKey: client_secret
+    optional: true
+  - envName: MICROSOFT_CLIENT_ID
+    secretName: microsoft-oauth
+    secretKey: client_id
+    optional: true
+  - envName: MICROSOFT_CLIENT_SECRET
+    secretName: microsoft-oauth
+    secretKey: client_secret
+    optional: true
+  - envName: DISCORD_CLIENT_SECRET
+    secretName: discord-secrets
+    secretKey: client_secret
+    optional: true
+  - envName: DISCORD_COACH_TOKEN
+    secretName: discord-secrets
+    secretKey: coach_token
+    optional: true
+  - envName: DISCORD_MAC_TOKEN
+    secretName: discord-secrets
+    secretKey: mac_token
+    optional: true
+  - envName: OCTOGEE_GUILD_ID
+    secretName: discord-secrets
+    secretKey: guild_id
+    optional: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

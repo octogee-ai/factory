@@ -90,6 +90,30 @@ gitea:
   strategy:
     type: Recreate
 
+# ── workspace-api ────────────────────────────────────────────────────────
+workspace-api:
+  image:
+    repository: us-central1-docker.pkg.dev/octogee/octogee/workspace-api
+    tag: latest
+  replicas: 1
+  port: 3001
+  serviceAccountName: octogee-gateway
+  env:
+    GITEA_ORG: "octogee"
+    FIREBASE_PROJECT_ID: "octogee"
+    GCLOUD_PROJECT: "octogee"
+    APP_URL: "https://octogee.com"
+    CHAT_PROXY_URL: "https://chat.octogee.com"
+    SITE_URL: "https://octogee.com"
+    K8S_NAMESPACE: "octogee"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 # ── gateway ─────────────────────────────────────────────────────────────────
 gateway:
   image:
