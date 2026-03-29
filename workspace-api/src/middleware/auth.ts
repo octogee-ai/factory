@@ -43,7 +43,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       if (userSnap.exists) {
         req.user = userSnap.data();
       }
-      // Check admin from system/config subcollection (PR #183 architecture)
+      // Admin check from system/config subcollection ONLY (PR #183 architecture)
+      // No fallback to user doc — system/config is the sole source of truth
       try {
         const configSnap = await db
           .collection("users")
@@ -53,8 +54,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
           .get();
         req.isAdmin = configSnap.exists && configSnap.data()?.role === "admin";
       } catch {
-        // Fallback to user doc for backward compat
-        req.isAdmin = req.user?.role === "admin";
+        req.isAdmin = false;
       }
       next();
     })
