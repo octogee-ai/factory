@@ -296,13 +296,11 @@ async function handleRest(
     return;
   }
 
-  // Admin users: system admin token for reads (GET — see all channels),
-  // personal token for writes (POST/PUT/DELETE — posts show as their name, not octogee-admin).
+  // Admin users: always use the system admin MM token (reads + writes).
   // Regular users always use their personal token.
   const isAdmin = await isAdminUser(uid);
-  const isRead = req.method === "GET" || req.method === "HEAD";
   const creds = isAdmin
-    ? (isRead ? await getAdminMmToken() : await getMmToken(uid))
+    ? await getAdminMmToken()
     : await getMmToken(uid);
   if (!creds) {
     res.writeHead(502, { "Content-Type": "application/json" });
