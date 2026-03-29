@@ -53,8 +53,7 @@
       "chatmode": "onmessage",
       "requireMention": false,
       "groupPolicy": "open",
-      "allowFrom": ["*"],
-      "threading": "off"
+      "allowFrom": ["*"]
     }
   },
   "gateway": {
