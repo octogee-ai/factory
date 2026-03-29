@@ -40,3 +40,16 @@ resource "google_vpc_access_connector" "main" {
     prevent_destroy = true
   }
 }
+
+# ── Static external IP for workspace-api Ingress ────────────────────────────
+# GKE Ingress for api.octogee.com / api-test.octogee.com
+
+resource "google_compute_global_address" "workspace_api" {
+  name    = "workspace-api-ip"
+  project = var.project_id
+}
+
+resource "google_compute_global_address" "chat_proxy" {
+  name    = "chat-proxy-ip"
+  project = var.project_id
+}

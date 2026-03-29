@@ -35,7 +35,7 @@ mattermost:
     size: 20Gi
     storageClass: standard-rwo
   ilb:
-    enabled: true
+    enabled: false  # No longer needed — chat-proxy uses K8s DNS
   resources:
     requests:
       cpu: "500m"
@@ -48,7 +48,7 @@ mattermost:
 
 # ── Gitea ILB (internal load balancer for workspace-api/VPC connector access)
 giteaIlb:
-  enabled: true
+  enabled: false  # No longer needed — workspace-api uses K8s DNS
   staticIp: ""  # Set via terraform output gitea_ilb_ip
 
 # ── gitea (upstream chart) ──────────────────────────────────────────────────

@@ -78,3 +78,16 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+
+# Ingress (public routes only — /api/* and /health)
+ingress:
+  enabled: true
+  host: api.octogee.com
+  staticIpName: workspace-api-ip
+  certName: workspace-api-cert
+
+# BackendConfig for health checks
+healthCheck:
+  path: /health
+  port: 3001
+  timeoutSec: 30

@@ -8,11 +8,14 @@ dependencies:
 - name: gitea
   repository: https://dl.gitea.com/charts/
   version: 12.5.0
+- name: chat-proxy
+  repository: file://charts/chat-proxy
+  version: 0.1.0
 - name: workspace-api
   repository: file://charts/workspace-api
   version: 0.1.0
 - name: gateway
   repository: file://charts/gateway
   version: 0.1.0
-digest: sha256:2324cdd326f5b4326ae7708c7b332bf480e56f25faaef2f50fe255e95a932cb7
-generated: "2026-03-28T20:49:29.466355-07:00"
+digest: sha256:ac38a159a0950f6a285973468de2253f83b0480df3127ea49d2c6c281f64e1ae
+generated: "2026-03-29T08:51:25.173924-07:00"

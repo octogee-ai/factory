@@ -17,7 +17,7 @@ const APP_URL = process.env.APP_URL || "https://octogee.com";
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_OAUTH_REDIRECT_URI || "https://googleoauthcallback-p57h3jzwfq-uc.a.run.app";
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_OAUTH_REDIRECT_URI || `https://api.octogee.com/api/integrations/google/callback`;
 
 router.get("/google/auth-url", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -91,7 +91,7 @@ router.get("/google/callback", async (req: Request, res: Response, next: NextFun
 const MS_AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const MS_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const MS_USERINFO_URL = "https://graph.microsoft.com/v1.0/me";
-const MS_REDIRECT_URI = process.env.MICROSOFT_OAUTH_REDIRECT_URI || "https://microsoftoauthcallback-p57h3jzwfq-uc.a.run.app";
+const MS_REDIRECT_URI = process.env.MICROSOFT_OAUTH_REDIRECT_URI || `https://api.octogee.com/api/integrations/microsoft/callback`;
 
 router.get("/microsoft/auth-url", async (req: Request, res: Response, next: NextFunction) => {
   try {

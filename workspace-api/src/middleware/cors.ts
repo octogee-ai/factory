@@ -9,6 +9,8 @@ export const CORS_ORIGINS: (string | RegExp)[] = [
   /^https:\/\/octogee\.firebaseapp\.com$/,
   /^https:\/\/octogee-test\.firebaseapp\.com$/,
   /^https:\/\/(www\.)?octogee\.com$/,
+  /^https:\/\/api\.octogee\.com$/,
+  /^https:\/\/api-test\.octogee\.com$/,
   /^http:\/\/localhost:\d+$/,
 ];
 

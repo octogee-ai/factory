@@ -3,7 +3,7 @@
  * Migrated from functions/src/triggers/{activateAgent,deprovisionAgents}.ts
  */
 import { Router, Request, Response, NextFunction } from "express";
-import { requireApiKey } from "../middleware/auth";
+import { requireApiKey, requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db, FieldValue } from "../lib/db";
 
@@ -87,9 +87,9 @@ router.post("/activate", requireApiKey, async (req: Request, res: Response, next
 });
 
 // ── POST /deprovision — queue agent cleanup job ───────────────────────────
-// Auth: Cloud Run IAM (no middleware needed — if we get here, caller is authorized)
+// Auth: requireAdmin (was Cloud Run IAM — now public via GKE Ingress)
 
-router.post("/deprovision", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/deprovision", requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { slugPrefix, agentId, deleteWorkspace = false } = req.body as {
       slugPrefix?: string;

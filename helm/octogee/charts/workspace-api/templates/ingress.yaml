@@ -1,0 +1,49 @@
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.ingress.certName }}
+spec:
+  domains:
+    - {{ .Values.ingress.host }}
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: workspace-api-backend
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: {{ .Values.healthCheck.path }}
+    port: {{ .Values.healthCheck.port }}
+  timeoutSec: {{ .Values.healthCheck.timeoutSec }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: workspace-api-ingress
+  annotations:
+    networking.gke.io/managed-certificates: {{ .Values.ingress.certName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.ingress.staticIpName }}
+spec:
+  ingressClassName: gce
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /api/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: workspace-api
+                port:
+                  number: {{ .Values.port }}
+          - path: /health
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: workspace-api
+                port:
+                  number: {{ .Values.port }}
+{{- end }}
