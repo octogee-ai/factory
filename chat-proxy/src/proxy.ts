@@ -42,6 +42,7 @@
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
+import { Registry, collectDefaultMetrics, Counter, Gauge } from "prom-client";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -55,6 +56,31 @@ if (!MM_INTERNAL_URL) {
   console.error("FATAL: MM_INTERNAL_URL is required");
   process.exit(1);
 }
+
+// ── Prometheus metrics ────────────────────────────────────────────────────────
+
+const metricsRegistry = new Registry();
+collectDefaultMetrics({ register: metricsRegistry });
+
+const wsConnectionsActive = new Gauge({
+  name: 'chat_proxy_ws_connections_active',
+  help: 'Number of active WebSocket connections',
+  registers: [metricsRegistry],
+});
+
+const wsMessagesTotal = new Counter({
+  name: 'chat_proxy_ws_messages_total',
+  help: 'Total WebSocket messages proxied',
+  labelNames: ['direction'] as const,
+  registers: [metricsRegistry],
+});
+
+const httpProxiedTotal = new Counter({
+  name: 'chat_proxy_http_requests_total',
+  help: 'Total HTTP requests proxied to Mattermost',
+  labelNames: ['method', 'status'] as const,
+  registers: [metricsRegistry],
+});
 
 // Initialize Firebase Admin — use explicit SA key if provided (cross-project),
 // otherwise fall back to ADC (same-project).
@@ -273,6 +299,14 @@ async function handleRest(
     return;
   }
 
+  // Metrics endpoint
+  if (req.url === "/metrics") {
+    const metrics = await metricsRegistry.metrics();
+    res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
+    res.end(metrics);
+    return;
+  }
+
   // Health check
   if (req.url === "/healthz" || req.url === "/health" || req.url === "/_health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -354,6 +388,7 @@ async function handleRest(
     if (cd) res.setHeader("Content-Disposition", cd);
 
     res.writeHead(mmResp.status);
+    httpProxiedTotal.inc({ method: req.method || "GET", status: String(mmResp.status) });
 
     if (mmResp.body) {
       const reader = mmResp.body.getReader();
@@ -451,18 +486,21 @@ function handleWsUpgrade(
         }));
 
         wss.handleUpgrade(req, socket, head, (clientWs) => {
+          wsConnectionsActive.inc();
           clientWs.on("message", (data, isBinary) => {
+            wsMessagesTotal.inc({ direction: "inbound" });
             if (mmWs.readyState === WebSocket.OPEN) {
               mmWs.send(isBinary ? data : data.toString(), { binary: isBinary });
             }
           });
           mmWs.on("message", (data, isBinary) => {
+            wsMessagesTotal.inc({ direction: "outbound" });
             if (clientWs.readyState === WebSocket.OPEN) {
               // MM sends JSON as text frames — ensure we forward as text, not binary
               clientWs.send(isBinary ? data : data.toString(), { binary: isBinary });
             }
           });
-          clientWs.on("close", () => mmWs.close());
+          clientWs.on("close", () => { wsConnectionsActive.dec(); mmWs.close(); });
           mmWs.on("close", () => clientWs.close());
           clientWs.on("error", () => mmWs.close());
           mmWs.on("error", () => clientWs.close());

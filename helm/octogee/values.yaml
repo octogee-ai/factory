@@ -65,6 +65,8 @@ gitea:
       service:
         DISABLE_REGISTRATION: "true"
         REQUIRE_SIGNIN_VIEW: "true"
+      metrics:
+        ENABLED: "true"
   postgresql:
     enabled: false
   postgresql-ha:

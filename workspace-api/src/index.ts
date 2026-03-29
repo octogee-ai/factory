@@ -5,6 +5,7 @@
  * Uses K8s DNS for Gitea and Mattermost — no VPC connectors, no ILB IPs.
  */
 import express from "express";
+import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 import { corsMiddleware } from "./middleware/cors";
 import { requestLogger } from "./middleware/logging";
 import { errorHandler } from "./middleware/errors";
@@ -28,9 +29,43 @@ import internalBillingRoutes from "./routes/internal/billing";
 const app = express();
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
+// ── Prometheus metrics ─────────────────────────────────────────────────────
+
+const metricsRegistry = new Registry();
+collectDefaultMetrics({ register: metricsRegistry });
+
+const httpRequestDuration = new Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'route', 'status'] as const,
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [metricsRegistry],
+});
+
+const httpRequestTotal = new Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'route', 'status'] as const,
+  registers: [metricsRegistry],
+});
+
 // ── Global middleware ──────────────────────────────────────────────────────
 
 app.use(corsMiddleware);
+
+// Metrics middleware — track request duration and counts (skip /metrics itself)
+app.use((req, res, next) => {
+  if (req.path === '/metrics') return next();
+  const end = httpRequestDuration.startTimer();
+  res.on('finish', () => {
+    const route = req.route?.path || req.path;
+    const labels = { method: req.method, route, status: String(res.statusCode) };
+    end(labels);
+    httpRequestTotal.inc(labels);
+  });
+  next();
+});
+
 app.use(requestLogger);
 
 // Parse JSON for most routes. Stripe webhook needs raw body.
@@ -47,6 +82,13 @@ app.use((req, res, next) => {
   }
 });
 app.use(express.urlencoded({ extended: true }));
+
+// ── Metrics endpoint ───────────────────────────────────────────────────────
+
+app.get('/metrics', async (_req, res) => {
+  res.set('Content-Type', metricsRegistry.contentType);
+  res.end(await metricsRegistry.metrics());
+});
 
 // ── Health check ───────────────────────────────────────────────────────────
 
