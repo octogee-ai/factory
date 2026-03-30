@@ -73,4 +73,6 @@ ENV NODE_OPTIONS=--no-deprecation
 ARG BUILD_SHA=unknown
 ENV BUILD_SHA=${BUILD_SHA}
 
+EXPOSE 9091
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
