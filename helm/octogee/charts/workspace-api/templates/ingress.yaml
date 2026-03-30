@@ -24,6 +24,7 @@ kind: Ingress
 metadata:
   name: workspace-api-ingress
   annotations:
+    kubernetes.io/ingress.class: "gce"
     networking.gke.io/managed-certificates: {{ .Values.ingress.certName }}
     kubernetes.io/ingress.global-static-ip-name: {{ .Values.ingress.staticIpName }}
 spec:
