@@ -127,17 +127,7 @@ fi
   done
 ) &
 
-# ── Start site API in background with auto-restart ──────────────────────────
-(
-  while true; do
-    log "Starting Octogee Site API..."
-    /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/site-api.ts \
-      || true
-    log "Site API exited — restarting in 5s..."
-    sleep 5
-  done
-) &
+# site-api.ts removed — migrated to workspace-api (GKE service)
 
 # ── Start OpenClaw gateway (foreground — Docker monitors this process) ───────
 log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
