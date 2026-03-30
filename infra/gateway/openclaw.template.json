@@ -5,19 +5,36 @@
   },
   "auth": {
     "profiles": {
-      "anthropic:default": { "provider": "anthropic", "mode": "api_key" }
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "api_key"
+      }
     }
   },
   "agents": {
     "defaults": {
-      "model": { "primary": "anthropic/claude-sonnet-4-6" },
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6"
+      },
       "models": {
-        "anthropic/claude-sonnet-4-6": { "alias": "sonnet", "params": { "cacheRetention": "short" } }
+        "anthropic/claude-sonnet-4-6": {
+          "alias": "sonnet",
+          "params": {
+            "cacheRetention": "short"
+          }
+        }
       },
       "workspace": "/home/node/.openclaw/workspace",
-      "contextPruning": { "mode": "cache-ttl", "ttl": "1h" },
-      "compaction": { "mode": "safeguard" },
-      "heartbeat": { "every": "30m" },
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "1h"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "heartbeat": {
+        "every": "30m"
+      },
       "maxConcurrent": 8,
       "subagents": {
         "maxConcurrent": 8,
@@ -32,19 +49,39 @@
         "workspace": "/home/node/.openclaw/workspace/ops",
         "agentDir": "/home/node/.openclaw/agents/mac/agent",
         "model": "anthropic/claude-sonnet-4-6",
-        "heartbeat": { "every": "30m" },
-        "identity": { "name": "Mac", "emoji": "🔧" }
+        "heartbeat": {
+          "every": "30m"
+        },
+        "identity": {
+          "name": "Mac",
+          "emoji": "\ud83d\udd27"
+        }
       }
     ]
   },
   "tools": {
-    "elevated": { "enabled": false },
-    "subagents": { "tools": { "deny": [] } }
+    "elevated": {
+      "enabled": false
+    },
+    "subagents": {
+      "tools": {
+        "deny": []
+      }
+    }
   },
   "bindings": [],
-  "messages": { "ackReactionScope": "group-mentions" },
-  "commands": { "native": "auto", "nativeSkills": "auto", "restart": true, "ownerDisplay": "raw" },
-  "session": { "dmScope": "per-channel-peer" },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
   "channels": {
     "mattermost": {
       "enabled": true,
@@ -53,8 +90,9 @@
       "chatmode": "onmessage",
       "requireMention": false,
       "groupPolicy": "open",
-      "allowFrom": ["*"],
-      "threading": "off"
+      "allowFrom": [
+        "*"
+      ]
     }
   },
   "gateway": {
@@ -64,12 +102,19 @@
     "auth": {
       "mode": "token",
       "token": "${GATEWAY_TOKEN}",
-      "rateLimit": { "maxAttempts": 10, "windowMs": 60000, "lockoutMs": 300000 }
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000
+      }
     }
   },
   "plugins": {
     "enabled": true,
-    "allow": ["mattermost", "octogee-router"],
+    "allow": [
+      "mattermost",
+      "octogee-router"
+    ],
     "entries": {
       "octogee-router": {
         "enabled": true,
