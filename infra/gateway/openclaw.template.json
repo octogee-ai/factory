@@ -92,7 +92,8 @@
       "groupPolicy": "open",
       "allowFrom": [
         "*"
-      ]
+      ],
+      "allowPrivateNetwork": true
     }
   },
   "gateway": {
