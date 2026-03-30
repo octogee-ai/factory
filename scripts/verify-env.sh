@@ -70,7 +70,7 @@ case "$ENV" in
     ENV_LABEL="🔴 PRODUCTION"
     ENV_COLOR="$RED"
     AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="admingetdashboard"
+    CF_SAMPLE="onSignup"
     CHAT_PROXY_SERVICE="octogee-chat-proxy"
     ;;
   test)
@@ -84,7 +84,7 @@ case "$ENV" in
     ENV_LABEL="🟡 TEST"
     ENV_COLOR="$YELLOW"
     AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="admingetdashboard"
+    CF_SAMPLE="onSignup"
     CHAT_PROXY_SERVICE="octogee-chat-proxy-test"
     ;;
   *)
@@ -250,6 +250,68 @@ else
   fi
 fi
 
+# ── 5b. GKE Ingresses ─────────────────────────────────────────────────────────
+header "5b. Ingresses"
+INGRESSES=$(kubectl --context "$K8S_CONTEXT" get ingress -n "$NAMESPACE" -o json 2>/dev/null)
+if [[ -z "$INGRESSES" || "$INGRESSES" == "null" ]]; then
+  warn "No ingresses found"
+else
+  for ING_NAME in $(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['metadata']['name']) for i in d.get('items',[])]" 2>/dev/null); do
+    ING_IP=$(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i.get('status',{}).get('loadBalancer',{}).get('ingress',[{}])[0].get('ip','')) for i in d.get('items',[]) if i['metadata']['name']=='$ING_NAME']" 2>/dev/null)
+    ING_HOST=$(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['spec']['rules'][0]['host']) for i in d.get('items',[]) if i['metadata']['name']=='$ING_NAME']" 2>/dev/null)
+    if [[ -n "$ING_IP" && "$ING_IP" != "None" ]]; then
+      pass "$ING_NAME → $ING_HOST ($ING_IP)"
+    else
+      fail "$ING_NAME → $ING_HOST has NO ADDRESS"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} Verify annotation kubernetes.io/ingress.class: gce exists on ingress"
+        echo -e "  ${YELLOW}     ${NC} kubectl annotate ingress $ING_NAME -n $NAMESPACE kubernetes.io/ingress.class=gce"
+      fi
+    fi
+  done
+fi
+
+# ── 5c. Managed Certificates ─────────────────────────────────────────────────
+header "5c. Managed Certificates"
+CERTS=$(kubectl --context "$K8S_CONTEXT" get managedcertificate -n "$NAMESPACE" -o json 2>/dev/null)
+if [[ -z "$CERTS" || "$CERTS" == "null" ]]; then
+  warn "No managed certificates found"
+else
+  for CERT_NAME in $(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['metadata']['name']) for i in d.get('items',[])]" 2>/dev/null); do
+    CERT_STATUS=$(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i.get('status',{}).get('certificateStatus','Unknown')) for i in d.get('items',[]) if i['metadata']['name']=='$CERT_NAME']" 2>/dev/null)
+    CERT_DOMAIN=$(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['spec']['domains'][0]) for i in d.get('items',[]) if i['metadata']['name']=='$CERT_NAME']" 2>/dev/null)
+    if [[ "$CERT_STATUS" == "Active" ]]; then
+      pass "$CERT_NAME ($CERT_DOMAIN): Active"
+    elif [[ "$CERT_STATUS" == "Provisioning" ]]; then
+      warn "$CERT_NAME ($CERT_DOMAIN): Provisioning (may take 15-30 min)"
+    else
+      fail "$CERT_NAME ($CERT_DOMAIN): $CERT_STATUS"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} Delete and recreate: kubectl delete managedcertificate $CERT_NAME -n $NAMESPACE"
+        echo -e "  ${YELLOW}     ${NC} Then: helm upgrade --install octogee helm/octogee -f helm/octogee/values.${ENV}.yaml -n $NAMESPACE"
+      fi
+    fi
+  done
+fi
+
+# ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
+header "5d. Endpoint Health"
+for ENDPOINT in "api" "chat"; do
+  if [[ "$ENV" == "test" ]]; then
+    URL="https://${ENDPOINT}-test.octogee.com/health"
+  else
+    URL="https://${ENDPOINT}.octogee.com/health"
+  fi
+  HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$URL" 2>/dev/null || echo "000")
+  if [[ "$HTTP_CODE" == "200" ]]; then
+    pass "$URL → $HTTP_CODE"
+  elif [[ "$HTTP_CODE" == "000" ]]; then
+    fail "$URL → unreachable (TLS or DNS issue)"
+  else
+    warn "$URL → HTTP $HTTP_CODE"
+  fi
+done
+
 # ── 6. Site (Firebase Hosting) ────────────────────────────────────────────────
 header "6. Site (Firebase Hosting)"
 SITE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$SITE_URL" 2>/dev/null || echo "000")
@@ -262,27 +324,18 @@ else
   fi
 fi
 
-# Check deployed functions count
+# Check deployed functions count (post-CF migration: only Firestore triggers remain, ~15 expected)
 header "7. Cloud Functions"
 CF_COUNT=$(gcloud run services list --project="$GCP_PROJECT" \
   --region=us-central1 --format="value(name)" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-CF_SAMPLE_STATUS=$(gcloud run services describe "$CF_SAMPLE" \
-  --project="$GCP_PROJECT" --region=us-central1 \
-  --format="value(status.conditions[0].status)" 2>/dev/null || echo "Unknown")
 
-if [[ "$CF_COUNT" -ge 30 ]]; then
+if [[ "$CF_COUNT" -ge 10 ]]; then
   pass "$CF_COUNT Cloud Run services deployed"
 else
-  warn "Only $CF_COUNT Cloud Run services found (expected ~43)"
+  warn "Only $CF_COUNT Cloud Run services found (expected ~15 Firestore triggers)"
   if $FIX; then
     echo -e "  ${YELLOW}FIX:${NC} cd functions && npm run build && firebase deploy --only functions --project=$FIREBASE_PROJECT"
   fi
-fi
-
-if [[ "$CF_SAMPLE_STATUS" == "True" ]]; then
-  pass "$CF_SAMPLE: ready"
-else
-  warn "$CF_SAMPLE: status=$CF_SAMPLE_STATUS"
 fi
 
 # ── 8. Chat Proxy ─────────────────────────────────────────────────────────────
