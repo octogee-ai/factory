@@ -222,19 +222,23 @@ export async function provisionMattermostUser(
     }
 
     // Add user as team_admin of workspace team
+    // Note: team_id is required in body for Team Edition (not just the URL)
     await mmApiCall("POST", `/teams/${teamId}/members`, {
+      team_id: teamId,
       user_id: mmUser.id,
       roles: "team_admin team_user",
     });
 
     // Add Octo bot to workspace team
     await mmApiCall("POST", `/teams/${teamId}/members`, {
+      team_id: teamId,
       user_id: MM_BOT_USER_ID,
     });
 
     // Add admin bot to workspace team
     if (MM_ADMIN_USER_ID) {
       await mmApiCall("POST", `/teams/${teamId}/members`, {
+        team_id: teamId,
         user_id: MM_ADMIN_USER_ID,
       });
       log(`[mattermost] admin bot added to workspace team ${teamName}`);
@@ -244,6 +248,7 @@ export async function provisionMattermostUser(
     const communityTeamId = MM_COMMUNITY_TEAM_ID || MM_TEAM_ID;
     if (communityTeamId && communityTeamId !== teamId) {
       await mmApiCall("POST", `/teams/${communityTeamId}/members`, {
+        team_id: communityTeamId,
         user_id: mmUser.id,
       });
       log(`[mattermost] joined community team ${communityTeamId}`);
@@ -386,6 +391,7 @@ export async function provisionMattermostUser(
       coachMmUserId = coachMmUser.id;
       // Add coach to workspace team (not shared team)
       await mmApiCall("POST", `/teams/${teamId}/members`, {
+        team_id: teamId,
         user_id: coachMmUser.id,
       });
       await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: coachMmUser.id });
