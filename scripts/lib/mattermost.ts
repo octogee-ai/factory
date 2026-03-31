@@ -122,14 +122,18 @@ export async function provisionMattermostUser(
   uid: string, slug: string, firstName: string, email: string,
   workspaceName?: string, lastName?: string, photoURL?: string,
 ): Promise<Record<string, any>> {
-  const MM_TEAM_ID = process.env.MM_TEAM_ID;
+  const MM_TEAM_ID = process.env.MM_TEAM_ID; // fallback for migration
   const MM_BOT_USER_ID = process.env.MM_BOT_USER_ID;
   const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
   const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL || process.env.MM_URL;
+  const MM_COMMUNITY_TEAM_ID = process.env.MM_COMMUNITY_TEAM_ID;
 
-  if (!process.env.MM_URL || !process.env.MM_BOT_TOKEN || !MM_TEAM_ID || !MM_BOT_USER_ID) {
+  if (!process.env.MM_URL || !process.env.MM_BOT_TOKEN || !MM_BOT_USER_ID) {
     log(`[mattermost] skipping — MM env vars not set`);
     return {};
+  }
+  if (!MM_TEAM_ID) {
+    log(`[mattermost] ⚠ MM_TEAM_ID not set — will create workspace team only (no fallback)`);
   }
 
   const generatePassword = (): string => {
@@ -189,11 +193,61 @@ export async function provisionMattermostUser(
       return {};
     }
 
-    // Add to team
-    await mmApiCall("POST", `/teams/${MM_TEAM_ID}/members`, {
-      team_id: MM_TEAM_ID,
-      user_id: mmUser.id,
+    // ── Create workspace team (team-per-workspace: Phase 4) ──────────────────
+    const teamName = `ws-${slug}`;
+    const teamDisplayName = workspaceName || `${firstName}'s Workspace`;
+    let teamId: string | null = null;
+
+    let team = await mmApiCall("POST", "/teams", {
+      name: teamName,
+      display_name: teamDisplayName,
+      type: "I", // invite-only
     });
+    if (!team) {
+      // Team may already exist (re-provision)
+      team = await mmApiCall("GET", `/teams/name/${teamName}`);
+      if (team) log(`[mattermost] team ${teamName} already exists, reusing`);
+    }
+
+    if (team) {
+      teamId = team.id;
+      log(`[mattermost] workspace team created: ${teamName} (${team.id})`);
+    } else if (MM_TEAM_ID) {
+      // Graceful degradation: fall back to shared team
+      teamId = MM_TEAM_ID;
+      log(`[mattermost] ⚠ failed to create workspace team ${teamName} — falling back to shared team`);
+    } else {
+      log(`[mattermost] ⚠ failed to create workspace team ${teamName} and no MM_TEAM_ID fallback`);
+      return {};
+    }
+
+    // Add user as team_admin of workspace team
+    await mmApiCall("POST", `/teams/${teamId}/members`, {
+      user_id: mmUser.id,
+      roles: "team_admin team_user",
+    });
+
+    // Add Octo bot to workspace team
+    await mmApiCall("POST", `/teams/${teamId}/members`, {
+      user_id: MM_BOT_USER_ID,
+    });
+
+    // Add admin bot to workspace team
+    if (MM_ADMIN_USER_ID) {
+      await mmApiCall("POST", `/teams/${teamId}/members`, {
+        user_id: MM_ADMIN_USER_ID,
+      });
+      log(`[mattermost] admin bot added to workspace team ${teamName}`);
+    }
+
+    // Join user to community team
+    const communityTeamId = MM_COMMUNITY_TEAM_ID || MM_TEAM_ID;
+    if (communityTeamId && communityTeamId !== teamId) {
+      await mmApiCall("POST", `/teams/${communityTeamId}/members`, {
+        user_id: mmUser.id,
+      });
+      log(`[mattermost] joined community team ${communityTeamId}`);
+    }
 
     // Upload avatar
     if (photoURL) {
@@ -206,7 +260,7 @@ export async function provisionMattermostUser(
       if (ok) log(`[mattermost] avatar uploaded from Gravatar`);
     }
 
-    // Auto-join community channels
+    // Auto-join community channels (legacy — for workspaces using shared team)
     for (const chId of communityChannelIds) {
       await mmApiCall("POST", `/channels/${chId}/members`, {
         user_id: mmUser.id,
@@ -216,25 +270,27 @@ export async function provisionMattermostUser(
       log(`[mattermost] joined ${communityChannelIds.length} community channels`);
     }
 
-    // Create private channel for customer
+    // ── Create channels in workspace team ───────────────────────────────────
+
+    // Octo DM channel (private channel rendered as DM in the UI)
     const channelName = `octogee-${slug}`;
     const channelDisplayName = firstName ? `${firstName}'s Workspace` : `${slug} Workspace`;
     let channel = await mmApiCall("POST", "/channels", {
-      team_id: MM_TEAM_ID,
+      team_id: teamId,
       name: channelName,
       display_name: channelDisplayName,
       type: "P",
       purpose: `${firstName || slug}'s Octogee workspace`,
     });
     if (!channel) {
-      channel = await mmApiCall("GET", `/teams/${MM_TEAM_ID}/channels/name/${channelName}`);
+      channel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${channelName}`);
     }
     if (!channel) {
       log(`[mattermost] ⚠ failed to create channel for ${slug}`);
       return {};
     }
 
-    // Add bot, customer, and admin to the channel
+    // Add bot, customer, and admin to the Octo DM channel
     await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: MM_BOT_USER_ID });
     await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: mmUser.id });
     if (MM_ADMIN_USER_ID) {
@@ -242,23 +298,22 @@ export async function provisionMattermostUser(
       log(`[mattermost] admin added to channel ${channelName}`);
     }
 
-    // Create #general channel — workspace lobby, visible to all workspace members
+    // #general channel — workspace lobby, visible to all workspace members
     const generalChannelName = `${slug}-general`;
     const generalDisplayName = `General`;
     let generalChannel = await mmApiCall("POST", "/channels", {
-      team_id: MM_TEAM_ID,
+      team_id: teamId,
       name: generalChannelName,
       display_name: generalDisplayName,
       type: "P",
       purpose: `${firstName || slug}'s workspace — general discussion`,
     });
     if (!generalChannel) {
-      generalChannel = await mmApiCall("GET", `/teams/${MM_TEAM_ID}/channels/name/${generalChannelName}`);
+      generalChannel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${generalChannelName}`);
     }
     let generalChannelId: string | null = null;
     if (generalChannel) {
       generalChannelId = generalChannel.id;
-      // Add bot, customer, and admin to general
       await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: MM_BOT_USER_ID });
       await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: mmUser.id });
       if (MM_ADMIN_USER_ID) {
@@ -269,23 +324,23 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ failed to create general channel for ${slug} — non-fatal`);
     }
 
-    // Create admin channel — founder-to-agent guidance, customer NOT invited (#170)
+    // Admin channel — founder-to-agent guidance, customer NOT invited (#170)
     const adminChannelName = `octogee-${slug}-admin`;
     const adminDisplayName = `Admin — ${firstName || slug}`;
     let adminChannel = await mmApiCall("POST", "/channels", {
-      team_id: MM_TEAM_ID,
+      team_id: teamId,
       name: adminChannelName,
       display_name: adminDisplayName,
       type: "P",
       purpose: `Founder-to-agent guidance for ${firstName || slug}. Customer not a member.`,
     });
     if (!adminChannel) {
-      adminChannel = await mmApiCall("GET", `/teams/${MM_TEAM_ID}/channels/name/${adminChannelName}`);
+      adminChannel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${adminChannelName}`);
     }
     let adminChannelId: string | null = null;
     if (adminChannel) {
       adminChannelId = adminChannel.id;
-      // Add bot + coach bot + admin — NOT the customer
+      // Add bot + admin — NOT the customer
       await mmApiCall("POST", `/channels/${adminChannel.id}/members`, { user_id: MM_BOT_USER_ID });
       if (MM_ADMIN_USER_ID) {
         await mmApiCall("POST", `/channels/${adminChannel.id}/members`, { user_id: MM_ADMIN_USER_ID });
@@ -329,8 +384,8 @@ export async function provisionMattermostUser(
     let coachMmUserId: string | null = null;
     if (coachMmUser) {
       coachMmUserId = coachMmUser.id;
-      await mmApiCall("POST", `/teams/${MM_TEAM_ID}/members`, {
-        team_id: MM_TEAM_ID,
+      // Add coach to workspace team (not shared team)
+      await mmApiCall("POST", `/teams/${teamId}/members`, {
         user_id: coachMmUser.id,
       });
       await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: coachMmUser.id });
@@ -346,6 +401,7 @@ export async function provisionMattermostUser(
     return {
       "mattermost.userId": mmUser.id,
       "mattermost.username": username,
+      "mattermost.teamId": teamId,
       "mattermost.channelId": channel.id,
       "mattermost.channelName": channelName,
       "mattermost.dmChannelId": channel.id,
@@ -364,6 +420,7 @@ export async function provisionMattermostUser(
 
 /** Create a private Mattermost channel for a project. Returns channel ID or null. */
 export async function createProjectChannel(
+  teamId: string,         // workspace team ID (Phase 4: team-per-workspace)
   slug: string,
   projectSlug: string,
   customerMmUserId: string,
@@ -373,7 +430,9 @@ export async function createProjectChannel(
   const MM_BOT_USER_ID = process.env.MM_BOT_USER_ID;
   const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
 
-  if (!process.env.MM_URL || !MM_TEAM_ID || !MM_BOT_USER_ID) {
+  // Use provided teamId, fall back to MM_TEAM_ID for legacy workspaces
+  const effectiveTeamId = teamId || MM_TEAM_ID;
+  if (!process.env.MM_URL || !effectiveTeamId || !MM_BOT_USER_ID) {
     log(`[mattermost] skipping project channel — MM env vars not set`);
     return null;
   }
@@ -381,7 +440,7 @@ export async function createProjectChannel(
   const channelName = `proj-${slug}-${projectSlug}`;
 
   let channel = await mmApiCall("POST", "/channels", {
-    team_id: MM_TEAM_ID,
+    team_id: effectiveTeamId,
     name: channelName,
     display_name: projectName,
     type: "P",
@@ -389,7 +448,7 @@ export async function createProjectChannel(
   });
 
   if (!channel) {
-    channel = await mmApiCall("GET", `/teams/${MM_TEAM_ID}/channels/name/${channelName}`);
+    channel = await mmApiCall("GET", `/teams/${effectiveTeamId}/channels/name/${channelName}`);
   }
 
   if (!channel) {
@@ -420,8 +479,9 @@ export const COMMUNITY_CHANNELS = [
 export let communityChannelIds: string[] = [];
 
 export async function ensureCommunityChannels(): Promise<void> {
-  const MM_TEAM_ID = process.env.MM_TEAM_ID;
-  if (!process.env.MM_URL || !MM_TEAM_ID) {
+  // Use MM_COMMUNITY_TEAM_ID (Phase 4), fall back to MM_TEAM_ID for migration
+  const communityTeamId = process.env.MM_COMMUNITY_TEAM_ID || process.env.MM_TEAM_ID;
+  if (!process.env.MM_URL || !communityTeamId) {
     log("[community] skipping — MM env vars not set");
     return;
   }
@@ -435,14 +495,14 @@ export async function ensureCommunityChannels(): Promise<void> {
   communityChannelIds = [];
 
   for (const def of COMMUNITY_CHANNELS) {
-    let channel = await mmApiCall("GET", `/teams/${MM_TEAM_ID}/channels/name/${def.name}`);
+    let channel = await mmApiCall("GET", `/teams/${communityTeamId}/channels/name/${def.name}`);
     if (channel) {
       communityChannelIds.push(channel.id);
       continue;
     }
 
     channel = await mmApiCall("POST", "/channels", {
-      team_id: MM_TEAM_ID,
+      team_id: communityTeamId,
       name: def.name,
       display_name: def.displayName,
       type: "O",
@@ -457,7 +517,7 @@ export async function ensureCommunityChannels(): Promise<void> {
     }
   }
 
-  log(`[community] ${communityChannelIds.length}/${COMMUNITY_CHANNELS.length} channels ready`);
+  log(`[community] ${communityChannelIds.length}/${COMMUNITY_CHANNELS.length} channels ready (team: ${communityTeamId})`);
 }
 
 // ── Admin Credentials ────────────────────────────────────────────────────────────

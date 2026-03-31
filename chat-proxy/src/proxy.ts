@@ -7,11 +7,10 @@
  * 3. Proxies whitelisted MM REST endpoints + WebSocket
  * 4. Mattermost stays fully internal (no public exposure)
  *
- * Team model: single-team for v1.0. All customers share one MM team.
- * The team ID is baked into the client (PUBLIC_MM_TEAM_ID) and passed
- * explicitly — no rewriting or fallback needed.
- * Multi-team: when needed, validate request team ID against user's
- * provisioned team (stored in Firestore users/{uid}.mattermost.teamId).
+ * Team model: team-per-workspace (Phase 4+5). Each workspace gets its own
+ * MM team (ws-{slug}). The proxy validates that API requests target a team
+ * the user belongs to. DM channels (no team) pass through without checks.
+ * Legacy: MM_TEAM_ID env var kept as fallback during migration.
  *
  * Endpoints proxied:
  *   GET  /api/v4/users/me/teams/{id}/channels  (list channels — team-scoped, includes private)
@@ -48,7 +47,7 @@ import { Registry, collectDefaultMetrics, Counter, Gauge } from "prom-client";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL; // e.g. http://mattermost.octogee.svc.cluster.local:8065
-const MM_TEAM_ID = process.env.MM_TEAM_ID || ""; // Mattermost team ID — single team for v1.0
+const MM_TEAM_ID = process.env.MM_TEAM_ID || ""; // Legacy shared team — fallback during migration
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
@@ -170,6 +169,59 @@ async function isAdminUser(uid: string): Promise<boolean> {
   const isAdmin = doc.data()?.role === "admin";
   roleCache.set(uid, { isAdmin, expiresAt: Date.now() + ROLE_CACHE_TTL });
   return isAdmin;
+}
+
+// ── Team Cache (Phase 5: team-per-workspace validation) ─────────────────────
+
+interface CachedTeamIds {
+  teamIds: string[];  // all teams the user belongs to (workspace + community)
+  expiresAt: number;
+}
+
+const teamCache = new Map<string, CachedTeamIds>();
+const TEAM_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/** Get the list of MM team IDs a user belongs to (from Firestore). */
+async function getUserTeamIds(uid: string): Promise<string[]> {
+  const cached = teamCache.get(uid);
+  if (cached && cached.expiresAt > Date.now()) return cached.teamIds;
+
+  const doc = await db.doc(`users/${uid}`).get();
+  const data = doc.data();
+  const teamIds: string[] = [];
+  // Workspace team (Phase 4)
+  if (data?.mattermost?.teamId) teamIds.push(data.mattermost.teamId);
+  // Legacy shared team
+  if (MM_TEAM_ID && !teamIds.includes(MM_TEAM_ID)) teamIds.push(MM_TEAM_ID);
+
+  teamCache.set(uid, { teamIds, expiresAt: Date.now() + TEAM_CACHE_TTL });
+  return teamIds;
+}
+
+/**
+ * Extract team ID from the request URL, if present.
+ * Returns null for endpoints that don't reference a team (DMs, posts, files, etc.).
+ */
+function extractTeamIdFromUrl(urlPath: string): string | null {
+  // GET /api/v4/users/me/teams/{teamId}/channels
+  const match = urlPath.match(/\/api\/v4\/users\/me\/teams\/([a-z0-9]+)\/channels/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Validate that the user is allowed to access the team referenced in the request.
+ * Returns null if OK, or an error message string if rejected.
+ */
+async function validateTeamAccess(uid: string, urlPath: string): Promise<string | null> {
+  const requestTeamId = extractTeamIdFromUrl(urlPath);
+  // No team in URL → endpoint is not team-scoped (DMs, posts, files) → allow
+  if (!requestTeamId) return null;
+
+  const userTeamIds = await getUserTeamIds(uid);
+  if (userTeamIds.includes(requestTeamId)) return null;
+
+  console.log(`[proxy] team access denied: uid=${uid} requested team=${requestTeamId}, allowed=${userTeamIds.join(",")}`);
+  return "Team access denied";
 }
 
 async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: string } | null> {
@@ -327,6 +379,14 @@ async function handleRest(
   if (!isAllowedRoute(req.method || "GET", urlPath)) {
     res.writeHead(403, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Endpoint not allowed" }));
+    return;
+  }
+
+  // Team validation (Phase 5: team-per-workspace access control)
+  const teamError = await validateTeamAccess(uid, urlPath);
+  if (teamError) {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: teamError }));
     return;
   }
 
@@ -538,6 +598,7 @@ server.on("upgrade", (req, socket, head) => {
 server.listen(PORT, () => {
   console.log(`[chat-proxy] listening on :${PORT}`);
   console.log(`[chat-proxy] MM backend: ${MM_INTERNAL_URL}`);
-  console.log(`[chat-proxy] MM team: ${MM_TEAM_ID || "(not set — multi-team not enforced)"}`);
+  console.log(`[chat-proxy] MM legacy team: ${MM_TEAM_ID || "(not set)"}`);
+  console.log(`[chat-proxy] team validation: enabled (team-per-workspace)`);
   console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
 });
