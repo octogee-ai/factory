@@ -242,6 +242,33 @@ export async function provisionMattermostUser(
       log(`[mattermost] admin added to channel ${channelName}`);
     }
 
+    // Create #general channel — workspace lobby, visible to all workspace members
+    const generalChannelName = `${slug}-general`;
+    const generalDisplayName = `General`;
+    let generalChannel = await mmApiCall("POST", "/channels", {
+      team_id: MM_TEAM_ID,
+      name: generalChannelName,
+      display_name: generalDisplayName,
+      type: "P",
+      purpose: `${firstName || slug}'s workspace — general discussion`,
+    });
+    if (!generalChannel) {
+      generalChannel = await mmApiCall("GET", `/teams/${MM_TEAM_ID}/channels/name/${generalChannelName}`);
+    }
+    let generalChannelId: string | null = null;
+    if (generalChannel) {
+      generalChannelId = generalChannel.id;
+      // Add bot, customer, and admin to general
+      await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: MM_BOT_USER_ID });
+      await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: mmUser.id });
+      if (MM_ADMIN_USER_ID) {
+        await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: MM_ADMIN_USER_ID });
+      }
+      log(`[mattermost] general channel created: #${generalChannelName} (${generalChannel.id})`);
+    } else {
+      log(`[mattermost] ⚠ failed to create general channel for ${slug} — non-fatal`);
+    }
+
     // Create admin channel — founder-to-agent guidance, customer NOT invited (#170)
     const adminChannelName = `octogee-${slug}-admin`;
     const adminDisplayName = `Admin — ${firstName || slug}`;
@@ -322,6 +349,7 @@ export async function provisionMattermostUser(
       "mattermost.channelId": channel.id,
       "mattermost.channelName": channelName,
       "mattermost.dmChannelId": channel.id,
+      "mattermost.generalChannelId": generalChannelId || null,
       "mattermost.proxyUrl": process.env.CHAT_PROXY_URL || "",
       ...(coachMmUserId ? { "mattermost.coachUserId": coachMmUserId } : {}),
       ...(adminChannelId ? { "mattermost.adminChannelId": adminChannelId } : {}),
