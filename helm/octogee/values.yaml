@@ -21,7 +21,7 @@ cloud-sql-proxy:
 mattermost:
   enabled: true
   image:
-    repository: mattermost/mattermost-enterprise-edition
+    repository: mattermost/mattermost-team-edition
     tag: "release-9.11"
   db:
     user: mattermost
