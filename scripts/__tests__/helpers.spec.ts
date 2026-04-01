@@ -5,7 +5,6 @@ import * as os from "os";
 import {
   slugify,
   generatePersonalSlug,
-  getTierSuffix,
   getTemplateForBusinessType,
   applyTemplatePlaceholders,
   copyDirSync,
@@ -57,34 +56,6 @@ describe("generatePersonalSlug", () => {
   it("generates different slugs on successive calls", () => {
     const slugs = new Set(Array.from({ length: 10 }, () => generatePersonalSlug()));
     expect(slugs.size).toBeGreaterThan(1);
-  });
-});
-
-// ── getTierSuffix ───────────────────────────────────────────────────────────────
-
-describe("getTierSuffix", () => {
-  it('returns "starter" for starter tier', () => {
-    expect(getTierSuffix("starter")).toBe("starter");
-  });
-
-  it('returns "starter" for free tier', () => {
-    expect(getTierSuffix("free")).toBe("starter");
-  });
-
-  it('returns "pro" for pro tier', () => {
-    expect(getTierSuffix("pro")).toBe("pro");
-  });
-
-  it('returns "pro" for business tier', () => {
-    expect(getTierSuffix("business")).toBe("pro");
-  });
-
-  it('returns "pro" for trial tier', () => {
-    expect(getTierSuffix("trial")).toBe("pro");
-  });
-
-  it('returns "pro" for enterprise', () => {
-    expect(getTierSuffix("enterprise")).toBe("pro");
   });
 });
 

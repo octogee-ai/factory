@@ -51,10 +51,10 @@ interface UsageData {
 
 /**
  * Extract role from agent ID.
- * Pattern: octogee-{slug}-{role}  e.g. octogee-rock-hard-gym-alex → "alex"
+ * Pattern: octogee-{slug}-{role}  e.g. octogee-swift-harbor-coach → "coach"
  */
 export function extractRole(agentId: string): string {
-  const knownRoles = ["coach", "alex", "morgan", "riley", "robert"];
+  const knownRoles = ["coach"];
   for (const role of knownRoles) {
     if (agentId.endsWith(`-${role}`)) return role;
   }

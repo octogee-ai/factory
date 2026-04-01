@@ -67,32 +67,6 @@ export function applyTemplatePlaceholders(template: string, vars: Record<string,
   return result;
 }
 
-/**
- * Read a tier-based template file, falling back to the old non-tier template.
- * Tries: {baseName}.{tierSuffix}.template → {baseName}.template
- */
-export function readTierTemplate(
-  baseName: string,
-  tierSuffix: string,
-  dir: string,
-  vars: Record<string, string>,
-): string | null {
-  const tierPath = path.join(dir, `${baseName}.${tierSuffix}.template`);
-  if (fs.existsSync(tierPath)) {
-    return applyTemplatePlaceholders(fs.readFileSync(tierPath, "utf-8"), vars);
-  }
-  const fallbackPath = path.join(dir, `${baseName}.template`);
-  if (fs.existsSync(fallbackPath)) {
-    return applyTemplatePlaceholders(fs.readFileSync(fallbackPath, "utf-8"), vars);
-  }
-  return null;
-}
-
-/** Map subscription tier to template suffix. Starter/free → "starter", everything else → "pro". */
-export function getTierSuffix(tier: string): "starter" | "pro" {
-  return (tier === "starter" || tier === "free") ? "starter" : "pro";
-}
-
 // ── Business Type → Website Template ────────────────────────────────────────────
 
 export const BUSINESS_TYPE_TEMPLATES: Record<string, string> = {

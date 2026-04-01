@@ -1,7 +1,5 @@
 # MEMORY.md
 
-**UID:** {{uid}}
-
 ## Onboarding
 - [ ] Coach personality set
 - [ ] Dream defined

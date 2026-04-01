@@ -81,6 +81,38 @@ export async function mmApiCall(method: string, endpoint: string, body?: any): P
   return resp.json();
 }
 
+/**
+ * Create or restore a channel. Handles the case where the channel name exists
+ * but is archived (MM returns 400 on create, 404 on name lookup).
+ */
+async function createOrRestoreChannel(
+  teamId: string, name: string, displayName: string, type: string, purpose: string,
+): Promise<any | null> {
+  let channel = await mmApiCall("POST", "/channels", {
+    team_id: teamId, name, display_name: displayName, type, purpose,
+  });
+  if (channel) return channel;
+
+  // Name might be claimed by an active channel
+  channel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`);
+  if (channel) return channel;
+
+  // Search for archived channel and restore
+  const search = await mmApiCall("POST", `/teams/${teamId}/channels/search`, {
+    term: name, include_deleted: true,
+  });
+  const archived = Array.isArray(search)
+    ? search.find((c: any) => c.name === name && c.delete_at > 0)
+    : null;
+  if (archived) {
+    channel = await mmApiCall("POST", `/channels/${archived.id}/restore`);
+    if (channel) log(`[mattermost] restored archived channel: ${name}`);
+    return channel;
+  }
+
+  return null;
+}
+
 // ── Avatar Upload ───────────────────────────────────────────────────────────────
 
 export async function mmUploadAvatar(userId: string, imageUrl: string): Promise<boolean> {
@@ -221,6 +253,8 @@ export async function provisionMattermostUser(
       return {};
     }
 
+    if (!teamId) return {};  // TS narrowing — unreachable after fallback above
+
     // Add user as team_admin of workspace team
     // Note: team_id is required in body for Team Edition (not just the URL)
     await mmApiCall("POST", `/teams/${teamId}/members`, {
@@ -280,16 +314,10 @@ export async function provisionMattermostUser(
     // Octo DM channel (private channel rendered as DM in the UI)
     const channelName = `octogee-${slug}`;
     const channelDisplayName = firstName ? `${firstName}'s Workspace` : `${slug} Workspace`;
-    let channel = await mmApiCall("POST", "/channels", {
-      team_id: teamId,
-      name: channelName,
-      display_name: channelDisplayName,
-      type: "P",
-      purpose: `${firstName || slug}'s Octogee workspace`,
-    });
-    if (!channel) {
-      channel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${channelName}`);
-    }
+    const channel = await createOrRestoreChannel(
+      teamId, channelName, channelDisplayName, "P",
+      `${firstName || slug}'s Octogee workspace`,
+    );
     if (!channel) {
       log(`[mattermost] ⚠ failed to create channel for ${slug}`);
       return {};
@@ -306,16 +334,10 @@ export async function provisionMattermostUser(
     // #general channel — workspace lobby, visible to all workspace members
     const generalChannelName = `${slug}-general`;
     const generalDisplayName = `General`;
-    let generalChannel = await mmApiCall("POST", "/channels", {
-      team_id: teamId,
-      name: generalChannelName,
-      display_name: generalDisplayName,
-      type: "P",
-      purpose: `${firstName || slug}'s workspace — general discussion`,
-    });
-    if (!generalChannel) {
-      generalChannel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${generalChannelName}`);
-    }
+    const generalChannel = await createOrRestoreChannel(
+      teamId, generalChannelName, generalDisplayName, "P",
+      `${firstName || slug}'s workspace — general discussion`,
+    );
     let generalChannelId: string | null = null;
     if (generalChannel) {
       generalChannelId = generalChannel.id;
@@ -332,16 +354,10 @@ export async function provisionMattermostUser(
     // Admin channel — founder-to-agent guidance, customer NOT invited (#170)
     const adminChannelName = `octogee-${slug}-admin`;
     const adminDisplayName = `Admin — ${firstName || slug}`;
-    let adminChannel = await mmApiCall("POST", "/channels", {
-      team_id: teamId,
-      name: adminChannelName,
-      display_name: adminDisplayName,
-      type: "P",
-      purpose: `Founder-to-agent guidance for ${firstName || slug}. Customer not a member.`,
-    });
-    if (!adminChannel) {
-      adminChannel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${adminChannelName}`);
-    }
+    const adminChannel = await createOrRestoreChannel(
+      teamId, adminChannelName, adminDisplayName, "P",
+      `Founder-to-agent guidance for ${firstName || slug}. Customer not a member.`,
+    );
     let adminChannelId: string | null = null;
     if (adminChannel) {
       adminChannelId = adminChannel.id;
