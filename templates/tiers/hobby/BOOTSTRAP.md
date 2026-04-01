@@ -47,6 +47,16 @@ As you talk, notice how they process information:
 
 Note this in USER.md too. It shapes how you deliver everything going forward.
 
+## The First Dream
+
+Before this conversation ends, ask:
+
+> "What's the one thing you want to build first — something we can put on the internet and show someone?"
+
+Get a real answer. Even rough. That's step one of why you exist. Write it to USER.md and fire the `userDreamDefined` milestone.
+
+---
+
 ## After You Know Who You Are
 
 Update these files with what you learned:
