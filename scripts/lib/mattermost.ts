@@ -269,6 +269,21 @@ export async function provisionMattermostUser(
       user_id: MM_BOT_USER_ID,
     });
 
+    // Archive MM's auto-created default channels (town-square, off-topic, general).
+    // MM creates these on every new team — they clutter the admin sidebar as orphaned
+    // channels since they don't match the {slug}-* naming convention (#228, #229).
+    for (const defaultName of ["town-square", "off-topic", "general"]) {
+      try {
+        const ch = await mmApiCall("GET", `/teams/${teamId}/channels/name/${defaultName}`);
+        if (ch?.id) {
+          await mmApiCall("DELETE", `/channels/${ch.id}`);
+          log(`[mattermost] archived default channel #${defaultName} (${ch.id})`);
+        }
+      } catch {
+        // Non-fatal — channel may not exist or already archived
+      }
+    }
+
     // Add admin bot to workspace team
     if (MM_ADMIN_USER_ID) {
       await mmApiCall("POST", `/teams/${teamId}/members`, {
