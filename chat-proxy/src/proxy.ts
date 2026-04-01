@@ -97,7 +97,9 @@ const db = admin.firestore();
 // ── Allowed Endpoints (whitelist) ─────────────────────────────────────────────
 
 const ALLOWED_ROUTES: Array<{ method: string; pattern: RegExp }> = [
-  // Channel listing — team ID required (PUBLIC_MM_TEAM_ID in client build)
+  // List teams the user belongs to (for multi-team channel fetch)
+  { method: "GET", pattern: /^\/api\/v4\/users\/me\/teams$/ },
+  // Channel listing per team
   { method: "GET", pattern: /^\/api\/v4\/users\/me\/teams\/[a-z0-9]+\/channels/ },
   // Profile lookup
   { method: "POST", pattern: /^\/api\/v4\/users\/ids$/ },
@@ -165,64 +167,14 @@ async function isAdminUser(uid: string): Promise<boolean> {
   const cached = roleCache.get(uid);
   if (cached && cached.expiresAt > Date.now()) return cached.isAdmin;
 
-  const doc = await db.doc(`users/${uid}`).get();
+  const doc = await db.doc(`users/${uid}/system/config`).get();
   const isAdmin = doc.data()?.role === "admin";
   roleCache.set(uid, { isAdmin, expiresAt: Date.now() + ROLE_CACHE_TTL });
   return isAdmin;
 }
 
-// ── Team Cache (Phase 5: team-per-workspace validation) ─────────────────────
-
-interface CachedTeamIds {
-  teamIds: string[];  // all teams the user belongs to (workspace + community)
-  expiresAt: number;
-}
-
-const teamCache = new Map<string, CachedTeamIds>();
-const TEAM_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-/** Get the list of MM team IDs a user belongs to (from Firestore). */
-async function getUserTeamIds(uid: string): Promise<string[]> {
-  const cached = teamCache.get(uid);
-  if (cached && cached.expiresAt > Date.now()) return cached.teamIds;
-
-  const doc = await db.doc(`users/${uid}`).get();
-  const data = doc.data();
-  const teamIds: string[] = [];
-  // Workspace team (Phase 4)
-  if (data?.mattermost?.teamId) teamIds.push(data.mattermost.teamId);
-  // Legacy shared team
-  if (MM_TEAM_ID && !teamIds.includes(MM_TEAM_ID)) teamIds.push(MM_TEAM_ID);
-
-  teamCache.set(uid, { teamIds, expiresAt: Date.now() + TEAM_CACHE_TTL });
-  return teamIds;
-}
-
-/**
- * Extract team ID from the request URL, if present.
- * Returns null for endpoints that don't reference a team (DMs, posts, files, etc.).
- */
-function extractTeamIdFromUrl(urlPath: string): string | null {
-  // GET /api/v4/users/me/teams/{teamId}/channels
-  const match = urlPath.match(/\/api\/v4\/users\/me\/teams\/([a-z0-9]+)\/channels/);
-  return match ? match[1] : null;
-}
-
-/**
- * Validate that the user is allowed to access the team referenced in the request.
- * Returns null if OK, or an error message string if rejected.
- */
-async function validateTeamAccess(uid: string, urlPath: string): Promise<string | null> {
-  const requestTeamId = extractTeamIdFromUrl(urlPath);
-  // No team in URL → endpoint is not team-scoped (DMs, posts, files) → allow
-  if (!requestTeamId) return null;
-
-  const userTeamIds = await getUserTeamIds(uid);
-  if (userTeamIds.includes(requestTeamId)) return null;
-
-  console.log(`[proxy] team access denied: uid=${uid} requested team=${requestTeamId}, allowed=${userTeamIds.join(",")}`);
-  return "Team access denied";
-}
+// Team validation removed — MM enforces channel/team membership natively.
+// The proxy authenticates, forwards to MM with the user's token, and MM rejects unauthorized access.
 
 async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: string } | null> {
   const cached = tokenCache.get(uid);
@@ -382,17 +334,15 @@ async function handleRest(
     return;
   }
 
-  // Team validation (Phase 5: team-per-workspace access control)
-  const teamError = await validateTeamAccess(uid, urlPath);
-  if (teamError) {
-    res.writeHead(403, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: teamError }));
-    return;
-  }
-
   // Admin users: always use the system admin MM token (reads + writes).
   // Regular users always use their personal token.
   const isAdmin = await isAdminUser(uid);
+
+  // Team validation removed — MM enforces channel/team membership natively.
+  // The proxy authenticates the user and forwards to MM with their token.
+  // MM rejects unauthorized access with 403.
+  {
+  }
   const creds = isAdmin
     ? await getAdminMmToken()
     : await getMmToken(uid);
@@ -599,6 +549,6 @@ server.listen(PORT, () => {
   console.log(`[chat-proxy] listening on :${PORT}`);
   console.log(`[chat-proxy] MM backend: ${MM_INTERNAL_URL}`);
   console.log(`[chat-proxy] MM legacy team: ${MM_TEAM_ID || "(not set)"}`);
-  console.log(`[chat-proxy] team validation: enabled (team-per-workspace)`);
+
   console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
 });
