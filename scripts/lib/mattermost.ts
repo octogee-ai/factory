@@ -347,7 +347,8 @@ export async function provisionMattermostUser(
     }
 
     // #general channel — workspace lobby, visible to all workspace members
-    const generalChannelName = `${slug}-general`;
+    // Prefixed with octogee- so admin sidebar groups it under the customer slug.
+    const generalChannelName = `octogee-${slug}-general`;
     const generalDisplayName = `General`;
     const generalChannel = await createOrRestoreChannel(
       teamId, generalChannelName, generalDisplayName, "P",

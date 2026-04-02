@@ -229,7 +229,31 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
     -H "Content-Type: application/json" \
     -d "{\"login_id\":\"$MM_ADMIN_USER\",\"password\":\"$MM_ADMIN_PASS\"}" 2>/dev/null)
   MM_ADMIN_TOKEN=$(echo "$LOGIN_RAW" | grep -i "^token:" | awk '{print $2}' | tr -d '\r')
-  [[ -n "$MM_ADMIN_TOKEN" ]] && save_env "MM_ADMIN_TOKEN" "$MM_ADMIN_TOKEN" && ok "Admin token refreshed"
+  [[ -n "$MM_ADMIN_TOKEN" ]] && save_env "MM_ADMIN_TOKEN" "$MM_ADMIN_TOKEN" && ok "Admin session token refreshed"
+
+  # Get real admin user ID from /me (stored IDs can drift after DB rebuilds)
+  MM_ADMIN_USER_ID=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    curl -s "http://localhost:8065/api/v4/users/me" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || echo "")
+  [[ -n "$MM_ADMIN_USER_ID" ]] && save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID" && ok "Admin user ID: $MM_ADMIN_USER_ID"
+
+  # Create a personal access token (PAT) for workspace-api
+  # Session tokens expire; PATs don't — workspace-api needs a PAT for /admin-token route
+  info "Creating admin personal access token (PAT) for workspace-api..."
+  PAT_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"description":"workspace-api admin token"}' 2>/dev/null)
+  MM_ADMIN_PAT=$(echo "$PAT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+  if [[ -n "$MM_ADMIN_PAT" ]]; then
+    save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
+    ok "Admin PAT created"
+  else
+    warn "Failed to create admin PAT: $PAT_RESP"
+    warn "workspace-api /admin-token route will return 503 without this!"
+  fi
 else
   info "Fresh Mattermost — bootstrapping admin, team, bot..."
 
@@ -280,6 +304,22 @@ else
     -d "{\"team_id\":\"$MM_TEAM_ID\",\"user_id\":\"$MM_ADMIN_USER_ID\"}" >/dev/null 2>&1
   ok "Admin added to team"
 
+  # Admin personal access token (PAT) for workspace-api
+  # Session tokens expire; PATs don't — workspace-api needs MM_ADMIN_TOKEN env var
+  info "Creating admin personal access token (PAT) for workspace-api..."
+  PAT_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"description":"workspace-api admin token"}' 2>/dev/null)
+  MM_ADMIN_PAT=$(echo "$PAT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+  if [[ -n "$MM_ADMIN_PAT" ]]; then
+    save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
+    ok "Admin PAT created"
+  else
+    warn "Failed to create admin PAT — workspace-api /admin-token will 503!"
+  fi
+
   # Bot
   BOT_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
     curl -s -X POST "http://localhost:8065/api/v4/bots" \
@@ -317,13 +357,26 @@ fi
 set +u
 if [[ -n "${MM_BOT_TOKEN:-}" && -n "${MM_ADMIN_USER:-}" && -n "${MM_ADMIN_PASS:-}" ]]; then
   kubectl delete secret mattermost-gateway -n "$K8S_NAMESPACE" 2>/dev/null || true
-  kubectl create secret generic mattermost-gateway -n "$K8S_NAMESPACE" \
-    --from-literal=bot_token="${MM_BOT_TOKEN}" \
-    --from-literal=admin_user="${MM_ADMIN_USER}" \
-    --from-literal=admin_pass="${MM_ADMIN_PASS}" \
-    --from-literal=team_id="${MM_TEAM_ID:-}" \
-    --from-literal=bot_user_id="${MM_BOT_USER_ID:-}" \
+
+  # Build secret args — admin_token is the PAT (not session token)
+  SECRET_ARGS=(
+    --from-literal=bot_token="${MM_BOT_TOKEN}"
+    --from-literal=admin_user="${MM_ADMIN_USER}"
+    --from-literal=admin_pass="${MM_ADMIN_PASS}"
+    --from-literal=team_id="${MM_TEAM_ID:-}"
+    --from-literal=bot_user_id="${MM_BOT_USER_ID:-}"
     --from-literal=admin_user_id="${MM_ADMIN_USER_ID:-}"
+  )
+  # Include admin_token (PAT) if available — required by workspace-api for /admin-token route
+  if [[ -n "${MM_ADMIN_PAT:-}" ]]; then
+    SECRET_ARGS+=(--from-literal=admin_token="${MM_ADMIN_PAT}")
+    ok "admin_token (PAT) included in secret"
+  else
+    warn "admin_token NOT in secret — workspace-api /admin-token will 503!"
+    warn "Create one manually: POST /api/v4/users/{admin_user_id}/tokens"
+  fi
+
+  kubectl create secret generic mattermost-gateway -n "$K8S_NAMESPACE" "${SECRET_ARGS[@]}"
   ok "mattermost-gateway K8s secret updated"
 fi
 set -u
