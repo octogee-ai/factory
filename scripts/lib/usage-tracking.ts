@@ -158,16 +158,16 @@ async function reportUsage(
       const userDoc = await t.get(userRef);
       const data = userDoc.data() || {};
       const usageData = data.usage || {};
-      const tier = data.subscription?.tier || "trial";
+      const tier = data.selectedTier || data.subscription?.tier || "trial";
 
       // ── Window-based refill logic ──────────────────────────────────
       const REFILL_MS = 4 * 60 * 60 * 1000;
       const WINDOWS_PER_WEEK = 42;
       const WEEKLY_BUDGETS: Record<string, number> = {
-        trial: 1_500_000, starter: 150_000, pro: 500_000,
-        business: 1_500_000, enterprise: 0,
+        free: 50_000, hobby: 200_000, pro: 500_000,
+        max: 1_500_000, trial: 1_500_000,
       };
-      const weeklyBudget = WEEKLY_BUDGETS[tier] ?? 150_000;
+      const weeklyBudget = WEEKLY_BUDGETS[tier] ?? 50_000;
       const windowSize = weeklyBudget === 0 ? 0 : Math.floor(weeklyBudget / WINDOWS_PER_WEEK);
 
       const windowStartedAt = usageData.windowStartedAt?.toDate?.() || null;
