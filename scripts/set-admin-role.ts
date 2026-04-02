@@ -1,63 +1,84 @@
 /**
- * set-admin-role.ts — grant or revoke admin role on a Octogee user document
+ * set-admin-role.ts — grant or revoke admin role on an Octogee user
  *
- * The admin dashboard Cloud Function checks `role: 'admin'` on the calling
- * user's Firestore document (users/{uid}). This script sets or clears it.
+ * Admin role lives in the system/config subcollection:
+ *   users/{uid}/system/config → { role: 'admin' }
+ *
+ * This is checked by:
+ *   - workspace-api requireAdmin middleware
+ *   - OnboardingFlow (redirect to /admin)
+ *   - AdminPage (dashboard access)
+ *
+ * Does NOT set role on the top-level user doc (legacy pattern, deprecated).
  *
  * Usage:
- *   npx tsx scripts/set-admin-role.ts <email-or-uid>          # grant admin
- *   npx tsx scripts/set-admin-role.ts <email-or-uid> --revoke # revoke admin
+ *   npx tsx scripts/set-admin-role.ts <email-or-uid> --project=octogee-test
+ *   npx tsx scripts/set-admin-role.ts <email-or-uid> --project=octogee --revoke
  */
-import { initializeApp, cert, getApps } from "firebase-admin/app";
+import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
-const SA_KEY_PATH =
-  process.env.GOOGLE_APPLICATION_CREDENTIALS ??
-  path.join(os.homedir(), ".openclaw/secrets/octogee-test-sa-key.json");
+const args = process.argv.slice(2);
+const revoke = args.includes("--revoke");
+const projectArg = args.find(a => a.startsWith("--project="));
+const project = projectArg?.split("=")[1] || process.env.GOOGLE_CLOUD_PROJECT || "octogee-test";
+const target = args.find(a => !a.startsWith("--"));
+
+if (!target) {
+  console.error("Usage: npx tsx scripts/set-admin-role.ts <email-or-uid> --project=<project> [--revoke]");
+  process.exit(1);
+}
 
 if (!getApps().length) {
-  initializeApp({ credential: cert(JSON.parse(fs.readFileSync(SA_KEY_PATH, "utf-8"))) });
+  initializeApp({ credential: applicationDefault(), projectId: project });
 }
 
 const auth = getAuth();
 const db = getFirestore();
 
-const [target, flag] = process.argv.slice(2);
-const revoke = flag === "--revoke";
-
-if (!target) {
-  console.error("Usage: npx tsx scripts/set-admin-role.ts <email-or-uid> [--revoke]");
-  process.exit(1);
-}
-
 async function main() {
-  // Accept either email or UID directly
   let uid: string;
   let email: string;
 
-  if (target.includes("@")) {
-    const user = await auth.getUserByEmail(target);
+  if (target!.includes("@")) {
+    const user = await auth.getUserByEmail(target!);
     uid = user.uid;
     email = user.email!;
   } else {
-    const user = await auth.getUser(target);
+    const user = await auth.getUser(target!);
     uid = user.uid;
     email = user.email ?? "(no email)";
   }
 
-  await db.doc(`users/${uid}`).set(
-    { role: revoke ? null : "admin" },
-    { merge: true }
-  );
+  // Check user doc exists
+  const userDoc = await db.doc(`users/${uid}`).get();
+  if (!userDoc.exists) {
+    console.error(`❌ No user doc found at users/${uid}. Has this user signed up?`);
+    process.exit(1);
+  }
+
+  // Set/clear role in system/config subcollection
+  const configRef = db.doc(`users/${uid}/system/config`);
+
+  if (revoke) {
+    await configRef.set({ role: FieldValue.delete() }, { merge: true });
+  } else {
+    await configRef.set({ role: "admin" }, { merge: true });
+  }
+
+  // Clean up legacy top-level role field if present
+  const userData = userDoc.data();
+  if (userData?.role) {
+    await db.doc(`users/${uid}`).update({ role: FieldValue.delete() });
+    console.log(`   ⚠ Removed legacy top-level role field`);
+  }
 
   console.log(`\n✅ ${revoke ? "Revoked" : "Granted"} admin role`);
-  console.log(`   email: ${email}`);
-  console.log(`   uid:   ${uid}`);
-  console.log(`   users/${uid}.role = ${revoke ? "null" : '"admin"'}\n`);
+  console.log(`   project: ${project}`);
+  console.log(`   email:   ${email}`);
+  console.log(`   uid:     ${uid}`);
+  console.log(`   users/${uid}/system/config.role = ${revoke ? "(deleted)" : '"admin"'}\n`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => { console.error(e.message || e); process.exit(1); });
