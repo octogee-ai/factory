@@ -41,6 +41,16 @@ try:
     if mm.get("allowFrom") != ["*"]:
         mm["allowFrom"] = ["*"]
         changed = True
+    # Sync bot token from env var (secret may have been rotated since last boot)
+    env_token = os.environ.get("MM_BOT_TOKEN", "")
+    if env_token and mm.get("botToken") != env_token:
+        mm["botToken"] = env_token
+        changed = True
+        print(f"[entrypoint] Synced MM bot token from env", flush=True)
+    # Remove stale 'token' key if present (not in OpenClaw schema)
+    if "token" in mm:
+        del mm["token"]
+        changed = True
     # Remove default:true from Mac — only bound agents should respond
     for agent in c.get("agents", {}).get("list", []):
         if agent.get("id") == "mac" and agent.get("default"):
