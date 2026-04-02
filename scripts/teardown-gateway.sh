@@ -232,9 +232,16 @@ if $FULL; then
   GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee 2>/dev/null || echo "")
 
   PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || \
-    ls ~/Downloads/google-cloud-sdk/bin/cloud-sql-proxy 2>/dev/null || \
+    ls /opt/homebrew/bin/cloud-sql-proxy 2>/dev/null || \
     ls /opt/homebrew/share/google-cloud-sdk/bin/cloud-sql-proxy 2>/dev/null || \
     echo "")
+
+  # Auto-install if missing (macOS + Homebrew)
+  if [[ -z "$PROXY_BIN" ]] && command -v brew >/dev/null 2>&1; then
+    info "cloud-sql-proxy not found — installing via Homebrew..."
+    brew install cloud-sql-proxy >/dev/null 2>&1 && PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || echo "")
+    [[ -n "$PROXY_BIN" ]] && ok "cloud-sql-proxy installed: $PROXY_BIN"
+  fi
 
   if [[ -z "$PROXY_BIN" ]]; then
     warn "cloud-sql-proxy not found — skipping DB reset. Run manually:"

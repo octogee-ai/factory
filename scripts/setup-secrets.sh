@@ -193,6 +193,36 @@ else
   ksecret octogee-github --from-literal=token=""
 fi
 
+# ── 9. Stripe secrets ─────────────────────────────────────────────────────
+# Required by workspace-api at startup (not optional). Use placeholder if not
+# configured yet — billing is sandbox mode until real keys are set.
+info "stripe-secrets"
+set +u
+STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-}"
+STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-}"
+set -u
+[[ -z "$STRIPE_SECRET_KEY" ]]    && STRIPE_SECRET_KEY=$(sm_get STRIPE_SECRET_KEY "$CLUSTER_PROJECT" 2>/dev/null || echo "")
+[[ -z "$STRIPE_WEBHOOK_SECRET" ]] && STRIPE_WEBHOOK_SECRET=$(sm_get STRIPE_WEBHOOK_SECRET "$CLUSTER_PROJECT" 2>/dev/null || echo "")
+[[ -z "$STRIPE_SECRET_KEY" ]]    && warn "STRIPE_SECRET_KEY not found — using placeholder (billing disabled)"
+[[ -z "$STRIPE_WEBHOOK_SECRET" ]] && warn "STRIPE_WEBHOOK_SECRET not found — using placeholder"
+ksecret stripe-secrets \
+  --from-literal=secret_key="${STRIPE_SECRET_KEY:-placeholder}" \
+  --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}"
+
+# ── 10. GCP Service Account key ───────────────────────────────────────────
+# Used by workspace-api and gateway for GCP API access (Workload Identity
+# preferred on prod; SA key is a fallback for services that need it directly).
+info "octogee-sa-key"
+case "$ENV" in
+  prod) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-sa-key.json" ;;
+  test) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;
+esac
+if [[ -f "$SA_KEY_PATH" ]]; then
+  ksecret octogee-sa-key --from-file=key.json="$SA_KEY_PATH"
+else
+  warn "SA key not found at $SA_KEY_PATH — skipping octogee-sa-key (Workload Identity must be configured)"
+fi
+
 # ── Firebase / Cloud Functions secrets (must exist before firebase deploy) ───
 # Firebase prompts interactively if these secrets don't exist in Secret Manager.
 # Pre-create them with placeholder values — the real values are set at runtime:
