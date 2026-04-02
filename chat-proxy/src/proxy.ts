@@ -10,7 +10,7 @@
  * Team model: team-per-workspace (Phase 4+5). Each workspace gets its own
  * MM team (ws-{slug}). The proxy validates that API requests target a team
  * the user belongs to. DM channels (no team) pass through without checks.
- * Legacy: MM_TEAM_ID env var kept as fallback during migration.
+ * Team-per-workspace: each user's teamId is in Firestore mattermost.teamId.
  *
  * Endpoints proxied:
  *   GET  /api/v4/users/me/teams/{id}/channels  (list channels — team-scoped, includes private)
@@ -47,7 +47,7 @@ import { Registry, collectDefaultMetrics, Counter, Gauge } from "prom-client";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL; // e.g. http://mattermost.octogee.svc.cluster.local:8065
-const MM_TEAM_ID = process.env.MM_TEAM_ID || ""; // Legacy shared team — fallback during migration
+// MM_TEAM_ID removed — legacy shared team, no longer used (team-per-workspace)
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
@@ -548,7 +548,7 @@ server.on("upgrade", (req, socket, head) => {
 server.listen(PORT, () => {
   console.log(`[chat-proxy] listening on :${PORT}`);
   console.log(`[chat-proxy] MM backend: ${MM_INTERNAL_URL}`);
-  console.log(`[chat-proxy] MM legacy team: ${MM_TEAM_ID || "(not set)"}`);
+
 
   console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
 });
