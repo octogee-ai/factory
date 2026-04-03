@@ -135,7 +135,7 @@ const ALLOWED_ROUTES: Array<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: /^\/api\/v4\/opengraph$/ },
 ];
 
-function isAllowedRoute(method: string, path: string): boolean {
+export function isAllowedRoute(method: string, path: string): boolean {
   return ALLOWED_ROUTES.some(
     (r) => r.method === method && r.pattern.test(path)
   );
@@ -243,7 +243,7 @@ async function getAdminMmToken(): Promise<{ mmToken: string; mmUserId: string } 
 
 // ── Firebase Auth Verification ────────────────────────────────────────────────
 
-async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
+export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
   const authHeader = req.headers.authorization;
   
   // MM Client4 SDK sends "BEARER" (uppercase), standard is "Bearer"
@@ -272,7 +272,7 @@ const ALLOWED_ORIGINS = [
   /^http:\/\/localhost:\d+$/,
 ];
 
-function setCors(req: http.IncomingMessage, res: http.ServerResponse): void {
+export function setCors(req: http.IncomingMessage, res: http.ServerResponse): void {
   const origin = req.headers.origin as string | undefined;
   if (origin) {
     for (const pattern of ALLOWED_ORIGINS) {
@@ -355,8 +355,20 @@ async function handleRest(
   // Proxy to MM
   const proxyUrl = req.url || "";
   const targetUrl = `${MM_INTERNAL_URL}${proxyUrl}`;
+
+  // Fast-path: reject oversized requests before buffering any body data.
+  // Only applies when the client sends a Content-Length header.
+  const maxBodyBytes = Number(process.env.MAX_BODY_BYTES || DEFAULT_MAX_BODY_BYTES);
+  const declaredLength = parseInt(req.headers["content-length"] || "0", 10);
+  if (!isNaN(declaredLength) && declaredLength > maxBodyBytes) {
+    req.resume(); // drain so the socket stays healthy
+    res.writeHead(413, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Payload too large" }));
+    return;
+  }
+
   try {
-    const body = await readBody(req);
+    const body = await readBody(req, maxBodyBytes);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${creds.mmToken}`,
     };
@@ -417,6 +429,11 @@ async function handleRest(
   } catch (e: any) {
     console.error(`[proxy] REST error: ${e.message}`);
     if (!res.headersSent) {
+      if (e?.message === "Payload too large") {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Payload too large" }));
+        return;
+      }
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Upstream error" }));
     } else {
@@ -425,12 +442,34 @@ async function handleRest(
   }
 }
 
-function readBody(req: http.IncomingMessage): Promise<Buffer> {
+export const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
+
+export function readBody(
+  req: http.IncomingMessage,
+  maxBytes = Number(process.env.MAX_BODY_BYTES || DEFAULT_MAX_BODY_BYTES),
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
+    let total = 0;
+    let settled = false;
+
+    req.on("data", (chunk) => {
+      if (settled) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.length;
+      if (total > maxBytes) {
+        settled = true;
+        reject(new Error("Payload too large"));
+        // Drain remaining data without destroying the socket so the 413
+        // response can still be sent to the client.
+        req.resume();
+        return;
+      }
+      chunks.push(buf);
+    });
+
+    req.on("end", () => { if (!settled) resolve(Buffer.concat(chunks)); });
+    req.on("error", (err) => { if (!settled) { settled = true; reject(err); } });
   });
 }
 
@@ -530,25 +569,38 @@ function handleWsUpgrade(
   })();
 }
 
+// ── Test helpers ────────────────────────────────────────────────────────────────
+
+/** Clear in-process token/role caches. For test isolation only. */
+export function _clearCaches(): void {
+  tokenCache.clear();
+  roleCache.clear();
+}
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
-const server = http.createServer(handleRest);
-const wss = new WebSocketServer({ noServer: true });
+export function createServer() {
+  const server = http.createServer(handleRest);
+  const wss = new WebSocketServer({ noServer: true });
 
-server.on("upgrade", (req, socket, head) => {
-  const urlPath = (req.url || "").split("?")[0];
-  if (urlPath.startsWith("/api/v4/websocket")) {
-    handleWsUpgrade(wss, req, socket, head);
-  } else {
-    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-    socket.destroy();
-  }
-});
+  server.on("upgrade", (req, socket, head) => {
+    const urlPath = (req.url || "").split("?")[0];
+    if (urlPath.startsWith("/api/v4/websocket")) {
+      handleWsUpgrade(wss, req, socket, head);
+    } else {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+    }
+  });
 
-server.listen(PORT, () => {
-  console.log(`[chat-proxy] listening on :${PORT}`);
-  console.log(`[chat-proxy] MM backend: ${MM_INTERNAL_URL}`);
+  return server;
+}
 
-
-  console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
-});
+if (process.env.NODE_ENV !== "test") {
+  const server = createServer();
+  server.listen(PORT, () => {
+    console.log(`[chat-proxy] listening on :${PORT}`);
+    console.log(`[chat-proxy] MM backend: ${MM_INTERNAL_URL}`);
+    console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
+  });
+}

@@ -10,6 +10,7 @@ import { corsMiddleware } from "./middleware/cors";
 import { requestLogger } from "./middleware/logging";
 import { errorHandler } from "./middleware/errors";
 import { logger } from "./middleware/logging";
+import { helmetMiddleware, globalRateLimit } from "./middleware/security";
 
 // Public routes — exposed via GKE Ingress (api.octogee.com)
 import workspaceRoutes from "./routes/workspace";
@@ -26,8 +27,10 @@ import dataRoutes from "./routes/data";
 import agentRoutes from "./routes/agents";
 import internalBillingRoutes from "./routes/internal/billing";
 
-const app = express();
 const PORT = parseInt(process.env.PORT || "3001", 10);
+
+export function createApp() {
+const app = express();
 
 // ── Prometheus metrics ─────────────────────────────────────────────────────
 
@@ -51,7 +54,12 @@ const httpRequestTotal = new Counter({
 
 // ── Global middleware ──────────────────────────────────────────────────────
 
+// Security headers (Helmet) — must run before CORS so headers compose cleanly
+app.use(helmetMiddleware);
 app.use(corsMiddleware);
+
+// Global rate limit — 300 req/min/IP, skips health + metrics
+app.use(globalRateLimit);
 
 // Metrics middleware — track request duration and counts (skip /metrics itself)
 app.use((req, res, next) => {
@@ -122,11 +130,32 @@ app.use(errorHandler);
 
 // ── Start ──────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  logger.info(`workspace-api listening on port ${PORT}`, {
-    port: PORT,
-    env: process.env.K8S_NAMESPACE || "local",
+return app;
+}
+
+const app = createApp();
+
+if (process.env.NODE_ENV !== "test") {
+  // Safety check: INTERNAL_SERVICE_KEY must be set in all non-dev deployed environments.
+  // Dev (NODE_ENV=development or unset) is allowed to run without it — the middleware warns per-request.
+  // Staging/prod deployments MUST inject this via K8s Secret.
+  const env = process.env.K8S_NAMESPACE || process.env.NODE_ENV || "development";
+  const isProd = env !== "development" && env !== "local" && env !== "test";
+  if (isProd && !process.env.INTERNAL_SERVICE_KEY) {
+    logger.error(
+      "FATAL: INTERNAL_SERVICE_KEY is not set in a non-development environment. " +
+      "All /internal/* routes are unprotected. Set this secret via K8s Secret and restart."
+    );
+    // Do NOT exit — keep running so the pod doesn't crash-loop and lose logs,
+    // but log loudly so on-call can catch it.
+  }
+
+  app.listen(PORT, () => {
+    logger.info(`workspace-api listening on port ${PORT}`, {
+      port: PORT,
+      env: process.env.K8S_NAMESPACE || "local",
+    });
   });
-});
+}
 
 export default app;

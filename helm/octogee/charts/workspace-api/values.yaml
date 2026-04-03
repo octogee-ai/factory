@@ -70,6 +70,10 @@ secrets:
     secretName: discord-secrets
     secretKey: guild_id
     optional: true
+  - envName: INTERNAL_SERVICE_KEY
+    secretName: internal-service-key
+    secretKey: key
+    optional: false
 
 resources:
   requests:

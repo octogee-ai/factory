@@ -71,10 +71,16 @@ router.get("/google/callback", async (req: Request, res: Response, next: NextFun
     if (!userInfoRes.ok) throw new Error("Failed to get Google user info");
     const userInfo = await userInfoRes.json() as { email: string };
 
+    // Write safe metadata to integrations/ (client-readable)
     await db.collection("users").doc(uid).collection("integrations").doc("google").set({
       provider: "google", status: "connected", email: userInfo.email, scopes: GOOGLE_SCOPES,
-      tokens: { accessToken: tokenData.access_token, refreshToken: tokenData.refresh_token || null, expiresAt: Date.now() + tokenData.expires_in * 1000, tokenType: tokenData.token_type },
       connectedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+    });
+    // Write tokens to secrets/ (client-blocked, Admin SDK only)
+    await db.collection("users").doc(uid).collection("secrets").doc("google").set({
+      provider: "google",
+      tokens: { accessToken: tokenData.access_token, refreshToken: tokenData.refresh_token || null, expiresAt: Date.now() + tokenData.expires_in * 1000, tokenType: tokenData.token_type },
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     const target = sanitizeReturnUrl(returnUrl).startsWith("http") ? sanitizeReturnUrl(returnUrl) : `${APP_URL}${sanitizeReturnUrl(returnUrl)}`;
@@ -145,10 +151,16 @@ router.get("/microsoft/callback", async (req: Request, res: Response, next: Next
     const userInfo = await userInfoRes.json() as { mail?: string; userPrincipalName?: string };
     const email = userInfo.mail || userInfo.userPrincipalName || "unknown";
 
+    // Write safe metadata to integrations/ (client-readable)
     await db.collection("users").doc(uid).collection("integrations").doc("microsoft").set({
       provider: "microsoft", status: "connected", email, scopes: MICROSOFT_SCOPES,
-      tokens: { accessToken: tokenData.access_token, refreshToken: tokenData.refresh_token || null, expiresAt: Date.now() + tokenData.expires_in * 1000, tokenType: tokenData.token_type },
       connectedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+    });
+    // Write tokens to secrets/ (client-blocked, Admin SDK only)
+    await db.collection("users").doc(uid).collection("secrets").doc("microsoft").set({
+      provider: "microsoft",
+      tokens: { accessToken: tokenData.access_token, refreshToken: tokenData.refresh_token || null, expiresAt: Date.now() + tokenData.expires_in * 1000, tokenType: tokenData.token_type },
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     const target = sanitizeReturnUrl(returnUrl).startsWith("http") ? sanitizeReturnUrl(returnUrl) : `${APP_URL}${sanitizeReturnUrl(returnUrl)}`;
@@ -168,11 +180,19 @@ router.post("/imap", requireAuth, async (req: Request, res: Response, next: Next
     const { email, imapHost, imapPort, smtpHost, smtpPort, username, password } = req.body;
     if (!email || !imapHost || !username || !password) { res.status(400).json({ error: "Missing required fields" }); return; }
 
+    // Write safe metadata to integrations/ (client-readable)
     await db.collection("users").doc(uid).collection("integrations").doc("imap").set({
       provider: "imap", status: "pending", email,
-      imap: { host: imapHost, port: imapPort || 993, username, encryptedPassword: password /* TODO: encrypt */ },
-      smtp: { host: smtpHost || imapHost.replace("imap.", "smtp."), port: smtpPort || 587, username, encryptedPassword: password },
+      imap: { host: imapHost, port: imapPort || 993, username },
+      smtp: { host: smtpHost || imapHost.replace("imap.", "smtp."), port: smtpPort || 587, username },
       connectedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+    });
+    // Write credentials to secrets/ (client-blocked, Admin SDK only)
+    await db.collection("users").doc(uid).collection("secrets").doc("imap").set({
+      provider: "imap",
+      imap: { encryptedPassword: password /* TODO: encrypt at rest */ },
+      smtp: { encryptedPassword: password /* TODO: encrypt at rest */ },
+      updatedAt: FieldValue.serverTimestamp(),
     });
     res.json({ success: true });
   } catch (e) { next(e); }
@@ -184,10 +204,17 @@ router.post("/twilio", requireAuth, async (req: Request, res: Response, next: Ne
     const { accountSid, authToken, fromNumber } = req.body;
     if (!accountSid || !authToken || !fromNumber) { res.status(400).json({ error: "Missing required fields" }); return; }
 
+    // Write safe metadata to integrations/ (client-readable)
     await db.collection("users").doc(uid).collection("integrations").doc("twilio").set({
       provider: "twilio", status: "pending",
-      twilio: { accountSid, encryptedAuthToken: authToken /* TODO: encrypt */, fromNumber },
+      twilio: { accountSid, fromNumber },
       connectedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+    });
+    // Write credentials to secrets/ (client-blocked, Admin SDK only)
+    await db.collection("users").doc(uid).collection("secrets").doc("twilio").set({
+      provider: "twilio",
+      twilio: { encryptedAuthToken: authToken /* TODO: encrypt at rest */ },
+      updatedAt: FieldValue.serverTimestamp(),
     });
     res.json({ success: true });
   } catch (e) { next(e); }
@@ -203,6 +230,8 @@ router.post("/disconnect", requireAuth, async (req: Request, res: Response, next
     await db.collection("users").doc(uid).collection("integrations").doc(service).set({
       provider: service, status: "disconnected", updatedAt: FieldValue.serverTimestamp(),
     });
+    // Remove credentials from secrets/ on disconnect
+    await db.collection("users").doc(uid).collection("secrets").doc(service).delete();
     res.json({ success: true });
   } catch (e) { next(e); }
 });

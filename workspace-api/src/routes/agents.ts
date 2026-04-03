@@ -3,7 +3,7 @@
  * Migrated from functions/src/triggers/{activateAgent,deprovisionAgents}.ts
  */
 import { Router, Request, Response, NextFunction } from "express";
-import { requireApiKey, requireAdmin } from "../middleware/auth";
+import { requireAgentKey, requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db, FieldValue } from "../lib/db";
 
@@ -28,7 +28,7 @@ const ALL_ROLES = ["coach", "alex", "morgan", "riley", "robert"] as const;
 
 // ── POST /activate — activate a specialist agent ──────────────────────────
 
-router.post("/activate", requireApiKey, async (req: Request, res: Response, next: NextFunction) => {
+router.post("/activate", requireAgentKey, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { uid, role, requestedBy } = req.body as { uid?: string; role?: string; requestedBy?: string };
 

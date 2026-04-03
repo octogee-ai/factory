@@ -2,13 +2,22 @@
  * Auth middleware — replaces 4 different auth patterns across 15+ Cloud Functions.
  *
  * Patterns consolidated:
- *   1. requireAuth()    — Firebase ID token from `Authorization: Bearer <token>`
- *   2. requireAdmin()   — requireAuth() + admin role check in Firestore
- *   3. requireApiKey()  — `X-Agent-Key` header (service-to-service from gateway)
- *   4. (no middleware)   — public endpoints get no auth middleware
+ *   1. requireAuth()               — Firebase ID token from `Authorization: Bearer <token>`
+ *   2. requireAdmin()              — requireAuth() + admin role check in Firestore
+ *   3. requireInternalServiceAuth() — internal service-to-service calls (gateway, provisioner, cron)
+ *                                    Validates `X-Internal-Service-Key` against INTERNAL_SERVICE_KEY env var.
+ *   4. requireAgentKey()           — `X-Agent-Key` header for agent/user-scoped calls
+ *                                    Header presence only; value is validated per-route against user doc.
+ *   5. (no middleware)             — public endpoints get no auth middleware
  *
  * Attaches `req.uid`, `req.user`, `req.isAdmin` to the request for downstream use.
+ *
+ * INTERNAL_SERVICE_KEY: shared secret injected via K8s Secret into workspace-api, gateway,
+ * provisioner, and any K8s CronJobs that call /internal/* routes. Rotate via K8s Secret update.
+ * If unset in dev/test the middleware logs a warning and allows the request so local dev stays
+ * friction-free; this permissive fallback MUST NOT ship to production (enforced by startup check).
  */
+import * as crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { auth, db } from "../lib/db";
 import { logger } from "./logging";
@@ -78,20 +87,90 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
 }
 
 /**
- * Verify X-Agent-Key header (gateway → workspace-api service-to-service auth).
+ * requireInternalServiceAuth — validates that the caller is a trusted internal service.
+ *
+ * Expects header: `X-Internal-Service-Key: <value>`
+ * The value is compared (constant-time) against process.env.INTERNAL_SERVICE_KEY.
+ *
+ * In production INTERNAL_SERVICE_KEY must be set. Startup code in index.ts warns loudly
+ * if it's missing so the omission is never silent in deployed environments.
+ *
+ * In development (INTERNAL_SERVICE_KEY unset): logs a warning and allows the request so
+ * local work remains frictionless. This is intentionally a loud no-op, not silent bypass.
+ *
+ * Used by: /internal/billing/*, scheduled CronJobs, provisioner service.
  */
-export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
+export function requireInternalServiceAuth(req: Request, res: Response, next: NextFunction): void {
+  const configuredSecret = process.env.INTERNAL_SERVICE_KEY;
+
+  if (!configuredSecret) {
+    // Dev/test fallback — allow but make noise
+    logger.warn(
+      "INTERNAL_SERVICE_KEY is not set — internal auth is DISABLED. " +
+      "This must not happen in production."
+    );
+    next();
+    return;
+  }
+
+  const provided = req.headers["x-internal-service-key"] as string | undefined;
+  if (!provided) {
+    res.status(401).json({ error: "X-Internal-Service-Key header required" });
+    return;
+  }
+
+  // Constant-time comparison to prevent timing attacks
+  let valid = false;
+  try {
+    valid =
+      provided.length === configuredSecret.length &&
+      crypto.timingSafeEqual(
+        Buffer.from(provided, "utf8"),
+        Buffer.from(configuredSecret, "utf8")
+      );
+  } catch {
+    valid = false;
+  }
+
+  if (!valid) {
+    logger.warn(`Internal service auth rejected from ${req.ip} — invalid key`);
+    res.status(401).json({ error: "Invalid internal service key" });
+    return;
+  }
+
+  next();
+}
+
+/**
+ * requireAgentKey — verifies that an X-Agent-Key header is present.
+ *
+ * This is a presence-only check; the actual key value is validated per-route
+ * against the agent's stored API key in Firestore (see agents.ts activate route).
+ * Do NOT use this for routes that don't do their own downstream value validation.
+ *
+ * Used by: /internal/agents/* (which validate key against users/{uid}/settings/api)
+ */
+export function requireAgentKey(req: Request, res: Response, next: NextFunction): void {
   const key = req.headers["x-agent-key"] as string | undefined;
   if (!key) {
     res.status(401).json({ error: "X-Agent-Key header required" });
     return;
   }
 
-  // Validate against the agent's stored API key
-  // The key format is typically the agent slug, looked up in Firestore
-  // For now, this passes the key through — individual routes validate against their agent doc
   (req as any).agentKey = key;
   next();
+}
+
+/**
+ * @deprecated Use requireInternalServiceAuth() for /internal/* routes,
+ * or requireAgentKey() for agent-scoped routes that validate the key downstream.
+ *
+ * Left here so any callers not yet migrated get a compile error rather than silent bypass.
+ * Remove once all call sites are updated.
+ */
+export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
+  // Keep the X-Agent-Key check for backward compat during migration
+  requireAgentKey(req, res, next);
 }
 
 /**

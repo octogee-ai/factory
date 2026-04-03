@@ -193,7 +193,28 @@ else
   ksecret octogee-github --from-literal=token=""
 fi
 
-# ── 9. Stripe secrets ─────────────────────────────────────────────────────
+# ── 9. Internal service key (workspace-api ↔ gateway ↔ CronJob) ─────────
+# Used by requireInternalServiceAuth() on /internal/billing/* routes.
+# One shared secret across workspace-api, gateway, and the trial-expiry CronJob.
+info "internal-service-key"
+INTERNAL_SERVICE_KEY=$(sm_get "INTERNAL_SERVICE_KEY" "$CLUSTER_PROJECT" 2>/dev/null || echo "")
+if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
+  INTERNAL_SERVICE_KEY=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
+  info "  Generating new INTERNAL_SERVICE_KEY — saving to Secret Manager ($CLUSTER_PROJECT)..."
+  if echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
+       --data-file=- --project="$CLUSTER_PROJECT" \
+       --replication-policy=automatic --quiet 2>/dev/null; then
+    ok "  Created SM secret: INTERNAL_SERVICE_KEY"
+  elif echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
+       --data-file=- --project="$CLUSTER_PROJECT" --quiet 2>/dev/null; then
+    ok "  Updated SM secret: INTERNAL_SERVICE_KEY"
+  else
+    warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
+  fi
+fi
+ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
+
+# ── 10. Stripe secrets ────────────────────────────────────────────────────
 # Required by workspace-api at startup (not optional). Use placeholder if not
 # configured yet — billing is sandbox mode until real keys are set.
 info "stripe-secrets"
@@ -209,7 +230,7 @@ ksecret stripe-secrets \
   --from-literal=secret_key="${STRIPE_SECRET_KEY:-placeholder}" \
   --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}"
 
-# ── 10. GCP Service Account key ───────────────────────────────────────────
+# ── 11. GCP Service Account key ───────────────────────────────────────────
 # Used by workspace-api and gateway for GCP API access (Workload Identity
 # preferred on prod; SA key is a fallback for services that need it directly).
 info "octogee-sa-key"
