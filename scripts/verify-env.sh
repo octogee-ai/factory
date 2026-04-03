@@ -10,12 +10,13 @@
 # Checks (in order):
 #   1. kubectl context
 #   2. Cloud SQL proxy
-#   3. Mattermost
-#   4. Gitea
+#   3. Mattermost infra + bootstrap secret completeness
+#   4. Gitea infra + token secret presence
 #   5. Gateway
+#   5b. Ingress / endpoint health
 #   6. Firebase Hosting (site)
-#   7. Cloud Functions (sample)
-#   8. Chat Proxy (Cloud Run)
+#   7. Cloud Functions / supporting services
+#   8. chat-proxy deployment + route health
 #
 # Exit codes:
 #   0 — all green
@@ -31,15 +32,37 @@ GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 pass()  { echo -e "  ${GREEN}✅ $1${NC}"; }
-fail()  { echo -e "  ${RED}❌ $1${NC}"; FAILURES+=("$1"); }
+fail()  {
+  local msg="$1"
+  echo -e "  ${RED}❌ $msg${NC}"
+  FAILURES+=("$msg")
+  case "$CONTEXT_SECTION" in
+    infra) INFRA_FAILS=$((INFRA_FAILS + 1)) ;;
+    secrets) SECRET_FAILS=$((SECRET_FAILS + 1)) ;;
+    bootstrap) BOOTSTRAP_FAILS=$((BOOTSTRAP_FAILS + 1)) ;;
+  esac
+}
 warn()  { echo -e "  ${YELLOW}⚠️  $1${NC}"; WARNINGS+=("$1"); }
 info()  { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
 header(){ echo -e "\n${CYAN}── $1 ──────────────────────────────────────────────${NC}"; }
+status(){
+  local okmsg="$1"; local badmsg="$2"; local value="$3"
+  if [[ -n "$value" ]]; then
+    pass "$okmsg"
+  else
+    fail "$badmsg"
+  fi
+}
+set_section(){ CONTEXT_SECTION="$1"; }
 
 FAILURES=()
 WARNINGS=()
 FIX=false
 ENV=""
+INFRA_FAILS=0
+SECRET_FAILS=0
+BOOTSTRAP_FAILS=0
+CONTEXT_SECTION=""
 
 for arg in "$@"; do
   case $arg in
@@ -104,6 +127,7 @@ echo -e "  Site:      ${BOLD}${SITE_URL}${NC}"
 echo -e "  Time:      $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
 # ── 1. kubectl context ────────────────────────────────────────────────────────
+set_section infra
 header "1. kubectl Context"
 gcloud container clusters get-credentials "$CLUSTER_NAME" \
   --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
@@ -120,6 +144,7 @@ else
 fi
 
 # ── 2. Cloud SQL Proxy ────────────────────────────────────────────────────────
+set_section infra
 header "2. Cloud SQL Proxy"
 PROXY_READY=$(kubectl get deployment cloud-sql-proxy -n "$NAMESPACE" \
   -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
@@ -136,6 +161,7 @@ else
 fi
 
 # ── 3. Mattermost ─────────────────────────────────────────────────────────────
+set_section infra
 header "3. Mattermost"
 MM_READY=$(kubectl get deployment mattermost -n "$NAMESPACE" \
   -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
@@ -154,14 +180,37 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   else
     warn "DB may not be Cloud SQL — check datasource"
   fi
+
+  set_section secrets
+  MM_ADMIN_USER=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_user}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  MM_ADMIN_PASS=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_pass}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  MM_ADMIN_TOKEN=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  MM_ADMIN_USER_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_user_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  MM_BOT_TOKEN=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.bot_token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  MM_BOT_USER_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.bot_user_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  MM_TEAM_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.team_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  INTERNAL_SERVICE_KEY=$(kubectl get secret internal-service-key -n "$NAMESPACE" -o jsonpath='{.data.key}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  GITEA_TOKEN=$(kubectl get secret gitea-token -n "$NAMESPACE" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+
+  status "mattermost-gateway admin_user present" "mattermost-gateway admin_user missing" "$MM_ADMIN_USER"
+  status "mattermost-gateway admin_pass present" "mattermost-gateway admin_pass missing" "$MM_ADMIN_PASS"
+  status "mattermost-gateway admin_token present" "mattermost-gateway admin_token missing (workspace-api /admin-token will fail)" "$MM_ADMIN_TOKEN"
+  status "mattermost-gateway admin_user_id present" "mattermost-gateway admin_user_id missing" "$MM_ADMIN_USER_ID"
+  status "mattermost-gateway bot_token present" "mattermost-gateway bot_token missing (chat-proxy will fail)" "$MM_BOT_TOKEN"
+  status "mattermost-gateway bot_user_id present" "mattermost-gateway bot_user_id missing" "$MM_BOT_USER_ID"
+  status "mattermost-gateway team_id present" "mattermost-gateway team_id missing" "$MM_TEAM_ID"
+  status "internal-service-key present" "internal-service-key missing" "$INTERNAL_SERVICE_KEY"
+  status "gitea-token present" "gitea-token missing" "$GITEA_TOKEN"
+  set_section bootstrap
 else
   fail "Mattermost not ready (readyReplicas=${MM_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh --env=$ENV --yes"
+    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
   fi
 fi
 
 # ── 4. Gitea ──────────────────────────────────────────────────────────────────
+set_section infra
 header "4. Gitea"
 # Gitea deployment name varies: "gitea" (standalone) or "octogee-gitea" (Helm umbrella)
 GITEA_DEPLOY=$(kubectl get deployment -n "$NAMESPACE" -o name 2>/dev/null | grep gitea | head -1 | sed 's|deployment.apps/||' || echo "")
@@ -174,11 +223,18 @@ GITEA_CHART=$(helm list -n "$NAMESPACE" -o json 2>/dev/null \
 
 if [[ "${GITEA_READY:-0}" -ge 1 ]]; then
   pass "Running (image: $GITEA_IMAGE, chart: $GITEA_CHART)"
-  # Check org exists
   GITEA_TOKEN_B64=$(kubectl get secret gitea-token -n "$NAMESPACE" \
     -o jsonpath='{.data.token}' 2>/dev/null || echo "")
   if [[ -n "$GITEA_TOKEN_B64" ]]; then
     pass "API token secret present"
+
+    set_section bootstrap
+    GITEA_SVC=$(kubectl get svc -n "$NAMESPACE" -o name 2>/dev/null | grep gitea-http | head -1 | sed 's|service/||' || echo "octogee-gitea-http")
+    GITEA_ORG_CHECK=$(kubectl exec deployment/octogee-gateway -n "$NAMESPACE" -c gateway -- \
+      node -e "const h=require('http');const t=process.env.GIT_API_TOKEN||'';const o={hostname:'$GITEA_SVC.$NAMESPACE.svc.cluster.local',port:3000,path:'/api/v1/orgs/octogee',headers:{Authorization:'token '+t}};h.get(o,r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
+      >/dev/null 2>&1 && echo ok || echo "")
+    status "Gitea org/API trust check passed from gateway pod" "Gitea org/API trust check failed from gateway pod" "$GITEA_ORG_CHECK"
+    set_section infra
   else
     warn "gitea-token secret missing — provisioner cannot create repos"
     if $FIX; then
@@ -193,6 +249,7 @@ else
 fi
 
 # ── 5. Gateway ────────────────────────────────────────────────────────────────
+set_section infra
 header "5. Gateway"
 GW_DESIRED=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
   -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
@@ -251,6 +308,7 @@ else
 fi
 
 # ── 5b. GKE Ingresses ─────────────────────────────────────────────────────────
+set_section infra
 header "5b. Ingresses"
 INGRESSES=$(kubectl --context "$K8S_CONTEXT" get ingress -n "$NAMESPACE" -o json 2>/dev/null)
 if [[ -z "$INGRESSES" || "$INGRESSES" == "null" ]]; then
@@ -272,6 +330,7 @@ else
 fi
 
 # ── 5c. Managed Certificates ─────────────────────────────────────────────────
+set_section infra
 header "5c. Managed Certificates"
 CERTS=$(kubectl --context "$K8S_CONTEXT" get managedcertificate -n "$NAMESPACE" -o json 2>/dev/null)
 if [[ -z "$CERTS" || "$CERTS" == "null" ]]; then
@@ -295,6 +354,7 @@ else
 fi
 
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
+set_section bootstrap
 header "5d. Endpoint Health"
 for ENDPOINT in "api" "chat"; do
   if [[ "$ENV" == "test" ]]; then
@@ -313,6 +373,7 @@ for ENDPOINT in "api" "chat"; do
 done
 
 # ── 6. Site (Firebase Hosting) ────────────────────────────────────────────────
+set_section infra
 header "6. Site (Firebase Hosting)"
 SITE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$SITE_URL" 2>/dev/null || echo "000")
 if [[ "$SITE_STATUS" == "200" ]]; then
@@ -325,6 +386,7 @@ else
 fi
 
 # Check deployed functions count (post-CF migration: only Firestore triggers remain, ~15 expected)
+set_section infra
 header "7. Cloud Functions"
 CF_COUNT=$(gcloud run services list --project="$GCP_PROJECT" \
   --region=us-central1 --format="value(name)" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
@@ -339,31 +401,43 @@ else
 fi
 
 # ── 8. Chat Proxy ─────────────────────────────────────────────────────────────
-header "8. Chat Proxy (Cloud Run)"
-PROXY_STATUS=$(gcloud run services describe "$CHAT_PROXY_SERVICE" \
-  --project="$GCP_PROJECT" --region=us-central1 \
-  --format="value(status.conditions[0].status)" 2>/dev/null || echo "NotFound")
-PROXY_URL=$(gcloud run services describe "$CHAT_PROXY_SERVICE" \
-  --project="$GCP_PROJECT" --region=us-central1 \
-  --format="value(status.url)" 2>/dev/null || echo "")
-PROXY_IMAGE_TAG=$(gcloud run services describe "$CHAT_PROXY_SERVICE" \
-  --project="$GCP_PROJECT" --region=us-central1 \
-  --format="value(spec.template.spec.containers[0].image)" 2>/dev/null \
-  | grep -o ':[^:]*$' | tr -d ':' || echo "unknown")
+set_section infra
+header "8. chat-proxy"
+CHAT_DEPLOY_READY=$(kubectl get deployment chat-proxy -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+CHAT_IMAGE=$(kubectl get deployment chat-proxy -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+CHAT_ENDPOINTS=$(kubectl get endpoints chat-proxy -n "$NAMESPACE" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || echo "")
 
-if [[ "$PROXY_STATUS" == "True" ]]; then
-  pass "$CHAT_PROXY_SERVICE: ready"
-  info "URL: $PROXY_URL"
-  info "Image: $PROXY_IMAGE_TAG"
-elif [[ "$ENV" == "test" && "$PROXY_STATUS" == "NotFound" ]]; then
-  # Chat proxy is not auto-deployed on test — it's a manual step run once per env lifetime
-  warn "$CHAT_PROXY_SERVICE: not deployed (run ./scripts/setup-chat-proxy.sh --env=test to deploy)"
+if [[ "${CHAT_DEPLOY_READY:-0}" -ge 1 ]]; then
+  pass "chat-proxy deployment ready (image: $CHAT_IMAGE)"
+  status "chat-proxy service has endpoints" "chat-proxy service has no ready endpoints" "$CHAT_ENDPOINTS"
 else
-  fail "$CHAT_PROXY_SERVICE: status=$PROXY_STATUS"
+  fail "chat-proxy deployment not ready (readyReplicas=${CHAT_DEPLOY_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-chat-proxy.sh --env=$ENV"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f helm/octogee/values.${ENV}.yaml -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
+
+CHAT_HEALTH_URL=$(if [[ "$ENV" == "test" ]]; then echo "https://chat-test.octogee.com/health"; else echo "https://chat.octogee.com/health"; fi)
+CHAT_HEALTH_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$CHAT_HEALTH_URL" 2>/dev/null || echo "000")
+if [[ "$CHAT_HEALTH_CODE" == "200" ]]; then
+  pass "$CHAT_HEALTH_URL → $CHAT_HEALTH_CODE"
+else
+  warn "$CHAT_HEALTH_URL → HTTP $CHAT_HEALTH_CODE"
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/chat-proxy --since=30m | tail -100"
+  fi
+fi
+
+set_section bootstrap
+LEGACY_MM_TEAM=$(kubectl get deployment chat-proxy -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MM_TEAM_ID")].value}' 2>/dev/null || echo "")
+MM_COMMUNITY_TEAM=$(kubectl get deployment chat-proxy -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MM_COMMUNITY_TEAM_ID")].value}' 2>/dev/null || echo "")
+if [[ -n "$LEGACY_MM_TEAM" ]]; then
+  warn "chat-proxy still carries dead MM_TEAM_ID env config. Remove it; MM_COMMUNITY_TEAM_ID is the only valid team env now."
+fi
+if [[ -n "$MM_COMMUNITY_TEAM" ]]; then
+  pass "chat-proxy uses MM_COMMUNITY_TEAM_ID (expected)"
+fi
+set_section infra
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
@@ -371,8 +445,27 @@ echo -e "${ENV_COLOR}═══════════════════�
 echo -e "${BOLD}  Summary — ${ENV_LABEL}${NC}"
 echo -e "${ENV_COLOR}════════════════════════════════════════════════════════════${NC}"
 
+echo ""
+echo -e "  ${BOLD}State buckets:${NC}"
+if [[ $INFRA_FAILS -eq 0 ]]; then
+  echo -e "    ${GREEN}✓ Infra state healthy${NC}"
+else
+  echo -e "    ${RED}✗ Infra state has $INFRA_FAILS failure(s)${NC}"
+fi
+if [[ $SECRET_FAILS -eq 0 ]]; then
+  echo -e "    ${GREEN}✓ Secret state healthy${NC}"
+else
+  echo -e "    ${RED}✗ Secret state has $SECRET_FAILS failure(s)${NC}"
+fi
+if [[ $BOOTSTRAP_FAILS -eq 0 ]]; then
+  echo -e "    ${GREEN}✓ Bootstrap state healthy${NC}"
+else
+  echo -e "    ${RED}✗ Bootstrap state has $BOOTSTRAP_FAILS failure(s)${NC}"
+fi
+
 if [[ ${#FAILURES[@]} -eq 0 && ${#WARNINGS[@]} -eq 0 ]]; then
-  echo -e "\n  ${GREEN}${BOLD}🎉 ALL GREEN — Environment is healthy${NC}\n"
+  echo -e "\n  ${GREEN}${BOLD}🎉 ALL GREEN — Environment is healthy${NC}"
+  echo -e "  ${GREEN}Verdict: safe to deploy / promote.${NC}\n"
   exit 0
 fi
 
@@ -388,7 +481,16 @@ if [[ ${#FAILURES[@]} -gt 0 ]]; then
   for f in "${FAILURES[@]}"; do
     echo -e "    - $f"
   done
+
   echo ""
+  if [[ $INFRA_FAILS -gt 0 ]]; then
+    echo -e "  ${RED}Verdict: infra is not healthy. Repair before deploy/promotion.${NC}"
+  elif [[ $SECRET_FAILS -gt 0 ]]; then
+    echo -e "  ${YELLOW}Verdict: infra may be up, but secret state is broken. Repair secrets/bootstrap before trusting the environment.${NC}"
+  elif [[ $BOOTSTRAP_FAILS -gt 0 ]]; then
+    echo -e "  ${YELLOW}Verdict: infra/secrets may be mostly up, but app bootstrap state is not trustworthy. Repair before promotion.${NC}"
+  fi
+
   if ! $FIX; then
     echo -e "  ${YELLOW}Run with --fix to see remediation commands.${NC}"
   fi
@@ -396,5 +498,5 @@ if [[ ${#FAILURES[@]} -gt 0 ]]; then
   exit 1
 fi
 
-echo ""
+echo -e "\n  ${YELLOW}Verdict: usable with warnings, but do not promote blindly.${NC}\n"
 exit 0

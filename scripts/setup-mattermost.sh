@@ -79,6 +79,14 @@ ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
+status() {
+  local label="$1" value="$2"
+  if [[ -n "$value" ]]; then
+    echo -e "  ${GREEN}✓${NC} $label"
+  else
+    echo -e "  ${RED}✗${NC} $label"
+  fi
+}
 
 confirm() {
   $YES && return 0
@@ -128,6 +136,7 @@ kubectl config use-context "$K8S_CONTEXT"
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context is '$CURRENT_CTX', expected '$K8S_CONTEXT'."
 ok "kubectl context: $CURRENT_CTX"
+info "This script owns Mattermost bootstrap/app state: admin user, admin PAT, bot token, team, and the mattermost-gateway secret inputs."
 
 # Ensure namespace exists
 kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$K8S_NAMESPACE"
@@ -185,7 +194,9 @@ ok "mattermost-cloud-sql secret created"
 # ── 4. Wait for Mattermost (Helm must already be deployed or running) ─────
 info "Checking if Mattermost is deployed..."
 if ! kubectl get deployment mattermost -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
-  info "Mattermost not deployed yet — run Helm first, then re-run this script to bootstrap."
+  info "Mattermost not deployed yet — Helm owns infra state, this script owns bootstrap state."
+  echo ""
+  echo "  Next step: deploy Helm first, then re-run this script"
   echo ""
   echo "  helm upgrade --install octogee helm/octogee \\"
   echo "    -f helm/octogee/values.${ENV}.yaml \\"
@@ -193,7 +204,7 @@ if ! kubectl get deployment mattermost -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
   echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
   echo "    --kube-context $K8S_CONTEXT"
   echo ""
-  ok "K8s secrets ready. Deploy Helm then re-run to complete bootstrap."
+  ok "K8s secrets ready. Deploy Helm then re-run to complete Mattermost bootstrap."
   exit 0
 fi
 
@@ -380,6 +391,39 @@ if [[ -n "${MM_BOT_TOKEN:-}" && -n "${MM_ADMIN_USER:-}" && -n "${MM_ADMIN_PASS:-
   ok "mattermost-gateway K8s secret updated"
 fi
 set -u
+
+echo ""
+echo -e "${CYAN}Mattermost bootstrap summary${NC}"
+status "MM_ADMIN_USER set" "${MM_ADMIN_USER:-}"
+status "MM_ADMIN_PASS set" "${MM_ADMIN_PASS:-}"
+status "MM_ADMIN_USER_ID set" "${MM_ADMIN_USER_ID:-}"
+status "MM_ADMIN_PAT set (required for workspace-api /admin-token)" "${MM_ADMIN_PAT:-}"
+status "MM_TEAM_ID set" "${MM_TEAM_ID:-}"
+status "MM_BOT_USER_ID set" "${MM_BOT_USER_ID:-}"
+status "MM_BOT_TOKEN set (required for chat-proxy)" "${MM_BOT_TOKEN:-}"
+
+echo ""
+if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_BOT_USER_ID:-}" && -n "${MM_BOT_TOKEN:-}" && -n "${MM_ADMIN_USER_ID:-}" ]]; then
+  ok "mattermost-gateway inputs are complete"
+  echo ""
+  echo "  Next steps:"
+  echo "    1. If Helm is not deployed yet, run setup-gateway / helm upgrade"
+  echo "    2. If this was a repair on an existing env, restart dependent workloads:"
+  echo "       kubectl rollout restart deployment/chat-proxy -n $K8S_NAMESPACE"
+  echo "       kubectl rollout restart deployment/workspace-api -n $K8S_NAMESPACE"
+  echo "    3. Re-test admin chat / Mattermost-backed routes"
+else
+  warn "Mattermost bootstrap is still incomplete"
+  echo ""
+  echo "  Expected healthy state includes:"
+  echo "    - admin PAT for workspace-api"
+  echo "    - bot token + bot user id + team id for chat-proxy"
+  echo ""
+  echo "  Next steps:"
+  echo "    1. Review warnings above"
+  echo "    2. Re-run ./scripts/setup-mattermost.sh --env=$ENV"
+  echo "    3. Do NOT trust admin chat until the missing values are fixed"
+fi
 
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"

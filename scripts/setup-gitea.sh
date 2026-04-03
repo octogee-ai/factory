@@ -74,6 +74,14 @@ ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
+status() {
+  local label="$1" value="$2"
+  if [[ -n "$value" ]]; then
+    echo -e "  ${GREEN}✓${NC} $label"
+  else
+    echo -e "  ${RED}✗${NC} $label"
+  fi
+}
 
 save_env() {
   local key="$1" val="$2"
@@ -100,6 +108,7 @@ kubectl config use-context "$K8S_CONTEXT"
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context mismatch: '$CURRENT_CTX'"
 ok "kubectl context: $CURRENT_CTX"
+info "This script owns Gitea bootstrap/app state: admin token, org existence, and the gitea-token secret consumed by gateway workflows."
 
 # ── 1. Get Gitea admin password ───────────────────────────────────────────
 info "Reading Gitea admin password from Secret Manager..."
@@ -118,7 +127,7 @@ ok "Admin password retrieved"
 # ── 2. Wait for Gitea ────────────────────────────────────────────────────
 info "Checking if Gitea is deployed..."
 kubectl get deployment -n "$K8S_NAMESPACE" -l "app.kubernetes.io/name=gitea" >/dev/null 2>&1 || \
-  fail "Gitea not deployed. Run: helm upgrade --install octogee helm/octogee ... first."
+  fail "Gitea not deployed. Helm owns infra state; run helm upgrade/install first, then re-run this script for bootstrap state."
 
 info "Waiting for Gitea (up to 120s)..."
 kubectl wait --for=condition=available \
@@ -222,6 +231,30 @@ ok "gitea-token K8s secret created"
 # Kill port-forward
 kill $PF_PID 2>/dev/null || true
 trap - EXIT
+
+echo ""
+echo -e "${CYAN}Gitea bootstrap summary${NC}"
+status "Gitea admin password present" "$GITEA_ADMIN_PASS"
+status "Org 'octogee' reachable" "$(curl -s -u "octogee-admin:$GITEA_ADMIN_PASS" http://localhost:13000/api/v1/orgs/octogee 2>/dev/null | grep -o '"username":"octogee"' || true)"
+status "GIT_API_TOKEN created" "$GIT_API_TOKEN"
+status "gitea-token secret materialized" "$(kubectl get secret gitea-token -n "$K8S_NAMESPACE" -o jsonpath='{.metadata.name}' 2>/dev/null || true)"
+
+echo ""
+if [[ -n "$GIT_API_TOKEN" ]]; then
+  ok "Gitea bootstrap state looks healthy"
+  echo ""
+  echo "  Next steps:"
+  echo "    1. Run ./scripts/setup-gateway.sh --env=$ENV if gateway deploy/update is next"
+  echo "    2. If gateway/workspace features were already deployed, restart workloads that read gitea-token"
+  echo "    3. Re-test workspace repo/file flows"
+else
+  warn "Gitea bootstrap is incomplete"
+  echo ""
+  echo "  Next steps:"
+  echo "    1. Review the token/org warnings above"
+  echo "    2. Re-run ./scripts/setup-gitea.sh --env=$ENV"
+  echo "    3. Do not trust repo provisioning until gitea-token is present"
+fi
 
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"

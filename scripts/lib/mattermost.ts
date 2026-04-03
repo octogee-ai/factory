@@ -154,7 +154,6 @@ export async function provisionMattermostUser(
   uid: string, slug: string, firstName: string, email: string,
   workspaceName?: string, lastName?: string, photoURL?: string,
 ): Promise<Record<string, any>> {
-  const MM_TEAM_ID = process.env.MM_TEAM_ID; // fallback for migration
   const MM_BOT_USER_ID = process.env.MM_BOT_USER_ID;
   const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
   const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL || process.env.MM_URL;
@@ -163,9 +162,6 @@ export async function provisionMattermostUser(
   if (!process.env.MM_URL || !process.env.MM_BOT_TOKEN || !MM_BOT_USER_ID) {
     log(`[mattermost] skipping — MM env vars not set`);
     return {};
-  }
-  if (!MM_TEAM_ID) {
-    log(`[mattermost] ⚠ MM_TEAM_ID not set — will create workspace team only (no fallback)`);
   }
 
   const generatePassword = (): string => {
@@ -244,16 +240,12 @@ export async function provisionMattermostUser(
     if (team) {
       teamId = team.id;
       log(`[mattermost] workspace team created: ${teamName} (${team.id})`);
-    } else if (MM_TEAM_ID) {
-      // Graceful degradation: fall back to shared team
-      teamId = MM_TEAM_ID;
-      log(`[mattermost] ⚠ failed to create workspace team ${teamName} — falling back to shared team`);
     } else {
-      log(`[mattermost] ⚠ failed to create workspace team ${teamName} and no MM_TEAM_ID fallback`);
+      log(`[mattermost] ⚠ failed to create workspace team ${teamName}`);
       return {};
     }
 
-    if (!teamId) return {};  // TS narrowing — unreachable after fallback above
+    if (!teamId) return {};
 
     // Add user as team_admin of workspace team
     // Note: team_id is required in body for Team Edition (not just the URL)
@@ -294,7 +286,7 @@ export async function provisionMattermostUser(
     }
 
     // Join user to community team
-    const communityTeamId = MM_COMMUNITY_TEAM_ID || MM_TEAM_ID;
+    const communityTeamId = MM_COMMUNITY_TEAM_ID;
     if (communityTeamId && communityTeamId !== teamId) {
       await mmApiCall("POST", `/teams/${communityTeamId}/members`, {
         team_id: communityTeamId,
@@ -464,12 +456,10 @@ export async function createProjectChannel(
   customerMmUserId: string,
   projectName: string,
 ): Promise<string | null> {
-  const MM_TEAM_ID = process.env.MM_TEAM_ID;
   const MM_BOT_USER_ID = process.env.MM_BOT_USER_ID;
   const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
 
-  // Use provided teamId, fall back to MM_TEAM_ID for legacy workspaces
-  const effectiveTeamId = teamId || MM_TEAM_ID;
+  const effectiveTeamId = teamId;
   if (!process.env.MM_URL || !effectiveTeamId || !MM_BOT_USER_ID) {
     log(`[mattermost] skipping project channel — MM env vars not set`);
     return null;
@@ -517,8 +507,7 @@ export const COMMUNITY_CHANNELS = [
 export let communityChannelIds: string[] = [];
 
 export async function ensureCommunityChannels(): Promise<void> {
-  // Use MM_COMMUNITY_TEAM_ID (Phase 4), fall back to MM_TEAM_ID for migration
-  const communityTeamId = process.env.MM_COMMUNITY_TEAM_ID || process.env.MM_TEAM_ID;
+  const communityTeamId = process.env.MM_COMMUNITY_TEAM_ID;
   if (!process.env.MM_URL || !communityTeamId) {
     log("[community] skipping — MM env vars not set");
     return;

@@ -10,6 +10,12 @@ set -euo pipefail
 #
 # Reads from: .env.test / .env + Secret Manager (octogee project)
 #
+# IMPORTANT:
+# - This script owns K8s secret materialization.
+# - It does NOT fully bootstrap Mattermost or Gitea app state.
+# - If Mattermost admin/bot/team/PAT state is missing or stale, run
+#   setup-mattermost.sh first, then re-run this script if needed.
+#
 # Usage:
 #   ./scripts/setup-secrets.sh --env=test [--yes]
 #   ./scripts/setup-secrets.sh --env=prod
@@ -59,6 +65,14 @@ ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
+status() {
+  local label="$1" value="$2"
+  if [[ -n "$value" ]]; then
+    echo -e "  ${GREEN}✓${NC} $label"
+  else
+    echo -e "  ${RED}✗${NC} $label"
+  fi
+}
 
 ksecret() {
   # idempotent: delete + create
@@ -96,6 +110,7 @@ gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 -
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 [[ "$(kubectl config current-context)" == "$K8S_CONTEXT" ]] || fail "Wrong kubectl context"
 ok "kubectl context: $K8S_CONTEXT"
+info "This script owns secret materialization into Kubernetes. It does not fully repair Mattermost/Gitea bootstrap state by itself."
 
 # Ensure namespace
 kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$K8S_NAMESPACE"
@@ -118,7 +133,9 @@ MM_TEAM_ID="${MM_TEAM_ID:-}"
 MM_BOT_USER_ID="${MM_BOT_USER_ID:-}"
 MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-}"
 set -u
-# Create even if empty — gateway treats these as optional
+# Create even if empty — but operationally, empty values are usually a smell.
+# chat-proxy/workspace-api may partially work and then fail in confusing ways.
+# If bot/admin/team fields are blank, run setup-mattermost.sh to repair app/bootstrap state.
 ksecret mattermost-gateway \
   --from-literal=bot_token="$MM_BOT_TOKEN" \
   --from-literal=admin_user="$MM_ADMIN_USER" \
@@ -126,6 +143,10 @@ ksecret mattermost-gateway \
   --from-literal=team_id="$MM_TEAM_ID" \
   --from-literal=bot_user_id="$MM_BOT_USER_ID" \
   --from-literal=admin_user_id="$MM_ADMIN_USER_ID"
+
+if [[ -z "$MM_BOT_TOKEN" || -z "$MM_TEAM_ID" || -z "$MM_BOT_USER_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
+  warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV before trusting this environment."
+fi
 
 # ── 3. Gitea admin ────────────────────────────────────────────────────────
 info "gitea-admin"
@@ -281,6 +302,29 @@ for sm_secret in \
 done
 
 # ── Done ──────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${CYAN}Secret completeness summary${NC}"
+status "mattermost-gateway / admin_user" "${MM_ADMIN_USER:-}"
+status "mattermost-gateway / admin_pass" "${MM_ADMIN_PASS:-}"
+status "mattermost-gateway / admin_user_id" "${MM_ADMIN_USER_ID:-}"
+status "mattermost-gateway / bot_token" "${MM_BOT_TOKEN:-}"
+status "mattermost-gateway / bot_user_id" "${MM_BOT_USER_ID:-}"
+status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
+status "internal-service-key" "${INTERNAL_SERVICE_KEY:-}"
+status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
+
+echo ""
+if [[ -z "${MM_BOT_TOKEN:-}" || -z "${MM_BOT_USER_ID:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
+  warn "Mattermost-related secret state is incomplete"
+  echo ""
+  echo "  Next steps:"
+  echo "    1. Run ./scripts/setup-mattermost.sh --env=$ENV"
+  echo "    2. Re-run ./scripts/setup-secrets.sh --env=$ENV $(if [[ "$YES" == "true" ]]; then echo "--yes"; fi) if you want a clean re-materialization"
+  echo "    3. Do not trust admin chat / chat-proxy until those values are present"
+else
+  ok "Required Mattermost secret inputs are present"
+fi
+
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}  All secrets created — ${ENV_LABEL}${NC}"
