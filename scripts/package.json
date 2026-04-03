@@ -5,12 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "provision": "tsx local-provisioner.ts",
-    "start": "pm2 start ecosystem.config.cjs",
-    "stop": "pm2 stop octogee-provisioner",
-    "restart": "pm2 restart octogee-provisioner",
-    "status": "pm2 status octogee-provisioner",
-    "logs": "pm2 logs octogee-provisioner"
+    "provision": "tsx local-provisioner.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

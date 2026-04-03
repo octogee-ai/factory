@@ -25,7 +25,7 @@ export const CUSTOMERS_DIR = path.join(OPENCLAW_DIR, "customers");
 // Templates: container default is /nucrew/templates; local dev falls back to ../templates
 export const TEMPLATES_DIR = process.env.OCTOGEE_TEMPLATES_DIR || path.resolve(__dirname, "..", "..", "templates");
 
-// Firebase credentials: explicit env var → default key file location → ADC
+// Firebase credentials: prefer GOOGLE_APPLICATION_CREDENTIALS; otherwise fall back to the local test key path when running outside Workload Identity.
 export const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS
   ?? path.join(OPENCLAW_DIR, "secrets", "octogee-test-sa-key.json");
 
