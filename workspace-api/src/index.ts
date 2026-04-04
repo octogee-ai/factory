@@ -28,6 +28,7 @@ import dataRoutes from "./routes/data";
 import agentRoutes from "./routes/agents";
 import internalBillingRoutes from "./routes/internal/billing";
 import internalNotificationRoutes from "./routes/internal/notifications";
+import internalEngagementRoutes from "./routes/internal/engagement";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
@@ -128,6 +129,7 @@ app.use("/internal/agents", agentRoutes);
 app.use("/internal/billing", internalBillingRoutes);
 app.use("/internal/notifications", notificationRoutes);
 app.use("/internal/notifications", internalNotificationRoutes);
+app.use("/internal/engagement", internalEngagementRoutes);
 
 // ── Global error handler ───────────────────────────────────────────────────
 
