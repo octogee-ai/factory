@@ -5,7 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "provision": "tsx local-provisioner.ts"
+    "provision": "tsx local-provisioner.ts",
+    "test": "npx vitest run __tests__"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
