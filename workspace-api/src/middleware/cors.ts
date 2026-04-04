@@ -1,23 +1,28 @@
 /**
- * CORS config — replaces setCorsHeaders() in 12 files + { cors: CORS_ORIGINS }.
+ * CORS middleware for workspace-api.
+ *
+ * Origins list is explicit and minimal — new people can understand
+ * it at a glance. Only localhost gets a regex (for dev flexibility).
  */
 import cors from "cors";
 
-export const CORS_ORIGINS: (string | RegExp)[] = [
-  /^https:\/\/octogee\.web\.app$/,
-  /^https:\/\/octogee-test\.web\.app$/,
-  /^https:\/\/app-octogee\.web\.app$/,
-  /^https:\/\/app-octogee-test\.web\.app$/,
-  /^https:\/\/octogee\.firebaseapp\.com$/,
-  /^https:\/\/octogee-test\.firebaseapp\.com$/,
-  /^https:\/\/app-octogee\.firebaseapp\.com$/,
-  /^https:\/\/app-octogee-test\.firebaseapp\.com$/,
-  /^https:\/\/(www\.)?octogee\.com$/,
-  /^https:\/\/app\.octogee\.com$/,
-  /^https:\/\/api\.octogee\.com$/,
-  /^https:\/\/api-test\.octogee\.com$/,
-  /^http:\/\/localhost:\d+$/,
-];
+const ALLOWED_ORIGINS = new Set([
+  "https://octogee.web.app",
+  "https://octogee-test.web.app",
+  "https://app-octogee.web.app",
+  "https://app-octogee-test.web.app",
+  "https://octogee.firebaseapp.com",
+  "https://octogee-test.firebaseapp.com",
+  "https://app-octogee.firebaseapp.com",
+  "https://app-octogee-test.firebaseapp.com",
+  "https://octogee.com",
+  "https://www.octogee.com",
+  "https://app.octogee.com",
+]);
+
+function isAllowedOrigin(origin: string): boolean {
+  return ALLOWED_ORIGINS.has(origin) || /^http:\/\/localhost:\d+$/.test(origin);
+}
 
 export const corsMiddleware = cors({
   origin: (origin, callback) => {
@@ -26,10 +31,7 @@ export const corsMiddleware = cors({
       callback(null, true);
       return;
     }
-    const allowed = CORS_ORIGINS.some((pattern) =>
-      typeof pattern === "string" ? pattern === origin : pattern.test(origin),
-    );
-    callback(null, allowed);
+    callback(null, isAllowedOrigin(origin));
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Agent-Key", "X-Internal-Service-Key"],

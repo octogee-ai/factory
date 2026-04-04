@@ -265,22 +265,28 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 
-const ALLOWED_ORIGINS = [
-  /^https:\/\/octogee(-test)?\.web\.app$/,
-  /^https:\/\/octogee(-test)?\.firebaseapp\.com$/,
-  /^https:\/\/(www\.)?octogee\.com$/,
-  /^http:\/\/localhost:\d+$/,
-];
+const ALLOWED_ORIGINS = new Set([
+  "https://octogee.web.app",
+  "https://octogee-test.web.app",
+  "https://app-octogee.web.app",
+  "https://app-octogee-test.web.app",
+  "https://octogee.firebaseapp.com",
+  "https://octogee-test.firebaseapp.com",
+  "https://app-octogee.firebaseapp.com",
+  "https://app-octogee-test.firebaseapp.com",
+  "https://octogee.com",
+  "https://www.octogee.com",
+  "https://app.octogee.com",
+]);
+
+function isAllowedOrigin(origin: string): boolean {
+  return ALLOWED_ORIGINS.has(origin) || /^http:\/\/localhost:\d+$/.test(origin);
+}
 
 export function setCors(req: http.IncomingMessage, res: http.ServerResponse): void {
   const origin = req.headers.origin as string | undefined;
-  if (origin) {
-    for (const pattern of ALLOWED_ORIGINS) {
-      if (pattern.test(origin)) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-        break;
-      }
-    }
+  if (origin && isAllowedOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
   }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
