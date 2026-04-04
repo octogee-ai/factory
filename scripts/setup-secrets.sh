@@ -251,7 +251,31 @@ ksecret stripe-secrets \
   --from-literal=secret_key="${STRIPE_SECRET_KEY:-placeholder}" \
   --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}"
 
-# ── 11. GCP Service Account key ───────────────────────────────────────────
+# ── 11. Resend secrets (email digest delivery — P6) ──────────────────────
+# Used by workspace-api for email digest delivery via Resend.
+# Required env vars: RESEND_API_KEY, RESEND_FROM_EMAIL
+# Optional: RESEND_FROM_NAME (defaults to "Octogee" in code)
+#
+# K8s Secret: resend-secrets
+#   api_key    → RESEND_API_KEY
+#   from_email → RESEND_FROM_EMAIL
+#   from_name  → RESEND_FROM_NAME
+info "resend-secrets"
+set +u
+RESEND_API_KEY="${RESEND_API_KEY:-}"
+RESEND_FROM_EMAIL="${RESEND_FROM_EMAIL:-}"
+RESEND_FROM_NAME="${RESEND_FROM_NAME:-Octogee}"
+set -u
+[[ -z "$RESEND_API_KEY" ]]   && RESEND_API_KEY=$(sm_get RESEND_API_KEY "$CLUSTER_PROJECT" 2>/dev/null || echo "")
+[[ -z "$RESEND_FROM_EMAIL" ]] && RESEND_FROM_EMAIL=$(sm_get RESEND_FROM_EMAIL "$CLUSTER_PROJECT" 2>/dev/null || echo "")
+[[ -z "$RESEND_API_KEY" ]]   && warn "RESEND_API_KEY not found — digest emails will fail until configured"
+[[ -z "$RESEND_FROM_EMAIL" ]] && warn "RESEND_FROM_EMAIL not found — using placeholder"
+ksecret resend-secrets \
+  --from-literal=api_key="${RESEND_API_KEY:-placeholder}" \
+  --from-literal=from_email="${RESEND_FROM_EMAIL:-notifications@octogee.com}" \
+  --from-literal=from_name="${RESEND_FROM_NAME}"
+
+# ── 12. GCP Service Account key ───────────────────────────────────────────
 # Used by workspace-api and gateway for GCP API access (Workload Identity
 # preferred on prod; SA key is a fallback for services that need it directly).
 info "octogee-sa-key"
@@ -289,7 +313,9 @@ for sm_secret in \
   DISCORD_BOT_APP_ID \
   DISCORD_CLIENT_SECRET \
   ANTHROPIC_API_KEY \
-  OCTOGEE_GUILD_ID; do
+  OCTOGEE_GUILD_ID \
+  RESEND_API_KEY \
+  RESEND_FROM_EMAIL; do
   if gcloud secrets describe "$sm_secret" --project="$SM_PROJECT_CF" >/dev/null 2>&1; then
     info "  $sm_secret already exists in SM ($SM_PROJECT_CF)"
   else
@@ -312,6 +338,8 @@ status "mattermost-gateway / bot_user_id" "${MM_BOT_USER_ID:-}"
 status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
 status "internal-service-key" "${INTERNAL_SERVICE_KEY:-}"
 status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
+status "resend-secrets / api_key" "${RESEND_API_KEY:-}"
+status "resend-secrets / from_email" "${RESEND_FROM_EMAIL:-}"
 
 echo ""
 if [[ -z "${MM_BOT_TOKEN:-}" || -z "${MM_BOT_USER_ID:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
