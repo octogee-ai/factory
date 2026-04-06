@@ -3,7 +3,7 @@
 #
 # Rebuild this ONLY when upgrading OpenClaw or changing system packages:
 #   gcloud builds submit --config cloudbuild-base.yaml \
-#     --substitutions=_OPENCLAW_VERSION=2026.4.2 \
+#     --substitutions=_OPENCLAW_VERSION=2026.4.5 \
 #     --project=octogee
 #
 # What lives here (changes rarely → cached across gateway builds):
