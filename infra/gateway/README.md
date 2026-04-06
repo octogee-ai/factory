@@ -25,7 +25,7 @@ gcloud builds submit --config cloudbuild.yaml \
 
 # Rebuild base image (only when upgrading OpenClaw)
 gcloud builds submit --config cloudbuild-base.yaml \
-  --substitutions=_OPENCLAW_VERSION=2026.4.5 \
+  --substitutions=_OPENCLAW_VERSION=2026.4.2 \
   --project=octogee
 ```
 
