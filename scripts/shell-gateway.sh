@@ -18,7 +18,7 @@ case "$ENV" in
     NAMESPACE="octogee"
     ;;
   test)
-    K8S_CONTEXT="gke_octogee-test_us-central1_octogee-test"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     NAMESPACE="octogee-test"
     ;;
   *)

@@ -72,9 +72,9 @@ case "$ENV" in
   test)
     GCP_PROJECT="octogee-test"
     FIREBASE_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee-test"
-    CLUSTER_NAME="octogee-test"
-    K8S_CONTEXT="gke_octogee-test_us-central1_octogee-test"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     K8S_NAMESPACE="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"

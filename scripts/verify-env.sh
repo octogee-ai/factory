@@ -97,9 +97,9 @@ case "$ENV" in
     CHAT_PROXY_SERVICE="octogee-chat-proxy"
     ;;
   test)
-    K8S_CONTEXT="gke_octogee-test_us-central1_octogee-test"
-    CLUSTER_NAME="octogee-test"
-    CLUSTER_PROJECT="octogee-test"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    CLUSTER_NAME="octogee-gateway"
+    CLUSTER_PROJECT="octogee"
     NAMESPACE="octogee-test"
     GCP_PROJECT="octogee-test"
     FIREBASE_PROJECT="octogee-test"

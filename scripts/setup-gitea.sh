@@ -60,9 +60,9 @@ case "$ENV" in
   test)
     K8S_NAMESPACE="octogee-test"
     GCP_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee-test"
-    CLUSTER_NAME="octogee-test"
-    K8S_CONTEXT="gke_octogee-test_us-central1_octogee-test"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
     GITEA_SVC="octogee-gitea-http"
