@@ -5,12 +5,14 @@ set -euo pipefail
 # Pre-deploy secret verification
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Checks that all required K8s secrets exist before helm upgrade.
-# Run this in CI before deploy, or locally before manual helm commands.
+# Checks that all required K8s secrets exist AND that critical keys within
+# them are non-empty. Run this in CI before deploy, or locally before manual
+# helm commands.
 #
 # Required secrets are derived from the Helm chart:
 #   - gateway/templates/deployment.yaml  (secretKeyRef without optional: true)
 #   - workspace-api/values.yaml          (optional: false)
+#   - chat-proxy/values.yaml             (optional: false)
 #   - workspace-api/templates/cronjob-*  (secretKeyRef)
 #
 # Usage:
@@ -18,8 +20,8 @@ set -euo pipefail
 #   ./scripts/verify-secrets.sh --env=test
 #
 # Exit codes:
-#   0 — all required secrets present
-#   1 — missing secrets (prints which ones)
+#   0 — all required secrets present with non-empty critical keys
+#   1 — missing secrets or empty required keys
 # ═══════════════════════════════════════════════════════════════════════════
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -66,22 +68,63 @@ REQUIRED_SECRETS=(
   "gitea-token"             # workspace-api: GITEA_TOKEN (not optional in deployment template)
 )
 
+# ── Critical keys within secrets ────────────────────────────────────────────
+# These are the most common source of "secret exists but value is empty" drift.
+# Format: "secret_name:key_name:fix_script"
+REQUIRED_KEYS=(
+  "mattermost-gateway:admin_token:./scripts/setup-mattermost.sh --env=${ENV}"
+  "mattermost-gateway:bot_token:./scripts/setup-mattermost.sh --env=${ENV}"
+  "mattermost-gateway:bot_user_id:./scripts/setup-mattermost.sh --env=${ENV}"
+  "mattermost-gateway:team_id:./scripts/setup-mattermost.sh --env=${ENV}"
+  "mattermost-gateway:admin_user:./scripts/setup-mattermost.sh --env=${ENV}"
+  "mattermost-gateway:admin_pass:./scripts/setup-mattermost.sh --env=${ENV}"
+  "mattermost-gateway:admin_user_id:./scripts/setup-mattermost.sh --env=${ENV}"
+  "internal-service-key:key:./scripts/setup-secrets.sh --env=${ENV}"
+  "octogee-anthropic:api_key:./scripts/setup-secrets.sh --env=${ENV}"
+)
+
 echo ""
 echo -e "${BOLD}Pre-deploy secret check — ${ENV}${NC}"
 echo -e "Namespace: ${NS} | Context: ${KUBE_CTX}"
 echo ""
 
-MISSING=()
+FAILURES=0
+
+# ── Check secret existence ──────────────────────────────────────────────────
+echo -e "${BOLD}Required secrets:${NC}"
 for secret in "${REQUIRED_SECRETS[@]}"; do
   if kubectl get secret "$secret" -n "$NS" --context "$KUBE_CTX" >/dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} $secret"
   else
     echo -e "  ${RED}✗${NC} $secret — ${RED}MISSING${NC}"
-    MISSING+=("$secret")
+    FAILURES=$((FAILURES + 1))
   fi
 done
 
-# Also check optional-but-important secrets (warn only, don't fail)
+# ── Check critical key values ───────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Required keys (non-empty):${NC}"
+for entry in "${REQUIRED_KEYS[@]}"; do
+  IFS=':' read -r secret key fix <<< "$entry"
+
+  # Skip key check if the secret itself is missing (already reported above)
+  if ! kubectl get secret "$secret" -n "$NS" --context "$KUBE_CTX" >/dev/null 2>&1; then
+    continue
+  fi
+
+  VAL_B64=$(kubectl get secret "$secret" -n "$NS" --context "$KUBE_CTX" \
+    -o jsonpath="{.data.${key}}" 2>/dev/null || echo "")
+
+  if [[ -z "$VAL_B64" ]]; then
+    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}EMPTY${NC}"
+    echo -e "    Fix: ${fix}"
+    FAILURES=$((FAILURES + 1))
+  else
+    echo -e "  ${GREEN}✓${NC} ${secret}/${key}"
+  fi
+done
+
+# ── Optional-but-important secrets (warn only) ──────────────────────────────
 OPTIONAL_SECRETS=(
   "mattermost-cloud-sql"
   "octogee-brave"
@@ -102,14 +145,14 @@ done
 
 echo ""
 
-if [[ ${#MISSING[@]} -gt 0 ]]; then
-  echo -e "${RED}${BOLD}❌ ${#MISSING[@]} required secret(s) missing — deploy will fail!${NC}"
+if [[ "$FAILURES" -gt 0 ]]; then
+  echo -e "${RED}${BOLD}❌ ${FAILURES} issue(s) found — deploy will fail!${NC}"
   echo ""
-  echo "  Fix: ./scripts/setup-secrets.sh --env=${ENV}"
+  echo "  Quick fix: ./scripts/bootstrap-env.sh --env=${ENV}"
   echo ""
   exit 1
 else
-  echo -e "${GREEN}${BOLD}✅ All required secrets present — safe to deploy${NC}"
+  echo -e "${GREEN}${BOLD}✅ All required secrets and keys present — safe to deploy${NC}"
   echo ""
   exit 0
 fi

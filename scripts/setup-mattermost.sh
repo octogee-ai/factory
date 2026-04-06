@@ -249,6 +249,29 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
     | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || echo "")
   [[ -n "$MM_ADMIN_USER_ID" ]] && save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID" && ok "Admin user ID: $MM_ADMIN_USER_ID"
 
+  # ── Revoke stale admin PATs before creating a new one ────────────────────
+  info "Checking for stale admin PATs..."
+  EXISTING_PATS=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    curl -s "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
+  OLD_PAT_IDS=$(echo "$EXISTING_PATS" | python3 -c "
+import sys, json
+tokens = json.load(sys.stdin)
+for t in tokens:
+    if 'workspace-api' in t.get('description', ''):
+        print(t['id'])
+" 2>/dev/null || echo "")
+  REVOKED=0
+  for pat_id in $OLD_PAT_IDS; do
+    kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+      curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens/revoke" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"token_id\":\"$pat_id\"}" >/dev/null 2>&1
+    REVOKED=$((REVOKED + 1))
+  done
+  [[ $REVOKED -gt 0 ]] && ok "Revoked $REVOKED stale admin PAT(s)" || info "No stale admin PATs found"
+
   # Create a personal access token (PAT) for workspace-api
   # Session tokens expire; PATs don't — workspace-api needs a PAT for /admin-token route
   info "Creating admin personal access token (PAT) for workspace-api..."
@@ -264,6 +287,75 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
   else
     warn "Failed to create admin PAT: $PAT_RESP"
     warn "workspace-api /admin-token route will return 503 without this!"
+  fi
+
+  # ── Discover existing team + bot (may be missing from env/secret) ────────
+  info "Discovering team + bot state..."
+  TEAM_ID_FROM_API=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    curl -s "http://localhost:8065/api/v4/teams/name/octogee" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+  if [[ -n "$TEAM_ID_FROM_API" ]]; then
+    MM_TEAM_ID="$TEAM_ID_FROM_API"
+    save_env "MM_TEAM_ID" "$MM_TEAM_ID"
+    ok "Team discovered: $MM_TEAM_ID"
+  else
+    warn "Could not discover Octogee team — MM_TEAM_ID will be empty"
+  fi
+
+  BOT_USER_ID_FROM_API=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    curl -s "http://localhost:8065/api/v4/bots" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
+    | python3 -c "
+import sys, json
+bots = json.load(sys.stdin)
+for b in bots:
+    if b.get('username') == 'octogee-bot':
+        print(b['user_id'])
+        break
+" 2>/dev/null || echo "")
+  if [[ -n "$BOT_USER_ID_FROM_API" ]]; then
+    MM_BOT_USER_ID="$BOT_USER_ID_FROM_API"
+    save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
+    ok "Bot discovered: $MM_BOT_USER_ID"
+
+    # Revoke stale bot tokens before creating a new one
+    info "Checking for stale bot tokens..."
+    EXISTING_BOT_TOKENS=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+      curl -s "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
+    OLD_BOT_IDS=$(echo "$EXISTING_BOT_TOKENS" | python3 -c "
+import sys, json
+for t in json.load(sys.stdin):
+    print(t['id'])
+" 2>/dev/null || echo "")
+    BOT_REVOKED=0
+    for tok_id in $OLD_BOT_IDS; do
+      kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+        curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens/revoke" \
+        -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"token_id\":\"$tok_id\"}" >/dev/null 2>&1
+      BOT_REVOKED=$((BOT_REVOKED + 1))
+    done
+    [[ $BOT_REVOKED -gt 0 ]] && ok "Revoked $BOT_REVOKED stale bot token(s)" || info "No stale bot tokens found"
+
+    # Create fresh bot token
+    info "Creating bot token..."
+    TOKEN_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+      curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"description":"Gateway token"}' 2>/dev/null)
+    MM_BOT_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+    if [[ -n "$MM_BOT_TOKEN" ]]; then
+      save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
+      ok "Bot token created"
+    else
+      warn "Failed to create bot token: $TOKEN_RESP"
+    fi
+  else
+    warn "Could not discover octogee-bot — MM_BOT_USER_ID and MM_BOT_TOKEN will be empty"
   fi
 else
   info "Fresh Mattermost — bootstrapping admin, team, bot..."
@@ -364,31 +456,58 @@ else
   info "All credentials saved to $ENV_FILE"
 fi
 
-# ── 7. Update mattermost-gateway K8s secret ──────────────────────────────
+# ── 7. Validate all values before writing K8s secret ─────────────────────
 set +u
-if [[ -n "${MM_BOT_TOKEN:-}" && -n "${MM_ADMIN_USER:-}" && -n "${MM_ADMIN_PASS:-}" ]]; then
-  kubectl delete secret mattermost-gateway -n "$K8S_NAMESPACE" 2>/dev/null || true
+info "Validating secret values before write..."
 
-  # Build secret args — admin_token is the PAT (not session token)
-  SECRET_ARGS=(
-    --from-literal=bot_token="${MM_BOT_TOKEN}"
-    --from-literal=admin_user="${MM_ADMIN_USER}"
-    --from-literal=admin_pass="${MM_ADMIN_PASS}"
-    --from-literal=team_id="${MM_TEAM_ID:-}"
-    --from-literal=bot_user_id="${MM_BOT_USER_ID:-}"
-    --from-literal=admin_user_id="${MM_ADMIN_USER_ID:-}"
-  )
-  # Include admin_token (PAT) if available — required by workspace-api for /admin-token route
-  if [[ -n "${MM_ADMIN_PAT:-}" ]]; then
-    SECRET_ARGS+=(--from-literal=admin_token="${MM_ADMIN_PAT}")
-    ok "admin_token (PAT) included in secret"
-  else
-    warn "admin_token NOT in secret — workspace-api /admin-token will 503!"
-    warn "Create one manually: POST /api/v4/users/{admin_user_id}/tokens"
+WRITE_ERRORS=0
+for var_name in MM_ADMIN_USER MM_ADMIN_PASS MM_ADMIN_USER_ID MM_ADMIN_PAT MM_TEAM_ID MM_BOT_USER_ID MM_BOT_TOKEN; do
+  val="${!var_name:-}"
+  if [[ -z "$val" ]]; then
+    warn "$var_name is empty — secret will be incomplete!"
+    WRITE_ERRORS=$((WRITE_ERRORS + 1))
   fi
+done
 
-  kubectl create secret generic mattermost-gateway -n "$K8S_NAMESPACE" "${SECRET_ARGS[@]}"
-  ok "mattermost-gateway K8s secret updated"
+if [[ "$WRITE_ERRORS" -gt 0 ]]; then
+  warn "$WRITE_ERRORS value(s) missing — writing partial secret"
+  warn "chat-proxy and workspace-api may fail to start (MM_ADMIN_TOKEN is required)"
+fi
+
+# ── 8. Atomic K8s secret write (dry-run + apply) ────────────────────────
+# Uses dry-run + apply instead of delete + create to avoid a window where
+# the secret doesn't exist (which would crash pods on restart).
+info "Writing mattermost-gateway K8s secret..."
+kubectl create secret generic mattermost-gateway \
+  -n "$K8S_NAMESPACE" \
+  --from-literal=admin_user="${MM_ADMIN_USER:-}" \
+  --from-literal=admin_pass="${MM_ADMIN_PASS:-}" \
+  --from-literal=admin_token="${MM_ADMIN_PAT:-}" \
+  --from-literal=admin_user_id="${MM_ADMIN_USER_ID:-}" \
+  --from-literal=bot_token="${MM_BOT_TOKEN:-}" \
+  --from-literal=bot_user_id="${MM_BOT_USER_ID:-}" \
+  --from-literal=team_id="${MM_TEAM_ID:-}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+ok "mattermost-gateway K8s secret written (atomic apply)"
+
+# ── 9. Post-write verification ──────────────────────────────────────────
+info "Verifying written secret..."
+VERIFY_ERRORS=0
+for key in admin_user admin_pass admin_token admin_user_id bot_token bot_user_id team_id; do
+  VAL=$(kubectl get secret mattermost-gateway -n "$K8S_NAMESPACE" \
+    -o jsonpath="{.data.$key}" 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  if [[ -z "$VAL" ]]; then
+    echo -e "  ${RED}✗${NC} $key — EMPTY"
+    VERIFY_ERRORS=$((VERIFY_ERRORS + 1))
+  else
+    echo -e "  ${GREEN}✓${NC} $key (${#VAL} chars)"
+  fi
+done
+
+if [[ "$VERIFY_ERRORS" -gt 0 ]]; then
+  warn "$VERIFY_ERRORS key(s) empty after write — investigate above warnings"
+else
+  ok "All 7 keys verified non-empty"
 fi
 set -u
 
