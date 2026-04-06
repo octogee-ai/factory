@@ -27,6 +27,61 @@ export function gitExec(cwd: string, args: string): string | null {
   }
 }
 
+// ── Clone Workspace Repo ────────────────────────────────────────────────────────
+
+/**
+ * Clone a customer workspace repo from Gitea to the local PVC.
+ * Used by boot-sync.ts to restore workspaces on a fresh gateway.
+ * Idempotent: returns true if already cloned.
+ */
+export async function cloneWorkspaceRepo(slug: string, repoUrl?: string): Promise<boolean> {
+  const dest = path.join(CUSTOMERS_DIR, slug);
+  const gitDir = path.join(dest, ".git");
+
+  // Already cloned
+  if (fs.existsSync(gitDir)) return true;
+
+  if (!GIT_API_TOKEN) {
+    log(`[git] Cannot clone ${slug} — GIT_API_TOKEN not set`);
+    return false;
+  }
+
+  const repoName = `${slug}-workspace`;
+  const gitHost = new URL(GIT_API_URL).origin;
+  const authedUrl = `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
+
+  // Verify repo exists on Gitea before cloning
+  try {
+    const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
+      headers: { Authorization: `token ${GIT_API_TOKEN}`, Accept: "application/json" },
+    });
+    if (!resp.ok) {
+      log(`[git] Repo ${GIT_ORG}/${repoName} not found on Gitea (${resp.status}) — skipping clone`);
+      return false;
+    }
+  } catch (err: any) {
+    log(`⚠ [git] Gitea API check failed for ${repoName}: ${err.message}`);
+    return false;
+  }
+
+  // Clone
+  fs.mkdirSync(dest, { recursive: true });
+  const result = gitExec(path.dirname(dest), `clone ${authedUrl} ${slug}`);
+  if (result === null) {
+    log(`⚠ [git] Clone failed for ${slug}`);
+    // Clean up partial clone
+    try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
+    return false;
+  }
+
+  // Configure git identity
+  gitExec(dest, 'config user.email "octo@octogee.com"');
+  gitExec(dest, 'config user.name "Octogee"');
+
+  log(`[git] ✅ Cloned ${GIT_ORG}/${repoName} → customers/${slug}/`);
+  return true;
+}
+
 // ── Workspace Repo ──────────────────────────────────────────────────────────────
 
 /** Initialize a git repo for a customer workspace and push to Gitea. */
