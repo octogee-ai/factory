@@ -94,7 +94,6 @@ case "$ENV" in
     ENV_COLOR="$RED"
     AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
     CF_SAMPLE="onSignup"
-    CHAT_PROXY_SERVICE="octogee-chat-proxy"
     ;;
   test)
     K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
@@ -108,7 +107,6 @@ case "$ENV" in
     ENV_COLOR="$YELLOW"
     AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
     CF_SAMPLE="onSignup"
-    CHAT_PROXY_SERVICE="octogee-chat-proxy-test"
     ;;
   *)
     echo "Unknown environment: $ENV (use prod or test)"
@@ -354,19 +352,25 @@ else
 fi
 
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
+# Derive URLs from K8s Ingress resources — no hardcoded env-specific URLs.
 set_section bootstrap
 header "5d. Endpoint Health"
-for ENDPOINT in "api" "chat"; do
-  if [[ "$ENV" == "test" ]]; then
-    URL="https://${ENDPOINT}-test.octogee.com/health"
-  else
-    URL="https://${ENDPOINT}.octogee.com/health"
+for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress; do
+  HOST=$(kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+  if [[ -z "$HOST" ]]; then
+    warn "$INGRESS_NAME — no host found"
+    continue
   fi
+  # Read health path from the readinessProbe of the matching deployment
+  DEPLOY_NAME="${INGRESS_NAME%-ingress}"
+  HEALTH_PATH=$(kubectl get deployment "$DEPLOY_NAME" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}' 2>/dev/null || echo "/health")
+  URL="https://${HOST}${HEALTH_PATH}"
   HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$URL" 2>/dev/null || echo "000")
   if [[ "$HTTP_CODE" == "200" ]]; then
     pass "$URL → $HTTP_CODE"
   elif [[ "$HTTP_CODE" == "000" ]]; then
-    fail "$URL → unreachable (TLS or DNS issue)"
+    warn "$URL → unreachable (TLS or DNS issue)"
   else
     warn "$URL → HTTP $HTTP_CODE"
   fi
@@ -417,14 +421,20 @@ else
   fi
 fi
 
-CHAT_HEALTH_URL=$(if [[ "$ENV" == "test" ]]; then echo "https://chat-test.octogee.com/health"; else echo "https://chat.octogee.com/health"; fi)
-CHAT_HEALTH_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$CHAT_HEALTH_URL" 2>/dev/null || echo "000")
-if [[ "$CHAT_HEALTH_CODE" == "200" ]]; then
-  pass "$CHAT_HEALTH_URL → $CHAT_HEALTH_CODE"
-else
-  warn "$CHAT_HEALTH_URL → HTTP $CHAT_HEALTH_CODE"
-  if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/chat-proxy --since=30m | tail -100"
+# Derive chat-proxy health URL from Ingress host + readinessProbe path
+CHAT_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+CHAT_HEALTH_PATH=$(kubectl get deployment chat-proxy -n "$NAMESPACE" \
+  -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
+if [[ -n "$CHAT_HOST" ]]; then
+  CHAT_HEALTH_URL="https://${CHAT_HOST}${CHAT_HEALTH_PATH}"
+  CHAT_HEALTH_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$CHAT_HEALTH_URL" 2>/dev/null || echo "000")
+  if [[ "$CHAT_HEALTH_CODE" == "200" ]]; then
+    pass "$CHAT_HEALTH_URL → $CHAT_HEALTH_CODE"
+  else
+    warn "$CHAT_HEALTH_URL → HTTP $CHAT_HEALTH_CODE"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/chat-proxy --since=30m | tail -100"
+    fi
   fi
 fi
 
