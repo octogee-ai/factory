@@ -201,9 +201,10 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     return null;
   }
 
-  const repoUrl = `${gitHost}/${GIT_ORG}/${repoName}`;
-  log(`[git] ✅ Workspace repo created: ${repoUrl}`);
-  return repoUrl;
+  const gitHost = new URL(GIT_API_URL).origin;
+  const repoUrlDisplay = `${gitHost}/${GIT_ORG}/${repoName}`;
+  log(`[git] ✅ Workspace repo created: ${repoUrlDisplay}`);
+  return repoUrlDisplay;
 }
 
 // ── Project Repo ────────────────────────────────────────────────────────────────
@@ -282,9 +283,10 @@ export async function initProjectRepo(
     return null;
   }
 
-  const repoUrl = `${gitHost}/${GIT_ORG}/${repoName}`;
-  log(`[git] ✅ Project repo created: ${repoUrl}`);
-  return repoUrl;
+  const gitHost = new URL(GIT_API_URL).origin;
+  const repoUrlDisplay = `${gitHost}/${GIT_ORG}/${repoName}`;
+  log(`[git] ✅ Project repo created: ${repoUrlDisplay}`);
+  return repoUrlDisplay;
 }
 
 // ── Commit and Push ─────────────────────────────────────────────────────────
