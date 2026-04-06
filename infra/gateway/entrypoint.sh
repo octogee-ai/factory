@@ -85,6 +85,30 @@ if [ ! -f "$MAC_WS/SOUL.md" ] && [ -d "$TEMPLATES_DIR/mac-workspace" ]; then
   mkdir -p "$MAC_WS/memory"
 fi
 
+# ── SSH key setup (for Gitea git operations) ────────────────────────────────
+# The SSH private key is mounted from a K8s secret at /etc/gitea-ssh/.
+# We configure ~/.ssh to use it for the Gitea SSH service.
+if [ -f /etc/gitea-ssh/id_ed25519 ]; then
+  mkdir -p "$HOME/.ssh"
+  cp /etc/gitea-ssh/id_ed25519 "$HOME/.ssh/id_ed25519"
+  chmod 600 "$HOME/.ssh/id_ed25519"
+  GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
+  cat > "$HOME/.ssh/config" <<SSHEOF
+Host gitea
+  HostName ${GIT_SSH_HOST}
+  Port 22
+  User git
+  IdentityFile ${HOME}/.ssh/id_ed25519
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  LogLevel ERROR
+SSHEOF
+  chmod 600 "$HOME/.ssh/config"
+  log "SSH key configured for Gitea (host: ${GIT_SSH_HOST})"
+else
+  log "No SSH key at /etc/gitea-ssh/ — git operations will use HTTP fallback"
+fi
+
 # ── Harden file permissions ─────────────────────────────────────────────────
 # The init container sets 775 for PVC/emptyDir. Tighten sensitive files.
 chmod 700 "$OPENCLAW_DIR" 2>/dev/null || true

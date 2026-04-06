@@ -5,7 +5,33 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { log, GIT_API_URL, GIT_API_TOKEN, GIT_ORG, CUSTOMERS_DIR } from "./config.js";
+import { log, GIT_API_URL, GIT_API_TOKEN, GIT_ORG, GIT_SSH_HOST, CUSTOMERS_DIR } from "./config.js";
+
+// ── SSH URL Helper ─────────────────────────────────────────────────────────────
+
+/** Build a git SSH remote URL using the ~/.ssh/config alias. */
+function sshRemoteUrl(repoName: string): string {
+  return `git@${GIT_SSH_HOST}:${GIT_ORG}/${repoName}.git`;
+}
+
+/** Check if SSH key is available (entrypoint.sh sets this up). */
+function sshAvailable(): boolean {
+  const sshConfig = path.join(process.env.HOME || "/home/node", ".ssh", "config");
+  return fs.existsSync(sshConfig);
+}
+
+/** Build an HTTP remote URL (fallback when SSH is not available). */
+function httpRemoteUrl(repoName: string): string {
+  const gitHost = new URL(GIT_API_URL).origin;
+  return `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
+}
+
+/** Get the remote URL for a repo — SSH preferred, HTTP fallback. */
+function remoteUrl(repoName: string): string {
+  if (sshAvailable()) return sshRemoteUrl(repoName);
+  log("⚠ [git] SSH not available — falling back to HTTP auth");
+  return httpRemoteUrl(repoName);
+}
 
 // ── Git Exec ────────────────────────────────────────────────────────────────────
 
@@ -47,10 +73,9 @@ export async function cloneWorkspaceRepo(slug: string, repoUrl?: string): Promis
   }
 
   const repoName = `${slug}-workspace`;
-  const gitHost = new URL(GIT_API_URL).origin;
-  const authedUrl = `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
+  const cloneUrl = remoteUrl(repoName);
 
-  // Verify repo exists on Gitea before cloning
+  // Verify repo exists on Gitea before cloning (always uses HTTP API)
   try {
     const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
       headers: { Authorization: `token ${GIT_API_TOKEN}`, Accept: "application/json" },
@@ -64,9 +89,9 @@ export async function cloneWorkspaceRepo(slug: string, repoUrl?: string): Promis
     return false;
   }
 
-  // Clone
+  // Clone via SSH (preferred) or HTTP (fallback)
   fs.mkdirSync(dest, { recursive: true });
-  const result = gitExec(path.dirname(dest), `clone ${authedUrl} ${slug}`);
+  const result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`);
   if (result === null) {
     log(`⚠ [git] Clone failed for ${slug}`);
     // Clean up partial clone
@@ -164,10 +189,9 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     return null;
   }
 
-  // Add remote + push (Gitea internal URL with auth)
-  const gitHost = new URL(GIT_API_URL).origin;
-  const remoteUrl = `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
-  const remoteResult = gitExec(coachDir, `remote add origin ${remoteUrl}`);
+  // Add remote + push (SSH preferred, HTTP fallback)
+  const originUrl = remoteUrl(repoName);
+  const remoteResult = gitExec(coachDir, `remote add origin ${originUrl}`);
   log(`[git] remote add: ${remoteResult === "" ? "OK" : remoteResult ?? "FAILED"}`);
   const pushResult = gitExec(coachDir, "push -u origin main");
   log(`[git] push: ${pushResult !== null ? "OK" : "FAILED"}`);
@@ -248,9 +272,8 @@ export async function initProjectRepo(
     return null;
   }
 
-  const gitHost = new URL(GIT_API_URL).origin;
-  const remoteUrl = `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
-  gitExec(projectDir, `remote add origin ${remoteUrl}`);
+  const originUrl = remoteUrl(repoName);
+  gitExec(projectDir, `remote add origin ${originUrl}`);
   const pushResult = gitExec(projectDir, "push -u origin main");
   log(`[git] project push: ${pushResult !== null ? "OK" : "FAILED"}`);
 
@@ -317,6 +340,14 @@ export async function syncAllWorkspaces(): Promise<void> {
       log(`[git-sync] ${slug}: no remote — initializing Gitea repo`);
       await initWorkspaceRepo(coachDir, slug);
       continue; // initWorkspaceRepo commits + pushes; skip normal sync this cycle
+    }
+
+    // Migrate HTTP remotes to SSH (one-time, after SSH key is deployed)
+    if (sshAvailable() && remoteCheck.startsWith("http")) {
+      const repoName = `${slug}-workspace`;
+      const newUrl = sshRemoteUrl(repoName);
+      gitExec(coachDir, `remote set-url origin ${newUrl}`);
+      log(`[git-sync] ${slug}: migrated remote to SSH`);
     }
 
     const status = gitExec(coachDir, "status --porcelain");
