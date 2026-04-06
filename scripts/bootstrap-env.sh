@@ -54,6 +54,51 @@ echo -e "${BOLD}  Octogee Environment Bootstrap — ${ENV}${NC}"
 echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 
+# ── Step 0: Gitea SSH key ───────────────────────────────────────────────
+echo -e "${BOLD}[0/3] Gitea SSH key${NC}"
+echo ""
+
+case "$ENV" in
+  prod) NS="octogee" ;;
+  test) NS="octogee-test" ;;
+esac
+
+if kubectl get secret gitea-ssh-key -n "$NS" >/dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} gitea-ssh-key secret exists"
+else
+  echo "  Generating SSH keypair for Gitea..."
+  TMPKEY=$(mktemp)
+  ssh-keygen -t ed25519 -f "$TMPKEY" -N "" -C "octogee-gateway@octogee.local" -q
+  kubectl create secret generic gitea-ssh-key -n "$NS" \
+    --from-file=id_ed25519="$TMPKEY" \
+    --from-file=id_ed25519.pub="${TMPKEY}.pub"
+  echo -e "  ${GREEN}✓${NC} gitea-ssh-key secret created"
+
+  # Register public key in Gitea (requires port-forward or in-cluster access)
+  GITEA_TOKEN=$(kubectl get secret gitea-token -n "$NS" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)
+  if [ -n "$GITEA_TOKEN" ]; then
+    PUB_KEY=$(cat "${TMPKEY}.pub")
+    # Try in-cluster Gitea URL first
+    GITEA_URL="http://octogee-gitea-http.${NS}.svc.cluster.local:3000"
+    RESP=$(kubectl exec deployment/octogee-gitea -n "$NS" -- \
+      curl -s -o /dev/null -w "%{http_code}" "${GITEA_URL}/api/v1/user" \
+      -H "Authorization: token $GITEA_TOKEN" 2>/dev/null || echo "000")
+    if [ "$RESP" = "200" ]; then
+      kubectl exec deployment/octogee-gitea -n "$NS" -- \
+        curl -s -X POST "${GITEA_URL}/api/v1/user/keys" \
+        -H "Authorization: token $GITEA_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"title\": \"octogee-gateway\", \"key\": \"$PUB_KEY\"}" >/dev/null 2>&1
+      echo -e "  ${GREEN}✓${NC} SSH public key registered in Gitea"
+    else
+      echo -e "  ⚠ Could not reach Gitea API — register the SSH key manually"
+      echo "    Public key: $PUB_KEY"
+    fi
+  fi
+  rm -f "$TMPKEY" "${TMPKEY}.pub"
+fi
+echo ""
+
 # ── Step 1: Mattermost bootstrap ────────────────────────────────────────
 echo -e "${BOLD}[1/3] Mattermost bootstrap${NC}"
 echo ""
