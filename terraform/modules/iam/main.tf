@@ -19,10 +19,12 @@ resource "google_service_account" "gateway" {
 
 # ── Workload Identity binding ───────────────────────────────────────────────
 # Allows K8s SA "octogee-gateway" in namespace to act as this GCP SA.
+# The WI pool is always in the cluster project (octogee), even when the SA
+# is in a different project (octogee-test). Both environments share one cluster.
 resource "google_service_account_iam_member" "workload_identity" {
   service_account_id = google_service_account.gateway.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.namespace}/octogee-gateway]"
+  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-gateway]"
 }
 
 # ── Cloud SQL Client role ───────────────────────────────────────────────────

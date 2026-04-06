@@ -24,3 +24,9 @@ variable "cloudsql_project_id" {
   type        = string
   default     = "octogee"
 }
+
+variable "cluster_project_id" {
+  description = "Project ID that owns the GKE cluster (for Workload Identity pool). Both test and prod use the same cluster in the 'octogee' project."
+  type        = string
+  default     = "octogee"
+}
