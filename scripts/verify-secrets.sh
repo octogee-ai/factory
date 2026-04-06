@@ -56,10 +56,12 @@ esac
 # Keep in sync with:
 #   helm/octogee/charts/gateway/templates/deployment.yaml
 #   helm/octogee/charts/workspace-api/values.yaml
+#   helm/octogee/charts/chat-proxy/values.yaml
 #   helm/octogee/charts/workspace-api/templates/cronjob-trial-expiry.yaml
 REQUIRED_SECRETS=(
   "octogee-anthropic"       # gateway: ANTHROPIC_API_KEY
   "internal-service-key"    # gateway + workspace-api + trial-expiry CronJob
+  "mattermost-gateway"      # chat-proxy + workspace-api: MM_ADMIN_TOKEN (no longer optional)
   "stripe-secrets"          # workspace-api: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
   "gitea-token"             # workspace-api: GITEA_TOKEN (not optional in deployment template)
 )
@@ -81,7 +83,6 @@ done
 
 # Also check optional-but-important secrets (warn only, don't fail)
 OPTIONAL_SECRETS=(
-  "mattermost-gateway"
   "mattermost-cloud-sql"
   "octogee-brave"
   "octogee-github"

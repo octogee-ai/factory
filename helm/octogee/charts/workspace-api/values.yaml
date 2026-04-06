@@ -30,10 +30,11 @@ secrets:
   - envName: GITEA_TOKEN
     secretName: gitea-token
     secretKey: token
+  # MM_ADMIN_TOKEN is REQUIRED — pods will not schedule without this secret.
+  # Create it via: ./scripts/setup-mattermost.sh --env=ENV
   - envName: MM_ADMIN_TOKEN
     secretName: mattermost-gateway
     secretKey: admin_token
-    optional: true
   - envName: GITHUB_TOKEN
     secretName: octogee-github
     secretKey: token
