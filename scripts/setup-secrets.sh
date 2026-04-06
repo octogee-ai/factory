@@ -45,15 +45,17 @@ case "$ENV" in
     CLUSTER_PROJECT="octogee"
     CLUSTER_NAME="octogee-gateway"
     K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    FIREBASE_PROJECT="octogee"
     ENV_FILE="$REPO_DIR/.env"
     ENV_LABEL="🔴 PRODUCTION"
     SM_PROJECT="octogee"
     ;;
   test)
     K8S_NAMESPACE="octogee-test"
-    CLUSTER_PROJECT="octogee-test"
-    CLUSTER_NAME="octogee-test"
-    K8S_CONTEXT="gke_octogee-test_us-central1_octogee-test"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    FIREBASE_PROJECT="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
     SM_PROJECT="octogee"  # Cloud SQL + shared secrets live in octogee project
@@ -218,16 +220,16 @@ fi
 # Used by requireInternalServiceAuth() on /internal/billing/* routes.
 # One shared secret across workspace-api, gateway, and the trial-expiry CronJob.
 info "internal-service-key"
-INTERNAL_SERVICE_KEY=$(sm_get "INTERNAL_SERVICE_KEY" "$CLUSTER_PROJECT" 2>/dev/null || echo "")
+INTERNAL_SERVICE_KEY=$(sm_get "INTERNAL_SERVICE_KEY" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
   INTERNAL_SERVICE_KEY=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
-  info "  Generating new INTERNAL_SERVICE_KEY — saving to Secret Manager ($CLUSTER_PROJECT)..."
+  info "  Generating new INTERNAL_SERVICE_KEY — saving to Secret Manager ($FIREBASE_PROJECT)..."
   if echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
-       --data-file=- --project="$CLUSTER_PROJECT" \
+       --data-file=- --project="$FIREBASE_PROJECT" \
        --replication-policy=automatic --quiet 2>/dev/null; then
     ok "  Created SM secret: INTERNAL_SERVICE_KEY"
   elif echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
-       --data-file=- --project="$CLUSTER_PROJECT" --quiet 2>/dev/null; then
+       --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
     ok "  Updated SM secret: INTERNAL_SERVICE_KEY"
   else
     warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
@@ -243,8 +245,8 @@ set +u
 STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-}"
 STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-}"
 set -u
-[[ -z "$STRIPE_SECRET_KEY" ]]    && STRIPE_SECRET_KEY=$(sm_get STRIPE_SECRET_KEY "$CLUSTER_PROJECT" 2>/dev/null || echo "")
-[[ -z "$STRIPE_WEBHOOK_SECRET" ]] && STRIPE_WEBHOOK_SECRET=$(sm_get STRIPE_WEBHOOK_SECRET "$CLUSTER_PROJECT" 2>/dev/null || echo "")
+[[ -z "$STRIPE_SECRET_KEY" ]]    && STRIPE_SECRET_KEY=$(sm_get STRIPE_SECRET_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$STRIPE_WEBHOOK_SECRET" ]] && STRIPE_WEBHOOK_SECRET=$(sm_get STRIPE_WEBHOOK_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$STRIPE_SECRET_KEY" ]]    && warn "STRIPE_SECRET_KEY not found — using placeholder (billing disabled)"
 [[ -z "$STRIPE_WEBHOOK_SECRET" ]] && warn "STRIPE_WEBHOOK_SECRET not found — using placeholder"
 ksecret stripe-secrets \
@@ -266,8 +268,8 @@ RESEND_API_KEY="${RESEND_API_KEY:-}"
 RESEND_FROM_EMAIL="${RESEND_FROM_EMAIL:-}"
 RESEND_FROM_NAME="${RESEND_FROM_NAME:-Octogee}"
 set -u
-[[ -z "$RESEND_API_KEY" ]]   && RESEND_API_KEY=$(sm_get RESEND_API_KEY "$CLUSTER_PROJECT" 2>/dev/null || echo "")
-[[ -z "$RESEND_FROM_EMAIL" ]] && RESEND_FROM_EMAIL=$(sm_get RESEND_FROM_EMAIL "$CLUSTER_PROJECT" 2>/dev/null || echo "")
+[[ -z "$RESEND_API_KEY" ]]   && RESEND_API_KEY=$(sm_get RESEND_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$RESEND_FROM_EMAIL" ]] && RESEND_FROM_EMAIL=$(sm_get RESEND_FROM_EMAIL "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$RESEND_API_KEY" ]]   && warn "RESEND_API_KEY not found — digest emails will fail until configured"
 [[ -z "$RESEND_FROM_EMAIL" ]] && warn "RESEND_FROM_EMAIL not found — using placeholder"
 ksecret resend-secrets \
@@ -295,7 +297,7 @@ fi
 #   MM_ADMIN_TOKEN: overwritten by provisioner on every gateway startup
 #   GITHUB_TOKEN:   optional, set manually if GitHub org integration is needed
 info "Pre-creating Firebase function secrets in Secret Manager (suppress deploy prompts)..."
-SM_PROJECT_CF="$CLUSTER_PROJECT"  # Functions run in the Firebase project (same as CLUSTER_PROJECT for each env)
+SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octogee-test for test, octogee for prod)
 
 # Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy
 for sm_secret in \

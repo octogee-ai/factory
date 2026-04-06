@@ -46,7 +46,7 @@ case "$ENV" in
     ;;
   test)
     NS="octogee-test"
-    [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee-test_us-central1_octogee-test"
+    [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
