@@ -1,6 +1,21 @@
 # ── Octogee Umbrella Chart — Shared Defaults ────────────────────────────────
 # Override per-environment in values.prod.yaml / values.test.yaml
 
+# ── Global values (shared across sub-charts) ────────────────────────────────
+global:
+  mattermost:
+    # K8s Secret containing admin credentials for Mattermost.
+    # This secret MUST exist before `helm upgrade`. Create it via:
+    #   ./scripts/setup-mattermost.sh --env=ENV
+    #
+    # Required keys: admin_user, admin_pass, admin_token, admin_user_id,
+    #                bot_token, bot_user_id, team_id
+    #
+    # Consumed by: chat-proxy, workspace-api, gateway
+    adminSecret:
+      name: mattermost-gateway
+      tokenKey: admin_token
+
 # ── cloud-sql-proxy ─────────────────────────────────────────────────────────
 cloud-sql-proxy:
   image:

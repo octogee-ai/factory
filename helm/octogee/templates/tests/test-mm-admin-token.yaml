@@ -1,0 +1,53 @@
+{{- if .Values.mattermost.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ .Release.Name }}-test-mm-admin-token"
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ .Values.gateway.serviceAccountName | default "default" }}
+  restartPolicy: Never
+  containers:
+    - name: test-mm-token
+      image: curlimages/curl:8.7.1
+      command:
+        - sh
+        - -ec
+        - |
+          echo "=== Validating MM_ADMIN_TOKEN against Mattermost API ==="
+
+          if [ -z "$MM_ADMIN_TOKEN" ]; then
+            echo "FAIL: MM_ADMIN_TOKEN is empty or not injected"
+            exit 1
+          fi
+
+          echo "Token present (length: $(printf '%s' "$MM_ADMIN_TOKEN" | wc -c | tr -d ' '))"
+
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+            "http://mattermost.{{ .Release.Namespace }}.svc.cluster.local:8065/api/v4/users/me")
+
+          echo "Mattermost /api/v4/users/me → HTTP $HTTP_CODE"
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "PASS: Admin token is valid"
+            exit 0
+          elif [ "$HTTP_CODE" = "401" ]; then
+            echo "FAIL: Token is expired or revoked (401 Unauthorized)"
+            echo "Fix: Re-run ./scripts/setup-mattermost.sh --env=ENV to generate a fresh PAT"
+            exit 1
+          else
+            echo "FAIL: Unexpected response ($HTTP_CODE) — is Mattermost running?"
+            exit 1
+          fi
+      env:
+        - name: MM_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: {{ .Values.global.mattermost.adminSecret.tokenKey | default "admin_token" }}
+{{- end }}
