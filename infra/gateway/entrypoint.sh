@@ -88,9 +88,11 @@ fi
 # ── SSH key setup (for Gitea git operations) ────────────────────────────────
 # The SSH private key is mounted from a K8s secret at /etc/gitea-ssh/.
 # We configure ~/.ssh to use it for the Gitea SSH service.
-if [ -f /etc/gitea-ssh/id_ed25519 ]; then
+# The init container copies the SSH key from /etc/gitea-ssh/ (root-owned secret mount)
+# to $OPENCLAW_DIR/.ssh/ (node-owned PVC) so we can read it here.
+if [ -f "$OPENCLAW_DIR/.ssh/id_ed25519" ]; then
   mkdir -p "$HOME/.ssh"
-  cp /etc/gitea-ssh/id_ed25519 "$HOME/.ssh/id_ed25519"
+  cp "$OPENCLAW_DIR/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519"
   chmod 600 "$HOME/.ssh/id_ed25519"
   GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
   cat > "$HOME/.ssh/config" <<SSHEOF
