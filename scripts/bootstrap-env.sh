@@ -48,20 +48,24 @@ done
 
 [[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test [--yes]"; exit 1; }
 
+case "$ENV" in
+  prod) NS="octogee" ;;
+  test) NS="octogee-test" ;;
+  *) echo "Unknown env: $ENV"; exit 1 ;;
+esac
+
 echo ""
 echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}  Octogee Environment Bootstrap — ${ENV}${NC}"
 echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 
+# Ensure namespace exists (teardown deletes it)
+kubectl create namespace "$NS" 2>/dev/null || true
+
 # ── Step 0: Gitea SSH key ───────────────────────────────────────────────
 echo -e "${BOLD}[0/3] Gitea SSH key${NC}"
 echo ""
-
-case "$ENV" in
-  prod) NS="octogee" ;;
-  test) NS="octogee-test" ;;
-esac
 
 if kubectl get secret gitea-ssh-key -n "$NS" >/dev/null 2>&1; then
   echo -e "  ${GREEN}✓${NC} gitea-ssh-key secret exists"

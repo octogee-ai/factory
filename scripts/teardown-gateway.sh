@@ -169,7 +169,7 @@ ok "kubectl context: $CURRENT_CTX"
 # ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
 echo ""
 if $FORCE && [[ "$ENV" == "test" ]]; then
-  # Fast path for test --yes: force-delete everything in parallel, skip waiting
+  # Fast path for test --yes: force-delete everything, skip waiting, nuke namespace
   info "Fast teardown (test + --yes)..."
   helm uninstall octogee -n "$K8S_NAMESPACE" \
     --kube-context "$K8S_CONTEXT" --no-hooks --timeout=1m 2>/dev/null || true
@@ -180,7 +180,12 @@ if $FORCE && [[ "$ENV" == "test" ]]; then
     kubectl patch "$pvc" -n "$K8S_NAMESPACE" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
     kubectl delete "$pvc" -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
   done
+  # Delete namespace (wipes all secrets too) — patch finalizers if stuck
+  kubectl patch namespace "$K8S_NAMESPACE" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
+  kubectl delete namespace "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
   ok "Fast teardown complete"
+  # Skip secrets + namespace sections below (already gone)
+  FAST_DONE=true
 else
   info "Uninstalling Helm release 'octogee'..."
   if helm status octogee -n "$K8S_NAMESPACE" \
@@ -212,31 +217,33 @@ else
   done
 fi
 
-# ── 3. Delete K8s secrets ─────────────────────────────────────────────────
-echo ""
-info "Deleting K8s secrets..."
-for secret in \
-  mattermost-gateway mattermost-cloud-sql mattermost-db \
-  gitea-token gitea-admin gitea-credentials \
-  octogee-anthropic octogee-brave octogee-sa-key octogee-discord octogee-github \
-  cloud-sql-sa; do
-  kubectl delete secret "$secret" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted: $secret" || true
-done
+if [[ "${FAST_DONE:-}" != "true" ]]; then
+  # ── 3. Delete K8s secrets ───────────────────────────────────────────────
+  echo ""
+  info "Deleting K8s secrets..."
+  for secret in \
+    mattermost-gateway mattermost-cloud-sql mattermost-db \
+    gitea-token gitea-admin gitea-credentials \
+    octogee-anthropic octogee-brave octogee-sa-key octogee-discord octogee-github \
+    cloud-sql-sa; do
+    kubectl delete secret "$secret" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted: $secret" || true
+  done
 
-# Delete any remaining secrets in namespace
-REMAINING=$(kubectl get secrets -n "$K8S_NAMESPACE" \
-  --field-selector type!=kubernetes.io/service-account-token \
-  -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
-for s in $REMAINING; do
-  [[ "$s" == "sh.helm.release"* ]] && continue  # skip helm history
-  kubectl delete secret "$s" -n "$K8S_NAMESPACE" 2>/dev/null || true
-done
-ok "K8s secrets cleared"
+  # Delete any remaining secrets in namespace
+  REMAINING=$(kubectl get secrets -n "$K8S_NAMESPACE" \
+    --field-selector type!=kubernetes.io/service-account-token \
+    -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+  for s in $REMAINING; do
+    [[ "$s" == "sh.helm.release"* ]] && continue  # skip helm history
+    kubectl delete secret "$s" -n "$K8S_NAMESPACE" 2>/dev/null || true
+  done
+  ok "K8s secrets cleared"
 
-# ── 4. Delete namespace ───────────────────────────────────────────────────
-echo ""
-info "Deleting namespace $K8S_NAMESPACE..."
-kubectl delete namespace "$K8S_NAMESPACE" --timeout=60s 2>/dev/null && ok "Namespace deleted" || warn "Namespace not found"
+  # ── 4. Delete namespace ─────────────────────────────────────────────────
+  echo ""
+  info "Deleting namespace $K8S_NAMESPACE..."
+  kubectl delete namespace "$K8S_NAMESPACE" --timeout=60s 2>/dev/null && ok "Namespace deleted" || warn "Namespace not found"
+fi
 
 # ── 5. Full: Cloud SQL DBs ────────────────────────────────────────────────
 if $FULL; then
