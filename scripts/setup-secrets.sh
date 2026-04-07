@@ -149,6 +149,7 @@ set +u
 MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
 MM_ADMIN_USER="${MM_ADMIN_USER:-octogee-admin}"
 MM_ADMIN_PASS="${MM_ADMIN_PASS:-}"
+MM_ADMIN_TOKEN="${MM_ADMIN_TOKEN:-}"
 MM_TEAM_ID="${MM_TEAM_ID:-}"
 MM_BOT_USER_ID="${MM_BOT_USER_ID:-}"
 MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-}"
@@ -160,6 +161,7 @@ ksecret mattermost-gateway \
   --from-literal=bot_token="$MM_BOT_TOKEN" \
   --from-literal=admin_user="$MM_ADMIN_USER" \
   --from-literal=admin_pass="$MM_ADMIN_PASS" \
+  --from-literal=admin_token="$MM_ADMIN_TOKEN" \
   --from-literal=team_id="$MM_TEAM_ID" \
   --from-literal=bot_user_id="$MM_BOT_USER_ID" \
   --from-literal=admin_user_id="$MM_ADMIN_USER_ID"
