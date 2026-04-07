@@ -163,15 +163,14 @@ ok "Gitea HTTP ready (status=$STATUS)"
 info "Ensuring admin account is accessible..."
 GITEA_POD=$(kubectl get pod -n "$K8S_NAMESPACE" -l "app.kubernetes.io/name=gitea" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 if [[ -n "$GITEA_POD" ]]; then
-  # Reset password via CLI (clears must_change_password flag)
+  # Reset password + clear must_change_password in one CLI call
   kubectl exec -n "$K8S_NAMESPACE" "$GITEA_POD" -- \
-    gitea admin user change-password --username octogee-admin --password "$GITEA_ADMIN_PASS" 2>/dev/null && \
-    ok "Admin password reset via CLI" || warn "CLI password reset failed (may already be correct)"
-  # Also clear must_change_password via API (belt + suspenders)
-  curl -s -X PATCH "http://localhost:13000/api/v1/admin/users/octogee-admin" \
-    -u "octogee-admin:$GITEA_ADMIN_PASS" \
-    -H "Content-Type: application/json" \
-    -d '{"login_name":"octogee-admin","source_id":0,"must_change_password":false}' >/dev/null 2>&1 || true
+    gitea admin user change-password \
+      --username octogee-admin \
+      --password "$GITEA_ADMIN_PASS" \
+      --must-change-password=false 2>/dev/null && \
+    ok "Admin password reset + must_change_password cleared" || \
+    warn "CLI password reset failed (may already be correct)"
 fi
 
 # ── 4. Create org ─────────────────────────────────────────────────────────
