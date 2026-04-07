@@ -102,6 +102,11 @@ ingress:
   staticIpName: workspace-api-ip
   certName: workspace-api-cert
 
+# Cloud Armor WAF (policy created by Terraform, referenced by name)
+cloudArmor:
+  enabled: false
+  policyName: octogee-waf
+
 # BackendConfig for health checks
 healthCheck:
   path: /health

@@ -31,6 +31,9 @@ resources:
     memory: "2Gi"
     ephemeral-storage: "5Gi"
 
+networkPolicy:
+  enabled: true
+
 pdb:
   enabled: true
   minAvailable: 1

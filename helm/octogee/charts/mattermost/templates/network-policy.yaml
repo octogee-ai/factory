@@ -1,0 +1,37 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mattermost-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: mattermost
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from chat-proxy (WebSocket + REST proxy)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: chat-proxy
+      ports:
+        - protocol: TCP
+          port: 8065
+    # Allow from gateway (OpenClaw bot, provisioner, site-build-api)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: 8065
+    # Allow from workspace-api (admin token exchange, team ops)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: workspace-api
+      ports:
+        - protocol: TCP
+          port: 8065
+{{- end }}

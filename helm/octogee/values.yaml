@@ -60,7 +60,11 @@ mattermost:
       ephemeral-storage: "5Gi"
 
 # ── gitea (upstream chart) ──────────────────────────────────────────────────
+# networkPolicy is managed in the parent chart (templates/gitea-network-policy.yaml)
+# because Gitea is a packaged upstream chart — can't inject templates into .tgz
 gitea:
+  networkPolicy:
+    enabled: true
   gitea:
     admin:
       username: octogee-admin
