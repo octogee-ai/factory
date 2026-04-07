@@ -30,6 +30,7 @@ RUN npm install
 
 COPY --chown=node:node scripts/local-provisioner.ts /octogee/scripts/
 COPY --chown=node:node scripts/site-build-api.ts /octogee/scripts/
+COPY --chown=node:node scripts/preview-proxy.ts /octogee/scripts/
 COPY --chown=node:node scripts/get-customer-uid.ts /octogee/scripts/
 COPY --chown=node:node scripts/report-usage.ts /octogee/scripts/
 COPY --chown=node:node scripts/pre-boot-config.ts /octogee/scripts/
