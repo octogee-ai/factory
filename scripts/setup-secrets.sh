@@ -119,6 +119,24 @@ kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespa
 ok "Namespace: $K8S_NAMESPACE"
 echo ""
 
+# ── 0. Gitea SSH key (gateway volume mount — blocks Init if missing) ──────
+info "gitea-ssh-key"
+if kubectl get secret gitea-ssh-key -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
+  ok "gitea-ssh-key already exists"
+else
+  info "  Generating SSH keypair for Gitea..."
+  TMPKEY=$(mktemp)
+  rm -f "$TMPKEY" "${TMPKEY}.pub"
+  ssh-keygen -t ed25519 -f "$TMPKEY" -N "" -C "octogee-gateway@octogee.local" -q
+  ksecret gitea-ssh-key \
+    --from-file=id_ed25519="$TMPKEY" \
+    --from-file=id_ed25519.pub="${TMPKEY}.pub"
+  info "  Register this public key in Gitea after setup-gitea.sh:"
+  info "  $(cat "${TMPKEY}.pub")"
+  rm -f "$TMPKEY" "${TMPKEY}.pub"
+fi
+echo ""
+
 # ── 1. Mattermost DB password ─────────────────────────────────────────────
 info "mattermost-cloud-sql"
 MM_DB_PASSWORD=$(sm_get MM_DB_PASSWORD octogee)
