@@ -102,13 +102,13 @@ echo ""
 # ── Step 1: Mattermost bootstrap ────────────────────────────────────────
 echo -e "${BOLD}[1/3] Mattermost bootstrap${NC}"
 echo ""
-"$SCRIPT_DIR/setup-mattermost.sh" --env="$ENV" "${EXTRA_ARGS[@]}"
+"$SCRIPT_DIR/setup-mattermost.sh" --env="$ENV" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 echo ""
 
 # ── Step 2: Remaining secrets ───────────────────────────────────────────
 echo -e "${BOLD}[2/3] Remaining K8s secrets${NC}"
 echo ""
-"$SCRIPT_DIR/setup-secrets.sh" --env="$ENV" "${EXTRA_ARGS[@]}"
+"$SCRIPT_DIR/setup-secrets.sh" --env="$ENV" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 echo ""
 
 # ── Step 3: Verify everything ──────────────────────────────────────────

@@ -143,19 +143,19 @@ kubectl port-forward "svc/$GITEA_SVC" -n "$K8S_NAMESPACE" 13000:3000 &
 PF_PID=$!
 trap "kill $PF_PID 2>/dev/null || true" EXIT
 
-# Wait for Gitea HTTP
+# Wait for Gitea HTTP — check if the server is responding at all.
+# Accept 200 (public) or 403 (REQUIRE_SIGNIN_VIEW=true) as "Gitea is up".
+# Auth will be verified in subsequent API calls.
 GITEA_READY=false
 for attempt in $(seq 1 20); do
-  # Use basic auth — Gitea may have REQUIRE_SIGNIN_VIEW=true which blocks unauthenticated API calls
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-    -u "octogee-admin:$GITEA_ADMIN_PASS" \
-    "http://localhost:13000/api/v1/version" 2>/dev/null || echo "000")
-  [[ "$STATUS" == "200" ]] && { GITEA_READY=true; break; }
+    "http://localhost:13000/api/v1/settings/api" 2>/dev/null || echo "000")
+  [[ "$STATUS" == "200" || "$STATUS" == "403" ]] && { GITEA_READY=true; break; }
   sleep 3
   info "  Waiting for Gitea HTTP (attempt $attempt/20, status=$STATUS)..."
 done
 $GITEA_READY || fail "Gitea HTTP not responding after 60s"
-ok "Gitea HTTP ready"
+ok "Gitea HTTP ready (status=$STATUS)"
 
 # Fix must_change_password (fresh installs set this by default)
 info "Ensuring admin account is accessible..."
