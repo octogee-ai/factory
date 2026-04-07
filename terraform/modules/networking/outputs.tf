@@ -27,8 +27,3 @@ output "chat_proxy_ip" {
   description = "Static external IP for chat-proxy Ingress"
   value       = google_compute_global_address.chat_proxy.address
 }
-
-output "waf_policy_name" {
-  description = "Cloud Armor WAF policy name — reference in Helm BackendConfigs"
-  value       = google_compute_security_policy.waf.name
-}
