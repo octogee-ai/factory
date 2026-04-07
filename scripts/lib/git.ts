@@ -17,6 +17,15 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { log, GIT_API_URL, GIT_API_TOKEN, GIT_ORG, GIT_SSH_HOST, CUSTOMERS_DIR } from "./config.js";
 
+/** Admin API headers for Gitea. Content-Type included for POST/PUT/PATCH. */
+function adminHeaders(includeContentType = true): Record<string, string> {
+  return {
+    Authorization: `token ${GIT_API_TOKEN}`,
+    Accept: "application/json",
+    ...(includeContentType ? { "Content-Type": "application/json" } : {}),
+  };
+}
+
 // ── SSH Key Management ────────────────────────────────────────────────────────
 
 /** Path to a customer's SSH private key. */
@@ -65,11 +74,7 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
 
   const username = giteaUsername(slug);
   const password = crypto.randomBytes(32).toString("hex");
-  const headers = {
-    Authorization: `token ${GIT_API_TOKEN}`,
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
+  const headers = adminHeaders();
 
   // 1. Create user (idempotent — 422 if exists)
   const createResp = await fetch(`${GIT_API_URL}/admin/users`, {
@@ -172,11 +177,7 @@ export async function grantRepoAccess(repoName: string, slug: string, permission
   const username = giteaUsername(slug);
   const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}/collaborators/${username}`, {
     method: "PUT",
-    headers: {
-      Authorization: `token ${GIT_API_TOKEN}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
+    headers: adminHeaders(),
     body: JSON.stringify({ permission }),
   });
 
@@ -198,7 +199,7 @@ export async function deleteGiteaUser(slug: string): Promise<void> {
   const username = giteaUsername(slug);
   const resp = await fetch(`${GIT_API_URL}/admin/users/${username}`, {
     method: "DELETE",
-    headers: { Authorization: `token ${GIT_API_TOKEN}`, Accept: "application/json" },
+    headers: adminHeaders(false),
   });
 
   if (resp.ok || resp.status === 404) {
@@ -271,7 +272,7 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
   // Verify repo exists on Gitea
   try {
     const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
-      headers: { Authorization: `token ${GIT_API_TOKEN}`, Accept: "application/json" },
+      headers: adminHeaders(false),
     });
     if (!resp.ok) {
       log(`[git] Repo ${GIT_ORG}/${repoName} not found on Gitea (${resp.status}) — skipping clone`);
@@ -359,11 +360,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   try {
     const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
       method: "POST",
-      headers: {
-        Authorization: `token ${GIT_API_TOKEN}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: adminHeaders(),
       body: JSON.stringify({
         name: repoName,
         private: true,
@@ -448,11 +445,7 @@ export async function initProjectRepo(
   try {
     const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
       method: "POST",
-      headers: {
-        Authorization: `token ${GIT_API_TOKEN}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: adminHeaders(),
       body: JSON.stringify({
         name: repoName,
         private: true,
@@ -584,11 +577,7 @@ export async function archiveWorkspaceRepo(slug: string): Promise<void> {
   try {
     await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
       method: "PATCH",
-      headers: {
-        Authorization: `token ${GIT_API_TOKEN}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: adminHeaders(),
       body: JSON.stringify({ archived: true }),
     });
     log(`[git] Archived repo: ${GIT_ORG}/${repoName}`);
@@ -605,11 +594,7 @@ export async function archiveProjectRepo(slug: string, projectName: string): Pro
   try {
     await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
       method: "PATCH",
-      headers: {
-        Authorization: `token ${GIT_API_TOKEN}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: adminHeaders(),
       body: JSON.stringify({ archived: true }),
     });
     log(`[git] Archived project repo: ${GIT_ORG}/${repoName}`);
@@ -626,10 +611,7 @@ export async function deleteRepo(repoName: string): Promise<void> {
 
   const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
     method: "DELETE",
-    headers: {
-      Authorization: `token ${GIT_API_TOKEN}`,
-      Accept: "application/json",
-    },
+    headers: adminHeaders(false),
   });
 
   if (resp.status === 204 || resp.status === 404) {

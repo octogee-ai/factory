@@ -1,8 +1,8 @@
 /**
  * Unit tests for per-customer Gitea isolation.
  *
- * Tests SSH key generation, slug-to-path derivation, gitExec with
- * per-customer key, and Gitea username conventions.
+ * Tests SSH key generation, permissions, slug-to-path derivation,
+ * Gitea username conventions, and gitignore coverage.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import * as fs from "fs";
@@ -89,6 +89,14 @@ describe("SSH key generation", () => {
     const keyB = generateCustomerSshKey(tmpDir, "bob");
     expect(keyA).not.toBe(keyB);
   });
+
+  it("private key is not readable by other users (0600)", () => {
+    generateCustomerSshKey(tmpDir, "acme");
+    const keyPath = path.join(tmpDir, "acme", ".ssh", "id_ed25519");
+    const stat = fs.statSync(keyPath);
+    // No group or other permissions
+    expect(stat.mode & 0o077).toBe(0);
+  });
 });
 
 describe("customer SSH key path", () => {
@@ -103,31 +111,20 @@ describe("Gitea username", () => {
     expect(giteaUsername("acme-co")).toBe("ws-acme-co");
     expect(giteaUsername("test")).toBe("ws-test");
   });
-});
 
-describe("gitExec with SSH key", () => {
-  it("sets GIT_SSH_COMMAND when sshKeyPath is provided", () => {
-    // We can't easily test gitExec directly (needs a real git repo),
-    // but we can verify the env var construction logic
-    const keyPath = "/home/node/.openclaw/customers/acme/.ssh/id_ed25519";
-    const expected = `ssh -i ${keyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
-
-    // This matches the GIT_SSH_COMMAND constructed in git.ts gitExec()
-    expect(expected).toContain(`-i ${keyPath}`);
-    expect(expected).toContain("-F /home/node/.ssh/config");
-    expect(expected).toContain("StrictHostKeyChecking=no");
+  it("is deterministic", () => {
+    expect(giteaUsername("x")).toBe(giteaUsername("x"));
   });
 });
 
-describe(".gitignore includes .ssh/", () => {
-  it("the workspace .gitignore template excludes .ssh directory", () => {
-    // This verifies that the gitignore in initWorkspaceRepo includes .ssh/
-    // so SSH keys on the PVC are never committed to git
-    const gitignoreLines = [
-      ".ssh/",
-      "brain/",
-      ".system/",
-    ];
-    expect(gitignoreLines).toContain(".ssh/");
+describe("workspace .gitignore excludes .ssh/", () => {
+  it("initWorkspaceRepo gitignore template contains .ssh/", () => {
+    // Read the actual git.ts source to verify the gitignore template
+    const gitTs = fs.readFileSync(
+      path.resolve(__dirname, "..", "lib", "git.ts"),
+      "utf-8",
+    );
+    // The gitignore string in initWorkspaceRepo must include .ssh/
+    expect(gitTs).toContain('".ssh/",');
   });
 });
