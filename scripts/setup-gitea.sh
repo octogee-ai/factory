@@ -157,17 +157,22 @@ done
 $GITEA_READY || fail "Gitea HTTP not responding after 60s"
 ok "Gitea HTTP ready (status=$STATUS)"
 
-# Fix must_change_password (fresh installs set this by default)
+# Fix must_change_password (fresh installs set this by default).
+# The API returns 403 when must_change_password is true, so we MUST use the
+# Gitea CLI inside the pod to reset the password and clear the flag first.
 info "Ensuring admin account is accessible..."
-MUST_CHANGE=$(kubectl exec -n "$K8S_NAMESPACE" \
-  "$(kubectl get pod -n "$K8S_NAMESPACE" -l "app.kubernetes.io/name=gitea" -o jsonpath='{.items[0].metadata.name}')" \
-  -- /bin/sh -c "gitea admin user list 2>/dev/null | grep octogee-admin | awk '{print \$5}'" 2>/dev/null || echo "")
-
-# Reset must_change_password via API config (tolerant — if it fails we continue)
-curl -s -X PATCH "http://localhost:13000/api/v1/admin/users/octogee-admin" \
-  -u "octogee-admin:$GITEA_ADMIN_PASS" \
-  -H "Content-Type: application/json" \
-  -d '{"login_name":"octogee-admin","source_id":0,"must_change_password":false}' >/dev/null 2>&1 || true
+GITEA_POD=$(kubectl get pod -n "$K8S_NAMESPACE" -l "app.kubernetes.io/name=gitea" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+if [[ -n "$GITEA_POD" ]]; then
+  # Reset password via CLI (clears must_change_password flag)
+  kubectl exec -n "$K8S_NAMESPACE" "$GITEA_POD" -- \
+    gitea admin user change-password --username octogee-admin --password "$GITEA_ADMIN_PASS" 2>/dev/null && \
+    ok "Admin password reset via CLI" || warn "CLI password reset failed (may already be correct)"
+  # Also clear must_change_password via API (belt + suspenders)
+  curl -s -X PATCH "http://localhost:13000/api/v1/admin/users/octogee-admin" \
+    -u "octogee-admin:$GITEA_ADMIN_PASS" \
+    -H "Content-Type: application/json" \
+    -d '{"login_name":"octogee-admin","source_id":0,"must_change_password":false}' >/dev/null 2>&1 || true
+fi
 
 # ── 4. Create org ─────────────────────────────────────────────────────────
 info "Checking 'octogee' org..."
