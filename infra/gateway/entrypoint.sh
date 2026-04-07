@@ -98,7 +98,7 @@ if [ -f "$OPENCLAW_DIR/.ssh/id_ed25519" ]; then
   cat > "$HOME/.ssh/config" <<SSHEOF
 Host gitea
   HostName ${GIT_SSH_HOST}
-  Port 22
+  Port 2222
   User git
   IdentityFile ${HOME}/.ssh/id_ed25519
   StrictHostKeyChecking no
