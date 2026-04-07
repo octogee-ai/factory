@@ -456,6 +456,7 @@ else
   echo ""
   echo "  # ── Post-Helm (services are running, bootstrap app state) ──"
   echo "  ./scripts/setup-mattermost.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+  echo "  ./scripts/setup-secrets.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)  # re-run to pick up MM tokens"
   echo "  ./scripts/setup-gitea.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
   echo "  ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
   echo ""

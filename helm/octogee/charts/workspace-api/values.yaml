@@ -24,17 +24,19 @@ secrets:
   - envName: STRIPE_SECRET_KEY
     secretName: stripe-secrets
     secretKey: secret_key
+    optional: true
   - envName: STRIPE_WEBHOOK_SECRET
     secretName: stripe-secrets
     secretKey: webhook_secret
+    optional: true
   - envName: GITEA_TOKEN
     secretName: gitea-token
     secretKey: token
-  # MM_ADMIN_TOKEN is REQUIRED — pods will not schedule without this secret.
-  # Create it via: ./scripts/setup-mattermost.sh --env=ENV
+    optional: true
   - envName: MM_ADMIN_TOKEN
     secretName: mattermost-gateway
     secretKey: admin_token
+    optional: true
   - envName: GITHUB_TOKEN
     secretName: octogee-github
     secretKey: token
@@ -79,9 +81,11 @@ secrets:
   - envName: RESEND_API_KEY
     secretName: resend-secrets
     secretKey: api_key
+    optional: true
   - envName: RESEND_FROM_EMAIL
     secretName: resend-secrets
     secretKey: from_email
+    optional: true
   - envName: RESEND_FROM_NAME
     secretName: resend-secrets
     secretKey: from_name
