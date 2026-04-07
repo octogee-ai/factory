@@ -119,10 +119,11 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
     log(`⚠ [git] Failed to register SSH key for ${username}: ${keyResp.status} ${body}`);
   }
 
-  // 3. Generate personal access token (delete existing first)
+  // 3. Generate personal access token (delete existing first via admin Sudo)
+  const sudoHeaders = { ...headers, Sudo: username };
   const tokensResp = await fetch(`${GIT_API_URL}/users/${username}/tokens`, {
     method: "GET",
-    headers: { Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`, Accept: "application/json" },
+    headers: sudoHeaders,
   });
   if (tokensResp.ok) {
     const tokens = (await tokensResp.json()) as any[];
@@ -130,23 +131,18 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
       if (t.name === "workspace-api") {
         await fetch(`${GIT_API_URL}/users/${username}/tokens/${t.id}`, {
           method: "DELETE",
-          headers: { Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` },
+          headers: sudoHeaders,
         });
       }
     }
   }
 
-  // Create token with admin API (basic auth as the user doesn't work for token creation via admin)
-  // Use admin token + sudo header to create token on behalf of user
   const tokenResp = await fetch(`${GIT_API_URL}/users/${username}/tokens`, {
     method: "POST",
-    headers: {
-      ...headers,
-      Sudo: username,
-    },
+    headers: sudoHeaders,
     body: JSON.stringify({
       name: "workspace-api",
-      scopes: ["write:repository", "write:user"],
+      scopes: ["write:repository"],
     }),
   });
   if (!tokenResp.ok) {
@@ -234,7 +230,7 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
       GIT_TERMINAL_PROMPT: "0",
     };
     if (sshKeyPath) {
-      env.GIT_SSH_COMMAND = `ssh -i ${sshKeyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
+      env.GIT_SSH_COMMAND = `ssh -i "${sshKeyPath}" -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
     }
     return execSync(`git ${args}`, {
       cwd,
