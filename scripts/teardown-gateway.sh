@@ -166,36 +166,51 @@ CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || { echo -e "  ${RED}❌ Wrong context: $CURRENT_CTX${NC}"; exit 1; }
 ok "kubectl context: $CURRENT_CTX"
 
-# ── 1. Helm uninstall ─────────────────────────────────────────────────────
+# ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
 echo ""
-info "Uninstalling Helm release 'octogee'..."
-if helm status octogee -n "$K8S_NAMESPACE" \
-    --kube-context "$K8S_CONTEXT" >/dev/null 2>&1; then
+if $FORCE && [[ "$ENV" == "test" ]]; then
+  # Fast path for test --yes: force-delete everything in parallel, skip waiting
+  info "Fast teardown (test + --yes)..."
   helm uninstall octogee -n "$K8S_NAMESPACE" \
-    --kube-context "$K8S_CONTEXT" \
-    --wait --timeout=3m 2>&1
-  ok "Helm release uninstalled"
+    --kube-context "$K8S_CONTEXT" --no-hooks --timeout=1m 2>/dev/null || true
+  kubectl delete deploy,statefulset,job --all -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
+  kubectl delete pod --all -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
+  # Force-delete PVCs (patch out finalizers if stuck)
+  for pvc in $(kubectl get pvc -n "$K8S_NAMESPACE" -o name 2>/dev/null); do
+    kubectl patch "$pvc" -n "$K8S_NAMESPACE" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
+    kubectl delete "$pvc" -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
+  done
+  ok "Fast teardown complete"
 else
-  warn "No Helm release found — skipping"
-fi
-
-# Wait for pods to terminate (PVCs can't delete while pods are running)
-info "Waiting for pods to terminate..."
-kubectl wait --for=delete pod --all -n "$K8S_NAMESPACE" \
-  --timeout=90s 2>/dev/null || true
-ok "Pods terminated"
-
-# ── 2. Delete PVCs ────────────────────────────────────────────────────────
-# Helm leaves PVCs intentionally (data safety). We delete them explicitly.
-echo ""
-info "Deleting PVCs..."
-for pvc in "$GATEWAY_PVC" mattermost-data gitea-shared-storage; do
-  if kubectl get pvc "$pvc" -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
-    kubectl delete pvc "$pvc" -n "$K8S_NAMESPACE" 2>/dev/null && ok "PVC deleted: $pvc" || warn "Could not delete: $pvc"
+  info "Uninstalling Helm release 'octogee'..."
+  if helm status octogee -n "$K8S_NAMESPACE" \
+      --kube-context "$K8S_CONTEXT" >/dev/null 2>&1; then
+    helm uninstall octogee -n "$K8S_NAMESPACE" \
+      --kube-context "$K8S_CONTEXT" \
+      --wait --timeout=3m 2>&1
+    ok "Helm release uninstalled"
   else
-    info "PVC not found (already gone): $pvc"
+    warn "No Helm release found — skipping"
   fi
-done
+
+  # Wait for pods to terminate (PVCs can't delete while pods are running)
+  info "Waiting for pods to terminate..."
+  kubectl wait --for=delete pod --all -n "$K8S_NAMESPACE" \
+    --timeout=90s 2>/dev/null || true
+  ok "Pods terminated"
+
+  # ── 2. Delete PVCs ──────────────────────────────────────────────────────
+  # Helm leaves PVCs intentionally (data safety). We delete them explicitly.
+  echo ""
+  info "Deleting PVCs..."
+  for pvc in "$GATEWAY_PVC" mattermost-data gitea-shared-storage; do
+    if kubectl get pvc "$pvc" -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
+      kubectl delete pvc "$pvc" -n "$K8S_NAMESPACE" 2>/dev/null && ok "PVC deleted: $pvc" || warn "Could not delete: $pvc"
+    else
+      info "PVC not found (already gone): $pvc"
+    fi
+  done
+fi
 
 # ── 3. Delete K8s secrets ─────────────────────────────────────────────────
 echo ""
