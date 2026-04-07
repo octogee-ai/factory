@@ -72,6 +72,7 @@ if kubectl get secret gitea-ssh-key -n "$NS" >/dev/null 2>&1; then
 else
   echo "  Generating SSH keypair for Gitea..."
   TMPKEY=$(mktemp)
+  rm -f "$TMPKEY" "${TMPKEY}.pub"
   ssh-keygen -t ed25519 -f "$TMPKEY" -N "" -C "octogee-gateway@octogee.local" -q
   kubectl create secret generic gitea-ssh-key -n "$NS" \
     --from-file=id_ed25519="$TMPKEY" \
