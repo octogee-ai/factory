@@ -93,6 +93,7 @@
       "allowFrom": [
         "*"
       ],
+      "allowPrivateNetwork": true,
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       }
