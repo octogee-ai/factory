@@ -444,3 +444,8 @@ else
   echo "  6. ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
 fi
 echo ""
+echo "  Monitoring:"
+echo "    kubectl get pods -n $K8S_NAMESPACE -w              # watch pod status"
+echo "    kubectl logs -n $K8S_NAMESPACE deploy/octogee-gateway -f  # tail gateway logs"
+echo "    kubectl describe pod -n $K8S_NAMESPACE -l app=octogee-gateway  # debug stuck pods"
+echo ""
