@@ -18,6 +18,10 @@ spec:
     requestPath: {{ .Values.healthCheck.path }}
     port: {{ .Values.healthCheck.port }}
   timeoutSec: {{ .Values.healthCheck.timeoutSec }}
+  {{- if .Values.cloudArmor.enabled }}
+  securityPolicy:
+    name: {{ .Values.cloudArmor.policyName }}
+  {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

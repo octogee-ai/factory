@@ -1,0 +1,31 @@
+{{- if .Values.gitea.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gitea-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gitea
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from gateway (git clone/push via HTTP API, provisioner)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 2222
+    # Allow from workspace-api (file read/write, repo management)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: workspace-api
+      ports:
+        - protocol: TCP
+          port: 3000
+{{- end }}
