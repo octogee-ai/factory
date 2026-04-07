@@ -51,12 +51,16 @@ try:
     if "token" in mm:
         del mm["token"]
         changed = True
-    # Migrate allowPrivateNetwork → network.dangerouslyAllowPrivateNetwork (2026.4.5)
-    if "allowPrivateNetwork" in mm:
-        net = mm.setdefault("network", {})
-        net["dangerouslyAllowPrivateNetwork"] = mm.pop("allowPrivateNetwork")
+    # Ensure private network access is allowed (Mattermost is internal K8s DNS).
+    # 2026.4.2 uses allowPrivateNetwork; 2026.4.5+ uses network.dangerouslyAllowPrivateNetwork.
+    # Set both for forward/backward compat.
+    if not mm.get("allowPrivateNetwork"):
+        mm["allowPrivateNetwork"] = True
         changed = True
-        print("[entrypoint] Migrated allowPrivateNetwork → network.dangerouslyAllowPrivateNetwork", flush=True)
+    net = mm.setdefault("network", {})
+    if not net.get("dangerouslyAllowPrivateNetwork"):
+        net["dangerouslyAllowPrivateNetwork"] = True
+        changed = True
     # Remove default:true from Mac — only bound agents should respond
     for agent in c.get("agents", {}).get("list", []):
         if agent.get("id") == "mac" and agent.get("default"):
