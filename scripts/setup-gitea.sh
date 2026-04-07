@@ -203,7 +203,7 @@ TOKEN_RESP=$(curl -s -w "\n%{http_code}" -X POST \
   -u "octogee-admin:$GITEA_ADMIN_PASS" \
   -H "Content-Type: application/json" \
   "http://localhost:13000/api/v1/users/octogee-admin/tokens" \
-  -d '{"name":"octogee-gateway-token","scopes":["write:repository","write:organization","write:user"]}' 2>/dev/null)
+  -d '{"name":"octogee-gateway-token","scopes":["write:repository","write:organization","write:user","write:admin"]}' 2>/dev/null)
 TOKEN_CODE=$(echo "$TOKEN_RESP" | tail -1)
 TOKEN_BODY=$(echo "$TOKEN_RESP" | head -1)
 
