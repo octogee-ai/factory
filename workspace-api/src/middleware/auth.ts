@@ -29,6 +29,8 @@ declare global {
       uid?: string;
       user?: FirebaseFirestore.DocumentData;
       isAdmin?: boolean;
+      /** Per-customer Gitea API token (from users/{uid}/system/config.gitea.token) */
+      giteaToken?: string;
     }
   }
 }
@@ -62,6 +64,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
           .doc("config")
           .get();
         req.isAdmin = configSnap.exists && configSnap.data()?.role === "admin";
+        req.giteaToken = configSnap.data()?.gitea?.token || undefined;
       } catch {
         req.isAdmin = false;
       }

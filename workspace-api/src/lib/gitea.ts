@@ -3,6 +3,11 @@
  *
  * In-cluster: http://octogee-gitea-http.{namespace}.svc.cluster.local:3000
  * Local dev:  http://localhost:13000 (kubectl port-forward)
+ *
+ * Per-customer tokens: workspace routes use giteaApiAs() with the customer's
+ * personal access token (stored in Firestore). The global GITEA_TOKEN is used
+ * only for admin operations (sharing, provisioning) where no per-customer
+ * token is appropriate.
  */
 import { logger } from "../middleware/logging";
 
@@ -19,12 +24,22 @@ function getToken(): string {
   return token;
 }
 
+/** Gitea API call using the global admin token. For admin operations only. */
 export async function giteaApi(
   path: string,
   method = "GET",
   body?: unknown,
 ): Promise<unknown> {
-  const token = getToken();
+  return giteaApiAs(getToken(), path, method, body);
+}
+
+/** Gitea API call using a specific token (per-customer or admin). */
+export async function giteaApiAs(
+  token: string,
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<unknown> {
   const url = `${GITEA_URL}/api/v1/repos/${GITEA_ORG}/${path}`;
   const resp = await fetch(url, {
     method,
@@ -47,12 +62,23 @@ export async function giteaApi(
   return resp.json();
 }
 
+/** Gitea API call that returns null on 404 instead of throwing. */
 export async function giteaApiAllowNotFound(
   path: string,
   method = "GET",
   body?: unknown,
 ): Promise<unknown | null> {
   const token = getToken();
+  return giteaApiAsAllowNotFound(token, path, method, body);
+}
+
+/** Per-customer variant that returns null on 404. */
+export async function giteaApiAsAllowNotFound(
+  token: string,
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<unknown | null> {
   const url = `${GITEA_URL}/api/v1/repos/${GITEA_ORG}/${path}`;
   const resp = await fetch(url, {
     method,
