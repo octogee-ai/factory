@@ -182,7 +182,8 @@ if $FORCE && [[ "$ENV" == "test" ]]; then
   done
   # Delete namespace (wipes all secrets too) — patch finalizers if stuck
   kubectl patch namespace "$K8S_NAMESPACE" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
-  kubectl delete namespace "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
+  # Timeout after 15s — namespace deletion can hang on stubborn finalizers
+  timeout 15 kubectl delete namespace "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
   ok "Fast teardown complete"
   # Skip secrets + namespace sections below (already gone)
   FAST_DONE=true
