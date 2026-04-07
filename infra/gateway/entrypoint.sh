@@ -190,6 +190,18 @@ fi
   done
 ) &
 
+# ── Start preview proxy in background with auto-restart ────────────────────
+(
+  while true; do
+    log "Starting preview proxy..."
+    /octogee/scripts/node_modules/.bin/tsx \
+      /octogee/scripts/preview-proxy.ts \
+      || true
+    log "Preview proxy exited — restarting in 5s..."
+    sleep 5
+  done
+) &
+
 # ── Start OpenClaw gateway (foreground — Docker monitors this process) ───────
 log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
 exec openclaw gateway run --bind lan --port 18789
