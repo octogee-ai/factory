@@ -210,11 +210,19 @@ export async function deleteGiteaUser(slug: string): Promise<void> {
   }
 }
 
-// ── SSH Remote URL ────────────────────────────────────────────────────────────
+// ── Remote URLs ──────────────────────────────────────────────────────────────
 
-/** Build a git SSH remote URL using the ~/.ssh/config alias. */
+/** SSH remote URL — requires per-customer key via GIT_SSH_COMMAND. */
 function sshRemoteUrl(repoName: string): string {
   return `git@${GIT_SSH_HOST}:${GIT_ORG}/${repoName}.git`;
+}
+
+/** HTTP clone URL with admin token — used only by boot-sync for initial clone.
+ *  The admin token is embedded in the URL for the clone, but the remote is
+ *  immediately switched to SSH after clone (don't persist credentials). */
+function httpCloneUrl(repoName: string): string {
+  const gitHost = new URL(GIT_API_URL).origin;
+  return `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
 }
 
 // ── Git Exec ────────────────────────────────────────────────────────────────────
@@ -252,7 +260,11 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
 
 /**
  * Clone a customer workspace repo from Gitea to the local PVC.
- * Uses per-customer SSH key if available.
+ *
+ * Uses per-customer SSH key if available. Falls back to HTTP clone
+ * with the admin token (for boot-sync, where per-customer keys don't
+ * exist yet). HTTP credentials are not persisted in the remote URL —
+ * after clone, the remote is switched to SSH.
  */
 export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promise<boolean> {
   const dest = path.join(CUSTOMERS_DIR, slug);
@@ -267,7 +279,7 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 
   const repoName = `${slug}-workspace`;
   const sshKey = customerSshKeyPath(slug);
-  const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
+  const hasCustomerKey = fs.existsSync(sshKey);
 
   // Verify repo exists on Gitea
   try {
@@ -283,17 +295,30 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
     return false;
   }
 
-  fs.mkdirSync(dest, { recursive: true });
-  const cloneUrl = sshRemoteUrl(repoName);
-  const result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`, keyArg);
+  // Clone: SSH with per-customer key if available, HTTP with admin token otherwise
+  let result: string | null;
+  if (hasCustomerKey) {
+    const cloneUrl = sshRemoteUrl(repoName);
+    result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`, sshKey);
+  } else {
+    // HTTP clone for boot-sync (no per-customer key yet)
+    const cloneUrl = httpCloneUrl(repoName);
+    log(`[git] Cloning ${slug} via HTTP (no per-customer SSH key yet)`);
+    result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`);
+    // Switch remote to SSH (don't persist admin token in remote URL)
+    if (result !== null) {
+      gitExec(dest, `remote set-url origin ${sshRemoteUrl(repoName)}`);
+    }
+  }
+
   if (result === null) {
     log(`⚠ [git] Clone failed for ${slug}`);
     try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
     return false;
   }
 
-  gitExec(dest, 'config user.email "octo@octogee.com"');
-  gitExec(dest, 'config user.name "Octogee"');
+  gitExec(dest, `config user.email "${slug}@octogee.com"`);
+  gitExec(dest, `config user.name "Octo (${slug})"`);
 
   log(`[git] ✅ Cloned ${GIT_ORG}/${repoName} → customers/${slug}/`);
   return true;
@@ -349,8 +374,8 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   log(`[git] Initializing repo in ${coachDir}`);
   const initResult = gitExec(coachDir, "init -b main");
   log(`[git] init: ${initResult ?? "FAILED"}`);
-  gitExec(coachDir, 'config user.email "octo@octogee.com"');
-  gitExec(coachDir, 'config user.name "Octogee"');
+  gitExec(coachDir, `config user.email "${slug}@octogee.com"`);
+  gitExec(coachDir, `config user.name "Octo (${slug})"`);
   const addResult = gitExec(coachDir, "add -A");
   log(`[git] add: ${addResult === "" ? "OK" : addResult ?? "FAILED"}`);
   const commitResult = gitExec(coachDir, 'commit -m "initial: workspace provisioned"');
