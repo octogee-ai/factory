@@ -25,7 +25,7 @@ async function main() {
     const agents = (d.provisioning?.openclaw?.activatedAgents || []).join(",") || "none";
     const pending = (d.provisioning?.pendingActivations || []).join(",");
     console.log(
-      `${complete} ${(d.businessSlug || "(no-slug)").padEnd(30)} ${(d.email || "no-email").padEnd(35)} tier=${tier.padEnd(8)} prov=${prov.padEnd(10)} activated=[${agents}]${pending ? " pending=["+pending+"]" : ""}`
+      `${complete} ${(d.workspaceSlug || "(no-slug)").padEnd(30)} ${(d.email || "no-email").padEnd(35)} tier=${tier.padEnd(8)} prov=${prov.padEnd(10)} activated=[${agents}]${pending ? " pending=["+pending+"]" : ""}`
     );
     console.log(`   uid=${doc.id}`);
   }

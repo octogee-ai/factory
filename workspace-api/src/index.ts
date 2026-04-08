@@ -24,6 +24,7 @@ import discordRoutes from "./routes/discord";
 import notificationRoutes from "./routes/notifications";
 import sharingRoutes from "./routes/sharing";
 import projectRoutes from "./routes/projects";
+import profileRoutes from "./routes/profile";
 
 // Internal routes — reachable only via K8s DNS (ClusterIP), NOT via Ingress
 import dataRoutes from "./routes/data";
@@ -125,6 +126,7 @@ app.use("/api/invites", inviteRoutes);
 app.use("/api/integrations", integrationRoutes);
 app.use("/api/discord", discordRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/profile", profileRoutes);
 
 // ── Internal routes (K8s DNS only — NOT routed by Ingress) ─────────────────
 // Ingress only matches /api/* paths. /internal/* never reaches the LB.

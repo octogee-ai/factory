@@ -132,7 +132,7 @@ router.post("/deprovision", requireAdmin, async (req: Request, res: Response, ne
     let uid: string | null = null;
 
     try {
-      const bySlug = await db.collection("users").where("businessSlug", "==", slug).limit(1).get();
+      const bySlug = await db.collection("users").where("workspaceSlug", "==", slug).limit(1).get();
       if (!bySlug.empty) {
         const userData = bySlug.docs[0].data();
         uid = bySlug.docs[0].id;
