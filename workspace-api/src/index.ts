@@ -23,6 +23,7 @@ import integrationRoutes from "./routes/integrations";
 import discordRoutes from "./routes/discord";
 import notificationRoutes from "./routes/notifications";
 import sharingRoutes from "./routes/sharing";
+import projectRoutes from "./routes/projects";
 
 // Internal routes — reachable only via K8s DNS (ClusterIP), NOT via Ingress
 import dataRoutes from "./routes/data";
@@ -115,6 +116,7 @@ app.get("/api/health", healthHandler);
 
 app.use("/api/workspace", workspaceRoutes);
 app.use("/api/sharing", sharingRoutes);
+app.use("/api/projects", projectRoutes);
 app.use("/api/mattermost", mattermostRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/admin", adminRoutes);
