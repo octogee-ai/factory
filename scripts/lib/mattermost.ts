@@ -630,7 +630,7 @@ export async function syncProfileToMattermost(uid: string, data: any): Promise<v
   const mmUserId = data.mattermost?.userId;
   if (!mmUserId || !process.env.MM_URL) return;
 
-  const slug = data.businessSlug;
+  const slug = data.workspaceSlug;
 
   const patch: Record<string, string> = {};
   if (data.firstName) patch.first_name = data.firstName;

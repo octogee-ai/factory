@@ -146,7 +146,7 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
 
     res.json({
       uid, email: d.email || "", displayName: d.displayName || d.firstName || "",
-      businessName: d.businessName || "", businessSlug: d.businessSlug || "", tier,
+      businessName: d.businessName || "", workspaceSlug: d.workspaceSlug || "", tier,
       subscription: {
         status: subscription.status || "none",
         stripeCustomerId: subscription.stripeCustomerId || null,
