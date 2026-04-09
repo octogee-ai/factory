@@ -52,3 +52,13 @@ export type {
   TaskFilters,
   Priority,
 } from './task';
+
+// Project types
+export type {
+  Project,
+  ProjectVisibility,
+  ProjectStatus,
+  ProjectProvisioningState,
+  ProjectCanvasMode,
+  ProjectType,
+} from './project';
