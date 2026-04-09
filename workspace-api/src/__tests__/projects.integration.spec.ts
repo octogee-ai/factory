@@ -290,37 +290,11 @@ describe('POST /api/projects/:id/join', () => {
     expect(res.body.error).toMatch(/private/i);
   });
 
-  it('rejects join when caller is NOT a workspace member', async () => {
-    // Workspace membership check throws — not a member
+  it('project join succeeds WITHOUT workspace membership — adds silent team membership', async () => {
+    // Independent membership (epic #428): user NOT in team → gets added to
+    // team silently (for channel access) but NOT to #general.
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
-      if (path === '/teams/team-1/members/mm-caller' && !method) {
-        throw new Error('MM API 404: User is not a member of this team');
-      }
-      return {};
-    });
-
-    const app = createApp();
-    const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/join')
-      .set('Authorization', 'Bearer valid-token');
-
-    expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/workspace/i);
-  });
-
-  it('rejects join for nonexistent project', async () => {
-    const app = createApp();
-    const res = await request(app)
-      .post('/api/projects/nonexistent/join')
-      .set('Authorization', 'Bearer valid-token');
-
-    expect(res.status).toBe(404);
-  });
-
-  it('project membership depends on workspace membership — join rejected without team membership', async () => {
-    // This is an explicit statement of the core access-control invariant:
-    // workspace team membership gates project membership.
-    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      // Team membership check: user is NOT a member yet
       if (path === '/teams/team-1/members/mm-caller' && !method) {
         throw new Error('MM API 404: not a team member');
       }
@@ -332,13 +306,55 @@ describe('POST /api/projects/:id/join', () => {
       .post('/api/projects/grand-raven_alpha/join')
       .set('Authorization', 'Bearer valid-token');
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/workspace/i);
-    // Crucially: guestUids must NOT have been updated
+    expect(res.status).toBe(200);
+
+    // User was added to MM team (silent membership)
+    expect(mockMmApi).toHaveBeenCalledWith(
+      '/teams/team-1/members',
+      'POST',
+      expect.objectContaining({ user_id: 'mm-caller' }),
+    );
+
+    // User was NOT added to #general channel — only project channel
+    const channelMemberCalls = mockMmApi.mock.calls.filter(
+      ([path, method]) => path.includes('/channels/') && path.includes('/members') && method === 'POST',
+    );
+    // Only the project channel join, not #general
+    expect(channelMemberCalls).toHaveLength(1);
+    expect(channelMemberCalls[0][0]).toBe('/channels/ch-alpha/members');
+
+    // guestUids was updated
     const updateCall = mockUpdate.mock.calls.find(
       ([path]) => path === 'projects/grand-raven_alpha',
     );
-    expect(updateCall).toBeUndefined();
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).toMatchObject({
+      guestUids: expect.objectContaining({ __op: 'arrayUnion', value: 'caller-uid' }),
+    });
+  });
+
+  it('project join succeeds when caller is already a team member', async () => {
+    // User already in team (workspace member) — no extra team add needed
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if (path === '/teams/team-1/members/mm-caller' && !method) return { user_id: 'mm-caller' };
+      return {};
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/projects/grand-raven_alpha/join')
+      .set('Authorization', 'Bearer valid-token');
+
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects join for nonexistent project', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/projects/nonexistent/join')
+      .set('Authorization', 'Bearer valid-token');
+
+    expect(res.status).toBe(404);
   });
 });
 
@@ -406,6 +422,81 @@ describe('POST /api/projects/:id/star', () => {
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(404);
+  });
+});
+
+// ── POST /api/projects/:id/leave ─────────────────────────────────────────────
+
+describe('POST /api/projects/:id/leave', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    for (const key of Object.keys(firestoreData)) delete firestoreData[key];
+
+    const { auth } = await import('../lib/db');
+    (auth.verifyIdToken as any).mockResolvedValue({ uid: 'caller-uid' });
+
+    seedBaseData();
+
+    firestoreData['projects/grand-raven_alpha'] = {
+      ownerUid: 'owner-uid',
+      workspaceSlug: 'grand-raven',
+      mmChannelId: 'ch-alpha',
+      giteaRepoName: 'grand-raven-alpha',
+      guestUids: ['caller-uid'],
+    };
+
+    mockMmApi.mockResolvedValue({});
+    mockGiteaApi.mockResolvedValue({});
+  });
+
+  it('removes caller from guestUids, MM channel, and Gitea', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/projects/grand-raven_alpha/leave')
+      .set('Authorization', 'Bearer valid-token');
+
+    expect(res.status).toBe(200);
+
+    // guestUids arrayRemove was applied
+    const updateCall = mockUpdate.mock.calls.find(
+      ([path]) => path === 'projects/grand-raven_alpha',
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).toMatchObject({
+      guestUids: expect.objectContaining({ __op: 'arrayRemove', value: 'caller-uid' }),
+    });
+
+    // MM channel member removal was called
+    expect(mockMmApi).toHaveBeenCalledWith(
+      '/channels/ch-alpha/members/mm-caller',
+      'DELETE',
+    );
+  });
+
+  it('rejects leave on nonexistent project', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/projects/nonexistent/leave')
+      .set('Authorization', 'Bearer valid-token');
+
+    expect(res.status).toBe(404);
+  });
+
+  it('owner cannot leave their own project', async () => {
+    firestoreData['projects/grand-raven_alpha'] = {
+      ownerUid: 'caller-uid', // caller IS the owner
+      workspaceSlug: 'grand-raven',
+      mmChannelId: 'ch-alpha',
+      giteaRepoName: 'grand-raven-alpha',
+      guestUids: [],
+    };
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/projects/grand-raven_alpha/leave')
+      .set('Authorization', 'Bearer valid-token');
+
+    expect(res.status).toBe(400);
   });
 });
 
