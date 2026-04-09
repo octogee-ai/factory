@@ -65,6 +65,8 @@ router.get("/dashboard", async (req: Request, res: Response, next: NextFunction)
         weeklyBudget: tierConfig.weeklyTokenBudget,
         totalTokensUsed: d.usage?.totalTokensUsed ?? d.usage?.tokensUsed ?? 0,
         costUsd, throttleLevel,
+        faceModel: d.faceModel ?? null,
+        brainModel: d.brainModel ?? null,
         lastActive: toISODate(d.usage?.lastUpdated),
         mattermostConnected: !!d.mattermost?.userId,
         agentCount: agentIds.length,
@@ -173,8 +175,25 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
         step: d.onboardingStep || "unknown", complete: d.onboardingComplete || false,
         milestones: Object.fromEntries(onboardingSnap.docs.map((doc) => [doc.id, doc.data()])),
       },
+      faceModel: d.faceModel || null,
+      brainModel: d.brainModel || null,
       workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
       usageLogs: logsSnap.docs.map((doc) => doc.data()),
+      // Per-model cost breakdown (from workspace usage/models/* subcollection)
+      modelCosts: await (async () => {
+        const costs: Record<string, { tokens: number; costUsd: number }> = {};
+        for (const ws of wsSnap.docs) {
+          const modelsSnap = await db.collection(`users/${uid}/workspaces/${ws.id}/usage/models`).get();
+          for (const modelDoc of modelsSnap.docs) {
+            const md = modelDoc.data();
+            const model = md.model || modelDoc.id.split("_")[0];
+            if (!costs[model]) costs[model] = { tokens: 0, costUsd: 0 };
+            costs[model].tokens += md.tokens || 0;
+            costs[model].costUsd += md.cost_usd || 0;
+          }
+        }
+        return costs;
+      })(),
       createdAt: d.createdAt?.toDate?.()?.toISOString() || null,
       approved: d.approved || false,
       // Full CSI document for detail view
