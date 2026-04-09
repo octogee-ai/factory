@@ -348,6 +348,24 @@ describe('POST /api/projects/:id/join', () => {
     expect(res.status).toBe(200);
   });
 
+  it('owner cannot join their own project as guest', async () => {
+    firestoreData['projects/grand-raven_alpha'] = {
+      ownerUid: 'caller-uid', // caller IS the owner
+      visibility: 'public',
+      mmChannelId: 'ch-alpha',
+      giteaRepoName: 'grand-raven-alpha',
+      guestUids: [],
+    };
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/projects/grand-raven_alpha/join')
+      .set('Authorization', 'Bearer valid-token');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/own/i);
+  });
+
   it('rejects join for nonexistent project', async () => {
     const app = createApp();
     const res = await request(app)
@@ -469,6 +487,12 @@ describe('POST /api/projects/:id/leave', () => {
     // MM channel member removal was called
     expect(mockMmApi).toHaveBeenCalledWith(
       '/channels/ch-alpha/members/mm-caller',
+      'DELETE',
+    );
+
+    // Gitea collaborator removal was called
+    expect(mockGiteaApi).toHaveBeenCalledWith(
+      'grand-raven-alpha/collaborators/ws-grand-raven',
       'DELETE',
     );
   });
