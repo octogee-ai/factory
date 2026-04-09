@@ -1,7 +1,7 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.3.8",
-    "lastTouchedAt": "2026-03-12T00:00:00.000Z"
+    "lastTouchedVersion": "2026.4.8",
+    "lastTouchedAt": "2026-04-08T00:00:00.000Z"
   },
   "auth": {
     "profiles": {
@@ -93,7 +93,6 @@
       "allowFrom": [
         "*"
       ],
-      "allowPrivateNetwork": true,
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       }
@@ -126,6 +125,9 @@
       "octogee-router"
     ],
     "entries": {
+      "mattermost": {
+        "enabled": true
+      },
       "octogee-router": {
         "enabled": true,
         "config": {
