@@ -59,6 +59,7 @@ FAILURES=()
 WARNINGS=()
 FIX=false
 ENV=""
+CUSTOM_NS=""
 INFRA_FAILS=0
 SECRET_FAILS=0
 BOOTSTRAP_FAILS=0
@@ -66,17 +67,18 @@ CONTEXT_SECTION=""
 
 for arg in "$@"; do
   case $arg in
-    --env=*) ENV="${arg#*=}" ;;
-    --fix)   FIX=true ;;
+    --env=*)       ENV="${arg#*=}" ;;
+    --namespace=*) CUSTOM_NS="${arg#*=}" ;;
+    --fix)         FIX=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test [--fix]"
+      echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--fix]"
       exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
 if [[ -z "$ENV" ]]; then
-  echo "Usage: $0 --env=prod|test [--fix]"
+  echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--fix]"
   exit 1
 fi
 
@@ -108,10 +110,35 @@ case "$ENV" in
     AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
     CF_SAMPLE="onSignup"
     ;;
+  custom)
+    [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
+    [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    CLUSTER_NAME="octogee-gateway"
+    CLUSTER_PROJECT="octogee"
+    NAMESPACE="$CUSTOM_NS"
+    GCP_PROJECT="octogee-test"      # custom namespaces share the test Firebase project
+    FIREBASE_PROJECT="octogee-test"
+    SITE_URL="https://octogee-test.web.app"
+    ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
+    ENV_COLOR="$BLUE"
+    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
+    CF_SAMPLE="onSignup"
+    ;;
   *)
-    echo "Unknown environment: $ENV (use prod or test)"
+    echo "Unknown environment: $ENV (use prod, test, or custom)"
     exit 1 ;;
 esac
+
+# ── Suffixes for fix-script hints ───────────────────────────────────────────
+# Custom namespaces need --namespace= and a different values file path.
+if [[ "$ENV" == "custom" ]]; then
+  FIX_SUFFIX="--env=custom --namespace=$CUSTOM_NS"
+  HELM_VALUES_FILE="helm/octogee/values.$CUSTOM_NS.yaml"
+else
+  FIX_SUFFIX="--env=$ENV$( [[ "$ENV" == "test" ]] && echo " --yes" )"
+  HELM_VALUES_FILE="helm/octogee/values.$ENV.yaml"
+fi
 
 # ── Header ────────────────────────────────────────────────────────────────────
 echo ""
@@ -154,7 +181,7 @@ if [[ "${PROXY_READY:-0}" -ge 1 ]]; then
 else
   fail "cloud-sql-proxy not ready (readyReplicas=${PROXY_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f helm/octogee/values.${ENV}.yaml -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 
@@ -203,7 +230,7 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
 else
   fail "Mattermost not ready (readyReplicas=${MM_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   fi
 fi
 
@@ -236,13 +263,13 @@ if [[ "${GITEA_READY:-0}" -ge 1 ]]; then
   else
     warn "gitea-token secret missing — provisioner cannot create repos"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gitea.sh --env=$ENV"
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gitea.sh ${FIX_SUFFIX}"
     fi
   fi
 else
   fail "Gitea not ready (readyReplicas=${GITEA_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gitea.sh --env=$ENV"
+    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gitea.sh ${FIX_SUFFIX}"
   fi
 fi
 
@@ -263,7 +290,11 @@ LATEST_SHA=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "u
 if [[ "${GW_DESIRED:-0}" -eq 0 ]]; then
   fail "Gateway scaled to 0 replicas — not deployed"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+    if [[ "$ENV" == "custom" ]]; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/provision-namespace.sh $CUSTOM_NS --yes"
+    else
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+    fi
   fi
 elif [[ "${GW_READY:-0}" -ge 1 ]]; then
   pass "Running ($GW_READY/$GW_DESIRED replicas)"
@@ -301,7 +332,11 @@ else
   info "Pod status: $GW_POD_STATUS"
   if $FIX; then
     echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/octogee-gateway -n $NAMESPACE -c gateway --tail=50"
-    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+    if [[ "$ENV" == "custom" ]]; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/provision-namespace.sh $CUSTOM_NS --yes"
+    else
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+    fi
   fi
 fi
 
@@ -345,7 +380,7 @@ else
       fail "$CERT_NAME ($CERT_DOMAIN): $CERT_STATUS"
       if $FIX; then
         echo -e "  ${YELLOW}FIX:${NC} Delete and recreate: kubectl delete managedcertificate $CERT_NAME -n $NAMESPACE"
-        echo -e "  ${YELLOW}     ${NC} Then: helm upgrade --install octogee helm/octogee -f helm/octogee/values.${ENV}.yaml -n $NAMESPACE"
+        echo -e "  ${YELLOW}     ${NC} Then: helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n $NAMESPACE"
       fi
     fi
   done
@@ -417,7 +452,7 @@ if [[ "${CHAT_DEPLOY_READY:-0}" -ge 1 ]]; then
 else
   fail "chat-proxy deployment not ready (readyReplicas=${CHAT_DEPLOY_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f helm/octogee/values.${ENV}.yaml -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 

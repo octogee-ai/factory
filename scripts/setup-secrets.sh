@@ -27,17 +27,18 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-ENV=""; YES=false
+ENV=""; YES=false; CUSTOM_NS=""
 
 for arg in "$@"; do
   case $arg in
-    --env=*)  ENV="${arg#*=}" ;;
-    --yes|-y) YES=true ;;
-    --help|-h) echo "Usage: $0 --env=prod|test [--yes]"; exit 0 ;;
+    --env=*)       ENV="${arg#*=}" ;;
+    --namespace=*) CUSTOM_NS="${arg#*=}" ;;
+    --yes|-y)      YES=true ;;
+    --help|-h) echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -49,6 +50,7 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env"
     ENV_LABEL="🔴 PRODUCTION"
     SM_PROJECT="octogee"
+    NS_SLUG="prod"
     ;;
   test)
     K8S_NAMESPACE="octogee-test"
@@ -59,6 +61,22 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
     SM_PROJECT="octogee"  # Cloud SQL + shared secrets live in octogee project
+    NS_SLUG="test"
+    ;;
+  custom)
+    # Ephemeral/feature namespaces sharing the octogee-test Firebase project.
+    [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
+    [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
+    [[ ${#CUSTOM_NS} -le 63 ]] || { echo "Namespace too long (max 63)"; exit 1; }
+    K8S_NAMESPACE="$CUSTOM_NS"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    FIREBASE_PROJECT="octogee-test"  # custom namespaces share test Firebase
+    ENV_FILE="$REPO_DIR/.env.$CUSTOM_NS"
+    ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
+    SM_PROJECT="octogee"
+    NS_SLUG="${CUSTOM_NS//-/_}"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
@@ -77,11 +95,21 @@ status() {
 }
 
 ksecret() {
-  # idempotent: delete + create
+  # Atomic idempotent apply — no delete + create window, no pod-mount failure
+  # if a volume-mounting pod gets scheduled mid-update.
   local name="$1"; shift
-  kubectl delete secret "$name" -n "$K8S_NAMESPACE" 2>/dev/null || true
-  kubectl create secret generic "$name" -n "$K8S_NAMESPACE" "$@"
+  kubectl create secret generic "$name" -n "$K8S_NAMESPACE" \
+    --dry-run=client -o yaml "$@" | kubectl apply -f - >/dev/null
   ok "Secret: $name"
+}
+
+ksecret_exists() {
+  kubectl get secret "$1" -n "$K8S_NAMESPACE" >/dev/null 2>&1
+}
+
+ksecret_key() {
+  # Read a key from an existing K8s secret. Empty string if missing.
+  kubectl get secret "$1" -n "$K8S_NAMESPACE" -o jsonpath="{.data.$2}" 2>/dev/null | base64 -d 2>/dev/null || echo ""
 }
 
 sm_get() {
@@ -187,11 +215,26 @@ ksecret gitea-admin \
   --from-literal=password="$GITEA_ADMIN_PASS"
 
 # ── 4. Gitea credentials (internal tokens) ───────────────────────────────
+# SECRET_KEY and INTERNAL_TOKEN are Gitea's internal crypto. They must NOT
+# rotate across rebuilds — Gitea encrypts persisted data with them. First
+# install: generate. Re-run: reuse what's already in the K8s secret.
 info "gitea-credentials"
 GITEA_DB_PASS=$(sm_get gitea-db-password octogee)
 [[ -n "$GITEA_DB_PASS" ]] || fail "gitea-db-password not in Secret Manager"
-GITEA_SECRET_KEY=$(openssl rand -hex 32)
-GITEA_INTERNAL_TOKEN=$(openssl rand -hex 64)
+
+EXISTING_SECRET_KEY=$(ksecret_key gitea-credentials secret-key)
+EXISTING_INTERNAL_TOKEN=$(ksecret_key gitea-credentials internal-token)
+
+if [[ -n "$EXISTING_SECRET_KEY" && -n "$EXISTING_INTERNAL_TOKEN" ]]; then
+  info "  Reusing existing Gitea SECRET_KEY + INTERNAL_TOKEN (do not rotate — encrypts persisted data)"
+  GITEA_SECRET_KEY="$EXISTING_SECRET_KEY"
+  GITEA_INTERNAL_TOKEN="$EXISTING_INTERNAL_TOKEN"
+else
+  info "  First install — generating Gitea SECRET_KEY + INTERNAL_TOKEN"
+  GITEA_SECRET_KEY=$(openssl rand -hex 32)
+  GITEA_INTERNAL_TOKEN=$(openssl rand -hex 64)
+fi
+
 ksecret gitea-credentials \
   --from-literal=admin-password="$GITEA_ADMIN_PASS" \
   --from-literal=db-password="$GITEA_DB_PASS" \
@@ -239,20 +282,36 @@ fi
 # ── 9. Internal service key (workspace-api ↔ gateway ↔ CronJob) ─────────
 # Used by requireInternalServiceAuth() on /internal/billing/* routes.
 # One shared secret across workspace-api, gateway, and the trial-expiry CronJob.
+# Precedence: Secret Manager > existing K8s secret > newly-generated.
+# Rotating this value breaks cron jobs until pods restart, so we only
+# generate a new one on first install (both SM and K8s empty).
 info "internal-service-key"
 INTERNAL_SERVICE_KEY=$(sm_get "INTERNAL_SERVICE_KEY" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
-  INTERNAL_SERVICE_KEY=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
-  info "  Generating new INTERNAL_SERVICE_KEY — saving to Secret Manager ($FIREBASE_PROJECT)..."
-  if echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
-       --data-file=- --project="$FIREBASE_PROJECT" \
-       --replication-policy=automatic --quiet 2>/dev/null; then
-    ok "  Created SM secret: INTERNAL_SERVICE_KEY"
-  elif echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
-       --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
-    ok "  Updated SM secret: INTERNAL_SERVICE_KEY"
+  # Not in SM — try to recover from existing K8s cache
+  EXISTING_ISK=$(ksecret_key internal-service-key key)
+  if [[ -n "$EXISTING_ISK" ]]; then
+    info "  Reusing existing INTERNAL_SERVICE_KEY from K8s, back-filling Secret Manager"
+    INTERNAL_SERVICE_KEY="$EXISTING_ISK"
+    echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
+      --data-file=- --project="$FIREBASE_PROJECT" \
+      --replication-policy=automatic --quiet 2>/dev/null || \
+    echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
+      --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
   else
-    warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
+    # First install — generate and persist to SM
+    INTERNAL_SERVICE_KEY=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
+    info "  First install — generating INTERNAL_SERVICE_KEY, saving to Secret Manager ($FIREBASE_PROJECT)"
+    if echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
+         --data-file=- --project="$FIREBASE_PROJECT" \
+         --replication-policy=automatic --quiet 2>/dev/null; then
+      ok "  Created SM secret: INTERNAL_SERVICE_KEY"
+    elif echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
+         --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
+      ok "  Updated SM secret: INTERNAL_SERVICE_KEY"
+    else
+      warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
+    fi
   fi
 fi
 ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
@@ -302,8 +361,9 @@ ksecret resend-secrets \
 # preferred on prod; SA key is a fallback for services that need it directly).
 info "octogee-sa-key"
 case "$ENV" in
-  prod) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-sa-key.json" ;;
-  test) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;
+  prod)   SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-sa-key.json" ;;
+  test)   SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;
+  custom) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;  # reuse test SA
 esac
 if [[ -f "$SA_KEY_PATH" ]]; then
   ksecret octogee-sa-key --from-file=key.json="$SA_KEY_PATH"
@@ -380,9 +440,11 @@ echo -e "${GREEN}═════════════════════
 echo -e "${BOLD}  All secrets created — ${ENV_LABEL}${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
+VALUES_FILE="values.${ENV}.yaml"
+[[ "$ENV" == "custom" ]] && VALUES_FILE="values.$CUSTOM_NS.yaml (rendered from template)"
 echo "  Next: helm upgrade --install octogee helm/octogee \\"
-echo "          -f helm/octogee/values.${ENV}.yaml \\"
-echo "          -n $K8S_NAMESPACE --create-namespace \\"
+echo "          -f helm/octogee/$VALUES_FILE \\"
+echo "          -n $K8S_NAMESPACE \\"
 echo "          --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
 echo "          --kube-context $K8S_CONTEXT \\"
 echo "          --wait --timeout=10m"
