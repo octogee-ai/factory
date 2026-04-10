@@ -11,17 +11,20 @@ set -euo pipefail
 # a PVC deliberately, snapshot the disk first and delete it manually — see
 # RUNBOOK.md → Known-Good Reset.
 #
-# Default (no flags): tears down the Helm release; preserves all PVCs.
-#   helm uninstall + K8s secrets delete
-#   Preserves: all PVCs, namespace, Cloud SQL, Secret Manager, Firestore,
-#              Functions, Auth
+# Default (no flags): `helm uninstall` and nothing else.
+#   Preserves: all PVCs, K8s secrets, namespace, Secret Manager, Cloud SQL,
+#              Firestore, Functions, Auth.
 #
-# --full: also wipes Cloud SQL DBs, Firestore, Cloud Functions, Firebase Auth,
-#         and Secret Manager secrets. Still preserves all PVCs and namespace.
+# --full: also drops the per-env Cloud SQL databases, wipes Firestore
+#         collections, deletes per-env Cloud Functions (chat proxy
+#         preserved), and deletes Firebase Auth users.
+#         Still preserves: all PVCs, all K8s secrets, namespace, Secret
+#         Manager. Secret rotation is never part of teardown.
 #
 # Does NOT delete (ever): GCP projects, GKE clusters, AR repos,
-#   Firebase projects, GCP Service Accounts, IAM bindings,
-#   any PVC, namespace.
+#   Firebase projects, GCP Service Accounts, IAM bindings, any PVC,
+#   any K8s secret, any Secret Manager entry, the namespace itself.
+# To rotate a secret, use scripts/rotate-secret.sh.
 #
 # Usage:
 #   ./scripts/teardown-gateway.sh --env=test           # Helm uninstall only
@@ -54,8 +57,13 @@ for arg in "$@"; do
     --help|-h)
       echo "Usage: $0 [--env=prod|test] [--force|--yes] [--full]"
       echo ""
-      echo "  (default)  Helm uninstall + PVCs + K8s secrets"
-      echo "  --full     Also wipe Cloud SQL DBs, Firestore, Functions, Auth, Secret Manager"
+      echo "  (default)  helm uninstall only — preserves PVCs, K8s secrets,"
+      echo "             namespace, Secret Manager, Cloud SQL, Firestore, Auth"
+      echo "  --full     Also drops Cloud SQL DBs + wipes Firestore + Cloud"
+      echo "             Functions + Auth users. Still preserves PVCs, K8s"
+      echo "             secrets, Secret Manager, and the namespace."
+      echo ""
+      echo "  To rotate a secret: scripts/rotate-secret.sh"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -127,23 +135,23 @@ echo -e "  Mode: ${BOLD}$(if $FULL; then echo "FULL (clean slate)"; else echo "H
 echo ""
 echo "  Will remove:"
 echo "    • Helm release 'octogee' (gateway, workspace-api, chat-proxy, MM + Gitea pods)"
-echo "    • K8s secrets in namespace $K8S_NAMESPACE"
 if $FULL; then
-  echo -e "  ${RED}  + Cloud SQL DBs: $MM_DB_NAME, $GITEA_DB_NAME (data wiped)${NC}"
-  echo -e "  ${RED}  + Firestore collections${NC}"
+  echo -e "  ${RED}  + Cloud SQL DBs: $MM_DB_NAME, $GITEA_DB_NAME (DROP DATABASE)${NC}"
+  echo -e "  ${RED}  + Firestore collections (all)${NC}"
   echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
-  echo -e "  ${RED}  + Firebase Auth users${NC}"
-  echo -e "  ${RED}  + Secret Manager secrets (per-env only — DB passwords preserved)${NC}"
+  echo -e "  ${RED}  + Firebase Auth users (all)${NC}"
 fi
 echo ""
 echo "  Will preserve:"
+echo "    • All K8s secrets in $K8S_NAMESPACE (rotate via scripts/rotate-secret.sh)"
 echo "    • All PVCs (mattermost-data, gitea-shared-storage, gateway PVC if any)"
 echo "    • Namespace: $K8S_NAMESPACE"
+echo "    • Secret Manager (every entry — never touched, even with --full)"
 echo "    • Cloud SQL instance (octogee-pg)"
 echo "    • GCP projects, GKE cluster, AR repo"
 echo "    • Firebase project, IAM, Service Accounts"
 if ! $FULL; then
-  echo "    • Cloud SQL data, Firestore, Functions (excl. chat proxy), Auth, Secret Manager"
+  echo "    • Cloud SQL data, Firestore, Functions (excl. chat proxy), Auth"
 fi
 echo ""
 

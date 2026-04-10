@@ -15,6 +15,15 @@ set -euo pipefail
 # For the full secret inventory and rarer rotations, see RUNBOOK.md →
 # "Credential Rotation (Full Playbook)".
 #
+# SCOPE: --env=test and --env=prod ONLY. Custom namespaces created with
+# scripts/provision-namespace.sh are explicitly DISPOSABLE and
+# NON-ROTATABLE. To "rotate" a custom namespace, re-provision it:
+#     ./scripts/provision-namespace.sh <namespace> --yes
+# That destroys the namespace, re-creates Cloud SQL DBs, and re-runs the
+# full bootstrap, which materializes fresh secrets in the process.
+# If a custom namespace is so long-lived that it needs in-place secret
+# rotation, it should be promoted to a real env (test or prod).
+#
 # Usage:
 #   ./scripts/rotate-secret.sh --env=test anthropic
 #   ./scripts/rotate-secret.sh --env=test internal-service-key
@@ -82,6 +91,29 @@ case "$ENV" in
     K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_LABEL="🟡 TEST"
     ;;
+  custom)
+    cat <<'EOF' >&2
+
+  ⛔ Custom namespaces are non-rotatable by design.
+
+  Custom namespaces (provisioned by scripts/provision-namespace.sh) are
+  scratch/feature/dev environments. They are intentionally disposable and
+  do not support in-place secret rotation.
+
+  To "rotate" a custom namespace's secrets, re-provision it:
+
+      ./scripts/provision-namespace.sh <namespace> --yes
+
+  That destroys the namespace, drops + recreates the Cloud SQL DBs, and
+  re-runs the full bootstrap. Fresh secrets fall out of that process.
+
+  If a custom namespace is so long-lived that it actually needs in-place
+  rotation, promote it to a real env (test or prod) — that's the signal
+  that "scratch" no longer fits.
+
+EOF
+    exit 1
+    ;;
   *) echo "Unknown environment: $ENV (use prod or test)"; exit 1 ;;
 esac
 
@@ -125,7 +157,7 @@ rollout_restart() {
 case "$SECRET" in
 
   list)
-    echo "  Rotatable via this script:"
+    echo "  Rotatable via this script (test + prod only):"
     echo "    anthropic             — ANTHROPIC_API_KEY, consumer: octogee-gateway"
     echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: workspace-api, octogee-gateway, cron jobs"
     echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: workspace-api, chat-proxy, octogee-gateway"
@@ -133,6 +165,9 @@ case "$SECRET" in
     echo ""
     echo "  For rarer rotations (Gitea SSH host key, Firebase SA key, DB passwords,"
     echo "  Stripe webhook secret, etc.) see RUNBOOK.md → 'Credential Rotation (Full Playbook)'."
+    echo ""
+    echo "  Custom namespaces are non-rotatable by design — re-provision instead:"
+    echo "    ./scripts/provision-namespace.sh <namespace> --yes"
     exit 0
     ;;
 

@@ -2,38 +2,62 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Octogee Namespace Provisioner — isolated dev/feature environments
+# Octogee Namespace Provisioner — DESTRUCTIVE scratch-env recreation
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Provisions a brand-new isolated Octogee stack in a custom K8s namespace
-# within the shared `octogee-gateway` cluster. Each namespace gets its own
-# Cloud SQL databases, PVCs, K8s secrets, MM + Gitea bootstrap state, and
-# a dedicated Helm release. The Firebase project is shared with octogee-test.
+# ⚠️  THIS IS NOT GENTLE PROVISIONING. ⚠️
 #
-# Full flow (idempotent "delete if exists → create from scratch"):
-#   1. Validate namespace name + safety confirmation
-#   2. Terraform apply → new Cloud SQL databases
-#   3. Create K8s namespace
-#   4. Render helm values from template
-#   5. setup-secrets.sh       → materialize K8s secrets
-#   6. helm upgrade --install → deploy everything
-#   7. setup-mattermost.sh    → bootstrap admin/team/bot
-#   8. setup-gitea.sh         → bootstrap org + API token
-#   9. Verify pods are running
+# This script DELETES the target namespace if it exists (helm uninstall,
+# force-delete pods/PVCs/secrets, drop the namespace, drop the Cloud SQL
+# databases via psql) and then re-creates it from scratch. There is no
+# preservation, no backup, no idempotent "noop if up-to-date" path.
 #
-# Access is INTERNAL ONLY (no ingress, no public URL). Use port-forward:
+# Run this when you want a clean disposable scratch/feature/dev environment
+# in the shared `octogee-gateway` cluster. Each namespace gets:
+#   - Its own Cloud SQL databases (per-namespace, on the shared instance)
+#   - Its own PVCs (mattermost-data, gitea-shared-storage)
+#   - Its own helm release + K8s secrets + MM/Gitea bootstrap
+#   - Internal-only services (no ingress, no public URL)
+#   - SHARED octogee-test Firebase project (Auth + Firestore)
+#
+# Custom namespaces are explicitly DISPOSABLE and NON-ROTATABLE.
+# To "rotate" secrets, re-run this script (which destroys + recreates).
+# scripts/rotate-secret.sh refuses --env=custom by design.
+#
+# Full flow:
+#   PHASE 1 — DESTROY (always runs):
+#     - helm uninstall
+#     - force-delete deployments/statefulsets/jobs/pods
+#     - patch + force-delete every PVC in the namespace
+#     - delete the namespace (clear stuck finalizers via raw API if needed)
+#     - cloud-sql-proxy + psql DROP DATABASE for both MM + Gitea per-ns DBs
+#   PHASE 2 — PROVISION:
+#     1. Terraform apply (per-namespace state prefix) → fresh Cloud SQL DBs
+#     2. kubectl create namespace
+#     3. Render helm values from template
+#     4. setup-secrets.sh        → fresh K8s secrets
+#     5. helm upgrade --install  → fresh deployments
+#     6. setup-mattermost.sh     → fresh admin/team/bot
+#     7. setup-secrets.sh again  → pick up fresh MM tokens
+#     8. setup-gitea.sh          → fresh org + API token
+#     9. rollout restart + verify pods running
+#
+# Access is INTERNAL ONLY. Use port-forward:
 #   kubectl port-forward -n NAMESPACE svc/workspace-api 3001:3001
 #   kubectl port-forward -n NAMESPACE svc/mattermost 8065:8065
 #
 # Usage:
-#   ./scripts/provision-namespace.sh feat-alice
-#   ./scripts/provision-namespace.sh feat-alice --yes
+#   ./scripts/provision-namespace.sh feat-alice          # interactive (asks)
+#   ./scripts/provision-namespace.sh feat-alice --yes    # non-interactive
 #   ./scripts/provision-namespace.sh --destroy feat-alice
+#   ./scripts/provision-namespace.sh feat-alice --skip-terraform
 #
-# SAFETY:
-#   - `octogee` and `octogee-test` cannot be used here (use setup-gateway.sh).
-#   - Any other existing namespace is deleted + recreated from scratch.
-#   - PVCs in the target namespace ARE deleted — this is a hard reset.
+# SAFETY GATES:
+#   - `octogee` requires typed 'DESTROY PROD NAMESPACE' confirmation,
+#     refuses --yes outright.
+#   - `octogee-test` is rejected entirely (use setup-gateway.sh instead).
+#   - Reserved K8s namespaces (kube-*, default, gke-*) are rejected.
+#   - Any other existing namespace IS DELETED. There is no "merge" path.
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -154,20 +178,36 @@ confirm() {
 
 # ── Banner ─────────────────────────────────────────────────────────────────
 echo ""
-echo -e "${CYAN}${BOLD}═══════════════════════════════════════════════════════════${NC}"
+echo -e "${RED}${BOLD}═══════════════════════════════════════════════════════════${NC}"
 if $DESTROY_ONLY; then
-  echo -e "${BOLD}  Octogee Namespace DESTROY — ${NAMESPACE}${NC}"
+  echo -e "${RED}${BOLD}  ⚠️  DESTRUCTIVE: Namespace DESTROY — ${NAMESPACE}${NC}"
 else
-  echo -e "${BOLD}  Octogee Namespace Provision — ${NAMESPACE}${NC}"
+  echo -e "${RED}${BOLD}  ⚠️  DESTRUCTIVE: Scratch-Env RECREATE — ${NAMESPACE}${NC}"
 fi
-echo -e "${CYAN}${BOLD}═══════════════════════════════════════════════════════════${NC}"
+echo -e "${RED}${BOLD}═══════════════════════════════════════════════════════════${NC}"
+echo ""
+echo -e "  ${RED}This is NOT gentle provisioning. It will:${NC}"
+if $DESTROY_ONLY; then
+  echo -e "  ${RED}  • helm uninstall the release${NC}"
+  echo -e "  ${RED}  • force-delete every pod, deployment, statefulset, job, PVC${NC}"
+  echo -e "  ${RED}  • delete the namespace itself${NC}"
+  echo -e "  ${RED}  • DROP DATABASE on the per-namespace Cloud SQL DBs${NC}"
+else
+  echo -e "  ${RED}  • DESTROY any existing state in this namespace (if present):${NC}"
+  echo -e "  ${RED}    helm uninstall, force-delete pods/PVCs/secrets, delete${NC}"
+  echo -e "  ${RED}    namespace, DROP DATABASE on the Cloud SQL DBs${NC}"
+  echo -e "  ${RED}  • RECREATE everything from scratch (terraform → helm → bootstrap)${NC}"
+fi
+echo ""
+echo -e "  Custom namespaces are explicitly DISPOSABLE and NON-ROTATABLE."
+echo -e "  ${BOLD}This script is the rotation path.${NC} (rotate-secret.sh refuses --env=custom)"
 echo ""
 echo -e "  Target namespace:  ${BOLD}$NAMESPACE${NC}"
 echo -e "  DB slug:           ${BOLD}$DB_SLUG${NC}"
-echo -e "  Mattermost DB:     ${BOLD}$MM_DB_NAME${NC}"
-echo -e "  Gitea DB:          ${BOLD}$GITEA_DB_NAME${NC}"
+echo -e "  Mattermost DB:     ${BOLD}$MM_DB_NAME${NC} (will be DROPped if it exists)"
+echo -e "  Gitea DB:          ${BOLD}$GITEA_DB_NAME${NC} (will be DROPped if it exists)"
 echo -e "  Cluster:           ${BOLD}$CLUSTER_NAME${NC}"
-echo -e "  Firebase (shared): ${BOLD}$FIREBASE_PROJECT${NC}"
+echo -e "  Firebase (shared): ${BOLD}$FIREBASE_PROJECT${NC} (NOT touched — shared with octogee-test)"
 echo ""
 
 # ── Tool checks ────────────────────────────────────────────────────────────
@@ -189,7 +229,7 @@ ok "kubectl context: $K8S_CONTEXT"
 # ── Confirm if not --yes ───────────────────────────────────────────────────
 if ! $YES && ! $DESTROY_ONLY; then
   echo ""
-  confirm "Proceed with full provision of '$NAMESPACE'?" || { echo "  Cancelled."; exit 0; }
+  confirm "DESTROY '$NAMESPACE' (if it exists) and recreate from scratch?" || { echo "  Cancelled."; exit 0; }
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
