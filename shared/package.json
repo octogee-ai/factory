@@ -2,6 +2,7 @@
   "name": "@octogee/shared",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "main": "types/index.ts",
   "types": "types/index.ts",
   "peerDependencies": {

@@ -8,6 +8,12 @@ import { FieldValue } from "firebase-admin/firestore";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { log } from "./config.js";
 import { db } from "./firebase.js";
+import {
+  workspaceGeneralChannelName,
+  workspaceCoachChannelName,
+  workspaceAdminChannelName,
+  projectGeneralChannelName,
+} from "../../shared/types/channelNames.js";
 
 const secretClient = new SecretManagerServiceClient();
 
@@ -318,8 +324,9 @@ export async function provisionMattermostUser(
 
     // ── Create channels in workspace team ───────────────────────────────────
 
-    // Octo DM channel (private channel rendered as DM in the UI)
-    const channelName = `octogee-${slug}`;
+    // Octo coach channel — private channel rendered as a DM in the UI
+    // (canonical name: {wsSlug}-coach).
+    const channelName = workspaceCoachChannelName(slug);
     const channelDisplayName = firstName ? `${firstName}'s Workspace` : `${slug} Workspace`;
     const channel = await createOrRestoreChannel(
       teamId, channelName, channelDisplayName, "P",
@@ -330,7 +337,7 @@ export async function provisionMattermostUser(
       return {};
     }
 
-    // Add bot, customer, and admin to the Octo DM channel
+    // Add bot, customer, and admin to the Octo coach channel
     await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: MM_BOT_USER_ID });
     await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: mmUser.id });
     if (MM_ADMIN_USER_ID) {
@@ -338,9 +345,9 @@ export async function provisionMattermostUser(
       log(`[mattermost] admin added to channel ${channelName}`);
     }
 
-    // #general channel — workspace lobby, visible to all workspace members
-    // Prefixed with octogee- so admin sidebar groups it under the customer slug.
-    const generalChannelName = `octogee-${slug}-general`;
+    // #general channel — workspace lobby, visible to all workspace members.
+    // Canonical name: {wsSlug}-general.
+    const generalChannelName = workspaceGeneralChannelName(slug);
     const generalDisplayName = `General`;
     const generalChannel = await createOrRestoreChannel(
       teamId, generalChannelName, generalDisplayName, "P",
@@ -359,8 +366,9 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ failed to create general channel for ${slug} — non-fatal`);
     }
 
-    // Admin channel — founder-to-agent guidance, customer NOT invited (#170)
-    const adminChannelName = `octogee-${slug}-admin`;
+    // Admin channel — founder-to-agent guidance, customer NOT invited (#170).
+    // Canonical name: {wsSlug}-admin.
+    const adminChannelName = workspaceAdminChannelName(slug);
     const adminDisplayName = `Admin — ${firstName || slug}`;
     const adminChannel = await createOrRestoreChannel(
       teamId, adminChannelName, adminDisplayName, "P",
@@ -465,7 +473,8 @@ export async function createProjectChannel(
     return null;
   }
 
-  const channelName = `proj-${slug}-${projectSlug}`;
+  // Canonical name: {wsSlug}-proj-{projSlug}-general.
+  const channelName = projectGeneralChannelName(slug, projectSlug);
 
   let channel = await mmApiCall("POST", "/channels", {
     team_id: effectiveTeamId,
