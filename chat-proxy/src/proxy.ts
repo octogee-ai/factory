@@ -29,6 +29,8 @@
  *   GET  /api/v4/posts/{id}/reactions           (list reactions on a post)
  *   POST /api/v4/channels/direct               (create DM channel)
  *   POST /api/v4/users/search                   (user search for DM creation)
+ *   GET  /api/v4/channels/{id}/members          (list channel members)
+ *   POST /api/v4/channels/{id}/members          (add channel member)
  *   DELETE /api/v4/channels/{id}/members/{uid}  (remove channel member)
  *   PUT  /api/v4/channels/{id}/members/{uid}/notify_props  (notification prefs)
  *   PUT  /api/v4/users/{id}/status              (set own status)
@@ -125,6 +127,10 @@ const ALLOWED_ROUTES: Array<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: /^\/api\/v4\/channels\/direct$/ },
   { method: "POST", pattern: /^\/api\/v4\/users\/search$/ },
   // Channel member management
+  // Querystring is stripped before allowlist check (see handleRest), so these
+  // match the path portion only. MM's GET /members supports ?page=N&per_page=M.
+  { method: "GET", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members$/ },
+  { method: "POST", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members$/ },
   { method: "DELETE", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members\/[a-z0-9]+$/ },
   { method: "PUT", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members\/[a-z0-9]+\/notify_props$/ },
   // User profile + status
