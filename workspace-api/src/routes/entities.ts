@@ -40,6 +40,7 @@ import { db, FieldValue } from "../lib/db";
 import { mmApi } from "../lib/mattermost";
 import { resolveWorkspaceUid } from "../lib/workspace-resolution";
 import { logger } from "../middleware/logging";
+import { workspaceGeneralChannelName } from "../lib/channelNames";
 
 const router = Router();
 router.use(requireAuth);
@@ -97,19 +98,20 @@ async function resolveEntityChannel(
     const storedChannelId = ownerData?.mattermost?.generalChannelId;
     if (storedChannelId) return { mmChannelId: storedChannelId, ownerUid };
 
-    // Fallback: search the owner's team channels for `{slug}-general`.
+    // Fallback: search the owner's team channels for the canonical
+    // {wsSlug}-general name. The legacy octogee- prefix was removed by the
+    // channel-naming-lockdown — only the canonical shape is recognized now.
     const teamId = ownerData?.mattermost?.teamId;
     if (!teamId) return { mmChannelId: null, ownerUid, error: "Workspace not yet provisioned" };
     try {
+      const expected = workspaceGeneralChannelName(id);
       const channels = (await mmApi(
         `/teams/${teamId}/channels`,
         "GET",
         undefined,
         callerToken,
       )) as Array<{ id: string; name: string }>;
-      const general = channels.find(
-        (ch) => ch.name === `octogee-${id}-general` || ch.name === `${id}-general`,
-      );
+      const general = channels.find((ch) => ch.name === expected);
       return { mmChannelId: general?.id ?? null, ownerUid };
     } catch (err) {
       logger.warn(`[entities] workspace channel lookup failed for ${id}`, { err: String(err) });

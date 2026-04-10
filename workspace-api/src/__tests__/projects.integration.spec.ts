@@ -94,13 +94,30 @@ vi.mock('../lib/stripe', () => ({
   getWebhookSecret: () => 'whsec_test',
 }));
 
+// Stub generateProjectSlug to a deterministic hash4 so test assertions can
+// pin the canonical {wsSlug}-proj-{projSlug}-general channel name without
+// dealing with randomness.
+vi.mock('../lib/channelNames', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/channelNames')>();
+  return {
+    ...actual,
+    generateProjectSlug: vi.fn(() => 'c91d'),
+  };
+});
+
 import { createApp } from '../index';
+
+// Canonical fixtures: workspace slugs follow {noun}-{verb}-{hash4},
+// project slugs are {hash4}. See shared/types/slugGenerator.ts.
+const WS = 'alive-fired-a3f2';
+const PJ = 'c91d';
+const PROJECT_ID = `${WS}_${PJ}`;
 
 // ── Shared seed helpers ──────────────────────────────────────────────────────
 
 function seedBaseData() {
   firestoreData['users/caller-uid'] = {
-    workspaceSlug: 'grand-raven',
+    workspaceSlug: WS,
     mattermost: { teamId: 'team-1', userId: 'mm-caller' },
   };
   firestoreData['users/owner-uid'] = {
@@ -144,13 +161,13 @@ describe('POST /api/projects', () => {
       .send({ name: 'Alpha Project', visibility: 'public' });
 
     expect(res.status).toBe(200);
-    expect(res.body.projectId).toBe('grand-raven_alpha-project');
-    expect(res.body.slug).toBe('alpha-project');
-    expect(res.body.workspaceSlug).toBe('grand-raven');
+    expect(res.body.projectId).toBe(PROJECT_ID);
+    expect(res.body.slug).toBe(PJ);
+    expect(res.body.workspaceSlug).toBe(WS);
 
     // Initial set call must include provisioningState + private during provisioning
     const setCall = mockSet.mock.calls.find(
-      ([path]) => path === 'projects/grand-raven_alpha-project',
+      ([path]) => path === `projects/${PROJECT_ID}`,
     );
     expect(setCall).toBeDefined();
     expect(setCall![1]).toMatchObject({
@@ -162,7 +179,7 @@ describe('POST /api/projects', () => {
 
     // Update call must flip to active + requested visibility
     const updateCall = mockUpdate.mock.calls.find(
-      ([path]) => path === 'projects/grand-raven_alpha-project',
+      ([path]) => path === `projects/${PROJECT_ID}`,
     );
     expect(updateCall).toBeDefined();
     expect(updateCall![1]).toMatchObject({
@@ -194,7 +211,7 @@ describe('POST /api/projects', () => {
   });
 
   it('rejects duplicate project', async () => {
-    firestoreData['projects/grand-raven_alpha'] = { ownerUid: 'caller-uid' };
+    firestoreData[`projects/${PROJECT_ID}`] = { ownerUid: 'caller-uid' };
 
     const app = createApp();
     const res = await request(app)
@@ -216,7 +233,7 @@ describe('POST /api/projects', () => {
       '/channels',
       'POST',
       expect.objectContaining({
-        name: 'grand-raven-alpha-project',
+        name: `${WS}-proj-${PJ}-general`,
         team_id: 'team-1',
       }),
     );
@@ -235,11 +252,11 @@ describe('POST /api/projects/:id/join', () => {
 
     seedBaseData();
 
-    firestoreData['projects/grand-raven_alpha'] = {
+    firestoreData[`projects/${PROJECT_ID}`] = {
       ownerUid: 'owner-uid',
       visibility: 'public',
       mmChannelId: 'ch-alpha',
-      giteaRepoName: 'grand-raven-alpha',
+      giteaRepoName: `${WS}-proj-${PJ}`,
       guestUids: [],
     };
 
@@ -257,14 +274,14 @@ describe('POST /api/projects/:id/join', () => {
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/join')
+      .post(`/api/projects/${PROJECT_ID}/join`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(200);
 
     // guestUids arrayUnion was applied
     const updateCall = mockUpdate.mock.calls.find(
-      ([path]) => path === 'projects/grand-raven_alpha',
+      ([path]) => path === `projects/${PROJECT_ID}`,
     );
     expect(updateCall).toBeDefined();
     expect(updateCall![1]).toMatchObject({
@@ -273,17 +290,17 @@ describe('POST /api/projects/:id/join', () => {
   });
 
   it('private project join rejects without invite', async () => {
-    firestoreData['projects/grand-raven_alpha'] = {
+    firestoreData[`projects/${PROJECT_ID}`] = {
       ownerUid: 'owner-uid',
       visibility: 'private',
       mmChannelId: 'ch-alpha',
-      giteaRepoName: 'grand-raven-alpha',
+      giteaRepoName: `${WS}-proj-${PJ}`,
       guestUids: [],
     };
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/join')
+      .post(`/api/projects/${PROJECT_ID}/join`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(403);
@@ -303,7 +320,7 @@ describe('POST /api/projects/:id/join', () => {
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/join')
+      .post(`/api/projects/${PROJECT_ID}/join`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(200);
@@ -325,7 +342,7 @@ describe('POST /api/projects/:id/join', () => {
 
     // guestUids was updated
     const updateCall = mockUpdate.mock.calls.find(
-      ([path]) => path === 'projects/grand-raven_alpha',
+      ([path]) => path === `projects/${PROJECT_ID}`,
     );
     expect(updateCall).toBeDefined();
     expect(updateCall![1]).toMatchObject({
@@ -342,24 +359,24 @@ describe('POST /api/projects/:id/join', () => {
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/join')
+      .post(`/api/projects/${PROJECT_ID}/join`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(200);
   });
 
   it('owner cannot join their own project as guest', async () => {
-    firestoreData['projects/grand-raven_alpha'] = {
+    firestoreData[`projects/${PROJECT_ID}`] = {
       ownerUid: 'caller-uid', // caller IS the owner
       visibility: 'public',
       mmChannelId: 'ch-alpha',
-      giteaRepoName: 'grand-raven-alpha',
+      giteaRepoName: `${WS}-proj-${PJ}`,
       guestUids: [],
     };
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/join')
+      .post(`/api/projects/${PROJECT_ID}/join`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(400);
@@ -388,15 +405,15 @@ describe('POST /api/projects/:id/star', () => {
 
     seedBaseData();
 
-    firestoreData['projects/grand-raven_alpha'] = { ownerUid: 'owner-uid' };
+    firestoreData[`projects/${PROJECT_ID}`] = { ownerUid: 'owner-uid' };
   });
 
   it('stars a project (creates star doc)', async () => {
-    // stars/caller-uid_grand-raven_alpha is NOT in firestoreData — so star doesn't exist yet
+    // stars/caller-uid_${PROJECT_ID} is NOT in firestoreData — so star doesn't exist yet
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/star')
+      .post(`/api/projects/${PROJECT_ID}/star`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(200);
@@ -404,39 +421,39 @@ describe('POST /api/projects/:id/star', () => {
 
     // Star doc was created with starrerUid
     const setCall = mockSet.mock.calls.find(
-      ([path]) => path === 'stars/caller-uid_grand-raven_alpha',
+      ([path]) => path === `stars/caller-uid_${PROJECT_ID}`,
     );
     expect(setCall).toBeDefined();
     expect(setCall![1]).toMatchObject({ starrerUid: 'caller-uid' });
   });
 
   it('unstars a project (deletes star doc)', async () => {
-    firestoreData['stars/caller-uid_grand-raven_alpha'] = {
+    firestoreData[`stars/caller-uid_${PROJECT_ID}`] = {
       starrerUid: 'caller-uid',
-      projectId: 'grand-raven_alpha',
+      projectId: PROJECT_ID,
     };
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/star')
+      .post(`/api/projects/${PROJECT_ID}/star`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(200);
     expect(res.body.starred).toBe(false);
 
     const deleteCall = mockDelete.mock.calls.find(
-      ([path]) => path === 'stars/caller-uid_grand-raven_alpha',
+      ([path]) => path === `stars/caller-uid_${PROJECT_ID}`,
     );
     expect(deleteCall).toBeDefined();
   });
 
   it('rejects star on nonexistent project', async () => {
     // Remove the project from firestoreData
-    delete firestoreData['projects/grand-raven_alpha'];
+    delete firestoreData[`projects/${PROJECT_ID}`];
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/star')
+      .post(`/api/projects/${PROJECT_ID}/star`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(404);
@@ -455,11 +472,11 @@ describe('POST /api/projects/:id/leave', () => {
 
     seedBaseData();
 
-    firestoreData['projects/grand-raven_alpha'] = {
+    firestoreData[`projects/${PROJECT_ID}`] = {
       ownerUid: 'owner-uid',
-      workspaceSlug: 'grand-raven',
+      workspaceSlug: WS,
       mmChannelId: 'ch-alpha',
-      giteaRepoName: 'grand-raven-alpha',
+      giteaRepoName: `${WS}-proj-${PJ}`,
       guestUids: ['caller-uid'],
     };
 
@@ -470,14 +487,14 @@ describe('POST /api/projects/:id/leave', () => {
   it('removes caller from guestUids, MM channel, and Gitea', async () => {
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/leave')
+      .post(`/api/projects/${PROJECT_ID}/leave`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(200);
 
     // guestUids arrayRemove was applied
     const updateCall = mockUpdate.mock.calls.find(
-      ([path]) => path === 'projects/grand-raven_alpha',
+      ([path]) => path === `projects/${PROJECT_ID}`,
     );
     expect(updateCall).toBeDefined();
     expect(updateCall![1]).toMatchObject({
@@ -492,7 +509,7 @@ describe('POST /api/projects/:id/leave', () => {
 
     // Gitea collaborator removal was called
     expect(mockGiteaApi).toHaveBeenCalledWith(
-      'grand-raven-alpha/collaborators/ws-grand-raven',
+      `${WS}-proj-${PJ}/collaborators/ws-${WS}`,
       'DELETE',
     );
   });
@@ -507,17 +524,17 @@ describe('POST /api/projects/:id/leave', () => {
   });
 
   it('owner cannot leave their own project', async () => {
-    firestoreData['projects/grand-raven_alpha'] = {
+    firestoreData[`projects/${PROJECT_ID}`] = {
       ownerUid: 'caller-uid', // caller IS the owner
-      workspaceSlug: 'grand-raven',
+      workspaceSlug: WS,
       mmChannelId: 'ch-alpha',
-      giteaRepoName: 'grand-raven-alpha',
+      giteaRepoName: `${WS}-proj-${PJ}`,
       guestUids: [],
     };
 
     const app = createApp();
     const res = await request(app)
-      .post('/api/projects/grand-raven_alpha/leave')
+      .post(`/api/projects/${PROJECT_ID}/leave`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(400);
@@ -536,10 +553,10 @@ describe('DELETE /api/projects/:id/members/:guestUid', () => {
 
     seedBaseData();
 
-    firestoreData['projects/grand-raven_alpha'] = {
+    firestoreData[`projects/${PROJECT_ID}`] = {
       ownerUid: 'caller-uid',
       mmChannelId: 'ch-alpha',
-      giteaRepoName: 'grand-raven-alpha',
+      giteaRepoName: `${WS}-proj-${PJ}`,
       guestUids: ['guest-uid'],
     };
 
@@ -550,14 +567,14 @@ describe('DELETE /api/projects/:id/members/:guestUid', () => {
   it('owner can remove guest', async () => {
     const app = createApp();
     const res = await request(app)
-      .delete('/api/projects/grand-raven_alpha/members/guest-uid')
+      .delete(`/api/projects/${PROJECT_ID}/members/guest-uid`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(200);
 
     // guestUids arrayRemove was applied
     const updateCall = mockUpdate.mock.calls.find(
-      ([path]) => path === 'projects/grand-raven_alpha',
+      ([path]) => path === `projects/${PROJECT_ID}`,
     );
     expect(updateCall).toBeDefined();
     expect(updateCall![1]).toMatchObject({
@@ -572,16 +589,16 @@ describe('DELETE /api/projects/:id/members/:guestUid', () => {
   });
 
   it('non-owner cannot remove guest', async () => {
-    firestoreData['projects/grand-raven_alpha'] = {
+    firestoreData[`projects/${PROJECT_ID}`] = {
       ownerUid: 'someone-else',
       mmChannelId: 'ch-alpha',
-      giteaRepoName: 'grand-raven-alpha',
+      giteaRepoName: `${WS}-proj-${PJ}`,
       guestUids: ['guest-uid'],
     };
 
     const app = createApp();
     const res = await request(app)
-      .delete('/api/projects/grand-raven_alpha/members/guest-uid')
+      .delete(`/api/projects/${PROJECT_ID}/members/guest-uid`)
       .set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(403);
