@@ -31,20 +31,22 @@ NC='\033[0m'
 
 ENV=""
 YES=false
+CUSTOM_NS=""
 
 for arg in "$@"; do
   case $arg in
-    --env=*) ENV="${arg#*=}" ;;
-    --yes|-y) YES=true ;;
+    --env=*)       ENV="${arg#*=}" ;;
+    --namespace=*) CUSTOM_NS="${arg#*=}" ;;
+    --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test [--yes]"
+      echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -65,6 +67,18 @@ case "$ENV" in
     K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
+    GITEA_SVC="octogee-gitea-http"
+    ;;
+  custom)
+    [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
+    [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
+    K8S_NAMESPACE="$CUSTOM_NS"
+    GCP_PROJECT="octogee-test"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    ENV_FILE="$REPO_DIR/.env.$CUSTOM_NS"
+    ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
     GITEA_SVC="octogee-gitea-http"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
@@ -192,31 +206,52 @@ else
   ok "Org 'octogee' created"
 fi
 
-# ── 5. Create API token ───────────────────────────────────────────────────
-info "Creating Gitea API token..."
-# Delete existing token with same name (idempotent)
-curl -s -X DELETE \
-  -u "octogee-admin:$GITEA_ADMIN_PASS" \
-  "http://localhost:13000/api/v1/users/octogee-admin/tokens/octogee-gateway-token" >/dev/null 2>&1 || true
+# ── 5. Gitea API token: test cached first, only rotate if broken ─────────
+info "Checking Gitea API token state..."
 
-TOKEN_RESP=$(curl -s -w "\n%{http_code}" -X POST \
-  -u "octogee-admin:$GITEA_ADMIN_PASS" \
-  -H "Content-Type: application/json" \
-  "http://localhost:13000/api/v1/users/octogee-admin/tokens" \
-  -d '{"name":"octogee-gateway-token","scopes":["write:repository","write:organization","write:user","write:admin"]}' 2>/dev/null)
-TOKEN_CODE=$(echo "$TOKEN_RESP" | tail -1)
-TOKEN_BODY=$(echo "$TOKEN_RESP" | head -1)
+# Read cached token from K8s secret (empty if missing)
+CACHED_TOKEN=$(kubectl get secret gitea-token -n "$K8S_NAMESPACE" \
+  -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 
-[[ "$TOKEN_CODE" == "201" ]] || fail "Failed to create token (HTTP $TOKEN_CODE): $TOKEN_BODY"
-GIT_API_TOKEN=$(echo "$TOKEN_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha1',''))" 2>/dev/null || echo "")
-[[ -n "$GIT_API_TOKEN" ]] || fail "Token created but sha1 missing: $TOKEN_BODY"
-ok "API token created"
+token_is_valid() {
+  local tok="$1"
+  [[ -z "$tok" ]] && return 1
+  local who
+  who=$(curl -s -H "Authorization: token $tok" \
+    "http://localhost:13000/api/v1/user" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('login',''))" 2>/dev/null || echo "")
+  [[ "$who" == "octogee-admin" ]]
+}
+
+if token_is_valid "$CACHED_TOKEN"; then
+  ok "Cached Gitea API token still valid — skipping rotation"
+  GIT_API_TOKEN="$CACHED_TOKEN"
+else
+  info "Cached Gitea API token missing or invalid — rotating"
+  # Delete existing token with same name (idempotent)
+  curl -s -X DELETE \
+    -u "octogee-admin:$GITEA_ADMIN_PASS" \
+    "http://localhost:13000/api/v1/users/octogee-admin/tokens/octogee-gateway-token" >/dev/null 2>&1 || true
+
+  TOKEN_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+    -u "octogee-admin:$GITEA_ADMIN_PASS" \
+    -H "Content-Type: application/json" \
+    "http://localhost:13000/api/v1/users/octogee-admin/tokens" \
+    -d '{"name":"octogee-gateway-token","scopes":["write:repository","write:organization","write:user","write:admin"]}' 2>/dev/null)
+  TOKEN_CODE=$(echo "$TOKEN_RESP" | tail -1)
+  TOKEN_BODY=$(echo "$TOKEN_RESP" | head -1)
+
+  [[ "$TOKEN_CODE" == "201" ]] || fail "Failed to create token (HTTP $TOKEN_CODE): $TOKEN_BODY"
+  GIT_API_TOKEN=$(echo "$TOKEN_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha1',''))" 2>/dev/null || echo "")
+  [[ -n "$GIT_API_TOKEN" ]] || fail "Token created but sha1 missing: $TOKEN_BODY"
+  ok "API token created"
+fi
 
 # ── 6. Save token ─────────────────────────────────────────────────────────
 save_env "GIT_API_TOKEN" "$GIT_API_TOKEN"
 ok "Token saved to $ENV_FILE"
 
-# Store in Secret Manager
+# Store in Secret Manager (safe to re-add same version)
 echo -n "$GIT_API_TOKEN" | gcloud secrets versions add "gitea-api-token-${ENV}" \
   --data-file=- --project=octogee 2>/dev/null || \
 echo -n "$GIT_API_TOKEN" | gcloud secrets create "gitea-api-token-${ENV}" \
@@ -225,12 +260,12 @@ echo -n "$GIT_API_TOKEN" | gcloud secrets create "gitea-api-token-${ENV}" \
 warn "Could not save token to Secret Manager — it's in .env file"
 ok "Token saved to Secret Manager: gitea-api-token-${ENV}"
 
-# ── 7. Create K8s secret ──────────────────────────────────────────────────
-info "Creating gitea-token K8s secret..."
-kubectl delete secret gitea-token -n "$K8S_NAMESPACE" 2>/dev/null || true
+# ── 7. Apply K8s secret (atomic) ─────────────────────────────────────────
+info "Applying gitea-token K8s secret..."
 kubectl create secret generic gitea-token -n "$K8S_NAMESPACE" \
-  --from-literal=token="$GIT_API_TOKEN"
-ok "gitea-token K8s secret created"
+  --from-literal=token="$GIT_API_TOKEN" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+ok "gitea-token K8s secret applied"
 
 # Kill port-forward
 kill $PF_PID 2>/dev/null || true

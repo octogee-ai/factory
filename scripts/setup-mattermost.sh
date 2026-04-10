@@ -34,20 +34,22 @@ NC='\033[0m'
 
 ENV=""
 YES=false
+CUSTOM_NS=""
 
 for arg in "$@"; do
   case $arg in
-    --env=*)  ENV="${arg#*=}" ;;
-    --yes|-y) YES=true ;;
+    --env=*)       ENV="${arg#*=}" ;;
+    --namespace=*) CUSTOM_NS="${arg#*=}" ;;
+    --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test [--yes]"
+      echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -70,6 +72,19 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
     MM_DB_NAME="mattermost_test"
+    MM_DB_USER="mattermost"
+    ;;
+  custom)
+    [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
+    [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
+    K8S_NAMESPACE="$CUSTOM_NS"
+    GCP_PROJECT="octogee-test"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    ENV_FILE="$REPO_DIR/.env.$CUSTOM_NS"
+    ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
+    MM_DB_NAME="mattermost_${CUSTOM_NS//-/_}"
     MM_DB_USER="mattermost"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
@@ -105,6 +120,25 @@ save_env() {
   else
     echo "${key}=${val}" >> "$ENV_FILE"
   fi
+}
+
+# Read a key from a K8s secret (empty string if secret or key is missing).
+ksecret_key() {
+  kubectl get secret "$1" -n "$K8S_NAMESPACE" \
+    -o jsonpath="{.data.$2}" 2>/dev/null | base64 -d 2>/dev/null || echo ""
+}
+
+# Test an MM PAT by calling /api/v4/users/me and checking the returned user
+# ID matches the expected one. Returns 0 on match, 1 otherwise.
+mm_pat_is_valid() {
+  local pat="$1" expected_uid="$2"
+  [[ -z "$pat" || -z "$expected_uid" ]] && return 1
+  local actual_uid
+  actual_uid=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    curl -s "http://localhost:8065/api/v4/users/me" \
+    -H "Authorization: Bearer $pat" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+  [[ "$actual_uid" == "$expected_uid" ]]
 }
 
 load_env() {
@@ -249,44 +283,49 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
     | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || echo "")
   [[ -n "$MM_ADMIN_USER_ID" ]] && save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID" && ok "Admin user ID: $MM_ADMIN_USER_ID"
 
-  # ── Revoke stale admin PATs before creating a new one ────────────────────
-  info "Checking for stale admin PATs..."
-  EXISTING_PATS=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
-    curl -s "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
-  OLD_PAT_IDS=$(echo "$EXISTING_PATS" | python3 -c "
+  # ── Admin PAT: test cached value first, only rotate if it's broken ──────
+  CACHED_ADMIN_PAT=$(ksecret_key mattermost-gateway admin_token)
+  if mm_pat_is_valid "$CACHED_ADMIN_PAT" "$MM_ADMIN_USER_ID"; then
+    ok "Cached admin PAT still valid — skipping rotation"
+    MM_ADMIN_PAT="$CACHED_ADMIN_PAT"
+    save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
+  else
+    info "Cached admin PAT missing or invalid — rotating"
+    # Revoke any stale workspace-api-tagged PATs before minting a new one
+    EXISTING_PATS=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+      curl -s "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
+    OLD_PAT_IDS=$(echo "$EXISTING_PATS" | python3 -c "
 import sys, json
 tokens = json.load(sys.stdin)
 for t in tokens:
     if 'workspace-api' in t.get('description', ''):
         print(t['id'])
 " 2>/dev/null || echo "")
-  REVOKED=0
-  for pat_id in $OLD_PAT_IDS; do
-    kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
-      curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens/revoke" \
+    REVOKED=0
+    for pat_id in $OLD_PAT_IDS; do
+      kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+        curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens/revoke" \
+        -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"token_id\":\"$pat_id\"}" >/dev/null 2>&1
+      REVOKED=$((REVOKED + 1))
+    done
+    [[ $REVOKED -gt 0 ]] && ok "Revoked $REVOKED stale admin PAT(s)"
+
+    PAT_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+      curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
       -H "Content-Type: application/json" \
-      -d "{\"token_id\":\"$pat_id\"}" >/dev/null 2>&1
-    REVOKED=$((REVOKED + 1))
-  done
-  [[ $REVOKED -gt 0 ]] && ok "Revoked $REVOKED stale admin PAT(s)" || info "No stale admin PATs found"
-
-  # Create a personal access token (PAT) for workspace-api
-  # Session tokens expire; PATs don't — workspace-api needs a PAT for /admin-token route
-  info "Creating admin personal access token (PAT) for workspace-api..."
-  PAT_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
-    curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"description":"workspace-api admin token"}' 2>/dev/null)
-  MM_ADMIN_PAT=$(echo "$PAT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
-  if [[ -n "$MM_ADMIN_PAT" ]]; then
-    save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
-    ok "Admin PAT created"
-  else
-    warn "Failed to create admin PAT: $PAT_RESP"
-    warn "workspace-api /admin-token route will return 503 without this!"
+      -d '{"description":"workspace-api admin token"}' 2>/dev/null)
+    MM_ADMIN_PAT=$(echo "$PAT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+    if [[ -n "$MM_ADMIN_PAT" ]]; then
+      save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
+      ok "Admin PAT created"
+    else
+      warn "Failed to create admin PAT: $PAT_RESP"
+      warn "workspace-api /admin-token route will return 503 without this!"
+    fi
   fi
 
   # ── Discover existing team + bot (may be missing from env/secret) ────────
@@ -319,40 +358,45 @@ for b in bots:
     save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
     ok "Bot discovered: $MM_BOT_USER_ID"
 
-    # Revoke stale bot tokens before creating a new one
-    info "Checking for stale bot tokens..."
-    EXISTING_BOT_TOKENS=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
-      curl -s "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
-      -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
-    OLD_BOT_IDS=$(echo "$EXISTING_BOT_TOKENS" | python3 -c "
+    # ── Bot token: test cached value first, only rotate if broken ────────
+    CACHED_BOT_TOKEN=$(ksecret_key mattermost-gateway bot_token)
+    if mm_pat_is_valid "$CACHED_BOT_TOKEN" "$MM_BOT_USER_ID"; then
+      ok "Cached bot token still valid — skipping rotation"
+      MM_BOT_TOKEN="$CACHED_BOT_TOKEN"
+      save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
+    else
+      info "Cached bot token missing or invalid — rotating"
+      EXISTING_BOT_TOKENS=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+        curl -s "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
+        -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
+      OLD_BOT_IDS=$(echo "$EXISTING_BOT_TOKENS" | python3 -c "
 import sys, json
 for t in json.load(sys.stdin):
     print(t['id'])
 " 2>/dev/null || echo "")
-    BOT_REVOKED=0
-    for tok_id in $OLD_BOT_IDS; do
-      kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
-        curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens/revoke" \
+      BOT_REVOKED=0
+      for tok_id in $OLD_BOT_IDS; do
+        kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+          curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens/revoke" \
+          -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "{\"token_id\":\"$tok_id\"}" >/dev/null 2>&1
+        BOT_REVOKED=$((BOT_REVOKED + 1))
+      done
+      [[ $BOT_REVOKED -gt 0 ]] && ok "Revoked $BOT_REVOKED stale bot token(s)"
+
+      TOKEN_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+        curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
         -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
-        -d "{\"token_id\":\"$tok_id\"}" >/dev/null 2>&1
-      BOT_REVOKED=$((BOT_REVOKED + 1))
-    done
-    [[ $BOT_REVOKED -gt 0 ]] && ok "Revoked $BOT_REVOKED stale bot token(s)" || info "No stale bot tokens found"
-
-    # Create fresh bot token
-    info "Creating bot token..."
-    TOKEN_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
-      curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
-      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d '{"description":"Gateway token"}' 2>/dev/null)
-    MM_BOT_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
-    if [[ -n "$MM_BOT_TOKEN" ]]; then
-      save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
-      ok "Bot token created"
-    else
-      warn "Failed to create bot token: $TOKEN_RESP"
+        -d '{"description":"Gateway token"}' 2>/dev/null)
+      MM_BOT_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+      if [[ -n "$MM_BOT_TOKEN" ]]; then
+        save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
+        ok "Bot token created"
+      else
+        warn "Failed to create bot token: $TOKEN_RESP"
+      fi
     fi
   else
     warn "Could not discover octogee-bot — MM_BOT_USER_ID and MM_BOT_TOKEN will be empty"

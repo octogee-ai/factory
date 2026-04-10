@@ -5,20 +5,28 @@ set -euo pipefail
 # Octogee Environment Teardown
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Default (no flags): tears down the Helm release only.
-#   helm uninstall + PVC delete + K8s secrets delete
-#   Preserves: Cloud SQL data, Secret Manager secrets, Firestore, Functions, Auth
+# Design intent: teardown never touches PVCs. The test gateway runs on
+# emptyDir (cattle); Mattermost and Gitea are install-once pets backed by
+# PVCs that persist across teardown/setup cycles. If you ever need to wipe
+# a PVC deliberately, snapshot the disk first and delete it manually — see
+# RUNBOOK.md → Known-Good Reset.
+#
+# Default (no flags): tears down the Helm release; preserves all PVCs.
+#   helm uninstall + K8s secrets delete
+#   Preserves: all PVCs, namespace, Cloud SQL, Secret Manager, Firestore,
+#              Functions, Auth
 #
 # --full: also wipes Cloud SQL DBs, Firestore, Cloud Functions, Firebase Auth,
-#         and Secret Manager secrets. Full clean-slate rebuild.
+#         and Secret Manager secrets. Still preserves all PVCs and namespace.
 #
 # Does NOT delete (ever): GCP projects, GKE clusters, AR repos,
-#   Firebase projects, GCP Service Accounts, IAM bindings.
+#   Firebase projects, GCP Service Accounts, IAM bindings,
+#   any PVC, namespace.
 #
 # Usage:
 #   ./scripts/teardown-gateway.sh --env=test           # Helm uninstall only
 #   ./scripts/teardown-gateway.sh --env=test --yes     # Non-interactive (test only)
-#   ./scripts/teardown-gateway.sh --env=test --full    # Full clean slate
+#   ./scripts/teardown-gateway.sh --env=test --full    # Full clean slate (DB wipe)
 #   ./scripts/teardown-gateway.sh --env=prod           # Prod (interactive, requires "DESTROY PROD")
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -67,7 +75,6 @@ case "$ENV" in
     ENV_LABEL="🔴 PRODUCTION"
     MM_DB_NAME="mattermost_prod"
     GITEA_DB_NAME="gitea_prod"
-    GATEWAY_PVC="octogee-data"
     ;;
   test)
     GCP_PROJECT="octogee-test"
@@ -81,7 +88,6 @@ case "$ENV" in
     ENV_LABEL="🟡 TEST"
     MM_DB_NAME="mattermost_test"
     GITEA_DB_NAME="gitea_test"
-    GATEWAY_PVC="octogee-test-data"
     ;;
   *)
     echo "Unknown environment: $ENV (use prod or test)"
@@ -120,8 +126,7 @@ echo ""
 echo -e "  Mode: ${BOLD}$(if $FULL; then echo "FULL (clean slate)"; else echo "Helm release only"; fi)${NC}"
 echo ""
 echo "  Will remove:"
-echo "    • Helm release 'octogee' (all managed resources)"
-echo "    • PVCs: $GATEWAY_PVC, mattermost-data, gitea-shared-storage"
+echo "    • Helm release 'octogee' (gateway, workspace-api, chat-proxy, MM + Gitea pods)"
 echo "    • K8s secrets in namespace $K8S_NAMESPACE"
 if $FULL; then
   echo -e "  ${RED}  + Cloud SQL DBs: $MM_DB_NAME, $GITEA_DB_NAME (data wiped)${NC}"
@@ -132,6 +137,8 @@ if $FULL; then
 fi
 echo ""
 echo "  Will preserve:"
+echo "    • All PVCs (mattermost-data, gitea-shared-storage, gateway PVC if any)"
+echo "    • Namespace: $K8S_NAMESPACE"
 echo "    • Cloud SQL instance (octogee-pg)"
 echo "    • GCP projects, GKE cluster, AR repo"
 echo "    • Firebase project, IAM, Service Accounts"
@@ -169,30 +176,14 @@ ok "kubectl context: $CURRENT_CTX"
 # ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
 echo ""
 if $FORCE && [[ "$ENV" == "test" ]]; then
-  # Fast path for test --yes: force-delete everything, skip waiting, nuke namespace
+  # Fast path for test --yes: force-delete gateway/app resources only.
+  # PVCs and namespace are preserved.
   info "Fast teardown (test + --yes)..."
   helm uninstall octogee -n "$K8S_NAMESPACE" \
     --kube-context "$K8S_CONTEXT" --no-hooks --timeout=1m 2>/dev/null || true
   kubectl delete deploy,statefulset,job --all -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
   kubectl delete pod --all -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
-  # Force-delete PVCs (patch out finalizers if stuck)
-  for pvc in $(kubectl get pvc -n "$K8S_NAMESPACE" -o name 2>/dev/null); do
-    kubectl patch "$pvc" -n "$K8S_NAMESPACE" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
-    kubectl delete "$pvc" -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
-  done
-  # Delete namespace — clear both metadata and spec finalizers to prevent hang
-  kubectl delete namespace "$K8S_NAMESPACE" --force --grace-period=0 --wait=false 2>/dev/null || true
-  # Clear spec.finalizers via raw API (the actual blocker for stuck namespaces)
-  kubectl get namespace "$K8S_NAMESPACE" -o json 2>/dev/null | \
-    jq '.spec.finalizers = []' | \
-    kubectl replace --raw "/api/v1/namespaces/$K8S_NAMESPACE/finalize" -f - 2>/dev/null || true
-  # Wait briefly for it to disappear
-  for i in $(seq 1 10); do
-    kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || break
-    sleep 1
-  done
-  ok "Fast teardown complete"
-  # Skip secrets + namespace sections below (already gone)
+  ok "Fast teardown complete (all PVCs preserved)"
   FAST_DONE=true
 else
   info "Uninstalling Helm release 'octogee'..."
@@ -212,45 +203,25 @@ else
     --timeout=90s 2>/dev/null || true
   ok "Pods terminated"
 
-  # ── 2. Delete PVCs ──────────────────────────────────────────────────────
-  # Helm leaves PVCs intentionally (data safety). We delete them explicitly.
+  # ── 2. PVCs preserved ───────────────────────────────────────────────────
+  # Helm leaves PVCs intentionally (data safety) and we don't override that.
+  # Test gateway runs on emptyDir (cattle), MM + Gitea PVCs are install-once
+  # pets. If you need to wipe any PVC deliberately, snapshot the disk first
+  # and delete it manually — see RUNBOOK.md → Known-Good Reset.
   echo ""
-  info "Deleting PVCs..."
-  for pvc in "$GATEWAY_PVC" mattermost-data gitea-shared-storage; do
-    if kubectl get pvc "$pvc" -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
-      kubectl delete pvc "$pvc" -n "$K8S_NAMESPACE" 2>/dev/null && ok "PVC deleted: $pvc" || warn "Could not delete: $pvc"
-    else
-      info "PVC not found (already gone): $pvc"
-    fi
-  done
+  info "Preserving all PVCs"
 fi
 
 if [[ "${FAST_DONE:-}" != "true" ]]; then
-  # ── 3. Delete K8s secrets ───────────────────────────────────────────────
+  # ── 3. Secrets preserved ────────────────────────────────────────────────
+  # Teardown never deletes K8s secrets. The cache in the namespace is still
+  # valid after a helm uninstall + reinstall; helm reuses what's there. If
+  # you need to rotate a specific secret, use scripts/rotate-secret.sh.
   echo ""
-  info "Deleting K8s secrets..."
-  for secret in \
-    mattermost-gateway mattermost-cloud-sql mattermost-db \
-    gitea-token gitea-admin gitea-credentials \
-    octogee-anthropic octogee-brave octogee-sa-key octogee-discord octogee-github \
-    cloud-sql-sa; do
-    kubectl delete secret "$secret" -n "$K8S_NAMESPACE" 2>/dev/null && ok "Deleted: $secret" || true
-  done
+  info "Preserving all K8s secrets"
 
-  # Delete any remaining secrets in namespace
-  REMAINING=$(kubectl get secrets -n "$K8S_NAMESPACE" \
-    --field-selector type!=kubernetes.io/service-account-token \
-    -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
-  for s in $REMAINING; do
-    [[ "$s" == "sh.helm.release"* ]] && continue  # skip helm history
-    kubectl delete secret "$s" -n "$K8S_NAMESPACE" 2>/dev/null || true
-  done
-  ok "K8s secrets cleared"
-
-  # ── 4. Delete namespace ─────────────────────────────────────────────────
-  echo ""
-  info "Deleting namespace $K8S_NAMESPACE..."
-  kubectl delete namespace "$K8S_NAMESPACE" --timeout=60s 2>/dev/null && ok "Namespace deleted" || warn "Namespace not found"
+  # ── 4. Namespace preserved ──────────────────────────────────────────────
+  info "Preserving namespace: $K8S_NAMESPACE"
 fi
 
 # ── 5. Full: Cloud SQL DBs ────────────────────────────────────────────────
@@ -309,35 +280,11 @@ if $FULL; then
   fi
 fi
 
-# ── 6. Full: Secret Manager ───────────────────────────────────────────────
-# PRESERVED (never deleted — shared infrastructure across both envs):
-#   MM_DB_PASSWORD       — Cloud SQL mattermost user password
-#   gitea-db-password    — Cloud SQL gitea user password
-#   gitea-admin-password-{prod,test} — Gitea admin passwords
-#   gitea-api-token-{prod,test}      — Gitea API tokens
-# DELETED: per-env app secrets (MM tokens, API keys, Stripe, OAuth, etc.)
-PRESERVED_SECRETS="MM_DB_PASSWORD gitea-db-password gitea-admin-password-prod gitea-admin-password-test gitea-api-token-prod gitea-api-token-test"
-
-if $FULL; then
-  echo ""
-  if confirm "Delete per-env Secret Manager secrets in project '$FIREBASE_PROJECT'? (infrastructure secrets preserved)"; then
-    SECRETS=$(gcloud secrets list --project="$FIREBASE_PROJECT" \
-      --format="value(name)" 2>/dev/null || true)
-    for secret in $SECRETS; do
-      # Skip preserved infrastructure secrets
-      SKIP=false
-      for preserved in $PRESERVED_SECRETS; do
-        [[ "$secret" == "$preserved" ]] && SKIP=true && break
-      done
-      $SKIP && info "  Preserving: $secret" && continue
-      gcloud secrets delete "$secret" --project="$FIREBASE_PROJECT" --quiet 2>/dev/null \
-        && ok "Deleted SM secret: $secret" || true
-    done
-    ok "Secret Manager cleared (infrastructure secrets preserved)"
-  else
-    info "Keeping Secret Manager secrets"
-  fi
-fi
+# ── 6. Secret Manager preserved ───────────────────────────────────────────
+# Even --full never deletes Secret Manager entries. SM is the source of truth
+# for ANTHROPIC_API_KEY, INTERNAL_SERVICE_KEY, STRIPE_*, RESEND_*, Firebase
+# web config, and DB passwords. Rotating those is a deliberate operation —
+# use scripts/rotate-secret.sh, not teardown.
 
 # ── 7. Full: Firestore ────────────────────────────────────────────────────
 if $FULL; then
@@ -415,25 +362,22 @@ echo -e "${BOLD}  Teardown complete — ${ENV_LABEL}${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 if $FULL; then
-  echo "  Clean slate. To rebuild:"
+  echo "  Clean slate (DBs dropped, Firestore/Auth/Functions wiped)."
+  echo "  K8s + Secret Manager secrets are untouched. To rebuild:"
   echo ""
-  echo "  # ── Pre-Helm ──"
-  echo "  ./scripts/setup-secrets.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
-  echo ""
-  echo "  # ── Helm install ──"
+  echo "  # ── Helm install (secrets still cached from previous install) ──"
   echo "  GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee)"
   echo "  helm upgrade --install octogee helm/octogee \\"
   echo "    -f helm/octogee/values.${ENV}.yaml \\"
-  echo "    -n $K8S_NAMESPACE --create-namespace \\"
+  echo "    -n $K8S_NAMESPACE \\"
   echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
   echo "    --kube-context $K8S_CONTEXT \\"
   echo "    --wait --timeout=10m"
   echo ""
-  echo "  # ── Post-Helm ──"
+  echo "  # ── Re-bootstrap MM + Gitea (DBs were dropped, need fresh admin/team/org) ──"
   echo "  ./scripts/setup-mattermost.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
-  echo "  ./scripts/setup-secrets.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)  # re-run to pick up MM tokens"
   echo "  ./scripts/setup-gitea.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
-  echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE  # pick up fresh secrets + regenerate NEGs"
+  echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE"
   echo "  kubectl rollout status deploy/octogee-gateway -n $K8S_NAMESPACE --timeout=120s"
   echo "  firebase deploy --project $FIREBASE_PROJECT"
   echo "  ./scripts/verify-env.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--fix"; fi)"
@@ -443,24 +387,17 @@ if $FULL; then
   echo "  kubectl exec -n $K8S_NAMESPACE deploy/octogee-gateway -- curl -s http://127.0.0.1:3001/api/site/health"
   echo "  kubectl exec -n $K8S_NAMESPACE deploy/octogee-gateway -- curl -s http://127.0.0.1:9080/health"
 else
-  echo "  Helm release uninstalled. To redeploy:"
+  echo "  Helm release uninstalled. All secrets, PVCs, and DBs preserved."
+  echo "  To redeploy (single command — no secret dance):"
   echo ""
-  echo "  # ── Pre-Helm (namespace + all secrets) ──"
-  echo "  ./scripts/setup-secrets.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
-  echo ""
-  echo "  # ── Helm install ──"
   echo "  GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee)"
   echo "  helm upgrade --install octogee helm/octogee \\"
   echo "    -f helm/octogee/values.${ENV}.yaml \\"
-  echo "    -n $K8S_NAMESPACE --create-namespace \\"
+  echo "    -n $K8S_NAMESPACE \\"
   echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
-  echo "    --kube-context $K8S_CONTEXT"
-  echo ""
-  echo "  # ── Post-Helm (services are running, bootstrap app state) ──"
-  echo "  ./scripts/setup-mattermost.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
-  echo "  ./scripts/setup-secrets.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)  # re-run to pick up MM tokens"
-  echo "  ./scripts/setup-gitea.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
-  echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE  # pick up fresh secrets + regenerate NEGs"
+  echo "    --kube-context $K8S_CONTEXT \\"
+  echo "    --wait --timeout=10m"
+  echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE"
   echo "  kubectl rollout status deploy/octogee-gateway -n $K8S_NAMESPACE --timeout=120s"
   echo ""
   echo "  # ── Verify ──"
@@ -468,6 +405,9 @@ else
   echo "  kubectl exec -n $K8S_NAMESPACE deploy/octogee-gateway -- curl -s http://127.0.0.1:3001/api/site/health"
   echo "  kubectl exec -n $K8S_NAMESPACE deploy/octogee-gateway -- curl -s http://127.0.0.1:9080/health"
   echo "  curl -s https://$(echo $K8S_NAMESPACE | sed 's/octogee$/preview.octogee.com/;s/octogee-test$/preview-test.octogee.com/')/health"
+  echo ""
+  echo "  # ── Rotate a secret (on-demand, not part of rebuild) ──"
+  echo "  ./scripts/rotate-secret.sh --env=$ENV <secret-name>"
 fi
 echo ""
 echo "  Monitoring:"
@@ -476,16 +416,14 @@ echo "    kubectl logs -n $K8S_NAMESPACE deploy/octogee-gateway -f  # tail gatew
 echo ""
 echo "  Troubleshooting:"
 echo ""
-echo "    Namespace stuck in Terminating?"
-echo "      kubectl get namespace $K8S_NAMESPACE -o json | jq '.spec.finalizers = []' | \\"
-echo "        kubectl replace --raw \"/api/v1/namespaces/$K8S_NAMESPACE/finalize\" -f -"
-echo ""
 echo "    Pod stuck in Init:0/1?"
 echo "      kubectl describe pod -n $K8S_NAMESPACE -l app=octogee-gateway"
-echo "      → Usually missing gitea-ssh-key secret. Run setup-secrets.sh first."
+echo "      → Usually missing gitea-ssh-key secret. First-install only:"
+echo "      ./scripts/setup-secrets.sh --env=$ENV   (bootstrap mode)"
 echo ""
 echo "    CreateContainerConfigError?"
-echo "      → Missing required secret. Run setup-secrets.sh --env=$ENV before helm install."
+echo "      → Missing required secret (first install). Run:"
+echo "      ./scripts/setup-secrets.sh --env=$ENV   (bootstrap mode)"
 echo ""
 echo "    Gateway 0/1 Running (not Ready)?"
 echo "      → Startup takes ~90s (classifier model load). Wait or check:"

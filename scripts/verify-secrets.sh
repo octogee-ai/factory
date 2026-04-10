@@ -18,6 +18,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/verify-secrets.sh --env=prod [--context=gke_octogee_us-central1_octogee-gateway]
 #   ./scripts/verify-secrets.sh --env=test
+#   ./scripts/verify-secrets.sh --env=custom --namespace=feat-alice
 #
 # Exit codes:
 #   0 — all required secrets present with non-empty critical keys
@@ -29,17 +30,19 @@ BOLD='\033[1m'; NC='\033[0m'
 
 ENV=""
 KUBE_CTX=""
+CUSTOM_NS=""
 
 for arg in "$@"; do
   case $arg in
-    --env=*)     ENV="${arg#*=}" ;;
-    --context=*) KUBE_CTX="${arg#*=}" ;;
-    --help|-h)   echo "Usage: $0 --env=prod|test [--context=<kube-context>]"; exit 0 ;;
+    --env=*)       ENV="${arg#*=}" ;;
+    --namespace=*) CUSTOM_NS="${arg#*=}" ;;
+    --context=*)   KUBE_CTX="${arg#*=}" ;;
+    --help|-h)     echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--context=<kube-context>]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -48,6 +51,12 @@ case "$ENV" in
     ;;
   test)
     NS="octogee-test"
+    [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
+    ;;
+  custom)
+    [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
+    [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
+    NS="$CUSTOM_NS"
     [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
@@ -71,16 +80,20 @@ REQUIRED_SECRETS=(
 # ── Critical keys within secrets ────────────────────────────────────────────
 # These are the most common source of "secret exists but value is empty" drift.
 # Format: "secret_name:key_name:fix_script"
+# Suffix passed to fix-script hints — includes --namespace for custom env.
+FIX_SUFFIX="--env=${ENV}"
+[[ "$ENV" == "custom" ]] && FIX_SUFFIX="--env=custom --namespace=${CUSTOM_NS}"
+
 REQUIRED_KEYS=(
-  "mattermost-gateway:admin_token:./scripts/setup-mattermost.sh --env=${ENV}"
-  "mattermost-gateway:bot_token:./scripts/setup-mattermost.sh --env=${ENV}"
-  "mattermost-gateway:bot_user_id:./scripts/setup-mattermost.sh --env=${ENV}"
-  "mattermost-gateway:team_id:./scripts/setup-mattermost.sh --env=${ENV}"
-  "mattermost-gateway:admin_user:./scripts/setup-mattermost.sh --env=${ENV}"
-  "mattermost-gateway:admin_pass:./scripts/setup-mattermost.sh --env=${ENV}"
-  "mattermost-gateway:admin_user_id:./scripts/setup-mattermost.sh --env=${ENV}"
-  "internal-service-key:key:./scripts/setup-secrets.sh --env=${ENV}"
-  "octogee-anthropic:api_key:./scripts/setup-secrets.sh --env=${ENV}"
+  "mattermost-gateway:admin_token:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  "mattermost-gateway:bot_token:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  "mattermost-gateway:bot_user_id:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  "mattermost-gateway:team_id:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  "mattermost-gateway:admin_user:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  "mattermost-gateway:admin_pass:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  "mattermost-gateway:admin_user_id:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  "internal-service-key:key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "octogee-anthropic:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
 )
 
 echo ""
@@ -148,7 +161,11 @@ echo ""
 if [[ "$FAILURES" -gt 0 ]]; then
   echo -e "${RED}${BOLD}❌ ${FAILURES} issue(s) found — deploy will fail!${NC}"
   echo ""
-  echo "  Quick fix: ./scripts/bootstrap-env.sh --env=${ENV}"
+  if [[ "$ENV" == "custom" ]]; then
+    echo "  Quick fix: ./scripts/provision-namespace.sh ${CUSTOM_NS} --yes"
+  else
+    echo "  Quick fix: ./scripts/bootstrap-env.sh --env=${ENV}"
+  fi
   echo ""
   exit 1
 else
