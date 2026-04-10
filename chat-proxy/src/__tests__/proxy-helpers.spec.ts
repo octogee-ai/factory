@@ -39,6 +39,22 @@ describe('chat-proxy helper coverage', () => {
     expect(isAllowedRoute('DELETE', '/api/v4/system/ping')).toBe(false);
   });
 
+  it('allows channel member management (list/add/remove)', () => {
+    // Needed for the Settings → Membership UI (phase 2 of the settings refactor).
+    // MM's native endpoint shape is /api/v4/channels/{id}/members{/{user_id}}.
+    expect(isAllowedRoute('GET', '/api/v4/channels/ch12345/members')).toBe(true);
+    expect(isAllowedRoute('POST', '/api/v4/channels/ch12345/members')).toBe(true);
+    expect(isAllowedRoute('DELETE', '/api/v4/channels/ch12345/members/user9')).toBe(true);
+  });
+
+  it('rejects member endpoints with the wrong method or stray segments', () => {
+    // Defense-in-depth — make sure the regex anchors catch typos.
+    expect(isAllowedRoute('PUT', '/api/v4/channels/ch12345/members')).toBe(false);
+    expect(isAllowedRoute('GET', '/api/v4/channels/ch12345/members/user9')).toBe(false);
+    expect(isAllowedRoute('POST', '/api/v4/channels/ch12345/members/user9')).toBe(false);
+    expect(isAllowedRoute('GET', '/api/v4/channels/ch12345/members/evil/../../users')).toBe(false);
+  });
+
   it('sets CORS for allowed origins', () => {
     const headers = new Map<string, string>();
     const req = { headers: { origin: 'https://octogee.web.app' } } as any;
