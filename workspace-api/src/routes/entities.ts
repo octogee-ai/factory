@@ -1,26 +1,42 @@
 /**
- * Entity membership — unified members endpoint for workspaces and projects.
+ * Entity membership — unified members endpoints for workspaces and projects.
  *
- * GET /api/entities/:kind/:id/members
+ * GET    /api/entities/:kind/:id/members
+ * DELETE /api/entities/:kind/:id/members/:mmUserId
+ *
  *   kind: 'workspace' | 'project'
  *   id:
  *     - workspace: workspace slug (e.g. "grand-raven")
  *     - project:   Firestore project doc id (e.g. "grand-raven_sprint-1")
  *
  * Membership source of truth is Mattermost — if you're in the MM channel,
- * you're a member of the entity, full stop. We use the caller's own MM
+ * you're a member of the entity, full stop. GET uses the caller's own MM
  * token (not the admin token) so MM enforces the usual "you can only see
  * channels you belong to" rule natively; non-members get a 403 from MM
  * which we surface as-is. No separate permission layer.
  *
- * The response hydrates each MM user with Firestore profile data
+ * DELETE is owner-only and keyed by MM user ID (not Firestore UID) so
+ * owners can evict users who haven't finished provisioning their
+ * Firestore profile yet — the mid-provisioning edge case that was
+ * blocked in MembershipSection before this endpoint existed.
+ *
+ * The GET response hydrates each MM user with Firestore profile data
  * (avatar, displayName) via a reverse lookup on `mattermost.userId`.
- * If a MM user has no Firestore profile yet (edge case during
- * provisioning), the MM first_name / username is used as fallback.
+ * If a MM user has no Firestore profile yet, the MM first_name /
+ * username is used as fallback.
+ *
+ * TODO (tracked in PR #462 review): hydration is currently N+1 — one
+ * Firestore read per member for the avatarUrl. Move avatarUrl onto the
+ * main users/{uid} doc or batch via chunked `in` queries once channels
+ * routinely exceed ~20 members.
+ *
+ * TODO (tracked in PR #462 review): /channels/{id}/members is paged by
+ * MM (default 60, max 200) and /users/ids is capped at 100 per call.
+ * Loop per_page=200 until empty once channels exceed that cap.
  */
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth";
-import { db } from "../lib/db";
+import { db, FieldValue } from "../lib/db";
 import { mmApi } from "../lib/mattermost";
 import { resolveWorkspaceUid } from "../lib/workspace-resolution";
 import { logger } from "../middleware/logging";
@@ -267,6 +283,121 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
   } catch (err: any) {
     logger.error(`[entities] Members fetch failed (${kind}/${id})`, { err: String(err) });
     res.status(500).json({ error: "Failed to load members" });
+  }
+});
+
+// ── DELETE /:kind/:id/members/:mmUserId ─────────────────────────────────────
+//
+// Owner-only. Keyed by MM user ID, not Firestore UID, so owners can evict
+// users who are mid-provisioning and don't have a Firestore profile yet
+// (the reason this endpoint exists at all — see PR #462 review #8).
+//
+// Workspace mode: removes the target from the {slug}-general channel only.
+//                 MM team membership and project channels are preserved.
+// Project mode:   removes from the project channel and, if we can map the
+//                 MM user back to a Firestore UID, also removes from the
+//                 project's guestUids array.
+router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response) => {
+  const callerUid = req.uid!;
+  const { kind, id, mmUserId } = req.params;
+
+  if (kind !== "workspace" && kind !== "project") {
+    res.status(400).json({ error: "kind must be 'workspace' or 'project'" });
+    return;
+  }
+  if (!mmUserId || !/^[a-z0-9]+$/.test(mmUserId)) {
+    res.status(400).json({ error: "Invalid mmUserId" });
+    return;
+  }
+
+  try {
+    // Owner check — workspace owner is `resolveWorkspaceUid(slug)`,
+    // project owner is on the project doc.
+    let ownerUid: string | null = null;
+    let mmChannelId: string | null = null;
+
+    if (kind === "workspace") {
+      ownerUid = await resolveWorkspaceUid(id);
+      if (!ownerUid) {
+        res.status(404).json({ error: "Workspace not found" });
+        return;
+      }
+      if (ownerUid !== callerUid) {
+        res.status(403).json({ error: "Only the workspace owner can remove members" });
+        return;
+      }
+      const ownerDoc = await db.doc(`users/${ownerUid}`).get();
+      mmChannelId = ownerDoc.data()?.mattermost?.generalChannelId ?? null;
+      if (!mmChannelId) {
+        res.status(422).json({ error: "Workspace has no general channel yet" });
+        return;
+      }
+    } else {
+      const projectDoc = await db.doc(`projects/${id}`).get();
+      if (!projectDoc.exists) {
+        res.status(404).json({ error: "Project not found" });
+        return;
+      }
+      const project = projectDoc.data()!;
+      ownerUid = project.ownerUid ?? null;
+      if (ownerUid !== callerUid) {
+        res.status(403).json({ error: "Only the project owner can remove members" });
+        return;
+      }
+      mmChannelId = project.mmChannelId ?? null;
+      if (!mmChannelId) {
+        res.status(422).json({ error: "Project has no channel yet" });
+        return;
+      }
+    }
+
+    // Refuse to let an owner evict themselves — that would orphan the
+    // entity. Use leave (project) / delete-workspace flows instead.
+    const ownerMmUserId = ownerUid
+      ? (await db.doc(`users/${ownerUid}`).get()).data()?.mattermost?.userId ?? null
+      : null;
+    if (ownerMmUserId && ownerMmUserId === mmUserId) {
+      res.status(400).json({ error: "Owners cannot remove themselves — delete the entity instead" });
+      return;
+    }
+
+    // Remove from the MM channel (admin token — owner authorization is
+    // already enforced above, MM-side permission is irrelevant here).
+    try {
+      await mmApi(`/channels/${mmChannelId}/members/${mmUserId}`, "DELETE");
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg.includes("404")) {
+        // Already not a member — treat as success, idempotent delete.
+        logger.info(`[entities] ${mmUserId} already absent from ${mmChannelId}`);
+      } else {
+        throw err;
+      }
+    }
+
+    // Project mode extras: clean up guestUids if the target has a
+    // Firestore profile. Missing profile is the common case this endpoint
+    // exists to support — we skip the Firestore cleanup silently.
+    if (kind === "project") {
+      const targetSnap = await db
+        .collection("users")
+        .where("mattermost.userId", "==", mmUserId)
+        .limit(1)
+        .get();
+      if (!targetSnap.empty) {
+        const targetUid = targetSnap.docs[0].id;
+        await db.doc(`projects/${id}`).update({
+          guestUids: FieldValue.arrayRemove(targetUid),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    logger.info(`[entities] ${callerUid} removed mmUser ${mmUserId} from ${kind}/${id}`);
+    res.json({ success: true });
+  } catch (err: any) {
+    logger.error(`[entities] Member removal failed (${kind}/${id}/${mmUserId})`, { err: String(err) });
+    res.status(500).json({ error: "Failed to remove member" });
   }
 });
 
