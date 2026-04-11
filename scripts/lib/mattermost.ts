@@ -8,31 +8,12 @@ import { FieldValue } from "firebase-admin/firestore";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { log } from "./config.js";
 import { db } from "./firebase.js";
-
-/**
- * Gateway/provisioner-local copy of canonical channel-name builders.
- *
- * Do not import these from ../../shared here. The gateway Docker build only
- * stages scripts/ before running `tsc`, so cross-package imports from shared/
- * type-check locally but fail in CI/container builds.
- *
- * Keep these helpers aligned with shared/types/channelNames.ts.
- */
-function workspaceGeneralChannelName(wsSlug: string): string {
-  return `${wsSlug}-general`;
-}
-
-function workspaceCoachChannelName(wsSlug: string): string {
-  return `${wsSlug}-coach`;
-}
-
-function workspaceAdminChannelName(wsSlug: string): string {
-  return `${wsSlug}-admin`;
-}
-
-function projectGeneralChannelName(wsSlug: string, projSlug: string): string {
-  return `${wsSlug}-proj-${projSlug}-general`;
-}
+import {
+  workspaceGeneralChannelName,
+  workspaceCoachChannelName,
+  workspaceAdminChannelName,
+  projectGeneralChannelName,
+} from "./channelNames.js";
 
 const secretClient = new SecretManagerServiceClient();
 
