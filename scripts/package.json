@@ -14,7 +14,7 @@
     "@types/http-proxy": "^1.17.17",
     "express": "^4.21.0",
     "firebase-admin": "^13.8.0",
-    "google-auth-library": "^9.0.0",
+    "google-auth-library": "^10.6.2",
     "http-proxy": "^1.18.1",
     "tsx": "^4.19.0",
     "unique-names-generator": "^4.7.1"
