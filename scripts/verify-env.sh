@@ -136,7 +136,7 @@ if [[ "$ENV" == "custom" ]]; then
   FIX_SUFFIX="--env=custom --namespace=$CUSTOM_NS"
   HELM_VALUES_FILE="helm/octogee/values.$CUSTOM_NS.yaml"
 else
-  FIX_SUFFIX="--env=$ENV$( [[ "$ENV" == "test" ]] && echo " --yes" )"
+  FIX_SUFFIX="--env=$ENV$( [[ "$ENV" == "test" ]] && echo " --yes" || true )"
   HELM_VALUES_FILE="helm/octogee/values.$ENV.yaml"
 fi
 
