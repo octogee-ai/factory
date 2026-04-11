@@ -340,6 +340,69 @@ else
   fi
 fi
 
+# ── 5e. Gateway Storage Mode ──────────────────────────────────────────────────
+# Asserts that the live gateway deployment is using the storage backing the
+# environment is supposed to use. test/custom = emptyDir (cattle), prod = pvc
+# (durable, claimName=octogee-data). Also flags any orphan gateway PVCs in the
+# namespace, which would indicate a previous install rendered the chart with
+# the wrong storageMode and left a disk behind.
+set_section infra
+header "5e. Gateway Storage Mode"
+case "$ENV" in
+  prod)            EXPECTED_MODE="pvc";       EXPECTED_CLAIM="octogee-data" ;;
+  test|custom)     EXPECTED_MODE="emptyDir";  EXPECTED_CLAIM="" ;;
+esac
+
+GW_VOLUME_JSON=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
+  -o jsonpath='{.spec.template.spec.volumes[?(@.name=="data")]}' 2>/dev/null || echo "")
+
+if [[ -z "$GW_VOLUME_JSON" ]]; then
+  fail "octogee-gateway has no 'data' volume (chart broken or deployment missing)"
+elif [[ "$EXPECTED_MODE" == "emptyDir" ]]; then
+  if echo "$GW_VOLUME_JSON" | grep -q '"emptyDir"'; then
+    pass "Storage mode: emptyDir (cattle, expected for $ENV)"
+  else
+    fail "Storage mode mismatch: expected emptyDir for $ENV, got $GW_VOLUME_JSON"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ensure ${HELM_VALUES_FILE} sets gateway.storageMode: emptyDir (chart default is also emptyDir, so this should never trip unless prod values were applied to a non-prod namespace)"
+    fi
+  fi
+  # Check for orphan gateway PVCs left behind by a prior pvc-mode install.
+  ORPHAN_PVCS=$(kubectl get pvc -n "$NAMESPACE" \
+    -l app.kubernetes.io/name=octogee-gateway -o name 2>/dev/null || echo "")
+  if [[ -n "$ORPHAN_PVCS" ]]; then
+    while IFS= read -r p; do
+      [[ -z "$p" ]] && continue
+      fail "Orphan gateway PVC: $p (gateway runs on emptyDir for $ENV; this PVC is unmounted dead weight)"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} kubectl delete $p -n $NAMESPACE"
+      fi
+    done <<< "$ORPHAN_PVCS"
+  else
+    pass "No orphan gateway PVCs"
+  fi
+elif [[ "$EXPECTED_MODE" == "pvc" ]]; then
+  if echo "$GW_VOLUME_JSON" | grep -q '"persistentVolumeClaim"' \
+     && echo "$GW_VOLUME_JSON" | grep -q "\"claimName\":\"${EXPECTED_CLAIM}\""; then
+    pass "Storage mode: pvc claimName=${EXPECTED_CLAIM} (durable, expected for prod)"
+    PVC_PHASE=$(kubectl get pvc "$EXPECTED_CLAIM" -n "$NAMESPACE" \
+      -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+    if [[ "$PVC_PHASE" == "Bound" ]]; then
+      pass "PVC ${EXPECTED_CLAIM} is Bound"
+    else
+      fail "PVC ${EXPECTED_CLAIM} is not Bound (phase=${PVC_PHASE:-missing}) — gateway cannot schedule"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} kubectl describe pvc $EXPECTED_CLAIM -n $NAMESPACE"
+      fi
+    fi
+  else
+    fail "Storage mode mismatch: expected persistentVolumeClaim claimName=${EXPECTED_CLAIM} for prod, got $GW_VOLUME_JSON"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ensure ${HELM_VALUES_FILE} sets gateway.storageMode: pvc and gateway.pvc.name: $EXPECTED_CLAIM"
+    fi
+  fi
+fi
+
 # ── 5b. GKE Ingresses ─────────────────────────────────────────────────────────
 set_section infra
 header "5b. Ingresses"
