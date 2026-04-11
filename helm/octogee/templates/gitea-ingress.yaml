@@ -1,0 +1,51 @@
+{{- if .Values.gitea.webIngress.enabled }}
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ .Values.gitea.webIngress.backendConfigName | default "gitea-backend" }}
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /user/login
+    port: 3000
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 300
+  {{- if .Values.gitea.webIngress.iap.enabled }}
+  iap:
+    enabled: true
+    oauthclientCredentials:
+      secretName: {{ .Values.gitea.webIngress.iap.oauthClientCredentialsSecretName }}
+  {{- end }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.gitea.webIngress.certName }}
+spec:
+  domains:
+    - {{ .Values.gitea.webIngress.host }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitea-ingress
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: {{ .Values.gitea.webIngress.certName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.gitea.webIngress.staticIpName }}
+spec:
+  ingressClassName: gce
+  rules:
+    - host: {{ .Values.gitea.webIngress.host }}
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: octogee-gitea-http
+                port:
+                  number: 3000
+{{- end }}

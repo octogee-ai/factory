@@ -1,0 +1,51 @@
+{{- if .Values.mattermost.ingress.enabled }}
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ .Values.mattermost.ingress.backendConfigName | default "mattermost-backend" }}
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /api/v4/system/ping
+    port: 8065
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 300
+  {{- if .Values.mattermost.ingress.iap.enabled }}
+  iap:
+    enabled: true
+    oauthclientCredentials:
+      secretName: {{ .Values.mattermost.ingress.iap.oauthClientCredentialsSecretName }}
+  {{- end }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.mattermost.ingress.certName }}
+spec:
+  domains:
+    - {{ .Values.mattermost.ingress.host }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mattermost-ingress
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: {{ .Values.mattermost.ingress.certName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.mattermost.ingress.staticIpName }}
+spec:
+  ingressClassName: gce
+  rules:
+    - host: {{ .Values.mattermost.ingress.host }}
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: mattermost
+                port:
+                  number: 8065
+{{- end }}

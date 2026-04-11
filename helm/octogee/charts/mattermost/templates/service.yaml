@@ -4,6 +4,9 @@ metadata:
   name: mattermost
   labels:
     {{- include "mattermost.labels" . | nindent 4 }}
+  annotations:
+    cloud.google.com/backend-config: '{"default":"{{ .Values.ingress.backendConfigName | default "mattermost-backend" }}"}'
+    cloud.google.com/neg: '{"ingress":true}'
 spec:
   selector:
     app: mattermost

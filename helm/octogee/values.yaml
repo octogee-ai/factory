@@ -49,6 +49,15 @@ mattermost:
   pvc:
     size: 20Gi
     storageClass: standard-rwo
+  ingress:
+    enabled: false
+    host: ""
+    staticIpName: ""
+    certName: ""
+    backendConfigName: mattermost-backend
+    iap:
+      enabled: false
+      oauthClientCredentialsSecretName: ""
   resources:
     requests:
       cpu: "500m"
@@ -65,6 +74,17 @@ mattermost:
 gitea:
   networkPolicy:
     enabled: true
+  ingress:
+    enabled: false
+  webIngress:
+    enabled: false
+    host: ""
+    staticIpName: ""
+    certName: ""
+    backendConfigName: gitea-backend
+    iap:
+      enabled: false
+      oauthClientCredentialsSecretName: ""
   gitea:
     admin:
       username: octogee-admin
@@ -86,6 +106,12 @@ gitea:
         REQUIRE_SIGNIN_VIEW: "true"
       metrics:
         ENABLED: "true"
+  service:
+    http:
+      annotations:
+        cloud.google.com/backend-config: '{"default":"gitea-backend"}'
+        cloud.google.com/neg: '{"ingress":true}'
+      clusterIP: ""
   postgresql:
     enabled: false
   postgresql-ha:
