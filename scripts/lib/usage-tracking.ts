@@ -19,6 +19,8 @@ import { Firestore, FieldValue } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
+import { keyFingerprint } from "./key-fingerprint.js";
+import { formatUsageLogLine } from "./usage-log-line.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -142,6 +144,7 @@ async function reportUsage(
   agentToUid: Map<string, string>,
   log: LogFn,
   gatewayId: string,
+  platformKeyFingerprint: string,
 ): Promise<void> {
   const uid = agentToUid.get(agentId);
   if (!uid) return;
@@ -195,24 +198,32 @@ async function reportUsage(
         else if (pct >= 80) throttleLevel = 1;
       }
 
+      // Phase 0: every turn attributes to a key fingerprint. Today that's
+      // always the platform key; Phase 1 (BYOT) will vary per customer
+      // once per-agent auth-profiles.json is in place.
+      const fingerprint = platformKeyFingerprint;
+
       // ── Legacy user-level write (kept for backward compat + throttle) ──
       t.update(userRef, {
         ...windowUpdates,
-        "usage.totalTokensUsed":  FieldValue.increment(usage.totalTokens),
-        "usage.tokensUsed":       FieldValue.increment(usage.totalTokens),
-        "usage.costUsd":          FieldValue.increment(usage.costUsd),
-        "usage.interactionCount": FieldValue.increment(1),
-        "usage.requestsThisHour": FieldValue.increment(1),
-        "usage.throttleLevel":    throttleLevel,
-        "usage.lastUpdated":      FieldValue.serverTimestamp(),
+        "usage.totalTokensUsed":    FieldValue.increment(usage.totalTokens),
+        "usage.tokensUsed":         FieldValue.increment(usage.totalTokens),
+        "usage.costUsd":            FieldValue.increment(usage.costUsd),
+        "usage.interactionCount":   FieldValue.increment(1),
+        "usage.requestsThisHour":   FieldValue.increment(1),
+        "usage.throttleLevel":      throttleLevel,
+        "usage.lastUpdated":        FieldValue.serverTimestamp(),
+        "usage.lastKeyFingerprint": fingerprint,
       });
 
       t.set(logRef, {
-        date:         today,
-        tokensUsed:   FieldValue.increment(usage.totalTokens),
-        costUsd:      FieldValue.increment(usage.costUsd),
-        interactions: FieldValue.increment(1),
+        date:             today,
+        tokensUsed:       FieldValue.increment(usage.totalTokens),
+        costUsd:          FieldValue.increment(usage.costUsd),
+        interactions:     FieldValue.increment(1),
         gatewayId,
+        keyFingerprint:   fingerprint,
+        keyFingerprints:  FieldValue.arrayUnion(fingerprint),
         [`breakdown.${role}`]:         FieldValue.increment(usage.totalTokens),
         "breakdown.input":             FieldValue.increment(usage.input),
         "breakdown.output":            FieldValue.increment(usage.output),
@@ -232,12 +243,14 @@ async function reportUsage(
 
         // sessions/{date} — daily rollup for this workspace
         t.set(wsUsageRef.doc(`sessions/${today}`), {
-          date:         today,
-          tokensUsed:   FieldValue.increment(usage.totalTokens),
-          costUsd:      FieldValue.increment(usage.costUsd),
-          interactions: FieldValue.increment(1),
+          date:            today,
+          tokensUsed:      FieldValue.increment(usage.totalTokens),
+          costUsd:         FieldValue.increment(usage.costUsd),
+          interactions:    FieldValue.increment(1),
           gatewayId,
           workspaceId,
+          keyFingerprint:  fingerprint,
+          keyFingerprints: FieldValue.arrayUnion(fingerprint),
           [`roles.${role}`]:              FieldValue.increment(usage.totalTokens),
           "token_breakdown.input":        FieldValue.increment(usage.input),
           "token_breakdown.output":       FieldValue.increment(usage.output),
@@ -255,6 +268,9 @@ async function reportUsage(
           cost_usd:          FieldValue.increment(usage.costUsd),
           interaction_count: FieldValue.increment(1),
           role,
+          keyFingerprint:    fingerprint,
+          keyFingerprints:   FieldValue.arrayUnion(fingerprint),
+          lastUsedAt:        FieldValue.serverTimestamp(),
           "token_breakdown.input":      FieldValue.increment(usage.input),
           "token_breakdown.output":     FieldValue.increment(usage.output),
           "token_breakdown.cacheRead":  FieldValue.increment(usage.cacheRead),
@@ -264,19 +280,33 @@ async function reportUsage(
         // summary — rolling workspace totals
         t.set(wsUsageRef.doc("summary"), {
           workspaceId,
-          totalTokens:       FieldValue.increment(usage.totalTokens),
-          totalCostUsd:      FieldValue.increment(usage.costUsd),
-          totalInteractions: FieldValue.increment(1),
-          lastUpdated:       FieldValue.serverTimestamp(),
+          totalTokens:        FieldValue.increment(usage.totalTokens),
+          totalCostUsd:       FieldValue.increment(usage.costUsd),
+          totalInteractions:  FieldValue.increment(1),
+          lastUpdated:        FieldValue.serverTimestamp(),
+          lastKeyFingerprint: fingerprint,
           [`modelCosts.${modelKey(usage.model)}`]: FieldValue.increment(usage.costUsd),
         }, { merge: true });
       }
     });
 
-    const wLabel = workspaceId ? ` ws:${workspaceId}` : "";
-    log(`\u2713 usage: ${usage.totalTokens} tokens ($${usage.costUsd.toFixed(4)}) [${role}/${usage.model}] uid:${uid.slice(0, 8)}${wLabel}`);
+    log(formatUsageLogLine({
+      totalTokens:    usage.totalTokens,
+      costUsd:        usage.costUsd,
+      role,
+      model:          usage.model,
+      uid,
+      workspaceId:    workspaceId ?? null,
+      keyFingerprint: platformKeyFingerprint,
+    }));
   } catch (err) {
-    log(`\u2717 usage write failed for ${agentId}: ${err}`);
+    // Include code/stack so systemic write failures (e.g. a new
+    // arrayUnion schema migration colliding with a pre-existing scalar
+    // field, or missing composite index) surface in logs instead of
+    // silently retrying every turn.
+    const code = (err as any)?.code;
+    const stack = (err as any)?.stack;
+    log(`\u2717 usage write failed for ${agentId}${code ? ` [${code}]` : ""}: ${err}${stack ? `\n${stack}` : ""}`);
   }
 }
 
@@ -290,6 +320,7 @@ async function processFile(
   agentPrefix: string,
   log: LogFn,
   gatewayId: string,
+  platformKeyFingerprint: string,
 ): Promise<void> {
   const parts    = filePath.split(path.sep);
   const agentIdx = parts.findIndex(p => p === "agents") + 1;
@@ -320,7 +351,7 @@ async function processFile(
     if (!line.trim()) continue;
     const usage = parseLineForUsage(line);
     if (usage) {
-      await reportUsage(db, agentId, role, agentDir, usage, agentToUid, log, gatewayId);
+      await reportUsage(db, agentId, role, agentDir, usage, agentToUid, log, gatewayId, platformKeyFingerprint);
     }
   }
 
@@ -364,14 +395,18 @@ export function startUsageTracking(
   const POLL_INTERVAL_MS = 30_000;
   const watchedFiles: Map<string, WatchedFile> = new Map();
 
-  log(`usage-tracker: starting \u2014 agents dir: ${agentsDir}, prefix: ${agentPrefix}, gateway: ${gatewayId}`);
+  // Resolve platform key fingerprint once; every turn today attributes to
+  // this. Phase 1 will layer per-customer fingerprints over this default.
+  const platformKeyFingerprint = keyFingerprint(process.env.ANTHROPIC_API_KEY);
+
+  log(`usage-tracker: starting \u2014 agents dir: ${agentsDir}, prefix: ${agentPrefix}, gateway: ${gatewayId}, platform-key: ${platformKeyFingerprint}`);
 
   async function poll() {
     const pollFiles = findSessionFiles(agentsDir, agentPrefix);
     if (pollFiles.length > 0) log(`usage-poll: checking ${pollFiles.length} files`);
     for (const file of pollFiles) {
       try {
-        await processFile(file, watchedFiles, db, agentToUid, agentPrefix, log, gatewayId);
+        await processFile(file, watchedFiles, db, agentToUid, agentPrefix, log, gatewayId, platformKeyFingerprint);
       } catch (err) {
         log(`usage: error processing ${file}: ${err}`);
       }

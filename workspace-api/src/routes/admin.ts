@@ -160,6 +160,10 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
         nextRefillAt: nextRefillAt?.toISOString() || null,
         throttleLevel: usage.throttleLevel || 0, interactionCount: usage.interactionCount || 0,
         lastUpdated: usage.lastUpdated?.toDate?.()?.toISOString() || null,
+        lastKeyFingerprint: usage.lastKeyFingerprint || null,
+      },
+      byot: {
+        active: d.byotActive === true,
       },
       provisioning: {
         status: provisioning.openclaw?.status || provisioning.status || "unknown",
@@ -178,18 +182,38 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
       faceModel: d.faceModel || null,
       brainModel: d.brainModel || null,
       workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-      usageLogs: logsSnap.docs.map((doc) => doc.data()),
+      usageLogs: logsSnap.docs.map((doc) => {
+        const ld = doc.data();
+        return {
+          ...ld,
+          // Phase 0: expose the fingerprints from this day's turns so admin
+          // UI can show a "Key" column. `keyFingerprint` = most-recent;
+          // `keyFingerprints` = distinct set observed that day.
+          keyFingerprint:  ld.keyFingerprint  || null,
+          keyFingerprints: ld.keyFingerprints || (ld.keyFingerprint ? [ld.keyFingerprint] : []),
+        };
+      }),
       // Per-model cost breakdown (from workspace usage/models/* subcollection)
       modelCosts: await (async () => {
-        const costs: Record<string, { tokens: number; costUsd: number }> = {};
+        const costs: Record<string, {
+          tokens: number;
+          costUsd: number;
+          keyFingerprint: string | null;
+          lastUsedAt: string | null;
+        }> = {};
         for (const ws of wsSnap.docs) {
           const modelsSnap = await db.collection(`users/${uid}/workspaces/${ws.id}/usage/models`).get();
           for (const modelDoc of modelsSnap.docs) {
             const md = modelDoc.data();
             const model = md.model || modelDoc.id.split("_")[0];
-            if (!costs[model]) costs[model] = { tokens: 0, costUsd: 0 };
+            if (!costs[model]) costs[model] = { tokens: 0, costUsd: 0, keyFingerprint: null, lastUsedAt: null };
             costs[model].tokens += md.tokens || 0;
             costs[model].costUsd += md.cost_usd || 0;
+            const lastUsed = md.lastUsedAt?.toDate?.()?.toISOString?.() || null;
+            if (lastUsed && (!costs[model].lastUsedAt || lastUsed > costs[model].lastUsedAt!)) {
+              costs[model].lastUsedAt = lastUsed;
+              costs[model].keyFingerprint = md.keyFingerprint || costs[model].keyFingerprint;
+            }
           }
         }
         return costs;
@@ -237,41 +261,83 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
     const userDoc = await db.collection("users").doc(uid).get();
     if (!userDoc.exists) { res.status(404).json({ error: "User not found" }); return; }
     const userData = userDoc.data()!;
-    const usage = userData.usage || {};
 
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
 
-    let sessions: any[] = [];
-    try {
-      const logsSnap = await db.collection("users").doc(uid)
-        .collection("usageLogs").where("date", ">=", cutoff.toISOString().slice(0, 10))
-        .orderBy("date", "desc").get();
-      sessions = logsSnap.docs.map((d) => {
-        const data = d.data();
-        return { date: data.date || d.id, tokensUsed: data.tokensUsed || 0, costUsd: data.costUsd || 0, interactions: data.interactions || 0 };
-      });
-    } catch (e: any) {
-      logger.warn(`usageLogs query failed for uid=${uid}: ${e.message}`);
-    }
+    // Iterate the customer's workspaces, pulling the v2 per-workspace usage
+    // subcollections that the gateway provisioner populates:
+    //   users/{uid}/workspaces/{wid}/usage/summary
+    //   users/{uid}/workspaces/{wid}/usage/sessions/{date}
+    //   users/{uid}/workspaces/{wid}/usage/models/{modelKey}_{date}
+    const wsSnap = await db.collection("users").doc(uid).collection("workspaces").get();
+    const wsEntries = wsSnap.docs.length > 0
+      ? wsSnap.docs.map((d) => ({ id: d.id, data: d.data() }))
+      : [{ id: userData.workspaceSlug || uid, data: userData }];
 
-    res.json({
-      uid,
-      workspaces: [{
-        workspaceId: userData.workspaceSlug || uid,
-        businessName: userData.workspaceName || userData.businessName || "Workspace",
-        summary: {
-          totalTokens: Number(usage.totalTokensUsed) || 0,
-          totalCostUsd: Number(usage.costUsd) || 0,
-          totalInteractions: Number(usage.interactionCount) || 0,
-          lastUpdated: usage.lastUpdated?.toDate?.()?.toISOString?.() || null,
-          modelCosts: {},
-        },
-        sessions,
-        models: [],
-      }],
-      generatedAt: new Date().toISOString(),
-    });
+    const workspaces = await Promise.all(
+      wsEntries.map(async (ws) => {
+        const wid = ws.id;
+        const summaryRef = db.collection(`users/${uid}/workspaces/${wid}/usage`).doc("summary");
+        const sessionsRef = db.collection(`users/${uid}/workspaces/${wid}/usage/sessions`);
+        const modelsRef   = db.collection(`users/${uid}/workspaces/${wid}/usage/models`);
+
+        // Let query errors propagate via the outer try/catch so they
+        // surface as 500s instead of silently hiding behind empty arrays.
+        // Firestore returns an empty result (not an error) for missing
+        // collections, so the normal "no usage yet" case works naturally.
+        const [summarySnap, sessionsSnap, modelsSnap] = await Promise.all([
+          summaryRef.get(),
+          sessionsRef.where("date", ">=", cutoffStr).orderBy("date", "desc").get(),
+          modelsRef.where("date", ">=", cutoffStr).get(),
+        ]);
+
+        const summary = summarySnap.exists ? summarySnap.data()! : {};
+        const sessions = sessionsSnap.docs.map((d) => {
+          const sd = d.data();
+          return {
+            date:           sd.date || d.id,
+            tokensUsed:     sd.tokensUsed || 0,
+            costUsd:        sd.costUsd || 0,
+            interactions:   sd.interactions || 0,
+            roles:          sd.roles || {},
+            keyFingerprint: sd.keyFingerprint || null,
+          };
+        });
+        const models = modelsSnap.docs.map((d) => {
+          const md = d.data();
+          return {
+            id:                d.id,
+            date:              md.date || d.id.split("_").slice(-1)[0] || "",
+            model:             md.model || d.id.split("_").slice(0, -1).join("_"),
+            tokens:            md.tokens || 0,
+            cost_usd:          md.cost_usd || 0,
+            interaction_count: md.interaction_count || 0,
+            role:              md.role || "coach",
+            keyFingerprint:    md.keyFingerprint || null,
+            lastUsedAt:        md.lastUsedAt?.toDate?.()?.toISOString?.() || null,
+          };
+        });
+
+        return {
+          workspaceId:   wid,
+          businessName:  ws.data.businessName || ws.data.workspaceName || userData.businessName || "Workspace",
+          summary: {
+            totalTokens:        Number(summary.totalTokens) || 0,
+            totalCostUsd:       Number(summary.totalCostUsd) || 0,
+            totalInteractions:  Number(summary.totalInteractions) || 0,
+            lastUpdated:        summary.lastUpdated?.toDate?.()?.toISOString?.() || null,
+            lastKeyFingerprint: summary.lastKeyFingerprint || null,
+            modelCosts:         summary.modelCosts || {},
+          },
+          sessions,
+          models,
+        };
+      }),
+    );
+
+    res.json({ uid, workspaces, generatedAt: new Date().toISOString() });
   } catch (e) { next(e); }
 });
 
