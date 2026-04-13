@@ -11,14 +11,50 @@ import { describe, test, expect } from "vitest";
 import { deriveDesiredByotState } from "../../scripts/lib/byot-sync";
 
 describe("deriveDesiredByotState", () => {
-  test("enabled when byotActive + complete + slug present", () => {
+  test("enabled when byotActive + complete + slug present (defaults to anthropic)", () => {
     const out = deriveDesiredByotState({
       byotActive: true,
       workspaceSlug: "smile-wring-011b",
       provisioning: { openclaw: { status: "complete", slug: "smile-wring-011b" } },
     });
     expect(out.enabled).toBe(true);
-    expect(out.input).toEqual({ slug: "smile-wring-011b", provider: "anthropic" });
+    expect(out.input).toMatchObject({ slug: "smile-wring-011b", provider: "anthropic" });
+  });
+
+  test("Phase 2: provider/baseUrl/model propagate from systemConfig.byot", () => {
+    const out = deriveDesiredByotState({
+      byotActive: true,
+      workspaceSlug: "x",
+      provisioning: { openclaw: { status: "complete" } },
+      systemConfig: { byot: { provider: "openai-compatible", baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-3.5-sonnet" } },
+    });
+    expect(out.input).toEqual({
+      slug: "x",
+      provider: "openai-compatible",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "anthropic/claude-3.5-sonnet",
+    });
+  });
+
+  test("Phase 2: openai provider propagates", () => {
+    const out = deriveDesiredByotState({
+      byotActive: true,
+      workspaceSlug: "x",
+      provisioning: { openclaw: { status: "complete" } },
+      systemConfig: { byot: { provider: "openai", model: "openai/gpt-5" } },
+    });
+    expect(out.input?.provider).toBe("openai");
+    expect(out.input?.model).toBe("openai/gpt-5");
+  });
+
+  test("unknown provider value falls back to anthropic (Phase 1 backwards compat)", () => {
+    const out = deriveDesiredByotState({
+      byotActive: true,
+      workspaceSlug: "x",
+      provisioning: { openclaw: { status: "complete" } },
+      systemConfig: { byot: { provider: "codex" } },
+    });
+    expect(out.input?.provider).toBe("anthropic");
   });
 
   test("disabled when byotActive is false", () => {

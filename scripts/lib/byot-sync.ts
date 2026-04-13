@@ -15,90 +15,129 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import {
-  buildByotAuthProfilesJson,
-  type ByotProfileInput,
-} from "./byot-auth-profiles.js";
+  buildByotConfigForProvider,
+  type Provider,
+} from "./byot-multi-provider-config.js";
 import { AGENTS_DIR, log } from "./config.js";
 
-/** The agent id we write auth-profiles.json into. */
+/** The agent id whose `agent/` dir we write per-agent BYOT files into. */
 function agentIdForSlug(slug: string): string {
   return `octogee-${slug}-coach`;
 }
 
-function authProfilesPathForSlug(slug: string): string {
-  return path.join(AGENTS_DIR, agentIdForSlug(slug), "agent", "auth-profiles.json");
+function agentDirForSlug(slug: string): string {
+  return path.join(AGENTS_DIR, agentIdForSlug(slug), "agent");
+}
+
+const BYOT_FILES = ["auth-profiles.json", "models.json"] as const;
+type ByotFile = (typeof BYOT_FILES)[number];
+
+interface ByotInput {
+  slug: string;
+  provider: Provider;
+  baseUrl?: string;
+  model?: string;
 }
 
 /**
  * Pure — given Firestore user data, decide whether the customer should
- * have a BYOT auth-profiles.json today. Phase 1 supports only Anthropic.
+ * have BYOT files written, and if so what provider config to render.
  */
 export function deriveDesiredByotState(userData: {
   byotActive?: boolean;
   workspaceSlug?: string;
   provisioning?: { openclaw?: { slug?: string; status?: string } };
-}): { enabled: boolean; input: ByotProfileInput | null } {
+  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
+}): { enabled: boolean; input: ByotInput | null } {
   const status = userData.provisioning?.openclaw?.status;
   const slug = userData.workspaceSlug || userData.provisioning?.openclaw?.slug;
   if (!userData.byotActive || !slug || status !== "complete") {
     return { enabled: false, input: null };
   }
+  // Default to anthropic for backwards compat with Phase 1 metadata
+  // that pre-dated the `provider` field on system/config.byot.
+  const cfg = userData.systemConfig?.byot;
+  const provider: Provider =
+    cfg?.provider === "openai" || cfg?.provider === "openai-compatible"
+      ? cfg.provider
+      : "anthropic";
   return {
     enabled: true,
-    input: { slug, provider: "anthropic" },
+    input: { slug, provider, baseUrl: cfg?.baseUrl, model: cfg?.model },
   };
 }
 
-/**
- * Write or remove auth-profiles.json to match desired state. Returns
- * true if the on-disk file actually changed (caller uses that signal
- * to decide whether to trigger secrets.reload).
- */
-export function applyByotState(slug: string, enabled: boolean): boolean {
-  const target = authProfilesPathForSlug(slug);
-  const agentDir = path.dirname(target);
+function writeAtomic(target: string, content: string): void {
+  const tmp = `${target}.tmp`;
+  fs.writeFileSync(tmp, content, { mode: 0o600 });
+  fs.renameSync(tmp, target);
+}
 
-  if (!enabled) {
-    if (fs.existsSync(target)) {
-      fs.rmSync(target);
-      log(`[byot-sync] ${slug}: removed auth-profiles.json (BYOT off)`);
-      return true;
-    }
-    return false;
+function removeIfExists(target: string): boolean {
+  if (!fs.existsSync(target)) return false;
+  fs.rmSync(target);
+  return true;
+}
+
+/**
+ * Reconcile every per-agent BYOT file (auth-profiles.json, models.json)
+ * with the desired state. Returns true iff any file actually changed on
+ * disk — caller uses that signal to decide whether to invoke
+ * `openclaw secrets reload`.
+ *
+ * - When disabled, removes any of the BYOT files that exist.
+ * - When enabled, writes the file(s) the chosen provider needs and
+ *   removes any leftover files from the previous provider (e.g. switching
+ *   anthropic → openai-compatible removes the auth-profiles.json that
+ *   anthropic produced and writes models.json).
+ */
+export function applyByotState(slug: string, input: ByotInput | null): boolean {
+  const dir = agentDirForSlug(slug);
+  const filePath = (f: ByotFile) => path.join(dir, f);
+
+  // Disabled — remove all BYOT files that exist.
+  if (!input) {
+    let changed = false;
+    for (const f of BYOT_FILES) changed = removeIfExists(filePath(f)) || changed;
+    if (changed) log(`[byot-sync] ${slug}: removed BYOT files (BYOT off)`);
+    return changed;
   }
 
-  // Enabled: refuse to write if the agent dir doesn't exist yet. This
-  // means the customer's coach hasn't been provisioned, and creating
-  // an orphan auth-profiles.json would silently leave a dangling
-  // SecretRef pointing at an agent OpenClaw doesn't know about.
-  // The provisioner's onSnapshot will fire again once the customer's
-  // provisioning completes — try then.
-  if (!fs.existsSync(agentDir)) {
+  // Enabled but agent dir doesn't exist — provisioning hasn't finished
+  // yet. Refuse to materialize an orphan dir; next provisioner tick
+  // will try again.
+  if (!fs.existsSync(dir)) {
     log(`⚠ [byot-sync] ${slug}: agent dir missing (provisioning incomplete?) — skipping BYOT write`);
     return false;
   }
 
-  const content = JSON.stringify(
-    buildByotAuthProfilesJson({ slug, provider: "anthropic" }),
-    null,
-    2,
-  );
+  const cfg = buildByotConfigForProvider(input);
 
-  const existing = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
-  if (existing === content) {
-    return false; // no-op — file already at desired state
+  // Decide what content each file should have (or null = remove).
+  const desired: Record<ByotFile, string | null> = {
+    "auth-profiles.json": cfg.authProfiles ? JSON.stringify(cfg.authProfiles, null, 2) : null,
+    "models.json":        cfg.models        ? JSON.stringify(cfg.models, null, 2)        : null,
+  };
+
+  let changed = false;
+  for (const f of BYOT_FILES) {
+    const target = filePath(f);
+    const want = desired[f];
+    const existing = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
+
+    if (want == null) {
+      changed = removeIfExists(target) || changed;
+      continue;
+    }
+    if (existing === want) continue;
+    writeAtomic(target, want);
+    changed = true;
   }
 
-  // Atomic write via .tmp + rename so the resolver never sees a partial
-  // file. Mode 0o600 hardens perms — even though this file holds only
-  // a SecretRef shape (no plaintext key), the keyRef reveals which
-  // Secret Manager secret a customer is bound to.
-  const tmp = `${target}.tmp`;
-  fs.writeFileSync(tmp, content, { mode: 0o600 });
-  fs.renameSync(tmp, target);
-
-  log(`[byot-sync] ${slug}: wrote auth-profiles.json (BYOT active)`);
-  return true;
+  if (changed) {
+    log(`[byot-sync] ${slug}: BYOT config updated (provider=${input.provider}${input.model ? ` model=${input.model}` : ""})`);
+  }
+  return changed;
 }
 
 /**
@@ -126,16 +165,21 @@ export function triggerSecretsReload(): void {
 /**
  * One-shot sync for a single customer — apply the desired state and
  * trigger secrets reload if anything actually changed on disk.
+ *
+ * Caller must pass the system/config.byot subdoc separately; the
+ * provisioner's onSnapshot watcher reads it from a sibling Firestore
+ * doc, not the user doc.
  */
 export function syncByotForCustomer(userData: {
   byotActive?: boolean;
   workspaceSlug?: string;
   provisioning?: { openclaw?: { slug?: string; status?: string } };
+  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
 }): void {
   const desired = deriveDesiredByotState(userData);
   const slug = userData.workspaceSlug || userData.provisioning?.openclaw?.slug;
   if (!slug) return;
 
-  const changed = applyByotState(slug, desired.enabled);
+  const changed = applyByotState(slug, desired.input);
   if (changed) triggerSecretsReload();
 }

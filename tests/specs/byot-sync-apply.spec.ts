@@ -47,7 +47,7 @@ describe("applyByotState — agent-dir guard", () => {
   test("refuses to write when the agent dir does not exist (no orphan dirs)", async () => {
     const { applyByotState } = await loadModule();
     const slug = "no-agent-yet";
-    const changed = applyByotState(slug, true);
+    const changed = applyByotState(slug, { slug, provider: "anthropic" });
     expect(changed).toBe(false);
     expect(fs.existsSync(agentDirFor(slug))).toBe(false);
     expect(fs.existsSync(profilePath(slug))).toBe(false);
@@ -55,7 +55,7 @@ describe("applyByotState — agent-dir guard", () => {
 
   test("disable on a slug with no agent dir is a quiet no-op (no false 'changed')", async () => {
     const { applyByotState } = await loadModule();
-    expect(applyByotState("no-agent-yet", false)).toBe(false);
+    expect(applyByotState("no-agent-yet", null)).toBe(false);
   });
 });
 
@@ -65,7 +65,7 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
 
-    const changed = applyByotState(slug, true);
+    const changed = applyByotState(slug, { slug, provider: "anthropic" });
     expect(changed).toBe(true);
 
     const target = profilePath(slug);
@@ -80,8 +80,8 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
 
-    expect(applyByotState(slug, true)).toBe(true);
-    expect(applyByotState(slug, true)).toBe(false);
+    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
+    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(false);
   });
 
   test("written content is JSON with the expected SecretRef shape", async () => {
@@ -89,7 +89,7 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
 
-    applyByotState(slug, true);
+    applyByotState(slug, { slug, provider: "anthropic" });
 
     const written = JSON.parse(fs.readFileSync(profilePath(slug), "utf8"));
     expect(written.profiles["anthropic:default"].type).toBe("api_key");
@@ -105,7 +105,7 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
 
-    applyByotState(slug, true);
+    applyByotState(slug, { slug, provider: "anthropic" });
     const raw = fs.readFileSync(profilePath(slug), "utf8");
     expect(raw).not.toContain("sk-ant-");
     expect(raw).not.toMatch(/"key"\s*:/); // sibling plaintext field MUST NOT appear
@@ -116,9 +116,85 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
 
-    applyByotState(slug, true);
+    applyByotState(slug, { slug, provider: "anthropic" });
     const tmp = `${profilePath(slug)}.tmp`;
     expect(fs.existsSync(tmp)).toBe(false);
+  });
+});
+
+describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
+  test("anthropic → openai-compatible removes auth-profiles.json AND writes models.json", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    // Start: anthropic BYOT.
+    applyByotState(slug, { slug, provider: "anthropic" });
+    const authPath = profilePath(slug);
+    const modelsPath = path.join(agentDirFor(slug), "models.json");
+    expect(fs.existsSync(authPath)).toBe(true);
+    expect(fs.existsSync(modelsPath)).toBe(false);
+
+    // Switch: openai-compatible.
+    const changed = applyByotState(slug, {
+      slug,
+      provider: "openai-compatible",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "anthropic/claude-3.5-sonnet",
+    });
+    expect(changed).toBe(true);
+
+    // auth-profiles.json must be GONE; models.json must exist.
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(fs.existsSync(modelsPath)).toBe(true);
+
+    // models.json content has the expected shape (api adapter + keyRef + models[]).
+    const mj = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
+    expect(mj.providers[`custom-${slug}`].api).toBe("openai-completions");
+    expect(mj.providers[`custom-${slug}`].apiKey.source).toBe("exec");
+    expect(mj.providers[`custom-${slug}`].models).toEqual([
+      { id: "anthropic/claude-3.5-sonnet", name: "anthropic/claude-3.5-sonnet" },
+    ]);
+  });
+
+  test("openai-compatible → anthropic removes models.json AND writes auth-profiles.json", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
+    const modelsPath = path.join(agentDirFor(slug), "models.json");
+    expect(fs.existsSync(modelsPath)).toBe(true);
+
+    applyByotState(slug, { slug, provider: "anthropic" });
+    expect(fs.existsSync(modelsPath)).toBe(false);
+    expect(fs.existsSync(profilePath(slug))).toBe(true);
+  });
+
+  test("openai → openai-compatible removes auth-profiles.json AND writes models.json", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, { slug, provider: "openai", model: "openai/gpt-4o" });
+    expect(fs.existsSync(profilePath(slug))).toBe(true);
+
+    applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
+    expect(fs.existsSync(profilePath(slug))).toBe(false);
+    expect(fs.existsSync(path.join(agentDirFor(slug), "models.json"))).toBe(true);
+  });
+
+  test("disable from any provider removes BOTH BYOT files", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
+    expect(fs.existsSync(path.join(agentDirFor(slug), "models.json"))).toBe(true);
+
+    applyByotState(slug, null);
+    expect(fs.existsSync(profilePath(slug))).toBe(false);
+    expect(fs.existsSync(path.join(agentDirFor(slug), "models.json"))).toBe(false);
   });
 });
 
@@ -127,10 +203,10 @@ describe("applyByotState — disabled remove path", () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
-    applyByotState(slug, true);
+    applyByotState(slug, { slug, provider: "anthropic" });
     expect(fs.existsSync(profilePath(slug))).toBe(true);
 
-    expect(applyByotState(slug, false)).toBe(true);
+    expect(applyByotState(slug, null)).toBe(true);
     expect(fs.existsSync(profilePath(slug))).toBe(false);
   });
 
@@ -138,6 +214,6 @@ describe("applyByotState — disabled remove path", () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
-    expect(applyByotState(slug, false)).toBe(false);
+    expect(applyByotState(slug, null)).toBe(false);
   });
 });
