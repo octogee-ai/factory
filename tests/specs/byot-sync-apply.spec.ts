@@ -1,0 +1,143 @@
+/**
+ * Filesystem-side tests for byot-sync.applyByotState.
+ *
+ * Critical behaviors:
+ *   - REFUSES to write when the agent dir doesn't exist (no auto-mkdir)
+ *     — this protects against silently materializing orphan agent
+ *     directories when BYOT flips on for an unprovisioned customer.
+ *   - Writes auth-profiles.json with mode 0o600.
+ *   - Idempotent: returns false when the on-disk content already matches.
+ *   - Removes the file (and reports change) when disabled.
+ *   - Atomic write — never leaves a half-written file behind.
+ */
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+
+let TMP_ROOT: string;
+
+beforeEach(async () => {
+  TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "byot-sync-test-"));
+  process.env.OPENCLAW_AGENTS_DIR = path.join(TMP_ROOT, "agents");
+  // Force re-import so the module picks up the new env var.
+  vi.resetModules();
+});
+
+afterEach(() => {
+  delete process.env.OPENCLAW_AGENTS_DIR;
+  if (TMP_ROOT && fs.existsSync(TMP_ROOT)) {
+    fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+  }
+});
+
+async function loadModule() {
+  return await import("../../scripts/lib/byot-sync");
+}
+
+function agentDirFor(slug: string): string {
+  return path.join(TMP_ROOT, "agents", `octogee-${slug}-coach`, "agent");
+}
+
+function profilePath(slug: string): string {
+  return path.join(agentDirFor(slug), "auth-profiles.json");
+}
+
+describe("applyByotState — agent-dir guard", () => {
+  test("refuses to write when the agent dir does not exist (no orphan dirs)", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "no-agent-yet";
+    const changed = applyByotState(slug, true);
+    expect(changed).toBe(false);
+    expect(fs.existsSync(agentDirFor(slug))).toBe(false);
+    expect(fs.existsSync(profilePath(slug))).toBe(false);
+  });
+
+  test("disable on a slug with no agent dir is a quiet no-op (no false 'changed')", async () => {
+    const { applyByotState } = await loadModule();
+    expect(applyByotState("no-agent-yet", false)).toBe(false);
+  });
+});
+
+describe("applyByotState — enabled write path", () => {
+  test("writes auth-profiles.json with mode 0o600 when agent dir exists", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    const changed = applyByotState(slug, true);
+    expect(changed).toBe(true);
+
+    const target = profilePath(slug);
+    expect(fs.existsSync(target)).toBe(true);
+
+    const stat = fs.statSync(target);
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  test("idempotent — second call returns false when content already matches", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    expect(applyByotState(slug, true)).toBe(true);
+    expect(applyByotState(slug, true)).toBe(false);
+  });
+
+  test("written content is JSON with the expected SecretRef shape", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, true);
+
+    const written = JSON.parse(fs.readFileSync(profilePath(slug), "utf8"));
+    expect(written.profiles["anthropic:default"].type).toBe("api_key");
+    expect(written.profiles["anthropic:default"].keyRef).toEqual({
+      source: "exec",
+      provider: "gcp-secret-manager",
+      id: `byok-${slug}-anthropic/latest`,
+    });
+  });
+
+  test("never embeds plaintext key (defense-in-depth — only SecretRef)", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, true);
+    const raw = fs.readFileSync(profilePath(slug), "utf8");
+    expect(raw).not.toContain("sk-ant-");
+    expect(raw).not.toMatch(/"key"\s*:/); // sibling plaintext field MUST NOT appear
+  });
+
+  test("no .tmp file lingers after successful write (atomic rename)", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, true);
+    const tmp = `${profilePath(slug)}.tmp`;
+    expect(fs.existsSync(tmp)).toBe(false);
+  });
+});
+
+describe("applyByotState — disabled remove path", () => {
+  test("removes auth-profiles.json when disabled and file existed", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    applyByotState(slug, true);
+    expect(fs.existsSync(profilePath(slug))).toBe(true);
+
+    expect(applyByotState(slug, false)).toBe(true);
+    expect(fs.existsSync(profilePath(slug))).toBe(false);
+  });
+
+  test("disable when no file present is a no-op (returns false)", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    expect(applyByotState(slug, false)).toBe(false);
+  });
+});

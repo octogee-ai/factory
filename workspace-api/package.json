@@ -16,6 +16,7 @@
     "node": "22"
   },
   "dependencies": {
+    "@google-cloud/secret-manager": "^6.1.1",
     "busboy": "^1.6.0",
     "cors": "^2.8.5",
     "express": "^4.21.0",

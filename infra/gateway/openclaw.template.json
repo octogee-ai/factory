@@ -11,6 +11,18 @@
       }
     }
   },
+  "secrets": {
+    "providers": {
+      "gcp-secret-manager": {
+        "source": "exec",
+        "command": "/usr/local/bin/node",
+        "args": ["/octogee/scripts/secret-resolver.mjs"],
+        "passEnv": ["GOOGLE_APPLICATION_CREDENTIALS", "GCP_PROJECT_ID"],
+        "jsonOnly": true,
+        "timeoutMs": 5000
+      }
+    }
+  },
   "agents": {
     "defaults": {
       "model": {
