@@ -134,7 +134,7 @@ mm_pat_is_valid() {
   local pat="$1" expected_uid="$2"
   [[ -z "$pat" || -z "$expected_uid" ]] && return 1
   local actual_uid
-  actual_uid=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  actual_uid=$(\
     curl -s "http://localhost:8065/api/v4/users/me" \
     -H "Authorization: Bearer $pat" 2>/dev/null \
     | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
@@ -247,12 +247,48 @@ kubectl wait --for=condition=available deployment/mattermost \
   -n "$K8S_NAMESPACE" --timeout=120s 2>/dev/null || fail "Mattermost not ready after 120s"
 ok "Mattermost deployment ready"
 
+# ── 4b. Port-forward to MM (distroless image — no in-pod curl) ────────────
+# MM 11.x ships a distroless image without curl/sh, so we can't `kubectl exec
+# -- curl`. Forward MM's service port to localhost:8065 and have the script
+# hit the API from the operator's machine. Trap ensures cleanup on any exit.
+PF_PID=""
+mm_cleanup() {
+  if [[ -n "$PF_PID" ]] && kill -0 "$PF_PID" 2>/dev/null; then
+    kill "$PF_PID" 2>/dev/null || true
+    wait "$PF_PID" 2>/dev/null || true
+  fi
+}
+trap mm_cleanup EXIT
+
+# Tear down any stale local port-forward that would race with ours.
+# (Operator may have left one running from a prior debug session.)
+if lsof -ti :8065 >/dev/null 2>&1; then
+  warn "Killing stale process holding localhost:8065"
+  lsof -ti :8065 | xargs kill -9 2>/dev/null || true
+  sleep 1
+fi
+
+info "Starting kubectl port-forward → localhost:8065..."
+kubectl port-forward -n "$K8S_NAMESPACE" svc/mattermost 8065:8065 >/dev/null 2>&1 &
+PF_PID=$!
+
+# Wait for port-forward to be ready (separate from MM HTTP readiness).
+PF_READY=false
+for _ in $(seq 1 10); do
+  if curl -s -o /dev/null -w "%{http_code}" http://localhost:8065 2>/dev/null | grep -qE "^[0-9]"; then
+    PF_READY=true
+    break
+  fi
+  sleep 1
+done
+$PF_READY || fail "kubectl port-forward did not establish on localhost:8065"
+
 # ── 5. Wait for HTTP ──────────────────────────────────────────────────────
 info "Waiting for Mattermost HTTP..."
 MM_READY=false
 for attempt in $(seq 1 24); do
-  PING=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
-    curl -s -o /dev/null -w "%{http_code}" http://localhost:8065/api/v4/system/ping 2>/dev/null || echo "000")
+  PING=$(curl -s -o /dev/null -w "%{http_code}" \
+    http://localhost:8065/api/v4/system/ping 2>/dev/null || echo "000")
   [[ "$PING" == "200" ]] && { MM_READY=true; break; }
   sleep 5
   info "  Waiting (attempt $attempt/24, status=$PING)..."
@@ -261,7 +297,7 @@ $MM_READY || fail "Mattermost HTTP not responding after 120s"
 ok "Mattermost HTTP ready"
 
 # ── 6. Bootstrap or refresh credentials ──────────────────────────────────
-ADMIN_CHECK=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+ADMIN_CHECK=$(\
   curl -s -o /dev/null -w "%{http_code}" \
   -X POST "http://localhost:8065/api/v4/users/login" \
   -H "Content-Type: application/json" \
@@ -269,7 +305,7 @@ ADMIN_CHECK=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
 
 if [[ "$ADMIN_CHECK" == "200" ]]; then
   info "Admin already exists — refreshing token only"
-  LOGIN_RAW=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  LOGIN_RAW=$(\
     curl -s -i -X POST "http://localhost:8065/api/v4/users/login" \
     -H "Content-Type: application/json" \
     -d "{\"login_id\":\"$MM_ADMIN_USER\",\"password\":\"$MM_ADMIN_PASS\"}" 2>/dev/null)
@@ -277,7 +313,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
   [[ -n "$MM_ADMIN_TOKEN" ]] && save_env "MM_ADMIN_TOKEN" "$MM_ADMIN_TOKEN" && ok "Admin session token refreshed"
 
   # Get real admin user ID from /me (stored IDs can drift after DB rebuilds)
-  MM_ADMIN_USER_ID=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  MM_ADMIN_USER_ID=$(\
     curl -s "http://localhost:8065/api/v4/users/me" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || echo "")
@@ -292,7 +328,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
   else
     info "Cached admin PAT missing or invalid — rotating"
     # Revoke any stale workspace-api-tagged PATs before minting a new one
-    EXISTING_PATS=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    EXISTING_PATS=$(\
       curl -s "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
     OLD_PAT_IDS=$(echo "$EXISTING_PATS" | python3 -c "
@@ -304,7 +340,7 @@ for t in tokens:
 " 2>/dev/null || echo "")
     REVOKED=0
     for pat_id in $OLD_PAT_IDS; do
-      kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+      \
         curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens/revoke" \
         -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
@@ -313,7 +349,7 @@ for t in tokens:
     done
     [[ $REVOKED -gt 0 ]] && ok "Revoked $REVOKED stale admin PAT(s)"
 
-    PAT_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+    PAT_RESP=$(\
       curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
       -H "Content-Type: application/json" \
@@ -330,7 +366,7 @@ for t in tokens:
 
   # ── Discover existing team + bot (may be missing from env/secret) ────────
   info "Discovering team + bot state..."
-  TEAM_ID_FROM_API=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  TEAM_ID_FROM_API=$(\
     curl -s "http://localhost:8065/api/v4/teams/name/octogee" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
     | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
@@ -342,7 +378,7 @@ for t in tokens:
     warn "Could not discover Octogee team — MM_TEAM_ID will be empty"
   fi
 
-  BOT_USER_ID_FROM_API=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  BOT_USER_ID_FROM_API=$(\
     curl -s "http://localhost:8065/api/v4/bots" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
     | python3 -c "
@@ -366,7 +402,7 @@ for b in bots:
       save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
     else
       info "Cached bot token missing or invalid — rotating"
-      EXISTING_BOT_TOKENS=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+      EXISTING_BOT_TOKENS=$(\
         curl -s "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
         -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
       OLD_BOT_IDS=$(echo "$EXISTING_BOT_TOKENS" | python3 -c "
@@ -376,7 +412,7 @@ for t in json.load(sys.stdin):
 " 2>/dev/null || echo "")
       BOT_REVOKED=0
       for tok_id in $OLD_BOT_IDS; do
-        kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+        \
           curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens/revoke" \
           -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
           -H "Content-Type: application/json" \
@@ -385,7 +421,7 @@ for t in json.load(sys.stdin):
       done
       [[ $BOT_REVOKED -gt 0 ]] && ok "Revoked $BOT_REVOKED stale bot token(s)"
 
-      TOKEN_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+      TOKEN_RESP=$(\
         curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
         -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
@@ -405,7 +441,7 @@ else
   info "Fresh Mattermost — bootstrapping admin, team, bot..."
 
   # Admin user
-  ADMIN_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  ADMIN_RESP=$(\
     curl -s -X POST "http://localhost:8065/api/v4/users" \
     -H "Content-Type: application/json" \
     -d "{\"email\":\"admin@octogee.com\",\"username\":\"$MM_ADMIN_USER\",\"password\":\"$MM_ADMIN_PASS\",\"first_name\":\"Octogee\",\"last_name\":\"Admin\",\"nickname\":\"Octogee Admin\"}" 2>/dev/null)
@@ -415,7 +451,7 @@ else
   ok "Admin created: $MM_ADMIN_USER_ID"
 
   # Login
-  LOGIN_RAW=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  LOGIN_RAW=$(\
     curl -s -i -X POST "http://localhost:8065/api/v4/users/login" \
     -H "Content-Type: application/json" \
     -d "{\"login_id\":\"$MM_ADMIN_USER\",\"password\":\"$MM_ADMIN_PASS\"}" 2>/dev/null)
@@ -425,7 +461,7 @@ else
   ok "Admin login OK"
 
   # Team
-  TEAM_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  TEAM_RESP=$(\
     curl -s -X POST "http://localhost:8065/api/v4/teams" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
@@ -436,7 +472,7 @@ else
   ok "Team created: $MM_TEAM_ID"
 
   # Enable bots + personal access tokens
-  kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  \
     curl -s -X PUT "http://localhost:8065/api/v4/config/patch" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
@@ -444,7 +480,7 @@ else
   ok "Bot accounts + PATs enabled"
 
   # Add admin to team
-  kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  \
     curl -s -X POST "http://localhost:8065/api/v4/teams/$MM_TEAM_ID/members" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
@@ -454,7 +490,7 @@ else
   # Admin personal access token (PAT) for workspace-api
   # Session tokens expire; PATs don't — workspace-api needs MM_ADMIN_TOKEN env var
   info "Creating admin personal access token (PAT) for workspace-api..."
-  PAT_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  PAT_RESP=$(\
     curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
@@ -468,7 +504,7 @@ else
   fi
 
   # Bot
-  BOT_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  BOT_RESP=$(\
     curl -s -X POST "http://localhost:8065/api/v4/bots" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
@@ -479,7 +515,7 @@ else
   ok "Bot created: $MM_BOT_USER_ID"
 
   # Add bot to team
-  kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  \
     curl -s -X POST "http://localhost:8065/api/v4/teams/$MM_TEAM_ID/members" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
@@ -487,7 +523,7 @@ else
   ok "Bot added to team"
 
   # Bot token
-  TOKEN_RESP=$(kubectl exec deployment/mattermost -n "$K8S_NAMESPACE" -- \
+  TOKEN_RESP=$(\
     curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
