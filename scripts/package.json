@@ -29,6 +29,7 @@
     "@tootallnate/once": "^3.0.1",
     "brace-expansion": "^2.0.3",
     "fast-xml-parser": "^5.5.7",
-    "path-to-regexp": "^0.1.13"
+    "path-to-regexp": "^0.1.13",
+    "follow-redirects": "^1.16.0"
   }
 }

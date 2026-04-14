@@ -32,7 +32,6 @@ export interface Project {
   canvasFile: string;
   previewUrl: string | null;
   starCount: number;
-  commentCount: number;
   createdAt: unknown; // Firestore Timestamp
   updatedAt: unknown; // Firestore Timestamp
 }
