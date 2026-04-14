@@ -28,17 +28,18 @@ spec:
               name: http
             - containerPort: 8067
               name: metrics
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              export MM_SQLSETTINGS_DATASOURCE="postgres://{{ .Values.db.user }}:${MM_DB_PASSWORD}@cloud-sql-proxy:5432/{{ .Values.db.name }}?sslmode=disable&connect_timeout=10"
-              exec /entrypoint.sh mattermost
+          # MM 11.x's image is distroless (no /bin/sh). Use K8s env var
+          # interpolation via $(VAR) syntax — MM_DB_PASSWORD must appear
+          # BEFORE MM_SQLSETTINGS_DATASOURCE in the env list (K8s resolves
+          # in order). The image's default entrypoint runs `mattermost`.
           env:
             - name: MM_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.db.passwordSecret }}
                   key: {{ .Values.db.passwordKey }}
+            - name: MM_SQLSETTINGS_DATASOURCE
+              value: "postgres://{{ .Values.db.user }}:$(MM_DB_PASSWORD)@cloud-sql-proxy:5432/{{ .Values.db.name }}?sslmode=disable&connect_timeout=10"
             - name: MM_SQLSETTINGS_DRIVERNAME
               value: postgres
             - name: MM_SERVICESETTINGS_SITEURL
