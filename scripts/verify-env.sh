@@ -192,8 +192,11 @@ MM_READY=$(kubectl get deployment mattermost -n "$NAMESPACE" \
   -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
 MM_IMAGE=$(kubectl get deployment mattermost -n "$NAMESPACE" \
   -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+# Datasource lives in the MM_SQLSETTINGS_DATASOURCE env var (post v3 helm
+# fix — we dropped the shell wrapper since MM 11.x is distroless). Look it
+# up by env name instead of args[0].
 MM_DATASOURCE=$(kubectl get deployment mattermost -n "$NAMESPACE" \
-  -o jsonpath='{.spec.template.spec.containers[0].args[0]}' 2>/dev/null \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MM_SQLSETTINGS_DATASOURCE")].value}' 2>/dev/null \
   | grep -o 'cloud-sql-proxy:[0-9]*/[a-z_]*' | head -1 || echo "unknown")
 
 if [[ "${MM_READY:-0}" -ge 1 ]]; then
