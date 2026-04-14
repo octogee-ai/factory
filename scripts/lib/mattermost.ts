@@ -231,8 +231,14 @@ export async function provisionMattermostUser(
 
     // ── Create workspace team (team-per-workspace: Phase 4) ──────────────────
     // Team name = username (v3 §2 — username is everything).
+    // Display name falls back to `{username}'s Workspace` when no explicit
+    // workspaceName/firstName is provided (v3 §2 dropped firstName, so most
+    // calls now hit the slug fallback). MM defaults to "Office" when display
+    // is empty — explicit fallback prevents that.
     const teamName = slug;
-    const teamDisplayName = workspaceName || `${firstName}'s Workspace`;
+    const teamDisplayName =
+      workspaceName ||
+      (firstName ? `${firstName}'s Workspace` : `${slug}'s Workspace`);
     let teamId: string | null = null;
 
     let team = await mmApiCall("POST", "/teams", {
