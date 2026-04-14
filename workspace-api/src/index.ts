@@ -17,7 +17,6 @@ import workspaceRoutes from "./routes/workspace";
 import mattermostRoutes from "./routes/mattermost";
 import billingRoutes from "./routes/billing";
 import adminRoutes from "./routes/admin";
-import leadRoutes from "./routes/leads";
 import inviteRoutes from "./routes/invites";
 import integrationRoutes from "./routes/integrations";
 import discordRoutes from "./routes/discord";
@@ -28,7 +27,6 @@ import entitiesRoutes from "./routes/entities";
 import profileRoutes from "./routes/profile";
 
 // Internal routes — reachable only via K8s DNS (ClusterIP), NOT via Ingress
-import dataRoutes from "./routes/data";
 import agentRoutes from "./routes/agents";
 import internalBillingRoutes from "./routes/internal/billing";
 import internalNotificationRoutes from "./routes/internal/notifications";
@@ -123,7 +121,6 @@ app.use("/api/entities", entitiesRoutes);
 app.use("/api/mattermost", mattermostRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/admin", adminRoutes);
-app.use("/api/leads", leadRoutes);
 app.use("/api/invites", inviteRoutes);
 app.use("/api/integrations", integrationRoutes);
 app.use("/api/discord", discordRoutes);
@@ -133,7 +130,6 @@ app.use("/api/profile", profileRoutes);
 // ── Internal routes (K8s DNS only — NOT routed by Ingress) ─────────────────
 // Ingress only matches /api/* paths. /internal/* never reaches the LB.
 
-app.use("/internal/data", dataRoutes);
 app.use("/internal/agents", agentRoutes);
 app.use("/internal/billing", internalBillingRoutes);
 app.use("/internal/notifications", notificationRoutes);
