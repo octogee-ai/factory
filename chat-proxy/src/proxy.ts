@@ -10,7 +10,7 @@
  * Team model: team-per-workspace (Phase 4+5). Each workspace gets its own
  * MM team (ws-{slug}). The proxy validates that API requests target a team
  * the user belongs to. DM channels (no team) pass through without checks.
- * Team-per-workspace: each user's teamId is in Firestore mattermost.teamId.
+ * Team-per-workspace: each user's teamId lives on workspaces/{slug}.mattermost.teamId (v3.1).
  *
  * Endpoints proxied:
  *   GET  /api/v4/users/me/teams/{id}/channels  (list channels — team-scoped, includes private)

@@ -7,6 +7,7 @@ import * as crypto from "crypto";
 import { requireAuth, requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db, FieldValue, Timestamp, auth as firebaseAuth } from "../lib/db";
+import { getWorkspaceMmContext } from "../lib/mattermost-context";
 
 const router = Router();
 
@@ -17,8 +18,9 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
     const uid = req.uid!;
     const userData = req.user!;
 
-    const mmUserId = userData.mattermost?.userId;
-    const dmChannelId = userData.mattermost?.dmChannelId;
+    const ctx = await getWorkspaceMmContext(uid, undefined, userData);
+    const mmUserId = ctx?.userId;
+    const dmChannelId = ctx?.coachDmChannelId;
 
     if (!mmUserId || !dmChannelId) {
       res.status(202).json({
@@ -39,7 +41,6 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
       return;
     }
 
-    // Generate short-lived WebSocket ticket
     const ticket = crypto.randomUUID();
     await db.doc(`wsTickets/${ticket}`).set({
       uid,
@@ -47,8 +48,8 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
       expiresAt: Date.now() + 30_000,
     });
 
-    const proxyUrl = process.env.CHAT_PROXY_URL || userData.mattermost?.proxyUrl || "";
-    const coachMmUserId = userData.mattermost?.coachUserId || null;
+    const proxyUrl = process.env.CHAT_PROXY_URL || "";
+    const coachMmUserId = ctx.coachUserId || null;
     const coachName = userData.onboarding?.coachName || null;
 
     res.json({ mmUserId, dmChannelId, proxyUrl, wsTicket: ticket, coachMmUserId, coachName });
@@ -114,7 +115,8 @@ router.post("/invite", requireAuth, async (req: Request, res: Response, next: Ne
       return;
     }
 
-    const callerChannelId = callerData.mattermost?.channelId;
+    const callerCtx = await getWorkspaceMmContext(callerUid, undefined, callerData);
+    const callerChannelId = callerCtx?.coachDmChannelId;
     if (callerChannelId && callerChannelId !== channelId) {
       res.status(403).json({ error: "You can only invite to your own channel" });
       return;
@@ -211,8 +213,8 @@ router.post("/invite-link", requireAuth, async (req: Request, res: Response, nex
       return;
     }
 
-    const callerMm = callerData.mattermost;
-    const callerChannels = [callerMm.channelId, callerMm.octogeeChannelId, callerMm.sharedChannelId].filter(Boolean);
+    const callerCtx = await getWorkspaceMmContext(callerUid, undefined, callerData);
+    const callerChannels = [callerCtx?.coachDmChannelId, callerCtx?.generalChannelId].filter(Boolean);
     if (callerChannels.length > 0 && !callerChannels.includes(channelId)) {
       res.status(403).json({ error: "You can only create invite links for your own channels" });
       return;

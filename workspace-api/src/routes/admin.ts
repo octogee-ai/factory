@@ -8,6 +8,7 @@ import { logger } from "../middleware/logging";
 import { db } from "../lib/db";
 import { getTierConfig, isUnlimitedTier, calculateAvailableTokens, type TierName } from "../billing/tiers";
 import type { CSIDocument } from "../csi/types";
+import { getWorkspaceMmContext } from "../lib/mattermost-context";
 
 const router = Router();
 router.use(requireAdmin);
@@ -171,10 +172,15 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
         activatedAgents: provisioning.openclaw?.activatedAgents || [],
         provisionedAt: provisioning.openclaw?.provisionedAt?.toDate?.()?.toISOString() || null,
       },
-      mattermost: {
-        connected: !!d.mattermost?.userId, userId: d.mattermost?.userId || null,
-        channelId: d.mattermost?.channelId || null, username: d.mattermost?.username || null,
-      },
+      mattermost: await (async () => {
+        const ctx = await getWorkspaceMmContext(uid, undefined, d);
+        return {
+          connected: !!d.mattermost?.userId,
+          userId: d.mattermost?.userId || null,
+          channelId: ctx?.coachDmChannelId || null,
+          username: d.mattermost?.username || null,
+        };
+      })(),
       onboarding: {
         step: d.onboardingStep || "unknown", complete: d.onboardingComplete || false,
         milestones: Object.fromEntries(onboardingSnap.docs.map((doc) => [doc.id, doc.data()])),

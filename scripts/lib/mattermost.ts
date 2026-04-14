@@ -179,19 +179,22 @@ export async function provisionMattermostUser(
   };
 
   try {
-    // Check if already provisioned
+    // Idempotency check (v3.1): user doc carries only userId+username; the
+    // coach DM channel now lives at workspaces/{slug}/channels/coach-dm.
     const existingUserDoc = await db.collection("users").doc(uid).get();
     const existingData = existingUserDoc.data() || {};
-    const existingChannelId = existingData.mattermost?.channelId || existingData.mattermost?.dmChannelId;
-    if (existingData.mattermost?.userId && existingChannelId) {
-      log(`[mattermost] user already provisioned (userId=${existingData.mattermost.userId}) — skipping MM creation`);
-      return {
-        "mattermost.userId": existingData.mattermost.userId,
-        "mattermost.username": existingData.mattermost.username || slug,
-        "mattermost.channelId": existingChannelId,
-        "mattermost.dmChannelId": existingChannelId,
-        "mattermost.proxyUrl": existingData.mattermost.proxyUrl || process.env.CHAT_PROXY_URL || "",
-      };
+    if (existingData.mattermost?.userId) {
+      const coachDmSnap = await db.doc(`workspaces/${slug}/channels/coach-dm`).get();
+      const existingChannelId = coachDmSnap.data()?.mattermost?.channelId;
+      if (existingChannelId) {
+        log(`[mattermost] user already provisioned (userId=${existingData.mattermost.userId}) — skipping MM creation`);
+        return {
+          "mattermost.userId": existingData.mattermost.userId,
+          "mattermost.username": existingData.mattermost.username || slug,
+          "mattermost.channelId": existingChannelId,
+          "mattermost.dmChannelId": existingChannelId,
+        };
+      }
     }
 
     // Per DATA-MODEL-REVIEW v3 §2: slug = username. MM username is the same

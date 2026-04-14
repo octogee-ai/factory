@@ -42,6 +42,7 @@ import { resolveWorkspaceUid } from "../lib/workspace-resolution";
 import { decomposeProjectId } from "../lib/projectId";
 import { logger } from "../middleware/logging";
 import { workspaceGeneralChannelName } from "../lib/channelNames";
+import { getWorkspaceMmContext } from "../lib/mattermost-context";
 
 const router = Router();
 router.use(requireAuth);
@@ -95,15 +96,14 @@ async function resolveEntityChannel(
     const ownerUid = await resolveWorkspaceUid(id);
     if (!ownerUid) return { mmChannelId: null, ownerUid: null, error: "Workspace not found" };
 
-    const ownerDoc = await db.doc(`users/${ownerUid}`).get();
-    const ownerData = ownerDoc.data();
-    const storedChannelId = ownerData?.mattermost?.generalChannelId;
+    const ownerCtx = await getWorkspaceMmContext(ownerUid, id);
+    const storedChannelId = ownerCtx?.generalChannelId;
     if (storedChannelId) return { mmChannelId: storedChannelId, ownerUid };
 
     // Fallback: search the owner's team channels for the canonical
     // {wsSlug}-general name. The legacy octogee- prefix was removed by the
     // channel-naming-lockdown — only the canonical shape is recognized now.
-    const teamId = ownerData?.mattermost?.teamId;
+    const teamId = ownerCtx?.teamId;
     if (!teamId) return { mmChannelId: null, ownerUid, error: "Workspace not yet provisioned" };
     try {
       const expected = workspaceGeneralChannelName(id);
@@ -336,8 +336,8 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
         res.status(403).json({ error: "Only the workspace owner can remove members" });
         return;
       }
-      const ownerDoc = await db.doc(`users/${ownerUid}`).get();
-      mmChannelId = ownerDoc.data()?.mattermost?.generalChannelId ?? null;
+      const ownerCtx = await getWorkspaceMmContext(ownerUid, id);
+      mmChannelId = ownerCtx?.generalChannelId ?? null;
       if (!mmChannelId) {
         res.status(422).json({ error: "Workspace has no general channel yet" });
         return;

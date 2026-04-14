@@ -106,6 +106,7 @@ esac
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
+die()  { echo -e "  ${RED}❌ $1${NC}" >&2; exit 1; }
 
 confirm() {
   $FORCE && return 0
@@ -252,40 +253,54 @@ if $FULL; then
     [[ -n "$PROXY_BIN" ]] && ok "cloud-sql-proxy installed: $PROXY_BIN"
   fi
 
+  # --full means DB drop is not optional. Hard-fail on missing deps so the
+  # user doesn't think the script succeeded while silently leaving stale
+  # rows behind (we hit this during TEST — "all old MM data is still there").
   if [[ -z "$PROXY_BIN" ]]; then
-    warn "cloud-sql-proxy not found — skipping DB reset. Run manually:"
-    warn "  PGPASSWORD=\$MM_DB_PASS psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres -c 'DROP DATABASE IF EXISTS $MM_DB_NAME; CREATE DATABASE $MM_DB_NAME;'"
-    warn "  PGPASSWORD=\$GITEA_DB_PASS psql -h 127.0.0.1 -p 5433 -U gitea -d postgres -c 'DROP DATABASE IF EXISTS $GITEA_DB_NAME; CREATE DATABASE $GITEA_DB_NAME;'"
-  elif [[ -z "$MM_DB_PASS" || -z "$GITEA_DB_PASS" ]]; then
-    warn "Could not read DB passwords from Secret Manager — skipping DB reset"
-  else
-    "$PROXY_BIN" octogee:us-central1:octogee-pg --port=5433 &
-    PROXY_PID=$!
-    sleep 4
-
-    # Terminate active connections then drop/create
-    for attempt in 1 2 3; do
-      PGPASSWORD=$MM_DB_PASS psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres \
-        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$MM_DB_NAME';" >/dev/null 2>&1 && break
-      sleep 2
-    done
-    PGPASSWORD=$MM_DB_PASS psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres \
-      -c "DROP DATABASE IF EXISTS $MM_DB_NAME;" 2>&1
-    PGPASSWORD=$MM_DB_PASS psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres \
-      -c "CREATE DATABASE $MM_DB_NAME;" 2>&1
-    ok "Mattermost DB reset: $MM_DB_NAME"
-
-    PGPASSWORD=$GITEA_DB_PASS psql -h 127.0.0.1 -p 5433 -U gitea -d postgres \
-      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$GITEA_DB_NAME';" >/dev/null 2>&1 || true
-    PGPASSWORD=$GITEA_DB_PASS psql -h 127.0.0.1 -p 5433 -U gitea -d postgres \
-      -c "DROP DATABASE IF EXISTS $GITEA_DB_NAME;" 2>&1
-    PGPASSWORD=$GITEA_DB_PASS psql -h 127.0.0.1 -p 5433 -U gitea -d postgres \
-      -c "CREATE DATABASE $GITEA_DB_NAME;" 2>&1
-    ok "Gitea DB reset: $GITEA_DB_NAME"
-
-    kill "$PROXY_PID" 2>/dev/null || true
-    PROXY_PID=""
+    die "cloud-sql-proxy not found and --full requested. Install it (brew install cloud-sql-proxy) or run DB drops manually and rerun without --full."
   fi
+  if [[ -z "$MM_DB_PASS" ]]; then
+    die "Could not read MM_DB_PASSWORD from Secret Manager. Check gcloud auth + grant, or run DB drop manually."
+  fi
+  if [[ -z "$GITEA_DB_PASS" ]]; then
+    die "Could not read gitea-db-password from Secret Manager. Check gcloud auth + grant, or run DB drop manually."
+  fi
+
+  "$PROXY_BIN" octogee:us-central1:octogee-pg --port=5433 &
+  PROXY_PID=$!
+  trap '[[ -n "${PROXY_PID:-}" ]] && kill "$PROXY_PID" 2>/dev/null' EXIT
+  sleep 4
+
+  # Helper: drop + recreate a database, then assert it is empty. Each psql
+  # call is a separate -c (psql refuses to run DROP DATABASE inside a
+  # transaction block), and an explicit verify-empty check prevents silent
+  # no-op — if the drop didn't land, the table count would stay non-zero.
+  drop_and_verify() {
+    local user="$1" pass="$2" dbname="$3"
+    PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
+      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$dbname';" >/dev/null 2>&1 || true
+    PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
+      -c "DROP DATABASE IF EXISTS $dbname;" \
+      || die "DROP DATABASE $dbname failed"
+    PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
+      -c "CREATE DATABASE $dbname;" \
+      || die "CREATE DATABASE $dbname failed"
+    local tbl_count
+    tbl_count=$(PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d "$dbname" \
+      -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" \
+      2>/dev/null || echo "ERR")
+    if [[ "$tbl_count" != "0" ]]; then
+      die "$dbname not empty after drop+create (table count = $tbl_count) — aborting"
+    fi
+    ok "$dbname reset and verified empty"
+  }
+
+  drop_and_verify mattermost "$MM_DB_PASS" "$MM_DB_NAME"
+  drop_and_verify gitea      "$GITEA_DB_PASS" "$GITEA_DB_NAME"
+
+  kill "$PROXY_PID" 2>/dev/null || true
+  PROXY_PID=""
+  trap - EXIT
 fi
 
 # ── 6. Secret Manager preserved ───────────────────────────────────────────
