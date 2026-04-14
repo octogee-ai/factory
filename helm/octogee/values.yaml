@@ -37,7 +37,7 @@ mattermost:
   enabled: true
   image:
     repository: mattermost/mattermost-team-edition
-    tag: "release-9.11"
+    tag: "release-11.5"
   db:
     user: mattermost
     name: mattermost_prod

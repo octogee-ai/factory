@@ -1,22 +1,14 @@
 /**
  * Workspace slug resolution — resolves a URL slug to a user UID.
  *
- * Fallback chain:
- *   1. workspaceSlugs/{slug} — canonical for new users (system-generated slugs)
- *   2. usernames/{slug}      — backward compat (old users where username === workspaceSlug)
- *
- * Returns null if neither collection has the slug.
+ * Per DATA-MODEL-REVIEW v3 §2: username IS the workspace slug. The
+ * `usernames/{username}` collection is the single claim. The pre-v3
+ * `workspaceSlugs/` collection has been deleted.
  */
 import { db } from "./db";
 
 export async function resolveWorkspaceUid(slug: string): Promise<string | null> {
-  // 1. Try workspaceSlugs (canonical)
-  const wsDoc = await db.doc(`workspaceSlugs/${slug}`).get();
-  if (wsDoc.exists) return wsDoc.data()?.uid ?? null;
-
-  // 2. Fallback to usernames (backward compat for pre-decoupling users)
   const unDoc = await db.doc(`usernames/${slug}`).get();
   if (unDoc.exists) return unDoc.data()?.uid ?? null;
-
   return null;
 }

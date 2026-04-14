@@ -126,6 +126,9 @@ app.use("/api/integrations", integrationRoutes);
 app.use("/api/discord", discordRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/profile", profileRoutes);
+// Agent routes are mounted publicly (PATCH /me for Settings UI) AND internally
+// (activate / deprovision); each route selects its own auth middleware.
+app.use("/api/agents", agentRoutes);
 
 // ── Internal routes (K8s DNS only — NOT routed by Ingress) ─────────────────
 // Ingress only matches /api/* paths. /internal/* never reaches the LB.

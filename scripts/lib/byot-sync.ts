@@ -45,12 +45,12 @@ interface ByotInput {
  */
 export function deriveDesiredByotState(userData: {
   byotActive?: boolean;
-  workspaceSlug?: string;
+  username?: string;
   provisioning?: { openclaw?: { slug?: string; status?: string } };
   systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
 }): { enabled: boolean; input: ByotInput | null } {
   const status = userData.provisioning?.openclaw?.status;
-  const slug = userData.workspaceSlug || userData.provisioning?.openclaw?.slug;
+  const slug = userData.username || userData.provisioning?.openclaw?.slug;
   if (!userData.byotActive || !slug || status !== "complete") {
     return { enabled: false, input: null };
   }
@@ -172,12 +172,12 @@ export function triggerSecretsReload(): void {
  */
 export function syncByotForCustomer(userData: {
   byotActive?: boolean;
-  workspaceSlug?: string;
+  username?: string;
   provisioning?: { openclaw?: { slug?: string; status?: string } };
   systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
 }): void {
   const desired = deriveDesiredByotState(userData);
-  const slug = userData.workspaceSlug || userData.provisioning?.openclaw?.slug;
+  const slug = userData.username || userData.provisioning?.openclaw?.slug;
   if (!slug) return;
 
   const changed = applyByotState(slug, desired.input);

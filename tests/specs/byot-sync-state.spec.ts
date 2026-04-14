@@ -14,7 +14,7 @@ describe("deriveDesiredByotState", () => {
   test("enabled when byotActive + complete + slug present (defaults to anthropic)", () => {
     const out = deriveDesiredByotState({
       byotActive: true,
-      workspaceSlug: "smile-wring-011b",
+      username: "smile-wring-011b",
       provisioning: { openclaw: { status: "complete", slug: "smile-wring-011b" } },
     });
     expect(out.enabled).toBe(true);
@@ -24,7 +24,7 @@ describe("deriveDesiredByotState", () => {
   test("Phase 2: provider/baseUrl/model propagate from systemConfig.byot", () => {
     const out = deriveDesiredByotState({
       byotActive: true,
-      workspaceSlug: "x",
+      username: "x",
       provisioning: { openclaw: { status: "complete" } },
       systemConfig: { byot: { provider: "openai-compatible", baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-3.5-sonnet" } },
     });
@@ -39,7 +39,7 @@ describe("deriveDesiredByotState", () => {
   test("Phase 2: openai provider propagates", () => {
     const out = deriveDesiredByotState({
       byotActive: true,
-      workspaceSlug: "x",
+      username: "x",
       provisioning: { openclaw: { status: "complete" } },
       systemConfig: { byot: { provider: "openai", model: "openai/gpt-5" } },
     });
@@ -50,7 +50,7 @@ describe("deriveDesiredByotState", () => {
   test("unknown provider value falls back to anthropic (Phase 1 backwards compat)", () => {
     const out = deriveDesiredByotState({
       byotActive: true,
-      workspaceSlug: "x",
+      username: "x",
       provisioning: { openclaw: { status: "complete" } },
       systemConfig: { byot: { provider: "codex" } },
     });
@@ -60,7 +60,7 @@ describe("deriveDesiredByotState", () => {
   test("disabled when byotActive is false", () => {
     const out = deriveDesiredByotState({
       byotActive: false,
-      workspaceSlug: "smile-wring-011b",
+      username: "smile-wring-011b",
       provisioning: { openclaw: { status: "complete" } },
     });
     expect(out.enabled).toBe(false);
@@ -69,7 +69,7 @@ describe("deriveDesiredByotState", () => {
 
   test("disabled when byotActive is missing (undefined)", () => {
     const out = deriveDesiredByotState({
-      workspaceSlug: "smile-wring-011b",
+      username: "smile-wring-011b",
       provisioning: { openclaw: { status: "complete" } },
     });
     expect(out.enabled).toBe(false);
@@ -78,7 +78,7 @@ describe("deriveDesiredByotState", () => {
   test("disabled when provisioning status is not complete", () => {
     const out = deriveDesiredByotState({
       byotActive: true,
-      workspaceSlug: "smile-wring-011b",
+      username: "smile-wring-011b",
       provisioning: { openclaw: { status: "in_progress" } },
     });
     expect(out.enabled).toBe(false);

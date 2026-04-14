@@ -39,6 +39,7 @@ import { requireAuth } from "../middleware/auth";
 import { db, FieldValue } from "../lib/db";
 import { mmApi } from "../lib/mattermost";
 import { resolveWorkspaceUid } from "../lib/workspace-resolution";
+import { decomposeProjectId } from "../lib/projectId";
 import { logger } from "../middleware/logging";
 import { workspaceGeneralChannelName } from "../lib/channelNames";
 
@@ -82,7 +83,8 @@ async function getCallerMmToken(uid: string): Promise<string | null> {
  *
  * Workspace: `{slug}-general` (looked up via owner's stored generalChannelId,
  *            with a name-based fallback if not stored).
- * Project:   `projects/{id}.mmChannelId` (set at provisioning time).
+ * Project:   `workspaces/{wid}/projects/{pid}/channels/general.mattermost.channelId`
+ *            per v3 §6.3; caller-supplied `id` is `{wid}_{pid}`.
  */
 async function resolveEntityChannel(
   kind: EntityKind,
@@ -119,14 +121,20 @@ async function resolveEntityChannel(
     }
   }
 
-  // project kind
-  const projectDoc = await db.doc(`projects/${id}`).get();
+  // project kind — id is `{workspaceId}_{projectSlug}`
+  const parts = decomposeProjectId(id);
+  if (!parts) return { mmChannelId: null, ownerUid: null, error: "Invalid project id" };
+
+  const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
+  const projectDoc = await projectRef.get();
   if (!projectDoc.exists) {
     return { mmChannelId: null, ownerUid: null, error: "Project not found" };
   }
   const project = projectDoc.data()!;
+  const channelDoc = await projectRef.collection("channels").doc("general").get();
+  const mmChannelId = channelDoc.data()?.mattermost?.channelId ?? null;
   return {
-    mmChannelId: project.mmChannelId ?? null,
+    mmChannelId,
     ownerUid: project.ownerUid ?? null,
   };
 }
@@ -335,7 +343,13 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
         return;
       }
     } else {
-      const projectDoc = await db.doc(`projects/${id}`).get();
+      const parts = decomposeProjectId(id);
+      if (!parts) {
+        res.status(400).json({ error: "Invalid project id" });
+        return;
+      }
+      const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
+      const projectDoc = await projectRef.get();
       if (!projectDoc.exists) {
         res.status(404).json({ error: "Project not found" });
         return;
@@ -346,7 +360,8 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
         res.status(403).json({ error: "Only the project owner can remove members" });
         return;
       }
-      mmChannelId = project.mmChannelId ?? null;
+      const channelDoc = await projectRef.collection("channels").doc("general").get();
+      mmChannelId = channelDoc.data()?.mattermost?.channelId ?? null;
       if (!mmChannelId) {
         res.status(422).json({ error: "Project has no channel yet" });
         return;
@@ -377,21 +392,30 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
       }
     }
 
-    // Project mode extras: clean up guestUids if the target has a
-    // Firestore profile. Missing profile is the common case this endpoint
-    // exists to support — we skip the Firestore cleanup silently.
+    // Project mode extras: delete the members/{uid} subcollection doc if
+    // the target has a Firestore profile + decrement memberCount. Missing
+    // profile is the common case — we skip the cleanup silently.
     if (kind === "project") {
-      const targetSnap = await db
-        .collection("users")
-        .where("mattermost.userId", "==", mmUserId)
-        .limit(1)
-        .get();
-      if (!targetSnap.empty) {
-        const targetUid = targetSnap.docs[0].id;
-        await db.doc(`projects/${id}`).update({
-          guestUids: FieldValue.arrayRemove(targetUid),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
+      const parts = decomposeProjectId(id);
+      if (parts) {
+        const targetSnap = await db
+          .collection("users")
+          .where("mattermost.userId", "==", mmUserId)
+          .limit(1)
+          .get();
+        if (!targetSnap.empty) {
+          const targetUid = targetSnap.docs[0].id;
+          const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
+          const memberRef = projectRef.collection("members").doc(targetUid);
+          const memberDoc = await memberRef.get();
+          if (memberDoc.exists) {
+            await memberRef.delete();
+            await projectRef.update({
+              memberCount: FieldValue.increment(-1),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
       }
     }
 

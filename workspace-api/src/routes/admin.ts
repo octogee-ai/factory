@@ -147,8 +147,8 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
     const csiData = csiSnap.exists ? csiSnap.data() as CSIDocument : null;
 
     res.json({
-      uid, email: d.email || "", displayName: d.displayName || d.firstName || "",
-      businessName: d.businessName || "", workspaceSlug: d.workspaceSlug || "", tier,
+      uid, email: d.email || "", displayName: d.username || "",
+      businessName: d.businessName || "", workspaceSlug: d.username || "", tier,
       subscription: {
         status: subscription.status || "none",
         stripeCustomerId: subscription.stripeCustomerId || null,
@@ -274,7 +274,7 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
     const wsSnap = await db.collection("users").doc(uid).collection("workspaces").get();
     const wsEntries = wsSnap.docs.length > 0
       ? wsSnap.docs.map((d) => ({ id: d.id, data: d.data() }))
-      : [{ id: userData.workspaceSlug || uid, data: userData }];
+      : [{ id: userData.username || uid, data: userData }];
 
     const workspaces = await Promise.all(
       wsEntries.map(async (ws) => {

@@ -1,13 +1,77 @@
 /**
- * Agent routes — activation and deprovisioning.
- * Migrated from functions/src/triggers/{activateAgent,deprovisionAgents}.ts
+ * Agent routes — activation, deprovisioning, and per-Builder coach updates.
+ *
+ * Mounted at both /api/agents (public via Ingress, requireAuth) and
+ * /internal/agents (K8s DNS only, requireAgentKey / requireAdmin). Each
+ * route picks its own auth middleware.
  */
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAgentKey, requireAdmin } from "../middleware/auth";
+import { requireAuth, requireAgentKey, requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db, FieldValue } from "../lib/db";
+import { mmApi } from "../lib/mattermost";
 
 const router = Router();
+
+// Coach MM patches only touch user-visible fields; the stable `{username}_coach`
+// MM username is never changed.
+const ALLOWED_COACH_PATCH_FIELDS = ["name", "persona", "avatarEmoji"] as const;
+type CoachPatchField = (typeof ALLOWED_COACH_PATCH_FIELDS)[number];
+
+// ── PATCH /me — update the caller's agent (coach) identity ────────────────
+// Settings UI writes here. Updates agents/{uid} and patches the coach MM
+// user's nickname + first_name when `name` changes.
+
+router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const uid = req.uid;
+    if (!uid) {
+      res.status(401).json({ error: "unauthenticated" });
+      return;
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    for (const key of ALLOWED_COACH_PATCH_FIELDS) {
+      const v = body[key];
+      if (typeof v === "string") patch[key] = v;
+    }
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: "no_valid_fields", allowed: ALLOWED_COACH_PATCH_FIELDS });
+      return;
+    }
+
+    // Update Firestore first so the doc is the source of truth even if the
+    // MM patch below fails.
+    await db.doc(`agents/${uid}`).set(
+      { id: uid, ...patch, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true },
+    );
+
+    // Sync display fields to MM when `name` changed. MM username stays stable.
+    if (typeof patch.name === "string" && patch.name) {
+      try {
+        const agentSnap = await db.doc(`agents/${uid}`).get();
+        const coachMmUserId = agentSnap.data()?.mattermost?.userId;
+        if (coachMmUserId) {
+          await mmApi(`/users/${coachMmUserId}/patch`, "PUT", {
+            first_name: patch.name,
+            nickname: patch.name,
+          });
+        }
+      } catch (err) {
+        // MM patch is best-effort. The next milestone sweep or a retry will
+        // reconcile if this fails.
+        logger.warn("coach MM patch failed (non-fatal)", {
+          uid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    res.json({ ok: true, updated: Object.keys(patch) as CoachPatchField[] });
+  } catch (e) { next(e); }
+});
 
 // ── Types ──────────────────────────────────────────────────────────────────
 

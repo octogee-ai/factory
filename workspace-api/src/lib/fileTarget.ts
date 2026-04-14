@@ -50,11 +50,13 @@ export type FileTargetResult =
  *
  *   - `slug` required → 400 "Missing slug"
  *   - If `projectSlug` is present:
- *       - project doc must exist → 404 "Project not found"
- *       - `project.workspaceSlug` must equal `slug` → 403 "Forbidden"
- *       - caller must be `ownerUid` or in `guestUids` → 403 "Forbidden"
+ *       - project doc must exist at `workspaces/{slug}/projects/{projectSlug}` → 404
+ *       - caller must be `ownerUid` or have a `members/{callerUid}` doc → 403
  *   - If no `projectSlug`:
  *       - `callerWorkspaceSlug` must equal `slug` → 403 "Forbidden"
+ *
+ * Per DATA-MODEL-REVIEW v3: slug = username (workspace ID). Projects nested
+ * under workspaces/{wid}/projects/{pid}; membership is a subcollection.
  *
  * Repo names and GCS prefixes are derived deterministically:
  *   workspace:  `{slug}-workspace`       / `customers/{slug}`
@@ -68,19 +70,19 @@ export async function resolveFileTarget(input: FileTargetInput): Promise<FileTar
   }
 
   if (projectSlug) {
-    const projectId = `${slug}_${projectSlug}`;
-    const projectDoc = await db.doc(`projects/${projectId}`).get();
+    const projectRef = db.doc(`workspaces/${slug}/projects/${projectSlug}`);
+    const projectDoc = await projectRef.get();
     if (!projectDoc.exists) {
       return { ok: false, status: 404, error: "Project not found" };
     }
     const project = projectDoc.data()!;
-    if (project.workspaceSlug !== slug) {
-      return { ok: false, status: 403, error: "Forbidden" };
-    }
     const isOwner = project.ownerUid === callerUid;
-    const isGuest =
-      Array.isArray(project.guestUids) && project.guestUids.includes(callerUid);
-    if (!isOwner && !isGuest) {
+    let isMember = false;
+    if (!isOwner && callerUid) {
+      const memberDoc = await projectRef.collection("members").doc(callerUid).get();
+      isMember = memberDoc.exists;
+    }
+    if (!isOwner && !isMember) {
       return { ok: false, status: 403, error: "Forbidden" };
     }
     return {
@@ -145,7 +147,8 @@ export function withFileTarget(handler: TargetedHandler): RequestHandler {
         slug,
         projectSlug,
         callerUid: req.uid,
-        callerWorkspaceSlug: req.user?.workspaceSlug,
+        // Username IS the workspace slug per v3 §2.
+        callerWorkspaceSlug: req.user?.username,
       });
       if (!result.ok) {
         res.status(result.status).json({ error: result.error });

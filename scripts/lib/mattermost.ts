@@ -194,8 +194,10 @@ export async function provisionMattermostUser(
       };
     }
 
-    // Create Mattermost user
-    const username = slug.replace(/[^a-z0-9-]/g, "").slice(0, 22);
+    // Per DATA-MODEL-REVIEW v3 §2: slug = username. MM username is the same
+    // string, capped at USERNAME_MAX (16) to leave room for `_coach` suffix
+    // inside MM's 22-char username limit.
+    const username = slug;
     let mmUser = await mmApiCall("POST", "/users", {
       email: email || `${uid}@octogee.local`,
       username,
@@ -228,7 +230,8 @@ export async function provisionMattermostUser(
     }
 
     // ── Create workspace team (team-per-workspace: Phase 4) ──────────────────
-    const teamName = `ws-${slug}`;
+    // Team name = username (v3 §2 — username is everything).
+    const teamName = slug;
     const teamDisplayName = workspaceName || `${firstName}'s Workspace`;
     let teamId: string | null = null;
 
@@ -403,8 +406,12 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ no personal token created — chat will be read-only until fixed`);
     }
 
-    // Create per-customer coach MM user
-    const coachUsername = `octogee-${slug}-coach`;
+    // Create per-customer coach MM user. Handle = `{username}_coach` — the
+    // underscore prevents collision with any Builder username (our regex
+    // disallows underscores). Display (first_name + nickname) is "Octo" by
+    // default; user renames via Settings or milestone, sync'd by the
+    // workspace-api PATCH /api/agents/me endpoint + the gateway sweep.
+    const coachUsername = `${slug}_coach`;
     let coachMmUser = await mmApiCall("POST", "/users", {
       email: `coach-${slug}@octogee.local`,
       username: coachUsername,
@@ -639,7 +646,7 @@ export async function syncProfileToMattermost(uid: string, data: any): Promise<v
   const mmUserId = data.mattermost?.userId;
   if (!mmUserId || !process.env.MM_URL) return;
 
-  const slug = data.workspaceSlug;
+  const slug = data.username;
 
   const patch: Record<string, string> = {};
   if (data.firstName) patch.first_name = data.firstName;
