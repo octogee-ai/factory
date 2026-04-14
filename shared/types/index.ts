@@ -62,3 +62,11 @@ export type {
   ProjectCanvasMode,
   ProjectType,
 } from './project';
+
+// Notification types
+export type {
+  NotificationCategory,
+  DeliveryChannel,
+  NotificationAction,
+  InboxDocument,
+} from './notifications';
