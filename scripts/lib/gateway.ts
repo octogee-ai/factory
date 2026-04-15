@@ -249,6 +249,14 @@ export async function syncBrainGatedSlugs(): Promise<void> {
  *
  * ensureGatewayDefaults() reads faceModelOverrides to set agent.model.
  * The router plugin reads brainModelOverrides when spawning Brain sub-agents.
+ *
+ * Operator-visible trade-off: only customers with a NON-default model get
+ * an override entry. Provisioning a new customer on default models does
+ * NOT add a key → no full gateway restart. The first Ops-Dashboard flip
+ * from default → custom for a given customer DOES add a key → one full
+ * restart. Every subsequent edit on that customer is a value change →
+ * hot reload. This is the right trade-off because provisioning is the
+ * more common path.
  */
 export async function syncModelOverrides(): Promise<void> {
   const snap = await db
@@ -256,12 +264,17 @@ export async function syncModelOverrides(): Promise<void> {
     .where("provisioning.openclaw.status", "==", "complete")
     .get();
 
-  // Seed every provisioned customer into both override dicts — even when the
-  // user has no custom model selected, we record the default. OpenClaw's
-  // config reload classifies *new keys* under plugins.entries.*.config.* as
-  // schema changes that require a full gateway restart, while value changes
-  // on existing keys hot-reload. Pre-populating keys turns first-time model
-  // switches from the Ops Dashboard into value updates — zero-downtime.
+  // Only write overrides for customers who have opted into a non-default
+  // model. Writing defaults for every customer triggers OpenClaw's config
+  // reload to see a new key under plugins.entries.*.config.* on first
+  // provisioning, which requires a FULL gateway restart. Customers on the
+  // shipped defaults don't need an override entry — `ensureGatewayDefaults`
+  // already falls back to the default when the slug key is absent.
+  //
+  // Trade-off: the first Ops-Dashboard switch from default → custom for a
+  // given customer becomes a key-addition (full restart), while every
+  // subsequent tweak on the same customer is a value change (hot reload).
+  // Provisioning no longer costs a restart, which is the more common path.
   const DEFAULT_FACE_MODEL = "anthropic/claude-haiku-4-5";
   const DEFAULT_BRAIN_MODEL = "anthropic/claude-sonnet-4-6";
   const faceOverrides: Record<string, string> = {};
@@ -272,10 +285,12 @@ export async function syncModelOverrides(): Promise<void> {
     const slug = data.provisioning?.openclaw?.slug;
     if (!slug) continue;
 
-    faceOverrides[slug] =
-      (typeof data.faceModel === "string" && data.faceModel) || DEFAULT_FACE_MODEL;
-    brainOverrides[slug] =
-      (typeof data.brainModel === "string" && data.brainModel) || DEFAULT_BRAIN_MODEL;
+    if (typeof data.faceModel === "string" && data.faceModel && data.faceModel !== DEFAULT_FACE_MODEL) {
+      faceOverrides[slug] = data.faceModel;
+    }
+    if (typeof data.brainModel === "string" && data.brainModel && data.brainModel !== DEFAULT_BRAIN_MODEL) {
+      brainOverrides[slug] = data.brainModel;
+    }
   }
 
   const config = readOpenClawConfig();

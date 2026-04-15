@@ -146,7 +146,7 @@ export function customerChannelMembers(
  */
 export const COACH_PAT_DESCRIPTION = "Octogee coach agent (OpenClaw)";
 
-export interface CoachTokenDeps {
+export interface CoachPatMintDeps {
   mmApiCall: (method: string, endpoint: string, body?: any) => Promise<any>;
   db: { collection: (name: string) => any };
   now: () => unknown;
@@ -154,7 +154,7 @@ export interface CoachTokenDeps {
 }
 
 async function revokeStaleCoachTokens(
-  deps: CoachTokenDeps,
+  deps: CoachPatMintDeps,
   coachMmUserId: string,
 ): Promise<void> {
   const warn = deps.log ?? (() => {});
@@ -187,7 +187,7 @@ async function revokeStaleCoachTokens(
 }
 
 export async function mintAndPersistCoachToken(
-  deps: CoachTokenDeps,
+  deps: CoachPatMintDeps,
   uid: string,
   coachMmUserId: string,
 ): Promise<{ token: string } | null> {
