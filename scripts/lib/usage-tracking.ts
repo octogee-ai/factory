@@ -9,10 +9,19 @@
  *     users/{uid}                              ← usage.* fields + throttle
  *     users/{uid}/usage_logs/{date}            ← daily rollup
  *
- *   Workspace-scoped (v2):
- *     users/{uid}/workspaces/{wid}/usage/sessions/{date}        ← daily session rollup
- *     users/{uid}/workspaces/{wid}/usage/models/{model}_{date}  ← per-model per-day
- *     users/{uid}/workspaces/{wid}/usage/summary                ← rolling totals
+ *   Workspace-scoped (v3.1 — rooted at top-level workspaces/{slug}):
+ *     workspaces/{slug}/usage_sessions/{date}              ← daily session rollup
+ *     workspaces/{slug}/usage_models/{model}_{date}        ← per-model per-day
+ *     workspaces/{slug}/usage_summary/current              ← rolling totals
+ *
+ *   Each per-day doc carries BYOT attribution: role (coach|brain|…), model id,
+ *   and keyFingerprint (sanitized — see key-fingerprint.ts). Rollup dimensions
+ *   are therefore workspace slug × role × model × keyFingerprint.
+ *
+ * The earlier v2 path `users/{uid}/workspaces/{wid}/usage/...` was abandoned
+ * in the v3.1 collection cleanup (DATA-MODEL-REVIEW.md). Writes there were
+ * silently failing because `.doc("sessions/{date}")` from a 5-segment
+ * collection reference produces a 7-segment path (collection, not document).
  */
 
 import { Firestore, FieldValue } from "firebase-admin/firestore";
@@ -135,7 +144,10 @@ function modelKey(model: string): string {
 
 // ── Report usage to Firestore ─────────────────────────────────────────────────
 
-async function reportUsage(
+// Exported for unit testing. Not part of the public module surface — callers
+// should go through startUsageTracking(), which tails session JSONL files
+// and invokes this per parsed usage event.
+export async function reportUsage(
   db: Firestore,
   agentId: string,
   role: string,
@@ -235,14 +247,15 @@ async function reportUsage(
         "breakdown.costCacheWrite":    FieldValue.increment(usage.costBreakdown.cacheWrite),
       }, { merge: true });
 
-      // ── Workspace-scoped writes (v2) ───────────────────────────────
+      // ── Workspace-scoped writes (v3.1) ──────────────────────────────
+      // workspaceId is the slug (e.g. "eckert"); the top-level workspaces
+      // collection is the v3.1 authoritative parent. Three parallel
+      // subcollections keep reads cheap and rules simple.
       if (workspaceId) {
-        const wsUsageRef = userRef
-          .collection("workspaces").doc(workspaceId)
-          .collection("usage");
+        const wsRef = db.collection("workspaces").doc(workspaceId);
 
-        // sessions/{date} — daily rollup for this workspace
-        t.set(wsUsageRef.doc(`sessions/${today}`), {
+        // usage_sessions/{date} — daily rollup for this workspace
+        t.set(wsRef.collection("usage_sessions").doc(today), {
           date:            today,
           tokensUsed:      FieldValue.increment(usage.totalTokens),
           costUsd:         FieldValue.increment(usage.costUsd),
@@ -258,9 +271,10 @@ async function reportUsage(
           "token_breakdown.cacheWrite":   FieldValue.increment(usage.cacheWrite),
         }, { merge: true });
 
-        // models/{modelKey}_{date} — per-model per-day granularity
+        // usage_models/{modelKey}_{date} — per-model per-day granularity,
+        // per role and per BYOT key fingerprint (BYOT rollups).
         const mk = `${modelKey(usage.model)}_${today}`;
-        t.set(wsUsageRef.doc(`models/${mk}`), {
+        t.set(wsRef.collection("usage_models").doc(mk), {
           date:              today,
           model:             usage.model,
           workspaceId,
@@ -277,8 +291,8 @@ async function reportUsage(
           "token_breakdown.cacheWrite": FieldValue.increment(usage.cacheWrite),
         }, { merge: true });
 
-        // summary — rolling workspace totals
-        t.set(wsUsageRef.doc("summary"), {
+        // usage_summary/current — rolling workspace totals (single doc)
+        t.set(wsRef.collection("usage_summary").doc("current"), {
           workspaceId,
           totalTokens:        FieldValue.increment(usage.totalTokens),
           totalCostUsd:       FieldValue.increment(usage.costUsd),

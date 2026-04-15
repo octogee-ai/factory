@@ -9,6 +9,21 @@ import { db } from "../lib/db";
 import { getTierConfig, isUnlimitedTier, calculateAvailableTokens, type TierName } from "../billing/tiers";
 import type { CSIDocument } from "../csi/types";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
+import { workspaceSlugsForUser } from "../lib/workspace-slugs";
+
+// Logs a one-liner when no workspace slug can be resolved for a user, so
+// broken state stays visible. The helper itself is pure (so the drift test
+// can import it without dragging Express into the root tests package) —
+// callers own the observability.
+function warnIfNoSlug(slugs: string[], uid: string): string[] {
+  if (slugs.length === 0) {
+    logger.warn(
+      "no workspace slug resolved (provisioning.openclaw.slug / username both missing) — workspace reads will return empty",
+      { uid },
+    );
+  }
+  return slugs;
+}
 
 const router = Router();
 router.use(requireAdmin);
@@ -199,7 +214,10 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
           keyFingerprints: ld.keyFingerprints || (ld.keyFingerprint ? [ld.keyFingerprint] : []),
         };
       }),
-      // Per-model cost breakdown (from workspace usage/models/* subcollection)
+      // Per-model cost breakdown — v3.1 top-level workspaces/{slug}/usage_models.
+      // BYOT attribution: each doc is keyed by model_date and carries role +
+      // keyFingerprint, so the rollup below is by customer (slug) × model,
+      // with the most-recent key fingerprint surfaced for the admin UI.
       modelCosts: await (async () => {
         const costs: Record<string, {
           tokens: number;
@@ -207,8 +225,8 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
           keyFingerprint: string | null;
           lastUsedAt: string | null;
         }> = {};
-        for (const ws of wsSnap.docs) {
-          const modelsSnap = await db.collection(`users/${uid}/workspaces/${ws.id}/usage/models`).get();
+        for (const slug of warnIfNoSlug(workspaceSlugsForUser(d), uid)) {
+          const modelsSnap = await db.collection(`workspaces/${slug}/usage_models`).get();
           for (const modelDoc of modelsSnap.docs) {
             const md = modelDoc.data();
             const model = md.model || modelDoc.id.split("_")[0];
@@ -272,22 +290,21 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
     cutoff.setDate(cutoff.getDate() - days);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
 
-    // Iterate the customer's workspaces, pulling the v2 per-workspace usage
-    // subcollections that the gateway provisioner populates:
-    //   users/{uid}/workspaces/{wid}/usage/summary
-    //   users/{uid}/workspaces/{wid}/usage/sessions/{date}
-    //   users/{uid}/workspaces/{wid}/usage/models/{modelKey}_{date}
-    const wsSnap = await db.collection("users").doc(uid).collection("workspaces").get();
-    const wsEntries = wsSnap.docs.length > 0
-      ? wsSnap.docs.map((d) => ({ id: d.id, data: d.data() }))
-      : [{ id: userData.username || uid, data: userData }];
+    // Iterate the customer's workspaces, pulling the v3.1 top-level usage
+    // subcollections populated by the gateway provisioner:
+    //   workspaces/{slug}/usage_summary/current
+    //   workspaces/{slug}/usage_sessions/{date}
+    //   workspaces/{slug}/usage_models/{modelKey}_{date}
+    const slugs = warnIfNoSlug(workspaceSlugsForUser(userData), uid);
+    const wsEntries = slugs.map((slug) => ({ id: slug, data: userData }));
 
     const workspaces = await Promise.all(
       wsEntries.map(async (ws) => {
-        const wid = ws.id;
-        const summaryRef = db.collection(`users/${uid}/workspaces/${wid}/usage`).doc("summary");
-        const sessionsRef = db.collection(`users/${uid}/workspaces/${wid}/usage/sessions`);
-        const modelsRef   = db.collection(`users/${uid}/workspaces/${wid}/usage/models`);
+        const slug = ws.id;
+        const wsRef = db.collection("workspaces").doc(slug);
+        const summaryRef  = wsRef.collection("usage_summary").doc("current");
+        const sessionsRef = wsRef.collection("usage_sessions");
+        const modelsRef   = wsRef.collection("usage_models");
 
         // Let query errors propagate via the outer try/catch so they
         // surface as 500s instead of silently hiding behind empty arrays.
@@ -327,7 +344,7 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
         });
 
         return {
-          workspaceId:   wid,
+          workspaceId:   slug,
           businessName:  ws.data.businessName || ws.data.workspaceName || userData.businessName || "Workspace",
           summary: {
             totalTokens:        Number(summary.totalTokens) || 0,
