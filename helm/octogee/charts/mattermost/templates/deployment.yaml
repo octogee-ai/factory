@@ -62,6 +62,12 @@ spec:
               value: "false"
             - name: MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS
               value: {{ .Values.allowedInternalConnections | quote }}
+            # When true, `POST /api/v4/opengraph` responds 200 with link
+            # metadata. When unset MM 11.x returns 404, which Safari/Chrome
+            # log at the network layer even though the app handles the miss
+            # gracefully. Default lives in values.yaml (.enableLinkPreviews).
+            - name: MM_SERVICESETTINGS_ENABLELINKPREVIEWS
+              value: {{ .Values.enableLinkPreviews | default true | quote }}
             - name: MM_PLUGINSETTINGS_ENABLEUPLOADS
               value: "true"
             - name: MM_METRICSSETTINGS_ENABLE

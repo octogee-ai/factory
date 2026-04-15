@@ -55,6 +55,21 @@ describe('chat-proxy helper coverage', () => {
     expect(isAllowedRoute('GET', '/api/v4/channels/ch12345/members/evil/../../users')).toBe(false);
   });
 
+  // Regression: the LinkPreview component in the app fetches opengraph
+  // metadata for URLs posted in chat. If this route falls out of the
+  // allowlist, users see a 403 in place of the usual 404 from MM when
+  // link previews are disabled — subtly different failure mode than an
+  // MM-side 404 and much harder to diagnose. Lock the contract.
+  it('allows POST /api/v4/opengraph (chat link previews)', () => {
+    expect(isAllowedRoute('POST', '/api/v4/opengraph')).toBe(true);
+  });
+
+  it('rejects opengraph requests with the wrong method or trailing path', () => {
+    expect(isAllowedRoute('GET', '/api/v4/opengraph')).toBe(false);
+    expect(isAllowedRoute('PUT', '/api/v4/opengraph')).toBe(false);
+    expect(isAllowedRoute('POST', '/api/v4/opengraph/extra')).toBe(false);
+  });
+
   it('sets CORS for allowed origins', () => {
     const headers = new Map<string, string>();
     const req = { headers: { origin: 'https://octogee.web.app' } } as any;
