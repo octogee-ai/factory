@@ -91,14 +91,25 @@ export async function mmApiCall(method: string, endpoint: string, body?: any): P
  * Decide which MM user ids become members of each kind of customer channel
  * during provisioning.
  *
- * Post MM-COACH-IDENTITY-SPEC (D4) `octogee-bot` is never a customer-
- * channel member — the coach authenticates with its own PAT from PR2 and
- * the shared bot's only remaining role is global admin-PAT work (team +
- * channel creation), not chat membership. Customer channels get:
- *   - `coach`, `general`, `project` → customer + coach + admin
- *   - `admin`                         → coach + admin (customer NOT invited, #170)
+ * `octogee-bot` is a required member of every customer channel (including
+ * admin) because OpenClaw's MM plugin authenticates its WebSocket
+ * subscription with the bot's token — MM only pushes channel events to
+ * users who are members of the channel. Without the bot in the channel,
+ * the gateway never sees incoming messages and Octo stays silent. This
+ * was the root cause of the post-PR3 coach-silence regression: removing
+ * the bot from customer channels fixed the Members-panel cosmetic issue
+ * but broke the event pipeline.
  *
- * Pure function so tests can prove the bot never appears in the result.
+ * Customer channels get:
+ *   - `coach`, `general`, `project` → customer + coach + admin + bot
+ *   - `admin`                         → admin + coach + bot (customer NOT invited, #170)
+ *
+ * Until OpenClaw supports per-agent MM auth (which would let each coach
+ * user subscribe to its own channels), the bot stays as a required
+ * member. Frontend hides the bot from the Members panel at render time
+ * via `computeBotUserIds` — users still see a clean panel.
+ *
+ * Pure function so tests lock the "bot is always included" invariant.
  */
 export type CustomerChannelKind = "coach" | "general" | "admin" | "project";
 
@@ -106,6 +117,9 @@ export interface CustomerChannelMemberIds {
   customerMmUserId: string | null;
   coachMmUserId: string | null;
   adminMmUserId: string | null;
+  /** octogee-bot's MM user id. Required in every customer channel so the
+   * gateway's WebSocket subscription receives events for those channels. */
+  botMmUserId: string | null;
 }
 
 export function customerChannelMembers(
@@ -120,9 +134,14 @@ export function customerChannelMembers(
     // Non-admin channels list customer-first. Order is immaterial at the
     // MM /channels/{id}/members call site (which loops and POSTs each
     // member independently), but the tests lock it to prevent drift.
-    return [ids.adminMmUserId, ids.coachMmUserId].filter(nonEmpty);
+    return [ids.adminMmUserId, ids.coachMmUserId, ids.botMmUserId].filter(nonEmpty);
   }
-  return [ids.customerMmUserId, ids.coachMmUserId, ids.adminMmUserId].filter(nonEmpty);
+  return [
+    ids.customerMmUserId,
+    ids.coachMmUserId,
+    ids.adminMmUserId,
+    ids.botMmUserId,
+  ].filter(nonEmpty);
 }
 
 /**
@@ -357,6 +376,33 @@ export async function provisionMattermostUser(
           }
         }
 
+        // Backfill octogee-bot channel membership. Earlier code (pre-
+        // fix/bot-back-as-channel-member) removed the bot from customer
+        // channels, which silently broke the gateway's WS subscription
+        // since MM only delivers events to channel members. Re-adding
+        // the bot is idempotent (MM returns an error we ignore if the
+        // user is already a member). Runs on every re-provision so
+        // workspaces stuck in the broken state self-heal. Spec D4.
+        try {
+          // General channel
+          const generalSnap = await db.doc(`workspaces/${slug}/channels/general`).get();
+          const generalId = generalSnap.data()?.mattermost?.channelId;
+          if (generalId) {
+            await mmApiCall("POST", `/channels/${generalId}/members`, { user_id: MM_BOT_USER_ID });
+          }
+          // Admin channel
+          const adminSnap = await db.doc(`workspaces/${slug}/channels/admin`).get();
+          const adminId = adminSnap.data()?.mattermost?.channelId;
+          if (adminId) {
+            await mmApiCall("POST", `/channels/${adminId}/members`, { user_id: MM_BOT_USER_ID });
+          }
+          // Coach-DM channel (the one we already fetched above)
+          await mmApiCall("POST", `/channels/${existingChannelId}/members`, { user_id: MM_BOT_USER_ID });
+          log(`[mattermost] backfilled octogee-bot channel membership for ${slug}`);
+        } catch (err) {
+          log(`[mattermost] ⚠ bot channel backfill failed for ${slug}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+
         return {
           "mattermost.userId": existingData.mattermost.userId,
           "mattermost.username": existingData.mattermost.username || slug,
@@ -443,11 +489,16 @@ export async function provisionMattermostUser(
       roles: "team_admin team_user",
     });
 
-    // octogee-bot is NOT added to the customer's team.
-    // MM-COACH-IDENTITY-SPEC D4: the shared bot's only role is global
-    // admin-PAT work (team + channel creation via system-admin
-    // privileges, which don't require team membership). Per-workspace
-    // posting flows through {slug}-coach's PAT (PR1 + PR2).
+    // octogee-bot MUST be a team member of every customer team.
+    // OpenClaw's MM plugin authenticates its WebSocket subscription with
+    // the bot's token; MM only delivers channel events to users who are
+    // team + channel members. Without this, the gateway never sees
+    // customer chat messages and Octo stays silent. D4 of the
+    // MM-COACH-IDENTITY-SPEC has been updated to reflect this.
+    await mmApiCall("POST", `/teams/${teamId}/members`, {
+      team_id: teamId,
+      user_id: MM_BOT_USER_ID,
+    });
 
     // Archive MM's auto-created default channels (town-square, off-topic, general).
     // MM creates these on every new team — they clutter the admin sidebar as orphaned
@@ -519,12 +570,14 @@ export async function provisionMattermostUser(
       return {};
     }
 
-    // Coach channel members: customer + (coach later) + admin. Coach is
-    // added below once coachMmUser exists. octogee-bot excluded per D4.
+    // Coach channel members: customer + (coach later) + admin + bot.
+    // Coach is added below once coachMmUser exists. Bot is required for
+    // the gateway's WS subscription to receive events on this channel.
     for (const memberId of customerChannelMembers("coach", {
       customerMmUserId: mmUser.id,
       coachMmUserId: null, // added below when coach user is created
       adminMmUserId: MM_ADMIN_USER_ID ?? null,
+      botMmUserId: MM_BOT_USER_ID,
     })) {
       await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: memberId });
     }
@@ -540,12 +593,13 @@ export async function provisionMattermostUser(
     let generalChannelId: string | null = null;
     if (generalChannel) {
       generalChannelId = generalChannel.id;
-      // General channel members: customer + (coach added below) + admin.
-      // octogee-bot excluded per D4.
+      // General channel members: customer + (coach added below) + admin + bot.
+      // Bot is required for WS subscription (see D4 architecture note).
       for (const memberId of customerChannelMembers("general", {
         customerMmUserId: mmUser.id,
         coachMmUserId: null, // added below when coach user is created
         adminMmUserId: MM_ADMIN_USER_ID ?? null,
+        botMmUserId: MM_BOT_USER_ID,
       })) {
         await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: memberId });
       }
@@ -565,12 +619,13 @@ export async function provisionMattermostUser(
     let adminChannelId: string | null = null;
     if (adminChannel) {
       adminChannelId = adminChannel.id;
-      // Admin channel members: admin + coach. Customer NOT invited (#170).
-      // octogee-bot excluded per D4. Coach added below when the user exists.
+      // Admin channel members: admin + coach + bot. Customer NOT invited (#170).
+      // Bot is required for the WS subscription. Coach added below.
       for (const memberId of customerChannelMembers("admin", {
         customerMmUserId: null, // #170: customer not invited to admin
         coachMmUserId: null,    // added below when coach user is created
         adminMmUserId: MM_ADMIN_USER_ID ?? null,
+        botMmUserId: MM_BOT_USER_ID,
       })) {
         await mmApiCall("POST", `/channels/${adminChannel.id}/members`, { user_id: memberId });
       }
@@ -721,6 +776,7 @@ export async function createProjectChannel(
     customerMmUserId,
     coachMmUserId: null,
     adminMmUserId: MM_ADMIN_USER_ID ?? null,
+    botMmUserId: MM_BOT_USER_ID,
   })) {
     await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: memberId });
   }
