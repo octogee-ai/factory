@@ -256,6 +256,14 @@ export async function syncModelOverrides(): Promise<void> {
     .where("provisioning.openclaw.status", "==", "complete")
     .get();
 
+  // Seed every provisioned customer into both override dicts — even when the
+  // user has no custom model selected, we record the default. OpenClaw's
+  // config reload classifies *new keys* under plugins.entries.*.config.* as
+  // schema changes that require a full gateway restart, while value changes
+  // on existing keys hot-reload. Pre-populating keys turns first-time model
+  // switches from the Ops Dashboard into value updates — zero-downtime.
+  const DEFAULT_FACE_MODEL = "anthropic/claude-haiku-4-5";
+  const DEFAULT_BRAIN_MODEL = "anthropic/claude-sonnet-4-6";
   const faceOverrides: Record<string, string> = {};
   const brainOverrides: Record<string, string> = {};
 
@@ -264,12 +272,10 @@ export async function syncModelOverrides(): Promise<void> {
     const slug = data.provisioning?.openclaw?.slug;
     if (!slug) continue;
 
-    if (data.faceModel && typeof data.faceModel === "string") {
-      faceOverrides[slug] = data.faceModel;
-    }
-    if (data.brainModel && typeof data.brainModel === "string") {
-      brainOverrides[slug] = data.brainModel;
-    }
+    faceOverrides[slug] =
+      (typeof data.faceModel === "string" && data.faceModel) || DEFAULT_FACE_MODEL;
+    brainOverrides[slug] =
+      (typeof data.brainModel === "string" && data.brainModel) || DEFAULT_BRAIN_MODEL;
   }
 
   const config = readOpenClawConfig();
@@ -311,12 +317,13 @@ export async function syncModelOverrides(): Promise<void> {
       writeOpenClawConfig(config);
     }
 
-    const faceEntries = Object.entries(faceOverrides);
-    const brainEntries = Object.entries(brainOverrides);
+    // Log only non-default entries so the line stays readable at scale.
+    const faceCustom = Object.entries(faceOverrides).filter(([, m]) => m !== DEFAULT_FACE_MODEL);
+    const brainCustom = Object.entries(brainOverrides).filter(([, m]) => m !== DEFAULT_BRAIN_MODEL);
     const parts: string[] = [];
-    if (faceEntries.length) parts.push(`face: ${faceEntries.map(([s, m]) => `${s}=${m.split("/").pop()}`).join(", ")}`);
-    if (brainEntries.length) parts.push(`brain: ${brainEntries.map(([s, m]) => `${s}=${m.split("/").pop()}`).join(", ")}`);
-    log(`model-overrides: ${parts.length ? parts.join(" | ") : "(all defaults)"}`);
+    if (faceCustom.length) parts.push(`face: ${faceCustom.map(([s, m]) => `${s}=${m.split("/").pop()}`).join(", ")}`);
+    if (brainCustom.length) parts.push(`brain: ${brainCustom.map(([s, m]) => `${s}=${m.split("/").pop()}`).join(", ")}`);
+    log(`model-overrides: ${parts.length ? parts.join(" | ") : "(all defaults)"} (seeded ${Object.keys(faceOverrides).length} slug(s))`);
   }
 }
 
