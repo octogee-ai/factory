@@ -8,6 +8,8 @@
  * DATA-MODEL-REVIEW v3 §2.
  */
 
+import type { WorkspaceType } from './workspaceType';
+
 export type WorkspaceVisibility = 'public' | 'private' | 'unlisted';
 
 export interface WorkspaceMattermost {
@@ -33,6 +35,9 @@ export interface Workspace {
   /** Owner display name. Equal to `id` (username) — denorm. */
   ownerDisplayName: string;
   visibility: WorkspaceVisibility;
+  /** Vibe taxonomy — drives coach personalization phrase resolution. Reads
+   * fall back to 'workshop' when the field is absent (existing docs). */
+  workspaceType?: WorkspaceType;
   mattermost: WorkspaceMattermost;
   gitea: WorkspaceGitea;
   createdAt: unknown; // Firestore Timestamp

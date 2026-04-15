@@ -26,6 +26,15 @@ export type {
   WorkspaceGitea,
 } from './workspace';
 
+// Workspace vibe taxonomy + per-type typing phrases (coach personalization).
+export type { WorkspaceType } from './workspaceType';
+export {
+  WORKSPACE_TYPES,
+  DEFAULT_WORKSPACE_TYPE,
+  DEFAULT_TYPING_PHRASES_BY_TYPE,
+  isWorkspaceType,
+} from './workspaceType';
+
 // Channel types (Firestore pointer to MM channel)
 export type {
   Channel,
