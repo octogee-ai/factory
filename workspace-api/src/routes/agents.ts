@@ -13,7 +13,7 @@ import { mmApi } from "../lib/mattermost";
 
 const router = Router();
 
-// Coach MM patches only touch user-visible fields; the stable `{username}_coach`
+// Coach MM patches only touch user-visible fields; the stable `{username}-coach`
 // MM username is never changed.
 const ALLOWED_COACH_PATCH_FIELDS = ["name", "persona", "avatarEmoji"] as const;
 type CoachPatchField = (typeof ALLOWED_COACH_PATCH_FIELDS)[number];

@@ -88,6 +88,136 @@ export async function mmApiCall(method: string, endpoint: string, body?: any): P
 }
 
 /**
+ * Decide which MM user ids become members of each kind of customer channel
+ * during provisioning.
+ *
+ * Post MM-COACH-IDENTITY-SPEC (D4) `octogee-bot` is never a customer-
+ * channel member — the coach authenticates with its own PAT from PR2 and
+ * the shared bot's only remaining role is global admin-PAT work (team +
+ * channel creation), not chat membership. Customer channels get:
+ *   - `coach`, `general`, `project` → customer + coach + admin
+ *   - `admin`                         → coach + admin (customer NOT invited, #170)
+ *
+ * Pure function so tests can prove the bot never appears in the result.
+ */
+export type CustomerChannelKind = "coach" | "general" | "admin" | "project";
+
+export interface CustomerChannelMemberIds {
+  customerMmUserId: string | null;
+  coachMmUserId: string | null;
+  adminMmUserId: string | null;
+}
+
+export function customerChannelMembers(
+  kind: CustomerChannelKind,
+  ids: CustomerChannelMemberIds,
+): string[] {
+  const nonEmpty = (s: string | null | undefined): s is string =>
+    typeof s === "string" && s.length > 0;
+  if (kind === "admin") {
+    // Admin channel lists the platform operator first by convention (this
+    // is the founder-to-agent channel; operator is the canonical actor).
+    // Non-admin channels list customer-first. Order is immaterial at the
+    // MM /channels/{id}/members call site (which loops and POSTs each
+    // member independently), but the tests lock it to prevent drift.
+    return [ids.adminMmUserId, ids.coachMmUserId].filter(nonEmpty);
+  }
+  return [ids.customerMmUserId, ids.coachMmUserId, ids.adminMmUserId].filter(nonEmpty);
+}
+
+/**
+ * Mint a personal access token for a `{slug}-coach` MM user and persist it
+ * to `users/{uid}/secrets/coachMattermost`. Dependency-injected so the
+ * provisioner, smoke tests, and unit tests can all feed it the mm caller +
+ * Firestore handle they have in hand.
+ *
+ * Replace-not-append semantics: before minting, list existing tokens on the
+ * coach user and revoke any prior "Octogee coach agent (OpenClaw)" PATs.
+ * MM's `POST /users/{id}/tokens` has no get-or-create — without this step,
+ * every re-provision would leak a stale valid token on the MM user.
+ *
+ * Failure semantics: any miss (MM throws, MM returns no token, missing
+ * coachMmUserId) returns null and writes NOTHING. Callers get a single
+ * unambiguous signal — no half-provisioned state. A failed revoke is
+ * logged and DOES NOT block the mint, since a new token is strictly
+ * safer than an aborted provision.
+ *
+ * Spec: docs/MM-COACH-IDENTITY-SPEC.md — Decision D2, acceptance M1.
+ */
+export const COACH_PAT_DESCRIPTION = "Octogee coach agent (OpenClaw)";
+
+export interface CoachTokenDeps {
+  mmApiCall: (method: string, endpoint: string, body?: any) => Promise<any>;
+  db: { collection: (name: string) => any };
+  now: () => unknown;
+  log?: (msg: string) => void;
+}
+
+async function revokeStaleCoachTokens(
+  deps: CoachTokenDeps,
+  coachMmUserId: string,
+): Promise<void> {
+  const warn = deps.log ?? (() => {});
+  let existing: any;
+  try {
+    existing = await deps.mmApiCall("GET", `/users/${coachMmUserId}/tokens`);
+  } catch (err) {
+    warn(
+      `[mattermost] ⚠ list coach tokens failed for ${coachMmUserId} — proceeding with mint: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return;
+  }
+  if (!Array.isArray(existing) || existing.length === 0) return;
+  const stale = existing.filter(
+    (t: any) => t?.description === COACH_PAT_DESCRIPTION && typeof t?.id === "string",
+  );
+  for (const t of stale) {
+    try {
+      await deps.mmApiCall("POST", "/users/tokens/revoke", { token_id: t.id });
+    } catch (err) {
+      warn(
+        `[mattermost] ⚠ revoke stale coach token ${t.id} failed — continuing: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+}
+
+export async function mintAndPersistCoachToken(
+  deps: CoachTokenDeps,
+  uid: string,
+  coachMmUserId: string,
+): Promise<{ token: string } | null> {
+  if (!coachMmUserId) return null;
+  // Revoke any prior coach PATs we minted for this user so the MM user
+  // carries at most one active "Octogee coach agent (OpenClaw)" token at
+  // any time. Non-blocking — a failed revoke is logged but does not
+  // prevent the new mint.
+  await revokeStaleCoachTokens(deps, coachMmUserId);
+  let result: any;
+  try {
+    result = await deps.mmApiCall("POST", `/users/${coachMmUserId}/tokens`, {
+      description: COACH_PAT_DESCRIPTION,
+    });
+  } catch {
+    return null;
+  }
+  if (!result || typeof result.token !== "string" || !result.token) return null;
+  await deps.db
+    .collection("users").doc(uid)
+    .collection("secrets").doc("coachMattermost")
+    .set({
+      personalToken: result.token,
+      coachMmUserId,
+      createdAt: deps.now(),
+    });
+  return { token: result.token };
+}
+
+/**
  * Create or restore a channel. Handles the case where the channel name exists
  * but is archived (MM returns 400 on create, 404 on name lookup).
  */
@@ -188,17 +318,57 @@ export async function provisionMattermostUser(
       const existingChannelId = coachDmSnap.data()?.mattermost?.channelId;
       if (existingChannelId) {
         log(`[mattermost] user already provisioned (userId=${existingData.mattermost.userId}) — skipping MM creation`);
+
+        // Backfill the coach PAT when the secrets doc is missing. Pre-
+        // MM-COACH-IDENTITY-SPEC workspaces have a coach MM user but no
+        // PAT on disk; the short-circuit used to return without minting
+        // and the coach was stuck with no token forever. Mint on-demand
+        // so re-triggering onboarding for an existing customer self-
+        // heals. Spec D2 / M1.
+        const coachSecretSnap = await db
+          .collection("users").doc(uid)
+          .collection("secrets").doc("coachMattermost")
+          .get();
+        let backfilledCoachUserId: string | null = null;
+        if (!coachSecretSnap.exists) {
+          // Need the coach MM user id. Prefer agents/{uid}.mattermost.userId
+          // (set during full provisioning); fall back to a MM lookup by the
+          // canonical `{slug}-coach` username.
+          const agentSnap = await db.collection("agents").doc(uid).get();
+          let coachUserId: string | null = agentSnap.data()?.mattermost?.userId ?? null;
+          if (!coachUserId) {
+            const coachLookup = await mmApiCall("GET", `/users/username/${slug}-coach`);
+            coachUserId = coachLookup?.id ?? null;
+          }
+          if (coachUserId) {
+            const minted = await mintAndPersistCoachToken(
+              { mmApiCall, db, now: () => FieldValue.serverTimestamp(), log },
+              uid,
+              coachUserId,
+            );
+            if (minted) {
+              backfilledCoachUserId = coachUserId;
+              log(`[mattermost] coach PAT backfilled for ${slug} on re-provision`);
+            } else {
+              log(`[mattermost] ⚠ coach PAT backfill failed for ${slug} — coach will fall back to shared bot token`);
+            }
+          } else {
+            log(`[mattermost] ⚠ coach PAT backfill skipped for ${slug}: no coach MM user found`);
+          }
+        }
+
         return {
           "mattermost.userId": existingData.mattermost.userId,
           "mattermost.username": existingData.mattermost.username || slug,
           "mattermost.channelId": existingChannelId,
           "mattermost.dmChannelId": existingChannelId,
+          ...(backfilledCoachUserId ? { "mattermost.coachUserId": backfilledCoachUserId } : {}),
         };
       }
     }
 
     // Per DATA-MODEL-REVIEW v3 §2: slug = username. MM username is the same
-    // string, capped at USERNAME_MAX (16) to leave room for `_coach` suffix
+    // string, capped at USERNAME_MAX (16) to leave room for `-coach` suffix
     // inside MM's 22-char username limit.
     const username = slug;
     let mmUser = await mmApiCall("POST", "/users", {
@@ -273,11 +443,11 @@ export async function provisionMattermostUser(
       roles: "team_admin team_user",
     });
 
-    // Add Octo bot to workspace team
-    await mmApiCall("POST", `/teams/${teamId}/members`, {
-      team_id: teamId,
-      user_id: MM_BOT_USER_ID,
-    });
+    // octogee-bot is NOT added to the customer's team.
+    // MM-COACH-IDENTITY-SPEC D4: the shared bot's only role is global
+    // admin-PAT work (team + channel creation via system-admin
+    // privileges, which don't require team membership). Per-workspace
+    // posting flows through {slug}-coach's PAT (PR1 + PR2).
 
     // Archive MM's auto-created default channels (town-square, off-topic, general).
     // MM creates these on every new team — they clutter the admin sidebar as orphaned
@@ -349,12 +519,14 @@ export async function provisionMattermostUser(
       return {};
     }
 
-    // Add bot, customer, and admin to the Octo coach channel
-    await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: MM_BOT_USER_ID });
-    await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: mmUser.id });
-    if (MM_ADMIN_USER_ID) {
-      await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: MM_ADMIN_USER_ID });
-      log(`[mattermost] admin added to channel ${channelName}`);
+    // Coach channel members: customer + (coach later) + admin. Coach is
+    // added below once coachMmUser exists. octogee-bot excluded per D4.
+    for (const memberId of customerChannelMembers("coach", {
+      customerMmUserId: mmUser.id,
+      coachMmUserId: null, // added below when coach user is created
+      adminMmUserId: MM_ADMIN_USER_ID ?? null,
+    })) {
+      await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: memberId });
     }
 
     // #general channel — workspace lobby, visible to all workspace members.
@@ -368,10 +540,14 @@ export async function provisionMattermostUser(
     let generalChannelId: string | null = null;
     if (generalChannel) {
       generalChannelId = generalChannel.id;
-      await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: MM_BOT_USER_ID });
-      await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: mmUser.id });
-      if (MM_ADMIN_USER_ID) {
-        await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: MM_ADMIN_USER_ID });
+      // General channel members: customer + (coach added below) + admin.
+      // octogee-bot excluded per D4.
+      for (const memberId of customerChannelMembers("general", {
+        customerMmUserId: mmUser.id,
+        coachMmUserId: null, // added below when coach user is created
+        adminMmUserId: MM_ADMIN_USER_ID ?? null,
+      })) {
+        await mmApiCall("POST", `/channels/${generalChannel.id}/members`, { user_id: memberId });
       }
       log(`[mattermost] general channel created: #${generalChannelName} (${generalChannel.id})`);
     } else {
@@ -389,10 +565,14 @@ export async function provisionMattermostUser(
     let adminChannelId: string | null = null;
     if (adminChannel) {
       adminChannelId = adminChannel.id;
-      // Add bot + admin — NOT the customer
-      await mmApiCall("POST", `/channels/${adminChannel.id}/members`, { user_id: MM_BOT_USER_ID });
-      if (MM_ADMIN_USER_ID) {
-        await mmApiCall("POST", `/channels/${adminChannel.id}/members`, { user_id: MM_ADMIN_USER_ID });
+      // Admin channel members: admin + coach. Customer NOT invited (#170).
+      // octogee-bot excluded per D4. Coach added below when the user exists.
+      for (const memberId of customerChannelMembers("admin", {
+        customerMmUserId: null, // #170: customer not invited to admin
+        coachMmUserId: null,    // added below when coach user is created
+        adminMmUserId: MM_ADMIN_USER_ID ?? null,
+      })) {
+        await mmApiCall("POST", `/channels/${adminChannel.id}/members`, { user_id: memberId });
       }
       log(`[mattermost] admin channel created: #${adminChannelName} (${adminChannel.id})`);
     } else {
@@ -415,12 +595,15 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ no personal token created — chat will be read-only until fixed`);
     }
 
-    // Create per-customer coach MM user. Handle = `{username}_coach` — the
-    // underscore prevents collision with any Builder username (our regex
-    // disallows underscores). Display (first_name + nickname) is "Octo" by
-    // default; user renames via Settings or milestone, sync'd by the
-    // workspace-api PATCH /api/agents/me endpoint + the gateway sweep.
-    const coachUsername = `${slug}_coach`;
+    // Create per-customer coach MM user. Handle = `{username}-coach` — hyphen
+    // matches the platform-wide identifier convention (octogee-bot,
+    // {slug}-general, etc.). Collision-safe because Builder usernames are
+    // auto-derived slugs (`{noun}-{verb}-{hash4}`) and no Builder can pick
+    // `{something}-coach` by hand — usernames come from the slugifier, not
+    // free-form input. Display (first_name + nickname) is "Octo" by default;
+    // user renames via Settings or milestone, sync'd by the workspace-api
+    // PATCH /api/agents/me endpoint + the gateway sweep.
+    const coachUsername = `${slug}-coach`;
     let coachMmUser = await mmApiCall("POST", "/users", {
       email: `coach-${slug}@octogee.local`,
       username: coachUsername,
@@ -443,11 +626,33 @@ export async function provisionMattermostUser(
         user_id: coachMmUser.id,
       });
       await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: coachMmUser.id });
-      // Add coach bot to admin channel too (#170)
+      // Coach is a member of general so it can author posts there and
+      // surface as the canonical Octo in the Members panel (MM-COACH-IDENTITY
+      // D4 + M5). Under PR3 the shared octogee-bot is out of customer
+      // channels; the coach is the only bot-style identity the user sees.
+      if (generalChannelId) {
+        await mmApiCall("POST", `/channels/${generalChannelId}/members`, { user_id: coachMmUser.id });
+      }
+      // Admin channel too (#170) — founder-to-agent guidance.
       if (adminChannelId) {
         await mmApiCall("POST", `/channels/${adminChannelId}/members`, { user_id: coachMmUser.id });
       }
       log(`[mattermost] coach user created: ${coachUsername} (${coachMmUser.id})`);
+
+      // Mint a PAT for the coach and persist to `users/{uid}/secrets/coachMattermost`.
+      // OpenClaw authenticates per-workspace using this token (PR2) so that
+      // Octo posts as {slug}-coach rather than the shared octogee-bot.
+      // MM-COACH-IDENTITY-SPEC D2 / M1.
+      const coachToken = await mintAndPersistCoachToken(
+        { mmApiCall, db, now: () => FieldValue.serverTimestamp() },
+        uid,
+        coachMmUser.id,
+      );
+      if (coachToken) {
+        log(`[mattermost] coach PAT minted and persisted for ${coachUsername}`);
+      } else {
+        log(`[mattermost] ⚠ coach PAT creation failed — coach identity will fall back to octogee-bot until re-provisioned`);
+      }
     } else {
       log(`[mattermost] ⚠ failed to create coach user ${coachUsername} — coach identity will use defaults`);
     }
@@ -509,11 +714,15 @@ export async function createProjectChannel(
     return null;
   }
 
-  // Add bot, customer, and admin
-  await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: MM_BOT_USER_ID });
-  await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: customerMmUserId });
-  if (MM_ADMIN_USER_ID) {
-    await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: MM_ADMIN_USER_ID });
+  // Project channel members: customer + admin. Coach is added by
+  // workspace-api when the coach user id is known at call time (or on the
+  // next provisioner sweep). octogee-bot excluded per MM-COACH-IDENTITY D4.
+  for (const memberId of customerChannelMembers("project", {
+    customerMmUserId,
+    coachMmUserId: null,
+    adminMmUserId: MM_ADMIN_USER_ID ?? null,
+  })) {
+    await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: memberId });
   }
 
   log(`[mattermost] ✅ project channel created: #${channelName} (${channel.id})`);
