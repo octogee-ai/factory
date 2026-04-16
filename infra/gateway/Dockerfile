@@ -38,10 +38,16 @@ COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 
-# ── Canonical identity module (imported via @shared/types/identity.js) ──────
+# ── Canonical identity module (imported via ../../shared/types/identity.js) ──
 # scripts/tsconfig.json rootDir is ".." so it expects shared/ at a sibling
-# path. See docs/DATA-MODEL-REVIEW.md §11.6 (Build-context fixes).
-COPY --chown=node:node shared/types/identity.ts /octogee/shared/types/identity.ts
+# path. Copy the whole shared/ dir — in particular shared/package.json —
+# because Node walks up from each .ts file looking for the nearest
+# package.json to determine module type. Without shared/package.json's
+# `"type": "module"` field, tsx loads identity.ts as CommonJS and only
+# the `default` export survives — named imports (projectGeneralChannelName,
+# etc.) throw "does not provide an export" at runtime.
+# See docs/DATA-MODEL-REVIEW.md §11.6 (Build-context fixes).
+COPY --chown=node:node shared/ /octogee/shared/
 
 # ── Type-check provisioner (catches errors at build time) ───────────────────
 RUN npx tsc -p tsconfig.json --noEmit 2>&1; \
