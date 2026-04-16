@@ -425,6 +425,181 @@ describe("gateway-rpc", () => {
   });
 });
 
+// ── Token resolution: env → openclaw.json → empty ──────────────────────────
+//
+// Production deployments rarely plumb OPENCLAW_GATEWAY_TOKEN into the
+// provisioner's env; the token lives in the gateway's openclaw.json at
+// `gateway.auth.token` instead. Client must fall back to reading that file
+// so stock OpenClaw deployments work without extra config.
+
+describe("token resolution", () => {
+  let tmpDir: string;
+  let configPath: string;
+  let origEnv: string | undefined;
+
+  beforeEach(() => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const os = require("node:os") as typeof import("node:os");
+    const path = require("node:path") as typeof import("node:path");
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gw-rpc-token-"));
+    configPath = path.join(tmpDir, "openclaw.json");
+    origEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  });
+
+  afterEach(() => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (origEnv === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    else process.env.OPENCLAW_GATEWAY_TOKEN = origEnv;
+  });
+
+  it("reads gateway.auth.token from openclaw.json when env is unset (captures auth.token in connect frame)", async () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { auth: { mode: "token", token: "from-file-abc123" } },
+      }),
+    );
+
+    const srv = await startMockGateway();
+    let captured: any = null;
+    srv.setConnectHandler((params) => {
+      captured = params;
+      return {
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 3,
+          server: { version: "test", connId: "c1" },
+          features: { methods: [], events: [] },
+          snapshot: {},
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        },
+      };
+    });
+    srv.setHandler("channels.status", () => ({ ok: true, payload: {} }));
+
+    const rpc = createGatewayRpc({
+      url: srv.url,
+      openclawConfigPath: configPath,
+      connectTimeoutMs: 500,
+      callTimeoutMs: 500,
+      identity: makeTestIdentity(),
+    });
+    try {
+      await rpc.isGatewayUp(500);
+    } finally {
+      await rpc.close();
+      await srv.close();
+    }
+
+    expect(captured?.auth?.token).toBe("from-file-abc123");
+  });
+
+  it("prefers the OPENCLAW_GATEWAY_TOKEN env var over openclaw.json", async () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ gateway: { auth: { token: "from-file" } } }),
+    );
+    process.env.OPENCLAW_GATEWAY_TOKEN = "from-env";
+
+    const srv = await startMockGateway();
+    let captured: any = null;
+    srv.setConnectHandler((params) => {
+      captured = params;
+      return {
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 3,
+          server: { version: "test", connId: "c1" },
+          features: { methods: [], events: [] },
+          snapshot: {},
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        },
+      };
+    });
+    srv.setHandler("channels.status", () => ({ ok: true, payload: {} }));
+
+    const rpc = createGatewayRpc({
+      url: srv.url,
+      openclawConfigPath: configPath,
+      connectTimeoutMs: 500,
+      callTimeoutMs: 500,
+      identity: makeTestIdentity(),
+    });
+    try {
+      await rpc.isGatewayUp(500);
+    } finally {
+      await rpc.close();
+      await srv.close();
+    }
+
+    expect(captured?.auth?.token).toBe("from-env");
+  });
+
+  it("sends no auth block when neither env nor file has a token (server rejects, caller falls back)", async () => {
+    // File exists but has no token.
+    const fs = require("node:fs") as typeof import("node:fs");
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { auth: { mode: "none" } } }));
+
+    const srv = await startMockGateway();
+    let captured: any = null;
+    srv.setConnectHandler((params) => {
+      captured = params;
+      return {
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 3,
+          server: { version: "test", connId: "c1" },
+          features: { methods: [], events: [] },
+          snapshot: {},
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        },
+      };
+    });
+    srv.setHandler("channels.status", () => ({ ok: true, payload: {} }));
+
+    const rpc = createGatewayRpc({
+      url: srv.url,
+      openclawConfigPath: configPath,
+      connectTimeoutMs: 500,
+      callTimeoutMs: 500,
+      identity: makeTestIdentity(),
+    });
+    try {
+      await rpc.isGatewayUp(500);
+    } finally {
+      await rpc.close();
+      await srv.close();
+    }
+
+    // No auth block at all — matches the pre-hotfix behavior for token-less connects.
+    expect(captured?.auth).toBeUndefined();
+  });
+
+  it("silently tolerates a missing/malformed openclaw.json", async () => {
+    const rpc = createGatewayRpc({
+      url: "ws://127.0.0.1:1",
+      openclawConfigPath: "/does/not/exist.json",
+      connectTimeoutMs: 100,
+      callTimeoutMs: 100,
+      identity: makeTestIdentity(),
+    });
+    try {
+      // If the file-read threw, this would reject with a non-RPC error;
+      // instead we expect the normal connect-failed path.
+      expect(await rpc.isGatewayUp(100)).toBe(false);
+    } finally {
+      await rpc.close();
+    }
+  });
+});
+
 // ── Crash-safety: unhandled error on terminate ─────────────────────────────
 //
 // Regression for the April 16 TEST-cluster provisioner crash. The original

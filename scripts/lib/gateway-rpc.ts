@@ -23,6 +23,9 @@
  */
 
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { WebSocket } from "ws";
 import {
   loadOrCreateDeviceIdentity,
@@ -62,8 +65,25 @@ export class GatewayRpcError extends Error {
 export interface GatewayRpcClientOptions {
   /** Default: `ws://127.0.0.1:${OPENCLAW_GATEWAY_PORT || 18789}`. */
   url?: string;
-  /** Default: `OPENCLAW_GATEWAY_TOKEN`. */
+  /**
+   * Gateway auth token. Resolution order when omitted:
+   *   1. `OPENCLAW_GATEWAY_TOKEN` env var
+   *   2. `gateway.auth.token` field of the local openclaw.json (found via
+   *      `openclawConfigPath` below, or the default location)
+   *   3. empty string (auth is skipped — the gateway will reject if it
+   *      requires token-mode auth)
+   *
+   * Reading the config file is what makes this work on a stock OpenClaw
+   * gateway deployment without any extra env-var plumbing: the token is
+   * already the source of truth on disk.
+   */
   token?: string;
+  /**
+   * Path to `openclaw.json` to read the token from when the env var is
+   * unset. Default: `OPENCLAW_CONFIG` (i.e. `~/.openclaw/openclaw.json`).
+   * Primarily for tests; production callers leave this unset.
+   */
+  openclawConfigPath?: string;
   /** TCP connect + handshake budget. Default: 10_000ms. */
   connectTimeoutMs?: number;
   /** Per-request response budget. Default: 10_000ms. */
@@ -118,7 +138,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   const url =
     opts.url ??
     `ws://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || 18789}`;
-  const token = opts.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+  const token = resolveGatewayToken(opts);
   // 10s default accommodates the gateway's startup-grace window — on a cold
   // pod the HTTP listener can accept TCP for tens of seconds before OpenClaw
   // finishes warming and actually answers the WS upgrade. Callers who need
@@ -233,6 +253,44 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       // Short-lived connections — nothing persistent to close.
     },
   };
+}
+
+// ── Auth-token resolution ───────────────────────────────────────────────────
+
+/**
+ * Three-tier token resolution: explicit opt → env var → openclaw.json on
+ * disk. The on-disk fallback is what makes this work on a vanilla OpenClaw
+ * gateway deployment — inside a pod the config file IS the source of
+ * truth (the gateway's own `auth.token` config field), and the provisioner
+ * runs with read access to it. No extra env-var plumbing in the helm chart,
+ * no extra Secret Manager entry.
+ *
+ * Silently falls back to empty string on any read / parse error; the server
+ * will then reject the connect with `token_missing` and the applyConfigPatch
+ * orchestrator will fall back to file-write. Better than throwing here,
+ * which would abort every provisioning call — we want RPC to be best-effort.
+ */
+function resolveGatewayToken(opts: GatewayRpcClientOptions): string {
+  if (typeof opts.token === "string" && opts.token.length > 0) return opts.token;
+  const fromEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
+  if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
+  return readTokenFromOpenClawJson(opts.openclawConfigPath);
+}
+
+function readTokenFromOpenClawJson(configPath?: string): string {
+  const resolved = configPath ?? path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    const raw = fs.readFileSync(resolved, "utf8");
+    const parsed = JSON.parse(raw) as {
+      gateway?: { auth?: { token?: unknown } };
+    };
+    const token = parsed?.gateway?.auth?.token;
+    if (typeof token === "string" && token.length > 0) return token;
+  } catch {
+    // Treated as "no token available" — caller either passes one explicitly
+    // or the connect will fail with token_missing and fall back to file-write.
+  }
+  return "";
 }
 
 // ── Connect handshake ───────────────────────────────────────────────────────
