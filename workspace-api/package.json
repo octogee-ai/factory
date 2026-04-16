@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "verify:no-alias-leakage": "! grep -rq --include='*.js' '@shared' dist/ || (echo '❌ Found un-rewritten @shared alias in compiled output — tsc-alias misconfigured. See README \"Shared code\" section.' && exit 1)"
+    "verify:no-alias-leakage": "! grep -rq --include='*.js' '@shared' dist/ || (echo '❌ Found un-rewritten @shared/* alias in compiled JS. Fix: ensure tsc-alias is installed and the build script runs `tsc && tsc-alias -p tsconfig.json` (path alias rewriting must run after emit, or Node will fail at runtime with MODULE_NOT_FOUND).' && exit 1)"
   },
   "engines": {
     "node": "22"
