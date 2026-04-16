@@ -1,0 +1,256 @@
+/**
+ * Unit tests for the multi-account MM config emitted by boot-sync.
+ *
+ * OpenClaw v2026.4.14's MM plugin supports
+ * `channels.mattermost.accounts.{accountId}.botToken` natively. Each account
+ * opens its OWN WebSocket subscription; `bindings[].match.accountId` pins
+ * each binding to a specific account so events route to the right agent.
+ *
+ * This replaces the single-token, shared-`octogee-bot` model where every
+ * post carried `override_username` to fake per-customer identity. Under the
+ * new shape:
+ *   - `admin` account = MM_BOT_TOKEN (system agents + default routing)
+ *   - `{slug}-coach` account = the customer's coach PAT (only sees that
+ *     tenant's channel events — isolation at the MM auth layer)
+ *
+ * Three extracted helpers are tested:
+ *   - `fetchCoachTokens(deps, customers)` — async, reads each customer's
+ *     `users/{uid}/secrets/coachMattermost.personalToken` from Firestore.
+ *   - `buildMattermostAccounts(customers, tokens)` — pure, returns the
+ *     accounts map (always includes `admin`; per-customer entries only
+ *     when a PAT is present).
+ *   - `buildCustomerBindings(customers)` — pure, returns the flat list of
+ *     `{ agentId, match: { channel, accountId, peer } }` bindings.
+ */
+
+import { describe, it, expect, vi } from "vitest";
+import {
+  buildMattermostAccounts,
+  buildCustomerBindings,
+  fetchCoachTokens,
+  type CoachTokenDeps,
+} from "../boot-sync.js";
+
+// ── fetchCoachTokens ────────────────────────────────────────────────────────
+
+describe("fetchCoachTokens", () => {
+  function mkDeps(
+    docs: Record<string, { personalToken?: string } | undefined>,
+    logSpy = vi.fn(),
+  ): CoachTokenDeps & { logs: ReturnType<typeof vi.fn> } {
+    const db = {
+      collection: (_users: string) => ({
+        doc: (uid: string) => ({
+          collection: (_secrets: string) => ({
+            doc: (_coachMm: string) => ({
+              get: async () => {
+                const data = docs[uid];
+                return { exists: !!data, data: () => data };
+              },
+            }),
+          }),
+        }),
+      }),
+    };
+    return { db, log: logSpy, logs: logSpy };
+  }
+
+  it("reads users/{uid}/secrets/coachMattermost.personalToken and keys by uid", async () => {
+    const deps = mkDeps({
+      "uid-chris": { personalToken: "tok-chris-abc123" },
+      "uid-sam": { personalToken: "tok-sam-def456" },
+    });
+    const result = await fetchCoachTokens(deps, [
+      { uid: "uid-chris", slug: "chris-builds-a3f2" },
+      { uid: "uid-sam", slug: "sam-cooks-b4g3" },
+    ]);
+    expect(result.get("uid-chris")).toBe("tok-chris-abc123");
+    expect(result.get("uid-sam")).toBe("tok-sam-def456");
+    expect(result.size).toBe(2);
+  });
+
+  it("omits customers with no secrets doc and logs a warning", async () => {
+    const logSpy = vi.fn();
+    const deps = mkDeps(
+      { "uid-chris": { personalToken: "tok-chris" } },
+      logSpy,
+    );
+    const result = await fetchCoachTokens(deps, [
+      { uid: "uid-chris", slug: "chris-builds-a3f2" },
+      { uid: "uid-sam", slug: "sam-cooks-b4g3" },
+    ]);
+    expect(result.has("uid-chris")).toBe(true);
+    expect(result.has("uid-sam")).toBe(false);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("sam-cooks-b4g3"),
+    );
+  });
+
+  it("omits entries when secrets doc exists but personalToken is empty", async () => {
+    const logSpy = vi.fn();
+    const deps = mkDeps({ "uid-chris": { personalToken: "" } }, logSpy);
+    const result = await fetchCoachTokens(deps, [
+      { uid: "uid-chris", slug: "chris-builds-a3f2" },
+    ]);
+    expect(result.has("uid-chris")).toBe(false);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("chris-builds-a3f2"),
+    );
+  });
+
+  it("tolerates Firestore errors for a single customer (continues others)", async () => {
+    const logSpy = vi.fn();
+    const db = {
+      collection: (_users: string) => ({
+        doc: (uid: string) => ({
+          collection: (_secrets: string) => ({
+            doc: (_coachMm: string) => ({
+              get: async () => {
+                if (uid === "uid-broken") throw new Error("firestore hiccup");
+                return { exists: true, data: () => ({ personalToken: "tok-ok" }) };
+              },
+            }),
+          }),
+        }),
+      }),
+    };
+    const result = await fetchCoachTokens({ db, log: logSpy }, [
+      { uid: "uid-broken", slug: "broken-a1b2" },
+      { uid: "uid-ok", slug: "ok-c3d4" },
+    ]);
+    expect(result.has("uid-broken")).toBe(false);
+    expect(result.get("uid-ok")).toBe("tok-ok");
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("broken-a1b2"));
+  });
+});
+
+// ── buildMattermostAccounts ─────────────────────────────────────────────────
+
+describe("buildMattermostAccounts", () => {
+  it("always emits an `admin` entry bound to the MM_BOT_TOKEN env var", () => {
+    const accounts = buildMattermostAccounts([], new Map());
+    expect(accounts.admin).toEqual({ botToken: "${MM_BOT_TOKEN}" });
+  });
+
+  it("adds `{slug}-coach` entries for customers with a mint'd PAT", () => {
+    const accounts = buildMattermostAccounts(
+      [
+        { uid: "uid-a", slug: "chris" },
+        { uid: "uid-b", slug: "sam" },
+      ],
+      new Map([
+        ["uid-a", "tok-chris"],
+        ["uid-b", "tok-sam"],
+      ]),
+    );
+    expect(accounts["chris-coach"]).toEqual({ botToken: "tok-chris" });
+    expect(accounts["sam-coach"]).toEqual({ botToken: "tok-sam" });
+  });
+
+  it("OMITS customers without a PAT — never emits a null/empty botToken", () => {
+    const accounts = buildMattermostAccounts(
+      [
+        { uid: "uid-a", slug: "chris" },
+        { uid: "uid-b", slug: "sam" }, // no token
+      ],
+      new Map([["uid-a", "tok-chris"]]),
+    );
+    expect(accounts["chris-coach"]).toBeDefined();
+    expect(accounts["sam-coach"]).toBeUndefined();
+    expect(Object.values(accounts).every((a) => a.botToken.length > 0)).toBe(
+      true,
+    );
+  });
+
+  // Regression guard: each customer's token must land under their OWN
+  // accountId. A Map-lookup bug that indexed by slug-position instead of
+  // uid could cross tenants — this test drives three customers and asserts
+  // each account's token matches its uid source.
+  it("routes tokens per-uid — no cross-workspace token bleed", () => {
+    const accounts = buildMattermostAccounts(
+      [
+        { uid: "uid-a", slug: "chris" },
+        { uid: "uid-b", slug: "sam" },
+        { uid: "uid-c", slug: "pat" },
+      ],
+      new Map([
+        ["uid-a", "tok-A"],
+        ["uid-b", "tok-B"],
+        ["uid-c", "tok-C"],
+      ]),
+    );
+    expect(accounts["chris-coach"].botToken).toBe("tok-A");
+    expect(accounts["sam-coach"].botToken).toBe("tok-B");
+    expect(accounts["pat-coach"].botToken).toBe("tok-C");
+    const tokens = Object.values(accounts).map((a) => a.botToken);
+    expect(new Set(tokens).size).toBe(4); // 3 coach tokens + 1 admin placeholder
+  });
+});
+
+// ── buildCustomerBindings ───────────────────────────────────────────────────
+
+describe("buildCustomerBindings", () => {
+  it("emits one binding per customer channel with accountId pinned to {slug}-coach", () => {
+    const bindings = buildCustomerBindings([
+      {
+        slug: "chris",
+        channels: [{ channelId: "ch-general-1" }, { channelId: "ch-coach-1" }],
+      },
+    ]);
+    expect(bindings).toEqual([
+      {
+        agentId: "octogee-chris-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "chris-coach",
+          peer: { kind: "group", id: "ch-general-1" },
+        },
+      },
+      {
+        agentId: "octogee-chris-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "chris-coach",
+          peer: { kind: "group", id: "ch-coach-1" },
+        },
+      },
+    ]);
+  });
+
+  // Core multi-tenant invariant. Under the OLD single-account model, an MM
+  // event for chris-ch-1 could theoretically fan out to sam's agent if
+  // bindings matched only on channelId. Under the new model every binding
+  // pins accountId, so OpenClaw filters events at the WS-receiver layer
+  // before agent resolution. This test locks that pinning so a future
+  // refactor that drops accountId fails loudly.
+  it("NEVER emits a binding without accountId (multi-tenant isolation lock)", () => {
+    const bindings = buildCustomerBindings([
+      { slug: "chris", channels: [{ channelId: "ch-1" }] },
+      { slug: "sam", channels: [{ channelId: "ch-2" }] },
+    ]);
+    for (const b of bindings) {
+      expect(b.match.accountId).toBeTruthy();
+      expect(b.match.accountId).toMatch(/-coach$/);
+    }
+  });
+
+  it("routes each customer's channels to their own accountId — no cross-tenant bleed", () => {
+    const bindings = buildCustomerBindings([
+      { slug: "chris", channels: [{ channelId: "chris-general" }] },
+      { slug: "sam", channels: [{ channelId: "sam-general" }] },
+    ]);
+    const chrisBinding = bindings.find((b) => b.match.peer.id === "chris-general");
+    const samBinding = bindings.find((b) => b.match.peer.id === "sam-general");
+    expect(chrisBinding?.match.accountId).toBe("chris-coach");
+    expect(samBinding?.match.accountId).toBe("sam-coach");
+    expect(chrisBinding?.agentId).toBe("octogee-chris-coach");
+    expect(samBinding?.agentId).toBe("octogee-sam-coach");
+  });
+
+  it("returns [] when a customer has zero channels (not-yet-provisioned)", () => {
+    const bindings = buildCustomerBindings([
+      { slug: "chris", channels: [] },
+    ]);
+    expect(bindings).toEqual([]);
+  });
+});
