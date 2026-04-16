@@ -126,6 +126,8 @@ describe("wireCoachMattermostAccount", () => {
     wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
+      groupPolicy: "open",
+      allowFrom: ["*"],
     });
     // OpenClaw's MM plugin defaults to groupPolicy=allowlist (fail-closed)
     // when the field is missing. Without these, group messages are silently
@@ -176,6 +178,8 @@ describe("wireCoachMattermostAccount", () => {
     expect(config.channels.mattermost.defaultAccount).toBe("admin");
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
+      groupPolicy: "open",
+      allowFrom: ["*"],
     });
   });
 
@@ -219,9 +223,11 @@ describe("wireCoachMattermostAccount", () => {
     wireCoachMattermostAccount(config, SLUG, mkMmUpdate()); // ceckert
     expect(config.channels.mattermost.accounts["sam-coach"]).toEqual({
       botToken: "tok-sam-preexisting",
-    });
+    } as any);
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
+      groupPolicy: "open",
+      allowFrom: ["*"],
     });
   });
 });

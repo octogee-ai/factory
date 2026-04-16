@@ -143,8 +143,8 @@ describe("buildMattermostAccounts", () => {
         ["uid-b", "tok-sam"],
       ]),
     );
-    expect(accounts["chris-coach"]).toEqual({ botToken: "tok-chris" });
-    expect(accounts["sam-coach"]).toEqual({ botToken: "tok-sam" });
+    expect(accounts["chris-coach"]).toEqual({ botToken: "tok-chris", groupPolicy: "open", allowFrom: ["*"] });
+    expect(accounts["sam-coach"]).toEqual({ botToken: "tok-sam", groupPolicy: "open", allowFrom: ["*"] });
   });
 
   it("OMITS customers without a PAT — never emits a null/empty botToken", () => {
@@ -155,7 +155,7 @@ describe("buildMattermostAccounts", () => {
       ],
       new Map([["uid-a", "tok-chris"]]),
     );
-    expect(accounts["chris-coach"]).toBeDefined();
+    expect(accounts["chris-coach"]).toMatchObject({ botToken: "tok-chris", groupPolicy: "open" });
     expect(accounts["sam-coach"]).toBeUndefined();
     expect(Object.values(accounts).every((a) => a.botToken.length > 0)).toBe(
       true,
@@ -179,9 +179,9 @@ describe("buildMattermostAccounts", () => {
         ["uid-c", "tok-C"],
       ]),
     );
-    expect(accounts["chris-coach"].botToken).toBe("tok-A");
-    expect(accounts["sam-coach"].botToken).toBe("tok-B");
-    expect(accounts["pat-coach"].botToken).toBe("tok-C");
+    expect(accounts["chris-coach"]).toMatchObject({ botToken: "tok-A", groupPolicy: "open" });
+    expect(accounts["sam-coach"]).toMatchObject({ botToken: "tok-B", groupPolicy: "open" });
+    expect(accounts["pat-coach"]).toMatchObject({ botToken: "tok-C", groupPolicy: "open" });
     const tokens = Object.values(accounts).map((a) => a.botToken);
     expect(new Set(tokens).size).toBe(4); // 3 coach tokens + 1 admin placeholder
   });
