@@ -344,26 +344,77 @@ export async function syncModelOverrides(): Promise<void> {
 
 // ── Wait for Gateway ────────────────────────────────────────────────────────────
 
-export async function waitForGateway(): Promise<void> {
-  const MAX_WAIT_MS = 120_000;
-  const POLL_MS = 3_000;
+/** Injectable seam for tests — defaults to the real implementation. */
+export interface WaitForGatewayDeps {
+  /** Probe implementation: returns true when the gateway is RPC-ready. */
+  probe: (timeoutMs: number) => Promise<boolean>;
+  /** Sleep for `ms` — overrideable so tests don't actually wait. */
+  sleep: (ms: number) => Promise<void>;
+  /** Milliseconds budget options. Pinned on the call for tests. */
+  maxWaitMs?: number;
+  pollMs?: number;
+  probeBudgetMs?: number;
+}
+
+/**
+ * Block until the OpenClaw gateway can actually service RPC calls — not just
+ * return HTTP 200 on GET /.
+ *
+ * The previous HTTP-GET probe returned true as soon as Express bound to
+ * 18789, which can happen tens of seconds before OpenClaw finishes loading
+ * plugins + channels. On the April 16 TEST deploy this let the provisioner
+ * race the gateway's boot: it started provisioning `cke123`, called
+ * `config.patch` RPC, and the server took 21.4s to answer `config.get`
+ * because plugin init was still blocking the event loop. The 10s client
+ * timeout fired first, the provisioner fell back to file-write, and the
+ * chokidar watcher wasn't fully armed yet so `[cke123-coach] starting
+ * channel` never fired — the coach stayed offline until pod restart.
+ *
+ * The fix: probe `rpc.isGatewayUp()` (a full connect-handshake + cheap
+ * `channels.status` roundtrip). That doesn't return true until the RPC
+ * subsystem is actually serving — plugins loaded, handlers registered,
+ * event loop not pinned on init work. Uses `createGatewayRpc`'s
+ * `openclaw.json` token fallback so it works without env-var plumbing.
+ */
+export async function waitForGateway(deps?: Partial<WaitForGatewayDeps>): Promise<void> {
+  const maxWaitMs = deps?.maxWaitMs ?? 120_000;
+  const pollMs = deps?.pollMs ?? 3_000;
+  // Budget per-probe tightly so we don't pin a full timeout on every slow
+  // startup probe. If the gateway is truly busy (plugins loading), the
+  // probe returns false fast and we retry.
+  const probeBudgetMs = deps?.probeBudgetMs ?? 2_500;
+  const sleep = deps?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+
+  // Default probe: real RPC client. Tests inject a stub.
+  let rpc: { isGatewayUp(ms?: number): Promise<boolean>; close(): Promise<void> } | undefined;
+  const probe =
+    deps?.probe ??
+    (async (timeoutMs: number) => {
+      if (!rpc) {
+        const { createGatewayRpc } = await import("./gateway-rpc.js");
+        rpc = createGatewayRpc({
+          connectTimeoutMs: probeBudgetMs,
+          callTimeoutMs: probeBudgetMs,
+        });
+      }
+      return rpc.isGatewayUp(timeoutMs);
+    });
+
   const start = Date.now();
+  log("Waiting for OpenClaw gateway RPC to be ready...");
 
-  log("Waiting for OpenClaw gateway to be ready...");
-
-  while (Date.now() - start < MAX_WAIT_MS) {
-    try {
-      const resp = await fetch("http://127.0.0.1:18789/");
-      if (resp.ok) {
+  try {
+    while (Date.now() - start < maxWaitMs) {
+      if (await probe(probeBudgetMs)) {
         const elapsed = Math.round((Date.now() - start) / 1000);
-        log(`✅ Gateway is ready — HTTP server responding (${elapsed}s)`);
+        log(`✅ Gateway is ready — RPC responding (${elapsed}s)`);
         return;
       }
-    } catch {
-      // Not up yet
+      await sleep(pollMs);
     }
-    await new Promise(r => setTimeout(r, POLL_MS));
+  } finally {
+    if (rpc) await rpc.close();
   }
 
-  log("⚠ Gateway health check timed out (120s) — proceeding anyway");
+  log("⚠ Gateway RPC probe timed out — proceeding anyway");
 }

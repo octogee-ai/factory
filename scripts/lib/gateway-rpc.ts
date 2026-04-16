@@ -139,14 +139,19 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     opts.url ??
     `ws://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || 18789}`;
   const token = resolveGatewayToken(opts);
-  // 10s default accommodates the gateway's startup-grace window — on a cold
-  // pod the HTTP listener can accept TCP for tens of seconds before OpenClaw
-  // finishes warming and actually answers the WS upgrade. Callers who need
-  // the old tight budget (tests, probes) still set `connectTimeoutMs`
-  // explicitly. For `isGatewayUp` this value is the natural upper bound so
-  // the probe doesn't become unbounded.
+  // 10s for connect — matches the handshake budget from the first hotfix and
+  // accommodates the gateway's startup-grace window on a cold pod. Callers
+  // who need a tighter budget (readiness probes) still set it explicitly.
+  //
+  // 30s for per-call — `config.get` on a busy/startup gateway has been
+  // observed taking up to ~21s because plugin init pins the event loop
+  // (April 16 TEST signup: 21411ms server-side). 10s was too tight and
+  // caused the provisioner to fall back to file-write on cold pods, which
+  // in turn caused chokidar to miss the write and the new customer's coach
+  // to never start. `waitForGateway` now probes via RPC so the first
+  // provisioner call lands on a warm server, but 30s is cheap headroom.
   const connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
-  const callTimeoutMs = opts.callTimeoutMs ?? 10_000;
+  const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
   const scopes = opts.scopes ?? ["operator.admin"];
 
   // Lazy identity load: only when we actually need to connect. Tests inject
