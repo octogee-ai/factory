@@ -127,6 +127,11 @@ describe("wireCoachMattermostAccount", () => {
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
     });
+    // OpenClaw's MM plugin defaults to groupPolicy=allowlist (fail-closed)
+    // when the field is missing. Without these, group messages are silently
+    // dropped with "no group allowlist" even though the WS is connected.
+    expect(config.channels.mattermost.groupPolicy).toBe("open");
+    expect(config.channels.mattermost.allowFrom).toEqual(["*"]);
   });
 
   it("ensures admin account + defaultAccount are present (self-bootstraps a legacy config)", () => {
