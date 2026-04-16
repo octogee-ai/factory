@@ -13,7 +13,7 @@ import {
   workspaceCoachChannelName,
   workspaceAdminChannelName,
   projectGeneralChannelName,
-} from "@shared/types/identity.js";
+} from "../../shared/types/identity.js";
 
 const secretClient = new SecretManagerServiceClient();
 
