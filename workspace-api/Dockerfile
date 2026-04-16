@@ -14,7 +14,10 @@ RUN npm ci --ignore-scripts
 COPY workspace-api/tsconfig.json ./
 COPY workspace-api/src/ ./src/
 COPY shared/ /shared/
-RUN npx tsc
+# `npm run build` = tsc → tsc-alias → verify:no-alias-leakage. The
+# alias rewriter and post-build grep guard together prevent the
+# MODULE_NOT_FOUND @shared/* runtime failure. See README "Shared code".
+RUN npm run build
 
 FROM node:22-slim
 WORKDIR /workspace-api

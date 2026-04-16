@@ -41,7 +41,7 @@ import { mmApi } from "../lib/mattermost";
 import { resolveWorkspaceUid } from "../lib/workspace-resolution";
 import { decomposeProjectId } from "../lib/projectId";
 import { logger } from "../middleware/logging";
-import { workspaceGeneralChannelName } from "../../../shared/types/identity";
+import { workspaceGeneralChannelName } from "@shared/types/identity";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
 
 const router = Router();
