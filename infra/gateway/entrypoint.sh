@@ -207,6 +207,43 @@ fi
   done
 ) &
 
-# ── Start OpenClaw gateway (foreground — Docker monitors this process) ───────
-log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
-exec openclaw gateway run --bind lan --port 18789
+# ── Start OpenClaw gateway in background with auto-restart ─────────────────
+# Previously this was `exec openclaw ...` which made OpenClaw PID 1 and tied
+# its lifecycle to the container's. OpenClaw self-restarts via SIGUSR1 when
+# its chokidar watcher detects an openclaw.json change — under `exec` that
+# cascaded into a whole-pod restart, losing the provisioner's in-memory
+# state, PVC-cached gitea tokens, etc., and taking ~6+ minutes to recover.
+#
+# Matching the while-loop pattern used above for provisioner / site-build /
+# preview-proxy: OpenClaw now runs as a supervised child. When it exits
+# (crash OR its own SIGUSR1-triggered self-restart), this loop respawns it
+# WITHOUT taking the pod down. The other three services keep running; only
+# tenant MM WebSockets blip for the gateway-restart window.
+(
+  while true; do
+    log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
+    openclaw gateway run --bind lan --port 18789 || true
+    log "OpenClaw gateway exited — restarting in 2s..."
+    sleep 2
+  done
+) &
+
+# ── Signal forwarding ──────────────────────────────────────────────────────
+# Kubernetes sends SIGTERM → PID 1 (this sh) → our trap → SIGTERM every
+# direct child → exit cleanly within the pod's terminationGracePeriodSeconds
+# (default 30s). Without this trap, the shell ignores SIGTERM and k8s
+# eventually SIGKILLs the pod, which drops MM WebSockets ungracefully.
+shutdown() {
+  log "entrypoint: received SIGTERM — forwarding to children"
+  # `kill 0` sends the signal to the entire process group (this shell +
+  # all descendants). The background loops catch EXIT on their child
+  # openclaw/tsx processes and break cleanly.
+  kill -TERM 0 2>/dev/null || true
+  exit 0
+}
+trap shutdown TERM INT
+
+# Block on all background jobs. `wait` with no args waits for every
+# backgrounded child; our SIGTERM trap will interrupt it and run the
+# shutdown handler before we exit.
+wait
