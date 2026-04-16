@@ -1,0 +1,160 @@
+/**
+ * Unit tests for the patch-builder side of `provisionSteps.ts`. These are the
+ * pure functions that produce merge-patch fragments handed to OpenClaw's
+ * `config.patch` RPC — compared to `wireCoachMattermostBindings` /
+ * `wireCoachMattermostAccount` / `registerCoachAgent` which remain the
+ * in-place mutators used by the file-write fallback.
+ *
+ * What we lock in:
+ *   - Builder output is a function of (current snapshot, ctx/mmUpdate only) —
+ *     no side effects on `current`.
+ *   - Existing bindings for OTHER agents are preserved.
+ *   - Bindings with the same (agentId, peer.id) pair are REPLACED (same
+ *     legacy-binding-upgrade contract as the in-place mutator).
+ *   - The coach account entry is OMITTED when token / allowlist is missing
+ *     (never send an empty-allowlist or placeholder-token account).
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  buildCoachAgentEntry,
+  buildCoachBindings,
+  buildCoachAccountFragment,
+  type ProvisioningContext,
+} from "../lib/provisionSteps.js";
+
+vi.mock("../lib/config.js", async () => {
+  const actual: any = await vi.importActual("../lib/config.js");
+  return { ...actual, log: vi.fn() };
+});
+
+const SLUG = "marie";
+const AGENT_ID = `octogee-${SLUG}-coach`;
+const ACCOUNT_ID = `${SLUG}-coach`;
+
+function mkCtx(): ProvisioningContext {
+  return {
+    uid: "uid-marie",
+    slug: SLUG,
+    tier: "trial",
+    ownerName: SLUG,
+    businessName: SLUG,
+    customerDir: "/var/empty/customers/marie",
+    today: "2026-04-16",
+    username: SLUG,
+    templateVars: {},
+    userData: {},
+  };
+}
+
+function mkMmUpdate(extra: Record<string, any> = {}): Record<string, any> {
+  return {
+    "mattermost.userId": "mm-marie",
+    "mattermost.channelId": "ch-coach-dm",
+    "mattermost.generalChannelId": "ch-general",
+    "mattermost.adminChannelId": "ch-admin",
+    _coachPersonalToken: "tok-marie",
+    ...extra,
+  };
+}
+
+const ORIG_ADMIN_ID = process.env.MM_ADMIN_USER_ID;
+beforeEach(() => {
+  process.env.MM_ADMIN_USER_ID = "mm-admin";
+});
+afterEach(() => {
+  if (ORIG_ADMIN_ID === undefined) delete process.env.MM_ADMIN_USER_ID;
+  else process.env.MM_ADMIN_USER_ID = ORIG_ADMIN_ID;
+});
+
+// ── buildCoachAgentEntry ────────────────────────────────────────────────────
+
+describe("buildCoachAgentEntry", () => {
+  it("produces an agent entry keyed by octogee-{slug}-coach", () => {
+    const entry = buildCoachAgentEntry(mkCtx()) as Record<string, unknown>;
+    expect(entry.id).toBe(AGENT_ID);
+    expect(entry.workspace).toBe("/var/empty/customers/marie");
+    expect((entry.identity as any).name).toBeTruthy();
+    expect((entry.tools as any).fs.workspaceOnly).toBe(true);
+  });
+
+  it("is pure — repeated calls on the same ctx produce equal output", () => {
+    const a = buildCoachAgentEntry(mkCtx());
+    const b = buildCoachAgentEntry(mkCtx());
+    expect(a).toEqual(b);
+  });
+});
+
+// ── buildCoachBindings ──────────────────────────────────────────────────────
+
+describe("buildCoachBindings", () => {
+  it("emits one binding per channel with accountId pinned to {slug}-coach", () => {
+    const bindings = buildCoachBindings({ bindings: [] }, AGENT_ID, SLUG, mkMmUpdate());
+    expect(bindings).toHaveLength(3);
+    for (const b of bindings) {
+      expect(b.agentId).toBe(AGENT_ID);
+      expect(b.match.channel).toBe("mattermost");
+      expect(b.match.accountId).toBe(ACCOUNT_ID);
+      expect(b.match.peer.kind).toBe("group");
+    }
+  });
+
+  it("preserves bindings for other agents", () => {
+    const existing = {
+      bindings: [
+        { agentId: "octogee-other-coach", match: { channel: "mattermost", accountId: "other-coach", peer: { kind: "group", id: "other-ch" } } },
+      ],
+    };
+    const bindings = buildCoachBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
+    const otherAgentEntries = bindings.filter((b: any) => b.agentId === "octogee-other-coach");
+    expect(otherAgentEntries).toHaveLength(1);
+    // No mutation on input
+    expect(existing.bindings).toHaveLength(1);
+  });
+
+  it("REPLACES a pre-existing binding that matches on (agentId, peer.id)", () => {
+    // Pre-existing binding WITHOUT accountId (legacy multi-account-less).
+    const existing = {
+      bindings: [
+        { agentId: AGENT_ID, match: { channel: "mattermost", peer: { kind: "group", id: "ch-coach-dm" } } },
+      ],
+    };
+    const bindings = buildCoachBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
+    // Old one replaced in place — not duplicated
+    const coachDmBindings = bindings.filter((b: any) => b.agentId === AGENT_ID && b.match?.peer?.id === "ch-coach-dm");
+    expect(coachDmBindings).toHaveLength(1);
+    expect(coachDmBindings[0].match.accountId).toBe(ACCOUNT_ID);
+  });
+
+  it("does not mutate the `current` snapshot", () => {
+    const existing = { bindings: [] };
+    buildCoachBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
+    expect(existing.bindings).toEqual([]);
+  });
+});
+
+// ── buildCoachAccountFragment ───────────────────────────────────────────────
+
+describe("buildCoachAccountFragment", () => {
+  it("returns the account entry keyed by {slug}-coach with allowlist scoped to owner + admin", () => {
+    const frag = buildCoachAccountFragment(SLUG, mkMmUpdate());
+    expect(frag.accounts[ACCOUNT_ID]).toEqual({
+      botToken: "tok-marie",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-marie", "mm-admin"],
+    });
+    expect(frag.defaultAccount).toBe("default");
+  });
+
+  it("omits the account entry when no coach PAT is available", () => {
+    const frag = buildCoachAccountFragment(SLUG, mkMmUpdate({ _coachPersonalToken: "" }));
+    expect(frag.accounts).toEqual({});
+    // defaultAccount is always safe to assert — it's independent of the PAT.
+    expect(frag.defaultAccount).toBe("default");
+  });
+
+  it("omits the account entry when the allowlist would be empty (no owner + no admin)", () => {
+    delete process.env.MM_ADMIN_USER_ID;
+    const frag = buildCoachAccountFragment(SLUG, mkMmUpdate({ "mattermost.userId": "" }));
+    expect(frag.accounts).toEqual({});
+  });
+});

@@ -65,10 +65,13 @@ export function readOpenClawConfig(): any {
   return JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, "utf-8"));
 }
 
-export function writeOpenClawConfig(config: any): void {
-  const tmp = OPENCLAW_CONFIG + ".tmp";
+export function writeOpenClawConfig(
+  config: any,
+  configPath: string = OPENCLAW_CONFIG,
+): void {
+  const tmp = configPath + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2), "utf-8");
-  fs.renameSync(tmp, OPENCLAW_CONFIG);
+  fs.renameSync(tmp, configPath);
   log("openclaw.json updated — gateway will hot-reload");
 }
 
