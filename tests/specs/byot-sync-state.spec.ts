@@ -11,11 +11,11 @@ import { describe, test, expect } from "vitest";
 import { deriveDesiredByotState } from "../../scripts/lib/byot-sync";
 
 describe("deriveDesiredByotState", () => {
-  test("enabled when byotActive + complete + slug present (defaults to anthropic)", () => {
+  test("enabled when byotActive + complete + username present (defaults to anthropic)", () => {
     const out = deriveDesiredByotState({
       byotActive: true,
       username: "smile-wring-011b",
-      provisioning: { openclaw: { status: "complete", slug: "smile-wring-011b" } },
+      provisioning: { openclaw: { status: "complete" } },
     });
     expect(out.enabled).toBe(true);
     expect(out.input).toMatchObject({ slug: "smile-wring-011b", provider: "anthropic" });
@@ -92,13 +92,15 @@ describe("deriveDesiredByotState", () => {
     expect(out.enabled).toBe(false);
   });
 
-  test("falls back to provisioning.openclaw.slug when workspaceSlug is missing", () => {
+  test("disabled when username is missing, even if provisioning status is complete", () => {
+    // Per DATA-MODEL-REVIEW §11: username IS the workspace slug. No
+    // separate provisioning.openclaw.slug fallback remains — a user doc
+    // without a username is unprovisioned for slug-derivation purposes.
     const out = deriveDesiredByotState({
       byotActive: true,
-      provisioning: { openclaw: { status: "complete", slug: "from-provisioning" } },
+      provisioning: { openclaw: { status: "complete" } },
     });
-    expect(out.enabled).toBe(true);
-    expect(out.input?.slug).toBe("from-provisioning");
+    expect(out.enabled).toBe(false);
   });
 
   test("empty user data = disabled (defensive default)", () => {

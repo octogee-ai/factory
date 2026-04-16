@@ -49,14 +49,26 @@ describe("GET /api/projects/slug-available", () => {
     firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
   });
 
-  it("rejects slugs that violate the regex", async () => {
+  // Slug rules per docs/DATA-MODEL-REVIEW.md §11.3: lowercase alphanumeric,
+  // no hyphens (custom channel names + project ids share `/^[a-z0-9]+$/`),
+  // length 1-16. Parser stays unambiguous when usernames contain hyphens.
+  it("rejects slugs containing hyphens", async () => {
     const app = createApp();
     const res = await request(app)
-      .get("/api/projects/slug-available?slug=1bad")
+      .get("/api/projects/slug-available?slug=my-game")
       .set(authHeaders());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(false);
-    expect(res.body.reason).toMatch(/start with a letter/);
+    expect(res.body.reason).toMatch(/no hyphens/i);
+  });
+
+  it("rejects slugs with uppercase letters", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get("/api/projects/slug-available?slug=MyGame")
+      .set(authHeaders());
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(false);
   });
 
   it("rejects reserved slugs", async () => {
@@ -69,19 +81,10 @@ describe("GET /api/projects/slug-available", () => {
     expect(res.body.reason).toMatch(/reserved/);
   });
 
-  it("rejects too-short slugs", async () => {
-    const app = createApp();
-    const res = await request(app)
-      .get("/api/projects/slug-available?slug=ab")
-      .set(authHeaders());
-    expect(res.status).toBe(200);
-    expect(res.body.available).toBe(false);
-  });
-
   it("rejects too-long slugs (>16 chars)", async () => {
     const app = createApp();
     const res = await request(app)
-      .get("/api/projects/slug-available?slug=seventeen-chars-x")
+      .get("/api/projects/slug-available?slug=seventeencharsxxx")
       .set(authHeaders());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(false);
@@ -90,7 +93,7 @@ describe("GET /api/projects/slug-available", () => {
   it("returns available=true for a valid, unclaimed slug", async () => {
     const app = createApp();
     const res = await request(app)
-      .get("/api/projects/slug-available?slug=my-game")
+      .get("/api/projects/slug-available?slug=mygame")
       .set(authHeaders());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(true);

@@ -56,12 +56,3 @@ export type {
   InboxDocument,
 } from './notifications';
 
-// Workspace slug resolution (pure helpers, no Firestore/logger deps)
-export type {
-  WorkspaceSlugSource,
-  WorkspaceSlugResolution,
-} from './workspaceSlug';
-export {
-  primaryWorkspaceSlug,
-  resolveWorkspaceSlugs,
-} from './workspaceSlug';

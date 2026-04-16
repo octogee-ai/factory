@@ -1,26 +1,17 @@
 /**
- * Workspace slug resolution — workspace-api mirror (pure).
+ * Workspace slug resolution — workspace-api helper.
  *
- * SOURCE OF TRUTH: shared/types/workspaceSlug.ts. Like channelNames.ts, we
- * mirror the pure helpers locally because workspace-api has its own rootDir
- * / Docker build context and cannot import `shared/` directly. The drift
- * test at tests/specs/workspace-slug-drift.spec.ts pins both mirrors
- * together — any divergence fails CI.
+ * Per docs/DATA-MODEL-REVIEW.md §11 (v3 §6.8 finalized): username IS the
+ * workspace slug. The user doc's `username` field is the single source of
+ * truth. Callers fan out reads via this helper to stay forward-compatible
+ * with a future multi-workspace model — today the list is always 0 or 1
+ * entry.
  *
- * This file is pure (no logger, no Firestore) so it can be imported from
- * the cross-package drift test without dragging workspace-api's Express /
- * middleware dependency graph into the root tests package. Callers that
- * want to emit a warning when no slug is available should do so at the
- * call site — they already have the uid and the per-request logger
- * handy.
- *
- * Post-v3.1 everything workspace-scoped (usage_*, channels, projects,
- * canvas) lives under `workspaces/{slug}/...`. This file is the canonical
- * way to resolve a user's slug before fanning out any such read.
+ * The prior `provisioning.openclaw.slug` fallback is retired; no writer in
+ * the codebase has emitted that field separately from `username` since v3.
  */
 
 export interface WorkspaceSlugSource {
-  provisioning?: { openclaw?: { slug?: string | null } | null } | null;
   username?: string | null;
 }
 
@@ -31,14 +22,12 @@ function coerceString(v: unknown): string | null {
 export function primaryWorkspaceSlug(
   data: WorkspaceSlugSource | null | undefined,
 ): string | null {
-  const fromProvisioning = coerceString(data?.provisioning?.openclaw?.slug);
-  if (fromProvisioning) return fromProvisioning;
   return coerceString(data?.username);
 }
 
 /**
- * Returns the set of v3.1 workspace slugs owned by this user. 0 or 1
- * entries today; shaped as a list so callers stay forward-compatible with
+ * Returns the set of workspace slugs owned by this user. 0 or 1 entries
+ * today; shaped as a list so callers stay forward-compatible with
  * multi-workspace users. Callers fan out reads via Promise.all — an empty
  * list collapses cleanly to zero reads.
  */

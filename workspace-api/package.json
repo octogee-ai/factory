@@ -2,11 +2,11 @@
   "name": "octogee-workspace-api",
   "version": "1.0.0",
   "description": "Octogee workspace API — consolidated HTTP service (ex Cloud Functions)",
-  "main": "dist/index.js",
+  "main": "dist/workspace-api/src/index.js",
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
-    "start": "node dist/index.js",
+    "start": "node dist/workspace-api/src/index.js",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
