@@ -132,58 +132,78 @@ describe("buildMattermostAccounts", () => {
     expect(accounts.admin).toEqual({ botToken: "${MM_BOT_TOKEN}" });
   });
 
-  it("adds `{slug}-coach` entries for customers with a mint'd PAT", () => {
+  it("adds `{slug}-coach` entries for customers with a mint'd PAT + allowlist scoped to (customer, admin)", () => {
     const accounts = buildMattermostAccounts(
       [
-        { uid: "uid-a", slug: "chris" },
-        { uid: "uid-b", slug: "sam" },
+        { uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" },
+        { uid: "uid-b", slug: "sam", customerMmUserId: "mm-sam" },
       ],
       new Map([
         ["uid-a", "tok-chris"],
         ["uid-b", "tok-sam"],
       ]),
+      "mm-admin",
     );
-    expect(accounts["chris-coach"]).toEqual({ botToken: "tok-chris", groupPolicy: "open", allowFrom: ["*"] });
-    expect(accounts["sam-coach"]).toEqual({ botToken: "tok-sam", groupPolicy: "open", allowFrom: ["*"] });
+    expect(accounts["chris-coach"]).toEqual({
+      botToken: "tok-chris",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-chris", "mm-admin"],
+    });
+    expect(accounts["sam-coach"]).toEqual({
+      botToken: "tok-sam",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-sam", "mm-admin"],
+    });
   });
 
   it("OMITS customers without a PAT — never emits a null/empty botToken", () => {
     const accounts = buildMattermostAccounts(
       [
-        { uid: "uid-a", slug: "chris" },
+        { uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" },
         { uid: "uid-b", slug: "sam" }, // no token
       ],
       new Map([["uid-a", "tok-chris"]]),
+      "mm-admin",
     );
-    expect(accounts["chris-coach"]).toMatchObject({ botToken: "tok-chris", groupPolicy: "open" });
+    expect(accounts["chris-coach"]).toMatchObject({
+      botToken: "tok-chris",
+      groupPolicy: "allowlist",
+    });
     expect(accounts["sam-coach"]).toBeUndefined();
-    expect(Object.values(accounts).every((a) => a.botToken.length > 0)).toBe(
-      true,
-    );
+    expect(Object.values(accounts).every((a) => a.botToken.length > 0)).toBe(true);
   });
 
   // Regression guard: each customer's token must land under their OWN
   // accountId. A Map-lookup bug that indexed by slug-position instead of
   // uid could cross tenants — this test drives three customers and asserts
-  // each account's token matches its uid source.
-  it("routes tokens per-uid — no cross-workspace token bleed", () => {
+  // each account's token matches its uid source AND each allowlist
+  // contains that customer's OWN MM user id (not another tenant's).
+  it("routes tokens + allowlists per-uid — no cross-workspace bleed", () => {
     const accounts = buildMattermostAccounts(
       [
-        { uid: "uid-a", slug: "chris" },
-        { uid: "uid-b", slug: "sam" },
-        { uid: "uid-c", slug: "pat" },
+        { uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" },
+        { uid: "uid-b", slug: "sam", customerMmUserId: "mm-sam" },
+        { uid: "uid-c", slug: "pat", customerMmUserId: "mm-pat" },
       ],
       new Map([
         ["uid-a", "tok-A"],
         ["uid-b", "tok-B"],
         ["uid-c", "tok-C"],
       ]),
+      "mm-admin",
     );
-    expect(accounts["chris-coach"]).toMatchObject({ botToken: "tok-A", groupPolicy: "open" });
-    expect(accounts["sam-coach"]).toMatchObject({ botToken: "tok-B", groupPolicy: "open" });
-    expect(accounts["pat-coach"]).toMatchObject({ botToken: "tok-C", groupPolicy: "open" });
-    const tokens = Object.values(accounts).map((a) => a.botToken);
-    expect(new Set(tokens).size).toBe(4); // 3 coach tokens + 1 admin placeholder
+    expect(accounts["chris-coach"].groupAllowFrom).toEqual(["mm-chris", "mm-admin"]);
+    expect(accounts["sam-coach"].groupAllowFrom).toEqual(["mm-sam", "mm-admin"]);
+    expect(accounts["pat-coach"].groupAllowFrom).toEqual(["mm-pat", "mm-admin"]);
+  });
+
+  it("tolerates missing customer MM user id (coach still gets admin in allowlist)", () => {
+    const accounts = buildMattermostAccounts(
+      [{ uid: "uid-a", slug: "chris" /* no customerMmUserId */ }],
+      new Map([["uid-a", "tok-chris"]]),
+      "mm-admin",
+    );
+    expect(accounts["chris-coach"].groupAllowFrom).toEqual(["mm-admin"]);
   });
 });
 

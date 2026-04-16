@@ -22,7 +22,7 @@
  *     available (never writes a null/empty botToken).
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   wireCoachMattermostBindings,
   wireCoachMattermostAccount,
@@ -41,6 +41,7 @@ const ACCOUNT_ID = `${SLUG}-coach`;
 
 function mkMmUpdate(extra: Record<string, any> = {}): Record<string, any> {
   return {
+    "mattermost.userId": "mm-ceckert",
     "mattermost.channelId": "ch-coach-dm",
     "mattermost.generalChannelId": "ch-general",
     "mattermost.adminChannelId": "ch-admin",
@@ -48,6 +49,15 @@ function mkMmUpdate(extra: Record<string, any> = {}): Record<string, any> {
     ...extra,
   };
 }
+
+const ORIG_ADMIN_ID = process.env.MM_ADMIN_USER_ID;
+beforeEach(() => {
+  process.env.MM_ADMIN_USER_ID = "mm-admin";
+});
+afterEach(() => {
+  if (ORIG_ADMIN_ID === undefined) delete process.env.MM_ADMIN_USER_ID;
+  else process.env.MM_ADMIN_USER_ID = ORIG_ADMIN_ID;
+});
 
 // ── wireCoachMattermostBindings ─────────────────────────────────────────────
 
@@ -121,19 +131,21 @@ describe("wireCoachMattermostAccount", () => {
     (logSpy as any).mockClear?.();
   });
 
-  it("upserts accounts.{slug}-coach = {botToken: <PAT>} on a fresh config", () => {
+  it("upserts accounts.{slug}-coach with allowlist scoped to (customer, admin)", () => {
     const config: any = {};
     wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
-      groupPolicy: "open",
-      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-ceckert", "mm-admin"],
     });
-    // OpenClaw's MM plugin defaults to groupPolicy=allowlist (fail-closed)
-    // when the field is missing. Without these, group messages are silently
-    // dropped with "no group allowlist" even though the WS is connected.
-    expect(config.channels.mattermost.groupPolicy).toBe("open");
-    expect(config.channels.mattermost.allowFrom).toEqual(["*"]);
+  });
+
+  it("does NOT set top-level groupPolicy=\"open\" (OpenClaw flags this as CRITICAL and refuses to start)", () => {
+    const config: any = {};
+    wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
+    expect(config.channels.mattermost.groupPolicy).toBeUndefined();
+    expect(config.channels.mattermost.allowFrom).toBeUndefined();
   });
 
   it("ensures admin account + defaultAccount are present (self-bootstraps a legacy config)", () => {
@@ -178,8 +190,8 @@ describe("wireCoachMattermostAccount", () => {
     expect(config.channels.mattermost.defaultAccount).toBe("admin");
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
-      groupPolicy: "open",
-      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-ceckert", "mm-admin"],
     });
   });
 
@@ -226,8 +238,8 @@ describe("wireCoachMattermostAccount", () => {
     } as any);
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
-      groupPolicy: "open",
-      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-ceckert", "mm-admin"],
     });
   });
 });
