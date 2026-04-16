@@ -24,6 +24,11 @@
 
 import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
+import {
+  loadOrCreateDeviceIdentity,
+  signConnectDevice,
+  type DeviceIdentity,
+} from "./gateway-device-identity.js";
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -59,10 +64,25 @@ export interface GatewayRpcClientOptions {
   url?: string;
   /** Default: `OPENCLAW_GATEWAY_TOKEN`. */
   token?: string;
-  /** TCP connect + handshake budget. Default: 3000ms. */
+  /** TCP connect + handshake budget. Default: 10_000ms. */
   connectTimeoutMs?: number;
-  /** Per-request response budget. Default: 5000ms. */
+  /** Per-request response budget. Default: 10_000ms. */
   callTimeoutMs?: number;
+  /**
+   * Pre-loaded Ed25519 device identity for signing the connect challenge.
+   * Default: lazy-load via `loadOrCreateDeviceIdentity()` (path controlled
+   * by `OCTOGEE_PROVISIONER_IDENTITY_PATH` env or the default under
+   * $HOME/.octogee/provisioner/). Pass explicitly in tests to avoid touching
+   * the disk.
+   */
+  identity?: DeviceIdentity;
+  /**
+   * Scopes to request from the gateway. Default: ["operator.admin"] which
+   * the server expands to admin+read+write per `shared/device-auth.ts`. If
+   * a specific caller only needs read-only access, narrow this to
+   * ["operator.read"] and the server will grant only that.
+   */
+  scopes?: string[];
 }
 
 export interface ConfigGetResult {
@@ -99,11 +119,33 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     opts.url ??
     `ws://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || 18789}`;
   const token = opts.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
-  const connectTimeoutMs = opts.connectTimeoutMs ?? 3000;
-  const callTimeoutMs = opts.callTimeoutMs ?? 5000;
+  // 10s default accommodates the gateway's startup-grace window — on a cold
+  // pod the HTTP listener can accept TCP for tens of seconds before OpenClaw
+  // finishes warming and actually answers the WS upgrade. Callers who need
+  // the old tight budget (tests, probes) still set `connectTimeoutMs`
+  // explicitly. For `isGatewayUp` this value is the natural upper bound so
+  // the probe doesn't become unbounded.
+  const connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
+  const callTimeoutMs = opts.callTimeoutMs ?? 10_000;
+  const scopes = opts.scopes ?? ["operator.admin"];
+
+  // Lazy identity load: only when we actually need to connect. Tests inject
+  // `identity` directly so they never touch the real filesystem.
+  let identity: DeviceIdentity | null = opts.identity ?? null;
+  function resolveIdentity(): DeviceIdentity {
+    if (identity) return identity;
+    identity = loadOrCreateDeviceIdentity();
+    return identity;
+  }
 
   async function call(method: string, params: unknown): Promise<unknown> {
-    const ws = await openAndConnect({ url, token, connectTimeoutMs });
+    const ws = await openAndConnect({
+      url,
+      token,
+      connectTimeoutMs,
+      identity: resolveIdentity(),
+      scopes,
+    });
     try {
       return await sendRequest(ws, method, params, callTimeoutMs);
     } finally {
@@ -165,7 +207,13 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     async isGatewayUp(timeoutMs) {
       const t = timeoutMs ?? connectTimeoutMs;
       try {
-        const ws = await openAndConnect({ url, token, connectTimeoutMs: t });
+        const ws = await openAndConnect({
+          url,
+          token,
+          connectTimeoutMs: t,
+          identity: resolveIdentity(),
+          scopes,
+        });
         try {
           await sendRequest(ws, "channels.status", {}, t);
           return true;
@@ -195,10 +243,29 @@ interface OpenAndConnectParams {
   url: string;
   token: string;
   connectTimeoutMs: number;
+  identity: DeviceIdentity;
+  scopes: string[];
 }
 
 async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> {
   const ws = new WebSocket(params.url);
+
+  // Permanent swallow-listener. `ws.terminate()` on a still-connecting socket
+  // emits an async `'error'` event ("WebSocket was closed before the
+  // connection was established"); if our specific-error listener has already
+  // been removed (cleanup after reject), Node treats it as unhandled and
+  // kills the process. Attaching a no-op at creation time guarantees the
+  // event always has at least one listener for the life of the socket.
+  // Regression: fix/gateway-rpc-crash-and-scopes — April 16 TEST signup
+  // crashed the provisioner here.
+  ws.on("error", () => {});
+
+  // Start capturing the `connect.challenge` event NOW, before waiting for
+  // `open`. OpenClaw sends the challenge as soon as the server accepts the
+  // WS upgrade, which can race our handler-attachment (`ws` does not buffer
+  // messages across listener gaps). Mirrors OpenClaw's
+  // `trackConnectChallengeNonce` test helper.
+  const nonceTracker = startConnectChallengeTracker(ws);
 
   // Wait for socket-open OR net failure, whichever comes first.
   await new Promise<void>((resolve, reject) => {
@@ -233,20 +300,41 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
     ws.once("error", onError);
   });
 
-  // Protocol handshake: send `connect`, expect hello-ok.
+  // OpenClaw's shared-token auth path: the server pushes a
+  // `connect.challenge` event with a one-shot nonce as soon as the WS opens,
+  // and the client's connect frame must include a device signature over
+  // the nonce (per OpenClaw `server.auth.default-token.suite.ts`). Without
+  // this, the server grants zero scopes and every subsequent call returns
+  // `missing scope: operator.read`.
+  const clientInfo = {
+    id: "gateway-client" as const,
+    displayName: "octogee-provisioner" as const,
+    version: "1.0.0" as const,
+    platform: process.platform,
+    mode: "backend" as const,
+  };
   try {
+    const nonce = await nonceTracker.wait(params.connectTimeoutMs);
+    const device = signConnectDevice({
+      identity: params.identity,
+      clientId: clientInfo.id,
+      clientMode: clientInfo.mode,
+      role: "operator",
+      scopes: params.scopes,
+      nonce,
+      token: params.token || null,
+      platform: clientInfo.platform,
+    });
     await sendRequest(
       ws,
       "connect",
       {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
-        client: {
-          id: "gateway-client",
-          version: "1.0.0",
-          platform: process.platform,
-          mode: "backend",
-        },
+        client: clientInfo,
+        role: "operator",
+        scopes: params.scopes,
+        device,
         ...(params.token ? { auth: { token: params.token } } : {}),
       },
       params.connectTimeoutMs,
@@ -262,6 +350,98 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
   }
 
   return ws;
+}
+
+/**
+ * Capture the server's `{type: "event", event: "connect.challenge",
+ * payload: {nonce}}` push. Must attach BEFORE the WS opens because the
+ * server emits the challenge the instant it accepts the upgrade, and `ws`
+ * does not buffer messages received before a listener is attached.
+ *
+ * Returns `{ wait(timeoutMs) }` which resolves with the nonce as soon as it
+ * arrives (or immediately if it's already cached), and rejects on timeout
+ * or socket close.
+ */
+function startConnectChallengeTracker(ws: WebSocket): {
+  wait: (timeoutMs: number) => Promise<string>;
+} {
+  let cached: string | null = null;
+  let pendingResolve: ((nonce: string) => void) | null = null;
+  let pendingReject: ((err: Error) => void) | null = null;
+
+  const onMessage = (data: unknown) => {
+    if (cached !== null) return;
+    let parsed: unknown;
+    try {
+      parsed =
+        typeof data === "string"
+          ? JSON.parse(data)
+          : JSON.parse((data as Buffer).toString("utf-8"));
+    } catch {
+      return;
+    }
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      (parsed as { type?: unknown }).type !== "event" ||
+      (parsed as { event?: unknown }).event !== "connect.challenge"
+    ) {
+      return;
+    }
+    const nonce = (parsed as { payload?: { nonce?: unknown } }).payload?.nonce;
+    if (typeof nonce !== "string" || nonce.length === 0) {
+      const err = new GatewayRpcError(
+        "invalid-response",
+        "connect.challenge event has no string nonce",
+      );
+      if (pendingReject) pendingReject(err);
+      return;
+    }
+    cached = nonce;
+    if (pendingResolve) pendingResolve(nonce);
+  };
+  ws.on("message", onMessage);
+
+  return {
+    wait(timeoutMs: number): Promise<string> {
+      if (cached !== null) return Promise.resolve(cached);
+      return new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(
+            new GatewayRpcError(
+              "connect-failed",
+              `connect.challenge not received within ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+        const onClose = () => {
+          cleanup();
+          reject(
+            new GatewayRpcError(
+              "connect-failed",
+              "socket closed before connect.challenge arrived",
+            ),
+          );
+        };
+        pendingResolve = (nonce) => {
+          cleanup();
+          resolve(nonce);
+        };
+        pendingReject = (err) => {
+          cleanup();
+          reject(err);
+        };
+        function cleanup() {
+          clearTimeout(timer);
+          ws.removeListener("close", onClose);
+          pendingResolve = null;
+          pendingReject = null;
+        }
+        ws.on("close", onClose);
+      });
+    },
+  };
 }
 
 // ── Request/response envelope ───────────────────────────────────────────────

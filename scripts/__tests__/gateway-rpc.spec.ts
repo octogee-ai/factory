@@ -11,13 +11,25 @@
  * (one RPC per signup step) and keeps the surface area tight.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AddressInfo } from "node:net";
+import { createServer, type AddressInfo, type Server } from "node:net";
+import * as crypto from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   GatewayRpcError,
   createGatewayRpc,
   type GatewayRpcClient,
 } from "../lib/gateway-rpc.js";
+import type { DeviceIdentity } from "../lib/gateway-device-identity.js";
+
+function makeTestIdentity(): DeviceIdentity {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }) as string;
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
+  const raw = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+  const rawKey = raw.length === 44 ? raw.subarray(12) : raw; // strip SPKI prefix for Ed25519
+  const deviceId = crypto.createHash("sha256").update(rawKey).digest("hex");
+  return { deviceId, publicKeyPem, privateKeyPem };
+}
 
 // ── Mock gateway server ─────────────────────────────────────────────────────
 
@@ -46,6 +58,11 @@ async function startMockGateway(): Promise<MockServerHandle> {
   let rejectAuth = false;
 
   wss.on("connection", (ws: WebSocket) => {
+    // Mirror OpenClaw: push a connect.challenge event with a one-shot nonce
+    // as soon as the socket is open. Real clients read this before sending
+    // their signed connect frame.
+    const nonce = crypto.randomBytes(12).toString("hex");
+    ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce } }));
     ws.on("message", (raw) => {
       let frame: any;
       try {
@@ -157,6 +174,7 @@ describe("gateway-rpc", () => {
       token: "test-token",
       connectTimeoutMs: 500,
       callTimeoutMs: 500,
+      identity: makeTestIdentity(),
     });
   });
 
@@ -261,6 +279,7 @@ describe("gateway-rpc", () => {
         token: "test-token",
         connectTimeoutMs: 250,
         callTimeoutMs: 250,
+        identity: makeTestIdentity(),
       });
       try {
         expect(await offline.isGatewayUp(250)).toBe(false);
@@ -296,6 +315,7 @@ describe("gateway-rpc", () => {
         token: "t",
         connectTimeoutMs: 100,
         callTimeoutMs: 100,
+        identity: makeTestIdentity(),
       });
       try {
         await expect(offline.configPatch({}, "h")).rejects.toMatchObject({
@@ -330,5 +350,148 @@ describe("gateway-rpc", () => {
       expect(e.message).toBe("stale hash");
       expect(e.name).toBe("GatewayRpcError");
     });
+  });
+
+  // ── connect-frame shape ───────────────────────────────────────────────────
+
+  describe("connect frame", () => {
+    it("requests operator.admin scope, signs the challenge nonce with the device identity, and identifies itself in `client.displayName`", async () => {
+      let captured: any = null;
+      server.setConnectHandler((params) => {
+        captured = params;
+        return {
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            protocol: 3,
+            server: { version: "test", connId: "c1" },
+            features: { methods: [], events: [] },
+            snapshot: {},
+            policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+          },
+        };
+      });
+      server.setHandler("channels.status", () => ({ ok: true, payload: { channels: [] } }));
+
+      await client.isGatewayUp(500);
+
+      expect(captured).toBeTruthy();
+      expect(captured.scopes).toContain("operator.admin");
+      expect(captured.role).toBe("operator");
+      expect(captured.client.id).toBe("gateway-client");
+      // User-Agent / displayName identifies the provisioner in gateway `[ws]` log lines.
+      expect(captured.client.displayName?.toLowerCase()).toContain("octogee");
+
+      // Device block is present and internally consistent.
+      expect(captured.device).toBeTruthy();
+      expect(typeof captured.device.id).toBe("string");
+      expect(typeof captured.device.publicKey).toBe("string");
+      expect(typeof captured.device.signature).toBe("string");
+      expect(typeof captured.device.signedAt).toBe("number");
+      expect(typeof captured.device.nonce).toBe("string");
+      // Signature actually verifies over the v3 payload. This is what catches
+      // protocol-drift: if our payload build ever falls out of sync with
+      // OpenClaw's verification, the server would reject us live.
+      const payload = [
+        "v3",
+        captured.device.id,
+        captured.client.id,
+        captured.client.mode,
+        captured.role,
+        captured.scopes.join(","),
+        String(captured.device.signedAt),
+        captured.auth?.token ?? "",
+        captured.device.nonce,
+        (captured.client.platform ?? "").toLowerCase(),
+        "", // deviceFamily left unset
+      ].join("|");
+      const sigBuf = Buffer.from(
+        captured.device.signature.replaceAll("-", "+").replaceAll("_", "/") +
+          "=".repeat((4 - (captured.device.signature.length % 4)) % 4),
+        "base64",
+      );
+      const pubRaw = Buffer.from(
+        captured.device.publicKey.replaceAll("-", "+").replaceAll("_", "/") +
+          "=".repeat((4 - (captured.device.publicKey.length % 4)) % 4),
+        "base64",
+      );
+      const pubKey = crypto.createPublicKey({
+        key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), pubRaw]),
+        type: "spki",
+        format: "der",
+      });
+      expect(crypto.verify(null, Buffer.from(payload, "utf8"), pubKey, sigBuf)).toBe(true);
+    });
+  });
+});
+
+// ── Crash-safety: unhandled error on terminate ─────────────────────────────
+//
+// Regression for the April 16 TEST-cluster provisioner crash. The original
+// `openAndConnect` timeout path did `cleanup()` (removing the 'error'
+// listener) then `ws.terminate()`. `terminate()` emits an async 'error'
+// event on the still-connecting socket → no listener → Node kills the
+// process. The provisioner pod then restarted, losing the rest of the
+// customer's signup state.
+//
+// This test drives the exact path: a plain TCP server that ACCEPTS
+// connections silently (no WS upgrade), so the client's 'open' never fires
+// and the connect timer is the only exit. If the crash regression returns,
+// this test will either time out (unhandled exception aborts the run) or
+// trip the explicit uncaughtException listener installed below.
+
+describe("crash safety on connect timeout", () => {
+  let tcpServer: Server;
+  let tcpPort: number;
+  let originalHandlers: Array<(err: Error) => void>;
+
+  beforeEach(async () => {
+    tcpServer = createServer(() => {
+      // Accept the connection but NEVER speak. No WS upgrade response,
+      // no close. The client's connect-timer is its only exit.
+    });
+    await new Promise<void>((resolve) => {
+      tcpServer.listen(0, "127.0.0.1", () => resolve());
+    });
+    tcpPort = (tcpServer.address() as AddressInfo).port;
+
+    // Snapshot existing uncaughtException listeners so the check below
+    // isn't contaminated by other parts of the test harness.
+    originalHandlers = process.listeners("uncaughtException") as any;
+  });
+
+  afterEach(() => {
+    tcpServer.close();
+    // Restore listeners to the pre-test set; vitest's own watchdog stays.
+    const now = process.listeners("uncaughtException") as any;
+    for (const h of now) {
+      if (!originalHandlers.includes(h)) process.off("uncaughtException", h);
+    }
+  });
+
+  it("rejects with connect-failed and does NOT emit an unhandled 'error' event when terminate() fires", async () => {
+    const crashes: unknown[] = [];
+    const crashCatcher = (err: unknown) => crashes.push(err);
+    process.on("uncaughtException", crashCatcher);
+
+    const client = createGatewayRpc({
+      url: `ws://127.0.0.1:${tcpPort}`,
+      token: "t",
+      connectTimeoutMs: 80,
+      callTimeoutMs: 80,
+      identity: makeTestIdentity(),
+    });
+
+    await expect(client.configGet()).rejects.toMatchObject({
+      name: "GatewayRpcError",
+      code: "connect-failed",
+    });
+
+    // Give any stray async error events a tick to surface.
+    await new Promise((r) => setTimeout(r, 50));
+    process.off("uncaughtException", crashCatcher);
+
+    expect(crashes).toEqual([]);
+    await client.close();
   });
 });
