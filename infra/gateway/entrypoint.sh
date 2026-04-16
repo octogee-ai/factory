@@ -35,11 +35,16 @@ try:
     if mm.get("requireMention") is not False:
         mm["requireMention"] = False
         changed = True
-    if mm.get("groupPolicy") != "open":
-        mm["groupPolicy"] = "open"
+    # Strip legacy top-level groupPolicy="open" / allowFrom=["*"] — OpenClaw
+    # flags these as a CRITICAL security warning and refuses to start the
+    # mattermost channel. Per-customer coach accounts now set their own
+    # groupPolicy="allowlist" + groupAllowFrom (see
+    # scripts/lib/provisionSteps.ts:wireCoachMattermostAccount).
+    if mm.get("groupPolicy") == "open":
+        del mm["groupPolicy"]
         changed = True
-    if mm.get("allowFrom") != ["*"]:
-        mm["allowFrom"] = ["*"]
+    if mm.get("allowFrom") == ["*"]:
+        del mm["allowFrom"]
         changed = True
     # Sync bot token from env var (secret may have been rotated since last boot)
     env_token = os.environ.get("MM_BOT_TOKEN", "")
@@ -69,7 +74,7 @@ try:
     if changed:
         with open(cfg_path, "w") as f:
             json.dump(c, f, indent=2)
-        print("[entrypoint] Patched openclaw.json: groupPolicy=open, allowFrom=[*]", flush=True)
+        print("[entrypoint] Patched openclaw.json (stripped legacy top-level groupPolicy/allowFrom, synced network + bot token)", flush=True)
 except Exception as e:
     print(f"[entrypoint] Config patch skipped: {e}", flush=True)
 PYEOF
