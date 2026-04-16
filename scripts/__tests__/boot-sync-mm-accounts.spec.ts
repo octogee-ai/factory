@@ -1,24 +1,28 @@
 /**
  * Unit tests for the multi-account MM config emitted by boot-sync.
  *
- * OpenClaw v2026.4.14's MM plugin supports
- * `channels.mattermost.accounts.{accountId}.botToken` natively. Each account
- * opens its OWN WebSocket subscription; `bindings[].match.accountId` pins
- * each binding to a specific account so events route to the right agent.
+ * Current shape (post-epic):
+ *   - `default` account = octogee-bot's token. NOT written here — OpenClaw
+ *     materializes it at load time by migrating the top-level `botToken`
+ *     that the entrypoint + pre-boot-config seed. System agents use it.
+ *   - `{slug}-coach` account = the customer's coach PAT, with
+ *     `groupPolicy: "allowlist"` and `groupAllowFrom: [customer, admin]`.
+ *     Only sees that tenant's channel events — isolation at the MM auth
+ *     layer.
  *
- * This replaces the single-token, shared-`octogee-bot` model where every
- * post carried `override_username` to fake per-customer identity. Under the
- * new shape:
- *   - `admin` account = MM_BOT_TOKEN (system agents + default routing)
- *   - `{slug}-coach` account = the customer's coach PAT (only sees that
- *     tenant's channel events — isolation at the MM auth layer)
+ * Historical note: an earlier iteration also emitted an `admin` account
+ * with `botToken: "${MM_BOT_TOKEN}"` as a placeholder. OpenClaw's env-var
+ * substitution only fires for the account literally named "default", so
+ * `admin` ended up sending the literal placeholder string → 401 →
+ * reconnect loop → event-loop starvation that prevented other per-account
+ * WSes from starting. That path is gone; see the regression guard below.
  *
  * Three extracted helpers are tested:
  *   - `fetchCoachTokens(deps, customers)` — async, reads each customer's
  *     `users/{uid}/secrets/coachMattermost.personalToken` from Firestore.
- *   - `buildMattermostAccounts(customers, tokens)` — pure, returns the
- *     accounts map (always includes `admin`; per-customer entries only
- *     when a PAT is present).
+ *   - `buildMattermostAccounts(customers, tokens, adminMmUserId, warn?)` —
+ *     pure, returns the accounts map: one `{slug}-coach` entry per
+ *     customer with a mint'd PAT AND a non-empty `groupAllowFrom`.
  *   - `buildCustomerBindings(customers)` — pure, returns the flat list of
  *     `{ agentId, match: { channel, accountId, peer } }` bindings.
  */
@@ -127,9 +131,25 @@ describe("fetchCoachTokens", () => {
 // ── buildMattermostAccounts ─────────────────────────────────────────────────
 
 describe("buildMattermostAccounts", () => {
-  it("always emits an `admin` entry bound to the MM_BOT_TOKEN env var", () => {
+  // Regression guard: NEVER emit an `admin` account. OpenClaw's env-var
+  // `${MM_BOT_TOKEN}` substitution only fires for the account literally
+  // named "default", so `admin: { botToken: "${MM_BOT_TOKEN}" }` sends the
+  // literal placeholder as a bearer token → MM 401 → reconnect loop →
+  // event-loop starvation that prevents coach WSes from starting. The
+  // `default` account exists at runtime via OpenClaw's auto-migration of
+  // the top-level botToken (written by pre-boot-config).
+  it("emits NO entries on empty input — no admin, no placeholders", () => {
     const accounts = buildMattermostAccounts([], new Map());
-    expect(accounts.admin).toEqual({ botToken: "${MM_BOT_TOKEN}" });
+    expect(accounts).toEqual({});
+  });
+
+  it("NEVER emits an `admin` account (root cause of silent channel-start failure)", () => {
+    const accounts = buildMattermostAccounts(
+      [{ uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" }],
+      new Map([["uid-a", "tok-chris"]]),
+      "mm-admin",
+    );
+    expect(accounts.admin).toBeUndefined();
   });
 
   it("adds `{slug}-coach` entries for customers with a mint'd PAT + allowlist scoped to (customer, admin)", () => {
@@ -197,13 +217,37 @@ describe("buildMattermostAccounts", () => {
     expect(accounts["pat-coach"].groupAllowFrom).toEqual(["mm-pat", "mm-admin"]);
   });
 
-  it("tolerates missing customer MM user id (coach still gets admin in allowlist)", () => {
+  it("coach-only-for-admin: when customerMmUserId is absent, allowlist is {admin} — the customer cannot trigger their own coach", () => {
+    // This is a tenant-breaking outcome (customer can't use their own
+    // coach), not a graceful fallback. Documented here because the emit
+    // still happens — the builder doesn't have enough signal to know if
+    // this is a re-provisioning race or actual data corruption. Operators
+    // should fix the missing customerMmUserId in Firestore.
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris" /* no customerMmUserId */ }],
       new Map([["uid-a", "tok-chris"]]),
       "mm-admin",
     );
     expect(accounts["chris-coach"].groupAllowFrom).toEqual(["mm-admin"]);
+  });
+
+  // Regression guard for P1-4. Before: `groupAllowFrom: []` + `groupPolicy:
+  // "allowlist"` means every group message is silently dropped. After:
+  // skip the account upsert entirely + warn, so the gap surfaces as
+  // "coach offline" (visible) rather than "coach ignores messages"
+  // (invisible).
+  it("REFUSES to emit when both customerMmUserId and adminMmUserId are missing (warns; skips account)", () => {
+    const warn = vi.fn();
+    const accounts = buildMattermostAccounts(
+      [{ uid: "uid-a", slug: "chris" /* no customerMmUserId */ }],
+      new Map([["uid-a", "tok-chris"]]),
+      undefined /* no admin */,
+      warn,
+    );
+    expect(accounts["chris-coach"]).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("empty allowlist"),
+    );
   });
 });
 

@@ -35,15 +35,18 @@ try:
     if mm.get("requireMention") is not False:
         mm["requireMention"] = False
         changed = True
-    # Strip legacy top-level groupPolicy="open" / allowFrom=["*"] — OpenClaw
-    # flags these as a CRITICAL security warning and refuses to start the
-    # mattermost channel. Per-customer coach accounts now set their own
-    # groupPolicy="allowlist" + groupAllowFrom (see
-    # scripts/lib/provisionSteps.ts:wireCoachMattermostAccount).
-    if mm.get("groupPolicy") == "open":
+    # Strip legacy top-level groupPolicy / allowFrom unconditionally.
+    # Per-customer coach accounts own these now (groupPolicy="allowlist"
+    # + groupAllowFrom scoped to [customer, admin]; see
+    # scripts/lib/provisionSteps.ts:wireCoachMattermostAccount). Any
+    # top-level value — "open" triggers OpenClaw's CRITICAL security
+    # warning, "allowlist" without allowFrom would fail-closed globally,
+    # and a manually-set value no longer has any effect on per-account
+    # routing — is just cruft at best and a footgun at worst. Delete it.
+    if "groupPolicy" in mm:
         del mm["groupPolicy"]
         changed = True
-    if mm.get("allowFrom") == ["*"]:
+    if "allowFrom" in mm:
         del mm["allowFrom"]
         changed = True
     # Sync bot token from env var (secret may have been rotated since last boot)

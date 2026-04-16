@@ -1,25 +1,27 @@
 /**
  * Unit tests for the provisioner-side multi-account MM wiring.
  *
- * Boot-sync (`scripts/boot-sync.ts`) rebuilds `channels.mattermost.accounts`
- * + `bindings[].match.accountId` from Firestore on every gateway restart —
- * but that path only runs when at least one customer is already assigned to
- * the gateway at boot. A fresh signup happens AFTER the gateway is up, and
- * the provisioner (`scripts/lib/provisionSteps.ts`) writes openclaw.json
- * incrementally from inside the running process. Without a parallel multi-
- * account code path here, a freshly-provisioned customer ends up with the
- * old single-token shape and their `{slug}-coach` WS never connects (coach
- * stays offline, silent in every channel) — observed in #560 testing.
- *
  * Two helpers are tested:
  *   - `wireCoachMattermostBindings(config, agentId, slug, mmUpdate)` —
- *     now writes `match.accountId: "{slug}-coach"` on every binding and
+ *     writes `match.accountId: "{slug}-coach"` on every binding and
  *     REPLACES any legacy accountId-less binding in place.
  *   - `wireCoachMattermostAccount(config, slug, mmUpdate)` — upserts
- *     `channels.mattermost.accounts.{slug}-coach.botToken` from the
- *     ephemeral `mmUpdate._coachPersonalToken`, ensures the `admin`
- *     account + `defaultAccount` are present, and SKIPS when no PAT is
- *     available (never writes a null/empty botToken).
+ *     `channels.mattermost.accounts.{slug}-coach` with the ephemeral
+ *     `mmUpdate._coachPersonalToken`, sets `defaultAccount: "default"`
+ *     if absent, and SKIPS when either the PAT or the allowlist ids
+ *     are missing (never writes a null/empty botToken, never writes an
+ *     allowlist that would silently drop every group message).
+ *
+ * Historical note: an earlier iteration also upserted an `admin` account
+ * with `botToken: "${MM_BOT_TOKEN}"` as a placeholder. OpenClaw's env-var
+ * substitution only fires for the account literally named "default", so
+ * `admin` sent the literal placeholder string as a bearer token → 401 →
+ * reconnect loop → event-loop starvation → coach WS never started.
+ * Removed. Regression guard below.
+ *
+ * Complement to boot-sync: boot-sync rebuilds the full accounts map on
+ * every restart; this provisioner path handles mid-session signups where
+ * a restart hasn't happened yet. Both must agree on the shape.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -148,7 +150,44 @@ describe("wireCoachMattermostAccount", () => {
     expect(config.channels.mattermost.allowFrom).toBeUndefined();
   });
 
-  it("ensures admin account + defaultAccount are present (self-bootstraps a legacy config)", () => {
+  // Regression guard: NEVER emit an `admin` account. OpenClaw's env-var
+  // `${MM_BOT_TOKEN}` substitution only fires for the account literally
+  // named "default", so an `admin: { botToken: "${MM_BOT_TOKEN}" }` sends
+  // the LITERAL placeholder as a bearer token → 401 → reconnect loop →
+  // event-loop starvation → coach WS never starts. The `default` account
+  // is sufficient (pre-boot-config seeds top-level botToken which OpenClaw
+  // migrates into accounts.default).
+  it("does NOT emit an `admin` account (root cause of silent channel-start failure)", () => {
+    const config: any = {};
+    wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
+    expect(config.channels.mattermost.accounts.admin).toBeUndefined();
+  });
+
+  it("sets defaultAccount to \"default\" on a fresh config (not \"admin\")", () => {
+    const config: any = {};
+    wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
+    expect(config.channels.mattermost.defaultAccount).toBe("default");
+  });
+
+  it("preserves an existing defaultAccount (does not overwrite with \"default\")", () => {
+    const config: any = {
+      channels: {
+        mattermost: {
+          accounts: { "some-custom": { botToken: "tok" } },
+          defaultAccount: "some-custom",
+        },
+      },
+    };
+    wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
+    expect(config.channels.mattermost.defaultAccount).toBe("some-custom");
+    expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
+      botToken: "tok-ceckert-abc123",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-ceckert", "mm-admin"],
+    });
+  });
+
+  it("preserves legacy top-level botToken / baseUrl / chatmode (OpenClaw migrates botToken at load time)", () => {
     const config: any = {
       channels: {
         mattermost: {
@@ -160,39 +199,15 @@ describe("wireCoachMattermostAccount", () => {
       },
     };
     wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
-    expect(config.channels.mattermost.accounts.admin).toEqual({
-      botToken: "${MM_BOT_TOKEN}",
-    });
-    expect(config.channels.mattermost.defaultAccount).toBe("admin");
-    // Legacy siblings preserved (the MM plugin still reads them as fallback
-    // defaults until OpenClaw is upgraded everywhere) — upsert MUST NOT
-    // strip them mid-flight.
+    // Legacy siblings preserved — upsert MUST NOT strip them. OpenClaw's
+    // own config migration moves top-level botToken into accounts.default
+    // at startup, which is how the `default` account comes to exist at
+    // runtime without us writing it here.
     expect(config.channels.mattermost.botToken).toBe("legacy-top-level-token");
     expect(config.channels.mattermost.baseUrl).toBe(
       "http://mm.svc.cluster.local:8065",
     );
     expect(config.channels.mattermost.chatmode).toBe("onmessage");
-  });
-
-  it("preserves an existing admin account entry + defaultAccount", () => {
-    const config: any = {
-      channels: {
-        mattermost: {
-          accounts: { admin: { botToken: "${MM_BOT_TOKEN}" } },
-          defaultAccount: "admin",
-        },
-      },
-    };
-    wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
-    expect(config.channels.mattermost.accounts.admin).toEqual({
-      botToken: "${MM_BOT_TOKEN}",
-    });
-    expect(config.channels.mattermost.defaultAccount).toBe("admin");
-    expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
-      botToken: "tok-ceckert-abc123",
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["mm-ceckert", "mm-admin"],
-    });
   });
 
   // Critical invariant: a missing PAT MUST NOT produce
@@ -207,8 +222,6 @@ describe("wireCoachMattermostAccount", () => {
       mkMmUpdate({ _coachPersonalToken: undefined }),
     );
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toBeUndefined();
-    // Admin entry still ensured so the gateway boots with a valid config.
-    expect(config.channels.mattermost.accounts.admin).toBeDefined();
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining(SLUG),
     );
@@ -218,7 +231,24 @@ describe("wireCoachMattermostAccount", () => {
     const config: any = {};
     wireCoachMattermostAccount(config, SLUG, mkMmUpdate({ _coachPersonalToken: "" }));
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toBeUndefined();
-    expect(config.channels.mattermost.accounts.admin).toBeDefined();
+  });
+
+  // Regression guard for P1-4. `groupPolicy: "allowlist"` with empty
+  // `groupAllowFrom` silently drops every group message. Fail loud
+  // instead: skip the account upsert + log a warning so the gap
+  // surfaces as "coach offline" rather than "coach silently ignores."
+  it("REFUSES to emit when both customerMmUserId and MM_ADMIN_USER_ID are missing", () => {
+    delete process.env.MM_ADMIN_USER_ID;
+    const config: any = {};
+    wireCoachMattermostAccount(
+      config,
+      SLUG,
+      mkMmUpdate({ "mattermost.userId": undefined }),
+    );
+    expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toBeUndefined();
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("empty allowlist"),
+    );
   });
 
   it("per-customer account upsert is scoped by slug — no cross-tenant clobber", () => {
@@ -226,7 +256,6 @@ describe("wireCoachMattermostAccount", () => {
       channels: {
         mattermost: {
           accounts: {
-            admin: { botToken: "${MM_BOT_TOKEN}" },
             "sam-coach": { botToken: "tok-sam-preexisting" },
           },
         },
@@ -235,7 +264,7 @@ describe("wireCoachMattermostAccount", () => {
     wireCoachMattermostAccount(config, SLUG, mkMmUpdate()); // ceckert
     expect(config.channels.mattermost.accounts["sam-coach"]).toEqual({
       botToken: "tok-sam-preexisting",
-    } as any);
+    });
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
       groupPolicy: "allowlist",
