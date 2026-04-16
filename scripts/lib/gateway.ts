@@ -354,27 +354,40 @@ export interface WaitForGatewayDeps {
   maxWaitMs?: number;
   pollMs?: number;
   probeBudgetMs?: number;
+  /**
+   * Consecutive successful probes required before declaring "ready".
+   * Default: 3. A single lucky probe during a lull is not enough —
+   * the April 16 TEST signup passed the old single-probe gate at 22:01:34,
+   * started provisioning, then the gateway's event loop pinned for plugin
+   * init at 22:02:11 and the next RPC timed out at 10s. Three consecutive
+   * probes with `stabilityGapMs` between them means we've seen the gateway
+   * respond over a window longer than a typical event-loop-pin stall.
+   */
+  requiredConsecutive?: number;
+  /**
+   * Sleep between consecutive-probe attempts (stability check). Default: 500ms.
+   * Kept short so stable gateways don't wait long; together with
+   * requiredConsecutive=3 this adds ~1 second to the normal-case warmup.
+   */
+  stabilityGapMs?: number;
 }
 
 /**
  * Block until the OpenClaw gateway can actually service RPC calls — not just
- * return HTTP 200 on GET /.
+ * return HTTP 200 on GET /, and not just respond to a single lucky probe.
  *
- * The previous HTTP-GET probe returned true as soon as Express bound to
- * 18789, which can happen tens of seconds before OpenClaw finishes loading
- * plugins + channels. On the April 16 TEST deploy this let the provisioner
- * race the gateway's boot: it started provisioning `cke123`, called
- * `config.patch` RPC, and the server took 21.4s to answer `config.get`
- * because plugin init was still blocking the event loop. The 10s client
- * timeout fired first, the provisioner fell back to file-write, and the
- * chokidar watcher wasn't fully armed yet so `[cke123-coach] starting
- * channel` never fired — the coach stayed offline until pod restart.
- *
- * The fix: probe `rpc.isGatewayUp()` (a full connect-handshake + cheap
- * `channels.status` roundtrip). That doesn't return true until the RPC
- * subsystem is actually serving — plugins loaded, handlers registered,
- * event loop not pinned on init work. Uses `createGatewayRpc`'s
- * `openclaw.json` token fallback so it works without env-var plumbing.
+ * History:
+ *   Original: polled `GET /`. Returned as soon as Express bound — well
+ *   before OpenClaw finished loading plugins + channels.
+ *   First fix (#571): switched to `rpc.isGatewayUp()`. Better, but a
+ *   single successful probe can land in a lull between event-loop-pin
+ *   phases. On the cke123 signup the probe passed at +28s, but the
+ *   gateway's event loop then pinned for plugin init, and the provisioner's
+ *   `config.patch` RPC timed out at +47s.
+ *   This version: require N consecutive probe successes across a small
+ *   stability window. A gateway that passes 3 probes spaced 500ms apart
+ *   has demonstrated the event loop is consistently free, not just
+ *   intermittently.
  */
 export async function waitForGateway(deps?: Partial<WaitForGatewayDeps>): Promise<void> {
   const maxWaitMs = deps?.maxWaitMs ?? 120_000;
@@ -383,6 +396,8 @@ export async function waitForGateway(deps?: Partial<WaitForGatewayDeps>): Promis
   // startup probe. If the gateway is truly busy (plugins loading), the
   // probe returns false fast and we retry.
   const probeBudgetMs = deps?.probeBudgetMs ?? 2_500;
+  const requiredConsecutive = deps?.requiredConsecutive ?? 3;
+  const stabilityGapMs = deps?.stabilityGapMs ?? 500;
   const sleep = deps?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   // Default probe: real RPC client. Tests inject a stub.
@@ -401,16 +416,32 @@ export async function waitForGateway(deps?: Partial<WaitForGatewayDeps>): Promis
     });
 
   const start = Date.now();
-  log("Waiting for OpenClaw gateway RPC to be ready...");
+  log(
+    `Waiting for OpenClaw gateway RPC to be ready (need ${requiredConsecutive} consecutive probe successes)...`,
+  );
 
   try {
+    let consecutiveSuccesses = 0;
     while (Date.now() - start < maxWaitMs) {
-      if (await probe(probeBudgetMs)) {
+      const ok = await probe(probeBudgetMs);
+      if (!ok) {
+        consecutiveSuccesses = 0;
+        await sleep(pollMs);
+        continue;
+      }
+      consecutiveSuccesses++;
+      if (consecutiveSuccesses >= requiredConsecutive) {
         const elapsed = Math.round((Date.now() - start) / 1000);
-        log(`✅ Gateway is ready — RPC responding (${elapsed}s)`);
+        log(
+          `✅ Gateway is ready — ${requiredConsecutive} consecutive RPC probes succeeded (${elapsed}s)`,
+        );
         return;
       }
-      await sleep(pollMs);
+      // Got a probe success, but we need a few more in a row before we
+      // trust the gateway. Sleep briefly — much shorter than `pollMs` so
+      // stable gateways clear this gate in ~1s rather than adding 9s to
+      // the warmup cost.
+      await sleep(stabilityGapMs);
     }
   } finally {
     if (rpc) await rpc.close();

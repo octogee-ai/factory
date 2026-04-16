@@ -10,13 +10,14 @@
  * issues its request, and closes. That matches the provisioner's use pattern
  * (one RPC per signup step) and keeps the surface area tight.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import * as crypto from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   GatewayRpcError,
   createGatewayRpc,
+  type ConnectTrace,
   type GatewayRpcClient,
 } from "../lib/gateway-rpc.js";
 import type { DeviceIdentity } from "../lib/gateway-device-identity.js";
@@ -421,6 +422,121 @@ describe("gateway-rpc", () => {
         format: "der",
       });
       expect(crypto.verify(null, Buffer.from(payload, "utf8"), pubKey, sigBuf)).toBe(true);
+    });
+  });
+
+  // ── Connect trace instrumentation (#3) ────────────────────────────────────
+  //
+  // Every connect attempt — success OR failure — emits a `ConnectTrace` with
+  // per-phase timings. This is the diagnostic hook we'll rely on when the
+  // gateway's event loop pins during plugin init: the trace tells us
+  // whether the stall was in TCP+upgrade (`ws-open`), challenge receive
+  // (`challenge`), or the connect frame itself (`connect`).
+
+  describe("onConnectTrace", () => {
+    it("fires with success=true, stage=done, and all three phase timings on a clean connect", async () => {
+      server.setHandler("channels.status", () => ({ ok: true, payload: {} }));
+
+      const traces: ConnectTrace[] = [];
+      const tracedClient = createGatewayRpc({
+        url: server.url,
+        token: "test",
+        connectTimeoutMs: 500,
+        callTimeoutMs: 500,
+        identity: makeTestIdentity(),
+        onConnectTrace: (t) => traces.push(t),
+      });
+      try {
+        await tracedClient.isGatewayUp(500);
+      } finally {
+        await tracedClient.close();
+      }
+
+      expect(traces).toHaveLength(1);
+      const t = traces[0];
+      expect(t.success).toBe(true);
+      expect(t.stage).toBe("done");
+      expect(t.url).toBe(server.url);
+      expect(typeof t.wsOpenMs).toBe("number");
+      expect(typeof t.challengeMs).toBe("number");
+      expect(typeof t.connectMs).toBe("number");
+      expect(t.totalMs).toBeGreaterThanOrEqual(
+        (t.wsOpenMs ?? 0) + (t.challengeMs ?? 0) + (t.connectMs ?? 0) - 5, // ±5ms slack
+      );
+      expect(t.errorCode).toBeUndefined();
+    });
+
+    it("fires with stage=ws-open on a connect-failed timeout (nothing listening)", async () => {
+      const traces: ConnectTrace[] = [];
+      const offline = createGatewayRpc({
+        url: "ws://127.0.0.1:1",
+        token: "t",
+        connectTimeoutMs: 80,
+        callTimeoutMs: 80,
+        identity: makeTestIdentity(),
+        onConnectTrace: (t) => traces.push(t),
+      });
+      try {
+        await offline.isGatewayUp(80);
+      } finally {
+        await offline.close();
+      }
+
+      // isGatewayUp swallows errors but still emits a trace.
+      expect(traces.length).toBeGreaterThanOrEqual(1);
+      const fail = traces.find((t) => !t.success);
+      expect(fail).toBeTruthy();
+      expect(fail?.stage).toBe("ws-open");
+      expect(fail?.errorCode).toBe("connect-failed");
+      // wsOpenMs was not completed, so it's undefined; challengeMs + connectMs too.
+      expect(fail?.wsOpenMs).toBeUndefined();
+      expect(fail?.challengeMs).toBeUndefined();
+      expect(fail?.connectMs).toBeUndefined();
+    });
+
+    it("fires with stage=connect on an auth-failed connect frame (connect frame rejected)", async () => {
+      server.setRejectAllAsAuth(true);
+      const traces: ConnectTrace[] = [];
+      const rpc = createGatewayRpc({
+        url: server.url,
+        token: "t",
+        connectTimeoutMs: 500,
+        callTimeoutMs: 500,
+        identity: makeTestIdentity(),
+        onConnectTrace: (t) => traces.push(t),
+      });
+      try {
+        await expect(rpc.configGet()).rejects.toThrow();
+      } finally {
+        await rpc.close();
+      }
+
+      const fail = traces.find((t) => !t.success);
+      expect(fail).toBeTruthy();
+      expect(fail?.stage).toBe("connect");
+      expect(fail?.errorCode).toBe("auth-failed");
+      // We got past ws-open and challenge; those timings should be present.
+      expect(typeof fail?.wsOpenMs).toBe("number");
+      expect(typeof fail?.challengeMs).toBe("number");
+      // connectMs undefined because the connect frame never completed.
+      expect(fail?.connectMs).toBeUndefined();
+    });
+
+    it("is optional — omitting onConnectTrace still works (production default uses config.log)", async () => {
+      server.setHandler("channels.status", () => ({ ok: true, payload: {} }));
+      // No onConnectTrace option — uses the default log-based trace.
+      const rpc = createGatewayRpc({
+        url: server.url,
+        token: "t",
+        connectTimeoutMs: 500,
+        callTimeoutMs: 500,
+        identity: makeTestIdentity(),
+      });
+      try {
+        expect(await rpc.isGatewayUp(500)).toBe(true);
+      } finally {
+        await rpc.close();
+      }
     });
   });
 });

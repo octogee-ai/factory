@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { WebSocket } from "ws";
+import { log as defaultLog } from "./config.js";
 import {
   loadOrCreateDeviceIdentity,
   signConnectDevice,
@@ -62,6 +63,25 @@ export class GatewayRpcError extends Error {
   }
 }
 
+/** Per-phase timing + outcome trace emitted on every connect attempt. */
+export interface ConnectTrace {
+  url: string;
+  /** Last phase entered. On failure this is where we got stuck. */
+  stage: "ws-open" | "challenge" | "connect" | "done";
+  success: boolean;
+  /** ms in TCP connect + WS upgrade ("open" event). */
+  wsOpenMs?: number;
+  /** ms waiting for the server's `connect.challenge` event after open. */
+  challengeMs?: number;
+  /** ms from sending `connect` frame to receiving `hello-ok`. */
+  connectMs?: number;
+  /** ms total (new WebSocket() → either success or error). */
+  totalMs: number;
+  /** Present on failure — mirrors the thrown GatewayRpcError. */
+  errorCode?: GatewayRpcErrorCode;
+  errorMessage?: string;
+}
+
 export interface GatewayRpcClientOptions {
   /** Default: `ws://127.0.0.1:${OPENCLAW_GATEWAY_PORT || 18789}`. */
   url?: string;
@@ -84,6 +104,18 @@ export interface GatewayRpcClientOptions {
    * Primarily for tests; production callers leave this unset.
    */
   openclawConfigPath?: string;
+  /**
+   * Structured trace callback for per-phase connect timings. Fires once per
+   * connect attempt (successful or not) with ms elapsed in each phase:
+   *   - `wsOpenMs`:    TCP+WS-upgrade handshake
+   *   - `challengeMs`: time waiting for server's `connect.challenge` event
+   *   - `connectMs`:   time from sending `connect` frame to receiving hello-ok
+   *   - `totalMs`:     wall-clock total
+   * `stage` names the last phase entered; on failure, it's whichever phase
+   * was in flight (`ws-open`, `challenge`, `connect`). Default: emit a
+   * single-line log via `scripts/lib/config.log`. Tests inject a spy.
+   */
+  onConnectTrace?: (trace: ConnectTrace) => void;
   /** TCP connect + handshake budget. Default: 10_000ms. */
   connectTimeoutMs?: number;
   /** Per-request response budget. Default: 10_000ms. */
@@ -153,6 +185,25 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   const connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
   const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
   const scopes = opts.scopes ?? ["operator.admin"];
+  // Default trace: single-line log when a connect takes >500ms or fails.
+  // Keeps warm-path noise low while still catching every slow/failed
+  // connect for diagnosis. Tests inject a spy to capture every trace.
+  const onConnectTrace =
+    opts.onConnectTrace ??
+    ((trace: ConnectTrace) => {
+      if (trace.success && trace.totalMs < 500) return;
+      const phases = [
+        trace.wsOpenMs !== undefined ? `wsOpen=${trace.wsOpenMs}ms` : null,
+        trace.challengeMs !== undefined ? `challenge=${trace.challengeMs}ms` : null,
+        trace.connectMs !== undefined ? `connect=${trace.connectMs}ms` : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const outcome = trace.success
+        ? "OK"
+        : `FAIL stage=${trace.stage} ${trace.errorCode}: ${trace.errorMessage}`;
+      defaultLog(`[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`);
+    });
 
   // Lazy identity load: only when we actually need to connect. Tests inject
   // `identity` directly so they never touch the real filesystem.
@@ -170,6 +221,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       connectTimeoutMs,
       identity: resolveIdentity(),
       scopes,
+      onConnectTrace,
     });
     try {
       return await sendRequest(ws, method, params, callTimeoutMs);
@@ -238,6 +290,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
           connectTimeoutMs: t,
           identity: resolveIdentity(),
           scopes,
+          onConnectTrace,
         });
         try {
           await sendRequest(ws, "channels.status", {}, t);
@@ -308,9 +361,34 @@ interface OpenAndConnectParams {
   connectTimeoutMs: number;
   identity: DeviceIdentity;
   scopes: string[];
+  onConnectTrace?: (trace: ConnectTrace) => void;
 }
 
 async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> {
+  // Instrumentation: record per-phase elapsed times so we can see which phase
+  // stalled on event-loop-pinned gateways. Each phase's duration is filled in
+  // as we cross it; `stage` advances so the final trace names where we are.
+  const t0 = Date.now();
+  let wsOpenMs: number | undefined;
+  let challengeMs: number | undefined;
+  let connectMs: number | undefined;
+  let stage: ConnectTrace["stage"] = "ws-open";
+
+  const emitTrace = (success: boolean, err?: GatewayRpcError) => {
+    if (!params.onConnectTrace) return;
+    params.onConnectTrace({
+      url: params.url,
+      stage: success ? "done" : stage,
+      success,
+      wsOpenMs,
+      challengeMs,
+      connectMs,
+      totalMs: Date.now() - t0,
+      errorCode: err?.code,
+      errorMessage: err?.message,
+    });
+  };
+
   const ws = new WebSocket(params.url);
 
   // Permanent swallow-listener. `ws.terminate()` on a still-connecting socket
@@ -330,54 +408,65 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
   // `trackConnectChallengeNonce` test helper.
   const nonceTracker = startConnectChallengeTracker(ws);
 
-  // Wait for socket-open OR net failure, whichever comes first.
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      try {
-        ws.terminate();
-      } catch {
-        // ignore
-      }
-      reject(new GatewayRpcError("connect-failed", `WS open timed out after ${params.connectTimeoutMs}ms`));
-    }, params.connectTimeoutMs);
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (err: Error) => {
-      cleanup();
-      try {
-        ws.terminate();
-      } catch {
-        // ignore
-      }
-      reject(new GatewayRpcError("connect-failed", `WS open failed: ${err.message}`));
-    };
-    function cleanup() {
-      clearTimeout(timer);
-      ws.removeListener("open", onOpen);
-      ws.removeListener("error", onError);
-    }
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-  });
-
-  // OpenClaw's shared-token auth path: the server pushes a
-  // `connect.challenge` event with a one-shot nonce as soon as the WS opens,
-  // and the client's connect frame must include a device signature over
-  // the nonce (per OpenClaw `server.auth.default-token.suite.ts`). Without
-  // this, the server grants zero scopes and every subsequent call returns
-  // `missing scope: operator.read`.
-  const clientInfo = {
-    id: "gateway-client" as const,
-    displayName: "octogee-provisioner" as const,
-    version: "1.0.0" as const,
-    platform: process.platform,
-    mode: "backend" as const,
-  };
   try {
+    // ── Phase 1: TCP connect + WS upgrade ───────────────────────────────
+    const wsOpenStart = Date.now();
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        try {
+          ws.terminate();
+        } catch {
+          // ignore
+        }
+        reject(
+          new GatewayRpcError("connect-failed", `WS open timed out after ${params.connectTimeoutMs}ms`),
+        );
+      }, params.connectTimeoutMs);
+      const onOpen = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (err: Error) => {
+        cleanup();
+        try {
+          ws.terminate();
+        } catch {
+          // ignore
+        }
+        reject(new GatewayRpcError("connect-failed", `WS open failed: ${err.message}`));
+      };
+      function cleanup() {
+        clearTimeout(timer);
+        ws.removeListener("open", onOpen);
+        ws.removeListener("error", onError);
+      }
+      ws.once("open", onOpen);
+      ws.once("error", onError);
+    });
+    wsOpenMs = Date.now() - wsOpenStart;
+
+    // ── Phase 2: receive server's connect.challenge event ───────────────
+    stage = "challenge";
+    const challengeStart = Date.now();
     const nonce = await nonceTracker.wait(params.connectTimeoutMs);
+    challengeMs = Date.now() - challengeStart;
+
+    // ── Phase 3: send signed connect, await hello-ok ────────────────────
+    // OpenClaw's shared-token auth path: the server pushes a
+    // `connect.challenge` event with a one-shot nonce as soon as the WS
+    // opens, and the client's connect frame must include a device signature
+    // over the nonce (per OpenClaw `server.auth.default-token.suite.ts`).
+    // Without this, the server grants zero scopes and every subsequent call
+    // returns `missing scope: operator.read`.
+    stage = "connect";
+    const clientInfo = {
+      id: "gateway-client" as const,
+      displayName: "octogee-provisioner" as const,
+      version: "1.0.0" as const,
+      platform: process.platform,
+      mode: "backend" as const,
+    };
     const device = signConnectDevice({
       identity: params.identity,
       clientId: clientInfo.id,
@@ -388,6 +477,7 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
       token: params.token || null,
       platform: clientInfo.platform,
     });
+    const connectStart = Date.now();
     await sendRequest(
       ws,
       "connect",
@@ -403,12 +493,16 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
       params.connectTimeoutMs,
       /* mapConnectErrors */ true,
     );
+    connectMs = Date.now() - connectStart;
+
+    emitTrace(true);
   } catch (err) {
     try {
       ws.terminate();
     } catch {
       // ignore
     }
+    emitTrace(false, err instanceof GatewayRpcError ? err : undefined);
     throw err;
   }
 
