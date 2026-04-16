@@ -334,6 +334,17 @@ export async function provisionMattermostUser(
           .collection("secrets").doc("coachMattermost")
           .get();
         let backfilledCoachUserId: string | null = null;
+        let backfilledCoachPersonalToken: string | null = null;
+        // If the secret already exists, read the token so we still thread it
+        // back through mmUpdate → `wireCoachMattermostAccount`. Otherwise an
+        // existing-customer re-provision would leave `channels.mattermost.
+        // accounts.{slug}-coach` unset and OpenClaw would drop the coach WS.
+        if (coachSecretSnap.exists) {
+          const persisted = coachSecretSnap.data()?.personalToken;
+          if (typeof persisted === "string" && persisted.length > 0) {
+            backfilledCoachPersonalToken = persisted;
+          }
+        }
         if (!coachSecretSnap.exists) {
           // Need the coach MM user id. Prefer agents/{uid}.mattermost.userId
           // (set during full provisioning); fall back to a MM lookup by the
@@ -352,6 +363,7 @@ export async function provisionMattermostUser(
             );
             if (minted) {
               backfilledCoachUserId = coachUserId;
+              backfilledCoachPersonalToken = minted.token;
               log(`[mattermost] coach PAT backfilled for ${slug} on re-provision`);
             } else {
               log(`[mattermost] ⚠ coach PAT backfill failed for ${slug} — coach will fall back to shared bot token`);
@@ -367,6 +379,18 @@ export async function provisionMattermostUser(
           "mattermost.channelId": existingChannelId,
           "mattermost.dmChannelId": existingChannelId,
           ...(backfilledCoachUserId ? { "mattermost.coachUserId": backfilledCoachUserId } : {}),
+          // `_coachPersonalToken` (underscore prefix) is an EPHEMERAL field
+          // read in-process by `wireCoachMattermostAccount` and explicitly
+          // NOT written to Firestore — `markProvisioningComplete` filters
+          // the mmUpdate map by `mattermost.*` prefix so the underscore
+          // key falls out. The authoritative token lives at
+          // `users/{uid}/secrets/coachMattermost`; duplicating it into
+          // `users/{uid}/system/config.mattermost.coachPersonalToken`
+          // would just widen its blast radius. Boot-sync reads the
+          // authoritative copy directly (scripts/boot-sync.ts:fetchCoachTokens).
+          ...(backfilledCoachPersonalToken
+            ? { _coachPersonalToken: backfilledCoachPersonalToken }
+            : {}),
         };
       }
     }
@@ -617,6 +641,7 @@ export async function provisionMattermostUser(
     }
 
     let coachMmUserId: string | null = null;
+    let coachPersonalToken: string | null = null;
     if (coachMmUser) {
       coachMmUserId = coachMmUser.id;
       // Add coach to workspace team (not shared team)
@@ -648,6 +673,7 @@ export async function provisionMattermostUser(
         coachMmUser.id,
       );
       if (coachToken) {
+        coachPersonalToken = coachToken.token;
         log(`[mattermost] coach PAT minted and persisted for ${coachUsername}`);
       } else {
         log(`[mattermost] ⚠ coach PAT creation failed — coach identity will fall back to octogee-bot until re-provisioned`);
@@ -666,6 +692,20 @@ export async function provisionMattermostUser(
       "mattermost.generalChannelId": generalChannelId || null,
       "mattermost.proxyUrl": process.env.CHAT_PROXY_URL || "",
       ...(coachMmUserId ? { "mattermost.coachUserId": coachMmUserId } : {}),
+      // `_coachPersonalToken` is an EPHEMERAL field threaded through to
+      // `wireCoachMattermostAccount` so the provisioner can upsert
+      // `channels.mattermost.accounts.{slug}-coach` in openclaw.json at
+      // signup time. Without it, the coach's WS never connects and Octo
+      // stays silent until the gateway restarts and boot-sync rebuilds
+      // the accounts map from Firestore.
+      //
+      // Underscore prefix is deliberate: `markProvisioningComplete`
+      // filters mmUpdate by `mattermost.*` prefix when flattening to
+      // `users/{uid}/system/config`, so this key falls out and the token
+      // is NOT duplicated into Firestore. The authoritative copy lives
+      // at `users/{uid}/secrets/coachMattermost` and boot-sync reads it
+      // directly from there.
+      ...(coachPersonalToken ? { _coachPersonalToken: coachPersonalToken } : {}),
       ...(adminChannelId ? { "mattermost.adminChannelId": adminChannelId } : {}),
     };
   } catch (e: any) {
