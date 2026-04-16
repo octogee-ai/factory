@@ -1,23 +1,29 @@
 # Build context: repo root (see workspace-api/cloudbuild.yaml).
 # workspace-api and shared/ are both copied in so tsc can compile
 # @shared/types/identity along with src/.
+#
+# WORKDIR must be /workspace-api (not /app) so that tsc's emit paths —
+# which mirror each source file's location relative to rootDir (the
+# container root /) — produce dist/workspace-api/src/index.js, matching
+# package.json main + CMD. Changing WORKDIR to /app made tsc emit
+# dist/app/src/index.js and broke the runtime module resolution.
 FROM node:22-slim AS builder
-WORKDIR /app
+WORKDIR /workspace-api
 COPY workspace-api/package.json workspace-api/package-lock.json* ./
 RUN npm ci --ignore-scripts
 COPY workspace-api/tsconfig.json ./
 COPY workspace-api/src/ ./src/
-COPY shared/ ../shared/
+COPY shared/ /shared/
 RUN npx tsc
 
 FROM node:22-slim
-WORKDIR /app
+WORKDIR /workspace-api
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY workspace-api/package.json workspace-api/package-lock.json* ./
 RUN npm ci --omit=dev
-COPY --from=builder /app/dist ./dist
+COPY --from=builder /workspace-api/dist ./dist
 USER node
 EXPOSE 3001
 ENV PORT=3001
