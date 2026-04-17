@@ -1,11 +1,10 @@
 /**
- * Seed `systemTypingPhrases/{workspaceType}` docs with the default phrase
- * lists shipped in `shared/types/workspaceType.ts`.
+ * Seed `systemTypingPhrases/{vibe}` docs with the default phrase lists from
+ * `shared/types/display-names.ts`.
  *
  * Idempotent: re-runs overwrite each doc's `phrases` array with the current
- * default. Safe to run after PR4 lands — admins edit via the UI, and
- * re-running this script resets to shipped defaults only if you pass the
- * `--force` flag.
+ * default only if you pass `--force`. Admins edit the docs via the Phrase
+ * Manager UI; `--force` resets to shipped defaults.
  *
  * Usage:
  *   GOOGLE_APPLICATION_CREDENTIALS=~/.openclaw/secrets/octogee-test-sa-key.json \
@@ -19,9 +18,9 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import {
-  DEFAULT_TYPING_PHRASES_BY_TYPE,
-  WORKSPACE_TYPES,
-} from '../shared/types/workspaceType';
+  TYPING_PHRASES_BY_VIBE,
+  WORKSPACE_VIBE_PRESETS,
+} from '../shared/types/display-names';
 
 const DEFAULT_SA_KEY_PATH = resolve(
   process.env.HOME || '~',
@@ -49,27 +48,27 @@ async function main() {
   const db = getFirestore(app);
 
   console.log(
-    `Seeding systemTypingPhrases/{${WORKSPACE_TYPES.join('|')}} ` +
+    `Seeding systemTypingPhrases/{${WORKSPACE_VIBE_PRESETS.join('|')}} ` +
       `(force=${force})`,
   );
 
-  for (const type of WORKSPACE_TYPES) {
-    const ref = db.doc(`systemTypingPhrases/${type}`);
+  for (const vibe of WORKSPACE_VIBE_PRESETS) {
+    const ref = db.doc(`systemTypingPhrases/${vibe}`);
     const snap = await ref.get();
     if (snap.exists && !force) {
-      console.log(`  • ${type}: exists, skipping (use --force to overwrite)`);
+      console.log(`  • ${vibe}: exists, skipping (use --force to overwrite)`);
       continue;
     }
     await ref.set(
       {
-        workspaceType: type,
-        phrases: DEFAULT_TYPING_PHRASES_BY_TYPE[type],
+        vibe,
+        phrases: TYPING_PHRASES_BY_VIBE[vibe],
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: false },
     );
     console.log(
-      `  • ${type}: wrote ${DEFAULT_TYPING_PHRASES_BY_TYPE[type].length} phrases`,
+      `  • ${vibe}: wrote ${TYPING_PHRASES_BY_VIBE[vibe].length} phrases`,
     );
   }
 

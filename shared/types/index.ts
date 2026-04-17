@@ -26,14 +26,22 @@ export type {
   WorkspaceGitea,
 } from './workspace';
 
-// Workspace vibe taxonomy + per-type typing phrases (coach personalization).
-export type { WorkspaceType } from './workspaceType';
+// Vibe taxonomy + deterministic display names. Single source of truth for
+// the workspace's MM team display_name, workspace/project channel display
+// names, and the typing-phrase personalization list per vibe. See
+// WORKSPACE-NAMING-CANONICAL-SPEC.
+export type { WorkspaceVibe, WorkspaceChannelKind } from './display-names';
 export {
-  WORKSPACE_TYPES,
-  DEFAULT_WORKSPACE_TYPE,
-  DEFAULT_TYPING_PHRASES_BY_TYPE,
-  isWorkspaceType,
-} from './workspaceType';
+  WORKSPACE_VIBE_PRESETS,
+  DEFAULT_VIBE_NOUN,
+  WORKSPACE_CHANNEL_DISPLAY_NAMES,
+  TYPING_PHRASES_BY_VIBE,
+  DEFAULT_TYPING_PHRASES,
+  isWorkspaceVibe,
+  titleCaseVibe,
+  computeWorkspaceDisplayName,
+  computeProjectChannelDisplayName,
+} from './display-names';
 
 // Channel types (Firestore pointer to MM channel)
 export type {

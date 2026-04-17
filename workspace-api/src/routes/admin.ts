@@ -345,7 +345,7 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
 
         return {
           workspaceId:   slug,
-          businessName:  ws.data.businessName || ws.data.workspaceName || userData.businessName || "Workspace",
+          businessName:  ws.data.businessName || userData.businessName || "Workspace",
           summary: {
             totalTokens:        Number(summary.totalTokens) || 0,
             totalCostUsd:       Number(summary.totalCostUsd) || 0,

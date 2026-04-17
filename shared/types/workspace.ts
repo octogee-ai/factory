@@ -8,7 +8,7 @@
  * DATA-MODEL-REVIEW v3 §2.
  */
 
-import type { WorkspaceType } from './workspaceType';
+import type { WorkspaceVibe } from './display-names';
 
 export type WorkspaceVisibility = 'public' | 'private' | 'unlisted';
 
@@ -35,9 +35,11 @@ export interface Workspace {
   /** Owner display name. Equal to `id` (username) — denorm. */
   ownerDisplayName: string;
   visibility: WorkspaceVisibility;
-  /** Vibe taxonomy — drives coach personalization phrase resolution. Reads
-   * fall back to 'workshop' when the field is absent (existing docs). */
-  workspaceType?: WorkspaceType;
+  /** Vibe — drives both MM team display_name and coach-typing-phrase
+   * personalization. Reads fall back to DEFAULT_VIBE_NOUN / DEFAULT_TYPING_PHRASES
+   * when the field is absent (Builder skipped the picker or new workspace
+   * pre-vibe-step). Stored lowercase ('office', 'garage', …). */
+  vibe?: WorkspaceVibe;
   mattermost: WorkspaceMattermost;
   gitea: WorkspaceGitea;
   createdAt: unknown; // Firestore Timestamp

@@ -14,6 +14,12 @@ import {
   workspaceAdminChannelName,
   projectGeneralChannelName,
 } from "../../shared/types/identity.js";
+import {
+  computeWorkspaceDisplayName,
+  computeProjectChannelDisplayName,
+  WORKSPACE_CHANNEL_DISPLAY_NAMES,
+} from "../../shared/types/display-names.js";
+import { postOnboardingGreeting } from "./onboarding-greeting.js";
 
 const secretClient = new SecretManagerServiceClient();
 
@@ -293,7 +299,7 @@ export async function mmUploadAvatar(userId: string, imageUrl: string): Promise<
 
 export async function provisionMattermostUser(
   uid: string, slug: string, firstName: string, email: string,
-  workspaceName?: string, lastName?: string, photoURL?: string,
+  vibe?: string | null, lastName?: string, photoURL?: string,
 ): Promise<Record<string, any>> {
   const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
   const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL || process.env.MM_URL;
@@ -432,14 +438,13 @@ export async function provisionMattermostUser(
 
     // ── Create workspace team (team-per-workspace: Phase 4) ──────────────────
     // Team name = username (v3 §2 — username is everything).
-    // Display name falls back to `{username}'s Workspace` when no explicit
-    // workspaceName/firstName is provided (v3 §2 dropped firstName, so most
-    // calls now hit the slug fallback). MM defaults to "Office" when display
-    // is empty — explicit fallback prevents that.
+    // Team display_name is MM-canonical and computed deterministically from
+    // (slug, firstName, vibe). See shared/types/display-names.ts and the
+    // WORKSPACE-NAMING-CANONICAL-SPEC for the rule. No Firestore read — the
+    // vibe comes in as a function argument, not as a `users/{uid}.workspaceName`
+    // field (that ghost field was removed).
     const teamName = slug;
-    const teamDisplayName =
-      workspaceName ||
-      (firstName ? `${firstName}'s Workspace` : `${slug}'s Workspace`);
+    const teamDisplayName = computeWorkspaceDisplayName({ slug, firstName, vibe });
     let teamId: string | null = null;
 
     let team = await mmApiCall("POST", "/teams", {
@@ -528,10 +533,12 @@ export async function provisionMattermostUser(
 
     // ── Create channels in workspace team ───────────────────────────────────
 
-    // Octo coach channel — private channel rendered as a DM in the UI
-    // (canonical name: {wsSlug}-coach).
+    // Octo coach channel — MM type "P" (private) so octogee-admin can
+    // observe, but rendered as a DM in the UI by convention. Display name
+    // is the plain word "Coach" — see WORKSPACE-NAMING-CANONICAL-SPEC.
+    // Canonical slug: {wsSlug}-coach.
     const channelName = workspaceCoachChannelName(slug);
-    const channelDisplayName = firstName ? `${firstName}'s Workspace` : `${slug} Workspace`;
+    const channelDisplayName = WORKSPACE_CHANNEL_DISPLAY_NAMES.coach;
     const channel = await createOrRestoreChannel(
       teamId, channelName, channelDisplayName, "P",
       `${firstName || slug}'s Octogee workspace`,
@@ -554,9 +561,9 @@ export async function provisionMattermostUser(
     }
 
     // #general channel — workspace lobby, visible to all workspace members.
-    // Canonical name: {wsSlug}-general.
+    // Canonical slug: {wsSlug}-general. Display name from the shared constant.
     const generalChannelName = workspaceGeneralChannelName(slug);
-    const generalDisplayName = `General`;
+    const generalDisplayName = WORKSPACE_CHANNEL_DISPLAY_NAMES.general;
     const generalChannel = await createOrRestoreChannel(
       teamId, generalChannelName, generalDisplayName, "P",
       `${firstName || slug}'s workspace — general discussion`,
@@ -577,10 +584,11 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ failed to create general channel for ${slug} — non-fatal`);
     }
 
-    // Admin channel — founder-to-agent guidance, customer NOT invited (#170).
-    // Canonical name: {wsSlug}-admin.
+    // Admin channel — founder-to-agent guidance, Builder NOT invited (#170).
+    // Canonical slug: {wsSlug}-admin. Display name from the shared constant —
+    // plain "Admin", no per-customer suffix.
     const adminChannelName = workspaceAdminChannelName(slug);
-    const adminDisplayName = `Admin — ${firstName || slug}`;
+    const adminDisplayName = WORKSPACE_CHANNEL_DISPLAY_NAMES.admin;
     const adminChannel = await createOrRestoreChannel(
       teamId, adminChannelName, adminDisplayName, "P",
       `Founder-to-agent guidance for ${firstName || slug}. Customer not a member.`,
@@ -642,6 +650,13 @@ export async function provisionMattermostUser(
 
     let coachMmUserId: string | null = null;
     let coachPersonalToken: string | null = null;
+    // Onboarding greeting outcome — mirrored onto the user doc so ops /
+    // retry logic can see whether the Coach channel got its first post.
+    // See the greeting call site below for the shape contract.
+    let greetingOutcome:
+      | { ok: true; postId: string; at: unknown }
+      | { ok: false; error: string; at: unknown }
+      | null = null;
     if (coachMmUser) {
       coachMmUserId = coachMmUser.id;
       // Add coach to workspace team (not shared team)
@@ -675,6 +690,45 @@ export async function provisionMattermostUser(
       if (coachToken) {
         coachPersonalToken = coachToken.token;
         log(`[mattermost] coach PAT minted and persisted for ${coachUsername}`);
+
+        // Post Octo's onboarding greeting to the Coach channel. Direct MM
+        // post authored as {slug}-coach via the coach's PAT — static content,
+        // no LLM. Lands before the Builder arrives at @me so their Coach
+        // channel is non-empty. Wrapped in try/catch: a failed post is
+        // non-fatal for the rest of provisioning. See
+        // WORKSPACE-NAMING-CANONICAL-SPEC §"Step 4 — Octo initiates…".
+        //
+        // Outcome is tracked on the user doc (`provisioning.openclaw.greeting`)
+        // so ops can count failures and retry logic has a signal to check.
+        // Shape: { ok: boolean, postId?: string, error?: string, at: timestamp }.
+        try {
+          const mmUrl = process.env.MM_URL;
+          if (!mmUrl) {
+            log(`[mattermost] ⚠ onboarding greeting skipped — MM_URL env not set`);
+            greetingOutcome = { ok: false, error: 'MM_URL not set', at: FieldValue.serverTimestamp() };
+          } else {
+            const result = await postOnboardingGreeting(
+              {
+                channelId: channel.id,
+                coachPat: coachToken.token,
+                firstName,
+                slug,
+              },
+              { mmUrl, fetch, log },
+            );
+            greetingOutcome = {
+              ok: true,
+              postId: result.postId,
+              at: FieldValue.serverTimestamp(),
+            };
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          log(
+            `[mattermost] ⚠ onboarding greeting post failed for ${coachUsername} (non-fatal): ${message}`,
+          );
+          greetingOutcome = { ok: false, error: message, at: FieldValue.serverTimestamp() };
+        }
       } else {
         log(`[mattermost] ⚠ coach PAT creation failed — coach identity will fall back to octogee-bot until re-provisioned`);
       }
@@ -707,6 +761,10 @@ export async function provisionMattermostUser(
       // directly from there.
       ...(coachPersonalToken ? { _coachPersonalToken: coachPersonalToken } : {}),
       ...(adminChannelId ? { "mattermost.adminChannelId": adminChannelId } : {}),
+      // Track greeting outcome so ops + a future retry path can see whether
+      // the Coach channel actually got its first post. Mirrored onto the
+      // user doc by markProvisioningComplete.
+      ...(greetingOutcome ? { "provisioning.openclaw.greeting": greetingOutcome } : {}),
     };
   } catch (e: any) {
     log(`[mattermost] ⚠ provisioning failed: ${e.message} — continuing without chat`);
@@ -732,13 +790,20 @@ export async function createProjectChannel(
     return null;
   }
 
-  // Canonical name: {wsSlug}-proj-{projSlug}-general.
+  // Canonical slug: {wsSlug}-proj-{projSlug}-general.
+  // Display name follows the "{ProjectName} {ChannelName}" convention so the
+  // UI sidebar can group channels under their project by a prefix-match-and-
+  // strip rule (no per-channel grouping metadata). Spec:
+  // WORKSPACE-NAMING-CANONICAL-SPEC §"Project channels". Future per-project
+  // channels (Design, Testing, etc.) reuse computeProjectChannelDisplayName
+  // with the same rule — keeps the grouping contract honest.
   const channelName = projectGeneralChannelName(slug, projectSlug);
+  const displayName = computeProjectChannelDisplayName({ projectName, channelName: "General" });
 
   let channel = await mmApiCall("POST", "/channels", {
     team_id: effectiveTeamId,
     name: channelName,
-    display_name: projectName,
+    display_name: displayName,
     type: "P",
     purpose: `Project channel for ${projectName}`,
   });
