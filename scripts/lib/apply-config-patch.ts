@@ -78,9 +78,13 @@ export interface ApplyConfigPatchOptions {
   log?: (msg: string) => void;
   /**
    * Backoff delays in ms between retry attempts on transient RPC errors.
-   * Length = max retries after the first failure. Default: [2000, 6000,
-   * 14000] — so up to 4 attempts total at 0s, 2s, 8s, 22s elapsed (22s
-   * covers the observed event-loop-pin window during plugin init).
+   * Length = max retries after the first failure. Default: [2000] — so up
+   * to 2 attempts at 0s, 2s elapsed. On a stable gateway the RPC path
+   * succeeds on attempt 1; on a broken gateway the file-write fallback
+   * is the right move, and the pod's next chokidar reload reconciles.
+   * Longer retry trains (the old [2000, 6000, 14000] default) blocked
+   * signup latency by up to 22s waiting for a gateway that wasn't
+   * coming back inside that window anyway.
    */
   retryBackoffMs?: number[];
   /**
@@ -133,7 +137,7 @@ export async function applyConfigPatch(
   const log = opts.log ?? defaultLog;
   const configPath = opts.configPath ?? OPENCLAW_CONFIG;
   const prefix = args.logPrefix ? `${args.logPrefix} ` : "";
-  const backoff = opts.retryBackoffMs ?? [2_000, 6_000, 14_000];
+  const backoff = opts.retryBackoffMs ?? [2_000];
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   // Own the rpc lifecycle: close it at the end when we created it ourselves.

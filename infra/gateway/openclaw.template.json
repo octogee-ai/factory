@@ -112,6 +112,9 @@
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       },
+      "interactions": {
+        "callbackBaseUrl": "${MM_INTERACTIONS_CALLBACK_BASE_URL}"
+      },
       "accounts": {
         "default": {
           "botToken": "${MM_BOT_TOKEN}"

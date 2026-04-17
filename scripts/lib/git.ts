@@ -151,8 +151,11 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
     }),
   });
   if (!tokenResp.ok) {
-    const body = await tokenResp.text();
-    log(`⚠ [git] Failed to create API token for ${username}: ${tokenResp.status} ${body}`);
+    // Gitea's `POST /users/{name}/tokens` requires Basic Auth; admin token
+    // + Sudo isn't accepted, so this returns 401 by design. The per-customer
+    // SSH keypair registered above is the primary git auth path;
+    // workspace-api falls back to the global admin token for REST calls.
+    log(`[git] PAT skipped for ${username} (Gitea admin-sudo limitation on /users/${username}/tokens) — SSH is the primary auth path`);
     return null;
   }
 

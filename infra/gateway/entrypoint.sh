@@ -20,6 +20,7 @@ mkdir -p "$OPENCLAW_DIR/agents"
 # envsubst replaces ${VAR} placeholders in the template. One line. No sed.
 export MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
 export MM_URL="${MM_URL:-}"
+export MM_INTERACTIONS_CALLBACK_BASE_URL="${MM_INTERACTIONS_CALLBACK_BASE_URL:-}"
 export GATEWAY_TOKEN="${GATEWAY_TOKEN:-$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 48)}"
 if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
   envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"

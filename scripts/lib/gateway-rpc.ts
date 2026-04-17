@@ -180,8 +180,8 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   // (April 16 TEST signup: 21411ms server-side). 10s was too tight and
   // caused the provisioner to fall back to file-write on cold pods, which
   // in turn caused chokidar to miss the write and the new customer's coach
-  // to never start. `waitForGateway` now probes via RPC so the first
-  // provisioner call lands on a warm server, but 30s is cheap headroom.
+  // to never start. 30s is cheap headroom for the rare cold-call case;
+  // on a stable gateway the round-trip is sub-second.
   const connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
   const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
   const scopes = opts.scopes ?? ["operator.admin"];
