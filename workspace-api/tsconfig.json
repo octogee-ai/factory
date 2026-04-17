@@ -11,9 +11,8 @@
     "sourceMap": true,
     "skipLibCheck": true,
     "noUnusedLocals": false,
-    "baseUrl": "..",
     "paths": {
-      "@shared/*": ["shared/*"]
+      "@shared/*": ["../shared/*"]
     }
   },
   "include": ["src/**/*.ts", "../shared/types/identity.ts"],
