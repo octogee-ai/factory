@@ -32,6 +32,7 @@ import {
   buildMattermostAccounts,
   buildCustomerBindings,
   fetchCoachTokens,
+  mergeAccountsPreservingDefault,
   type CoachTokenDeps,
 } from "../boot-sync.js";
 
@@ -316,5 +317,80 @@ describe("buildCustomerBindings", () => {
       { slug: "chris", channels: [] },
     ]);
     expect(bindings).toEqual([]);
+  });
+});
+
+// ── mergeAccountsPreservingDefault ─────────────────────────────────────────
+
+describe("mergeAccountsPreservingDefault", () => {
+  it("takes all coach entries from the fresh list and preserves `default` from existing", () => {
+    const existing = {
+      default: { botToken: "bot-token-xyz" },
+      "chris-coach": { botToken: "stale-coach-abc" }, // will be dropped (not in fresh)
+    };
+    const coach = {
+      "marie-coach": { botToken: "marie-tok", groupPolicy: "allowlist" as const, groupAllowFrom: ["u1"] },
+    };
+    const merged = mergeAccountsPreservingDefault(existing, coach);
+    expect(merged).toEqual({
+      default: { botToken: "bot-token-xyz" },
+      "marie-coach": { botToken: "marie-tok", groupPolicy: "allowlist", groupAllowFrom: ["u1"] },
+    });
+    // Stale coach not in fresh list is dropped — nuked-customer cleanup.
+    expect(merged).not.toHaveProperty("chris-coach");
+  });
+
+  it("emits only coach entries when existing has no `default` (fresh PVC)", () => {
+    const merged = mergeAccountsPreservingDefault(
+      {},
+      { "x-coach": { botToken: "x", groupPolicy: "allowlist" as const, groupAllowFrom: ["u1"] } },
+    );
+    expect(merged).toEqual({
+      "x-coach": { botToken: "x", groupPolicy: "allowlist", groupAllowFrom: ["u1"] },
+    });
+  });
+
+  it("preserves ONLY `default` — stale non-coach entries (e.g. legacy `admin`) are dropped", () => {
+    const existing = {
+      default: { botToken: "bot" },
+      admin: { botToken: "legacy-admin-that-must-not-survive" }, // historical footgun
+    };
+    const merged = mergeAccountsPreservingDefault(existing, {});
+    expect(merged).toEqual({ default: { botToken: "bot" } });
+    expect(merged).not.toHaveProperty("admin");
+  });
+
+  it("when coach list has zero customers, result is just `default`", () => {
+    const merged = mergeAccountsPreservingDefault(
+      { default: { botToken: "bot" } },
+      {},
+    );
+    expect(merged).toEqual({ default: { botToken: "bot" } });
+  });
+
+  it("REGRESSION: reboot with ≥1 customer must retain `default` (the hang-on-reboot bug)", () => {
+    // Scenario: pod rebooted, existing on-disk openclaw.json has both
+    // `default` (from template) and `chris1969-coach` (from prior session).
+    // boot-sync regens with Firestore listing chris1969 as still-present.
+    // Pre-fix: `accounts: coachAccounts` replaced the whole map, dropping
+    // `default`, which tanked OpenClaw's channel-init.
+    const existing = {
+      default: { botToken: "octogee-bot-token" },
+      "chris1969-coach": { botToken: "stale-pat", groupPolicy: "allowlist" as const, groupAllowFrom: [] },
+    };
+    const coach = {
+      "chris1969-coach": {
+        botToken: "fresh-pat-from-firestore",
+        groupPolicy: "allowlist" as const,
+        groupAllowFrom: ["mm-chris", "mm-admin"],
+      },
+    };
+    const merged = mergeAccountsPreservingDefault(existing, coach);
+    expect(merged.default).toEqual({ botToken: "octogee-bot-token" });
+    expect(merged["chris1969-coach"]).toEqual({
+      botToken: "fresh-pat-from-firestore",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-chris", "mm-admin"],
+    });
   });
 });

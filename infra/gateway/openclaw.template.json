@@ -1,7 +1,7 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.4.8",
-    "lastTouchedAt": "2026-04-08T00:00:00.000Z"
+    "lastTouchedVersion": "2026.4.14",
+    "lastTouchedAt": "2026-04-17T01:04:39.966Z"
   },
   "auth": {
     "profiles": {
@@ -20,8 +20,13 @@
       "gcp-secret-manager": {
         "source": "exec",
         "command": "/usr/local/bin/node",
-        "args": ["/octogee/scripts/secret-resolver.mjs"],
-        "passEnv": ["GOOGLE_APPLICATION_CREDENTIALS", "GCP_PROJECT_ID"],
+        "args": [
+          "/octogee/scripts/secret-resolver.mjs"
+        ],
+        "passEnv": [
+          "GOOGLE_APPLICATION_CREDENTIALS",
+          "GCP_PROJECT_ID"
+        ],
         "jsonOnly": true,
         "timeoutMs": 5000
       }
@@ -70,7 +75,7 @@
         },
         "identity": {
           "name": "Mac",
-          "emoji": "\ud83d\udd27"
+          "emoji": "🔧"
         }
       }
     ]
@@ -139,7 +144,9 @@
     "enabled": true,
     "allow": [
       "mattermost",
-      "octogee-router"
+      "octogee-router",
+      "anthropic",
+      "memory-core"
     ],
     "entries": {
       "mattermost": {
@@ -152,6 +159,9 @@
           "advisorySlugs": [],
           "enforcementOverrides": {}
         }
+      },
+      "anthropic": {
+        "enabled": true
       }
     }
   }
