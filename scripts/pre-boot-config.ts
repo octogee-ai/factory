@@ -87,19 +87,24 @@ async function main(): Promise<void> {
     log(`enforcement overrides: ${entries.length ? entries.map(([s, e]) => `${s}=${e}`).join(", ") : "(all observe)"}`);
   }
 
-  // ── MM bot token sync ───────────────────────────────────────────────────
-  // OpenClaw uses BOTH `channels.mattermost.botToken` AND `channels.mattermost.token`.
-  // If MM was re-bootstrapped (new token in K8s secret), both fields must be updated
-  // or the gateway will send the stale token and get 401 on every WebSocket connect.
+  // ── MM bot token + baseUrl sync ─────────────────────────────────────────
+  // Secret-rotation reconciliation: if MM_BOT_TOKEN in env differs from
+  // what's on disk (k8s secret rotated since last boot), update in place.
+  // Canonical location is `channels.mattermost.accounts.default.botToken`
+  // (matches the template; no longer writes top-level `botToken` / `token`
+  // legacy fields — OpenClaw reads from the accounts map).
   const envBotToken = process.env.MM_BOT_TOKEN;
   const envMmUrl = process.env.MM_URL;
   if (config.channels?.mattermost) {
     const mm = config.channels.mattermost;
-    if (envBotToken && (mm.botToken !== envBotToken || mm.token !== envBotToken)) {
-      mm.botToken = envBotToken;
-      mm.token = envBotToken;
-      changed = true;
-      log(`MM bot token synced from MM_BOT_TOKEN env var`);
+    if (envBotToken) {
+      mm.accounts ??= {};
+      mm.accounts.default ??= {};
+      if (mm.accounts.default.botToken !== envBotToken) {
+        mm.accounts.default.botToken = envBotToken;
+        changed = true;
+        log(`MM bot token synced into accounts.default from MM_BOT_TOKEN env var`);
+      }
     }
     if (envMmUrl && mm.baseUrl !== envMmUrl) {
       mm.baseUrl = envMmUrl;

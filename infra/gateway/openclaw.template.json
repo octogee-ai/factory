@@ -101,13 +101,18 @@
   "channels": {
     "mattermost": {
       "enabled": true,
-      "botToken": "${MM_BOT_TOKEN}",
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
       "requireMention": false,
       "network": {
         "dangerouslyAllowPrivateNetwork": true
-      }
+      },
+      "accounts": {
+        "default": {
+          "botToken": "${MM_BOT_TOKEN}"
+        }
+      },
+      "defaultAccount": "default"
     }
   },
   "gateway": {

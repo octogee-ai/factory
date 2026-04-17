@@ -21,72 +21,16 @@ mkdir -p "$OPENCLAW_DIR/agents"
 export MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
 export MM_URL="${MM_URL:-}"
 export GATEWAY_TOKEN="${GATEWAY_TOKEN:-$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 48)}"
-if [ -f "$OPENCLAW_DIR/openclaw.json" ]; then
-  log "openclaw.json already exists — preserving (provisioner is source of truth)"
-  # Patch missing Mattermost fields (migration for pods with stale config)
-  python3 - <<'PYEOF'
-import json, os, sys
-cfg_path = os.environ.get("OPENCLAW_DIR", "/home/node/.openclaw") + "/openclaw.json"
-try:
-    with open(cfg_path) as f:
-        c = json.load(f)
-    mm = c.setdefault("channels", {}).setdefault("mattermost", {})
-    changed = False
-    if mm.get("requireMention") is not False:
-        mm["requireMention"] = False
-        changed = True
-    # Strip legacy top-level groupPolicy / allowFrom unconditionally.
-    # Per-customer coach accounts own these now (groupPolicy="allowlist"
-    # + groupAllowFrom scoped to [customer, admin]; see
-    # scripts/lib/provisionSteps.ts:wireCoachMattermostAccount). Any
-    # top-level value — "open" triggers OpenClaw's CRITICAL security
-    # warning, "allowlist" without allowFrom would fail-closed globally,
-    # and a manually-set value no longer has any effect on per-account
-    # routing — is just cruft at best and a footgun at worst. Delete it.
-    if "groupPolicy" in mm:
-        del mm["groupPolicy"]
-        changed = True
-    if "allowFrom" in mm:
-        del mm["allowFrom"]
-        changed = True
-    # Sync bot token from env var (secret may have been rotated since last boot)
-    env_token = os.environ.get("MM_BOT_TOKEN", "")
-    if env_token and mm.get("botToken") != env_token:
-        mm["botToken"] = env_token
-        changed = True
-        print(f"[entrypoint] Synced MM bot token from env", flush=True)
-    # Remove stale 'token' key if present (not in OpenClaw schema)
-    if "token" in mm:
-        del mm["token"]
-        changed = True
-    # Ensure private network access is allowed (Mattermost is internal K8s DNS).
-    # 2026.4.2 uses allowPrivateNetwork; 2026.4.5+ uses network.dangerouslyAllowPrivateNetwork.
-    # Set both for forward/backward compat.
-    if not mm.get("allowPrivateNetwork"):
-        mm["allowPrivateNetwork"] = True
-        changed = True
-    net = mm.setdefault("network", {})
-    if not net.get("dangerouslyAllowPrivateNetwork"):
-        net["dangerouslyAllowPrivateNetwork"] = True
-        changed = True
-    # Remove default:true from Mac — only bound agents should respond
-    for agent in c.get("agents", {}).get("list", []):
-        if agent.get("id") == "mac" and agent.get("default"):
-            del agent["default"]
-            changed = True
-    if changed:
-        with open(cfg_path, "w") as f:
-            json.dump(c, f, indent=2)
-        print("[entrypoint] Patched openclaw.json (stripped legacy top-level groupPolicy/allowFrom, synced network + bot token)", flush=True)
-except Exception as e:
-    print(f"[entrypoint] Config patch skipped: {e}", flush=True)
-PYEOF
-else
+if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
   envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
   chmod 600 "$OPENCLAW_DIR/openclaw.json"
   GW_SHORT=$(echo "$GATEWAY_TOKEN" | cut -c1-8)
-  log "openclaw.json generated (gw=${GW_SHORT}...)"
+  log "openclaw.json generated from template (gw=${GW_SHORT}...)"
+else
+  log "openclaw.json already exists — preserving (provisioner is source of truth)"
 fi
+# Secret rotation / reconciliation (env-sync) happens later via pre-boot-config.ts
+# — nothing else fixed up here. The template is canonical; don't re-derive.
 
 # ── Provision Mac's workspace if missing ────────────────────────────────────
 MAC_WS="$OPENCLAW_DIR/workspace/ops"
@@ -234,10 +178,13 @@ fi
 # (default 30s). Without this trap, the shell ignores SIGTERM and k8s
 # eventually SIGKILLs the pod, which drops MM WebSockets ungracefully.
 shutdown() {
+  # Clear the trap FIRST. `kill 0` below signals the entire process group,
+  # which includes this shell — without clearing, the re-delivered SIGTERM
+  # re-enters the handler and we loop (observed in 2026-04-17 rollout: the
+  # entrypoint logged `received SIGTERM — forwarding to children` 6+ times
+  # in the same second). Setting to '' makes subsequent signals ignored.
+  trap '' TERM INT
   log "entrypoint: received SIGTERM — forwarding to children"
-  # `kill 0` sends the signal to the entire process group (this shell +
-  # all descendants). The background loops catch EXIT on their child
-  # openclaw/tsx processes and break cleanly.
   kill -TERM 0 2>/dev/null || true
   exit 0
 }
