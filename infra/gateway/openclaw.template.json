@@ -3,6 +3,11 @@
     "lastTouchedVersion": "2026.4.14",
     "lastTouchedAt": "2026-04-17T01:04:39.966Z"
   },
+  "discovery": {
+    "mdns": {
+      "mode": "off"
+    }
+  },
   "auth": {
     "profiles": {
       "anthropic:default": {
@@ -113,7 +118,8 @@
         "dangerouslyAllowPrivateNetwork": true
       },
       "interactions": {
-        "callbackBaseUrl": "${MM_INTERACTIONS_CALLBACK_BASE_URL}"
+        "callbackBaseUrl": "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
+        "allowedSourceIps": ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"]
       },
       "accounts": {
         "default": {
