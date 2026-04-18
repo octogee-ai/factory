@@ -115,7 +115,7 @@ export async function resolveFileTarget(input: FileTargetInput): Promise<FileTar
  * then body — matches the historical precedence so we don't silently change
  * which source wins).
  */
-export function readTargetInput(req: Request): { slug: string | null; projectSlug: string | null } {
+function readTargetInput(req: Request): { slug: string | null; projectSlug: string | null } {
   const slug = ((req.query.slug as string) || (req.body?.slug as string) || null) as string | null;
   const projectSlug = ((req.query.project as string) || (req.body?.project as string) || null) as string | null;
   return { slug, projectSlug };

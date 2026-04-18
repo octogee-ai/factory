@@ -87,7 +87,7 @@ export const strictRateLimit = rateLimit({
  *
  * Use on: /api/billing/webhook
  */
-export const webhookRateLimit = rateLimit({
+const webhookRateLimit = rateLimit({
   ...DEFAULT_RATE_LIMIT_OPTIONS,
   windowMs: 60 * 1000,
   limit: 200,
@@ -98,6 +98,6 @@ export const webhookRateLimit = rateLimit({
  * No-op placeholder so routes can import a rate limiter that is currently
  * disabled (e.g. during gradual rollout) without changing call sites.
  */
-export function noopRateLimit(_req: Request, _res: Response, next: NextFunction): void {
+function noopRateLimit(_req: Request, _res: Response, next: NextFunction): void {
   next();
 }

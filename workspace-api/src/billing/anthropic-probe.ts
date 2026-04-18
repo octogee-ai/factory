@@ -29,7 +29,7 @@ const ENDPOINT = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-haiku-4-5-20251001"; // cheapest available model
 const TIMEOUT_MS = 8000;
 
-export async function probeAnthropicKey(apiKey: string): Promise<ProbeResult> {
+async function probeAnthropicKey(apiKey: string): Promise<ProbeResult> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
 

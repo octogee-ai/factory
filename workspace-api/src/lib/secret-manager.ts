@@ -120,7 +120,7 @@ export async function archiveSecret(name: string): Promise<{ disabledCount: numb
  * validation probes; OpenClaw's exec resolver has its own code path
  * (scripts/secret-resolver.mjs). Not used on the hot request path.
  */
-export async function accessLatest(name: string): Promise<string | null> {
+async function accessLatest(name: string): Promise<string | null> {
   try {
     const [response] = await client().accessSecretVersion({
       name: `${fqSecretName(name)}/versions/latest`,

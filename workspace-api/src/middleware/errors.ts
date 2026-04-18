@@ -16,7 +16,7 @@ const STATUS_MAP: Record<string, number> = {
   "Admin access required": 403,
 };
 
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(
     public statusCode: number,
     message: string,

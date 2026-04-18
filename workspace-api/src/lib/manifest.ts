@@ -45,10 +45,7 @@ interface CacheEntry {
 
 const manifestCache = new Map<string, CacheEntry>();
 
-/** Test-only: drop the in-process cache. Not called from production code. */
-export function __clearManifestCache(): void {
-  manifestCache.clear();
-}
+// __clearManifestCache removed — test-only helper, no callers
 
 // ─── Read ───────────────────────────────────────────────────────────────────
 

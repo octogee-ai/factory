@@ -26,6 +26,6 @@ export function decomposeProjectId(id: string): ProjectIdParts | null {
   return { wid: id.slice(0, idx), pid: id.slice(idx + 1) };
 }
 
-export function composeProjectId(wid: string, pid: string): string {
+function composeProjectId(wid: string, pid: string): string {
   return `${wid}_${pid}`;
 }

@@ -171,7 +171,7 @@ export function requireAgentKey(req: Request, res: Response, next: NextFunction)
  * Left here so any callers not yet migrated get a compile error rather than silent bypass.
  * Remove once all call sites are updated.
  */
-export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
+function requireApiKey(req: Request, res: Response, next: NextFunction): void {
   // Keep the X-Agent-Key check for backward compat during migration
   requireAgentKey(req, res, next);
 }
@@ -180,7 +180,7 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
  * Verify workspace ownership — slug must match the caller's workspaceSlug.
  * Used after requireAuth. Returns 403 if the slug doesn't match.
  */
-export function requireOwnership(slugParam: "slug" | "query" = "query") {
+function requireOwnership(slugParam: "slug" | "query" = "query") {
   return (req: Request, res: Response, next: NextFunction): void => {
     const slug =
       slugParam === "query"

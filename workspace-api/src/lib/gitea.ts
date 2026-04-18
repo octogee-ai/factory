@@ -61,7 +61,7 @@ export async function giteaApiAs(token: string, path: string, method = "GET", bo
 }
 
 /** Global admin token, returns null on 404. */
-export async function giteaApiAllowNotFound(path: string, method = "GET", body?: unknown): Promise<unknown | null> {
+async function giteaApiAllowNotFound(path: string, method = "GET", body?: unknown): Promise<unknown | null> {
   return giteaFetch(getToken(), path, method, body, true);
 }
 
