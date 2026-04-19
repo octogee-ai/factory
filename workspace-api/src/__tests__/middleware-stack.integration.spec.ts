@@ -130,11 +130,20 @@ describe('workspace-api middleware stack', () => {
     expect(res.headers['referrer-policy']).toBeDefined();
   });
 
-  it('does not set CSP header (JSON API — no HTML served)', async () => {
+  it('sets a lockdown CSP header (default-src none, no scripts/forms/frames)', async () => {
+    // CodeQL js/insecure-helmet-configuration flagged disabled CSP. A JSON
+    // API doesn't need script/img/style allowances — even if a response
+    // leaks into a browser, `default-src 'none'` blocks execution. If we
+    // ever serve HTML we'll declare a narrower per-route CSP.
     const app = createApp();
     const res = await request(app).get('/api/health');
 
-    expect(res.headers['content-security-policy']).toBeUndefined();
+    const csp = res.headers['content-security-policy'];
+    expect(csp).toBeDefined();
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("form-action 'none'");
+    expect(csp).toContain("base-uri 'none'");
   });
 
   // ── Rate limiting ─────────────────────────────────────────────────────────

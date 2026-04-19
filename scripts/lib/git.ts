@@ -244,6 +244,15 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
     if (sshKeyPath) {
       env.GIT_SSH_COMMAND = `ssh -i "${sshKeyPath}" -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
     }
+    // CodeQL flags this as js/shell-command-injection-from-environment
+    // because `args` composes into the shell string and callers sometimes
+    // interpolate slugs / URLs. Every caller in this file validates those
+    // inputs upstream: `sanitizeSlug` (/^[a-z0-9-]{1,60}$/) rejects any
+    // shell metachars; `cloneUrl` is constructed from hardcoded env +
+    // token; `commitAndPush` now single-quote-wraps the user message
+    // (see safeMessage). The function is internal — no callers expose
+    // `args` to request bodies.
+    // eslint-disable-next-line sonarjs/os-command -- args constructed by trusted callers; each input validated upstream (see comment above)
     return execSync(`git ${args}`, {
       cwd,
       encoding: "utf8",
@@ -601,7 +610,14 @@ export async function commitAndPush(repoDir: string, message: string): Promise<b
     return true;
   }
   gitExec(repoDir, "add -A");
-  const commitResult = gitExec(repoDir, `commit -m "${message.replace(/"/g, '\\"')}"`);
+  // The earlier `message.replace(/"/g, '\\"')` only escaped double-quotes,
+  // not backslashes/backticks/`$` — CodeQL js/incomplete-sanitization. Use
+  // single-quote wrapping + the shell-standard `'\''` for embedded single
+  // quotes, which is fully literal under POSIX sh (no expansion, no
+  // escapes). `gitExec` runs under `/bin/sh` via Node's execSync, so this
+  // is safe across bash/dash/zsh.
+  const safeMessage = `'${message.replace(/'/g, "'\\''")}'`;
+  const commitResult = gitExec(repoDir, `commit -m ${safeMessage}`);
   if (commitResult === null) {
     log(`⚠ [git] commitAndPush: commit failed in ${repoDir}`);
     return false;

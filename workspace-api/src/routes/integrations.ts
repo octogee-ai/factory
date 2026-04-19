@@ -7,7 +7,7 @@ import { requireAuth } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db, FieldValue } from "../lib/db";
 import { GOOGLE_SCOPES, MICROSOFT_SCOPES } from "../lib/integrations";
-import { sanitizeReturnUrl } from "../lib/redirect-validation";
+import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validation";
 
 const router = Router();
 const APP_URL = process.env.APP_URL || "https://octogee.com";
@@ -83,8 +83,10 @@ router.get("/google/callback", async (req: Request, res: Response, next: NextFun
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    const target = sanitizeReturnUrl(returnUrl).startsWith("http") ? sanitizeReturnUrl(returnUrl) : `${APP_URL}${sanitizeReturnUrl(returnUrl)}`;
-    res.redirect(`${target}${target.includes("?") ? "&" : "?"}google_connected=true&google_email=${encodeURIComponent(userInfo.email)}`);
+    res.redirect(buildOAuthRedirect(returnUrl, APP_URL, {
+      google_connected: "true",
+      google_email: userInfo.email,
+    }));
   } catch (err: any) {
     logger.error(`Google OAuth error for uid=${uid}: ${err.message}`);
     try { await db.collection("users").doc(uid).collection("integrations").doc("google").set({ provider: "google", status: "error", error: String(err), updatedAt: FieldValue.serverTimestamp() }, { merge: true }); } catch {}
@@ -163,8 +165,10 @@ router.get("/microsoft/callback", async (req: Request, res: Response, next: Next
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    const target = sanitizeReturnUrl(returnUrl).startsWith("http") ? sanitizeReturnUrl(returnUrl) : `${APP_URL}${sanitizeReturnUrl(returnUrl)}`;
-    res.redirect(`${target}${target.includes("?") ? "&" : "?"}microsoft_connected=true&microsoft_email=${encodeURIComponent(email)}`);
+    res.redirect(buildOAuthRedirect(returnUrl, APP_URL, {
+      microsoft_connected: "true",
+      microsoft_email: email,
+    }));
   } catch (err: any) {
     logger.error(`Microsoft OAuth error for uid=${uid}: ${err.message}`);
     try { await db.collection("users").doc(uid).collection("integrations").doc("microsoft").set({ provider: "microsoft", status: "error", error: String(err), updatedAt: FieldValue.serverTimestamp() }, { merge: true }); } catch {}

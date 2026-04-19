@@ -41,6 +41,39 @@ function trimSlash(s: string): string {
   return s.endsWith("/") ? s.slice(0, -1) : s;
 }
 
+/**
+ * Reject openai-compatible base URLs that would steer the probe at
+ * internal infrastructure: cloud metadata services, link-local, loopback,
+ * private RFC1918 ranges, or non-https schemes. The probe runs inside
+ * workspace-api with access to cluster DNS — an attacker who can set
+ * `baseUrl` could otherwise query `http://metadata.google.internal/...`
+ * and exfiltrate the GCP service-account token via our own `Authorization`
+ * header. CodeQL js/request-forgery.
+ */
+function validateCompatibleBaseUrl(baseUrl: string): string | null {
+  let u: URL;
+  try { u = new URL(baseUrl); } catch { return "Invalid baseUrl"; }
+  if (u.protocol !== "https:") return "baseUrl must use https://";
+  const host = u.hostname.toLowerCase();
+  if (
+    host === "localhost" ||
+    host === "metadata.google.internal" ||
+    host.endsWith(".internal") ||
+    host.endsWith(".svc.cluster.local") ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^::1$/.test(host) ||
+    /^fe80:/.test(host) ||
+    /^fc[0-9a-f]{2}:/.test(host)
+  ) {
+    return "baseUrl host not permitted";
+  }
+  return null;
+}
+
 async function probeFetch(
   url: string,
   init: RequestInit,
@@ -108,6 +141,10 @@ export async function probeProviderKey(req: ProbeRequest): Promise<ProbeResult> 
         error: "baseUrl is required for openai-compatible providers",
         classification: "user",
       };
+    }
+    const validationError = validateCompatibleBaseUrl(req.baseUrl);
+    if (validationError) {
+      return { ok: false, error: validationError, classification: "user" };
     }
     return probeFetch(`${trimSlash(req.baseUrl)}/models`, {
       method: "GET",

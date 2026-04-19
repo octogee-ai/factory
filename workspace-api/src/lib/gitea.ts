@@ -13,6 +13,22 @@ const GITEA_URL =
 
 export const GITEA_ORG = process.env.GITEA_ORG || "octogee";
 
+// Derived once at module load — every fetch in this file checks the final
+// URL resolves to this host. Stops server-side request forgery where a
+// malicious `path` / `url` argument steers fetch somewhere else (e.g.
+// metadata.google.internal). CodeQL js/request-forgery.
+const GITEA_HOST = (() => {
+  try { return new URL(GITEA_URL).host; } catch { return ""; }
+})();
+
+function assertGiteaUrl(url: string): void {
+  let host: string;
+  try { host = new URL(url).host; } catch { throw new Error(`Invalid Gitea URL: ${url}`); }
+  if (!GITEA_HOST || host !== GITEA_HOST) {
+    throw new Error(`Refusing off-Gitea fetch: ${host} !== ${GITEA_HOST}`);
+  }
+}
+
 function getToken(): string {
   const token = process.env.GITEA_TOKEN;
   if (!token) throw new Error("GITEA_TOKEN not configured");
@@ -28,6 +44,7 @@ async function giteaFetch(
   allow404: boolean,
 ): Promise<unknown | null> {
   const url = `${GITEA_URL}/api/v1/repos/${GITEA_ORG}/${path}`;
+  assertGiteaUrl(url);
   const resp = await fetch(url, {
     method,
     headers: {
@@ -83,6 +100,7 @@ async function giteaAdminFetch(
   body: unknown | undefined,
   allow404: boolean,
 ): Promise<unknown | null> {
+  assertGiteaUrl(url);
   const resp = await fetch(url, {
     method,
     headers: {

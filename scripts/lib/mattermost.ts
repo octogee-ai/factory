@@ -2,7 +2,6 @@
  * Octogee Provisioner — Mattermost Integration
  */
 
-import { randomBytes } from "crypto";
 import * as crypto from "crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
@@ -311,10 +310,14 @@ export async function provisionMattermostUser(
   }
 
   const generatePassword = (): string => {
+    // crypto.randomInt uses rejection sampling so each char is drawn
+    // uniformly from the 67-char alphabet. The earlier `randomBytes(24)[i]
+    // % chars.length` pattern introduced modulo bias (257 % 67 = 55 got
+    // more representation than indices ≥ 55 % 67) — low-impact for a
+    // 24-char password but CodeQL's js/biased-cryptographic-random flags it.
     const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%";
     let pass = "";
-    const bytes = randomBytes(24);
-    for (let i = 0; i < 24; i++) pass += chars[bytes[i] % chars.length];
+    for (let i = 0; i < 24; i++) pass += chars[crypto.randomInt(chars.length)];
     return pass;
   };
 

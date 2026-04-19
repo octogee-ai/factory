@@ -29,11 +29,24 @@ import { Request, Response, NextFunction } from "express";
  *  - Cross-Origin-Resource-Policy: same-origin
  *  - Origin-Agent-Cluster: ?1
  *
- * CSP is disabled here — this is a JSON API, not a browser app.
- * Enable it if we ever serve HTML responses.
+ * CSP was previously disabled on the "JSON API, no HTML" rationale, but
+ * CodeQL flags disabled CSP as js/insecure-helmet-configuration — and
+ * even a JSON API benefits from a locked-down default-src for the edge
+ * cases where a response leaks into a browser (debug tooling, accidental
+ * HTML error page, etc.). Setting a minimal deny-everything policy is the
+ * correct posture: no script, no images, no iframes, no form-action. Any
+ * future HTML surface will have to declare its own CSP explicitly.
  */
 export const helmetMiddleware = helmet({
-  contentSecurityPolicy: false, // JSON API — no HTML served
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      formAction: ["'none'"],
+      baseUri: ["'none'"],
+    },
+  },
   crossOriginEmbedderPolicy: false, // Needed for metrics endpoint compat
 });
 
