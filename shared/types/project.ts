@@ -15,7 +15,6 @@
 export type ProjectVisibility = 'private' | 'public' | 'unlisted';
 export type ProjectStatus = 'idea' | 'building' | 'launched' | 'paused' | 'archived';
 export type ProjectProvisioningState = 'provisioning' | 'active' | 'failed';
-export type ProjectCanvasMode = 'markdown' | 'preview';
 export type ProjectType = 'game' | 'social' | 'planner' | 'trip' | 'other';
 
 export interface Project {
@@ -52,7 +51,11 @@ export interface Project {
    */
   pendingVisibility?: ProjectVisibility | null;
   giteaRepoName: string | null;
-  canvasMode: ProjectCanvasMode;
+  /**
+   * Path in the workspace/project repo that Canvas renders when
+   * `previewUrl` isn't set. Defaults to `README.md`; changing it is an
+   * escape hatch for non-default landing paths. See PROJECTS-CANVAS-SPEC §D2.
+   */
   canvasFile: string;
   previewUrl: string | null;
   starCount: number;

@@ -8,7 +8,6 @@ export type {
   ProjectVisibility,
   ProjectStatus,
   ProjectProvisioningState,
-  ProjectCanvasMode,
   ProjectType,
 } from './project';
 
