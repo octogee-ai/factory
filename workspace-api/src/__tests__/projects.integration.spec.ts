@@ -15,7 +15,7 @@
  *   either failed provisioning or is active-but-missing its channels doc.
  */
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Firestore mock state ────────────────────────────────────────────────────
 
@@ -84,13 +84,323 @@ vi.mock("../lib/mattermost-context", () => ({
   getWorkspaceMmContext: (...args: any[]) => mockGetWorkspaceMmContext(...args),
 }));
 
-vi.mock("../lib/gitea", () => ({ giteaApi: vi.fn() }));
+// Mock the Gitea helpers used by the project routes (phase 5 §D12). Each
+// spec overrides these as needed via `mockClear` + `mockImplementation`.
+const mockCreateProjectGiteaRepo = vi.fn();
+const mockGiteaWriteFile = vi.fn();
+const mockGiteaApi = vi.fn();
+vi.mock("../lib/gitea", () => ({
+  giteaApi: (...args: any[]) => mockGiteaApi(...args),
+  createProjectGiteaRepo: (...args: any[]) => mockCreateProjectGiteaRepo(...args),
+  giteaWriteFile: (...args: any[]) => mockGiteaWriteFile(...args),
+}));
 
 import { createApp } from "../index";
 
 function authHeaders() {
   return { Authorization: "Bearer valid-token" };
 }
+
+// ── Deploy preview endpoint (phase 7 §D14) ──────────────────────────────────
+
+describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
+  const ORIG_BUILD_URL = process.env.SITE_BUILD_API_URL;
+  const ORIG_INTERNAL_KEY = process.env.INTERNAL_SERVICE_KEY;
+
+  beforeEach(() => {
+    resetFirestoreMocks();
+    firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      id: "mygame",
+      ownerUid: "caller-uid",
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "public",
+      provisioningState: "active",
+    };
+  });
+
+  afterEach(() => {
+    if (ORIG_BUILD_URL === undefined) delete process.env.SITE_BUILD_API_URL;
+    else process.env.SITE_BUILD_API_URL = ORIG_BUILD_URL;
+    if (ORIG_INTERNAL_KEY === undefined) delete process.env.INTERNAL_SERVICE_KEY;
+    else process.env.INTERNAL_SERVICE_KEY = ORIG_INTERNAL_KEY;
+  });
+
+  it("returns 503 when SITE_BUILD_API_URL or INTERNAL_SERVICE_KEY is unset", async () => {
+    delete process.env.SITE_BUILD_API_URL;
+    delete process.env.INTERNAL_SERVICE_KEY;
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/deploy-preview")
+      .set(authHeaders())
+      .send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/not enabled/i);
+  });
+
+  it("returns 404 when the project does not exist", async () => {
+    process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
+    process.env.INTERNAL_SERVICE_KEY = "secret";
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/ghost/deploy-preview")
+      .set(authHeaders())
+      .send({});
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 403 when the caller is not the project owner", async () => {
+    process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
+    process.env.INTERNAL_SERVICE_KEY = "secret";
+    firestoreData["workspaces/alice/projects/mygame"].ownerUid = "someone-else";
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/deploy-preview")
+      .set(authHeaders())
+      .send({});
+    expect(res.status).toBe(403);
+  });
+
+  it("writes previewUrl on success + forwards slug/projectSlug/projectName in the body", async () => {
+    process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
+    process.env.INTERNAL_SERVICE_KEY = "secret";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(url)).toBe("http://gateway.local:3001/api/project-preview/deploy");
+      expect(init?.headers).toMatchObject({ "X-Internal-Service-Key": "secret" });
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      expect(body).toMatchObject({ slug: "alice", projectSlug: "mygame", projectName: "My Game" });
+      return new Response(
+        JSON.stringify({ success: true, previewUrl: "https://octogee-alice-mygame.web.app" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const app = createApp();
+      const res = await request(app)
+        .post("/api/projects/alice/mygame/deploy-preview")
+        .set(authHeaders())
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.previewUrl).toBe("https://octogee-alice-mygame.web.app");
+      expect(firestoreData["workspaces/alice/projects/mygame"].previewUrl).toBe(
+        "https://octogee-alice-mygame.web.app",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("returns 502 + leaves previewUrl unchanged when site-build-api fails", async () => {
+    process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
+    process.env.INTERNAL_SERVICE_KEY = "secret";
+    firestoreData["workspaces/alice/projects/mygame"].previewUrl = null;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      return new Response("Build failed", { status: 500 });
+    }) as typeof fetch;
+
+    try {
+      const app = createApp();
+      const res = await request(app)
+        .post("/api/projects/alice/mygame/deploy-preview")
+        .set(authHeaders())
+        .send({});
+      expect(res.status).toBe(502);
+      expect(firestoreData["workspaces/alice/projects/mygame"].previewUrl).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("returns 504 when the upstream fetch aborts (AbortError / TimeoutError)", async () => {
+    process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
+    process.env.INTERNAL_SERVICE_KEY = "secret";
+    firestoreData["workspaces/alice/projects/mygame"].previewUrl = null;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      const err = new Error("The operation was aborted") as Error & { name: string };
+      err.name = "TimeoutError";
+      throw err;
+    }) as typeof fetch;
+
+    try {
+      const app = createApp();
+      const res = await request(app)
+        .post("/api/projects/alice/mygame/deploy-preview")
+        .set(authHeaders())
+        .send({});
+      expect(res.status).toBe(504);
+      expect(res.body.error).toMatch(/timed out/i);
+      expect(firestoreData["workspaces/alice/projects/mygame"].previewUrl).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("returns 404 for malformed workspace + project slugs before any upstream call", async () => {
+    process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
+    process.env.INTERNAL_SERVICE_KEY = "secret";
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+    globalThis.fetch = fetchSpy as typeof fetch;
+    try {
+      const app = createApp();
+      const r = await request(app)
+        .post("/api/projects/-bad/My-Bad/deploy-preview")
+        .set(authHeaders())
+        .send({});
+      expect(r.status).toBe(404);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ── Public README endpoint (phase 6 §D13) ───────────────────────────────────
+
+describe("GET /api/projects/:wid/:pid/readme (public)", () => {
+  beforeEach(() => {
+    resetFirestoreMocks();
+    mockGiteaApi.mockReset();
+  });
+
+  it("returns the rendered README for a public project (no auth header required)", async () => {
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      visibility: "public",
+      giteaRepoName: "alice-proj-mygame",
+      canvasFile: "README.md",
+    };
+    mockGiteaApi.mockResolvedValue({
+      content: Buffer.from("# Hello from repo", "utf-8").toString("base64"),
+    });
+
+    const app = createApp();
+    const res = await request(app).get("/api/projects/alice/mygame/readme");
+
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe("# Hello from repo");
+    expect(res.body.path).toBe("README.md");
+    // Confirm no Authorization header was required — bypass requireAuth.
+    expect(mockGiteaApi).toHaveBeenCalledWith("alice-proj-mygame/contents/README.md");
+  });
+
+  it("returns 404 for private projects (visibility leak guard)", async () => {
+    firestoreData["workspaces/alice/projects/secret"] = {
+      visibility: "private",
+      giteaRepoName: "alice-proj-secret",
+    };
+
+    const app = createApp();
+    const res = await request(app).get("/api/projects/alice/secret/readme");
+
+    expect(res.status).toBe(404);
+    expect(mockGiteaApi).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the project does not exist", async () => {
+    const app = createApp();
+    const res = await request(app).get("/api/projects/alice/ghost/readme");
+    expect(res.status).toBe(404);
+  });
+
+  it("allows unlisted projects to read via direct URL", async () => {
+    firestoreData["workspaces/alice/projects/soft"] = {
+      visibility: "unlisted",
+      giteaRepoName: "alice-proj-soft",
+    };
+    mockGiteaApi.mockResolvedValue({
+      content: Buffer.from("# Unlisted is fine", "utf-8").toString("base64"),
+    });
+    const app = createApp();
+    const res = await request(app).get("/api/projects/alice/soft/readme");
+    expect(res.status).toBe(200);
+    expect(res.body.content).toContain("Unlisted is fine");
+  });
+
+  it("returns empty content (not 500) when the Gitea repo 404s on the file", async () => {
+    firestoreData["workspaces/alice/projects/fresh"] = {
+      visibility: "public",
+      giteaRepoName: "alice-proj-fresh",
+    };
+    const err = new Error("Gitea API 404") as Error & { status: number };
+    err.status = 404;
+    mockGiteaApi.mockRejectedValue(err);
+
+    const app = createApp();
+    const res = await request(app).get("/api/projects/alice/fresh/readme");
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe("");
+  });
+
+  it("returns 404 for malformed workspace + project slugs (no Firestore read)", async () => {
+    const app = createApp();
+    const r1 = await request(app).get("/api/projects/-alice/mygame/readme");
+    expect(r1.status).toBe(404);
+    const r2 = await request(app).get("/api/projects/alice/MY-GAME/readme");
+    expect(r2.status).toBe(404);
+    // Path traversal via a malformed wid segment shouldn't even hit Gitea.
+    expect(mockGiteaApi).not.toHaveBeenCalled();
+  });
+
+  it("falls back to README.md when canvasFile contains a path traversal", async () => {
+    // Owners can write canvasFile directly (Firestore rules §D8). Make sure
+    // a malicious value can't steer the admin-token Gitea fetch.
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      visibility: "public",
+      giteaRepoName: "alice-proj-mygame",
+      canvasFile: "../../../../etc/passwd",
+    };
+    mockGiteaApi.mockResolvedValue({
+      content: Buffer.from("# Safe content", "utf-8").toString("base64"),
+    });
+
+    const app = createApp();
+    const res = await request(app).get("/api/projects/alice/mygame/readme");
+    expect(res.status).toBe(200);
+    // Path in the response is the safe fallback, not the owner's input.
+    expect(res.body.path).toBe("README.md");
+    // And the Gitea call used the safe fallback too.
+    expect(mockGiteaApi).toHaveBeenCalledWith("alice-proj-mygame/contents/README.md");
+  });
+
+  it("falls back to README.md when canvasFile is an absolute path", async () => {
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      visibility: "public",
+      giteaRepoName: "alice-proj-mygame",
+      canvasFile: "/etc/passwd",
+    };
+    mockGiteaApi.mockResolvedValue({
+      content: Buffer.from("hi", "utf-8").toString("base64"),
+    });
+    const app = createApp();
+    const res = await request(app).get("/api/projects/alice/mygame/readme");
+    expect(res.status).toBe(200);
+    expect(res.body.path).toBe("README.md");
+  });
+
+  it("honors a legitimate nested canvasFile path", async () => {
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      visibility: "public",
+      giteaRepoName: "alice-proj-mygame",
+      canvasFile: "docs/INTRO.md",
+    };
+    mockGiteaApi.mockResolvedValue({
+      content: Buffer.from("# Intro", "utf-8").toString("base64"),
+    });
+    const app = createApp();
+    const res = await request(app).get("/api/projects/alice/mygame/readme");
+    expect(res.status).toBe(200);
+    expect(res.body.path).toBe("docs/INTRO.md");
+    expect(mockGiteaApi).toHaveBeenCalledWith("alice-proj-mygame/contents/docs/INTRO.md");
+  });
+});
 
 // ── Availability endpoint ────────────────────────────────────────────────────
 
@@ -156,6 +466,13 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
     mockMmApi.mockReset();
     mockGetWorkspaceMmContext.mockReset();
+    // Gitea calls resolve by default so the MM-failure path isn't affected
+    // by Gitea mock state from a previous test; individual Gitea tests
+    // override these.
+    mockCreateProjectGiteaRepo.mockReset();
+    mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
+    mockGiteaWriteFile.mockReset();
+    mockGiteaWriteFile.mockResolvedValue(undefined);
   });
 
   it("returns 502 and marks provisioningState:failed when MM channel POST throws", async () => {
@@ -258,6 +575,71 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       kind: "general",
       mattermost: { channelId: "ch-new-123" },
     });
+    // Gitea side effects (phase 5 §D12): repo created + README seeded.
+    expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
+      "alice-proj-mygame",
+      expect.any(String),
+      false, // public visibility → private=false
+    );
+    expect(mockGiteaWriteFile).toHaveBeenCalledWith(
+      "alice-proj-mygame",
+      "README.md",
+      expect.stringContaining("My Game"),
+      expect.any(String),
+    );
+  });
+
+  it("passes private=true to Gitea when the requested visibility is private", async () => {
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: null, username: null, coachUserId: null,
+      coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
+    });
+    mockMmApi.mockResolvedValue({ id: "ch-priv-1" });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects")
+      .set(authHeaders())
+      .send({ name: "Private Thing", slug: "privthing", visibility: "private" });
+
+    expect(res.status).toBe(200);
+    expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
+      "alice-proj-privthing",
+      expect.any(String),
+      true,
+    );
+  });
+
+  it("returns 502 + marks failed when Gitea repo creation throws", async () => {
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: null, username: null, coachUserId: null,
+      coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
+    });
+    mockMmApi.mockResolvedValue({ id: "ch-new-999" });
+    mockCreateProjectGiteaRepo.mockRejectedValue(new Error("Gitea down"));
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects")
+      .set(authHeaders())
+      .send({ name: "My Game", slug: "mygame", visibility: "public" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/code repo/i);
+    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    expect(doc.provisioningState).toBe("failed");
+    expect(doc.provisioningError).toMatch(/Gitea down/);
+    // MM channel + channels subdoc should still have been written — the
+    // Gitea step fires AFTER the MM step succeeds.
+    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
+      mattermost: { channelId: "ch-new-999" },
+    });
   });
 });
 
@@ -269,6 +651,10 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
     mockMmApi.mockReset();
     mockGetWorkspaceMmContext.mockReset();
+    mockCreateProjectGiteaRepo.mockReset();
+    mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
+    mockGiteaWriteFile.mockReset();
+    mockGiteaWriteFile.mockResolvedValue(undefined);
   });
 
   it("creates the MM channel + channels/general doc and restores requested visibility (failed → active)", async () => {
@@ -340,6 +726,59 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       "POST",
       expect.objectContaining({ team_id: "team-abc", name: "alice-proj-mygame-general" }),
     );
+    // Gitea reconcile: repo + README seeded alongside the MM work (§D12).
+    expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
+      "alice-proj-mygame",
+      expect.any(String),
+      false,
+    );
+    expect(mockGiteaWriteFile).toHaveBeenCalledWith(
+      "alice-proj-mygame",
+      "README.md",
+      expect.any(String),
+      expect.any(String),
+    );
+  });
+
+  it("flips to failed with a Gitea-specific error when the Gitea reconcile throws during retry", async () => {
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      id: "mygame",
+      ownerUid: "caller-uid",
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "private",
+      pendingVisibility: "public",
+      provisioningState: "failed",
+    };
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: null, username: null, coachUserId: null,
+      coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
+    });
+    // MM side of the retry succeeds.
+    mockMmApi.mockImplementation(async (_path: string, method?: string) => {
+      if (method === "POST") return { id: "ch-retry-gitea-fail" };
+      const err = new Error("MM API 404: not found") as Error & { status: number };
+      err.status = 404;
+      throw err;
+    });
+    // Gitea side fails.
+    mockCreateProjectGiteaRepo.mockRejectedValue(new Error("Gitea unreachable"));
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/retry-provisioning")
+      .set(authHeaders())
+      .send({});
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/code repo/i);
+    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    expect(doc.provisioningState).toBe("failed");
+    expect(doc.provisioningError).toMatch(/Gitea unreachable/);
   });
 
   it("reuses an existing MM channel when lookup-by-name returns it (idempotent retry)", async () => {

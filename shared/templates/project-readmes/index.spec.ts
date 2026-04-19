@@ -1,19 +1,10 @@
 /**
- * Tests for the README-template renderer used when provisioning a new
- * project (PROJECTS-CANVAS-SPEC §D3).
- *
- * Two layers:
- *   - `substitute` — pure string-level var replacement, unit-tested
- *     without filesystem access.
- *   - `renderReadmeTemplate` — reads the per-projectType template from
- *     `shared/templates/project-readmes/{type}.md` and applies
- *     substitution. Unknown projectTypes fall back to `default.md`.
+ * Tests for the README-template renderer shared between workspace-api
+ * (UI-driven project creation) and scripts/lib/projects.ts (Face-driven
+ * project creation). See PROJECTS-CANVAS-SPEC §D3.
  */
 import { describe, it, expect } from "vitest";
-import {
-  substitute,
-  renderReadmeTemplate,
-} from "../lib/project-readme-template.js";
+import { renderReadmeTemplate, substitute } from "./index.js";
 
 describe("substitute", () => {
   it("replaces known variables", () => {
@@ -31,8 +22,6 @@ describe("substitute", () => {
   });
 
   it("does not recurse through replacement values", () => {
-    // Replacements containing `{{y}}` are NOT re-expanded. Guards against
-    // runaway templates and keeps the pass single-shot.
     expect(substitute("{{x}}", { x: "{{y}}", y: "loop" })).toBe("{{y}}");
   });
 });
@@ -60,8 +49,6 @@ describe("renderReadmeTemplate", () => {
   it("falls back to the default template for unknown project types", () => {
     const out = renderReadmeTemplate("unknown-type-xyz", baseVars);
     expect(out).toContain("# My Game");
-    // Default README has a neutral "What is this?" section instead of a
-    // game-specific one.
     expect(out).toContain("What is this?");
     expect(out).not.toMatch(/engine/i);
   });
@@ -80,7 +67,18 @@ describe("renderReadmeTemplate", () => {
     const withoutDate = { ...baseVars };
     delete (withoutDate as Partial<typeof baseVars>).date;
     const out = renderReadmeTemplate("default", withoutDate);
-    // ISO date prefix — e.g. "2026-04-19". Match shape, not exact day.
     expect(out).toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+
+  it("each known projectType picks its own template body", () => {
+    const g = renderReadmeTemplate("game", baseVars);
+    const t = renderReadmeTemplate("trip", baseVars);
+    const s = renderReadmeTemplate("social", baseVars);
+    const p = renderReadmeTemplate("planner", baseVars);
+    // Distinct marker phrases per type guard against regression to default.
+    expect(g).toMatch(/engine/i);
+    expect(t).toMatch(/itinerary/i);
+    expect(s).toMatch(/audience/i);
+    expect(p).toMatch(/milestone/i);
   });
 });
