@@ -35,6 +35,22 @@ export interface Project {
   status: ProjectStatus;
   visibility: ProjectVisibility;
   provisioningState: ProjectProvisioningState;
+  /**
+   * Short, human-readable reason the project failed to provision. Only set
+   * when provisioningState === 'failed'. Cleared on a successful retry.
+   * See docs/PROJECTS-CANVAS-SPEC.md §D4.
+   */
+  provisioningError?: string | null;
+  /**
+   * Target visibility the caller requested at creation time. Persisted at
+   * the initial write so a failed → retry flow can restore the requested
+   * visibility without the client re-submitting it. While `provisioningState`
+   * is `provisioning` or `failed` the doc's `visibility` is forced to
+   * `private` to avoid surfacing half-provisioned projects in public
+   * discovery. On successful provisioning, `visibility` flips to
+   * `pendingVisibility` and this field is cleared. See PROJECTS-CANVAS-SPEC §D4.
+   */
+  pendingVisibility?: ProjectVisibility | null;
   giteaRepoName: string | null;
   canvasMode: ProjectCanvasMode;
   canvasFile: string;

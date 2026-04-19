@@ -327,6 +327,80 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
   return true;
 }
 
+// ── Clone Project Repo (boot-sync) ──────────────────────────────────────────
+//
+// Parallel to `cloneWorkspaceRepo` — restores a single project repo from
+// Gitea into `customers/{slug}/projects/{projectSlug}/`. Used by boot-sync
+// so a fresh PVC (new cluster, node failure) self-heals every project
+// directory, matching the cattle-gateway principle in
+// docs/GATEWAY-PLATFORM-SPEC.md + docs/PROJECTS-CANVAS-SPEC.md §D11.
+//
+// `giteaRepoName` is read from the Firestore project doc — avoids the
+// workspace-api vs provisioner naming discrepancy (two code paths
+// historically picked different repo names; neither is fixed in this PR).
+
+/** Clone a project's Gitea repo into `customers/{slug}/projects/{projectSlug}/`.
+ *  Returns true if the project dir already has `.git` OR was cloned; false
+ *  if the repo is absent on Gitea or clone failed. */
+export async function cloneProjectRepo(
+  slug: string,
+  projectSlug: string,
+  giteaRepoName: string,
+): Promise<boolean> {
+  const dest = path.join(CUSTOMERS_DIR, slug, "projects", projectSlug);
+  const gitDir = path.join(dest, ".git");
+
+  if (fs.existsSync(gitDir)) return true;
+
+  if (!GIT_API_TOKEN) {
+    log(`[git] Cannot clone ${slug}/${projectSlug} — GIT_API_TOKEN not set`);
+    return false;
+  }
+
+  const sshKey = customerSshKeyPath(slug);
+  const hasCustomerKey = fs.existsSync(sshKey);
+
+  try {
+    const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${giteaRepoName}`, {
+      headers: adminHeaders(false),
+    });
+    if (!resp.ok) {
+      log(`[git] Project repo ${GIT_ORG}/${giteaRepoName} not found on Gitea (${resp.status}) — skipping clone`);
+      return false;
+    }
+  } catch (err: any) {
+    log(`⚠ [git] Gitea API check failed for ${giteaRepoName}: ${err.message}`);
+    return false;
+  }
+
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+
+  let result: string | null;
+  if (hasCustomerKey) {
+    const cloneUrl = sshRemoteUrl(giteaRepoName);
+    result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${projectSlug}`, sshKey);
+  } else {
+    const cloneUrl = httpCloneUrl(giteaRepoName);
+    log(`[git] Cloning ${slug}/${projectSlug} via HTTP (no per-customer SSH key yet)`);
+    result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${projectSlug}`);
+    if (result !== null) {
+      gitExec(dest, `remote set-url origin ${sshRemoteUrl(giteaRepoName)}`);
+    }
+  }
+
+  if (result === null) {
+    log(`⚠ [git] Clone failed for ${slug}/${projectSlug}`);
+    try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
+    return false;
+  }
+
+  gitExec(dest, `config user.email "${slug}@octogee.com"`);
+  gitExec(dest, `config user.name "Octo (${slug})"`);
+
+  log(`[git] ✅ Cloned ${GIT_ORG}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
+  return true;
+}
+
 // ── Workspace Repo ──────────────────────────────────────────────────────────────
 
 /** Initialize a git repo for a customer workspace and push to Gitea. */

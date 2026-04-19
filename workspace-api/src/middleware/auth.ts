@@ -22,8 +22,12 @@ import { Request, Response, NextFunction } from "express";
 import { auth, db } from "../lib/db";
 import { logger } from "./logging";
 
-// Extend Express Request to include auth context
+// Extend Express Request to include auth context. `namespace` is the only
+// way to augment @types/express — ES2015 module syntax doesn't support
+// declaration merging into a third-party type's internal namespace. This
+// is the pattern the Express types' own README recommends.
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       uid?: string;

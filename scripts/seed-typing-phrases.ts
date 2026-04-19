@@ -35,8 +35,8 @@ function loadSa(): Record<string, unknown> {
     return JSON.parse(readFileSync(keyPath, 'utf-8'));
   } catch (err) {
     throw new Error(
-      `Could not read service-account key at ${keyPath}. Set ` +
-        `GOOGLE_APPLICATION_CREDENTIALS or drop the key file at ${DEFAULT_SA_KEY_PATH}.`,
+      `Could not read service-account key at ${keyPath} (${(err as Error)?.message ?? "unknown"}). ` +
+        `Set GOOGLE_APPLICATION_CREDENTIALS or drop the key file at ${DEFAULT_SA_KEY_PATH}.`,
     );
   }
 }
