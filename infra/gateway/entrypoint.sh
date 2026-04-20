@@ -153,7 +153,31 @@ fi
   done
 ) &
 
-# ── Start OpenClaw gateway in background with auto-restart ─────────────────
+# ── Helper: wait until no OpenClaw gateway process is running. ──────────────
+# Uses a /proc cmdline scan so we don't depend on procps (pgrep) — not
+# installed in node:22-slim. Matches any process whose command line
+# contains "openclaw gateway run", which is the server binary and not CLI
+# one-shots like `openclaw secrets reload`.
+wait_for_gateway_exit() {
+  while true; do
+    running=""
+    for d in /proc/[0-9]*; do
+      [ -r "$d/cmdline" ] || continue
+      cmdline=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+      case "$cmdline" in
+        *"openclaw gateway run"*)
+          running="${d##*/}"
+          break
+          ;;
+      esac
+    done
+    [ -z "$running" ] && return 0
+    log "OpenClaw gateway (pid $running) still running; supervisor waiting..."
+    sleep 1
+  done
+}
+
+# ── Start OpenClaw gateway under a single-instance supervisor ───────────────
 # Previously this was `exec openclaw ...` which made OpenClaw PID 1 and tied
 # its lifecycle to the container's. OpenClaw self-restarts via SIGUSR1 when
 # its chokidar watcher detects an openclaw.json change — under `exec` that
@@ -161,12 +185,24 @@ fi
 # state, PVC-cached gitea tokens, etc., and taking ~6+ minutes to recover.
 #
 # Matching the while-loop pattern used above for provisioner / site-build /
-# preview-proxy: OpenClaw now runs as a supervised child. When it exits
-# (crash OR its own SIGUSR1-triggered self-restart), this loop respawns it
-# WITHOUT taking the pod down. The other three services keep running; only
-# tenant MM WebSockets blip for the gateway-restart window.
+# preview-proxy, OpenClaw runs as a supervised child: when it exits
+# (crash OR self-restart), this loop respawns it without taking the pod
+# down. Other services keep running; only tenant MM WebSockets blip.
+#
+# The wait_for_gateway_exit() guard enforces at-most-one gateway per pod.
+# On config-driven restarts OpenClaw itself forks a replacement child
+# ("restart mode: full process restart (spawned pid N)") before the parent
+# exits. Without the guard, the supervisor saw the parent exit and
+# respawned its own gateway alongside OpenClaw's self-spawned child — two
+# processes racing on port 18789. Observed 2026-04-20 in prod when a Face
+# model switch via the admin dashboard triggered
+# `plugins.entries.octogee-router.config.faceModelOverrides.*` reload; the
+# pod had to be rollout-restarted manually. The guard blocks the
+# supervisor's next respawn until OpenClaw's own child (or any other
+# `openclaw gateway run`) fully exits, so only one instance is ever live.
 (
   while true; do
+    wait_for_gateway_exit
     log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
     openclaw gateway run --bind lan --port 18789 || true
     log "OpenClaw gateway exited — restarting in 2s..."
