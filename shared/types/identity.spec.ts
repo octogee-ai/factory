@@ -38,6 +38,7 @@ import {
   parseChannelName,
   attributeChannelToUsername,
   deriveJoinedUsernames,
+  deriveContactedUsernames,
 } from './identity';
 
 // Mattermost's team-name regex, sourced from
@@ -149,6 +150,23 @@ describe('identity: isValidUsername', () => {
     expect(isValidUsername(undefined as unknown as string)).toBe(false);
     expect(isValidUsername(null as unknown as string)).toBe(false);
     expect(isValidUsername(123 as unknown as string)).toBe(false);
+  });
+
+  it('rejects reserved words embedded as hyphen-delimited segments', () => {
+    // The `{username}-proj-{project}-{channel}` naming scheme would be
+    // ambiguous if a username could contain `-proj-` as a segment-break.
+    // `foo-proj-bar-general` could parse as either `{foo-proj-bar}-general`
+    // or `{foo}-proj-bar-general`. The validator rejects the ambiguity
+    // at the source. Same rationale for every reserved channel suffix.
+    expect(isValidUsername('foo-proj-bar')).toBe(false);
+    expect(isValidUsername('foo-general-bar')).toBe(false);
+    expect(isValidUsername('foo-admin-bar')).toBe(false);
+    expect(isValidUsername('foo-coach')).toBe(false);
+    expect(isValidUsername('foo-community')).toBe(false);
+    // But a username that merely contains a reserved substring as part of
+    // a larger non-reserved segment is fine (e.g. `general-ly`, `projector`).
+    expect(isValidUsername('generally')).toBe(true);
+    expect(isValidUsername('projector')).toBe(true);
   });
 });
 
@@ -454,16 +472,27 @@ describe('identity: deriveJoinedUsernames', () => {
     expect(deriveJoinedUsernames(channels, 'kyle')).toEqual(['chris']);
   });
 
-  it('ignores DM channels, project channels, and custom channels', () => {
+  it('ignores DM channels, project channels, custom workspace channels, community, and MM system', () => {
     const channels = [
       { name: 'user1__user2', type: 'D' },                     // DM
-      { name: 'kyle-proj-dragonfly-general', type: 'P' },      // project channel
-      { name: 'kyle-standups', type: 'P' },                    // custom workspace channel
+      { name: 'kyle-proj-dragonfly-general', type: 'P' },      // project-only — NOT full membership
+      { name: 'kyle-standups', type: 'P' },                    // custom workspace channel — does not mark membership
       { name: 'town-square', type: 'O' },                      // MM system
       { name: 'community-general', type: 'O' },                // community
-      { name: 'kyle-general', type: 'P' },                     // <- the only counter
+      { name: 'kyle-general', type: 'P' },                     // full membership
     ];
     expect(deriveJoinedUsernames(channels, null)).toEqual(['kyle']);
+  });
+
+  it('does NOT surface project-only guests (prevents MenuBar tile regression)', () => {
+    // bug #3 in the channel-naming lockdown plan: project-only guests
+    // must not become workspace tiles. Use deriveContactedUsernames when
+    // project-only surface is actually desired (aggregator / classifier).
+    const channels = [
+      { name: 'kyle-proj-dragonfly-general', type: 'P' },      // kyle, project-only
+      { name: 'alice-general', type: 'P' },                    // alice, full membership
+    ];
+    expect(deriveJoinedUsernames(channels, null)).toEqual(['alice']);
   });
 
   it('deduplicates — one user with multiple reserved channels counts once', () => {
@@ -477,6 +506,54 @@ describe('identity: deriveJoinedUsernames', () => {
 
   it('returns empty for empty input', () => {
     expect(deriveJoinedUsernames([], null)).toEqual([]);
+  });
+});
+
+// ── deriveContactedUsernames ────────────────────────────────────────────────
+
+describe('identity: deriveContactedUsernames', () => {
+  it('surfaces owners from project-only guest collaborations', () => {
+    // Alice collaborates on Kyle's dragonfly project without joining
+    // Kyle's workspace. Kyle surfaces because of the project channel.
+    const channels = [
+      { name: 'kyle-proj-dragonfly-general', type: 'P' },
+      { name: 'kyle-proj-dragonfly-design', type: 'P' },
+      { name: 'alice-general', type: 'P' },
+    ];
+    expect(deriveContactedUsernames(channels, 'alice')).toEqual(['kyle']);
+  });
+
+  it('unions full-membership and project-only signals', () => {
+    const channels = [
+      { name: 'kyle-general', type: 'P' },                     // full member → kyle
+      { name: 'alice-proj-widget-general', type: 'P' },        // project-only → alice
+      { name: 'chris-proj-car-general', type: 'P' },           // project-only → chris
+    ];
+    expect(deriveContactedUsernames(channels, null)).toEqual(['alice', 'chris', 'kyle']);
+  });
+
+  it('handles hyphenated owner slug in project channels', () => {
+    const channels = [
+      { name: 'christopher-eckert-proj-car-general', type: 'P' },
+    ];
+    expect(deriveContactedUsernames(channels, null)).toEqual(['christopher-eckert']);
+  });
+
+  it('rejects project-channel patterns with invalid owner slugs', () => {
+    const channels = [
+      { name: '-proj-x-general', type: 'P' },            // leading hyphen → invalid username
+      { name: 'general-proj-x-general', type: 'P' },     // reserved-segment owner → invalid
+    ];
+    expect(deriveContactedUsernames(channels, null)).toEqual([]);
+  });
+
+  it('excludes the caller\'s own username across both signals', () => {
+    const channels = [
+      { name: 'alice-general', type: 'P' },
+      { name: 'alice-proj-x-general', type: 'P' },
+      { name: 'kyle-general', type: 'P' },
+    ];
+    expect(deriveContactedUsernames(channels, 'alice')).toEqual(['kyle']);
   });
 });
 

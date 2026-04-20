@@ -80,6 +80,16 @@ export function isValidUsername(name: unknown): name is string {
   if (name.length > USERNAME_MAX_LENGTH) return false;
   if (!USERNAME_RE.test(name)) return false;
   if (RESERVED_USERNAMES.has(name)) return false;
+  // Any hyphen-delimited segment that collides with a canonical delimiter
+  // or reserved channel suffix would create a parsing ambiguity in
+  // {username}-based channel names. Example: with the segment-level check
+  // off, `foo-proj-bar-general` could parse as either
+  // `{foo-proj-bar}-general` (workspace) or `{foo}-proj-bar-general`
+  // (project). We reject at validation so every channel name has a
+  // single canonical parse. See also deriveJoinedUsernames().
+  for (const segment of name.split('-')) {
+    if (RESERVED_USERNAMES.has(segment)) return false;
+  }
   return true;
 }
 
@@ -101,6 +111,11 @@ export function usernameValidationError(name: unknown): string | null {
   }
   if (RESERVED_USERNAMES.has(name)) {
     return `"${name}" is reserved.`;
+  }
+  for (const segment of name.split('-')) {
+    if (RESERVED_USERNAMES.has(segment)) {
+      return `Username cannot contain "${segment}" as a segment (reserved).`;
+    }
   }
   return null;
 }
@@ -231,19 +246,25 @@ export function attributeChannelToUsername(
 }
 
 /**
- * Derive the set of workspace usernames a user is joined to, based on the
- * reserved channels present in their MM channel list. A channel named
- * `{username}-general|coach|admin` is an unambiguous marker of workspace
- * membership — the workspace slug is whatever precedes the reserved
- * suffix. Project channels, custom workspace channels, community
- * channels, and MM system channels are ignored (they don't signal
- * workspace membership by themselves; project-only membership is a
- * distinct concept tracked via Firestore project memberships).
+ * Derive the set of workspace usernames a user is FULL-MEMBER joined to,
+ * based on the MM channel list alone. Signal: presence of
+ * `{username}-general|coach|admin` ({@link RESERVED_WORKSPACE_CHANNELS}).
  *
- * Returns a sorted list with `ownUsername` excluded. Pure — no network,
- * no known-usernames list required. Reserved suffixes + a validity check
- * on the extracted prefix disambiguate hyphenated slugs from adjacent
- * patterns (community-general, project channels, etc.).
+ * **Full-membership only.** Project-only guest collaborations (being in
+ * someone's `{owner}-proj-*` without joining their workspace) are
+ * deliberately NOT surfaced here. Callers that want both — e.g. the
+ * unread aggregator which rolls project-only guest unreads under the
+ * owner's key — should use {@link deriveContactedUsernames}.
+ *
+ * This distinction matters because the return feeds
+ * `deriveAppShellWorkspaces` → the MenuBar tile list, and the "bug #3"
+ * callout on that function explicitly forbids project-only guests from
+ * appearing as workspace tiles.
+ *
+ * Community channels, MM system channels, DMs, custom workspace
+ * channels, and project channels are ignored. Pure — no Firestore,
+ * no known-usernames list required. Returns a sorted list with
+ * `ownUsername` excluded.
  */
 export function deriveJoinedUsernames(
   channels: ReadonlyArray<{ name: string; type: string }>,
@@ -258,15 +279,55 @@ export function deriveJoinedUsernames(
       const marker = `-${suffix}`;
       if (!name.endsWith(marker) || name.length <= marker.length) continue;
       const candidate = name.slice(0, -marker.length);
-      // Reject project channels (their prefix embeds `-proj-`),
-      // community channels (prefix is the reserved `community` word, which
-      // fails isValidUsername), and anything else that doesn't pass
-      // username validation (too short, reserved, wrong charset).
       if (candidate.includes(projectMarker)) break;
       if (!isValidUsername(candidate)) break;
       usernames.add(candidate);
       break;
     }
+  }
+  if (ownUsername) usernames.delete(ownUsername);
+  return Array.from(usernames).sort();
+}
+
+/**
+ * Derive the set of OTHER builder usernames a user has ANY relationship
+ * with — full workspace members AND project-only guest collaborators.
+ *
+ * Two signals, unioned:
+ *   1. Full workspace membership (same signal as {@link deriveJoinedUsernames}).
+ *   2. Project-only membership — presence of `{username}-proj-{project}-*`
+ *      channels marks `{username}` as a builder whose project the user is
+ *      in, even when the user hasn't joined the containing workspace.
+ *      `-proj-` is a unique delimiter because `proj` is reserved in
+ *      {@link RESERVED_USERNAMES} — `isValidUsername` enforces that no
+ *      segment of a username equals `proj`, so a real username cannot
+ *      embed `-proj-` as a segment break.
+ *
+ * Callers:
+ *   - `aggregateUnreadByContext` → roll project-only unreads under the
+ *      owner's `workspace:{slug}` bucket.
+ *   - `categorize` / `groupByCategory` callers that want full
+ *      `guest-project` bucketing.
+ *
+ * Do NOT use this for the MenuBar tile list — see deriveJoinedUsernames.
+ *
+ * Returns a sorted list with `ownUsername` excluded.
+ */
+export function deriveContactedUsernames(
+  channels: ReadonlyArray<{ name: string; type: string }>,
+  ownUsername: string | null,
+): string[] {
+  const usernames = new Set<string>(deriveJoinedUsernames(channels, ownUsername));
+  const projectMarker = `-${PROJECT_DISCRIMINATOR}-`;
+  for (const ch of channels) {
+    if (ch.type === 'D') continue;
+    const name = ch.name ?? '';
+    const projIdx = name.indexOf(projectMarker);
+    if (projIdx <= 0) continue;
+    const candidate = name.slice(0, projIdx);
+    if (!isValidUsername(candidate)) continue;
+    const parsed = parseChannelName(name, candidate);
+    if (parsed.kind === 'project') usernames.add(candidate);
   }
   if (ownUsername) usernames.delete(ownUsername);
   return Array.from(usernames).sort();
