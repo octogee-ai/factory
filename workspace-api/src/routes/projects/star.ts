@@ -42,8 +42,8 @@ router.post("/:wid/:pid/star", async (req: Request, res: Response) => {
       await projectRef.update({ starCount: FieldValue.increment(1) });
       res.json({ starred: true });
     }
-  } catch (err: any) {
-    logger.error(`[projects] Star toggle failed:`, err);
+  } catch (err) {
+    logger.error(`[projects] Star toggle failed:`, { err });
     res.status(500).json({ error: "Failed to toggle star" });
   }
 });

@@ -5,8 +5,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import * as crypto from "crypto";
 import { requireAuth, requireAdmin } from "../middleware/auth";
-import { logger } from "../middleware/logging";
-import { db, FieldValue, Timestamp, auth as firebaseAuth } from "../lib/db";
+import { db, FieldValue, Timestamp } from "../lib/db";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
 
 const router = Router();

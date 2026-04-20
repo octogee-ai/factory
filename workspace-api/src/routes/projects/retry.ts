@@ -48,14 +48,14 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
       // Look up existing channel by name first so retry is idempotent when
       // the MM channel was created on a prior attempt but the Firestore
       // subdoc write was interrupted.
-      let existing: any = null;
+      let existing: { id?: string } | null = null;
       try {
-        existing = await mmApi(`/teams/${teamId}/channels/name/${channelName}`);
-      } catch (lookupErr: any) {
+        existing = (await mmApi(`/teams/${teamId}/channels/name/${channelName}`)) as { id?: string } | null;
+      } catch (lookupErr) {
         // A 404 here means the channel doesn't exist yet — fall through to
         // create. Any other status bubbles up as a real failure. `status`
         // is attached by mmApi so we don't parse the error message.
-        if (lookupErr?.status !== 404) throw lookupErr;
+        if ((lookupErr as { status?: number } | null)?.status !== 404) throw lookupErr;
       }
       if (existing?.id) {
         mmChannelId = existing.id;
@@ -65,18 +65,18 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
           name: channelName,
           display_name: project.name || pid,
           type: "O",
-        })) as any;
+        })) as { id?: string };
         if (!ch?.id) throw new Error("MM returned no channel id");
         mmChannelId = ch.id;
       }
-    } catch (err: any) {
-      const message = err?.message ?? String(err);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       await projectRef.update({
         provisioningState: "failed",
         provisioningError: message.slice(0, 500),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      logger.error(`[projects] Retry provisioning failed for ${wid}/${pid}:`, err);
+      logger.error(`[projects] Retry provisioning failed for ${wid}/${pid}:`, { err });
       res.status(502).json({ error: "Retry failed — could not create chat channel" });
       return;
     }
@@ -110,14 +110,14 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
         projectType: typeof project.projectType === "string" ? project.projectType : null,
         visibility: restoredVisibility,
       });
-    } catch (err: any) {
-      const message = err?.message ?? String(err);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       await projectRef.update({
         provisioningState: "failed",
         provisioningError: message.slice(0, 500),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      logger.error(`[projects] Gitea reconcile failed for ${wid}/${pid}:`, err);
+      logger.error(`[projects] Gitea reconcile failed for ${wid}/${pid}:`, { err });
       res.status(502).json({ error: "Retry failed — could not reconcile code repo" });
       return;
     }

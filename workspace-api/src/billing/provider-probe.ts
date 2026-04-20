@@ -86,7 +86,7 @@ async function probeFetch(
 
     let detail = "";
     try {
-      const body = (await resp.json()) as any;
+      const body = (await resp.json()) as { error?: { type?: string; message?: string }; message?: string };
       detail = body?.error?.type || body?.error?.message || body?.message || "";
     } catch {
       detail = (await resp.text().catch(() => "")).slice(0, 200);
@@ -97,12 +97,13 @@ async function probeFetch(
       error: detail || `Upstream returned HTTP ${resp.status}`,
       classification: classifyHttp(resp.status),
     };
-  } catch (err: any) {
-    if (err?.name === "AbortError") {
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
       return { ok: false, error: `Probe timed out after ${TIMEOUT_MS}ms`, classification: "transient" };
     }
-    logger.warn(`[byot-probe] network error: ${err?.message || err}`);
-    return { ok: false, error: `Probe failed: ${err?.message || err}`, classification: "transient" };
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`[byot-probe] network error: ${msg}`);
+    return { ok: false, error: `Probe failed: ${msg}`, classification: "transient" };
   } finally {
     clearTimeout(timer);
   }

@@ -60,9 +60,10 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
             team_id: teamId,
             user_id: joinerMmUserId,
           });
-        } catch (addErr: any) {
-          if (!addErr?.message?.includes("409")) {
-            logger.error(`[projects] Failed to add user to MM team:`, addErr);
+        } catch (addErr) {
+          const msg = addErr instanceof Error ? addErr.message : String(addErr);
+          if (!msg.includes("409")) {
+            logger.error(`[projects] Failed to add user to MM team:`, { err: addErr });
             res.status(500).json({ error: "Failed to join project — could not add to chat team" });
             return;
           }
@@ -88,9 +89,10 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
         await mmApi(`/channels/${mmChannelId}/members`, "POST", {
           user_id: joinerMmUserId,
         });
-      } catch (err: any) {
-        if (!err?.message?.includes("409")) {
-          logger.warn(`[projects] MM channel join failed:`, err);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("409")) {
+          logger.warn(`[projects] MM channel join failed:`, { err });
         }
       }
     }
@@ -104,8 +106,8 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
           "PUT",
           { permission: "read" },
         );
-      } catch (err: any) {
-        logger.warn(`[projects] Gitea access grant failed:`, err);
+      } catch (err) {
+        logger.warn(`[projects] Gitea access grant failed:`, { err });
       }
     }
 
@@ -147,9 +149,10 @@ router.post("/:wid/:pid/leave", strictRateLimit, async (req: Request, res: Respo
     if (mmChannelId && leaverMmUserId) {
       try {
         await mmApi(`/channels/${mmChannelId}/members/${leaverMmUserId}`, "DELETE");
-      } catch (err: any) {
-        if (!err?.message?.includes("404")) {
-          logger.warn(`[projects] MM channel leave failed:`, err);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("404")) {
+          logger.warn(`[projects] MM channel leave failed:`, { err });
         }
       }
     }
@@ -161,8 +164,8 @@ router.post("/:wid/:pid/leave", strictRateLimit, async (req: Request, res: Respo
           `${project.giteaRepoName}/collaborators/${leaverGiteaUser}`,
           "DELETE",
         );
-      } catch (err: any) {
-        logger.warn(`[projects] Gitea leave failed:`, err);
+      } catch (err) {
+        logger.warn(`[projects] Gitea leave failed:`, { err });
       }
     }
 

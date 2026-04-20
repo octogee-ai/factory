@@ -84,7 +84,10 @@ async function main(): Promise<void> {
     config.plugins.entries["octogee-router"].config.enforcementOverrides = enforcementOverrides;
     changed = true;
     const entries = Object.entries(enforcementOverrides);
-    log(`enforcement overrides: ${entries.length ? entries.map(([s, e]) => `${s}=${e}`).join(", ") : "(all observe)"}`);
+    const overrideSummary = entries.length
+      ? entries.map(([s, e]) => `${s}=${e}`).join(", ")
+      : "(all observe)";
+    log(`enforcement overrides: ${overrideSummary}`);
   }
 
   // ── MM bot token + baseUrl sync ─────────────────────────────────────────

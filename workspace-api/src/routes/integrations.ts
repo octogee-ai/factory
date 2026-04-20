@@ -39,12 +39,13 @@ router.get("/google/auth-url", async (req: Request, res: Response, next: NextFun
   } catch (e) { next(e); }
 });
 
-router.get("/google/callback", async (req: Request, res: Response, next: NextFunction) => {
+router.get("/google/callback", async (req: Request, res: Response, _next: NextFunction) => {
   const { code, state, error: authError } = req.query;
   if (authError) { res.redirect(`${APP_URL}/dashboard?integration_error=cancelled`); return; }
   if (!code || !state) { res.redirect(`${APP_URL}/dashboard?integration_error=invalid`); return; }
 
-  let uid = "", returnUrl = "/dashboard";
+  let uid = "";
+  let returnUrl: string;
   try {
     const decoded = JSON.parse(Buffer.from(state as string, "base64url").toString());
     uid = decoded.uid || "";
@@ -65,7 +66,7 @@ router.get("/google/callback", async (req: Request, res: Response, next: NextFun
       }),
     });
     if (!tokenRes.ok) throw new Error("Token exchange failed");
-    const tokenData = await tokenRes.json() as any;
+    const tokenData = await tokenRes.json() as { access_token: string; refresh_token?: string; expires_in: number; token_type: string };
 
     const userInfoRes = await fetch(GOOGLE_USERINFO_URL, { headers: { Authorization: `Bearer ${tokenData.access_token}` } });
     if (!userInfoRes.ok) throw new Error("Failed to get Google user info");
@@ -87,8 +88,9 @@ router.get("/google/callback", async (req: Request, res: Response, next: NextFun
       google_connected: "true",
       google_email: userInfo.email,
     }));
-  } catch (err: any) {
-    logger.error(`Google OAuth error for uid=${uid}: ${err.message}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`Google OAuth error for uid=${uid}: ${msg}`);
     try { await db.collection("users").doc(uid).collection("integrations").doc("google").set({ provider: "google", status: "error", error: String(err), updatedAt: FieldValue.serverTimestamp() }, { merge: true }); } catch {}
     res.redirect(`${APP_URL}/dashboard?integration_error=google_failed`);
   }
@@ -120,12 +122,13 @@ router.get("/microsoft/auth-url", async (req: Request, res: Response, next: Next
   } catch (e) { next(e); }
 });
 
-router.get("/microsoft/callback", async (req: Request, res: Response, next: NextFunction) => {
+router.get("/microsoft/callback", async (req: Request, res: Response, _next: NextFunction) => {
   const { code, state, error: authError } = req.query;
   if (authError) { res.redirect(`${APP_URL}/dashboard?integration_error=cancelled`); return; }
   if (!code || !state) { res.redirect(`${APP_URL}/dashboard?integration_error=invalid`); return; }
 
-  let uid = "", returnUrl = "/dashboard";
+  let uid = "";
+  let returnUrl: string;
   try {
     const decoded = JSON.parse(Buffer.from(state as string, "base64url").toString());
     uid = decoded.uid || "";
@@ -146,7 +149,7 @@ router.get("/microsoft/callback", async (req: Request, res: Response, next: Next
       }),
     });
     if (!tokenRes.ok) throw new Error("Token exchange failed");
-    const tokenData = await tokenRes.json() as any;
+    const tokenData = await tokenRes.json() as { access_token: string; refresh_token?: string; expires_in: number; token_type: string };
 
     const userInfoRes = await fetch(MS_USERINFO_URL, { headers: { Authorization: `Bearer ${tokenData.access_token}` } });
     if (!userInfoRes.ok) throw new Error("Failed to get Microsoft user info");
@@ -169,8 +172,9 @@ router.get("/microsoft/callback", async (req: Request, res: Response, next: Next
       microsoft_connected: "true",
       microsoft_email: email,
     }));
-  } catch (err: any) {
-    logger.error(`Microsoft OAuth error for uid=${uid}: ${err.message}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`Microsoft OAuth error for uid=${uid}: ${msg}`);
     try { await db.collection("users").doc(uid).collection("integrations").doc("microsoft").set({ provider: "microsoft", status: "error", error: String(err), updatedAt: FieldValue.serverTimestamp() }, { merge: true }); } catch {}
     res.redirect(`${APP_URL}/dashboard?integration_error=microsoft_failed`);
   }

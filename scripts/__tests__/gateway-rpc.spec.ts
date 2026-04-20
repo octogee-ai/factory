@@ -10,7 +10,7 @@
  * issues its request, and closes. That matches the provisioner's use pattern
  * (one RPC per signup step) and keeps the surface area tight.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import * as crypto from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";

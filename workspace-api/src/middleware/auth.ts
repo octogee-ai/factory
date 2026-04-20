@@ -164,48 +164,7 @@ export function requireAgentKey(req: Request, res: Response, next: NextFunction)
     return;
   }
 
-  (req as any).agentKey = key;
+  (req as Request & { agentKey?: string }).agentKey = key;
   next();
 }
 
-/**
- * @deprecated Use requireInternalServiceAuth() for /internal/* routes,
- * or requireAgentKey() for agent-scoped routes that validate the key downstream.
- *
- * Left here so any callers not yet migrated get a compile error rather than silent bypass.
- * Remove once all call sites are updated.
- */
-function requireApiKey(req: Request, res: Response, next: NextFunction): void {
-  // Keep the X-Agent-Key check for backward compat during migration
-  requireAgentKey(req, res, next);
-}
-
-/**
- * Verify workspace ownership — slug must match the caller's workspaceSlug.
- * Used after requireAuth. Returns 403 if the slug doesn't match.
- */
-function requireOwnership(slugParam: "slug" | "query" = "query") {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const slug =
-      slugParam === "query"
-        ? (req.query.slug as string) || req.body?.slug
-        : req.params.slug;
-
-    if (!slug) {
-      res.status(400).json({ error: "Missing slug" });
-      return;
-    }
-
-    if (!req.user) {
-      res.status(401).json({ error: "Unauthenticated" });
-      return;
-    }
-
-    if (req.user.workspaceSlug !== slug) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-
-    next();
-  };
-}

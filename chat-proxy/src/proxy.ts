@@ -353,8 +353,6 @@ async function handleRest(
   // Team validation removed — MM enforces channel/team membership natively.
   // The proxy authenticates the user and forwards to MM with their token.
   // MM rejects unauthorized access with 403.
-  {
-  }
   const creds = isAdmin
     ? await getAdminMmToken()
     : await getMmToken(uid);

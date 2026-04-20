@@ -51,8 +51,8 @@ router.delete("/:wid/:pid/members/:guestUid", strictRateLimit, async (req: Reque
     if (mmChannelId && guestMmUserId) {
       try {
         await mmApi(`/channels/${mmChannelId}/members/${guestMmUserId}`, "DELETE");
-      } catch (err: any) {
-        logger.warn(`[projects] MM channel removal failed:`, err);
+      } catch (err) {
+        logger.warn(`[projects] MM channel removal failed:`, { err });
       }
     }
 
@@ -63,8 +63,8 @@ router.delete("/:wid/:pid/members/:guestUid", strictRateLimit, async (req: Reque
           `${project.giteaRepoName}/collaborators/${guestGiteaUser}`,
           "DELETE",
         );
-      } catch (err: any) {
-        logger.warn(`[projects] Gitea removal failed:`, err);
+      } catch (err) {
+        logger.warn(`[projects] Gitea removal failed:`, { err });
       }
     }
 

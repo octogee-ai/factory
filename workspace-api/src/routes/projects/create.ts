@@ -181,17 +181,17 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
         name: channelName,
         display_name: name.trim(),
         type: "O", // public within the team
-      })) as any;
+      })) as { id?: string };
       if (!ch?.id) throw new Error("MM returned no channel id");
       mmChannelId = ch.id;
-    } catch (err: any) {
-      const message = err?.message ?? String(err);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       await projectRef.update({
         provisioningState: "failed",
         provisioningError: message.slice(0, 500),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      logger.error(`[projects] MM channel creation failed for ${workspaceId}/${slug}:`, err);
+      logger.error(`[projects] MM channel creation failed for ${workspaceId}/${slug}:`, { err });
       res.status(502).json({
         error: "Project provisioning failed — could not create chat channel",
         workspaceId,
@@ -221,14 +221,14 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
         projectType: projectType ?? null,
         visibility: targetVisibility,
       });
-    } catch (err: any) {
-      const message = err?.message ?? String(err);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       await projectRef.update({
         provisioningState: "failed",
         provisioningError: message.slice(0, 500),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      logger.error(`[projects] Gitea repo creation failed for ${workspaceId}/${slug}:`, err);
+      logger.error(`[projects] Gitea repo creation failed for ${workspaceId}/${slug}:`, { err });
       res.status(502).json({
         error: "Project provisioning failed — could not create code repo",
         workspaceId,
@@ -253,8 +253,8 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       slug,
       channelId: mmChannelId,
     });
-  } catch (err: any) {
-    logger.error(`[projects] Create failed:`, err);
+  } catch (err) {
+    logger.error(`[projects] Create failed:`, { err });
     res.status(500).json({ error: "Failed to create project" });
   }
 });

@@ -4,7 +4,7 @@
  * Replaces ~20 Cloud Functions with a single Express app running in GKE.
  * Uses K8s DNS for Gitea and Mattermost — no VPC connectors, no ILB IPs.
  */
-import express from "express";
+import express, { Request, Response } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 import { corsMiddleware } from "./middleware/cors";
 import { requestLogger } from "./middleware/logging";
@@ -88,7 +88,7 @@ app.use((req, res, next) => {
     // Stripe needs raw body for signature verification
     express.raw({ type: "application/json" })(req, res, (err) => {
       if (err) return next(err);
-      (req as any).rawBody = req.body;
+      (req as Request & { rawBody?: Buffer }).rawBody = req.body;
       next();
     });
   } else {
@@ -106,7 +106,7 @@ app.get('/metrics', async (_req, res) => {
 
 // ── Health check ───────────────────────────────────────────────────────────
 
-const healthHandler = (_req: any, res: any) => {
+const healthHandler = (_req: Request, res: Response) => {
   res.json({ status: "ok", service: "workspace-api", timestamp: new Date().toISOString() });
 };
 app.get("/health", healthHandler);

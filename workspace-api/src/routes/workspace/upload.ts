@@ -82,7 +82,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
     let mimeType = "";
 
     bb.on("field", (name: string, val: string) => { fields[name] = val; });
-    bb.on("file", (_name: string, stream: any, info: { filename: string; mimeType: string }) => {
+    bb.on("file", (_name: string, stream: NodeJS.ReadableStream, info: { filename: string; mimeType: string }) => {
       filename = info.filename;
       mimeType = info.mimeType;
       const chunks: Buffer[] = [];
@@ -104,8 +104,9 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
       });
     });
     bb.on("error", reject);
-    if ((req as any).rawBody) {
-      bb.end((req as any).rawBody);
+    const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+    if (rawBody) {
+      bb.end(rawBody);
     } else {
       req.pipe(bb);
     }
@@ -155,8 +156,9 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
           expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
         });
         thumbnailUrl = signedUrl;
-      } catch (e: any) {
-        logger.warn(`Thumbnail generation failed for ${filePath}: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.warn(`Thumbnail generation failed for ${filePath}: ${msg}`);
       }
     }
 

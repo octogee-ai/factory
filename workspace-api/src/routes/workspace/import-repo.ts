@@ -67,10 +67,16 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
       throw new Error(`Source repo API ${treeResp.status}`);
     }
 
-    const treeData = (await treeResp.json()) as { tree: any[] };
-    const blobs = (treeData.tree ?? []).filter((i: any) => i.type === "blob");
+    interface GitHubTreeEntry {
+      path: string;
+      type: string;
+      sha: string;
+      size?: number;
+    }
+    const treeData = (await treeResp.json()) as { tree: GitHubTreeEntry[] };
+    const blobs = (treeData.tree ?? []).filter((i) => i.type === "blob");
     const SKIP = [/^\.git\//, /node_modules\//, /^\.DS_Store$/, /^__MACOSX\//];
-    const manifestEntries: Record<string, any> = {};
+    const manifestEntries: Record<string, unknown> = {};
     let fileCount = 0;
 
     for (const blob of blobs) {

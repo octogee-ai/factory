@@ -28,18 +28,33 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
   const { repoName } = target;
   const apiPath = path ? `${repoName}/contents/${path}` : `${repoName}/contents`;
 
-  let contents: any[];
+  interface GiteaContentEntry {
+    name: string;
+    path: string;
+    type: string;
+    size?: number;
+  }
+  let contents: GiteaContentEntry[];
   try {
     const raw = await customerGiteaApi(req, apiPath);
-    contents = Array.isArray(raw) ? raw : [raw];
-  } catch (e: any) {
-    if (e.message?.includes("404")) { res.json({ files: [] }); return; }
+    contents = (Array.isArray(raw) ? raw : [raw]) as GiteaContentEntry[];
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("404")) { res.json({ files: [] }); return; }
     throw e;
   }
 
-  const gitFiles = contents
-    .filter((f: any) => !HIDDEN.has(f.name) && !f.name.startsWith("."))
-    .map((f: any) => ({
+  interface FileEntry {
+    name: string;
+    path: string;
+    type: "dir" | "file";
+    size: number;
+    source: "git" | "blob";
+    thumbnailUrl?: string;
+  }
+  const gitFiles: FileEntry[] = contents
+    .filter((f) => !HIDDEN.has(f.name) && !f.name.startsWith("."))
+    .map((f) => ({
       name: f.name,
       path: f.path,
       type: f.type === "dir" ? ("dir" as const) : ("file" as const),
@@ -64,7 +79,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
       size: entry.size ?? 0,
       source: "blob" as const,
       ...(entry.thumbnailUrl ? { thumbnailUrl: entry.thumbnailUrl } : {}),
-    } as any);
+    });
   }
 
   const files = gitFiles.sort((a, b) => {

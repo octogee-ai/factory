@@ -108,7 +108,7 @@ router.post("/activate", requireAgentKey, async (req: Request, res: Response, ne
     }
 
     // Validate API key belongs to this uid
-    const agentKey = (req as any).agentKey;
+    const agentKey = (req as Request & { agentKey?: string }).agentKey;
     const apiSettingsSnap = await db.doc(`users/${uid}/settings/api`).get();
     if (!apiSettingsSnap.exists) {
       res.status(401).json({ error: "unauthorized", message: "No API key on record" });
@@ -204,8 +204,9 @@ router.post("/deprovision", requireAdmin, async (req: Request, res: Response, ne
         discordChannelId = userData.discord?.channelId ?? userData.provisioning?.discord?.channels?.octogee ?? null;
         discordAdminChannelId = userData.provisioning?.discord?.channels?.admin ?? null;
       }
-    } catch (err: any) {
-      logger.warn(`deprovisionAgents: Firestore lookup failed (non-fatal): ${err.message}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`deprovisionAgents: Firestore lookup failed (non-fatal): ${msg}`);
     }
 
     const jobId = `${slug}-${Date.now()}`;

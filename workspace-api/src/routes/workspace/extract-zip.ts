@@ -48,7 +48,7 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
 
     const gitPaths: string[] = [];
     const blobPaths: string[] = [];
-    const manifestEntries: Record<string, any> = {};
+    const manifestEntries: Record<string, unknown> = {};
 
     const zipName = zipPath.split("/").pop()?.replace(/\.zip$/i, "") ?? "extracted";
     const baseDir = zipPath.includes("/")
@@ -111,8 +111,9 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
       await updateManifest(getCustomerGiteaToken(req), repoName, manifestEntries);
     }
 
-    try { await zipFile.delete(); } catch (e: any) {
-      logger.warn(`Failed to delete ZIP after extraction: ${e.message}`);
+    try { await zipFile.delete(); } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.warn(`Failed to delete ZIP after extraction: ${msg}`);
     }
 
     // Remove the original zip from the manifest if it was tracked there

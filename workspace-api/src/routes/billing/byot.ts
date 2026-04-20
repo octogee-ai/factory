@@ -159,7 +159,7 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
     // (4) Firestore metadata only. NEVER plaintext apiKey.
     // Phase 2: provider, optional baseUrl + model also persisted so the
     // provisioner can render the right per-agent config.
-    const byotMetadata: Record<string, any> = {
+    const byotMetadata: Record<string, unknown> = {
       provider,
       secretName,
       fingerprint,

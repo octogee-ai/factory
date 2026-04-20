@@ -72,7 +72,7 @@ function makeStubDb(userData: Record<string, any>) {
       collection: (p: string) => makeCollRef(p),
       runTransaction: async (fn: (t: any) => Promise<void>) => {
         const t = {
-          get: async (ref: any) => ({
+          get: async (_ref: any) => ({
             exists: true,
             data: () => userData,
           }),

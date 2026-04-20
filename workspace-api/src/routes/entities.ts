@@ -236,8 +236,8 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
         undefined,
         callerToken,
       )) as MmChannelMember[];
-    } catch (err: any) {
-      const msg = err?.message || "";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("403") || msg.includes("401")) {
         res.status(403).json({ error: "You are not a member of this channel" });
         return;
@@ -289,7 +289,7 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
     });
 
     res.json({ members });
-  } catch (err: any) {
+  } catch (err) {
     logger.error(`[entities] Members fetch failed (${kind}/${id})`, { err: String(err) });
     res.status(500).json({ error: "Failed to load members" });
   }
@@ -380,8 +380,8 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
     // already enforced above, MM-side permission is irrelevant here).
     try {
       await mmApi(`/channels/${mmChannelId}/members/${mmUserId}`, "DELETE");
-    } catch (err: any) {
-      const msg = err?.message || "";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("404")) {
         // Already not a member — treat as success, idempotent delete.
         logger.info(`[entities] ${mmUserId} already absent from ${mmChannelId}`);
@@ -419,7 +419,7 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
 
     logger.info(`[entities] ${callerUid} removed mmUser ${mmUserId} from ${kind}/${id}`);
     res.json({ success: true });
-  } catch (err: any) {
+  } catch (err) {
     logger.error(`[entities] Member removal failed (${kind}/${id}/${mmUserId})`, { err: String(err) });
     res.status(500).json({ error: "Failed to remove member" });
   }

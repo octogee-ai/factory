@@ -9,7 +9,7 @@
  */
 import helmet from "helmet";
 import rateLimit, { Options as RateLimitOptions } from "express-rate-limit";
-import { Request, Response, NextFunction } from "express";
+import { Request } from "express";
 
 // ── Helmet security headers ────────────────────────────────────────────────
 
@@ -94,23 +94,3 @@ export const strictRateLimit = rateLimit({
   message: { error: "Too many requests, please try again later." },
 });
 
-/**
- * Webhook rate limit — permissive, but still bounded.
- * Stripe sends bursts during event replay; 200/min is safe.
- *
- * Use on: /api/billing/webhook
- */
-const webhookRateLimit = rateLimit({
-  ...DEFAULT_RATE_LIMIT_OPTIONS,
-  windowMs: 60 * 1000,
-  limit: 200,
-  message: { error: "Too many requests, please try again later." },
-});
-
-/**
- * No-op placeholder so routes can import a rate limiter that is currently
- * disabled (e.g. during gradual rollout) without changing call sites.
- */
-function noopRateLimit(_req: Request, _res: Response, next: NextFunction): void {
-  next();
-}

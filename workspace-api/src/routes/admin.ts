@@ -6,7 +6,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db } from "../lib/db";
-import { getTierConfig, isUnlimitedTier, calculateAvailableTokens, type TierName } from "../billing/tiers";
+import { getTierConfig, calculateAvailableTokens, type TierName } from "../billing/tiers";
 import type { CSIDocument } from "../csi/types";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
 import { workspaceSlugsForUser } from "../lib/workspace-slugs";
@@ -28,9 +28,11 @@ function warnIfNoSlug(slugs: string[], uid: string): string[] {
 const router = Router();
 router.use(requireAdmin);
 
-function toISODate(val: any): string | null {
+function toISODate(val: unknown): string | null {
   if (!val) return null;
-  if (val?.toDate) return val.toDate().toISOString();
+  if (typeof (val as { toDate?: unknown }).toDate === "function") {
+    return (val as { toDate: () => Date }).toDate().toISOString();
+  }
   if (val instanceof Date) return val.toISOString();
   return null;
 }
@@ -155,7 +157,7 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
     const provisioning = d.provisioning || {};
     const tier = subscription.tier || "trial";
     const { available, windowSize, nextRefillAt } = calculateAvailableTokens(
-      tier as any, usage.windowTokensUsed || 0, usage.windowStartedAt?.toDate?.() || null,
+      tier as TierName, usage.windowTokensUsed || 0, usage.windowStartedAt?.toDate?.() || null,
     );
 
     // Fetch CSI document

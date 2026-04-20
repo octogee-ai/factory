@@ -72,7 +72,7 @@ router.get("/:wid/:pid/readme", async (req: Request, res: Response) => {
         "base64",
       ).toString("utf-8");
       res.json({ content, path: filePath });
-    } catch (err: any) {
+    } catch (err) {
       // `giteaApi` attaches `status` on the thrown Error (added PR 1 §D4).
       // Use it directly — the older message-includes heuristic misfires on
       // unrelated error strings that happen to contain "404".
@@ -85,8 +85,8 @@ router.get("/:wid/:pid/readme", async (req: Request, res: Response) => {
       }
       throw err;
     }
-  } catch (err: any) {
-    logger.error(`[projects] Public README fetch failed for ${wid}/${pid}:`, err);
+  } catch (err) {
+    logger.error(`[projects] Public README fetch failed for ${wid}/${pid}:`, { err });
     res.status(500).json({ error: "Failed to load project readme" });
   }
 });
