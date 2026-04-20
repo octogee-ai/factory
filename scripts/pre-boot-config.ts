@@ -26,9 +26,19 @@ function log(msg: string): void {
 }
 
 async function main(): Promise<void> {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    log("No openclaw.json found — skipping pre-boot config");
-    return;
+  // Read config in try/catch rather than existsSync-then-read — avoids
+  // TOCTOU (CodeQL js/file-system-race). The writeFileSync later in this
+  // function also needs this file to exist, and reading it up front means
+  // we short-circuit on ENOENT before opening a Firestore connection.
+  let configRaw: string;
+  try {
+    configRaw = fs.readFileSync(CONFIG_PATH, "utf-8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      log("No openclaw.json found — skipping pre-boot config");
+      return;
+    }
+    throw e;
   }
   // Init Firebase — use SA key if available, otherwise ADC (Workload Identity)
   if (fs.existsSync(SA_KEY_PATH)) {
@@ -42,8 +52,8 @@ async function main(): Promise<void> {
   }
   const db = admin.firestore();
 
-  // Read current config
-  const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+  // Parse config (already read up top to short-circuit on ENOENT)
+  const config = JSON.parse(configRaw);
 
   let changed = false;
 
