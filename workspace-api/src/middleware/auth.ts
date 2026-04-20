@@ -6,8 +6,9 @@
  *   2. requireAdmin()              — requireAuth() + admin role check in Firestore
  *   3. requireInternalServiceAuth() — internal service-to-service calls (gateway, provisioner, cron)
  *                                    Validates `X-Internal-Service-Key` against INTERNAL_SERVICE_KEY env var.
- *   4. requireAgentKey()           — `X-Agent-Key` header for agent/user-scoped calls
- *                                    Header presence only; value is validated per-route against user doc.
+ *   4. requireAgentKeyForUser(getUid) — `X-Agent-Key` presence + constant-time
+ *                                    value validation against users/{uid}/settings/api.
+ *                                    The pattern for every /internal/agents/* route.
  *   5. (no middleware)             — public endpoints get no auth middleware
  *
  * Attaches `req.uid`, `req.user`, `req.isAdmin` to the request for downstream use.
@@ -149,22 +150,79 @@ export function requireInternalServiceAuth(req: Request, res: Response, next: Ne
 }
 
 /**
- * requireAgentKey — verifies that an X-Agent-Key header is present.
+ * requireAgentKeyForUser — presence + value validation for X-Agent-Key.
  *
- * This is a presence-only check; the actual key value is validated per-route
- * against the agent's stored API key in Firestore (see agents.ts activate route).
- * Do NOT use this for routes that don't do their own downstream value validation.
+ * Validates the header against the stored key at users/{uid}/settings/api.apiKey
+ * using a constant-time comparison. On success, attaches `req.agentKey` and
+ * `req.agentUid` for downstream handlers.
  *
- * Used by: /internal/agents/* (which validate key against users/{uid}/settings/api)
+ * The `getUid` callback receives the full Request so callers can source uid
+ * from the body, params, or query as appropriate for the route.
+ *
+ * 401 cases:
+ *   - missing X-Agent-Key header
+ *   - uid not supplied by callback (400 instead — caller error)
+ *   - no API settings doc for uid
+ *   - stored key mismatch
  */
-export function requireAgentKey(req: Request, res: Response, next: NextFunction): void {
-  const key = req.headers["x-agent-key"] as string | undefined;
-  if (!key) {
-    res.status(401).json({ error: "X-Agent-Key header required" });
-    return;
-  }
+export function requireAgentKeyForUser(
+  getUid: (req: Request) => string | undefined,
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    const key = req.headers["x-agent-key"] as string | undefined;
+    if (!key) {
+      res.status(401).json({ error: "X-Agent-Key header required" });
+      return;
+    }
 
-  (req as Request & { agentKey?: string }).agentKey = key;
-  next();
+    const uid = getUid(req);
+    if (!uid) {
+      res.status(400).json({ error: "missing_uid" });
+      return;
+    }
+
+    db.doc(`users/${uid}/settings/api`)
+      .get()
+      .then((snap) => {
+        if (!snap.exists) {
+          res.status(401).json({ error: "unauthorized", message: "No API key on record" });
+          return;
+        }
+        const stored = snap.data()?.apiKey as string | undefined;
+        if (!stored) {
+          res.status(401).json({ error: "unauthorized", message: "No API key on record" });
+          return;
+        }
+
+        // Constant-time compare to avoid leaking the stored key's length
+        // via timing. Length check first since timingSafeEqual requires
+        // equal-length buffers and throws otherwise.
+        let valid = false;
+        try {
+          valid =
+            stored.length === key.length &&
+            crypto.timingSafeEqual(
+              Buffer.from(stored, "utf8"),
+              Buffer.from(key, "utf8"),
+            );
+        } catch {
+          valid = false;
+        }
+
+        if (!valid) {
+          logger.warn(`Agent-key auth rejected for uid=${uid} from ${req.ip}`);
+          res.status(401).json({ error: "unauthorized", message: "Invalid API key" });
+          return;
+        }
+
+        (req as Request & { agentKey?: string; agentUid?: string }).agentKey = key;
+        (req as Request & { agentUid?: string }).agentUid = uid;
+        next();
+      })
+      .catch((err) => {
+        logger.warn(`Agent-key auth failed for uid=${uid}: ${err.message}`);
+        res.status(500).json({ error: "auth_check_failed" });
+      });
+  };
 }
 

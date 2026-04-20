@@ -29,6 +29,7 @@ set -euo pipefail
 #   ./scripts/rotate-secret.sh --env=test internal-service-key
 #   ./scripts/rotate-secret.sh --env=test mm-admin-pat
 #   ./scripts/rotate-secret.sh --env=test gitea-pat
+#   ./scripts/rotate-secret.sh --env=test discord-ops-webhook
 #   ./scripts/rotate-secret.sh --env=test list
 #
 # Rotatable secrets:
@@ -36,6 +37,7 @@ set -euo pipefail
 #   internal-service-key  — generates a new random 40-char key, persists to SM
 #   mm-admin-pat          — revokes + remints via setup-mattermost.sh
 #   gitea-pat             — revokes + remints via setup-gitea.sh
+#   discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL (reads from stdin or env)
 #
 # Prod rotations always prompt for confirmation. Test supports --yes.
 # ═══════════════════════════════════════════════════════════════════════════
@@ -162,6 +164,7 @@ case "$SECRET" in
     echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: workspace-api, octogee-gateway, cron jobs"
     echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: workspace-api, chat-proxy, octogee-gateway"
     echo "    gitea-pat             — Gitea API token, consumers: octogee-gateway, workspace-api"
+    echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: octogee-gateway"
     echo ""
     echo "  For rarer rotations (Gitea SSH host key, Firebase SA key, DB passwords,"
     echo "  Stripe webhook secret, etc.) see RUNBOOK.md → 'Credential Rotation (Full Playbook)'."
@@ -290,6 +293,43 @@ print(json.dumps(d))
     info "Restarting consumers..."
     rollout_restart octogee-gateway workspace-api
     ok "Rotation complete"
+    ;;
+
+  # ── Discord ops webhook ─────────────────────────────────────────────────
+  discord-ops-webhook)
+    NEW_VALUE="${DISCORD_OPS_WEBHOOK_URL:-}"
+    if [[ -z "$NEW_VALUE" ]]; then
+      if [[ -t 0 ]]; then
+        echo -n "  Paste new DISCORD_OPS_WEBHOOK_URL (input hidden): "
+        read -rs NEW_VALUE
+        echo ""
+      else
+        NEW_VALUE=$(cat)
+      fi
+    fi
+    [[ -z "$NEW_VALUE" ]] && fail "No value provided"
+    [[ "$NEW_VALUE" =~ ^https://discord\.com/api/webhooks/ ]] || warn "URL does not match Discord webhook format — proceeding anyway"
+
+    confirm "Rotate DISCORD_OPS_WEBHOOK_URL in $FIREBASE_PROJECT and restart gateway?" || { info "Cancelled"; exit 0; }
+
+    info "Writing new version to Secret Manager ($FIREBASE_PROJECT)..."
+    echo -n "$NEW_VALUE" | gcloud secrets versions add DISCORD_OPS_WEBHOOK_URL \
+      --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
+    echo -n "$NEW_VALUE" | gcloud secrets create DISCORD_OPS_WEBHOOK_URL \
+      --data-file=- --project="$FIREBASE_PROJECT" \
+      --replication-policy=automatic 2>/dev/null || \
+      fail "Could not write to Secret Manager"
+    ok "Secret Manager updated"
+
+    info "Updating K8s secret discord-ops-webhook..."
+    kubectl create secret generic discord-ops-webhook -n "$K8S_NAMESPACE" \
+      --from-literal=url="$NEW_VALUE" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    ok "K8s secret discord-ops-webhook updated"
+
+    info "Restarting gateway to pick up new webhook URL..."
+    rollout_restart octogee-gateway
+    ok "Rotation complete — verify by checking Discord for the next ops event"
     ;;
 
   *)

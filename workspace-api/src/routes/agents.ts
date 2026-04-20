@@ -2,11 +2,11 @@
  * Agent routes — activation, deprovisioning, and per-Builder coach updates.
  *
  * Mounted at both /api/agents (public via Ingress, requireAuth) and
- * /internal/agents (K8s DNS only, requireAgentKey / requireAdmin). Each
+ * /internal/agents (K8s DNS only, requireAgentKeyForUser / requireAdmin). Each
  * route picks its own auth middleware.
  */
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth, requireAgentKey, requireAdmin } from "../middleware/auth";
+import { requireAuth, requireAgentKeyForUser, requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db, FieldValue } from "../lib/db";
 import { readAgent } from "../lib/firestoreReads";
@@ -93,30 +93,20 @@ const ALL_ROLES = ["coach", "alex", "morgan", "riley", "robert"] as const;
 
 // ── POST /activate — activate a specialist agent ──────────────────────────
 
-router.post("/activate", requireAgentKey, async (req: Request, res: Response, next: NextFunction) => {
+// Auth: requireAgentKeyForUser validates X-Agent-Key against users/{uid}/settings/api
+// (presence + constant-time value compare). Handler sees `req.agentUid` on success.
+router.post("/activate", requireAgentKeyForUser((req) => (req.body as { uid?: string })?.uid), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { uid, role, requestedBy } = req.body as { uid?: string; role?: string; requestedBy?: string };
 
-    if (!uid || !role) {
-      res.status(400).json({ error: "missing_fields", required: ["uid", "role"] });
+    // uid is guaranteed present + auth'd by middleware; re-read from body for handler use.
+    if (!role) {
+      res.status(400).json({ error: "missing_fields", required: ["role"] });
       return;
     }
 
     if (!SPECIALIST_ROLES.includes(role as SpecialistRole)) {
       res.status(400).json({ error: "invalid_role", role, allowed: SPECIALIST_ROLES });
-      return;
-    }
-
-    // Validate API key belongs to this uid
-    const agentKey = (req as Request & { agentKey?: string }).agentKey;
-    const apiSettingsSnap = await db.doc(`users/${uid}/settings/api`).get();
-    if (!apiSettingsSnap.exists) {
-      res.status(401).json({ error: "unauthorized", message: "No API key on record" });
-      return;
-    }
-    const storedKey = apiSettingsSnap.data()?.apiKey;
-    if (!storedKey || storedKey !== agentKey) {
-      res.status(401).json({ error: "unauthorized", message: "Invalid API key" });
       return;
     }
 

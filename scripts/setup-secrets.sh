@@ -356,6 +356,28 @@ ksecret resend-secrets \
   --from-literal=from_email="${RESEND_FROM_EMAIL:-notifications@octogee.com}" \
   --from-literal=from_name="${RESEND_FROM_NAME}"
 
+# ── 11b. Discord ops webhook (optional) ──────────────────────────────────
+# Used by gateway to post operational events (agent provisioning, errors,
+# deploy notifications) to a single Discord channel. Optional: if unset,
+# the helm chart mounts the K8s Secret as optional=true and the gateway
+# silently no-ops Discord posts.
+#
+# K8s Secret: discord-ops-webhook
+#   url → DISCORD_OPS_WEBHOOK_URL (full https://discord.com/api/webhooks/... URL)
+#
+# Rotate: delete + recreate the webhook in Discord server settings, then
+# `rotate-secret.sh --env=ENV discord-ops-webhook`. See docs/RUNBOOK.md.
+info "discord-ops-webhook"
+set +u
+DISCORD_OPS_WEBHOOK_URL="${DISCORD_OPS_WEBHOOK_URL:-}"
+set -u
+[[ -z "$DISCORD_OPS_WEBHOOK_URL" ]] && DISCORD_OPS_WEBHOOK_URL=$(sm_get DISCORD_OPS_WEBHOOK_URL "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+if [[ -n "$DISCORD_OPS_WEBHOOK_URL" ]]; then
+  ksecret discord-ops-webhook --from-literal=url="$DISCORD_OPS_WEBHOOK_URL"
+else
+  info "  DISCORD_OPS_WEBHOOK_URL not configured — skipping (gateway will no-op Discord posts)"
+fi
+
 # ── 12. GCP Service Account key ───────────────────────────────────────────
 # Used by workspace-api and gateway for GCP API access (Workload Identity
 # preferred on prod; SA key is a fallback for services that need it directly).
@@ -386,6 +408,7 @@ for sm_secret in \
   GITHUB_TOKEN \
   STRIPE_SECRET_KEY \
   STRIPE_WEBHOOK_SECRET \
+  DISCORD_OPS_WEBHOOK_URL \
   GOOGLE_CLIENT_ID \
   GOOGLE_CLIENT_SECRET \
   MICROSOFT_CLIENT_ID \

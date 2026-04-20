@@ -82,15 +82,25 @@ interface ParsedUpload {
   mimeType: string;
 }
 
+// Only these multipart field names are honored. Busboy will still emit
+// events for unexpected names, but we drop them so the fields object
+// stays a known-shape Record<AllowedField, string> and a malicious
+// uploader can't write arbitrary keys (e.g. `__proto__`) onto it.
+const ALLOWED_FIELDS = new Set(["slug", "project", "path"] as const);
+type AllowedField = typeof ALLOWED_FIELDS extends Set<infer T> ? T : never;
+
 function parseMultipart(req: Request): Promise<ParsedUpload> {
   return new Promise((resolve, reject) => {
     const bb = Busboy({ headers: req.headers });
-    const fields: Record<string, string> = {};
+    const fields: Record<string, string> = Object.create(null);
     let fileBuffer: Buffer | null = null;
     let filename = "";
     let mimeType = "";
 
-    bb.on("field", (name: string, val: string) => { fields[name] = val; });
+    bb.on("field", (name: string, val: string) => {
+      // eslint-disable-next-line security/detect-object-injection -- name is gated by ALLOWED_FIELDS above; fields is Object.create(null) so no prototype chain
+      if (ALLOWED_FIELDS.has(name as AllowedField)) fields[name] = val;
+    });
     bb.on("file", (_name: string, stream: NodeJS.ReadableStream, info: { filename: string; mimeType: string }) => {
       filename = info.filename;
       mimeType = info.mimeType;
