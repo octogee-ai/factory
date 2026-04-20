@@ -43,6 +43,7 @@ import { decomposeProjectId } from "../lib/projectId";
 import { logger } from "../middleware/logging";
 import { workspaceGeneralChannelName } from "@shared/types/identity";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
+import { readChannel, readProject } from "../lib/firestoreReads";
 
 const router = Router();
 router.use(requireAuth);
@@ -126,16 +127,14 @@ async function resolveEntityChannel(
   if (!parts) return { mmChannelId: null, ownerUid: null, error: "Invalid project id" };
 
   const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
-  const projectDoc = await projectRef.get();
-  if (!projectDoc.exists) {
+  const project = await readProject(projectRef);
+  if (!project) {
     return { mmChannelId: null, ownerUid: null, error: "Project not found" };
   }
-  const project = projectDoc.data()!;
-  const channelDoc = await projectRef.collection("channels").doc("general").get();
-  const mmChannelId = channelDoc.data()?.mattermost?.channelId ?? null;
+  const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
   return {
-    mmChannelId,
-    ownerUid: project.ownerUid ?? null,
+    mmChannelId: generalChan?.mattermost?.channelId ?? null,
+    ownerUid: project.ownerUid,
   };
 }
 
@@ -349,19 +348,18 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
         return;
       }
       const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
-      const projectDoc = await projectRef.get();
-      if (!projectDoc.exists) {
+      const project = await readProject(projectRef);
+      if (!project) {
         res.status(404).json({ error: "Project not found" });
         return;
       }
-      const project = projectDoc.data()!;
-      ownerUid = project.ownerUid ?? null;
+      ownerUid = project.ownerUid;
       if (ownerUid !== callerUid) {
         res.status(403).json({ error: "Only the project owner can remove members" });
         return;
       }
-      const channelDoc = await projectRef.collection("channels").doc("general").get();
-      mmChannelId = channelDoc.data()?.mattermost?.channelId ?? null;
+      const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
+      mmChannelId = generalChan?.mattermost?.channelId ?? null;
       if (!mmChannelId) {
         res.status(422).json({ error: "Project has no channel yet" });
         return;

@@ -5,12 +5,12 @@
  * `workspaces/{wid}/projects/{pid}/channels/{cid}` (project-level). Per
  * DATA-MODEL-REVIEW v3 §6.3.
  *
- * MVP seeds exactly one channel per parent (kind = 'general'); the
- * subcollection shape is in place so adding focused channels later
- * requires zero schema change.
+ * Project-level channels are always kind = 'general' (MVP seeds one).
+ * Workspace-level channels can be any of 'general' / 'coach-dm' / 'admin',
+ * seeded at provisioning time by scripts/lib/provisionSteps.ts.
  */
 
-export type ChannelKind = 'general';
+export type ChannelKind = 'general' | 'coach-dm' | 'admin';
 
 export interface ChannelMattermost {
   /** MM channel ID for this channel. */

@@ -26,13 +26,15 @@
  * malformed slugs can't steer the doc lookup at unrelated collections.
  */
 import type { Request, Response } from "express";
+import type { Project } from "@shared/types";
 import { db } from "./db";
+import { readProject } from "./firestoreReads";
 import { logger } from "../middleware/logging";
 import { isValidProjectId, USERNAME_RE } from "@shared/types/identity";
 
 export type ProjectCtx = {
   projectRef: FirebaseFirestore.DocumentReference;
-  project: FirebaseFirestore.DocumentData;
+  project: Project;
   uid: string;
   wid: string;
   pid: string;
@@ -79,12 +81,11 @@ export async function withProject(
     }
 
     const projectRef = db.doc(`workspaces/${wid}/projects/${pid}`);
-    const projectDoc = await projectRef.get();
-    if (!projectDoc.exists) {
+    const project = await readProject(projectRef);
+    if (!project) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    const project = projectDoc.data()!;
 
     if (opts.ownerOnly && project.ownerUid !== req.uid) {
       res.status(403).json({

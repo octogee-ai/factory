@@ -13,6 +13,7 @@
  */
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { db } from "./db";
+import { readProject } from "./firestoreReads";
 
 /** Resolved target for a file operation — points at a workspace or project repo. */
 export interface FileTarget {
@@ -71,11 +72,10 @@ export async function resolveFileTarget(input: FileTargetInput): Promise<FileTar
 
   if (projectSlug) {
     const projectRef = db.doc(`workspaces/${slug}/projects/${projectSlug}`);
-    const projectDoc = await projectRef.get();
-    if (!projectDoc.exists) {
+    const project = await readProject(projectRef);
+    if (!project) {
       return { ok: false, status: 404, error: "Project not found" };
     }
-    const project = projectDoc.data()!;
     const isOwner = project.ownerUid === callerUid;
     let isMember = false;
     if (!isOwner && callerUid) {

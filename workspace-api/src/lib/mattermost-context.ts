@@ -9,6 +9,7 @@
  * reads in parallel and returns the resolved context for a given user.
  */
 import { db } from "./db";
+import { readAgent, readChannel, readWorkspace } from "./firestoreReads";
 
 export interface WorkspaceMmContext {
   ownerUid: string;
@@ -33,23 +34,23 @@ export async function getWorkspaceMmContext(
   const slug = ownerSlug || u.username || u.workspaceId;
   if (!slug) return null;
 
-  const [wsSnap, generalSnap, coachDmSnap, adminSnap, agentSnap] = await Promise.all([
-    db.doc(`workspaces/${slug}`).get(),
-    db.doc(`workspaces/${slug}/channels/general`).get(),
-    db.doc(`workspaces/${slug}/channels/coach-dm`).get(),
-    db.doc(`workspaces/${slug}/channels/admin`).get(),
-    db.doc(`agents/${ownerUid}`).get(),
+  const [workspace, generalChan, coachDmChan, adminChan, agent] = await Promise.all([
+    readWorkspace(slug),
+    readChannel(db.doc(`workspaces/${slug}/channels/general`)),
+    readChannel(db.doc(`workspaces/${slug}/channels/coach-dm`)),
+    readChannel(db.doc(`workspaces/${slug}/channels/admin`)),
+    readAgent(ownerUid),
   ]);
 
   return {
     ownerUid,
     slug,
-    teamId: wsSnap.data()?.mattermost?.teamId ?? null,
+    teamId: workspace?.mattermost.teamId ?? null,
     userId: u.mattermost?.userId ?? null,
     username: u.mattermost?.username ?? null,
-    coachUserId: agentSnap.data()?.mattermost?.userId ?? null,
-    coachDmChannelId: coachDmSnap.data()?.mattermost?.channelId ?? null,
-    generalChannelId: generalSnap.data()?.mattermost?.channelId ?? null,
-    adminChannelId: adminSnap.data()?.mattermost?.channelId ?? null,
+    coachUserId: agent?.mattermost.userId ?? null,
+    coachDmChannelId: coachDmChan?.mattermost.channelId ?? null,
+    generalChannelId: generalChan?.mattermost.channelId ?? null,
+    adminChannelId: adminChan?.mattermost.channelId ?? null,
   };
 }

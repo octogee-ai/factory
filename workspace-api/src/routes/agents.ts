@@ -9,6 +9,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth, requireAgentKey, requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db, FieldValue } from "../lib/db";
+import { readAgent } from "../lib/firestoreReads";
 import { mmApi } from "../lib/mattermost";
 
 const router = Router();
@@ -51,8 +52,8 @@ router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextF
     // Sync display fields to MM when `name` changed. MM username stays stable.
     if (typeof patch.name === "string" && patch.name) {
       try {
-        const agentSnap = await db.doc(`agents/${uid}`).get();
-        const coachMmUserId = agentSnap.data()?.mattermost?.userId;
+        const agent = await readAgent(uid);
+        const coachMmUserId = agent?.mattermost.userId;
         if (coachMmUserId) {
           await mmApi(`/users/${coachMmUserId}/patch`, "PUT", {
             first_name: patch.name,
