@@ -79,11 +79,22 @@ if $OPEN_BROWSER; then
   # Open in background so the port-forward command is the foreground process
   # that owns the TTY and responds to Ctrl+C.
   (
-    # Give port-forward ~1s to bind before the browser hits it.
-    sleep 1
-    if command -v open >/dev/null 2>&1; then open "$URL" >/dev/null 2>&1 || true
-    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 || true
-    fi
+    # Poll the local port until kubectl port-forward finishes binding,
+    # THEN open the browser. A fixed sleep races: port-forward takes
+    # 2-4s to auth via gke-gcloud-auth-plugin + establish the SPDY tunnel,
+    # and macOS's `open` at T+1s hits ECONNREFUSED, caches the error,
+    # and never auto-recovers when the forward finishes. Poll for up
+    # to 6s (12 × 500ms) which covers cold gcloud sessions.
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      sleep 0.5
+      if (exec 3<>/dev/tcp/127.0.0.1/"${LOCAL_PORT}") 2>/dev/null; then
+        exec 3>&-
+        if command -v open >/dev/null 2>&1; then open "$URL" >/dev/null 2>&1 || true
+        elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 || true
+        fi
+        exit 0
+      fi
+    done
   ) &
 fi
 
