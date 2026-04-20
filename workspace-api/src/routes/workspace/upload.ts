@@ -51,12 +51,21 @@ router.post("/upload", withFileTarget(async (req, res, _next, target) => {
       sha = existing.sha;
     } catch { /* new file */ }
 
-    await customerGiteaApi(req, `${repoName}/contents/${filePath}`, "PUT", {
-      message: `upload: ${filePath}`,
-      content: file.content,
-      ...(sha ? { sha } : {}),
-    });
-    results.push({ name: filePath, status: "ok" });
+    try {
+      await customerGiteaApi(req, `${repoName}/contents/${filePath}`, "PUT", {
+        message: `upload: ${filePath}`,
+        content: file.content,
+        ...(sha ? { sha } : {}),
+      });
+      results.push({ name: filePath, status: "ok" });
+    } catch (error) {
+      logger.warn("Gitea upload failed", {
+        filePath,
+        repoName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      results.push({ name: filePath, status: "error" });
+    }
   }
 
   res.json({ results });
@@ -144,6 +153,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
 
     // Generate thumbnail for images
     let thumbnailUrl: string | undefined;
+    let thumbnailError: string | undefined;
     if (IMAGE_EXTENSIONS.has(ext)) {
       try {
         const sharp = (await import("sharp")).default;
@@ -159,6 +169,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         logger.warn(`Thumbnail generation failed for ${filePath}: ${msg}`);
+        thumbnailError = msg;
       }
     }
 
@@ -179,6 +190,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
       path: filePath,
       gcsUrl: `gs://${bucket.name}/${gcsPath}`,
       ...(thumbnailUrl ? { thumbnailUrl } : {}),
+      ...(thumbnailError ? { thumbnailError } : {}),
       manifestUpdated: true,
     });
   } catch (e) {
