@@ -42,7 +42,6 @@ import {
   computeWorkspaceDisplayName,
   WORKSPACE_CHANNEL_DISPLAY_NAMES,
 } from "../../../shared/types/display-names.js";
-import { postOnboardingGreeting } from "../onboarding-greeting.js";
 import { mmApiCall } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
 import { mintAndPersistCoachToken } from "./coach-pat.js";
@@ -407,13 +406,6 @@ export async function provisionMattermostUser(
 
     let coachMmUserId: string | null = null;
     let coachPersonalToken: string | null = null;
-    // Onboarding greeting outcome — mirrored onto the user doc so ops /
-    // retry logic can see whether the Coach channel got its first post.
-    // See the greeting call site below for the shape contract.
-    let greetingOutcome:
-      | { ok: true; postId: string; at: unknown }
-      | { ok: false; error: string; at: unknown }
-      | null = null;
     if (coachMmUser) {
       coachMmUserId = coachMmUser.id;
       // Add coach to workspace team (not shared team)
@@ -448,44 +440,12 @@ export async function provisionMattermostUser(
         coachPersonalToken = coachToken.token;
         log(`[mattermost] coach PAT minted and persisted for ${coachUsername}`);
 
-        // Post Octo's onboarding greeting to the Coach channel. Direct MM
-        // post authored as {slug}-coach via the coach's PAT — static content,
-        // no LLM. Lands before the Builder arrives at @me so their Coach
-        // channel is non-empty. Wrapped in try/catch: a failed post is
-        // non-fatal for the rest of provisioning. See
-        // WORKSPACE-NAMING-CANONICAL-SPEC §"Step 4 — Octo initiates…".
-        //
-        // Outcome is tracked on the user doc (`provisioning.openclaw.greeting`)
-        // so ops can count failures and retry logic has a signal to check.
-        // Shape: { ok: boolean, postId?: string, error?: string, at: timestamp }.
-        try {
-          const mmUrl = process.env.MM_URL;
-          if (!mmUrl) {
-            log(`[mattermost] ⚠ onboarding greeting skipped — MM_URL env not set`);
-            greetingOutcome = { ok: false, error: 'MM_URL not set', at: FieldValue.serverTimestamp() };
-          } else {
-            const result = await postOnboardingGreeting(
-              {
-                channelId: channel.id,
-                coachPat: coachToken.token,
-                firstName,
-                slug,
-              },
-              { mmUrl, fetch, log },
-            );
-            greetingOutcome = {
-              ok: true,
-              postId: result.postId,
-              at: FieldValue.serverTimestamp(),
-            };
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          log(
-            `[mattermost] ⚠ onboarding greeting post failed for ${coachUsername} (non-fatal): ${message}`,
-          );
-          greetingOutcome = { ok: false, error: message, at: FieldValue.serverTimestamp() };
-        }
+        // NOTE: The onboarding greeting used to post HERE, inline after the
+        // PAT mint. That ordering was wrong — it fired before the coach
+        // agent was bound in openclaw.json, so any reply the Builder sent
+        // to the greeting hit an unmounted coach. The post + its outcome
+        // mirror are now owned by `provisionCustomer` (workspace.ts),
+        // which runs them AFTER `applyConfigPatch` lands the binding.
       } else {
         log(`[mattermost] ⚠ coach PAT creation failed — coach identity will fall back to octogee-bot until re-provisioned`);
       }
@@ -518,10 +478,11 @@ export async function provisionMattermostUser(
       // directly from there.
       ...(coachPersonalToken ? { _coachPersonalToken: coachPersonalToken } : {}),
       ...(adminChannelId ? { "mattermost.adminChannelId": adminChannelId } : {}),
-      // Track greeting outcome so ops + a future retry path can see whether
-      // the Coach channel actually got its first post. Mirrored onto the
-      // user doc by markProvisioningComplete.
-      ...(greetingOutcome ? { "provisioning.openclaw.greeting": greetingOutcome } : {}),
+      // The onboarding-greeting outcome key is intentionally not set here
+      // — the post is lifted up to `provisionCustomer` (workspace.ts) so
+      // it fires after the coach agent is bound. That orchestrator owns
+      // the outcome mirror into mmUpdate. See the regression guard in
+      // scripts/__tests__/provisioner-greeting-ordering.spec.ts.
     };
   } catch (e: any) {
     log(`[mattermost] ⚠ provisioning failed: ${e.message} — continuing without chat`);
