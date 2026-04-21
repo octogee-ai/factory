@@ -76,28 +76,40 @@ async function main(): Promise<void> {
     }
   }
 
-  // Patch plugin config
-  config.plugins ??= {};
-  config.plugins.entries ??= {};
-  config.plugins.entries["octogee-router"] ??= {};
-  config.plugins.entries["octogee-router"].config ??= {};
+  if (process.env.OCTOGEE_ROUTER_ENABLED === "false") {
+    if (config.plugins?.allow && Array.isArray(config.plugins.allow)) {
+      config.plugins.allow = config.plugins.allow.filter((id: string) => id !== "octogee-router");
+      changed = true;
+    }
+    if (config.plugins?.entries?.["octogee-router"]) {
+      delete config.plugins.entries["octogee-router"];
+      changed = true;
+      log("removed octogee-router from config because OCTOGEE_ROUTER_ENABLED=false");
+    }
+  } else {
+    // Patch plugin config
+    config.plugins ??= {};
+    config.plugins.entries ??= {};
+    config.plugins.entries["octogee-router"] ??= {};
+    config.plugins.entries["octogee-router"].config ??= {};
 
-  // Clean up stale advisorySlugs key if present (advisory mode removed)
-  if (config.plugins.entries["octogee-router"].config.advisorySlugs !== undefined) {
-    delete config.plugins.entries["octogee-router"].config.advisorySlugs;
-    changed = true;
-    log("removed stale advisorySlugs from config");
-  }
+    // Clean up stale advisorySlugs key if present (advisory mode removed)
+    if (config.plugins.entries["octogee-router"].config.advisorySlugs !== undefined) {
+      delete config.plugins.entries["octogee-router"].config.advisorySlugs;
+      changed = true;
+      log("removed stale advisorySlugs from config");
+    }
 
-  const currentOverrides = config.plugins.entries["octogee-router"].config.enforcementOverrides ?? {};
-  if (JSON.stringify(enforcementOverrides) !== JSON.stringify(currentOverrides)) {
-    config.plugins.entries["octogee-router"].config.enforcementOverrides = enforcementOverrides;
-    changed = true;
-    const entries = Object.entries(enforcementOverrides);
-    const overrideSummary = entries.length
-      ? entries.map(([s, e]) => `${s}=${e}`).join(", ")
-      : "(all observe)";
-    log(`enforcement overrides: ${overrideSummary}`);
+    const currentOverrides = config.plugins.entries["octogee-router"].config.enforcementOverrides ?? {};
+    if (JSON.stringify(enforcementOverrides) !== JSON.stringify(currentOverrides)) {
+      config.plugins.entries["octogee-router"].config.enforcementOverrides = enforcementOverrides;
+      changed = true;
+      const entries = Object.entries(enforcementOverrides);
+      const overrideSummary = entries.length
+        ? entries.map(([s, e]) => `${s}=${e}`).join(", ")
+        : "(all observe)";
+      log(`enforcement overrides: ${overrideSummary}`);
+    }
   }
 
   // ── MM bot token + baseUrl sync ─────────────────────────────────────────

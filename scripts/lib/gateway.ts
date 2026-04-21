@@ -140,12 +140,15 @@ export function ensureGatewayDefaults(): void {
     log("Set tools.elevated.enabled = false");
   }
 
+  const routerEnabled = process.env.OCTOGEE_ROUTER_ENABLED !== "false";
+
   // Security: Explicit plugin allowlist
   config.plugins ??= {};
-  if (!config.plugins.allow || !Array.isArray(config.plugins.allow)) {
-    config.plugins.allow = ["mattermost", "octogee-router"];
+  const desiredAllow = routerEnabled ? ["mattermost", "octogee-router"] : ["mattermost"];
+  if (JSON.stringify(config.plugins.allow ?? []) !== JSON.stringify(desiredAllow)) {
+    config.plugins.allow = desiredAllow;
     changed = true;
-    log("Set plugins.allow = ['mattermost', 'octogee-router']");
+    log(`Set plugins.allow = ${JSON.stringify(desiredAllow)}`);
   }
 
   // Security: Gateway auth rate limiting
@@ -160,8 +163,14 @@ export function ensureGatewayDefaults(): void {
   // Plugin config structure
   config.plugins ??= {};
   config.plugins.entries ??= {};
-  config.plugins.entries["octogee-router"] ??= {};
-  config.plugins.entries["octogee-router"].config ??= {};
+  if (routerEnabled) {
+    config.plugins.entries["octogee-router"] ??= {};
+    config.plugins.entries["octogee-router"].config ??= {};
+  } else if (config.plugins.entries["octogee-router"]) {
+    delete config.plugins.entries["octogee-router"];
+    changed = true;
+    log("Removed octogee-router plugin entry because OCTOGEE_ROUTER_ENABLED=false");
+  }
 
   if (changed) writeOpenClawConfig(config);
 }
@@ -185,6 +194,8 @@ export async function syncEnforcementOverrides(): Promise<void> {
       }
     }
   }
+
+  if (process.env.OCTOGEE_ROUTER_ENABLED === "false") return;
 
   const config = readOpenClawConfig();
   config.plugins ??= {};
@@ -219,6 +230,8 @@ export async function syncBrainGatedSlugs(): Promise<void> {
     const slug = doc.data().provisioning?.openclaw?.slug;
     if (slug) brainGatedSlugs.push(slug);
   }
+
+  if (process.env.OCTOGEE_ROUTER_ENABLED === "false") return;
 
   const config = readOpenClawConfig();
   config.plugins ??= {};
@@ -292,6 +305,8 @@ export async function syncModelOverrides(): Promise<void> {
       brainOverrides[slug] = data.brainModel;
     }
   }
+
+  if (process.env.OCTOGEE_ROUTER_ENABLED === "false") return;
 
   const config = readOpenClawConfig();
   config.plugins ??= {};

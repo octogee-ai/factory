@@ -153,21 +153,12 @@
     "enabled": true,
     "allow": [
       "mattermost",
-      "octogee-router",
       "anthropic",
       "memory-core"
     ],
     "entries": {
       "mattermost": {
         "enabled": true
-      },
-      "octogee-router": {
-        "enabled": true,
-        "config": {
-          "enforcement": "hard",
-          "advisorySlugs": [],
-          "enforcementOverrides": {}
-        }
       },
       "anthropic": {
         "enabled": true
