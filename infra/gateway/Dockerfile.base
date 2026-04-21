@@ -12,7 +12,16 @@
 #   - @huggingface/transformers (1.2GB — heaviest dep, almost never changes)
 #   - octogee-router npm install (node_modules for the classifier extension)
 # ─────────────────────────────────────────────────────────────────────────────
-FROM node:22-slim
+# Node 24 matches OpenClaw upstream's publishing + CI target image
+# (node:24-bookworm-slim, per their Dockerfile). OpenClaw 2026.4.20's
+# `engines.node` declares `>=22.14.0` as the hard floor, but the CI
+# matrix runs primarily on 24.x with only partial 22.18 compat. Staying
+# in lockstep with their ship target avoids "works on their CI, not on
+# our pod" surprises and keeps us on the current LTS line. Unrelated
+# services (`workspace-api` on GKE, `functions` on Firebase) stay on
+# Node 22 — they're separate deploy surfaces with their own runtime
+# constraints (Firebase Functions Node 24 support lags the runtime).
+FROM node:24-bookworm-slim
 
 # ── All system packages in one layer ────────────────────────────────────────
 # Combining apt runs avoids duplicate update overhead and saves ~30s per build.
