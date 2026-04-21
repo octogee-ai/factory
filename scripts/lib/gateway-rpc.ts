@@ -171,18 +171,31 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     opts.url ??
     `ws://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || 18789}`;
   const token = resolveGatewayToken(opts);
-  // 10s for connect — matches the handshake budget from the first hotfix and
-  // accommodates the gateway's startup-grace window on a cold pod. Callers
-  // who need a tighter budget (readiness probes) still set it explicitly.
+  // 30s for both connect AND per-call — matches the observed event-loop
+  // pin window on a busy gateway. Rationale:
   //
-  // 30s for per-call — `config.get` on a busy/startup gateway has been
-  // observed taking up to ~21s because plugin init pins the event loop
-  // (April 16 TEST signup: 21411ms server-side). 10s was too tight and
-  // caused the provisioner to fall back to file-write on cold pods, which
-  // in turn caused chokidar to miss the write and the new customer's coach
-  // to never start. 30s is cheap headroom for the rare cold-call case;
-  // on a stable gateway the round-trip is sub-second.
-  const connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
+  // The April 16 TEST signup showed `config.get` taking ~21s server-side.
+  // We already raised `callTimeoutMs` to 30s to absorb that. But a later
+  // TEST signup (April 21, `chris-test5`) showed the PROBLEM also bites
+  // during the WS open phase itself — the connect handshake timed out at
+  // 10s with `stage=ws-open`, meaning the gateway's TCP accept + WS upgrade
+  // couldn't complete within that budget because the event loop was pinned
+  // by concurrent MM-client reconnects. Two retries at 10s each exhausted
+  // in 22s and sent us straight to the file-write fallback, which then
+  // triggered a wholesale `restarting mattermost channel` that dropped
+  // every existing tenant's WS for the gateway-hot-reload window.
+  //
+  // 30s connect timeout matches the observed pin ceiling with modest
+  // headroom. On a stable gateway the WS open is sub-second so the extra
+  // budget is only ever spent on the cold/busy path — which is exactly
+  // the path we want to keep on the RPC rail rather than the file-write
+  // rail. No in-repo production callers of `isGatewayUp()` exist today
+  // (every call site passes an explicit timeout); the default bump is
+  // inert for that API and the contract is preserved for any future
+  // readiness probe that might rely on it.
+  //
+  // Spec: docs/MM-MULTI-ACCOUNT-FOLLOWUP-SPEC.md §7 (provisioner → RPC).
+  const connectTimeoutMs = opts.connectTimeoutMs ?? 30_000;
   const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
   const scopes = opts.scopes ?? ["operator.admin"];
   // Default trace: single-line log when a connect takes >500ms or fails.

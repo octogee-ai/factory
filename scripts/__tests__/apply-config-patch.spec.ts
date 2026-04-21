@@ -424,3 +424,183 @@ describe("applyConfigPatch — timing instrumentation (#3)", () => {
     expect(attempts.some((l) => /OK attempt=2\/2/.test(l))).toBe(true);
   });
 });
+
+// ── Retry budget defaults + fallback telemetry (resilience hardening) ──────
+
+describe("applyConfigPatch — default retry budget", () => {
+  it("defaults to 3 attempts (backoff [2s, 10s]) on transient errors", async () => {
+    // Pin the default retry budget so a future tweak of the default can't
+    // silently reduce retries without an explicit test flip. The budget
+    // matters for the event-loop-pin absorb case: a 2-attempt budget
+    // (pre-resilience) exhausted in 22s and sent provisioning straight to
+    // the file-write fallback. 3 attempts with the new backoff covers up
+    // to ~42s + per-call budget.
+    const configGet = vi.fn(async () => {
+      throw new GatewayRpcError("connect-failed", "ECONNREFUSED");
+    });
+    const sleep = vi.fn(async () => {});
+    const rpc = makeFakeRpc({ configGet });
+
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({}), fallback: () => {}, logPrefix: "[p]" },
+      {
+        configPath: tmpConfigPath,
+        log: () => {},
+        sleep,
+        rpc,
+        // NOTE: no retryBackoffMs — explicitly exercise the default.
+      },
+    );
+
+    expect(result.mode).toBe("fallback-file-write");
+    expect(result.attempts).toBe(3);
+    expect(configGet).toHaveBeenCalledTimes(3);
+    // Two sleeps between three attempts. Delays come from the default.
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenNthCalledWith(1, 2_000);
+    expect(sleep).toHaveBeenNthCalledWith(2, 10_000);
+  });
+});
+
+describe("applyConfigPatch — fallback telemetry (resilience hardening)", () => {
+  it("emits a structured [fallback-metric] line on transient-exhausted fallback", async () => {
+    const log = vi.fn();
+    const configGet = vi.fn(async () => {
+      throw new GatewayRpcError("connect-failed", "WS open timed out after 30000ms");
+    });
+
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({}), fallback: () => {}, logPrefix: "[provision:chris]" },
+      {
+        configPath: tmpConfigPath,
+        log,
+        retryBackoffMs: [10],
+        sleep: vi.fn(async () => {}),
+        rpc: makeFakeRpc({ configGet }),
+      },
+    );
+
+    expect(result.mode).toBe("fallback-file-write");
+    expect(result.fallbackReasonCode).toBe("connect-failed");
+    expect(result.fallbackElapsedMs).toEqual(expect.any(Number));
+
+    const metricLine = log.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => /\[fallback-metric\]/.test(l));
+    expect(metricLine).toBeTruthy();
+    expect(metricLine).toContain("applyConfigPatch.fallback");
+    expect(metricLine).toMatch(/reason=connect-failed/);
+    expect(metricLine).toMatch(/attempts=2/);
+    expect(metricLine).toMatch(/elapsedMs=\d+/);
+  });
+
+  it("tags permanent-error fallback with the specific error code", async () => {
+    const log = vi.fn();
+    const configPatch = vi.fn(async () => {
+      throw new GatewayRpcError("invalid-patch", "invalid config");
+    });
+
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({}), fallback: () => {} },
+      {
+        configPath: tmpConfigPath,
+        log,
+        retryBackoffMs: [100, 200],
+        sleep: vi.fn(async () => {}),
+        rpc: makeFakeRpc({ configPatch }),
+      },
+    );
+
+    expect(result.fallbackReasonCode).toBe("invalid-patch");
+    const metricLine = log.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => /\[fallback-metric\]/.test(l));
+    expect(metricLine).toMatch(/reason=invalid-patch/);
+    // Permanent errors are single-attempt by design — no retry on schema fail.
+    expect(metricLine).toMatch(/attempts=1/);
+  });
+
+  it("tags hash-mismatch exhaustion distinctly from the underlying code", async () => {
+    // The hash-mismatch-exhausted case is its own telemetry bucket because
+    // it means "someone else is writing concurrently" rather than "the
+    // gateway is pinned" — different ops response. The reason code
+    // captures that distinction without callers parsing prose.
+    const log = vi.fn();
+    const configPatch = vi.fn(async () => {
+      throw new GatewayRpcError("hash-mismatch", "config changed since last load");
+    });
+
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({}), fallback: () => {} },
+      {
+        configPath: tmpConfigPath,
+        log,
+        retryBackoffMs: [],
+        sleep: vi.fn(async () => {}),
+        rpc: makeFakeRpc({ configPatch }),
+      },
+    );
+
+    expect(result.fallbackReasonCode).toBe("hash-mismatch-exhausted");
+    const metricLine = log.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => /\[fallback-metric\]/.test(l));
+    expect(metricLine).toMatch(/reason=hash-mismatch-exhausted/);
+  });
+
+  it("omits fallback fields from the result AND skips the [fallback-metric] line on RPC success", async () => {
+    // Strict shape: success must not emit the metric line, or ops
+    // dashboards would count a fallback that never happened. The negative
+    // assertion catches a future regression where the metric emit gets
+    // hoisted outside the fallback branch.
+    const log = vi.fn();
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({}), fallback: () => {} },
+      {
+        configPath: tmpConfigPath,
+        log,
+        retryBackoffMs: [],
+        sleep: vi.fn(async () => {}),
+        rpc: makeFakeRpc(),
+      },
+    );
+
+    expect(result.mode).toBe("rpc");
+    expect(result.fallbackReasonCode).toBeUndefined();
+    expect(result.fallbackElapsedMs).toBeUndefined();
+    const metricLine = log.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => /\[fallback-metric\]/.test(l));
+    expect(metricLine).toBeUndefined();
+  });
+
+  it("exercises the structured metric through the default retry budget (attempts=3)", async () => {
+    // Pairs with the default-budget test above: that one asserts the
+    // retry count and sleep calls; this one asserts the metric line
+    // reports the same count. If a future default tweak changes attempts
+    // without updating the metric, one of the two tests flags it.
+    const log = vi.fn();
+    const configGet = vi.fn(async () => {
+      throw new GatewayRpcError("connect-failed", "WS open timed out after 30000ms");
+    });
+
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({}), fallback: () => {} },
+      {
+        configPath: tmpConfigPath,
+        log,
+        sleep: vi.fn(async () => {}),
+        rpc: makeFakeRpc({ configGet }),
+        // NOTE: no retryBackoffMs — default of [2000, 10000] exercised.
+      },
+    );
+
+    expect(result.mode).toBe("fallback-file-write");
+    expect(result.attempts).toBe(3);
+    const metricLine = log.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => /\[fallback-metric\]/.test(l));
+    expect(metricLine).toMatch(/reason=connect-failed/);
+    expect(metricLine).toMatch(/attempts=3/);
+  });
+});

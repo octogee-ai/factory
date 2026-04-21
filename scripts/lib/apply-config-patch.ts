@@ -78,13 +78,20 @@ export interface ApplyConfigPatchOptions {
   log?: (msg: string) => void;
   /**
    * Backoff delays in ms between retry attempts on transient RPC errors.
-   * Length = max retries after the first failure. Default: [2000] — so up
-   * to 2 attempts at 0s, 2s elapsed. On a stable gateway the RPC path
-   * succeeds on attempt 1; on a broken gateway the file-write fallback
-   * is the right move, and the pod's next chokidar reload reconciles.
-   * Longer retry trains (the old [2000, 6000, 14000] default) blocked
-   * signup latency by up to 22s waiting for a gateway that wasn't
-   * coming back inside that window anyway.
+   * Length = max retries after the first failure. Default: [2000, 10000]
+   * — so up to 3 attempts at 0s, 2s, 12s elapsed (plus up to 30s inside
+   * each attempt for the connect+call timeout).
+   *
+   * Why 3 attempts: TEST evidence from April 21 (`chris-test5` signup)
+   * showed the gateway event loop can pin for 15–20s during provisioning
+   * because of concurrent MM-client reconnects, which starves the WS
+   * accept path and times out the connect handshake. Two attempts
+   * (previously [2000]) exhausted before the pin cleared; the file-write
+   * fallback then triggered a full channel restart that dropped every
+   * existing tenant's WS. The third attempt at 12s-elapsed + 30s-timeout
+   * gives the event loop up to 42s to clear before we give up — enough
+   * to ride out the observed pin window without locking provisioning
+   * indefinitely against a genuinely-dead gateway.
    */
   retryBackoffMs?: number[];
   /**
@@ -97,6 +104,19 @@ export interface ApplyConfigPatchResult {
   mode: "rpc" | "fallback-file-write";
   /** Number of RPC attempts made (1 on first-try success, higher on retry). */
   attempts?: number;
+  /**
+   * On fallback only: classified reason for giving up on the RPC path.
+   * Maps 1:1 to a GatewayRpcErrorCode from the last attempt, plus
+   * `"hash-mismatch-exhausted"` for the hash-retry burn-out case. Exposed
+   * so callers can emit structured telemetry / alerting on fallback
+   * frequency without parsing the human-readable log line.
+   */
+  fallbackReasonCode?: GatewayRpcErrorCode | "hash-mismatch-exhausted";
+  /**
+   * On fallback only: total elapsed wall time (ms) in the RPC attempts
+   * before we gave up. Pair with `fallbackReasonCode` for dashboards.
+   */
+  fallbackElapsedMs?: number;
 }
 
 /**
@@ -137,7 +157,7 @@ export async function applyConfigPatch(
   const log = opts.log ?? defaultLog;
   const configPath = opts.configPath ?? OPENCLAW_CONFIG;
   const prefix = args.logPrefix ? `${args.logPrefix} ` : "";
-  const backoff = opts.retryBackoffMs ?? [2_000];
+  const backoff = opts.retryBackoffMs ?? [2_000, 10_000];
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   // Own the rpc lifecycle: close it at the end when we created it ourselves.
@@ -148,6 +168,9 @@ export async function applyConfigPatch(
   const maxAttempts = backoff.length + 1; // initial + one per backoff entry
   let attempts = 0;
   let reason: string | null = null;
+  // Classified, grep-able reason code for the structured [fallback-metric]
+  // line. Set before we `break` out of the retry loop into fallback.
+  let reasonCode: GatewayRpcErrorCode | "hash-mismatch-exhausted" | null = null;
 
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -190,11 +213,13 @@ export async function applyConfigPatch(
             continue;
           }
           reason = `retry exhausted (hash-mismatch x${maxAttempts}: ${err.message})`;
+          reasonCode = "hash-mismatch-exhausted";
           break;
         }
 
         if (kind === "permanent") {
           reason = `${err.code} (permanent, no retry): ${err.message}`;
+          reasonCode = err.code;
           break;
         }
 
@@ -209,14 +234,42 @@ export async function applyConfigPatch(
           continue;
         }
         reason = `retry exhausted (${err.code} x${maxAttempts}: ${err.message})`;
+        reasonCode = err.code;
         break;
       }
     }
 
+    const fallbackElapsedMs = Date.now() - startedAt;
+    // Invariant: every `break` path out of the retry loop above sets
+    // `reasonCode`, and the loop has no natural fall-through (each branch
+    // either `continue`s or `break`s). If this throws, a new break path
+    // was added that forgot to set `reasonCode` — fail loudly rather than
+    // emitting `reason=unknown` in the metric stream, which would silently
+    // hide the bug from ops dashboards.
+    if (reasonCode === null) {
+      throw new Error(
+        "applyConfigPatch: retry loop exited with reasonCode=null — missing assignment on a new break path",
+      );
+    }
     log(
-      `⚠ ${prefix}config.patch ${reason} totalMs=${Date.now() - startedAt} attempts=${attempts} — falling back to file-write. boot-sync will reconcile on next gateway restart.`,
+      `⚠ ${prefix}config.patch ${reason} totalMs=${fallbackElapsedMs} attempts=${attempts} — falling back to file-write. boot-sync will reconcile on next gateway restart.`,
     );
-    return { ...fileWriteFallback(args.fallback, configPath, log, prefix), attempts };
+    // Structured, grep-able metric line paired with the human-readable warn
+    // above. Ops scrapes `[fallback-metric]` out of the log stream to count
+    // occurrences per reason code; dashboards key on the fields after the
+    // tag. Emitted on EVERY fallback (transient-exhausted, hash-mismatch-
+    // exhausted, or permanent) so the count reflects the truth without
+    // having to reconstruct it from prose. Spec §7 acceptance: "Metric:
+    // count of RPC-fallback events, surface in the Ops Dashboard."
+    log(
+      `[fallback-metric] applyConfigPatch.fallback reason=${reasonCode} attempts=${attempts} elapsedMs=${fallbackElapsedMs}`,
+    );
+    return {
+      ...fileWriteFallback(args.fallback, configPath, log, prefix),
+      attempts,
+      fallbackReasonCode: reasonCode,
+      fallbackElapsedMs,
+    };
   } finally {
     if (ownsRpc) {
       try {
