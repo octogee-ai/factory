@@ -136,6 +136,39 @@ async function main(): Promise<void> {
       changed = true;
       log(`MM baseUrl synced from MM_URL env var: ${envMmUrl}`);
     }
+
+    // ── Force native slash commands OFF ────────────────────────────────────
+    // Octogee users talk to Octo in natural language — we don't use native
+    // MM slash commands (/help, /info, etc.). Leaving `commands.native` at
+    // its OpenClaw default ("auto", which historically resolves false but
+    // can be flipped to true by plugin capabilities) means the MM monitor
+    // registers 5+ slash commands across every team on every account mount.
+    // On reconnect (which happens every ~2-4 min due to upstream ping
+    // dynamics) that's 50-100+ serial HTTP calls to MM per cycle — enough
+    // event-loop load to miss the next WS ping window and cascade. Set both
+    // channel-level and per-account `commands.native: false` so the early-
+    // return in monitor-slash.ts:150-151 fires and skips the whole dance.
+    mm.commands ??= {};
+    if (mm.commands.native !== false) {
+      mm.commands.native = false;
+      changed = true;
+      log(`forced channels.mattermost.commands.native=false (slash commands disabled)`);
+    }
+    // Per-account override too — monitor-slash.ts reads
+    // `params.account.config.commands` which may or may not inherit from
+    // the channel level depending on the plugin's resolution strategy.
+    // Belt-and-suspenders: pin it on every existing account.
+    if (mm.accounts && typeof mm.accounts === "object") {
+      for (const [accountId, account] of Object.entries(mm.accounts as Record<string, any>)) {
+        if (!account || typeof account !== "object") continue;
+        account.commands ??= {};
+        if (account.commands.native !== false) {
+          account.commands.native = false;
+          changed = true;
+          log(`forced commands.native=false on accounts.${accountId}`);
+        }
+      }
+    }
   }
 
   if (changed) {

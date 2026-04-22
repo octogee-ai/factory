@@ -165,15 +165,21 @@ describe("buildMattermostAccounts", () => {
       ]),
       "mm-admin",
     );
+    // Per-account `commands.native: false` is pinned on every coach account
+    // so the MM monitor's slash-command registration dance early-returns
+    // instead of making 50+ HTTP calls to MM on every account mount. See
+    // buildMattermostAccounts for the rationale on the interface comment.
     expect(accounts["chris-coach"]).toEqual({
       botToken: "tok-chris",
       groupPolicy: "allowlist",
       groupAllowFrom: ["mm-chris", "mm-admin"],
+      commands: { native: false },
     });
     expect(accounts["sam-coach"]).toEqual({
       botToken: "tok-sam",
       groupPolicy: "allowlist",
       groupAllowFrom: ["mm-sam", "mm-admin"],
+      commands: { native: false },
     });
   });
 

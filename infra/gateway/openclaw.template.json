@@ -121,9 +121,15 @@
         "callbackBaseUrl": "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
         "allowedSourceIps": ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"]
       },
+      "commands": {
+        "native": false
+      },
       "accounts": {
         "default": {
-          "botToken": "${MM_BOT_TOKEN}"
+          "botToken": "${MM_BOT_TOKEN}",
+          "commands": {
+            "native": false
+          }
         }
       },
       "defaultAccount": "default"
