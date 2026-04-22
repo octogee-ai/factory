@@ -34,9 +34,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash-completion git vim less \
     && rm -rf /var/lib/apt/lists/*
 
-# ── OpenClaw from npm ────────────────────────────────────────────────────────
+# ── OpenClaw from private fork tarball ──────────────────────────────────────
+# See infra/gateway/openclaw-tarball/README.md for what's patched and why.
+# Cloud Build stages the pinned tarball from gs://octogee-openclaw-fork/ into
+# this path before the docker build runs. Local docker builds need to
+# `gcloud storage cp` the same object manually (see the README).
+# When our patches land upstream, swap back to `npm install -g openclaw@${OPENCLAW_VERSION}`.
 ARG OPENCLAW_VERSION=latest
-RUN npm install -g openclaw@${OPENCLAW_VERSION} && openclaw --version
+COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
+RUN npm install -g /tmp/openclaw-fork.tgz && openclaw --version && rm /tmp/openclaw-fork.tgz
 
 # ── Non-root user ────────────────────────────────────────────────────────────
 RUN groupadd -r node 2>/dev/null || true && \
