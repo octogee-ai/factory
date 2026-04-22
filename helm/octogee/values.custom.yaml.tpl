@@ -71,7 +71,6 @@ workspace-api:
     enabled: false
 
 gateway:
-  storageMode: emptyDir
   cloudArmor:
     enabled: false
   preview:

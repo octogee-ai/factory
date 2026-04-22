@@ -63,3 +63,24 @@ export type {
   InboxDocument,
 } from './notifications';
 
+// Fleet controller types (gateway state + restore jobs + shared constants).
+// Spec: docs/GATEWAY-FLEET-CONTROLLER-SPEC.md
+export type {
+  GatewayStatus,
+  GatewayState,
+  GatewayLastError,
+  RestoreJobState,
+  RestoreJob,
+  CustomerSnapshot,
+} from './fleet-controller';
+export {
+  GATEWAY_HEARTBEAT_INTERVAL_MS,
+  GATEWAY_UNREACHABLE_AFTER_MS,
+  JOB_TTL_MS,
+  VERIFY_ACCOUNT_TIMEOUT_MS,
+  IDEMPOTENCY_HEADER,
+  SIGNATURE_HEADER,
+  GATEWAYS_COLLECTION,
+  RESTORE_JOBS_COLLECTION,
+} from './fleet-controller';
+

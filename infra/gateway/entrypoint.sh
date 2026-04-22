@@ -113,14 +113,12 @@ if [ -f "$OPENCLAW_DIR/openclaw.json" ] && [ -f "${SA_KEY_PATH:-$OPENCLAW_DIR/se
   /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 
-# ── Boot sync: restore customer workspaces from Gitea + regenerate config ────
-# Runs AFTER pre-boot-config (enforcement sync) and BEFORE provisioner/OpenClaw.
-# On a fresh PVC, this clones workspace repos from Gitea, syncs blobs from GCS,
-# and regenerates openclaw.json agents + bindings from Firestore.
-if [ -f "$OPENCLAW_DIR/openclaw.json" ] && [ -n "${GIT_API_TOKEN:-}" ]; then
-  log "Boot sync: restoring customer workspaces..."
-  /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/boot-sync.ts || log "Boot sync: non-fatal, continuing..."
-fi
+# ── Boot sync: REMOVED ───────────────────────────────────────────────────────
+# The gateway now boots with only the default account (written by
+# pre-boot-config.ts). Customer workspaces + openclaw.json customer entries
+# are restored post-boot by the fleet controller, one customer at a time via
+# the HTTP endpoint exposed by local-provisioner.
+# See docs/GATEWAY-FLEET-CONTROLLER-SPEC.md
 
 # ── Start provisioner in background with auto-restart ───────────────────────
 (

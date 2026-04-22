@@ -15,7 +15,7 @@
  *     those are the retry endpoint's responsibility (spec §D4).
  */
 import { describe, it, expect } from "vitest";
-import { projectsNeedingClone, type ProjectRestoreInput } from "../boot-sync.js";
+import { projectsNeedingClone, type ProjectRestoreInput } from "../lib/openclaw-config-builders.js";
 
 const never = (_: string, __: string) => false;
 const always = (_: string, __: string) => true;

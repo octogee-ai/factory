@@ -34,7 +34,7 @@ import {
   fetchCoachTokens,
   mergeAccountsPreservingDefault,
   type CoachTokenDeps,
-} from "../boot-sync.js";
+} from "../lib/openclaw-config-builders.js";
 
 // ── fetchCoachTokens ────────────────────────────────────────────────────────
 

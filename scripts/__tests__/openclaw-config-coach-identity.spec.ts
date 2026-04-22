@@ -24,7 +24,7 @@ import {
   resolveCoachIdentity,
   type CustomerAgentInput,
   type CoachIdentityDeps,
-} from "../boot-sync.js";
+} from "../lib/openclaw-config-builders.js";
 
 const DEFAULT_COACH = { name: "Octo", emoji: "🐙", model: "anthropic/claude-haiku-4-5" };
 
