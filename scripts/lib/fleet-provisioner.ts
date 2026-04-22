@@ -401,8 +401,32 @@ export async function startFleetController(
     });
   });
 
+  // The controller's URL shape is `{FLEET_PROXY_BASE_URL}/{gatewayId}`, so
+  // the path on this pod arrives with the gatewayId as a trailing segment.
+  // We could strip it at the Ingress, but handling it in the route keeps
+  // the routing story debuggable (the pod can log what gatewayId the LB
+  // thought it was hitting; useful when adding the second gateway).
+  //
+  // The handler verifies req.params.gatewayId === opts.gatewayId and 400s
+  // on mismatch — guards against an LB URL map bug routing to the wrong
+  // backend. Belt-and-suspenders; HMAC already bounds what a misrouted
+  // request can do.
   app.post(
-    "/restore-customer",
+    "/restore-customer/:gatewayId",
+    (req, res, next) => {
+      if (req.params.gatewayId !== opts.gatewayId) {
+        opts.log(
+          `[fleet-http] ⚠ path gatewayId=${req.params.gatewayId} does not match this pod's gatewayId=${opts.gatewayId} — rejecting`,
+        );
+        res.status(400).json({
+          error: "path gatewayId does not match this gateway",
+          pathGatewayId: req.params.gatewayId,
+          podGatewayId: opts.gatewayId,
+        });
+        return;
+      }
+      next();
+    },
     createRestoreCustomerHandler({
       secret: opts.secret,
       gatewayId: opts.gatewayId,

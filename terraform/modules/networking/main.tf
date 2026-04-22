@@ -54,5 +54,15 @@ resource "google_compute_global_address" "chat_proxy" {
   project = var.project_id
 }
 
+# ── Static external IP for gateway fleet-control plane Ingress ──────────────
+# GKE Ingress for fleet.octogee.com / fleet-test.octogee.com (the fleet
+# controller's Cloud Tasks push target — see docs/GATEWAY-PLATFORM-SPEC.md
+# §Cloud Tasks Routing). Dedicated IP so this LB can be swapped or rolled
+# back without touching the data-plane LBs.
+resource "google_compute_global_address" "fleet_control" {
+  name    = "fleet-control-ip${var.static_ip_suffix}"
+  project = var.project_id
+}
+
 # Cloud Armor WAF policy is created in prod main.tf (octogee project, shared
 # by both namespaces). Not per-environment — GKE LBs all live in octogee.

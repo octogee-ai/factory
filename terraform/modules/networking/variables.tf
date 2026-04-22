@@ -26,3 +26,9 @@ variable "ip_cidr_range" {
   type        = string
   default     = "10.10.0.0/28"
 }
+
+variable "static_ip_suffix" {
+  description = "Suffix appended to env-scoped static IP names (e.g. '-test' for test env). Prod leaves blank."
+  type        = string
+  default     = ""
+}
