@@ -90,6 +90,18 @@ case "$ENV" in
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
 
+# ── Per-gateway MM bot identity ──────────────────────────────────────────
+# One bot user per gateway, derived from the helm `gateway.env.gatewayId`
+# convention (`gw-test` / `gw-prod` / `<custom-ns>`). Matches the
+# MM_BOT_USERNAME env var the gateway deployment exports.
+case "$ENV" in
+  prod)   MM_BOT_USERNAME="mac-gw-prod" ;;
+  test)   MM_BOT_USERNAME="mac-gw-test" ;;
+  custom) MM_BOT_USERNAME="mac-${CUSTOM_NS}" ;;
+esac
+MM_BOT_DISPLAY_NAME="Mac"
+MM_BOT_DESCRIPTION="Octogee Ops Agent"
+
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
@@ -381,18 +393,18 @@ for t in tokens:
   BOT_USER_ID_FROM_API=$(\
     curl -s "http://localhost:8065/api/v4/bots" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
-    | python3 -c "
-import sys, json
-bots = json.load(sys.stdin)
-for b in bots:
-    if b.get('username') == 'octogee-bot':
+    | MM_BOT_USERNAME="$MM_BOT_USERNAME" python3 -c "
+import os, sys, json
+want = os.environ['MM_BOT_USERNAME']
+for b in json.load(sys.stdin):
+    if b.get('username') == want:
         print(b['user_id'])
         break
 " 2>/dev/null || echo "")
   if [[ -n "$BOT_USER_ID_FROM_API" ]]; then
     MM_BOT_USER_ID="$BOT_USER_ID_FROM_API"
     save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
-    ok "Bot discovered: $MM_BOT_USER_ID"
+    ok "Bot discovered: $MM_BOT_USER_ID (@$MM_BOT_USERNAME)"
 
     # ── Bot token: test cached value first, only rotate if broken ────────
     CACHED_BOT_TOKEN=$(ksecret_key mattermost-gateway bot_token)
@@ -435,7 +447,7 @@ for t in json.load(sys.stdin):
       fi
     fi
   else
-    warn "Could not discover octogee-bot — MM_BOT_USER_ID and MM_BOT_TOKEN will be empty"
+    warn "Could not discover @$MM_BOT_USERNAME — MM_BOT_USER_ID and MM_BOT_TOKEN will be empty"
   fi
 else
   info "Fresh Mattermost — bootstrapping admin, team, bot..."
@@ -508,7 +520,7 @@ else
     curl -s -X POST "http://localhost:8065/api/v4/bots" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"username":"octogee-bot","display_name":"Octo","description":"Octogee AI Agent"}' 2>/dev/null)
+    -d "{\"username\":\"$MM_BOT_USERNAME\",\"display_name\":\"$MM_BOT_DISPLAY_NAME\",\"description\":\"$MM_BOT_DESCRIPTION\"}" 2>/dev/null)
   MM_BOT_USER_ID=$(echo "$BOT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user_id',''))" 2>/dev/null || echo "")
   [[ -n "$MM_BOT_USER_ID" ]] || fail "Failed to create bot: $BOT_RESP"
   save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"

@@ -31,7 +31,7 @@
   "overrides": {
     "@tootallnate/once": "^3.0.1",
     "brace-expansion": "^2.0.3",
-    "fast-xml-parser": "^5.5.7",
+    "fast-xml-parser": "^5.7.0",
     "path-to-regexp": "^0.1.13",
     "follow-redirects": "^1.16.0",
     "protobufjs": "^7.5.5"
