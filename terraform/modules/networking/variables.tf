@@ -32,3 +32,9 @@ variable "static_ip_suffix" {
   type        = string
   default     = ""
 }
+
+variable "cluster_project_id" {
+  description = "GCP project that hosts the GKE cluster. GKE Ingress resolves global static IP names against this project — they must live here, not the namespace/workload project. Today both prod + test live in `octogee` on one cluster."
+  type        = string
+  default     = "octogee"
+}

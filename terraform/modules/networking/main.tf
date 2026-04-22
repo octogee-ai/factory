@@ -59,9 +59,15 @@ resource "google_compute_global_address" "chat_proxy" {
 # controller's Cloud Tasks push target — see docs/GATEWAY-PLATFORM-SPEC.md
 # §Cloud Tasks Routing). Dedicated IP so this LB can be swapped or rolled
 # back without touching the data-plane LBs.
+#
+# IMPORTANT: lives in var.cluster_project_id (octogee), NOT var.project_id.
+# GKE Ingress resolves `kubernetes.io/ingress.global-static-ip-name` against
+# the cluster's project. First attempt put this in octogee-test and the LB
+# controller reported "the given static IP name doesn't translate to an
+# existing static IP" — cluster looks in the wrong project.
 resource "google_compute_global_address" "fleet_control" {
   name    = "fleet-control-ip${var.static_ip_suffix}"
-  project = var.project_id
+  project = var.cluster_project_id
 }
 
 # Cloud Armor WAF policy is created in prod main.tf (octogee project, shared
