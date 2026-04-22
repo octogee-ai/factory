@@ -425,11 +425,106 @@ else
   done
 fi
 
+# ── 5f. Fleet Controller (control plane) ────────────────────────────────────
+# Checks the fleet-control LB stack that Cloud Tasks pushes through to reach
+# the gateway's POST /restore-customer/{gatewayId} handler. Per-env:
+#   - global static IP exists (fleet-control-ip{-test})
+#   - DNS A record for fleet[-test].octogee.com resolves to that IP
+#   - K8s Secret octogee-fleet-controller exists in the gateway namespace
+#   - BackendConfig octogee-gateway-fleet-control exists (attached via
+#     the gateway Service's cloud.google.com/backend-config annotation)
+#   - Fleet-control Ingress exists (cert state covered in 5c)
+# See docs/GATEWAY-PLATFORM-SPEC.md §Cloud Tasks Routing.
+set_section infra
+header "5f. Fleet Controller"
+
+# Derive env-scoped names from the namespace (octogee vs octogee-test).
+case "$NAMESPACE" in
+  octogee-test)
+    FLEET_IP_NAME="fleet-control-ip-test"
+    FLEET_HOST="fleet-test.octogee.com"
+    ;;
+  octogee)
+    FLEET_IP_NAME="fleet-control-ip"
+    FLEET_HOST="fleet.octogee.com"
+    ;;
+  *)
+    FLEET_IP_NAME=""
+    FLEET_HOST=""
+    ;;
+esac
+
+if [[ -z "$FLEET_IP_NAME" ]]; then
+  warn "Unknown namespace '$NAMESPACE' — skipping fleet-control checks"
+else
+  # Static IP
+  FLEET_IP_VALUE=$(gcloud compute addresses describe "$FLEET_IP_NAME" --global --project="$GCP_PROJECT" --format='value(address)' 2>/dev/null || echo "")
+  if [[ -n "$FLEET_IP_VALUE" ]]; then
+    pass "Static IP $FLEET_IP_NAME = $FLEET_IP_VALUE"
+  else
+    fail "Static IP $FLEET_IP_NAME missing in project $GCP_PROJECT"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} cd terraform/environments/$ENV && terraform apply -target=module.networking.google_compute_global_address.fleet_control"
+    fi
+  fi
+
+  # DNS — must resolve to the static IP. DNS is in Cloudflare (external), not
+  # Cloud DNS, so we resolve from the local machine's resolver + match against
+  # the static IP.
+  FLEET_DNS=$(dig +short +time=5 "$FLEET_HOST" | head -1)
+  if [[ -z "$FLEET_DNS" ]]; then
+    fail "DNS $FLEET_HOST has no A record"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} add A record in Cloudflare: $FLEET_HOST → $FLEET_IP_VALUE"
+    fi
+  elif [[ -n "$FLEET_IP_VALUE" && "$FLEET_DNS" == "$FLEET_IP_VALUE" ]]; then
+    pass "DNS $FLEET_HOST → $FLEET_DNS (matches static IP)"
+  else
+    fail "DNS $FLEET_HOST → $FLEET_DNS (static IP is $FLEET_IP_VALUE)"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} update Cloudflare A record: $FLEET_HOST → $FLEET_IP_VALUE"
+    fi
+  fi
+
+  # K8s Secret on the gateway side (HMAC-verify key, must match Firebase
+  # functions:secrets:set FLEET_CONTROLLER_SECRET for the same project)
+  if kubectl get secret octogee-fleet-controller -n "$NAMESPACE" -o name >/dev/null 2>&1; then
+    pass "K8s Secret octogee-fleet-controller exists in $NAMESPACE"
+  else
+    fail "K8s Secret octogee-fleet-controller missing in $NAMESPACE — gateway cannot verify HMACs"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} SECRET=\$(firebase functions:secrets:access FLEET_CONTROLLER_SECRET --project=$FIREBASE_PROJECT 2>/dev/null)"
+      echo -e "  ${YELLOW}     ${NC} kubectl -n $NAMESPACE create secret generic octogee-fleet-controller --from-literal=secret=\"\$SECRET\""
+    fi
+  fi
+
+  # BackendConfig (created by helm template, wires health check + WAF to the
+  # Ingress backend port)
+  if kubectl get backendconfig octogee-gateway-fleet-control -n "$NAMESPACE" -o name >/dev/null 2>&1; then
+    pass "BackendConfig octogee-gateway-fleet-control exists"
+  else
+    fail "BackendConfig octogee-gateway-fleet-control missing — Ingress backend will fall back to defaults"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    fi
+  fi
+
+  # Fleet-control Ingress
+  if kubectl get ingress octogee-gateway-fleet-control-ingress -n "$NAMESPACE" -o name >/dev/null 2>&1; then
+    pass "Ingress octogee-gateway-fleet-control-ingress exists"
+  else
+    fail "Ingress octogee-gateway-fleet-control-ingress missing — Cloud Tasks cannot reach the gateway"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ensure fleetControlIngress.enabled=true in values.$ENV.yaml, then helm upgrade"
+    fi
+  fi
+fi
+
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
 # Derive URLs from K8s Ingress resources — no hardcoded env-specific URLs.
 set_section bootstrap
 header "5d. Endpoint Health"
-for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress; do
+for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress octogee-gateway-fleet-control-ingress; do
   HOST=$(kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
   if [[ -z "$HOST" ]]; then
     warn "$INGRESS_NAME — no host found"
