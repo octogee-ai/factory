@@ -516,18 +516,35 @@ else
     pass "FLEET_CONTROLLER_SECRET matches across K8s + Secret Manager ($K8S_HASH...)"
   fi
 
-  # Functions compute-SA needs roles/secretmanager.secretAccessor on
-  # FLEET_CONTROLLER_SECRET or `defineSecret` will 500 every invocation.
+  # Two SAs need access to FLEET_CONTROLLER_SECRET, with different roles:
+  #   - Runtime: functions compute SA needs `secretAccessor` (versions.access)
+  #   - Deploy:  GitHub Actions SA needs `admin` on this secret because
+  #     `firebase deploy` calls `secrets.get` to configure the binding —
+  #     and that permission is NOT in `secretAccessor`, only in `viewer`
+  #     and `admin`. We use `admin` (scoped to one secret) so the deploy
+  #     SA can also manage versions if we wire up rotation later.
   FN_SA_NUM=$(gcloud projects describe "$FIREBASE_PROJECT" --format='value(projectNumber)' 2>/dev/null)
+  # get-iam-policy with --flatten makes each binding a row of role+member.
+  RUNTIME_BINDINGS=$(gcloud secrets get-iam-policy FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" --flatten='bindings[].members' --filter='bindings.role=roles/secretmanager.secretAccessor' --format='value(bindings.members)' 2>/dev/null || echo "")
+  DEPLOY_BINDINGS=$(gcloud secrets get-iam-policy FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" --flatten='bindings[].members' --filter='bindings.role=roles/secretmanager.admin' --format='value(bindings.members)' 2>/dev/null || echo "")
   if [[ -n "$FN_SA_NUM" ]]; then
     FN_SA="${FN_SA_NUM}-compute@developer.gserviceaccount.com"
-    if gcloud secrets get-iam-policy FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" --format='value(bindings.members)' 2>/dev/null | grep -q "$FN_SA"; then
-      pass "Functions SA ($FN_SA) has secretAccessor on FLEET_CONTROLLER_SECRET"
+    if echo "$RUNTIME_BINDINGS" | grep -q "$FN_SA"; then
+      pass "Functions runtime SA ($FN_SA) has secretAccessor"
     else
-      fail "Functions SA lacks secretAccessor on FLEET_CONTROLLER_SECRET — fn invocations will 500"
+      fail "Functions runtime SA lacks secretAccessor on FLEET_CONTROLLER_SECRET — fn invocations will 500"
       if $FIX; then
-        echo -e "  ${YELLOW}FIX:${NC} gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET --member=serviceAccount:$FN_SA --role=roles/secretmanager.secretAccessor --project=$FIREBASE_PROJECT"
+        echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
       fi
+    fi
+  fi
+  CI_DEPLOY_SA="github-actions@octogee.iam.gserviceaccount.com"
+  if echo "$DEPLOY_BINDINGS" | grep -q "$CI_DEPLOY_SA"; then
+    pass "Deploy SA ($CI_DEPLOY_SA) has admin (scoped)"
+  else
+    fail "Deploy SA lacks admin on FLEET_CONTROLLER_SECRET — firebase deploy will 403 (secretAccessor alone is not enough; needs secrets.get)"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
     fi
   fi
 

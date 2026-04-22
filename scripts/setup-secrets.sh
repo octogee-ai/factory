@@ -355,19 +355,41 @@ if [[ -z "$FLEET_CONTROLLER_SECRET" ]]; then
     fi
   fi
 fi
-# Grant the Cloud Functions compute SA access so `defineSecret` can bind it.
-# Firebase Functions v2 runs under the project's default compute SA; without
-# this, the function fails at invocation with "Permission denied on resource".
-# Idempotent — `add-iam-policy-binding` no-ops if the binding already exists.
-FN_SA="$(gcloud projects describe "$FIREBASE_PROJECT" --format='value(projectNumber)' 2>/dev/null)-compute@developer.gserviceaccount.com"
+# Two service accounts need access on FLEET_CONTROLLER_SECRET, with
+# DIFFERENT roles because Firebase deploy + runtime need different perms:
+#
+#   1. RUNTIME  — functions compute SA (`{projectNumber}-compute@…`) reads
+#      the secret VALUE at invocation time via defineSecret. Needs
+#      `roles/secretmanager.secretAccessor` (covers `versions.access`).
+#      Without it: every function invocation 500s.
+#
+#   2. DEPLOY   — GitHub Actions CI SA (`github-actions@octogee.iam.…`)
+#      reads secret METADATA at `firebase deploy` time to configure the
+#      function's secret binding. Needs `secretmanager.secrets.get`,
+#      which is NOT in `secretAccessor` — only in `roles/secretmanager.viewer`
+#      and above. We grant `roles/secretmanager.admin` (scoped to this
+#      single secret) so the deploy SA can also manage versions if we
+#      ever wire up rotation. Without it: firebase deploy 403s on
+#      "secretmanager.secrets.get denied".
+FN_SA_NUM=$(gcloud projects describe "$FIREBASE_PROJECT" --format='value(projectNumber)' 2>/dev/null)
+FN_SA=""
+[[ -n "$FN_SA_NUM" ]] && FN_SA="${FN_SA_NUM}-compute@developer.gserviceaccount.com"
+CI_DEPLOY_SA="github-actions@octogee.iam.gserviceaccount.com"
+
 if [[ -n "$FN_SA" ]]; then
   gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET \
     --member="serviceAccount:$FN_SA" \
     --role="roles/secretmanager.secretAccessor" \
     --project="$FIREBASE_PROJECT" --quiet >/dev/null 2>&1 \
-    && ok "  IAM: $FN_SA → roles/secretmanager.secretAccessor" \
-    || warn "  Could not grant functions SA access to FLEET_CONTROLLER_SECRET — fn invocations may 500"
+    && ok "  IAM runtime: $FN_SA → secretAccessor" \
+    || warn "  Could not grant $FN_SA secretAccessor"
 fi
+gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET \
+  --member="serviceAccount:$CI_DEPLOY_SA" \
+  --role="roles/secretmanager.admin" \
+  --project="$FIREBASE_PROJECT" --quiet >/dev/null 2>&1 \
+  && ok "  IAM deploy:  $CI_DEPLOY_SA → admin (scoped to this secret)" \
+  || warn "  Could not grant $CI_DEPLOY_SA admin"
 ksecret octogee-fleet-controller --from-literal=secret="$FLEET_CONTROLLER_SECRET"
 
 # ── 10. Stripe secrets ────────────────────────────────────────────────────
