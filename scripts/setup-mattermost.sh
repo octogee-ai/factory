@@ -447,7 +447,35 @@ for t in json.load(sys.stdin):
       fi
     fi
   else
-    warn "Could not discover @$MM_BOT_USERNAME — MM_BOT_USER_ID and MM_BOT_TOKEN will be empty"
+    info "Bot @$MM_BOT_USERNAME not found — creating"
+    BOT_RESP=$(\
+      curl -s -X POST "http://localhost:8065/api/v4/bots" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"username\":\"$MM_BOT_USERNAME\",\"display_name\":\"$MM_BOT_DISPLAY_NAME\",\"description\":\"$MM_BOT_DESCRIPTION\"}" 2>/dev/null)
+    MM_BOT_USER_ID=$(echo "$BOT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user_id',''))" 2>/dev/null || echo "")
+    [[ -n "$MM_BOT_USER_ID" ]] || fail "Failed to create bot @$MM_BOT_USERNAME: $BOT_RESP"
+    save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
+    ok "Bot created: $MM_BOT_USER_ID (@$MM_BOT_USERNAME)"
+
+    # Add bot to team so it can post into channels.
+    \
+      curl -s -X POST "http://localhost:8065/api/v4/teams/$MM_TEAM_ID/members" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"team_id\":\"$MM_TEAM_ID\",\"user_id\":\"$MM_BOT_USER_ID\"}" >/dev/null 2>&1
+    ok "Bot added to team"
+
+    # Issue gateway token.
+    TOKEN_RESP=$(\
+      curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"description":"Gateway token"}' 2>/dev/null)
+    MM_BOT_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+    [[ -n "$MM_BOT_TOKEN" ]] || fail "Failed to create bot token: $TOKEN_RESP"
+    save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
+    ok "Bot token created"
   fi
 else
   info "Fresh Mattermost — bootstrapping admin, team, bot..."
