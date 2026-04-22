@@ -327,7 +327,20 @@ ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
 # both sides must pull the same SM value. Rotating = new SM version +
 # re-run this script + redeploy functions + rollout gateway pod.
 info "octogee-fleet-controller (fleet controller HMAC)"
-FLEET_CONTROLLER_SECRET=$(sm_get "FLEET_CONTROLLER_SECRET" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+# Read the RAW SM payload (no shell trimming) to detect trailing whitespace.
+# `firebase functions:secrets:set` and manual stdin input can persist a
+# trailing newline into the stored value, which `process.env.X` in Cloud
+# Functions surfaces as-is — the controller signs with 65 bytes, the gateway
+# verifies with 64 (bash command substitution strips the newline on the
+# gateway side), HMAC mismatch, every restore 401s. Observed on TEST.
+# Rewrite SM with a clean version if any trailing whitespace is present.
+FLEET_RAW_BYTES=$(gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" 2>/dev/null || true)
+FLEET_CONTROLLER_SECRET=$(printf '%s' "$FLEET_RAW_BYTES" | tr -d '[:space:]')
+if [[ -n "$FLEET_CONTROLLER_SECRET" && "$FLEET_RAW_BYTES" != "$FLEET_CONTROLLER_SECRET" ]]; then
+  info "  SM FLEET_CONTROLLER_SECRET had trailing whitespace — rewriting clean version"
+  echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add FLEET_CONTROLLER_SECRET \
+    --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>&1 | tail -1 | sed 's/^/    /'
+fi
 if [[ -z "$FLEET_CONTROLLER_SECRET" ]]; then
   # Not in SM — try to recover from existing K8s cache
   EXISTING_FCS=$(ksecret_key octogee-fleet-controller secret)
@@ -391,6 +404,23 @@ gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET \
   && ok "  IAM deploy:  $CI_DEPLOY_SA → admin (scoped to this secret)" \
   || warn "  Could not grant $CI_DEPLOY_SA admin"
 ksecret octogee-fleet-controller --from-literal=secret="$FLEET_CONTROLLER_SECRET"
+
+# ── 9c. Cloud Tasks enqueuer for functions runtime SA ─────────────────────
+# The fleet controller Cloud Functions call CloudTasksClient.createTask() to
+# push restore jobs onto the `restore-customer` queue. Firebase Functions v2
+# runs under the project compute SA ($FN_SA) — which does NOT get Cloud
+# Tasks permissions by default, so every enqueue fails with a
+# "cloudtasks.tasks.create denied" 403 until this binding exists. Scoped
+# to the one queue, not project-wide.
+if [[ -n "$FN_SA" ]]; then
+  gcloud tasks queues add-iam-policy-binding restore-customer \
+    --location=us-central1 \
+    --project="$FIREBASE_PROJECT" \
+    --member="serviceAccount:$FN_SA" \
+    --role="roles/cloudtasks.enqueuer" --quiet >/dev/null 2>&1 \
+    && ok "  IAM tasks:   $FN_SA → cloudtasks.enqueuer (restore-customer)" \
+    || warn "  Could not grant $FN_SA cloudtasks.enqueuer on restore-customer — fleet controller will 403 every enqueue"
+fi
 
 # ── 10. Stripe secrets ────────────────────────────────────────────────────
 # Required by workspace-api at startup (not optional). Use placeholder if not

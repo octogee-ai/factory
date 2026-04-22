@@ -489,31 +489,46 @@ else
   fi
 
   # Fleet controller HMAC secret — exists in Secret Manager (Firebase
-  # project) AND K8s. Both sides must resolve to the SAME value or the
-  # gateway silently 401s every restore task. Check both + compare the
-  # SHA-256 prefix so a mismatch is surfaced loudly here rather than at
-  # first Cloud Task dispatch.
-  K8S_FCS=$(kubectl get secret octogee-fleet-controller -n "$NAMESPACE" -o jsonpath='{.data.secret}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-  SM_FCS=$(gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" 2>/dev/null || echo "")
-  K8S_HASH=$(printf '%s' "$K8S_FCS" | shasum -a 256 | awk '{print $1}' | head -c 12)
-  SM_HASH=$(printf '%s' "$SM_FCS"  | shasum -a 256 | awk '{print $1}' | head -c 12)
-  if [[ -z "$K8S_FCS" ]]; then
+  # project) AND K8s. Both sides must resolve to the SAME BYTES or the
+  # gateway silently 401s every restore task.
+  #
+  # IMPORTANT: read RAW bytes (write to file, use wc -c on the file) —
+  # not `$(gcloud ...)` command substitution, which strips trailing
+  # whitespace and hides byte-length drift. Observed on TEST: SM had 65
+  # bytes (trailing newline from `firebase functions:secrets:set` stdin),
+  # K8s had 64 bytes (command substitution stripped the newline on
+  # write); SHA-256 matched after trimming but the function runtime read
+  # the raw 65 and the gateway read the raw 64. Every HMAC mismatched.
+  tmp_k8s=$(mktemp) && tmp_sm=$(mktemp)
+  kubectl get secret octogee-fleet-controller -n "$NAMESPACE" -o jsonpath='{.data.secret}' 2>/dev/null | base64 -d > "$tmp_k8s" 2>/dev/null || true
+  gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" > "$tmp_sm" 2>/dev/null || true
+  K8S_LEN=$(wc -c < "$tmp_k8s" | tr -d ' ')
+  SM_LEN=$(wc -c < "$tmp_sm" | tr -d ' ')
+  K8S_HASH=$(shasum -a 256 < "$tmp_k8s" | awk '{print $1}' | head -c 12)
+  SM_HASH=$(shasum -a 256 < "$tmp_sm" | awk '{print $1}' | head -c 12)
+  rm -f "$tmp_k8s" "$tmp_sm"
+  if [[ "$K8S_LEN" == "0" ]]; then
     fail "K8s Secret octogee-fleet-controller missing in $NAMESPACE — gateway cannot verify HMACs"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
     fi
-  elif [[ -z "$SM_FCS" ]]; then
+  elif [[ "$SM_LEN" == "0" ]]; then
     fail "Secret Manager FLEET_CONTROLLER_SECRET missing in $FIREBASE_PROJECT — Cloud Functions cannot sign HMACs"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (back-fills SM from K8s)"
     fi
+  elif [[ "$K8S_LEN" != "$SM_LEN" ]]; then
+    fail "FLEET_CONTROLLER_SECRET BYTE-LENGTH drift: K8s=$K8S_LEN vs SM=$SM_LEN — usually trailing-whitespace in SM. Every restore will 401"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (detects + writes clean version)"
+    fi
   elif [[ "$K8S_HASH" != "$SM_HASH" ]]; then
-    fail "FLEET_CONTROLLER_SECRET mismatch: K8s=$K8S_HASH... vs SM=$SM_HASH... — every restore Task will 401"
+    fail "FLEET_CONTROLLER_SECRET value mismatch: K8s=$K8S_HASH... vs SM=$SM_HASH... — every restore will 401"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (SM is source of truth; rewrites K8s)"
     fi
   else
-    pass "FLEET_CONTROLLER_SECRET matches across K8s + Secret Manager ($K8S_HASH...)"
+    pass "FLEET_CONTROLLER_SECRET matches across K8s + Secret Manager ($K8S_LEN bytes, $K8S_HASH...)"
   fi
 
   # Two SAs need access to FLEET_CONTROLLER_SECRET, with different roles:
@@ -545,6 +560,22 @@ else
     fail "Deploy SA lacks admin on FLEET_CONTROLLER_SECRET — firebase deploy will 403 (secretAccessor alone is not enough; needs secrets.get)"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
+    fi
+  fi
+
+  # Functions runtime SA also needs cloudtasks.enqueuer on the restore-customer
+  # queue, or every fleet-controller enqueue 403s with "cloudtasks.tasks.create
+  # denied" even after all the secret plumbing is clean.
+  if [[ -n "$FN_SA_NUM" ]]; then
+    FN_SA="${FN_SA_NUM}-compute@developer.gserviceaccount.com"
+    TASK_BINDINGS=$(gcloud tasks queues get-iam-policy restore-customer --location=us-central1 --project="$FIREBASE_PROJECT" --flatten='bindings[].members' --filter='bindings.role=roles/cloudtasks.enqueuer' --format='value(bindings.members)' 2>/dev/null || echo "")
+    if echo "$TASK_BINDINGS" | grep -q "$FN_SA"; then
+      pass "Functions runtime SA has cloudtasks.enqueuer on restore-customer"
+    else
+      fail "Functions runtime SA lacks cloudtasks.enqueuer on restore-customer — every fleet-controller enqueue will 403"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
+      fi
     fi
   fi
 
