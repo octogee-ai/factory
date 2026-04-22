@@ -457,12 +457,14 @@ esac
 if [[ -z "$FLEET_IP_NAME" ]]; then
   warn "Unknown namespace '$NAMESPACE' — skipping fleet-control checks"
 else
-  # Static IP
-  FLEET_IP_VALUE=$(gcloud compute addresses describe "$FLEET_IP_NAME" --global --project="$GCP_PROJECT" --format='value(address)' 2>/dev/null || echo "")
+  # Static IP — lives in the CLUSTER project (not the namespace/Firebase
+  # project), because GKE Ingress resolves `global-static-ip-name` against
+  # the cluster's project. See PR #656 for the root-cause history.
+  FLEET_IP_VALUE=$(gcloud compute addresses describe "$FLEET_IP_NAME" --global --project="$CLUSTER_PROJECT" --format='value(address)' 2>/dev/null || echo "")
   if [[ -n "$FLEET_IP_VALUE" ]]; then
-    pass "Static IP $FLEET_IP_NAME = $FLEET_IP_VALUE"
+    pass "Static IP $FLEET_IP_NAME = $FLEET_IP_VALUE (in cluster project $CLUSTER_PROJECT)"
   else
-    fail "Static IP $FLEET_IP_NAME missing in project $GCP_PROJECT"
+    fail "Static IP $FLEET_IP_NAME missing in cluster project $CLUSTER_PROJECT"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} cd terraform/environments/$ENV && terraform apply -target=module.networking.google_compute_global_address.fleet_control"
     fi
