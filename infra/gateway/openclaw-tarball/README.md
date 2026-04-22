@@ -15,6 +15,13 @@ Docker build runs; local docker builds need it copied manually.
   coach accounts disconnect in lockstep every 2–4 minutes when the gateway
   has been idle.
   Log proof at runtime: `[octogee-patch] mattermost ws keepalive armed: pingIntervalMs=15000`
+- **MM per-message latency instrumentation** — new `extensions/mattermost/src/mattermost/monitor-timing.ts`
+  module plus hooks in `monitor.ts`. Emits one `[mm-timing]` log line per
+  delivered (or failed) reply with span durations (ws→handle, handle→typing,
+  typing→first, first→delivered). Replaces the need for
+  `OPENCLAW_LOG_LEVEL=debug` + grep-a-dozen-landmarks when diagnosing
+  inbound→reply latency.
+  Log proof at runtime: `[mm-timing] channel=… post=… total=…ms | ws→handle=…ms | …`
 
 ## GCS bucket
 
