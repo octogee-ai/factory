@@ -155,26 +155,10 @@ export interface ConfigPatchResult {
   config?: unknown;
 }
 
-export interface ChannelStartResult {
-  channel: string;
-  accountId: string;
-  started: boolean;
-}
-
 export interface GatewayRpcClient {
   configGet(): Promise<ConfigGetResult>;
   configPatch(patch: object, baseHash: string): Promise<ConfigPatchResult>;
   channelsStatus(): Promise<unknown>;
-  /**
-   * Surgically mount a single account on a channel plugin without triggering
-   * the full-channel reload path. Wraps OpenClaw's `channels.start` RPC
-   * (server-methods/channels.ts:338 in v2026.4.20+), which calls
-   * `context.startChannel(channelId, accountId)` — skip-if-running semantics
-   * per startChannelInternal. Used by the staggered bootstrap to de-sync the
-   * per-account mount events so MM's idle-read-deadline doesn't fire on
-   * every account at the same moment.
-   */
-  channelsStart(channelId: string, accountId: string): Promise<ChannelStartResult>;
   /** Cheap up-probe: completes the handshake + a `channels.status` roundtrip
    *  within `timeoutMs`. Never throws. */
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
@@ -308,31 +292,6 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
 
     async channelsStatus() {
       return await call("channels.status", {});
-    },
-
-    async channelsStart(channelId, accountId) {
-      const payload = await call("channels.start", {
-        channel: channelId,
-        accountId,
-      });
-      if (!payload || typeof payload !== "object") {
-        throw new GatewayRpcError(
-          "invalid-response",
-          "channels.start returned non-object payload",
-        );
-      }
-      const p = payload as Partial<ChannelStartResult>;
-      if (typeof p.channel !== "string" || typeof p.accountId !== "string") {
-        throw new GatewayRpcError(
-          "invalid-response",
-          "channels.start payload missing channel/accountId",
-        );
-      }
-      return {
-        channel: p.channel,
-        accountId: p.accountId,
-        started: p.started === true,
-      };
     },
 
     async isGatewayUp(timeoutMs) {
