@@ -488,15 +488,46 @@ else
     fi
   fi
 
-  # K8s Secret on the gateway side (HMAC-verify key, must match Firebase
-  # functions:secrets:set FLEET_CONTROLLER_SECRET for the same project)
-  if kubectl get secret octogee-fleet-controller -n "$NAMESPACE" -o name >/dev/null 2>&1; then
-    pass "K8s Secret octogee-fleet-controller exists in $NAMESPACE"
-  else
+  # Fleet controller HMAC secret — exists in Secret Manager (Firebase
+  # project) AND K8s. Both sides must resolve to the SAME value or the
+  # gateway silently 401s every restore task. Check both + compare the
+  # SHA-256 prefix so a mismatch is surfaced loudly here rather than at
+  # first Cloud Task dispatch.
+  K8S_FCS=$(kubectl get secret octogee-fleet-controller -n "$NAMESPACE" -o jsonpath='{.data.secret}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  SM_FCS=$(gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" 2>/dev/null || echo "")
+  K8S_HASH=$(printf '%s' "$K8S_FCS" | shasum -a 256 | awk '{print $1}' | head -c 12)
+  SM_HASH=$(printf '%s' "$SM_FCS"  | shasum -a 256 | awk '{print $1}' | head -c 12)
+  if [[ -z "$K8S_FCS" ]]; then
     fail "K8s Secret octogee-fleet-controller missing in $NAMESPACE — gateway cannot verify HMACs"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} SECRET=\$(firebase functions:secrets:access FLEET_CONTROLLER_SECRET --project=$FIREBASE_PROJECT 2>/dev/null)"
-      echo -e "  ${YELLOW}     ${NC} kubectl -n $NAMESPACE create secret generic octogee-fleet-controller --from-literal=secret=\"\$SECRET\""
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
+    fi
+  elif [[ -z "$SM_FCS" ]]; then
+    fail "Secret Manager FLEET_CONTROLLER_SECRET missing in $FIREBASE_PROJECT — Cloud Functions cannot sign HMACs"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (back-fills SM from K8s)"
+    fi
+  elif [[ "$K8S_HASH" != "$SM_HASH" ]]; then
+    fail "FLEET_CONTROLLER_SECRET mismatch: K8s=$K8S_HASH... vs SM=$SM_HASH... — every restore Task will 401"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (SM is source of truth; rewrites K8s)"
+    fi
+  else
+    pass "FLEET_CONTROLLER_SECRET matches across K8s + Secret Manager ($K8S_HASH...)"
+  fi
+
+  # Functions compute-SA needs roles/secretmanager.secretAccessor on
+  # FLEET_CONTROLLER_SECRET or `defineSecret` will 500 every invocation.
+  FN_SA_NUM=$(gcloud projects describe "$FIREBASE_PROJECT" --format='value(projectNumber)' 2>/dev/null)
+  if [[ -n "$FN_SA_NUM" ]]; then
+    FN_SA="${FN_SA_NUM}-compute@developer.gserviceaccount.com"
+    if gcloud secrets get-iam-policy FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" --format='value(bindings.members)' 2>/dev/null | grep -q "$FN_SA"; then
+      pass "Functions SA ($FN_SA) has secretAccessor on FLEET_CONTROLLER_SECRET"
+    else
+      fail "Functions SA lacks secretAccessor on FLEET_CONTROLLER_SECRET — fn invocations will 500"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET --member=serviceAccount:$FN_SA --role=roles/secretmanager.secretAccessor --project=$FIREBASE_PROJECT"
+      fi
     fi
   fi
 

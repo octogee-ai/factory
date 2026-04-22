@@ -316,6 +316,60 @@ if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
 fi
 ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
 
+# ── 9b. Fleet controller HMAC secret (gateway ↔ Cloud Functions) ─────────
+# The controller Cloud Functions (onUserUpdatedForFleet etc.) sign Cloud
+# Tasks push payloads with this key; the gateway verifies on receipt.
+# Stored once in Secret Manager in the Firebase project:
+#   - Firebase Functions binds it via `defineSecret("FLEET_CONTROLLER_SECRET")`
+#     → becomes `process.env.FLEET_CONTROLLER_SECRET` at function runtime.
+#   - K8s Secret `octogee-fleet-controller/secret` feeds the gateway pod.
+# If the two diverge the gateway silently 401s every restore task, so
+# both sides must pull the same SM value. Rotating = new SM version +
+# re-run this script + redeploy functions + rollout gateway pod.
+info "octogee-fleet-controller (fleet controller HMAC)"
+FLEET_CONTROLLER_SECRET=$(sm_get "FLEET_CONTROLLER_SECRET" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+if [[ -z "$FLEET_CONTROLLER_SECRET" ]]; then
+  # Not in SM — try to recover from existing K8s cache
+  EXISTING_FCS=$(ksecret_key octogee-fleet-controller secret)
+  if [[ -n "$EXISTING_FCS" ]]; then
+    info "  Reusing existing FLEET_CONTROLLER_SECRET from K8s, back-filling Secret Manager"
+    FLEET_CONTROLLER_SECRET="$EXISTING_FCS"
+    echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets create "FLEET_CONTROLLER_SECRET" \
+      --data-file=- --project="$FIREBASE_PROJECT" \
+      --replication-policy=automatic --quiet 2>/dev/null || \
+    echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add "FLEET_CONTROLLER_SECRET" \
+      --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
+  else
+    # First install — generate and persist to SM
+    FLEET_CONTROLLER_SECRET=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9+/' | head -c 64)
+    info "  First install — generating FLEET_CONTROLLER_SECRET, saving to Secret Manager ($FIREBASE_PROJECT)"
+    if echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets create "FLEET_CONTROLLER_SECRET" \
+         --data-file=- --project="$FIREBASE_PROJECT" \
+         --replication-policy=automatic --quiet 2>/dev/null; then
+      ok "  Created SM secret: FLEET_CONTROLLER_SECRET"
+    elif echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add "FLEET_CONTROLLER_SECRET" \
+         --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
+      ok "  Updated SM secret: FLEET_CONTROLLER_SECRET"
+    else
+      warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
+    fi
+  fi
+fi
+# Grant the Cloud Functions compute SA access so `defineSecret` can bind it.
+# Firebase Functions v2 runs under the project's default compute SA; without
+# this, the function fails at invocation with "Permission denied on resource".
+# Idempotent — `add-iam-policy-binding` no-ops if the binding already exists.
+FN_SA="$(gcloud projects describe "$FIREBASE_PROJECT" --format='value(projectNumber)' 2>/dev/null)-compute@developer.gserviceaccount.com"
+if [[ -n "$FN_SA" ]]; then
+  gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET \
+    --member="serviceAccount:$FN_SA" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project="$FIREBASE_PROJECT" --quiet >/dev/null 2>&1 \
+    && ok "  IAM: $FN_SA → roles/secretmanager.secretAccessor" \
+    || warn "  Could not grant functions SA access to FLEET_CONTROLLER_SECRET — fn invocations may 500"
+fi
+ksecret octogee-fleet-controller --from-literal=secret="$FLEET_CONTROLLER_SECRET"
+
 # ── 10. Stripe secrets ────────────────────────────────────────────────────
 # Required by workspace-api at startup (not optional). Use placeholder if not
 # configured yet — billing is sandbox mode until real keys are set.
