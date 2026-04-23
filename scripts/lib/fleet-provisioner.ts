@@ -15,7 +15,6 @@
 
 import express from "express";
 import * as fs from "fs";
-import * as net from "net";
 import * as path from "path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { Server } from "http";
@@ -344,101 +343,38 @@ export async function startFleetController(
   };
 
   // Initial "booting" heartbeat — controller knows the pod exists but is
-  // not yet ready for jobs. Flips to "ready" once the gateway's ops bot
-  // is MM-connected (see waitForGatewayReady below).
+  // not yet ready for jobs. Flips to "ready" once the gateway RPC answers
+  // (see waitForGatewayReady below).
   await emitHeartbeat("booting");
 
-  // Two-phase gateway readiness:
+  // Background poll: once the gateway RPC answers, transition to ready.
   //
-  //   1. Quiet TCP probe on localhost:18789. Plain socket connects, no WS,
-  //      no handshake, no RPC trace — so the pre-ready window is silent
-  //      (no ECONNREFUSED spam while openclaw is still loading plugins).
-  //   2. Once the port accepts, poll `channels.status` RPC until the ops
-  //      account `"default"` reports `running + connected`. OpenClaw
-  //      logs this as "[mattermost] connected as @mac-{gatewayId}" (the
-  //      MM bot username), but the account KEY in the channels.status
-  //      response is the config account id — i.e. `"default"` — not the
-  //      bot username. See `channels/plugins/status.ts` in openclaw:
-  //      the response map is keyed by `Object.keys(accounts)` from
-  //      openclaw.json, which for the ops bot is always `"default"`.
-  //      Only then do we transition status=ready.
-  //
-  // The controller won't enqueue restore jobs against a non-ready gateway,
-  // so nothing upstream hammers us while we wait. A gateway that never
-  // finishes connecting to MM stays booting forever — the controller's
-  // lastHeartbeatAt + status signals are what flag a truly-stuck gateway.
-  // Validate the parsed port — a malformed env value (e.g. "abc") would
-  // otherwise feed NaN to net.connect and turn `void waitForGatewayReady()`
-  // into an unhandled rejection, leaving the gateway stuck in "booting".
-  // Falls back to 18789 with a warning when out of range or unparseable.
-  const configuredPort = process.env.OPENCLAW_GATEWAY_PORT ?? process.env.GATEWAY_PORT;
-  const parsedPortNum = Number.parseInt(configuredPort ?? "18789", 10);
-  const gatewayPortNum =
-    Number.isInteger(parsedPortNum) && parsedPortNum >= 1 && parsedPortNum <= 65_535
-      ? parsedPortNum
-      : 18789;
-  if (configuredPort != null && gatewayPortNum !== parsedPortNum) {
-    opts.log(
-      `[fleet] ⚠ invalid gateway port "${configuredPort}" in env; falling back to ${gatewayPortNum}`,
-    );
-  }
-  // Canonical config-account key for the ops bot. Set by the template and
-  // enforced by provisionSteps.ts (`defaultAccount: "default"`). Coach
-  // accounts land later as `{slug}-coach`; they are NOT this bot.
-  const opsAccountId = "default";
-
-  const waitForPortOpen = async (port: number): Promise<void> => {
-    const attemptMs = 500;
-    const pollMs = 1_000;
-    while (runtime.status !== "ready") {
-      const ok = await new Promise<boolean>((resolve) => {
-        const sock = net.connect({ host: "127.0.0.1", port });
-        const done = (v: boolean) => {
-          try {
-            sock.destroy();
-          } catch {
-            // ignore
-          }
-          resolve(v);
-        };
-        sock.setTimeout(attemptMs);
-        sock.once("connect", () => done(true));
-        sock.once("error", () => done(false));
-        sock.once("timeout", () => done(false));
-      });
-      if (ok) return;
-      await new Promise<void>((r) => setTimeout(r, pollMs));
-    }
-  };
-
-  const waitForOpsAgentConnected = async (): Promise<void> => {
+  // A prior iteration of this code waited for the ops bot's
+  // `channels.status` entry to report `running + connected` so the log
+  // window between "booting" and "ready" was quiet. That gate went wrong
+  // twice (wrong account key, then wrong response-shape assumptions) and
+  // each miss left the fleet hung — controller won't enqueue restore
+  // jobs against a non-ready gateway, so customers stopped provisioning
+  // on TEST. The simple RPC-up check is noisy during openclaw's plugin-
+  // load window (ECONNREFUSED / ws-open-timeout for ~90s) but it's the
+  // outcome the fleet needs, so we're back to it.
+  const waitForGatewayReady = async (): Promise<void> => {
     while (runtime.status !== "ready") {
       try {
-        const snap = (await opts.rpc.channelsStatus()) as {
-          channelAccounts?: Record<string, Record<string, { running?: boolean; connected?: boolean }>>;
-        };
-        const entry = snap.channelAccounts?.mattermost?.[opsAccountId];
-        if (entry?.running === true && entry?.connected === true) return;
+        const up = await opts.rpc.isGatewayUp(2_000);
+        if (up) {
+          runtime.status = "ready";
+          opts.log(
+            `[fleet] gateway RPC up; transitioning gateways/${opts.gatewayId} to status=ready`,
+          );
+          await emitHeartbeat("ready");
+          return;
+        }
       } catch {
-        // Expected while the gateway is still booting its plugins; swallow
-        // and keep polling. TCP is already open so this is quick-fail, not
-        // minute-long connect timeouts.
+        // Ignore; keep polling.
       }
-      await new Promise<void>((r) => setTimeout(r, 2_000));
+      await new Promise<void>((r) => setTimeout(r, 1_000));
     }
-  };
-
-  const waitForGatewayReady = async (): Promise<void> => {
-    await waitForPortOpen(gatewayPortNum);
-    opts.log(
-      `[fleet] gateway WS port ${gatewayPortNum} accepting connections — probing ops agent (${opsAccountId})`,
-    );
-    await waitForOpsAgentConnected();
-    runtime.status = "ready";
-    opts.log(
-      `[fleet] ops agent ${opsAccountId} connected; transitioning gateways/${opts.gatewayId} to status=ready`,
-    );
-    await emitHeartbeat("ready");
   };
   void waitForGatewayReady();
 
