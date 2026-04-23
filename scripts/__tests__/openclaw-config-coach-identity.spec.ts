@@ -26,7 +26,7 @@ import {
   type CoachIdentityDeps,
 } from "../lib/openclaw-config-builders.js";
 
-const DEFAULT_COACH = { name: "Octo", emoji: "🐙", model: "anthropic/claude-haiku-4-5" };
+const DEFAULT_COACH = { name: "Octo", emoji: "🐙", model: "anthropic/claude-sonnet-4-6" };
 
 function mkCustomer(overrides: Partial<CustomerAgentInput> = {}): CustomerAgentInput {
   return {
@@ -79,7 +79,7 @@ describe("resolveCoachIdentity", () => {
 describe("buildCustomerAgent", () => {
   it("writes the customer's coach identity into the agent's identity block", () => {
     const agent = buildCustomerAgent(
-      mkCustomer({ coach: { name: "Scout", emoji: "🧠", model: "anthropic/claude-haiku-4-5" } }),
+      mkCustomer({ coach: { name: "Scout", emoji: "🧠", model: "anthropic/claude-sonnet-4-6" } }),
     );
     expect(agent.identity).toEqual({ name: "Scout", emoji: "🧠" });
   });
@@ -101,7 +101,7 @@ describe("buildCustomerAgent", () => {
       name: "Octo (Chris's Workshop)",
       workspace: "/home/node/.openclaw/customers/chris-builds-a3f2",
       agentDir: "/home/node/.openclaw/agents/octogee-chris-builds-a3f2-coach/agent",
-      model: "anthropic/claude-haiku-4-5",
+      model: "anthropic/claude-sonnet-4-6",
       heartbeat: { every: "45s", target: "last", lightContext: true },
       tools: { fs: { workspaceOnly: true } },
     });

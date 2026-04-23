@@ -77,10 +77,10 @@ export function ensureGatewayDefaults(): void {
         log(`${agent.id} → removed exec/process from agent deny (moved to router plugin)`);
       }
 
-      // Face model: default Haiku, per-customer override via faceModelOverrides
+      // Face model: default Sonnet 4.6, per-customer override via faceModelOverrides
       const agentSlug = agent.id.replace(/^octogee-/, "").replace(/-coach$/, "");
       const faceOverrides: Record<string, string> = config.plugins?.entries?.["octogee-router"]?.config?.faceModelOverrides ?? {};
-      const faceModel = faceOverrides[agentSlug] || "anthropic/claude-haiku-4-5";
+      const faceModel = faceOverrides[agentSlug] || "anthropic/claude-sonnet-4-6";
       if (agent.model !== faceModel) {
         const oldModel = agent.model ?? "default";
         agent.model = faceModel;

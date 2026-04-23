@@ -82,11 +82,11 @@ describe("ensureGatewayDefaults — config transformation", () => {
     expect(agent.tools.deny).toEqual(["other"]);
   });
 
-  it("sets coach model to haiku", () => {
-    const agent: any = { id: "octogee-foo-coach", model: "anthropic/claude-sonnet-4-6" };
+  it("sets coach model to sonnet 4.6", () => {
+    const agent: any = { id: "octogee-foo-coach", model: "anthropic/claude-haiku-4-5" };
     if (/^octogee-.+-coach$/.test(agent.id)) {
-      agent.model = "anthropic/claude-haiku-4-5";
+      agent.model = "anthropic/claude-sonnet-4-6";
     }
-    expect(agent.model).toBe("anthropic/claude-haiku-4-5");
+    expect(agent.model).toBe("anthropic/claude-sonnet-4-6");
   });
 });
