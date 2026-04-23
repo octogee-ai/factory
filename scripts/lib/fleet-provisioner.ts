@@ -309,25 +309,28 @@ export async function startFleetController(
     status: "booting",
   };
 
-  // Load existing mountedCustomers from Firestore so a pod restart
-  // mid-restore doesn't re-mount everyone. The controller will reconcile
-  // any drift on next pick-next.
-  try {
-    const snap = await opts.db
-      .collection(GATEWAYS_COLLECTION)
-      .doc(opts.gatewayId)
-      .get();
-    if (snap.exists) {
-      const data = snap.data();
-      if (Array.isArray(data?.mountedCustomers)) {
-        runtime.mountedCustomers = data!.mountedCustomers as string[];
-      }
-    }
-  } catch (err) {
-    opts.log(
-      `[fleet] ⚠ failed to read existing gateways/${opts.gatewayId}: ${String(err)}`,
-    );
-  }
+  // `mountedCustomers` starts EMPTY on every pod boot. This reflects the
+  // emptyDir reality: openclaw.json on disk was regenerated from the
+  // template and only carries the default account — no customer accounts
+  // are actually mounted in the OpenClaw runtime. Firestore may still hold
+  // the previous pod's mountedCustomers list, but that list is stale from
+  // the moment this pod starts.
+  //
+  // Earlier versions of this code read Firestore's `mountedCustomers` and
+  // used it as local state ("so a pod restart mid-restore doesn't re-mount
+  // everyone"). That was a PVC-era assumption — when gateways were pets
+  // with persistent disks, the mounts survived pod cycles. Under the
+  // cattle-gateway emptyDir model, the mounts DON'T survive, and
+  // preserving the stale list makes the fleet controller's pick-next see
+  // all customers as "already mounted" → noop-none-pending → customers
+  // never come back. Observed post-#668 deploy on TEST 2026-04-23:
+  // gateway booted, flipped to ready, 6 prior customers stayed in the
+  // Firestore mountedCustomers list, no restore tasks fired.
+  //
+  // The first heartbeat after boot writes the empty list to Firestore;
+  // the controller's `gateways/` onWrite trigger sees the transition and
+  // enqueues the first restore task. Subsequent restore completions
+  // append to `mountedCustomers` as they land.
 
   const cache = new IdempotencyCache();
   const activeRestores = new ActiveRestoreSet();
