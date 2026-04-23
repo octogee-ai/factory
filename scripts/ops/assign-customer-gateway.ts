@@ -77,14 +77,19 @@ async function assignOne(
   if (!snap.exists) {
     return { kind: "not-ready", uid, slug: "?", reason: "user-not-found" };
   }
-  const openclaw = snap.data()?.provisioning?.openclaw;
+  const data = snap.data() ?? {};
+  const openclaw = data.provisioning?.openclaw;
   const slug: string = openclaw?.slug ?? "?";
-  if (openclaw?.status !== "complete") {
-    return { kind: "not-ready", uid, slug, reason: "provisioning-not-complete" };
+  // Precondition: user is approved. Deliberately NOT gating on
+  // `status === "complete"` — assignment happens before provisioning
+  // runs so the gateway knows which pod to target. Mirror of the
+  // canonical helper in functions/src/orchestrator/assign.ts.
+  if (data.approved !== true) {
+    return { kind: "not-ready", uid, slug, reason: "not-approved" };
   }
   const config = await readOrchestratorConfig(db);
   const target = config.overrides?.[uid] ?? config.defaultGatewayId;
-  const current: string | null = typeof openclaw.gatewayId === "string" ? openclaw.gatewayId : null;
+  const current: string | null = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;
   if (current === target) {
     return { kind: "already-assigned", uid, slug, gatewayId: current };
   }
@@ -175,9 +180,12 @@ async function main(): Promise<void> {
     }
     uids.push(q.docs[0].id);
   } else if (opts.all) {
+    // `approved=true` is the precondition for assignment (see assignOne).
+    // Widening from the prior `status=complete` filter so --all also
+    // catches new signups that are approved but still provisioning.
     const q = await db
       .collection("users")
-      .where("provisioning.openclaw.status", "==", "complete")
+      .where("approved", "==", true)
       .get();
     for (const d of q.docs) {
       if (!d.data().provisioning?.openclaw?.gatewayId) {

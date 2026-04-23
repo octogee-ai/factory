@@ -27,7 +27,7 @@ import { applyConfigPatch } from "./apply-config-patch.js";
 import { blobSyncForSlug } from "./blob-sync.js";
 import { AGENTS_DIR, CUSTOMERS_DIR } from "./config.js";
 import { CREW_IDENTITY } from "./crew.js";
-import { createRestoreCustomerHandler, IdempotencyCache } from "./fleet-http.js";
+import { ActiveRestoreSet, createRestoreCustomerHandler, IdempotencyCache } from "./fleet-http.js";
 import {
   writeGatewayHeartbeat,
   type FleetStateDeps,
@@ -330,6 +330,7 @@ export async function startFleetController(
   }
 
   const cache = new IdempotencyCache();
+  const activeRestores = new ActiveRestoreSet();
 
   const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {
     try {
@@ -431,6 +432,7 @@ export async function startFleetController(
       secret: opts.secret,
       gatewayId: opts.gatewayId,
       stateDeps,
+      activeRestores,
       adapter: {
         ...adapter,
         // Wrap applyCustomerConfigPatch to track inFlight + mounted state

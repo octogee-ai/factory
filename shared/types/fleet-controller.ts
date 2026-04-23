@@ -68,6 +68,17 @@ export interface GatewayState {
   lastJobCompletedAt: unknown | null; // Firestore Timestamp | null
   /** Most recent failure — kept for one job lifetime. Null when last job succeeded. */
   lastError: GatewayLastError | null;
+  /**
+   * Per-customer failure tracker for exponential-backoff scheduling. Keyed
+   * by slug. Pick-next skips any slug whose last failure is still inside
+   * the backoff window computed from its `failCount`, so a single corrupt
+   * user doc cannot flat-line the gateway by spinning on immediate-requeue.
+   * Cleared on successful restore for that slug.
+   *
+   * Missing field (older gateways) is treated as "no failures" — pick-next
+   * defaults to an empty map when absent.
+   */
+  failedCustomers?: Record<string, { failCount: number; lastFailedAt: unknown /* Timestamp */ }>;
 }
 
 // ── Restore jobs ─────────────────────────────────────────────────────────────
