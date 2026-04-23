@@ -1,13 +1,18 @@
 /**
- * Unit tests for `applyConfigPatch` — the fetch-hash / patch / retry /
- * fallback ceremony every runtime writer uses instead of `writeOpenClawConfig`.
+ * Unit tests for `applyConfigPatch` — the single path for runtime config
+ * writes.
  *
- * The orchestrator is what makes RPC migration safe:
- *   - on a transient RPC failure (connect-failed, timeout, rpc-error) it
- *     retries with exponential backoff before giving up;
- *   - on a permanent failure (auth-failed, invalid-patch, invalid-response)
- *     it falls back to file-write immediately;
- *   - on a hash-mismatch it re-fetches the hash and re-patches.
+ * Contract (post 2026.4.24):
+ *   - Happy path: configGet → buildPatch → configPatch → return { mode: 'rpc' }
+ *   - Transient error (connect-failed, timeout, rpc-error): retry with
+ *     capped exponential backoff. Default `maxRetries: Infinity` — tests
+ *     inject a small finite number to exercise the exhaustion path.
+ *   - Hash-mismatch: refetch hash and retry immediately (no backoff);
+ *     also unbounded by default.
+ *   - Permanent error (auth-failed, invalid-patch, invalid-response):
+ *     throw immediately. No file-write fallback — the cascading chokidar
+ *     reload from fallback was what made one slow restore blip every
+ *     tenant's MM WS, which is exactly the outcome we don't want.
  *
  * Tests inject a `sleep` stub so retry delays don't burn real time.
  */
@@ -32,33 +37,21 @@ function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClien
   };
 }
 
-/** Default opts every test uses: temp config path + silenced log + no-wait sleep. */
-function baseOpts(configPath: string, extra: Record<string, any> = {}) {
+/** Default opts every test uses: silenced log + no-wait sleep + finite retries. */
+function baseOpts(extra: Record<string, unknown> = {}) {
   return {
-    configPath,
     log: () => {},
     sleep: vi.fn(async () => {}),
-    // Keep backoff length the default (3 entries = 4 attempts) unless a
-    // test overrides; real delay is stubbed so no wall-clock cost.
+    // Tests pin a small maxRetries so exhaustion-path assertions don't hang.
+    maxRetries: 3,
     ...extra,
   };
 }
 
 let tmpDir: string;
-let tmpConfigPath: string;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "apply-config-patch-"));
-  tmpConfigPath = path.join(tmpDir, "openclaw.json");
-  fs.writeFileSync(
-    tmpConfigPath,
-    JSON.stringify(
-      { agents: { list: [] }, bindings: [], channels: { mattermost: {} } },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
 });
 
 afterEach(() => {
@@ -75,12 +68,11 @@ describe("applyConfigPatch — RPC happy path", () => {
 
     const result = await applyConfigPatch(
       {
-        buildPatch: () => ({ channels: { mattermost: { accounts: { "x-coach": { botToken: "tok" } } } } }),
-        fallback: () => {
-          throw new Error("fallback must not run on happy path");
-        },
+        buildPatch: () => ({
+          channels: { mattermost: { accounts: { "x-coach": { botToken: "tok" } } } },
+        }),
       },
-      { ...baseOpts(tmpConfigPath), rpc },
+      { ...baseOpts(), rpc },
     );
 
     expect(result.mode).toBe("rpc");
@@ -103,9 +95,8 @@ describe("applyConfigPatch — RPC happy path", () => {
           seen = cfg;
           return {};
         },
-        fallback: () => {},
       },
-      { ...baseOpts(tmpConfigPath), rpc },
+      { ...baseOpts(), rpc },
     );
 
     expect(seen).toEqual(current);
@@ -127,8 +118,8 @@ describe("applyConfigPatch — hash-mismatch", () => {
     const rpc = makeFakeRpc({ configGet, configPatch });
 
     const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      { ...baseOpts(tmpConfigPath), rpc },
+      { buildPatch: () => ({}) },
+      { ...baseOpts(), rpc },
     );
 
     expect(result.mode).toBe("rpc");
@@ -138,7 +129,7 @@ describe("applyConfigPatch — hash-mismatch", () => {
     expect(configPatch.mock.calls[1][1]).toBe("fresh");
   });
 
-  it("hash-mismatch retries do NOT consume the backoff-budget (retry immediately)", async () => {
+  it("hash-mismatch retries do NOT consume any backoff sleep (retry immediately)", async () => {
     const configPatch = vi
       .fn()
       .mockRejectedValueOnce(new GatewayRpcError("hash-mismatch", "stale 1"))
@@ -146,12 +137,24 @@ describe("applyConfigPatch — hash-mismatch", () => {
     const sleep = vi.fn(async () => {});
 
     await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      { ...baseOpts(tmpConfigPath, { sleep }), rpc: makeFakeRpc({ configPatch }) },
+      { buildPatch: () => ({}) },
+      { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configPatch }) },
     );
 
-    // Zero sleeps between attempts — hash-mismatch path goes straight back.
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("throws hash-mismatch when maxRetries is exhausted", async () => {
+    const configPatch = vi.fn(async () => {
+      throw new GatewayRpcError("hash-mismatch", "racing writer");
+    });
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        { ...baseOpts({ maxRetries: 2 }), rpc: makeFakeRpc({ configPatch }) },
+      ),
+    ).rejects.toMatchObject({ code: "hash-mismatch" });
   });
 });
 
@@ -161,17 +164,16 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
   it("retries a connect-failed on the next backoff slot and succeeds", async () => {
     const configGet = vi
       .fn()
-      .mockRejectedValueOnce(new GatewayRpcError("connect-failed", "WS open timed out after 10000ms"))
+      .mockRejectedValueOnce(
+        new GatewayRpcError("connect-failed", "WS open timed out after 10000ms"),
+      )
       .mockResolvedValueOnce({ config: {}, hash: "h1" });
     const sleep = vi.fn(async () => {});
     const rpc = makeFakeRpc({ configGet });
 
     const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      {
-        ...baseOpts(tmpConfigPath, { retryBackoffMs: [500, 1000, 2000], sleep }),
-        rpc,
-      },
+      { buildPatch: () => ({}) },
+      { ...baseOpts({ retryBackoffInitialMs: 500, sleep }), rpc },
     );
 
     expect(result.mode).toBe("rpc");
@@ -181,182 +183,116 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
     expect(sleep).toHaveBeenCalledWith(500);
   });
 
-  it("retries timeout errors across all backoff slots before falling back", async () => {
-    const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("timeout", "response timed out");
-    });
-    const sleep = vi.fn(async () => {});
-    const fallback = vi.fn();
-    const rpc = makeFakeRpc({ configGet });
-
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback },
-      {
-        ...baseOpts(tmpConfigPath, { retryBackoffMs: [100, 200, 400], sleep }),
-        rpc,
-      },
-    );
-
-    expect(result.mode).toBe("fallback-file-write");
-    expect(result.attempts).toBe(4); // initial + 3 retries
-    expect(configGet).toHaveBeenCalledTimes(4);
-    // Backoff slot is consumed between each failed attempt.
-    expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200, 400]);
-    expect(fallback).toHaveBeenCalledOnce();
-  });
-
   it("treats rpc-error as transient and retries", async () => {
     const configGet = vi
       .fn()
       .mockRejectedValueOnce(new GatewayRpcError("rpc-error", "server stalled"))
       .mockResolvedValueOnce({ config: {}, hash: "h" });
-    const sleep = vi.fn(async () => {});
 
     const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      {
-        ...baseOpts(tmpConfigPath, { retryBackoffMs: [10], sleep }),
-        rpc: makeFakeRpc({ configGet }),
-      },
+      { buildPatch: () => ({}) },
+      { ...baseOpts({ retryBackoffInitialMs: 10 }), rpc: makeFakeRpc({ configGet }) },
     );
 
     expect(result.mode).toBe("rpc");
     expect(result.attempts).toBe(2);
   });
 
-  it("does NOT retry when backoff is empty (single-attempt mode)", async () => {
+  it("doubles the backoff between attempts (capped at retryBackoffMaxMs)", async () => {
+    const configGet = vi.fn(async () => {
+      throw new GatewayRpcError("timeout", "response timed out");
+    });
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        {
+          ...baseOpts({
+            maxRetries: 5,
+            retryBackoffInitialMs: 100,
+            retryBackoffMaxMs: 400,
+            sleep,
+          }),
+          rpc: makeFakeRpc({ configGet }),
+        },
+      ),
+    ).rejects.toBeInstanceOf(GatewayRpcError);
+
+    // maxRetries=5 → 4 sleeps between 5 attempts: 100, 200, 400 (capped), 400.
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200, 400, 400]);
+  });
+
+  it("throws the GatewayRpcError when maxRetries is exhausted (no file-write fallback)", async () => {
     const configGet = vi.fn(async () => {
       throw new GatewayRpcError("connect-failed", "ECONNREFUSED");
     });
-    const sleep = vi.fn(async () => {});
-    const fallback = vi.fn();
 
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback },
-      {
-        ...baseOpts(tmpConfigPath, { retryBackoffMs: [], sleep }),
-        rpc: makeFakeRpc({ configGet }),
-      },
-    );
-
-    expect(result.mode).toBe("fallback-file-write");
-    expect(result.attempts).toBe(1);
-    expect(sleep).not.toHaveBeenCalled();
-    expect(fallback).toHaveBeenCalledOnce();
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        { ...baseOpts({ maxRetries: 2 }), rpc: makeFakeRpc({ configGet }) },
+      ),
+    ).rejects.toMatchObject({ code: "connect-failed" });
+    expect(configGet).toHaveBeenCalledTimes(2);
   });
 });
 
-// ── Permanent errors skip retry ─────────────────────────────────────────────
+// ── Permanent errors throw immediately ──────────────────────────────────────
 
-describe("applyConfigPatch — permanent RPC errors fall back immediately", () => {
-  it("falls back on auth-failed without retry", async () => {
+describe("applyConfigPatch — permanent RPC errors throw without retry", () => {
+  it("throws auth-failed without retry", async () => {
     const configGet = vi.fn(async () => {
       throw new GatewayRpcError("auth-failed", "bad token");
     });
     const sleep = vi.fn(async () => {});
-    const fallback = vi.fn();
 
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback },
-      {
-        ...baseOpts(tmpConfigPath, { retryBackoffMs: [100, 200], sleep }),
-        rpc: makeFakeRpc({ configGet }),
-      },
-    );
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configGet }) },
+      ),
+    ).rejects.toMatchObject({ code: "auth-failed" });
 
-    expect(result.mode).toBe("fallback-file-write");
-    expect(result.attempts).toBe(1);
     expect(configGet).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
-    expect(fallback).toHaveBeenCalledOnce();
   });
 
-  it("falls back on invalid-patch without retry (server schema rejection)", async () => {
+  it("throws invalid-patch without retry (server schema rejection)", async () => {
     const configPatch = vi.fn(async () => {
       throw new GatewayRpcError("invalid-patch", "invalid config: channels.mattermost.accounts");
     });
     const sleep = vi.fn(async () => {});
-    const fallback = vi.fn();
 
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback },
-      {
-        ...baseOpts(tmpConfigPath, { retryBackoffMs: [100, 200], sleep }),
-        rpc: makeFakeRpc({ configPatch }),
-      },
-    );
-
-    expect(result.mode).toBe("fallback-file-write");
-    expect(result.attempts).toBe(1);
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configPatch }) },
+      ),
+    ).rejects.toMatchObject({ code: "invalid-patch" });
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("falls back on invalid-response without retry", async () => {
+  it("throws invalid-response without retry", async () => {
     const configGet = vi.fn(async () => {
       throw new GatewayRpcError("invalid-response", "malformed");
     });
     const sleep = vi.fn(async () => {});
 
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      {
-        ...baseOpts(tmpConfigPath, { retryBackoffMs: [100], sleep }),
-        rpc: makeFakeRpc({ configGet }),
-      },
-    );
-
-    expect(result.mode).toBe("fallback-file-write");
-    expect(result.attempts).toBe(1);
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configGet }) },
+      ),
+    ).rejects.toMatchObject({ code: "invalid-response" });
     expect(sleep).not.toHaveBeenCalled();
   });
 });
 
-// ── Fallback correctness + error-bubbling ───────────────────────────────────
+// ── Error bubbling for non-RPC exceptions ───────────────────────────────────
 
-describe("applyConfigPatch — fallback correctness + error bubbling", () => {
-  it("writes the fallback mutator's result to disk when RPC fails", async () => {
-    const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("connect-failed", "ECONNREFUSED");
-    });
-    const fallback = vi.fn((cfg: any) => {
-      cfg.bindings.push({ agentId: "a" });
-    });
-
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback, logPrefix: "[test]" },
-      {
-        ...baseOpts(tmpConfigPath, { retryBackoffMs: [] }),
-        rpc: makeFakeRpc({ configGet }),
-      },
-    );
-
-    expect(result.mode).toBe("fallback-file-write");
-    const written = JSON.parse(fs.readFileSync(tmpConfigPath, "utf-8"));
-    expect(written.bindings).toEqual([{ agentId: "a" }]);
-  });
-
-  it("emits a structured warn line mentioning fallback + reason", async () => {
-    const log = vi.fn();
-    const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("connect-failed", "ECONNREFUSED");
-    });
-
-    await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {}, logPrefix: "[p]" },
-      {
-        configPath: tmpConfigPath,
-        log,
-        retryBackoffMs: [],
-        sleep: vi.fn(async () => {}),
-        rpc: makeFakeRpc({ configGet }),
-      },
-    );
-
-    expect(log.mock.calls.some((c) => /fallback|file-write/i.test(String(c[0])))).toBe(true);
-    expect(log.mock.calls.some((c) => /connect-failed|ECONNREFUSED/i.test(String(c[0])))).toBe(true);
-  });
-
-  it("propagates unknown (non-GatewayRpcError) errors instead of silently falling back", async () => {
+describe("applyConfigPatch — caller error bubbling", () => {
+  it("propagates unknown (non-GatewayRpcError) errors without touching retry", async () => {
     const rpc = makeFakeRpc({
       configGet: vi.fn(async () => {
         throw new Error("bug in caller");
@@ -364,34 +300,25 @@ describe("applyConfigPatch — fallback correctness + error bubbling", () => {
     });
 
     await expect(
-      applyConfigPatch(
-        { buildPatch: () => ({}), fallback: () => {} },
-        { ...baseOpts(tmpConfigPath), rpc },
-      ),
+      applyConfigPatch({ buildPatch: () => ({}) }, { ...baseOpts(), rpc }),
     ).rejects.toThrow("bug in caller");
   });
 });
 
 // ── Timing instrumentation ──────────────────────────────────────────────────
 
-describe("applyConfigPatch — timing instrumentation (#3)", () => {
+describe("applyConfigPatch — timing instrumentation", () => {
   it("logs a single-line timing trace on happy-path RPC success", async () => {
     const log = vi.fn();
 
     await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {}, logPrefix: "[p]" },
-      {
-        configPath: tmpConfigPath,
-        log,
-        rpc: makeFakeRpc(),
-        retryBackoffMs: [],
-        sleep: vi.fn(async () => {}),
-      },
+      { buildPatch: () => ({}), logPrefix: "[p]" },
+      { ...baseOpts({ log }), rpc: makeFakeRpc() },
     );
 
     const traceLine = log.mock.calls.map((c) => String(c[0])).find((l) => /config\.patch OK/.test(l));
     expect(traceLine).toBeTruthy();
-    expect(traceLine).toContain("attempt=1/1");
+    expect(traceLine).toContain("attempt=1");
     expect(traceLine).toMatch(/configGet=\d+ms/);
     expect(traceLine).toMatch(/configPatch=\d+ms/);
     expect(traceLine).toMatch(/totalMs=\d+/);
@@ -401,206 +328,22 @@ describe("applyConfigPatch — timing instrumentation (#3)", () => {
     const log = vi.fn();
     const configGet = vi
       .fn()
-      .mockRejectedValueOnce(new GatewayRpcError("connect-failed", "WS open timed out after 10000ms"))
+      .mockRejectedValueOnce(
+        new GatewayRpcError("connect-failed", "WS open timed out after 10000ms"),
+      )
       .mockResolvedValueOnce({ config: {}, hash: "h" });
 
     await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
+      { buildPatch: () => ({}) },
       {
-        configPath: tmpConfigPath,
-        log,
-        retryBackoffMs: [250],
-        sleep: vi.fn(async () => {}),
+        ...baseOpts({ log, retryBackoffInitialMs: 250 }),
         rpc: makeFakeRpc({ configGet }),
       },
     );
 
-    const attempts = log.mock.calls
-      .map((c) => String(c[0]))
-      .filter((l) => /attempt=/.test(l));
-    expect(attempts.length).toBeGreaterThanOrEqual(2);
-    expect(attempts.some((l) => /attempt=1\/2 failed \(connect-failed/.test(l))).toBe(true);
-    expect(attempts.some((l) => /retrying in 250ms/.test(l))).toBe(true);
-    expect(attempts.some((l) => /OK attempt=2\/2/.test(l))).toBe(true);
-  });
-});
-
-// ── Retry budget defaults + fallback telemetry (resilience hardening) ──────
-
-describe("applyConfigPatch — default retry budget", () => {
-  it("defaults to 3 attempts (backoff [2s, 10s]) on transient errors", async () => {
-    // Pin the default retry budget so a future tweak of the default can't
-    // silently reduce retries without an explicit test flip. The budget
-    // matters for the event-loop-pin absorb case: a 2-attempt budget
-    // (pre-resilience) exhausted in 22s and sent provisioning straight to
-    // the file-write fallback. 3 attempts with the new backoff covers up
-    // to ~42s + per-call budget.
-    const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("connect-failed", "ECONNREFUSED");
-    });
-    const sleep = vi.fn(async () => {});
-    const rpc = makeFakeRpc({ configGet });
-
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {}, logPrefix: "[p]" },
-      {
-        configPath: tmpConfigPath,
-        log: () => {},
-        sleep,
-        rpc,
-        // NOTE: no retryBackoffMs — explicitly exercise the default.
-      },
-    );
-
-    expect(result.mode).toBe("fallback-file-write");
-    expect(result.attempts).toBe(3);
-    expect(configGet).toHaveBeenCalledTimes(3);
-    // Two sleeps between three attempts. Delays come from the default.
-    expect(sleep).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenNthCalledWith(1, 2_000);
-    expect(sleep).toHaveBeenNthCalledWith(2, 10_000);
-  });
-});
-
-describe("applyConfigPatch — fallback telemetry (resilience hardening)", () => {
-  it("emits a structured [fallback-metric] line on transient-exhausted fallback", async () => {
-    const log = vi.fn();
-    const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("connect-failed", "WS open timed out after 30000ms");
-    });
-
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {}, logPrefix: "[provision:chris]" },
-      {
-        configPath: tmpConfigPath,
-        log,
-        retryBackoffMs: [10],
-        sleep: vi.fn(async () => {}),
-        rpc: makeFakeRpc({ configGet }),
-      },
-    );
-
-    expect(result.mode).toBe("fallback-file-write");
-    expect(result.fallbackReasonCode).toBe("connect-failed");
-    expect(result.fallbackElapsedMs).toEqual(expect.any(Number));
-
-    const metricLine = log.mock.calls
-      .map((c) => String(c[0]))
-      .find((l) => /\[fallback-metric\]/.test(l));
-    expect(metricLine).toBeTruthy();
-    expect(metricLine).toContain("applyConfigPatch.fallback");
-    expect(metricLine).toMatch(/reason=connect-failed/);
-    expect(metricLine).toMatch(/attempts=2/);
-    expect(metricLine).toMatch(/elapsedMs=\d+/);
-  });
-
-  it("tags permanent-error fallback with the specific error code", async () => {
-    const log = vi.fn();
-    const configPatch = vi.fn(async () => {
-      throw new GatewayRpcError("invalid-patch", "invalid config");
-    });
-
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      {
-        configPath: tmpConfigPath,
-        log,
-        retryBackoffMs: [100, 200],
-        sleep: vi.fn(async () => {}),
-        rpc: makeFakeRpc({ configPatch }),
-      },
-    );
-
-    expect(result.fallbackReasonCode).toBe("invalid-patch");
-    const metricLine = log.mock.calls
-      .map((c) => String(c[0]))
-      .find((l) => /\[fallback-metric\]/.test(l));
-    expect(metricLine).toMatch(/reason=invalid-patch/);
-    // Permanent errors are single-attempt by design — no retry on schema fail.
-    expect(metricLine).toMatch(/attempts=1/);
-  });
-
-  it("tags hash-mismatch exhaustion distinctly from the underlying code", async () => {
-    // The hash-mismatch-exhausted case is its own telemetry bucket because
-    // it means "someone else is writing concurrently" rather than "the
-    // gateway is pinned" — different ops response. The reason code
-    // captures that distinction without callers parsing prose.
-    const log = vi.fn();
-    const configPatch = vi.fn(async () => {
-      throw new GatewayRpcError("hash-mismatch", "config changed since last load");
-    });
-
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      {
-        configPath: tmpConfigPath,
-        log,
-        retryBackoffMs: [],
-        sleep: vi.fn(async () => {}),
-        rpc: makeFakeRpc({ configPatch }),
-      },
-    );
-
-    expect(result.fallbackReasonCode).toBe("hash-mismatch-exhausted");
-    const metricLine = log.mock.calls
-      .map((c) => String(c[0]))
-      .find((l) => /\[fallback-metric\]/.test(l));
-    expect(metricLine).toMatch(/reason=hash-mismatch-exhausted/);
-  });
-
-  it("omits fallback fields from the result AND skips the [fallback-metric] line on RPC success", async () => {
-    // Strict shape: success must not emit the metric line, or ops
-    // dashboards would count a fallback that never happened. The negative
-    // assertion catches a future regression where the metric emit gets
-    // hoisted outside the fallback branch.
-    const log = vi.fn();
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      {
-        configPath: tmpConfigPath,
-        log,
-        retryBackoffMs: [],
-        sleep: vi.fn(async () => {}),
-        rpc: makeFakeRpc(),
-      },
-    );
-
-    expect(result.mode).toBe("rpc");
-    expect(result.fallbackReasonCode).toBeUndefined();
-    expect(result.fallbackElapsedMs).toBeUndefined();
-    const metricLine = log.mock.calls
-      .map((c) => String(c[0]))
-      .find((l) => /\[fallback-metric\]/.test(l));
-    expect(metricLine).toBeUndefined();
-  });
-
-  it("exercises the structured metric through the default retry budget (attempts=3)", async () => {
-    // Pairs with the default-budget test above: that one asserts the
-    // retry count and sleep calls; this one asserts the metric line
-    // reports the same count. If a future default tweak changes attempts
-    // without updating the metric, one of the two tests flags it.
-    const log = vi.fn();
-    const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("connect-failed", "WS open timed out after 30000ms");
-    });
-
-    const result = await applyConfigPatch(
-      { buildPatch: () => ({}), fallback: () => {} },
-      {
-        configPath: tmpConfigPath,
-        log,
-        sleep: vi.fn(async () => {}),
-        rpc: makeFakeRpc({ configGet }),
-        // NOTE: no retryBackoffMs — default of [2000, 10000] exercised.
-      },
-    );
-
-    expect(result.mode).toBe("fallback-file-write");
-    expect(result.attempts).toBe(3);
-    const metricLine = log.mock.calls
-      .map((c) => String(c[0]))
-      .find((l) => /\[fallback-metric\]/.test(l));
-    expect(metricLine).toMatch(/reason=connect-failed/);
-    expect(metricLine).toMatch(/attempts=3/);
+    const lines = log.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => /attempt=1 failed \(connect-failed/.test(l))).toBe(true);
+    expect(lines.some((l) => /retrying in 250ms/.test(l))).toBe(true);
+    expect(lines.some((l) => /OK attempt=2/.test(l))).toBe(true);
   });
 });

@@ -44,6 +44,12 @@ import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, collectDefaultMetrics, Counter, Gauge } from "prom-client";
+import { generateIdentity, type DeviceIdentity } from "./openclaw/device-identity.js";
+import { openUpstream, UpstreamError } from "./openclaw/upstream.js";
+import {
+  resolveGatewayUrl,
+  GatewayResolveError,
+} from "./openclaw/gateway-resolver.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +88,32 @@ const httpProxiedTotal = new Counter({
   labelNames: ['method', 'status'] as const,
   registers: [metricsRegistry],
 });
+
+// OpenClaw gateway proxy counters — separate label space so dashboards
+// don't conflate MM WS traffic with OC WS traffic.
+const ocWsConnectionsActive = new Gauge({
+  name: 'chat_proxy_openclaw_ws_connections_active',
+  help: 'Active OpenClaw gateway proxy connections',
+  registers: [metricsRegistry],
+});
+
+const ocWsHandshakeTotal = new Counter({
+  name: 'chat_proxy_openclaw_ws_handshakes_total',
+  help: 'Total OpenClaw upstream handshake outcomes',
+  labelNames: ['outcome'] as const,
+  registers: [metricsRegistry],
+});
+
+// OpenClaw gateway auth token (option A: reuse provisioner's shared secret;
+// chat-proxy deployment mounts the same K8s Secret). Device identity is
+// generated once per pod — OpenClaw grants scopes by the token + signed
+// payload, not by any pre-registered identity, so in-memory is fine.
+const OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+let openclawIdentity: DeviceIdentity | null = null;
+function getOpenClawIdentity(): DeviceIdentity {
+  if (!openclawIdentity) openclawIdentity = generateIdentity();
+  return openclawIdentity;
+}
 
 // Initialize Firebase Admin — use explicit SA key if provided (cross-project),
 // otherwise fall back to ADC (same-project).
@@ -579,6 +611,151 @@ function handleWsUpgrade(
   })();
 }
 
+// ── OpenClaw WebSocket Proxy ──────────────────────────────────────────────────
+//
+// Parallel path to the MM proxy above. Browser opens
+// `wss://chat-proxy/api/openclaw/ws/<ticket>`; we validate the one-time
+// ticket from `ocTickets/{ticket}` (minted by workspace-api after Firebase
+// auth), resolve the user's assigned gateway, open an authenticated
+// upstream WS via the Ed25519 device handshake, and pipe frames.
+// The browser sees a normal WS; it never needs to know about Ed25519
+// nonces or the gateway URL.
+
+function handleOpenClawWsUpgrade(
+  wss: WebSocketServer,
+  req: http.IncomingMessage,
+  socket: any,
+  head: Buffer,
+): void {
+  const urlPath = (req.url || "").split("?")[0];
+  const pathMatch = urlPath.match(/\/api\/openclaw\/ws\/([a-f0-9-]{36})$/);
+  const ticket = pathMatch?.[1] || null;
+
+  if (!ticket) {
+    console.log(`[proxy] OC WS: no ticket`);
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  if (OPENCLAW_GATEWAY_TOKEN.length === 0) {
+    // Fail fast when the shared gateway secret isn't mounted into the pod.
+    // Without it, openUpstream would still dial the gateway, handshake
+    // would fail with a generic auth error, and we'd return a 502 that
+    // looks like a gateway problem. A 503 flags the misconfig clearly.
+    console.error("[proxy] OC WS: OPENCLAW_GATEWAY_TOKEN unset — cannot open upstream");
+    socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  (async () => {
+    try {
+      const ticketRef = db.doc(`ocTickets/${ticket}`);
+
+      // Atomic claim: read + delete inside a transaction so two concurrent
+      // upgrades with the same ticket can't both pass the validation window.
+      // One transaction commits the delete; the other sees a missing doc
+      // and rejects. Also validates shape (uid type, expiresAt number) inside
+      // the transaction so a malformed doc — missing expiresAt yields
+      // `undefined < Date.now()` → false → non-expired — is rejected too.
+      const TICKET_INVALID = "TICKET_INVALID";
+      let uid: string;
+      try {
+        uid = await db.runTransaction<string>(async (tx) => {
+          const snap = await tx.get(ticketRef);
+          if (!snap.exists) throw new Error(TICKET_INVALID);
+          const data = snap.data() ?? {};
+          const expiresAt = data.expiresAt;
+          const claimUid = data.uid;
+          if (typeof expiresAt !== "number" || expiresAt < Date.now()) {
+            throw new Error(TICKET_INVALID);
+          }
+          if (typeof claimUid !== "string" || claimUid.length === 0) {
+            throw new Error(TICKET_INVALID);
+          }
+          tx.delete(ticketRef);
+          return claimUid;
+        });
+      } catch (e: any) {
+        if (e?.message === TICKET_INVALID) {
+          socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        throw e;
+      }
+
+      let gatewayUrl: string;
+      try {
+        const resolved = await resolveGatewayUrl({ db, uid });
+        gatewayUrl = resolved.url;
+      } catch (e) {
+        if (e instanceof GatewayResolveError) {
+          console.log(`[proxy] OC WS: resolve failed — ${e.code}: ${e.message}`);
+          socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        throw e;
+      }
+
+      let upstream: WebSocket;
+      try {
+        upstream = await openUpstream({
+          url: gatewayUrl,
+          token: OPENCLAW_GATEWAY_TOKEN,
+          identity: getOpenClawIdentity(),
+        });
+        ocWsHandshakeTotal.inc({ outcome: "ok" });
+      } catch (e) {
+        const code = e instanceof UpstreamError ? e.code : "unknown";
+        console.log(`[proxy] OC WS: upstream handshake failed — ${code}`);
+        ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
+        socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
+      wss.handleUpgrade(req, socket, head, (clientWs) => {
+        ocWsConnectionsActive.inc();
+
+        clientWs.on("message", (data, isBinary) => {
+          if (upstream.readyState === WebSocket.OPEN) {
+            upstream.send(isBinary ? data : data.toString(), { binary: isBinary });
+          }
+        });
+        upstream.on("message", (data, isBinary) => {
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(isBinary ? data : data.toString(), { binary: isBinary });
+          }
+        });
+        clientWs.on("close", () => {
+          ocWsConnectionsActive.dec();
+          try {
+            upstream.close();
+          } catch {
+            // ignore
+          }
+        });
+        upstream.on("close", () => clientWs.close());
+        clientWs.on("error", () => {
+          try {
+            upstream.close();
+          } catch {
+            // ignore
+          }
+        });
+        upstream.on("error", () => clientWs.close());
+      });
+    } catch (e: any) {
+      console.error(`[proxy] OC WS error: ${e?.message ?? e}`);
+      socket.write("HTTP/1.1 500 Internal Error\r\n\r\n");
+      socket.destroy();
+    }
+  })();
+}
+
 // ── Test helpers ────────────────────────────────────────────────────────────────
 
 /** Clear in-process token/role caches. For test isolation only. */
@@ -597,6 +774,8 @@ export function createServer() {
     const urlPath = (req.url || "").split("?")[0];
     if (urlPath.startsWith("/api/v4/websocket")) {
       handleWsUpgrade(wss, req, socket, head);
+    } else if (urlPath.startsWith("/api/openclaw/ws/")) {
+      handleOpenClawWsUpgrade(wss, req, socket, head);
     } else {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
       socket.destroy();

@@ -77,10 +77,13 @@ export function ensureGatewayDefaults(): void {
         log(`${agent.id} → removed exec/process from agent deny (moved to router plugin)`);
       }
 
-      // Face model: default Sonnet 4.6, per-customer override via faceModelOverrides
-      const agentSlug = agent.id.replace(/^octogee-/, "").replace(/-coach$/, "");
-      const faceOverrides: Record<string, string> = config.plugins?.entries?.["octogee-router"]?.config?.faceModelOverrides ?? {};
-      const faceModel = faceOverrides[agentSlug] || "anthropic/claude-sonnet-4-6";
+      // Face model: Sonnet 4.6 for F&F. Per-customer overrides were driven
+      // by writes to `plugins.entries.octogee-router.config.faceModelOverrides`,
+      // which tripped the `plugins.*` restart rule — the exact cascade that
+      // bounced every tenant's MM WS on signup. Removed for F&F; bring back
+      // via applyConfigPatch + a plugin-hot-reload declaration when the
+      // per-customer model knob actually ships.
+      const faceModel = "anthropic/claude-sonnet-4-6";
       if (agent.model !== faceModel) {
         const oldModel = agent.model ?? "default";
         agent.model = faceModel;
@@ -175,185 +178,23 @@ export function ensureGatewayDefaults(): void {
   if (changed) writeOpenClawConfig(config);
 }
 
-// ── Enforcement Overrides ───────────────────────────────────────────────────────
-
-export async function syncEnforcementOverrides(): Promise<void> {
-  const snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.status", "==", "complete")
-    .get();
-
-  const overrides: Record<string, string> = {};
-  for (const doc of snap.docs) {
-    const data = doc.data();
-    const slug = data.provisioning?.openclaw?.slug;
-    const enforcement = data.faceBrainEnforcement;
-    if (slug && enforcement && ["off", "observe", "soft", "hard"].includes(enforcement)) {
-      if (enforcement !== "observe") {
-        overrides[slug] = enforcement;
-      }
-    }
-  }
-
-  if (process.env.OCTOGEE_ROUTER_ENABLED === "false") return;
-
-  const config = readOpenClawConfig();
-  config.plugins ??= {};
-  config.plugins.entries ??= {};
-  config.plugins.entries["octogee-router"] ??= {};
-  config.plugins.entries["octogee-router"].config ??= {};
-
-  const current = config.plugins.entries["octogee-router"].config.enforcementOverrides ?? {};
-  if (JSON.stringify(overrides) !== JSON.stringify(current)) {
-    config.plugins.entries["octogee-router"].config.enforcementOverrides = overrides;
-    writeOpenClawConfig(config);
-    const entries = Object.entries(overrides);
-    log(`enforcement: synced overrides — ${entries.length ? entries.map(([s, e]) => `${s}=${e}`).join(", ") : "(all observe)"}`);
-  }
-}
-
-// ── Brain Gating ─────────────────────────────────────────────────────────────────
-
-/**
- * Sync brain-gated slugs from Firestore to router plugin config.
- * Free-tier users can't spawn Brain sub-agents.
- */
-export async function syncBrainGatedSlugs(): Promise<void> {
-  const snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.status", "==", "complete")
-    .where("tier", "==", "free")
-    .get();
-
-  const brainGatedSlugs: string[] = [];
-  for (const doc of snap.docs) {
-    const slug = doc.data().provisioning?.openclaw?.slug;
-    if (slug) brainGatedSlugs.push(slug);
-  }
-
-  if (process.env.OCTOGEE_ROUTER_ENABLED === "false") return;
-
-  const config = readOpenClawConfig();
-  config.plugins ??= {};
-  config.plugins.entries ??= {};
-  config.plugins.entries["octogee-router"] ??= {};
-  config.plugins.entries["octogee-router"].config ??= {};
-
-  const current = config.plugins.entries["octogee-router"].config.brainGatedSlugs ?? [];
-  if (JSON.stringify(brainGatedSlugs.sort()) !== JSON.stringify([...current].sort())) {
-    config.plugins.entries["octogee-router"].config.brainGatedSlugs = brainGatedSlugs;
-    writeOpenClawConfig(config);
-    log(`brain-gating: synced ${brainGatedSlugs.length} slug(s) — ${brainGatedSlugs.join(", ") || "(none)"}`);
-  }
-}
-
-// ── Model Overrides (Face + Brain Knobs) ────────────────────────────────────────
-
-/**
- * Sync per-customer Face and Brain model overrides from Firestore.
- *
- * Firestore fields (on user doc):
- *   faceModel  — e.g. "anthropic/claude-sonnet-4-6" (overrides default Haiku)
- *   brainModel — e.g. "anthropic/claude-opus-4-6" (overrides default Sonnet)
- *
- * Written to router plugin config as:
- *   faceModelOverrides:  { "slug": "anthropic/claude-sonnet-4-6" }
- *   brainModelOverrides: { "slug": "anthropic/claude-opus-4-6" }
- *
- * ensureGatewayDefaults() reads faceModelOverrides to set agent.model.
- * The router plugin reads brainModelOverrides when spawning Brain sub-agents.
- *
- * Operator-visible trade-off: only customers with a NON-default model get
- * an override entry. Provisioning a new customer on default models does
- * NOT add a key → no full gateway restart. The first Ops-Dashboard flip
- * from default → custom for a given customer DOES add a key → one full
- * restart. Every subsequent edit on that customer is a value change →
- * hot reload. This is the right trade-off because provisioning is the
- * more common path.
- */
-export async function syncModelOverrides(): Promise<void> {
-  const snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.status", "==", "complete")
-    .get();
-
-  // Only write overrides for customers who have opted into a non-default
-  // model. Writing defaults for every customer triggers OpenClaw's config
-  // reload to see a new key under plugins.entries.*.config.* on first
-  // provisioning, which requires a FULL gateway restart. Customers on the
-  // shipped defaults don't need an override entry — `ensureGatewayDefaults`
-  // already falls back to the default when the slug key is absent.
-  //
-  // Trade-off: the first Ops-Dashboard switch from default → custom for a
-  // given customer becomes a key-addition (full restart), while every
-  // subsequent tweak on the same customer is a value change (hot reload).
-  // Provisioning no longer costs a restart, which is the more common path.
-  const DEFAULT_FACE_MODEL = "anthropic/claude-haiku-4-5";
-  const DEFAULT_BRAIN_MODEL = "anthropic/claude-sonnet-4-6";
-  const faceOverrides: Record<string, string> = {};
-  const brainOverrides: Record<string, string> = {};
-
-  for (const doc of snap.docs) {
-    const data = doc.data();
-    const slug = data.provisioning?.openclaw?.slug;
-    if (!slug) continue;
-
-    if (typeof data.faceModel === "string" && data.faceModel && data.faceModel !== DEFAULT_FACE_MODEL) {
-      faceOverrides[slug] = data.faceModel;
-    }
-    if (typeof data.brainModel === "string" && data.brainModel && data.brainModel !== DEFAULT_BRAIN_MODEL) {
-      brainOverrides[slug] = data.brainModel;
-    }
-  }
-
-  if (process.env.OCTOGEE_ROUTER_ENABLED === "false") return;
-
-  const config = readOpenClawConfig();
-  config.plugins ??= {};
-  config.plugins.entries ??= {};
-  config.plugins.entries["octogee-router"] ??= {};
-  config.plugins.entries["octogee-router"].config ??= {};
-
-  const currentFace = config.plugins.entries["octogee-router"].config.faceModelOverrides ?? {};
-  const currentBrain = config.plugins.entries["octogee-router"].config.brainModelOverrides ?? {};
-
-  let changed = false;
-
-  if (JSON.stringify(faceOverrides) !== JSON.stringify(currentFace)) {
-    config.plugins.entries["octogee-router"].config.faceModelOverrides = faceOverrides;
-    changed = true;
-  }
-
-  if (JSON.stringify(brainOverrides) !== JSON.stringify(currentBrain)) {
-    config.plugins.entries["octogee-router"].config.brainModelOverrides = brainOverrides;
-    changed = true;
-  }
-
-  if (changed) {
-    writeOpenClawConfig(config);
-
-    // Also update agent models for face overrides (ensureGatewayDefaults reads from config,
-    // but we need to apply immediately when overrides change at runtime)
-    for (const agent of config.agents?.list ?? []) {
-      if (!/^octogee-.+-coach$/.test(agent.id)) continue;
-      const agentSlug = agent.id.replace(/^octogee-/, "").replace(/-coach$/, "");
-      const targetModel = faceOverrides[agentSlug] || "anthropic/claude-haiku-4-5";
-      if (agent.model !== targetModel) {
-        log(`model-override: ${agent.id} face → ${targetModel}`);
-        agent.model = targetModel;
-      }
-    }
-    if (Object.keys(faceOverrides).length > 0 || Object.keys(brainOverrides).length > 0) {
-      writeOpenClawConfig(config);
-    }
-
-    // Log only non-default entries so the line stays readable at scale.
-    const faceCustom = Object.entries(faceOverrides).filter(([, m]) => m !== DEFAULT_FACE_MODEL);
-    const brainCustom = Object.entries(brainOverrides).filter(([, m]) => m !== DEFAULT_BRAIN_MODEL);
-    const parts: string[] = [];
-    if (faceCustom.length) parts.push(`face: ${faceCustom.map(([s, m]) => `${s}=${m.split("/").pop()}`).join(", ")}`);
-    if (brainCustom.length) parts.push(`brain: ${brainCustom.map(([s, m]) => `${s}=${m.split("/").pop()}`).join(", ")}`);
-    log(`model-overrides: ${parts.length ? parts.join(" | ") : "(all defaults)"} (seeded ${Object.keys(faceOverrides).length} slug(s))`);
-  }
-}
+// ── Removed for F&F: per-customer router config syncs ──────────────────────────
+//
+// The following sync functions used to write to
+// `plugins.entries.octogee-router.config.*`:
+//
+//   - syncEnforcementOverrides  (per-customer faceBrainEnforcement)
+//   - syncBrainGatedSlugs       (free-tier brain gating)
+//   - syncModelOverrides        (per-customer face/brain model)
+//
+// Each wrote openclaw.json directly, which chokidar picked up and fed into
+// the reload plan. `plugins.*` matches `BASE_RELOAD_RULES_TAIL` with
+// `kind: "restart"` — a FULL GATEWAY RESTART — so every onSnapshot fire on
+// `users/{uid}` (including the terminal `provisioning.openclaw.status =
+// "complete"` write) bounced every tenant's MM WS.
+//
+// F&F defaults (sonnet-4-6 face, observe-only router, no brain gating,
+// liberal tools) don't need any of these knobs. Bring them back post-F&F
+// via `applyConfigPatch` + a plugin-scoped `hotPrefixes` declaration so
+// value tweaks hot-reload instead of restarting the pod.
 

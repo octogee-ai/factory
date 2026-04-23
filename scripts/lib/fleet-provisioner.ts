@@ -15,6 +15,7 @@
 
 import express from "express";
 import * as fs from "fs";
+import * as net from "net";
 import * as path from "path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { Server } from "http";
@@ -176,7 +177,7 @@ export function buildProductionAdapter(opts: BuildAdapterOptions): RestoreAdapte
       const agentId = `octogee-${snapshot.slug}-coach`;
 
       const startedAt = Date.now();
-      const result = await applyConfigPatch(
+      await applyConfigPatch(
         {
           buildPatch: (current) => {
             const currentCfg = current as {
@@ -197,31 +198,11 @@ export function buildProductionAdapter(opts: BuildAdapterOptions): RestoreAdapte
               },
             };
           },
-          fallback: (cfg) => {
-            cfg.agents ??= {};
-            cfg.agents.list ??= [];
-            const existingAgents = (cfg.agents.list as unknown[]).filter(
-              (a) => (a as { id?: string }).id !== agentId,
-            );
-            cfg.agents.list = [...existingAgents, agentEntry];
-            cfg.bindings ??= [];
-            const keep = (cfg.bindings as unknown[]).filter(
-              (b) => (b as { agentId?: string }).agentId !== agentId,
-            );
-            cfg.bindings = [...keep, ...bindings];
-            cfg.channels ??= {};
-            cfg.channels.mattermost ??= {};
-            cfg.channels.mattermost.accounts ??= {};
-            (cfg.channels.mattermost.accounts as Record<string, unknown>)[accountId] = accountEntry;
-          },
           logPrefix: `[restore:${snapshot.slug}]`,
         },
         { rpc },
       );
-      return {
-        mode: result.mode === "rpc" ? "rpc" : "fallback-file-write",
-        elapsedMs: Date.now() - startedAt,
-      };
+      return { elapsedMs: Date.now() - startedAt };
     },
 
     waitForAccountHealthy: async ({ slug, timeoutMs }) => {
@@ -335,6 +316,16 @@ export async function startFleetController(
   const cache = new IdempotencyCache();
   const activeRestores = new ActiveRestoreSet();
 
+  // Canonical cluster-internal URL for this gateway's OpenClaw RPC. Consumed
+  // by chat-proxy to open per-user upstream WS connections. Env vars resolve
+  // at boot and stay constant for the pod's lifetime, so we compute once.
+  // Env resolution matches createGatewayRpc's (OPENCLAW_GATEWAY_PORT falling
+  // back to GATEWAY_PORT) so the heartbeat publishes the same port the
+  // gateway is actually listening on when only the legacy var is set.
+  const namespace = process.env.K8S_NAMESPACE || "octogee";
+  const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
+  const internalUrl = `http://octogee-gateway-${opts.gatewayId}.${namespace}.svc.cluster.local:${gatewayPort}`;
+
   const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {
     try {
       await writeGatewayHeartbeat(stateDeps, {
@@ -343,6 +334,7 @@ export async function startFleetController(
         version: opts.version,
         openclawVersion: opts.openclawVersion,
         mountedCustomers: runtime.mountedCustomers,
+        internalUrl,
       });
     } catch (err) {
       opts.log(
@@ -352,27 +344,93 @@ export async function startFleetController(
   };
 
   // Initial "booting" heartbeat — controller knows the pod exists but is
-  // not yet ready for jobs. Flips to "ready" once the gateway RPC is up.
+  // not yet ready for jobs. Flips to "ready" once the gateway's ops bot
+  // is MM-connected (see waitForGatewayReady below).
   await emitHeartbeat("booting");
 
-  // Background poll: once the gateway RPC answers, transition to ready.
-  const waitForGatewayReady = async (): Promise<void> => {
+  // Two-phase gateway readiness:
+  //
+  //   1. Quiet TCP probe on localhost:18789. Plain socket connects, no WS,
+  //      no handshake, no RPC trace — so the pre-ready window is silent
+  //      (no ECONNREFUSED spam while openclaw is still loading plugins).
+  //   2. Once the port accepts, poll `channels.status` RPC until the ops
+  //      account `mac-{gatewayId}` reports `running + connected` — the
+  //      same signal OpenClaw logs as "[mattermost] connected as
+  //      @mac-{gatewayId}". Only then do we transition status=ready.
+  //
+  // The controller won't enqueue restore jobs against a non-ready gateway,
+  // so nothing upstream hammers us while we wait. A gateway that never
+  // finishes connecting to MM stays booting forever — the controller's
+  // lastHeartbeatAt + status signals are what flag a truly-stuck gateway.
+  // Validate the parsed port — a malformed env value (e.g. "abc") would
+  // otherwise feed NaN to net.connect and turn `void waitForGatewayReady()`
+  // into an unhandled rejection, leaving the gateway stuck in "booting".
+  // Falls back to 18789 with a warning when out of range or unparseable.
+  const configuredPort = process.env.OPENCLAW_GATEWAY_PORT ?? process.env.GATEWAY_PORT;
+  const parsedPortNum = Number.parseInt(configuredPort ?? "18789", 10);
+  const gatewayPortNum =
+    Number.isInteger(parsedPortNum) && parsedPortNum >= 1 && parsedPortNum <= 65_535
+      ? parsedPortNum
+      : 18789;
+  if (configuredPort != null && gatewayPortNum !== parsedPortNum) {
+    opts.log(
+      `[fleet] ⚠ invalid gateway port "${configuredPort}" in env; falling back to ${gatewayPortNum}`,
+    );
+  }
+  const opsAccountId = `mac-${opts.gatewayId}`;
+
+  const waitForPortOpen = async (port: number): Promise<void> => {
+    const attemptMs = 500;
+    const pollMs = 1_000;
+    while (runtime.status !== "ready") {
+      const ok = await new Promise<boolean>((resolve) => {
+        const sock = net.connect({ host: "127.0.0.1", port });
+        const done = (v: boolean) => {
+          try {
+            sock.destroy();
+          } catch {
+            // ignore
+          }
+          resolve(v);
+        };
+        sock.setTimeout(attemptMs);
+        sock.once("connect", () => done(true));
+        sock.once("error", () => done(false));
+        sock.once("timeout", () => done(false));
+      });
+      if (ok) return;
+      await new Promise<void>((r) => setTimeout(r, pollMs));
+    }
+  };
+
+  const waitForOpsAgentConnected = async (): Promise<void> => {
     while (runtime.status !== "ready") {
       try {
-        const up = await opts.rpc.isGatewayUp(2_000);
-        if (up) {
-          runtime.status = "ready";
-          opts.log(
-            `[fleet] gateway RPC up; transitioning gateways/${opts.gatewayId} to status=ready`,
-          );
-          await emitHeartbeat("ready");
-          return;
-        }
+        const snap = (await opts.rpc.channelsStatus()) as {
+          channelAccounts?: Record<string, Record<string, { running?: boolean; connected?: boolean }>>;
+        };
+        const entry = snap.channelAccounts?.mattermost?.[opsAccountId];
+        if (entry?.running === true && entry?.connected === true) return;
       } catch {
-        // Ignore; keep polling.
+        // Expected while the gateway is still booting its plugins; swallow
+        // and keep polling. TCP is already open so this is quick-fail, not
+        // minute-long connect timeouts.
       }
-      await new Promise<void>((r) => setTimeout(r, 1_000));
+      await new Promise<void>((r) => setTimeout(r, 2_000));
     }
+  };
+
+  const waitForGatewayReady = async (): Promise<void> => {
+    await waitForPortOpen(gatewayPortNum);
+    opts.log(
+      `[fleet] gateway WS port ${gatewayPortNum} accepting connections — probing ops agent (${opsAccountId})`,
+    );
+    await waitForOpsAgentConnected();
+    runtime.status = "ready";
+    opts.log(
+      `[fleet] ops agent ${opsAccountId} connected; transitioning gateways/${opts.gatewayId} to status=ready`,
+    );
+    await emitHeartbeat("ready");
   };
   void waitForGatewayReady();
 
@@ -439,18 +497,17 @@ export async function startFleetController(
       adapter: {
         ...adapter,
         // Wrap applyCustomerConfigPatch to track inFlight + mounted state
-        // locally so heartbeats stay accurate. Success/failure writes via
-        // fleet-state are for controller consumption; these tweaks are
-        // for the gateway's own status reporting.
+        // locally so heartbeats stay accurate. The RPC is the only write
+        // path since 2026.4.24 — any thrown error aborts this wrapper
+        // without touching mountedCustomers, which is what we want (the
+        // controller shouldn't see a failed restore as mounted).
         applyCustomerConfigPatch: async (snapshot) => {
           const result = await adapter.applyCustomerConfigPatch(snapshot);
-          if (result.mode === "rpc" || result.mode === "fallback-file-write") {
-            if (!runtime.mountedCustomers.includes(snapshot.slug)) {
-              runtime.mountedCustomers = [
-                ...runtime.mountedCustomers,
-                snapshot.slug,
-              ];
-            }
+          if (!runtime.mountedCustomers.includes(snapshot.slug)) {
+            runtime.mountedCustomers = [
+              ...runtime.mountedCustomers,
+              snapshot.slug,
+            ];
           }
           return result;
         },

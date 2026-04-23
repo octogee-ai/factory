@@ -1,15 +1,17 @@
 /**
- * pre-boot-config.ts — Pre-seed restart-triggering config before OpenClaw starts.
+ * pre-boot-config.ts — patch openclaw.json before OpenClaw starts.
  *
- * Queries Firestore for enforcement overrides, then patches openclaw.json
- * BEFORE the gateway boots. This eliminates post-boot config writes that
- * would trigger SIGUSR1 restarts.
+ * Runs once at container startup from entrypoint.sh. Responsibilities:
+ *   - Strip stale octogee-router plugin config keys (F&F: no runtime syncs).
+ *   - Reconcile MM bot token + baseUrl + native-commands from env into
+ *     `channels.mattermost.accounts.*` — the secret-rotation path that
+ *     previously required a post-boot restart.
  *
- * Runs once at container startup (called from entrypoint.sh).
- * The provisioner's Firestore watchers still handle runtime changes.
+ * No Firestore queries live here anymore — the enforcement-override sync
+ * that required them was removed (see banner in the router-config section
+ * below).
  */
 
-import * as admin from "firebase-admin";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -17,8 +19,6 @@ const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
   : "/home/node/.openclaw";
 const CONFIG_PATH = path.join(OPENCLAW_DIR, "openclaw.json");
-const SA_KEY_PATH = process.env.SA_KEY_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS || path.join(OPENCLAW_DIR, "secrets", "octogee-test-sa-key.json");
-const PROJECT = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "octogee";
 
 function log(msg: string): void {
   const ts = new Date().toISOString().replace("Z", "+00:00");
@@ -40,42 +40,21 @@ async function main(): Promise<void> {
     }
     throw e;
   }
-  // Init Firebase — use SA key if available, otherwise ADC (Workload Identity)
-  if (fs.existsSync(SA_KEY_PATH)) {
-    admin.initializeApp({
-      credential: admin.credential.cert(SA_KEY_PATH),
-      projectId: PROJECT,
-    });
-  } else {
-    log("No SA key file — using Application Default Credentials (Workload Identity)");
-    admin.initializeApp({ projectId: PROJECT });
-  }
-  const db = admin.firestore();
-
-  // Parse config (already read up top to short-circuit on ENOENT)
+  // Parse config (already read up top to short-circuit on ENOENT). Firestore
+  // is no longer queried here — the enforcement-override sync that required
+  // it was removed for F&F (see banner below).
   const config = JSON.parse(configRaw);
 
   let changed = false;
 
-  // ── Enforcement overrides ───────────────────────────────────────────────
-  const snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.status", "==", "complete")
-    .get();
-
-  const enforcementOverrides: Record<string, string> = {};
-
-  for (const doc of snap.docs) {
-    const data = doc.data();
-    const slug = data.provisioning?.openclaw?.slug;
-    if (!slug) continue;
-
-    const enforcement = data.faceBrainEnforcement;
-    if (enforcement && ["off", "soft", "hard"].includes(enforcement)) {
-      enforcementOverrides[slug] = enforcement;
-    }
-  }
-
+  // ── Octogee Router plugin config ────────────────────────────────────────
+  // F&F: the router has no runtime-tweakable config. All per-customer knobs
+  // (enforcementOverrides, faceModelOverrides, brainModelOverrides,
+  // brainGatedSlugs) were removed because every Firestore-driven write hit
+  // `plugins.entries.octogee-router.config.*` → the default `plugins.*`
+  // restart rule → fleet-wide MM WS bounce on every signup. Router runs on
+  // built-in defaults (observe mode, no gating). Bring the knobs back via
+  // applyConfigPatch + a plugin-scoped hotPrefixes declaration post-F&F.
   if (process.env.OCTOGEE_ROUTER_ENABLED === "false") {
     if (config.plugins?.allow && Array.isArray(config.plugins.allow)) {
       config.plugins.allow = config.plugins.allow.filter((id: string) => id !== "octogee-router");
@@ -87,28 +66,26 @@ async function main(): Promise<void> {
       log("removed octogee-router from config because OCTOGEE_ROUTER_ENABLED=false");
     }
   } else {
-    // Patch plugin config
-    config.plugins ??= {};
-    config.plugins.entries ??= {};
-    config.plugins.entries["octogee-router"] ??= {};
-    config.plugins.entries["octogee-router"].config ??= {};
-
-    // Clean up stale advisorySlugs key if present (advisory mode removed)
-    if (config.plugins.entries["octogee-router"].config.advisorySlugs !== undefined) {
-      delete config.plugins.entries["octogee-router"].config.advisorySlugs;
-      changed = true;
-      log("removed stale advisorySlugs from config");
-    }
-
-    const currentOverrides = config.plugins.entries["octogee-router"].config.enforcementOverrides ?? {};
-    if (JSON.stringify(enforcementOverrides) !== JSON.stringify(currentOverrides)) {
-      config.plugins.entries["octogee-router"].config.enforcementOverrides = enforcementOverrides;
-      changed = true;
-      const entries = Object.entries(enforcementOverrides);
-      const overrideSummary = entries.length
-        ? entries.map(([s, e]) => `${s}=${e}`).join(", ")
-        : "(all observe)";
-      log(`enforcement overrides: ${overrideSummary}`);
+    // Clean up any stale plugin config keys. These entries are harmless at
+    // runtime (the router reads them with `?? {}` defaults) but leaving
+    // them in the file means future `config.patch` diffs flag noise — and
+    // when the knob returns, a stale shape could shadow fresh values.
+    const staleKeys = [
+      "advisorySlugs",
+      "enforcementOverrides",
+      "brainGatedSlugs",
+      "faceModelOverrides",
+      "brainModelOverrides",
+    ];
+    const pluginCfg = config.plugins?.entries?.["octogee-router"]?.config;
+    if (pluginCfg && typeof pluginCfg === "object") {
+      for (const key of staleKeys) {
+        if (pluginCfg[key] !== undefined) {
+          delete pluginCfg[key];
+          changed = true;
+          log(`removed stale ${key} from octogee-router config (F&F: runtime syncs disabled)`);
+        }
+      }
     }
   }
 
@@ -173,13 +150,10 @@ async function main(): Promise<void> {
 
   if (changed) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
-    log("openclaw.json patched with Firestore state");
+    log("openclaw.json patched with env / stale-key cleanup");
   } else {
-    log("no changes needed — config matches Firestore state");
+    log("no changes needed");
   }
-
-  // Clean shutdown
-  await admin.app().delete();
 }
 
 main().catch((err) => {

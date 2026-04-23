@@ -69,6 +69,13 @@ export interface GatewayState {
   /** Most recent failure — kept for one job lifetime. Null when last job succeeded. */
   lastError: GatewayLastError | null;
   /**
+   * Cluster-internal URL where this gateway's OpenClaw RPC listens. Written
+   * by the heartbeat; read by workspace-api / chat-proxy to resolve a
+   * user's assigned gateway to a connectable host. Canonical shape:
+   * `http://octogee-gateway-{gatewayId}.{namespace}.svc.cluster.local:{port}`.
+   */
+  internalUrl?: string;
+  /**
    * Per-customer failure tracker for exponential-backoff scheduling. Keyed
    * by slug. Pick-next skips any slug whose last failure is still inside
    * the backoff window computed from its `failCount`, so a single corrupt

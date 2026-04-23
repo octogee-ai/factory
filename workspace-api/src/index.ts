@@ -15,6 +15,7 @@ import { helmetMiddleware, globalRateLimit } from "./middleware/security";
 // Public routes — exposed via GKE Ingress (api.octogee.com)
 import workspaceRoutes from "./routes/workspace";
 import mattermostRoutes from "./routes/mattermost";
+import openclawRoutes from "./routes/openclaw";
 import billingRoutes from "./routes/billing";
 import adminRoutes from "./routes/admin";
 import inviteRoutes from "./routes/invites";
@@ -119,6 +120,7 @@ app.use("/api/sharing", sharingRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/entities", entitiesRoutes);
 app.use("/api/mattermost", mattermostRoutes);
+app.use("/api/openclaw", openclawRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/invites", inviteRoutes);
