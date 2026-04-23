@@ -354,9 +354,14 @@ export async function startFleetController(
   //      no handshake, no RPC trace — so the pre-ready window is silent
   //      (no ECONNREFUSED spam while openclaw is still loading plugins).
   //   2. Once the port accepts, poll `channels.status` RPC until the ops
-  //      account `mac-{gatewayId}` reports `running + connected` — the
-  //      same signal OpenClaw logs as "[mattermost] connected as
-  //      @mac-{gatewayId}". Only then do we transition status=ready.
+  //      account `"default"` reports `running + connected`. OpenClaw
+  //      logs this as "[mattermost] connected as @mac-{gatewayId}" (the
+  //      MM bot username), but the account KEY in the channels.status
+  //      response is the config account id — i.e. `"default"` — not the
+  //      bot username. See `channels/plugins/status.ts` in openclaw:
+  //      the response map is keyed by `Object.keys(accounts)` from
+  //      openclaw.json, which for the ops bot is always `"default"`.
+  //      Only then do we transition status=ready.
   //
   // The controller won't enqueue restore jobs against a non-ready gateway,
   // so nothing upstream hammers us while we wait. A gateway that never
@@ -377,7 +382,10 @@ export async function startFleetController(
       `[fleet] ⚠ invalid gateway port "${configuredPort}" in env; falling back to ${gatewayPortNum}`,
     );
   }
-  const opsAccountId = `mac-${opts.gatewayId}`;
+  // Canonical config-account key for the ops bot. Set by the template and
+  // enforced by provisionSteps.ts (`defaultAccount: "default"`). Coach
+  // accounts land later as `{slug}-coach`; they are NOT this bot.
+  const opsAccountId = "default";
 
   const waitForPortOpen = async (port: number): Promise<void> => {
     const attemptMs = 500;
