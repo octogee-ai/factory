@@ -46,8 +46,6 @@
   },
   "overrides": {
     "@tootallnate/once": "^3.0.1",
-    "fast-xml-parser": "^5.7.0",
-    "protobufjs": "^7.5.5",
     "uuid": "^14.0.0"
   }
 }

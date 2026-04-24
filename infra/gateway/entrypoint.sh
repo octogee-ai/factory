@@ -22,7 +22,11 @@ export MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
 export MM_URL="${MM_URL:-}"
 export MM_INTERACTIONS_CALLBACK_BASE_URL="${MM_INTERACTIONS_CALLBACK_BASE_URL:-}"
 export MM_INTERACTIONS_ALLOWED_SOURCE_IPS="${MM_INTERACTIONS_ALLOWED_SOURCE_IPS:-}"
-export GATEWAY_TOKEN="${GATEWAY_TOKEN:-$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 48)}"
+# Gateway auth token — generated per pod boot. NEVER written to the JSON
+# config on disk. OpenClaw reads it from $OPENCLAW_GATEWAY_TOKEN natively
+# (openclaw/src/gateway/startup-auth.ts:111). chat-proxy fetches the live
+# token from Secret Manager (published below) when it opens upstream WS.
+export OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 48)}"
 # GATEWAY_ID is set by the deployment's env block; `export` makes it visible
 # to envsubst below. Fail fast if it's missing — the template references it
 # and a silently-empty substitution would yield `octogee-ops-` as the agent
@@ -31,13 +35,54 @@ export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm va
 if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
   envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
   chmod 600 "$OPENCLAW_DIR/openclaw.json"
-  GW_SHORT=$(echo "$GATEWAY_TOKEN" | cut -c1-8)
-  log "openclaw.json generated from template (gatewayId=${GATEWAY_ID} gw=${GW_SHORT}...)"
+  # Do NOT log any substring of $OPENCLAW_GATEWAY_TOKEN — this is the live
+  # cross-service auth credential. The gatewayId is the correlator ops
+  # people use to match pod ↔ SM secret ↔ heartbeat doc.
+  log "openclaw.json generated from template (gatewayId=${GATEWAY_ID})"
 else
   log "openclaw.json already exists — preserving (provisioner is source of truth)"
 fi
 # Secret rotation / reconciliation (env-sync) happens later via pre-boot-config.ts
 # — nothing else fixed up here. The template is canonical; don't re-derive.
+
+# Publish the fresh gateway auth token to Secret Manager so chat-proxy can
+# open authenticated upstream WS connections.
+#
+# Exit-code contract with publish-gateway-token.mjs:
+#   0 — published successfully; boot continues
+#   2 — setup-incomplete (secret missing, IAM not granted, Workload
+#       Identity misconfigured). FATAL: crash-loop the pod so the
+#       operator fixes setup-secrets.sh before traffic arrives at a
+#       gateway chat-proxy can never authenticate against.
+#   1 — transient SM error (UNAVAILABLE, DNS blip). WARN + continue;
+#       the next boot retries. Ops agents keep working.
+#
+# Skipped silently when GCP_PROJECT_ID is unset (docker-compose local dev,
+# where chat-proxy uses the OPENCLAW_GATEWAY_TOKEN env fallback instead).
+if [ -n "${GCP_PROJECT_ID:-}" ]; then
+  set +e
+  node /octogee/scripts/publish-gateway-token.mjs
+  PUBLISH_RC=$?
+  set -e
+  case "$PUBLISH_RC" in
+    0)
+      log "gateway auth token published to Secret Manager (gateway-auth-token-${GATEWAY_ID})"
+      ;;
+    2)
+      log "████████████████████████████████████████████████████████████████"
+      log "FATAL: GATEWAY_AUTH_PUBLISH_FAILED (setup-incomplete). Secret"
+      log "shell missing, IAM missing, or Workload Identity misconfigured."
+      log "Gateway cannot be authenticated by chat-proxy until this is fixed."
+      log "Run: ./scripts/setup-secrets.sh --env=<env> to provision."
+      log "Crash-looping pod so the failure surfaces in kubectl events."
+      log "████████████████████████████████████████████████████████████████"
+      exit 1
+      ;;
+    *)
+      log "WARN: publish-gateway-token.mjs exit=${PUBLISH_RC} (transient) — chat-proxy will reject upstream WS until the next successful publish; not crash-looping since gateway can serve ops traffic meanwhile"
+      ;;
+  esac
+fi
 
 # ── Provision ops-agent workspace + agent dirs ──────────────────────────────
 # Workspace (SOUL.md et al.) is shared across all gateways — it's the ops

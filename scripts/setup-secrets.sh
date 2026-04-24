@@ -405,7 +405,87 @@ gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET \
   || warn "  Could not grant $CI_DEPLOY_SA admin"
 ksecret octogee-fleet-controller --from-literal=secret="$FLEET_CONTROLLER_SECRET"
 
-# ── 9c. Cloud Tasks enqueuer for functions runtime SA ─────────────────────
+# ── 9c. Gateway auth token secret shell + IAM ────────────────────────────
+# The gateway pod PUBLISHES a fresh auth token to
+# `gateway-auth-token-{gatewayId}` on every boot (see
+# scripts/publish-gateway-token.mjs). chat-proxy READS the latest version
+# at upstream-WS-connect time. We pre-create the secret SHELL here with
+# proper IAM so the first gateway boot can successfully addVersion, and
+# chat-proxy can successfully access.
+#
+# Why NOT pre-populate the value here: rotation-on-every-boot means any
+# value we'd seed gets overwritten within seconds. A shell with IAM is
+# the actual contract; the value arrives at boot.
+#
+# Per-gatewayId naming future-proofs multi-pod fleets — a second gateway
+# pod (`gw-a`, `gw-b`) gets its own secret so chat-proxy can route users
+# to their assigned pod without mixing tokens.
+#
+# Gateway IDs by env (match helm/octogee/values.{test,prod}.yaml):
+info "gateway-auth-token (Secret Manager, per-gatewayId)"
+case "$ENV" in
+  prod)      GATEWAY_IDS=("gw-prod") ;;
+  test)      GATEWAY_IDS=("gw-test") ;;
+  custom)    GATEWAY_IDS=("gw-$CUSTOM_NS") ;;
+esac
+
+# Gateway + chat-proxy both run on this SA via Workload Identity (see
+# helm/octogee/charts/{gateway,chat-proxy}/values.yaml serviceAccountName).
+# One SA, two roles per secret: versionAdder (gateway publishes) +
+# secretAccessor (chat-proxy reads).
+GATEWAY_SA="octogee-gateway@${FIREBASE_PROJECT}.iam.gserviceaccount.com"
+
+for gw_id in "${GATEWAY_IDS[@]}"; do
+  SECRET_NAME="gateway-auth-token-${gw_id}"
+  if gcloud secrets describe "$SECRET_NAME" --project="$FIREBASE_PROJECT" >/dev/null 2>&1; then
+    info "  $SECRET_NAME already exists in SM ($FIREBASE_PROJECT)"
+  else
+    # Seed with a placeholder ONLY so the secret has a version — the first
+    # gateway boot overwrites this within seconds. Required because
+    # accessSecretVersion on a version-less secret throws NOT_FOUND, which
+    # would blackhole chat-proxy if it happened to boot first.
+    #
+    # The literal MUST match GATEWAY_TOKEN_PLACEHOLDER in
+    # chat-proxy/src/openclaw/gateway-token-constants.ts — the fetcher
+    # detects this exact string and rejects it with `empty-token` so the
+    # bootstrap window surfaces as a clean 503 instead of a doomed
+    # auth-failed dance.
+    if echo -n "placeholder-awaiting-gateway-boot" | gcloud secrets create "$SECRET_NAME" \
+         --data-file=- \
+         --project="$FIREBASE_PROJECT" \
+         --replication-policy=automatic \
+         --quiet 2>/dev/null; then
+      ok "  Created SM secret: $SECRET_NAME (placeholder)"
+    else
+      warn "  Could not create $SECRET_NAME"
+      continue
+    fi
+  fi
+
+  # IAM: gateway SA needs BOTH roles — add versions on boot, access to
+  # verify its own publish round-tripped. Scoped to this single secret.
+  gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
+    --member="serviceAccount:$GATEWAY_SA" \
+    --role="roles/secretmanager.secretVersionAdder" \
+    --project="$FIREBASE_PROJECT" --quiet >/dev/null 2>&1 \
+    && ok "  IAM: $GATEWAY_SA → secretVersionAdder on $SECRET_NAME" \
+    || warn "  Could not grant secretVersionAdder on $SECRET_NAME"
+  gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
+    --member="serviceAccount:$GATEWAY_SA" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project="$FIREBASE_PROJECT" --quiet >/dev/null 2>&1 \
+    && ok "  IAM: $GATEWAY_SA → secretAccessor on $SECRET_NAME" \
+    || warn "  Could not grant secretAccessor on $SECRET_NAME"
+  # Version destroyer for publish-gateway-token.mjs's prune step.
+  gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
+    --member="serviceAccount:$GATEWAY_SA" \
+    --role="roles/secretmanager.secretVersionManager" \
+    --project="$FIREBASE_PROJECT" --quiet >/dev/null 2>&1 \
+    && ok "  IAM: $GATEWAY_SA → secretVersionManager on $SECRET_NAME" \
+    || warn "  Could not grant secretVersionManager on $SECRET_NAME"
+done
+
+# ── 9d. Cloud Tasks enqueuer for functions runtime SA ─────────────────────
 # The fleet controller Cloud Functions call CloudTasksClient.createTask() to
 # push restore jobs onto the `restore-customer` queue. Firebase Functions v2
 # runs under the project compute SA ($FN_SA) — which does NOT get Cloud

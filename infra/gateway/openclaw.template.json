@@ -141,7 +141,6 @@
     "bind": "lan",
     "auth": {
       "mode": "token",
-      "token": "${GATEWAY_TOKEN}",
       "rateLimit": {
         "maxAttempts": 10,
         "windowMs": 60000,

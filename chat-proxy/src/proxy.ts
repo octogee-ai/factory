@@ -50,6 +50,11 @@ import {
   resolveGatewayUrl,
   GatewayResolveError,
 } from "./openclaw/gateway-resolver.js";
+import {
+  fetchGatewayToken,
+  invalidateGatewayToken,
+  GatewayTokenError,
+} from "./openclaw/gateway-token.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -104,11 +109,23 @@ const ocWsHandshakeTotal = new Counter({
   registers: [metricsRegistry],
 });
 
-// OpenClaw gateway auth token (option A: reuse provisioner's shared secret;
-// chat-proxy deployment mounts the same K8s Secret). Device identity is
-// generated once per pod — OpenClaw grants scopes by the token + signed
-// payload, not by any pre-registered identity, so in-memory is fine.
-const OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+// Separate counter for successful rotation-recovery attempts. Stays out of
+// `ocWsHandshakeTotal` (which counts first-try outcomes) so alerting on a
+// sustained high rotation-recovery rate is straightforward: it would mean
+// the gateway pod is cycling more often than expected.
+const ocWsRotationRecoveredTotal = new Counter({
+  name: 'chat_proxy_openclaw_ws_rotation_recovered_total',
+  help: 'OpenClaw upstream handshakes that succeeded after an auth-failed rotation retry',
+  registers: [metricsRegistry],
+});
+
+// OpenClaw gateway auth token is fetched from Secret Manager per-request
+// (see ./openclaw/gateway-token.ts). The gateway publishes a fresh token
+// on every pod boot under `gateway-auth-token-{gatewayId}`; chat-proxy
+// caches briefly and invalidates on auth-failed to pick up rotations
+// within one upgrade attempt. Device identity is generated once per pod
+// — OpenClaw grants scopes by the token + signed payload, not by any
+// pre-registered identity, so in-memory is fine.
 let openclawIdentity: DeviceIdentity | null = null;
 function getOpenClawIdentity(): DeviceIdentity {
   if (!openclawIdentity) openclawIdentity = generateIdentity();
@@ -638,17 +655,6 @@ function handleOpenClawWsUpgrade(
     return;
   }
 
-  if (OPENCLAW_GATEWAY_TOKEN.length === 0) {
-    // Fail fast when the shared gateway secret isn't mounted into the pod.
-    // Without it, openUpstream would still dial the gateway, handshake
-    // would fail with a generic auth error, and we'd return a 502 that
-    // looks like a gateway problem. A 503 flags the misconfig clearly.
-    console.error("[proxy] OC WS: OPENCLAW_GATEWAY_TOKEN unset — cannot open upstream");
-    socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
-    socket.destroy();
-    return;
-  }
-
   (async () => {
     try {
       const ticketRef = db.doc(`ocTickets/${ticket}`);
@@ -687,9 +693,11 @@ function handleOpenClawWsUpgrade(
       }
 
       let gatewayUrl: string;
+      let gatewayId: string;
       try {
         const resolved = await resolveGatewayUrl({ db, uid });
         gatewayUrl = resolved.url;
+        gatewayId = resolved.gatewayId;
       } catch (e) {
         if (e instanceof GatewayResolveError) {
           console.log(`[proxy] OC WS: resolve failed — ${e.code}: ${e.message}`);
@@ -700,19 +708,90 @@ function handleOpenClawWsUpgrade(
         throw e;
       }
 
-      let upstream: WebSocket;
+      // Auth token lookup. Missing secret / empty secret / unreachable SM
+      // is a 503 (misconfigured deploy) rather than a 502 (bad gateway) —
+      // the gateway itself is probably fine; the operator just hasn't
+      // wired the secret yet.
+      let token: string;
       try {
-        upstream = await openUpstream({
+        token = await fetchGatewayToken({ gatewayId });
+      } catch (e) {
+        if (e instanceof GatewayTokenError) {
+          console.error(`[proxy] OC WS: token fetch failed — ${e.code}: ${e.message}`);
+          socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        throw e;
+      }
+
+      // Handshake. On auth-failed the cached token may have been superseded
+      // by a fresh gateway boot — invalidate + retry ONCE with a forced
+      // re-fetch. Closes the rotation race without surfacing a stale-token
+      // 502 to the user. `upstream` initialized to null so TypeScript's
+      // definite-assignment checker catches any future branch that
+      // forgets to assign before the `wss.handleUpgrade` call below.
+      let upstream: WebSocket | null = null;
+      const tryOpen = (authToken: string) =>
+        openUpstream({
           url: gatewayUrl,
-          token: OPENCLAW_GATEWAY_TOKEN,
+          token: authToken,
           identity: getOpenClawIdentity(),
         });
+      try {
+        upstream = await tryOpen(token);
         ocWsHandshakeTotal.inc({ outcome: "ok" });
       } catch (e) {
         const code = e instanceof UpstreamError ? e.code : "unknown";
-        console.log(`[proxy] OC WS: upstream handshake failed — ${code}`);
-        ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
-        socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        if (code === "auth-failed") {
+          invalidateGatewayToken(gatewayId);
+          // Re-fetch step. A failure here (SM unreachable, permission
+          // denied, placeholder still in place) is a token-source
+          // problem, not a gateway outage — respond 503 so dashboards
+          // bucket it correctly and clients know to retry later.
+          let fresh: string;
+          try {
+            fresh = await fetchGatewayToken({ gatewayId, skipCache: true });
+          } catch (fetchErr) {
+            const fetchCode =
+              fetchErr instanceof GatewayTokenError ? fetchErr.code : "unknown";
+            console.error(
+              `[proxy] OC WS: token re-fetch during rotation failed — ${fetchCode}`,
+            );
+            ocWsHandshakeTotal.inc({ outcome: `fail:refetch:${fetchCode}` });
+            socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          try {
+            upstream = await tryOpen(fresh);
+            ocWsHandshakeTotal.inc({ outcome: "ok" });
+            ocWsRotationRecoveredTotal.inc();
+          } catch (retryErr) {
+            const retryCode =
+              retryErr instanceof UpstreamError ? retryErr.code : "unknown";
+            console.log(
+              `[proxy] OC WS: upstream handshake failed after rotation retry — ${retryCode}`,
+            );
+            ocWsHandshakeTotal.inc({ outcome: `fail:${retryCode}` });
+            socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+        } else {
+          console.log(`[proxy] OC WS: upstream handshake failed — ${code}`);
+          ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
+          socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+      }
+      if (!upstream) {
+        // Unreachable — every path above either assigns or returns. Guard
+        // against future refactors that split the try/catch chain without
+        // preserving the invariant.
+        console.error("[proxy] OC WS: upstream was never assigned — bug");
+        socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
         socket.destroy();
         return;
       }
