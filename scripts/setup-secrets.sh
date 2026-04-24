@@ -327,17 +327,30 @@ ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
 # both sides must pull the same SM value. Rotating = new SM version +
 # re-run this script + redeploy functions + rollout gateway pod.
 info "octogee-fleet-controller (fleet controller HMAC)"
-# Read the RAW SM payload (no shell trimming) to detect trailing whitespace.
+# Detect + repair trailing-whitespace drift in SM.
+#
 # `firebase functions:secrets:set` and manual stdin input can persist a
 # trailing newline into the stored value, which `process.env.X` in Cloud
 # Functions surfaces as-is — the controller signs with 65 bytes, the gateway
 # verifies with 64 (bash command substitution strips the newline on the
-# gateway side), HMAC mismatch, every restore 401s. Observed on TEST.
-# Rewrite SM with a clean version if any trailing whitespace is present.
-FLEET_RAW_BYTES=$(gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" 2>/dev/null || true)
-FLEET_CONTROLLER_SECRET=$(printf '%s' "$FLEET_RAW_BYTES" | tr -d '[:space:]')
-if [[ -n "$FLEET_CONTROLLER_SECRET" && "$FLEET_RAW_BYTES" != "$FLEET_CONTROLLER_SECRET" ]]; then
-  info "  SM FLEET_CONTROLLER_SECRET had trailing whitespace — rewriting clean version"
+# gateway side), HMAC mismatch, every restore 401s. Observed on TEST and
+# again on PROD 2026-04-24.
+#
+# IMPORTANT: bash $(...) command substitution ALWAYS strips trailing
+# newlines. The old detection did `FLEET_RAW_BYTES=$(gcloud ...)` and
+# compared against the stripped value — both sides were pre-stripped, so
+# the comparison was always equal and no clean version was ever written.
+# To actually see the raw bytes we must write them to a file.
+FLEET_RAW_TMP=$(mktemp)
+gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET \
+  --project="$FIREBASE_PROJECT" > "$FLEET_RAW_TMP" 2>/dev/null || true
+FLEET_RAW_LEN=$(wc -c < "$FLEET_RAW_TMP" | tr -d ' ')
+FLEET_CONTROLLER_SECRET=$(tr -d '[:space:]' < "$FLEET_RAW_TMP")
+FLEET_CLEAN_LEN=${#FLEET_CONTROLLER_SECRET}
+rm -f "$FLEET_RAW_TMP"
+
+if [[ "$FLEET_CLEAN_LEN" -gt 0 && "$FLEET_RAW_LEN" != "$FLEET_CLEAN_LEN" ]]; then
+  info "  SM FLEET_CONTROLLER_SECRET had trailing whitespace (${FLEET_RAW_LEN}→${FLEET_CLEAN_LEN} bytes) — rewriting clean version"
   echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add FLEET_CONTROLLER_SECRET \
     --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>&1 | tail -1 | sed 's/^/    /'
 fi
