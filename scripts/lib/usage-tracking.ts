@@ -402,12 +402,16 @@ export function startUsageTracking(
 ): void {
   const POLL_INTERVAL_MS = 30_000;
   const watchedFiles: Map<string, WatchedFile> = new Map();
+  let lastPollFileCount: number | null = null;
 
   log(`usage-tracker: starting \u2014 agents dir: ${agentsDir}, prefix: ${agentPrefix}, gateway: ${gatewayId}`);
 
   async function poll() {
     const pollFiles = findSessionFiles(agentsDir, agentPrefix);
-    if (pollFiles.length > 0) log(`usage-poll: checking ${pollFiles.length} files`);
+    if (pollFiles.length > 0 && pollFiles.length !== lastPollFileCount) {
+      log(`usage-poll: tracking ${pollFiles.length} session files`);
+    }
+    lastPollFileCount = pollFiles.length;
     for (const file of pollFiles) {
       try {
         await processFile(file, watchedFiles, db, agentToUid, agentPrefix, log, gatewayId);

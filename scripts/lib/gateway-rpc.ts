@@ -210,24 +210,66 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   const connectTimeoutMs = opts.connectTimeoutMs ?? 30_000;
   const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
   const scopes = opts.scopes ?? ["operator.admin"];
-  // Default trace: single-line log when a connect takes >500ms or fails.
-  // Keeps warm-path noise low while still catching every slow/failed
-  // connect for diagnosis. Tests inject a spy to capture every trace.
+  // Default trace: concise in normal operation, verbose only when requested.
+  // Warm-path successes are silent unless they cross the slow threshold.
+  // Repeated failures are sampled so gateway startup/retry loops do not flood
+  // `kubectl logs`; custom `onConnectTrace` still receives every attempt.
+  const traceVerbose = /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? "");
+  const slowTraceMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10);
+  const failureSampleMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10);
+  let lastFailureKey = "";
+  let lastFailureLogAt = 0;
+  let suppressedFailures = 0;
+
+  function formatConnectTrace(trace: ConnectTrace): string {
+    const phases = [
+      trace.wsOpenMs !== undefined ? `wsOpen=${trace.wsOpenMs}ms` : null,
+      trace.challengeMs !== undefined ? `challenge=${trace.challengeMs}ms` : null,
+      trace.connectMs !== undefined ? `connect=${trace.connectMs}ms` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const outcome = trace.success
+      ? "OK"
+      : `FAIL stage=${trace.stage} ${trace.errorCode}: ${trace.errorMessage}`;
+    return `[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`;
+  }
+
   const onConnectTrace =
     opts.onConnectTrace ??
     ((trace: ConnectTrace) => {
-      if (trace.success && trace.totalMs < 500) return;
-      const phases = [
-        trace.wsOpenMs !== undefined ? `wsOpen=${trace.wsOpenMs}ms` : null,
-        trace.challengeMs !== undefined ? `challenge=${trace.challengeMs}ms` : null,
-        trace.connectMs !== undefined ? `connect=${trace.connectMs}ms` : null,
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const outcome = trace.success
-        ? "OK"
-        : `FAIL stage=${trace.stage} ${trace.errorCode}: ${trace.errorMessage}`;
-      defaultLog(`[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`);
+      if (traceVerbose) {
+        defaultLog(formatConnectTrace(trace));
+        return;
+      }
+
+      if (trace.success) {
+        if (suppressedFailures > 0) {
+          defaultLog(`${formatConnectTrace(trace)} (recovered after ${suppressedFailures} suppressed failures)`);
+          suppressedFailures = 0;
+          lastFailureKey = "";
+        } else if (trace.totalMs >= slowTraceMs) {
+          defaultLog(formatConnectTrace(trace));
+        }
+        return;
+      }
+
+      const now = Date.now();
+      const failureKey = `${trace.stage}:${trace.errorCode}:${trace.errorMessage ?? ""}`;
+      const shouldLog =
+        failureKey !== lastFailureKey ||
+        lastFailureLogAt === 0 ||
+        now - lastFailureLogAt >= failureSampleMs;
+
+      if (shouldLog) {
+        const suffix = suppressedFailures > 0 ? ` (suppressed ${suppressedFailures} similar failures)` : "";
+        defaultLog(`${formatConnectTrace(trace)}${suffix}`);
+        lastFailureKey = failureKey;
+        lastFailureLogAt = now;
+        suppressedFailures = 0;
+      } else {
+        suppressedFailures++;
+      }
     });
 
   // Lazy identity load: only when we actually need to connect. Tests inject
