@@ -178,7 +178,6 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
         nextRefillAt: nextRefillAt?.toISOString() || null,
         throttleLevel: usage.throttleLevel || 0, interactionCount: usage.interactionCount || 0,
         lastUpdated: usage.lastUpdated?.toDate?.()?.toISOString() || null,
-        lastKeyFingerprint: usage.lastKeyFingerprint || null,
       },
       byot: {
         active: d.byotActive === true,
@@ -205,26 +204,18 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
       faceModel: d.faceModel || null,
       brainModel: d.brainModel || null,
       workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-      usageLogs: logsSnap.docs.map((doc) => {
-        const ld = doc.data();
-        return {
-          ...ld,
-          // Phase 0: expose the fingerprints from this day's turns so admin
-          // UI can show a "Key" column. `keyFingerprint` = most-recent;
-          // `keyFingerprints` = distinct set observed that day.
-          keyFingerprint:  ld.keyFingerprint  || null,
-          keyFingerprints: ld.keyFingerprints || (ld.keyFingerprint ? [ld.keyFingerprint] : []),
-        };
-      }),
+      usageLogs: logsSnap.docs.map((doc) => doc.data()),
       // Per-model cost breakdown — v3.1 top-level workspaces/{slug}/usage_models.
-      // BYOT attribution: each doc is keyed by model_date and carries role +
-      // keyFingerprint, so the rollup below is by customer (slug) × model,
-      // with the most-recent key fingerprint surfaced for the admin UI.
+      // Rollup by customer (slug) × model. Key attribution is intentionally
+      // omitted: the JSONL session feed doesn't expose which API key billed
+      // a turn, so any per-key split here would be a fabrication. BYOT
+      // status (active/inactive + the configured key fingerprint) lives on
+      // `byot.active` above and `users/{uid}/system/config.byot`; for actual
+      // per-call billing the customer's Anthropic dashboard is authoritative.
       modelCosts: await (async () => {
         const costs: Record<string, {
           tokens: number;
           costUsd: number;
-          keyFingerprint: string | null;
           lastUsedAt: string | null;
         }> = {};
         for (const slug of warnIfNoSlug(workspaceSlugsForUser(d), uid)) {
@@ -232,13 +223,12 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
           for (const modelDoc of modelsSnap.docs) {
             const md = modelDoc.data();
             const model = md.model || modelDoc.id.split("_")[0];
-            if (!costs[model]) costs[model] = { tokens: 0, costUsd: 0, keyFingerprint: null, lastUsedAt: null };
+            if (!costs[model]) costs[model] = { tokens: 0, costUsd: 0, lastUsedAt: null };
             costs[model].tokens += md.tokens || 0;
             costs[model].costUsd += md.cost_usd || 0;
             const lastUsed = md.lastUsedAt?.toDate?.()?.toISOString?.() || null;
             if (lastUsed && (!costs[model].lastUsedAt || lastUsed > costs[model].lastUsedAt!)) {
               costs[model].lastUsedAt = lastUsed;
-              costs[model].keyFingerprint = md.keyFingerprint || costs[model].keyFingerprint;
             }
           }
         }
@@ -322,12 +312,11 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
         const sessions = sessionsSnap.docs.map((d) => {
           const sd = d.data();
           return {
-            date:           sd.date || d.id,
-            tokensUsed:     sd.tokensUsed || 0,
-            costUsd:        sd.costUsd || 0,
-            interactions:   sd.interactions || 0,
-            roles:          sd.roles || {},
-            keyFingerprint: sd.keyFingerprint || null,
+            date:         sd.date || d.id,
+            tokensUsed:   sd.tokensUsed || 0,
+            costUsd:      sd.costUsd || 0,
+            interactions: sd.interactions || 0,
+            roles:        sd.roles || {},
           };
         });
         const models = modelsSnap.docs.map((d) => {
@@ -340,7 +329,6 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
             cost_usd:          md.cost_usd || 0,
             interaction_count: md.interaction_count || 0,
             role:              md.role || "coach",
-            keyFingerprint:    md.keyFingerprint || null,
             lastUsedAt:        md.lastUsedAt?.toDate?.()?.toISOString?.() || null,
           };
         });
@@ -349,12 +337,11 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
           workspaceId:   slug,
           businessName:  ws.data.businessName || userData.businessName || "Workspace",
           summary: {
-            totalTokens:        Number(summary.totalTokens) || 0,
-            totalCostUsd:       Number(summary.totalCostUsd) || 0,
-            totalInteractions:  Number(summary.totalInteractions) || 0,
-            lastUpdated:        summary.lastUpdated?.toDate?.()?.toISOString?.() || null,
-            lastKeyFingerprint: summary.lastKeyFingerprint || null,
-            modelCosts:         summary.modelCosts || {},
+            totalTokens:       Number(summary.totalTokens) || 0,
+            totalCostUsd:      Number(summary.totalCostUsd) || 0,
+            totalInteractions: Number(summary.totalInteractions) || 0,
+            lastUpdated:       summary.lastUpdated?.toDate?.()?.toISOString?.() || null,
+            modelCosts:        summary.modelCosts || {},
           },
           sessions,
           models,

@@ -12,9 +12,12 @@
  *
  * Then we call reportUsage() once and assert:
  *   - Exactly the three v3.1 paths were written
- *   - The BYOT fields (role, model, keyFingerprint, keyFingerprints) land
- *     where expected on both usage_sessions and usage_models
+ *   - The (role, model, tokens, cost, gateway, slug) attribution lands on
+ *     usage_sessions and usage_models
  *   - The deprecated user-subtree workspace path is never touched
+ *   - No `keyFingerprint` / `keyFingerprints` / `lastKeyFingerprint` fields
+ *     are written — the JSONL session feed doesn't expose which key billed
+ *     each turn, so any per-turn key field would lie. (See module header.)
  */
 import { describe, it, expect, vi } from "vitest";
 import * as fs from "fs";
@@ -129,7 +132,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
       new Map([["octogee-eckert-coach", "eckert-uid"]]),
       () => {},                         // log
       "gw-test",
-      "sk-ant…abcd",                    // platform key fingerprint
     );
 
     const today = new Date().toISOString().slice(0, 10);
@@ -148,7 +150,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(deprecated).toEqual([]);
   });
 
-  it("carries BYOT attribution on session + model docs", async () => {
+  it("session + model docs carry (role, model, slug, gateway, tokens, cost) — no per-turn key fingerprint", async () => {
     const { db, writes } = makeStubDb({
       selectedTier: "pro",
       usage: {},
@@ -168,7 +170,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
       new Map([["octogee-christopher-coach", "chris-uid"]]),
       () => {},
       "gw-test",
-      "sk-byot…wxyz",
     );
 
     const today = new Date().toISOString().slice(0, 10);
@@ -180,14 +181,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(modelWrite).toBeDefined();
     expect(summaryWrite).toBeDefined();
 
-    // Sessions carry fingerprint + arrayUnion, token counts attributed
-    // via FieldValue.increment on the exact token field (pinning the
-    // value catches a regression that swaps totalTokens/input/etc.)
-    expect(sessionWrite!.data.keyFingerprint).toBe("sk-byot…wxyz");
-    expect(sessionWrite!.data.keyFingerprints).toEqual({
-      __op: "arrayUnion",
-      values: ["sk-byot…wxyz"],
-    });
+    // Session doc: gateway, slug, role-attributed token count, breakdown
     expect(sessionWrite!.data.gatewayId).toBe("gw-test");
     expect(sessionWrite!.data.workspaceId).toBe("christopher");
     expect(sessionWrite!.data.tokensUsed).toEqual({ __op: "increment", value: 35 });
@@ -198,18 +192,16 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(sessionWrite!.data["token_breakdown.output"]).toEqual({ __op: "increment", value: 20 });
     expect(sessionWrite!.data["token_breakdown.cacheRead"]).toEqual({ __op: "increment", value: 5 });
 
-    // Models doc: role/model/fingerprint + pinned tokens/cost
+    // Model doc: role + model + slug + token/cost increments
     expect(modelWrite!.data.model).toBe("anthropic/claude-sonnet-4-6");
     expect(modelWrite!.data.role).toBe("brain");
-    expect(modelWrite!.data.keyFingerprint).toBe("sk-byot…wxyz");
     expect(modelWrite!.data.workspaceId).toBe("christopher");
     expect(modelWrite!.data.tokens).toEqual({ __op: "increment", value: 35 });
     expect(modelWrite!.data.cost_usd).toEqual({ __op: "increment", value: 0.01 });
     expect(modelWrite!.data.interaction_count).toEqual({ __op: "increment", value: 1 });
 
-    // Summary: lastFingerprint + rolling totals + per-model cost by
-    // normalized model key (slash → underscore).
-    expect(summaryWrite!.data.lastKeyFingerprint).toBe("sk-byot…wxyz");
+    // Summary: rolling totals + per-model cost by normalized model key
+    // (slash → underscore).
     expect(summaryWrite!.data.workspaceId).toBe("christopher");
     expect(summaryWrite!.data.totalTokens).toEqual({ __op: "increment", value: 35 });
     expect(summaryWrite!.data.totalCostUsd).toEqual({ __op: "increment", value: 0.01 });
@@ -218,9 +210,21 @@ describe("reportUsage — v3.1 workspace paths", () => {
       __op: "increment",
       value: 0.01,
     });
+
+    // Regression guard: the writer used to stamp `keyFingerprint`,
+    // `keyFingerprints`, and `lastKeyFingerprint` with a hardcoded
+    // platform fingerprint — wrong for BYOT customers and unprovable
+    // either way. They're gone. If a future change re-introduces them,
+    // this test fails so we have to revisit the design.
+    for (const w of [sessionWrite!, modelWrite!, summaryWrite!]) {
+      expect(w.data).not.toHaveProperty("keyFingerprint");
+      expect(w.data).not.toHaveProperty("keyFingerprints");
+      expect(w.data).not.toHaveProperty("lastKeyFingerprint");
+    }
   });
 
-  it("still writes the legacy user-level fields (backward compat)", async () => {
+  it("user-level write does NOT carry lastKeyFingerprint", async () => {
+    // Same regression class as above, on the legacy user-doc write.
     const { db, writes } = makeStubDb({
       selectedTier: "pro",
       usage: {},
@@ -240,7 +244,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
       new Map([["octogee-eckert-coach", "eckert-uid"]]),
       () => {},
       "gw-test",
-      "sk-ant…abcd",
     );
 
     const today = new Date().toISOString().slice(0, 10);
@@ -248,8 +251,12 @@ describe("reportUsage — v3.1 workspace paths", () => {
     const logSet = writes.find((w) => w.path === `users/eckert-uid/usage_logs/${today}`);
 
     expect(userUpdate).toBeDefined();
+    expect(userUpdate!.data).not.toHaveProperty("usage.lastKeyFingerprint");
     expect(userUpdate!.data["usage.totalTokensUsed"]).toBeDefined();
+
     expect(logSet).toBeDefined();
+    expect(logSet!.data).not.toHaveProperty("keyFingerprint");
+    expect(logSet!.data).not.toHaveProperty("keyFingerprints");
     expect(logSet!.data.date).toBe(today);
   });
 
@@ -270,7 +277,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
       new Map(),                        // empty map
       () => {},
       "gw-test",
-      "sk-ant…abcd",
     );
 
     expect(writes).toEqual([]);
@@ -298,7 +304,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
       new Map([["octogee-eckert-coach", "eckert-uid"]]),
       () => {},
       "gw-test",
-      "sk-ant…abcd",
     );
 
     const wsWrites = writes.filter((w) => w.path.startsWith("workspaces/"));

@@ -14,9 +14,17 @@
  *     workspaces/{slug}/usage_models/{model}_{date}        ← per-model per-day
  *     workspaces/{slug}/usage_summary/current              ← rolling totals
  *
- *   Each per-day doc carries BYOT attribution: role (coach|brain|…), model id,
- *   and keyFingerprint (sanitized — see key-fingerprint.ts). Rollup dimensions
- *   are therefore workspace slug × role × model × keyFingerprint.
+ *   Each rollup carries (uid, workspace slug, role, model). Rollup dimensions
+ *   are therefore workspace slug × role × model.
+ *
+ *   Why no key fingerprint: OpenClaw's session JSONL doesn't expose which
+ *   API key billed a turn. With BYOT in play we can't reliably distinguish
+ *   platform-billed turns from customer-billed turns inside this stream.
+ *   The user's own Anthropic dashboard is the source of truth for that.
+ *   We attribute by uid + slug; the BYOT echo block in /api/billing/usage
+ *   tells the UI "is BYOT on for this user, what's the configured key" via
+ *   `users/{uid}/system/config.byot.fingerprint` (the workspace-api writer
+ *   for that field is authoritative — see workspace-api/src/routes/billing/byot.ts).
  *
  * The earlier v2 path `users/{uid}/workspaces/{wid}/usage/...` was abandoned
  * in the v3.1 collection cleanup (DATA-MODEL-REVIEW.md). Writes there were
@@ -28,7 +36,6 @@ import { Firestore, FieldValue } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
-import { keyFingerprint } from "./key-fingerprint.js";
 import { formatUsageLogLine } from "./usage-log-line.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -156,7 +163,6 @@ export async function reportUsage(
   agentToUid: Map<string, string>,
   log: LogFn,
   gatewayId: string,
-  platformKeyFingerprint: string,
 ): Promise<void> {
   const uid = agentToUid.get(agentId);
   if (!uid) return;
@@ -210,11 +216,6 @@ export async function reportUsage(
         else if (pct >= 80) throttleLevel = 1;
       }
 
-      // Phase 0: every turn attributes to a key fingerprint. Today that's
-      // always the platform key; Phase 1 (BYOT) will vary per customer
-      // once per-agent auth-profiles.json is in place.
-      const fingerprint = platformKeyFingerprint;
-
       // ── Legacy user-level write (kept for backward compat + throttle) ──
       t.update(userRef, {
         ...windowUpdates,
@@ -225,7 +226,6 @@ export async function reportUsage(
         "usage.requestsThisHour":   FieldValue.increment(1),
         "usage.throttleLevel":      throttleLevel,
         "usage.lastUpdated":        FieldValue.serverTimestamp(),
-        "usage.lastKeyFingerprint": fingerprint,
       });
 
       t.set(logRef, {
@@ -234,8 +234,6 @@ export async function reportUsage(
         costUsd:          FieldValue.increment(usage.costUsd),
         interactions:     FieldValue.increment(1),
         gatewayId,
-        keyFingerprint:   fingerprint,
-        keyFingerprints:  FieldValue.arrayUnion(fingerprint),
         [`breakdown.${role}`]:         FieldValue.increment(usage.totalTokens),
         "breakdown.input":             FieldValue.increment(usage.input),
         "breakdown.output":            FieldValue.increment(usage.output),
@@ -250,7 +248,10 @@ export async function reportUsage(
       // ── Workspace-scoped writes (v3.1) ──────────────────────────────
       // workspaceId is the slug (e.g. "eckert"); the top-level workspaces
       // collection is the v3.1 authoritative parent. Three parallel
-      // subcollections keep reads cheap and rules simple.
+      // subcollections keep reads cheap and rules simple. Rollups are
+      // dimensioned by (slug, role, model) — no per-key splits because
+      // the key fingerprint is not knowable from the JSONL session feed
+      // (see module header).
       if (workspaceId) {
         const wsRef = db.collection("workspaces").doc(workspaceId);
 
@@ -262,8 +263,6 @@ export async function reportUsage(
           interactions:    FieldValue.increment(1),
           gatewayId,
           workspaceId,
-          keyFingerprint:  fingerprint,
-          keyFingerprints: FieldValue.arrayUnion(fingerprint),
           [`roles.${role}`]:              FieldValue.increment(usage.totalTokens),
           "token_breakdown.input":        FieldValue.increment(usage.input),
           "token_breakdown.output":       FieldValue.increment(usage.output),
@@ -272,7 +271,7 @@ export async function reportUsage(
         }, { merge: true });
 
         // usage_models/{modelKey}_{date} — per-model per-day granularity,
-        // per role and per BYOT key fingerprint (BYOT rollups).
+        // per role.
         const mk = `${modelKey(usage.model)}_${today}`;
         t.set(wsRef.collection("usage_models").doc(mk), {
           date:              today,
@@ -282,8 +281,6 @@ export async function reportUsage(
           cost_usd:          FieldValue.increment(usage.costUsd),
           interaction_count: FieldValue.increment(1),
           role,
-          keyFingerprint:    fingerprint,
-          keyFingerprints:   FieldValue.arrayUnion(fingerprint),
           lastUsedAt:        FieldValue.serverTimestamp(),
           "token_breakdown.input":      FieldValue.increment(usage.input),
           "token_breakdown.output":     FieldValue.increment(usage.output),
@@ -298,20 +295,18 @@ export async function reportUsage(
           totalCostUsd:       FieldValue.increment(usage.costUsd),
           totalInteractions:  FieldValue.increment(1),
           lastUpdated:        FieldValue.serverTimestamp(),
-          lastKeyFingerprint: fingerprint,
           [`modelCosts.${modelKey(usage.model)}`]: FieldValue.increment(usage.costUsd),
         }, { merge: true });
       }
     });
 
     log(formatUsageLogLine({
-      totalTokens:    usage.totalTokens,
-      costUsd:        usage.costUsd,
+      totalTokens: usage.totalTokens,
+      costUsd:     usage.costUsd,
       role,
-      model:          usage.model,
+      model:       usage.model,
       uid,
-      workspaceId:    workspaceId ?? null,
-      keyFingerprint: platformKeyFingerprint,
+      workspaceId: workspaceId ?? null,
     }));
   } catch (err) {
     // Include code/stack so systemic write failures (e.g. a new
@@ -331,10 +326,9 @@ async function processFile(
   watchedFiles: Map<string, WatchedFile>,
   db: Firestore,
   agentToUid: Map<string, string>,
-  agentPrefix: string,
+  _agentPrefix: string,
   log: LogFn,
   gatewayId: string,
-  platformKeyFingerprint: string,
 ): Promise<void> {
   const parts    = filePath.split(path.sep);
   const agentIdx = parts.findIndex(p => p === "agents") + 1;
@@ -365,7 +359,7 @@ async function processFile(
     if (!line.trim()) continue;
     const usage = parseLineForUsage(line);
     if (usage) {
-      await reportUsage(db, agentId, role, agentDir, usage, agentToUid, log, gatewayId, platformKeyFingerprint);
+      await reportUsage(db, agentId, role, agentDir, usage, agentToUid, log, gatewayId);
     }
   }
 
@@ -409,18 +403,14 @@ export function startUsageTracking(
   const POLL_INTERVAL_MS = 30_000;
   const watchedFiles: Map<string, WatchedFile> = new Map();
 
-  // Resolve platform key fingerprint once; every turn today attributes to
-  // this. Phase 1 will layer per-customer fingerprints over this default.
-  const platformKeyFingerprint = keyFingerprint(process.env.ANTHROPIC_API_KEY);
-
-  log(`usage-tracker: starting \u2014 agents dir: ${agentsDir}, prefix: ${agentPrefix}, gateway: ${gatewayId}, platform-key: ${platformKeyFingerprint}`);
+  log(`usage-tracker: starting \u2014 agents dir: ${agentsDir}, prefix: ${agentPrefix}, gateway: ${gatewayId}`);
 
   async function poll() {
     const pollFiles = findSessionFiles(agentsDir, agentPrefix);
     if (pollFiles.length > 0) log(`usage-poll: checking ${pollFiles.length} files`);
     for (const file of pollFiles) {
       try {
-        await processFile(file, watchedFiles, db, agentToUid, agentPrefix, log, gatewayId, platformKeyFingerprint);
+        await processFile(file, watchedFiles, db, agentToUid, agentPrefix, log, gatewayId);
       } catch (err) {
         log(`usage: error processing ${file}: ${err}`);
       }

@@ -1,7 +1,11 @@
 /**
  * Unit tests for formatUsageLogLine() — the `✓ usage: ...` line emitted
- * per turn by the gateway provisioner. Phase 0 adds the `key=` suffix
- * so every line attributes the turn to a specific API key fingerprint.
+ * per turn by the gateway provisioner.
+ *
+ * Traceability is by (uid, workspace slug). The API key identity is
+ * intentionally NOT in the line — see the module header for the
+ * rationale (JSONL doesn't expose which key billed each turn; the
+ * customer's provider dashboard is the source of truth for that).
  *
  * Pure function; no Firebase, no filesystem.
  */
@@ -16,18 +20,17 @@ describe("formatUsageLogLine", () => {
     model: "anthropic/claude-sonnet-4-6",
     uid: "abc12345defg",
     workspaceId: "smile-wring-011b",
-    keyFingerprint: "sk-ant…9f2a",
   };
 
-  test("canonical turn line: tokens, cost, role/model, uid, workspace, key", () => {
+  test("canonical turn line: tokens, cost, role/model, uid, workspace slug", () => {
     expect(formatUsageLogLine(base)).toBe(
-      "✓ usage: 1800 tokens ($0.0168) [coach/anthropic/claude-sonnet-4-6] uid:abc12345 ws:smile-wring-011b key=sk-ant…9f2a",
+      "✓ usage: 1800 tokens ($0.0168) [coach/anthropic/claude-sonnet-4-6] uid:abc12345 slug:smile-wring-011b",
     );
   });
 
-  test("workspaceId omitted: no ws: segment, key still present", () => {
+  test("workspaceId omitted: no slug: segment", () => {
     expect(formatUsageLogLine({ ...base, workspaceId: null })).toBe(
-      "✓ usage: 1800 tokens ($0.0168) [coach/anthropic/claude-sonnet-4-6] uid:abc12345 key=sk-ant…9f2a",
+      "✓ usage: 1800 tokens ($0.0168) [coach/anthropic/claude-sonnet-4-6] uid:abc12345",
     );
   });
 
@@ -43,19 +46,15 @@ describe("formatUsageLogLine", () => {
     expect(formatUsageLogLine({ ...base, costUsd: 0.123456 })).toContain("($0.1235)");
   });
 
-  test("key fingerprint always present, even when 'none'", () => {
-    expect(formatUsageLogLine({ ...base, keyFingerprint: "none" })).toContain(
-      "key=none",
-    );
-  });
-
-  test("line never contains raw secret material", () => {
-    const line = formatUsageLogLine({
-      ...base,
-      keyFingerprint: "sk-ant…9f2a", // already a fingerprint; caller is
-                                      // responsible for redacting before call
-    });
-    expect(line).not.toMatch(/sk-ant-api\d+/); // no full-form key patterns
+  test("line never contains raw secret material — the format does not include keys", () => {
+    // Belt-and-suspenders: even if a future field accidentally surfaces a
+    // key-shaped string in any contributing field, the formatter shape
+    // doesn't include API-key tokens. Lock in the absence of `key=` and
+    // `sk-ant-` prefixes so a regression that re-introduces fingerprint
+    // plumbing fails this test.
+    const line = formatUsageLogLine(base);
+    expect(line).not.toContain("key=");
+    expect(line).not.toMatch(/sk-ant-api\d+/);
   });
 
   test("alternative role (e.g. alex) renders inline", () => {
