@@ -18,9 +18,10 @@ describe("CREW_ROLES", () => {
 // ── CREW_IDENTITY ───────────────────────────────────────────────────────────────
 
 describe("CREW_IDENTITY", () => {
-  it("coach is Octo with octopus emoji", () => {
+  it("coach is Octo with octopus emoji and Sonnet as the provisioning default", () => {
     expect(CREW_IDENTITY.coach.name).toBe("Octo");
     expect(CREW_IDENTITY.coach.emoji).toBe("🐙");
+    expect(CREW_IDENTITY.coach.model).toBe("anthropic/claude-sonnet-4-6");
   });
 });
 
