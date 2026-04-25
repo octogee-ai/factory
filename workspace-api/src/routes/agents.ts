@@ -15,8 +15,10 @@ import { mmApi } from "../lib/mattermost";
 const router = Router();
 
 // Coach MM patches only touch user-visible fields; the stable `{username}-coach`
-// MM username is never changed.
-const ALLOWED_COACH_PATCH_FIELDS = ["name", "persona", "avatarEmoji"] as const;
+// MM username is never changed. Avatar imagery is owned by Mattermost (single
+// profile source); image uploads land via /api/profile/avatar which syncs
+// directly to MM's /users/{id}/image endpoint, not through this PATCH.
+const ALLOWED_COACH_PATCH_FIELDS = ["name", "persona"] as const;
 type CoachPatchField = (typeof ALLOWED_COACH_PATCH_FIELDS)[number];
 
 // ── PATCH /me — update the caller's agent (coach) identity ────────────────

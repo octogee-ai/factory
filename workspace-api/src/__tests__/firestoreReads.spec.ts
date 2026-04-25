@@ -121,7 +121,6 @@ describe('readAgent', () => {
       id: 'u-alice',
       name: 'Octo',
       persona: 'helpful coach',
-      avatarEmoji: '🐙',
       mattermost: { userId: 'mm-agent-1' },
     };
     const agent = await readAgent('u-alice');
