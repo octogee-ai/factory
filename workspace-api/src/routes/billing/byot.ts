@@ -150,10 +150,12 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
     }
 
     // (3) Write to Secret Manager. Handles create-if-not-exists + new version.
+    // GCP label values must match [\p{Ll}\p{Lo}\p{N}_-]{0,63} — lowercase
+    // only. Firebase UIDs are mixed-case, so lowercase before stamping.
     const { versionName } = await writeSecret({
       name: secretName,
       value: key,
-      labels: { slug, provider, uid: uid.slice(0, 32) },
+      labels: { slug, provider, uid: uid.toLowerCase().slice(0, 63) },
     });
 
     // (4) Firestore metadata only. NEVER plaintext apiKey.
