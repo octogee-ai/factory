@@ -321,9 +321,26 @@ export async function startFleetController(
   // Env resolution matches createGatewayRpc's (OPENCLAW_GATEWAY_PORT falling
   // back to GATEWAY_PORT) so the heartbeat publishes the same port the
   // gateway is actually listening on when only the legacy var is set.
-  const namespace = process.env.K8S_NAMESPACE || "octogee";
+  //
+  // Service name is `octogee-gateway` (no `-${gatewayId}` suffix) — the helm
+  // chart creates one Service per namespace, not per gatewayId. Using the
+  // suffix here broke chat-proxy upstream WS on 2026-04-24 after a --full
+  // teardown wiped the Firestore doc (no field to compare against, every
+  // heartbeat wrote the wrong URL, chat-proxy got ENOTFOUND).
+  //
+  // K8S_NAMESPACE must be set on the gateway deployment via downward API
+  // (see helm chart); the old `|| "octogee"` default silently pinned test
+  // pods to the prod namespace on writes.
+  const namespace = process.env.K8S_NAMESPACE;
+  if (!namespace) {
+    throw new Error(
+      "[fleet] K8S_NAMESPACE env var is not set. The gateway deployment must " +
+        "expose it via downward API (valueFrom.fieldRef.fieldPath=metadata.namespace) " +
+        "or heartbeats will publish internalUrl with a null namespace.",
+    );
+  }
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
-  const internalUrl = `http://octogee-gateway-${opts.gatewayId}.${namespace}.svc.cluster.local:${gatewayPort}`;
+  const internalUrl = `http://octogee-gateway.${namespace}.svc.cluster.local:${gatewayPort}`;
 
   const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {
     try {

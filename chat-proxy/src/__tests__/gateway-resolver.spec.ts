@@ -28,9 +28,13 @@ function mkDb(docs: Record<string, DocData>): any {
 }
 
 describe('canonicalGatewayUrl', () => {
-  it('formats the cluster-internal DNS shape', () => {
+  it('formats the cluster-internal DNS shape (gatewayId is NOT in hostname — Service is per-namespace)', () => {
     expect(canonicalGatewayUrl('gw-a', 'octogee-test', '18789')).toBe(
-      'http://octogee-gateway-gw-a.octogee-test.svc.cluster.local:18789',
+      'http://octogee-gateway.octogee-test.svc.cluster.local:18789',
+    );
+    // gatewayId argument is retained for signature stability but unused:
+    expect(canonicalGatewayUrl('gw-prod', 'octogee', '18789')).toBe(
+      'http://octogee-gateway.octogee.svc.cluster.local:18789',
     );
   });
 });
@@ -40,13 +44,37 @@ describe('resolveGatewayUrl', () => {
     const db = mkDb({
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
       'gateways/gw-a': {
-        internalUrl: 'http://octogee-gateway-gw-a.octogee-test.svc.cluster.local:18789',
+        internalUrl: 'http://octogee-gateway.octogee-test.svc.cluster.local:18789',
       },
     });
     const r = await resolveGatewayUrl({ db, uid: 'u1' });
     expect(r.gatewayId).toBe('gw-a');
-    expect(r.url).toBe('http://octogee-gateway-gw-a.octogee-test.svc.cluster.local:18789');
+    expect(r.url).toBe('http://octogee-gateway.octogee-test.svc.cluster.local:18789');
     expect(r.usedFallback).toBe(false);
+  });
+
+  it('honors overrideUrl (sidecar mode) and skips the gateways/{id} read', async () => {
+    // gateways/{id} is intentionally absent — proves we never read it when
+    // the override is set. If the resolver fell through, the missing doc
+    // would throw `gateway-not-registered`.
+    const db = mkDb({
+      'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
+    });
+    const r = await resolveGatewayUrl({
+      db,
+      uid: 'u1',
+      overrideUrl: 'http://127.0.0.1:18789',
+    });
+    expect(r.gatewayId).toBe('gw-a');
+    expect(r.url).toBe('http://127.0.0.1:18789');
+    expect(r.usedFallback).toBe(false);
+  });
+
+  it('still requires user provisioning when overrideUrl is set', async () => {
+    const db = mkDb({});
+    await expect(
+      resolveGatewayUrl({ db, uid: 'u1', overrideUrl: 'http://127.0.0.1:18789' }),
+    ).rejects.toMatchObject({ code: 'user-not-provisioned' });
   });
 
   it('falls back to canonical DNS when internalUrl is absent (fresh deploy)', async () => {
@@ -60,7 +88,7 @@ describe('resolveGatewayUrl', () => {
       namespace: 'octogee-test',
       port: '18789',
     });
-    expect(r.url).toBe('http://octogee-gateway-gw-b.octogee-test.svc.cluster.local:18789');
+    expect(r.url).toBe('http://octogee-gateway.octogee-test.svc.cluster.local:18789');
     expect(r.usedFallback).toBe(true);
   });
 

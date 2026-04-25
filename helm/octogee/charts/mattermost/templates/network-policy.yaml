@@ -19,15 +19,10 @@ spec:
       ports:
         - protocol: TCP
           port: 8065
-    # Allow from chat-proxy (WebSocket + REST proxy)
-    - from:
-        - podSelector:
-            matchLabels:
-              app: chat-proxy
-      ports:
-        - protocol: TCP
-          port: 8065
-    # Allow from gateway (OpenClaw bot, provisioner, site-build-api)
+    # chat-proxy traffic is covered by the gateway selector below — chat-proxy
+    # runs as a sidecar of the octogee-gateway pod (helm/octogee/charts/gateway
+    # /templates/deployment.yaml), so its source pod label is `app: octogee-gateway`.
+    # Allow from gateway (OpenClaw bot, provisioner, site-build-api, chat-proxy sidecar)
     - from:
         - podSelector:
             matchLabels:

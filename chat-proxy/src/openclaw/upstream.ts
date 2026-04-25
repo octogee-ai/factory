@@ -51,7 +51,7 @@ const PROTOCOL_VERSION = 3;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 export interface OpenUpstreamParams {
-  /** Gateway URL, e.g. `http://octogee-gateway-gw-a.octogee-test.svc.cluster.local:18789`. */
+  /** Gateway URL, e.g. `http://octogee-gateway.octogee-test.svc.cluster.local:18789`. */
   url: string;
   /** OPENCLAW_GATEWAY_TOKEN — resolved from env before calling. */
   token: string;
