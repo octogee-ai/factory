@@ -30,7 +30,9 @@
         ],
         "passEnv": [
           "GOOGLE_APPLICATION_CREDENTIALS",
-          "GCP_PROJECT_ID"
+          "GCP_PROJECT_ID",
+          "OPENCLAW_AGENTS_DIR",
+          "HOME"
         ],
         "jsonOnly": true,
         "timeoutMs": 5000

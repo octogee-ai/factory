@@ -1,11 +1,14 @@
 /**
- * BYOT state sync — writes per-agent auth-profiles.json for customers
- * whose Firestore byotActive flag is true; removes it when false.
+ * BYOT state sync — pure logic + filesystem reconciliation for
+ * per-agent auth-profiles.json files. NO gateway RPC, NO subprocess
+ * dependencies live here.
  *
- * After a mutation, triggers `openclaw secrets reload` so the in-memory
- * snapshot swaps without a gateway pod restart.
- *
- * Called from the provisioner's onSnapshot watcher in local-provisioner.ts.
+ * The runtime hand-off (in-memory snapshot reload via gateway-rpc) lives
+ * in `byot-sync-runtime.ts`. This split is intentional: the cross-package
+ * `tests/` workspace typechecks specs that import from this file, and
+ * pulling `gateway-rpc` (→ `ws`) into its transitive type graph would
+ * force `tests/` to declare a `ws` dep it never uses at runtime.
+ * Splitting keeps the pure-logic surface free of runtime deps.
  *
  * Idempotent: re-writing an existing file with identical content is a
  * no-op (file-content diff). Removing a non-existent file is safe.
@@ -13,7 +16,6 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
 import {
   buildByotConfigForProvider,
   type Provider,
@@ -32,7 +34,7 @@ function agentDirForSlug(slug: string): string {
 const BYOT_FILES = ["auth-profiles.json", "models.json"] as const;
 type ByotFile = (typeof BYOT_FILES)[number];
 
-interface ByotInput {
+export interface ByotInput {
   slug: string;
   provider: Provider;
   baseUrl?: string;
@@ -141,46 +143,3 @@ export function applyByotState(slug: string, input: ByotInput | null): boolean {
   return changed;
 }
 
-/**
- * Trigger OpenClaw's in-memory snapshot swap. Safe to call any time —
- * OpenClaw atomically keeps the last-known-good snapshot on failure.
- *
- * Invocation is via the local `openclaw` CLI which speaks to the same
- * gateway over its own WS auth. The gateway pod shares env with the
- * provisioner, so the CLI auto-discovers the local token.
- */
-export function triggerSecretsReload(): void {
-  const r = spawnSync("openclaw", ["secrets", "reload", "--json"], {
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  if (r.status !== 0) {
-    log(
-      `⚠ [byot-sync] secrets reload returned non-zero (${r.status}): ${r.stderr?.trim() || r.stdout?.trim() || ""}`,
-    );
-    return;
-  }
-  log(`[byot-sync] secrets reload ok${r.stdout?.trim() ? ` — ${r.stdout.trim()}` : ""}`);
-}
-
-/**
- * One-shot sync for a single customer — apply the desired state and
- * trigger secrets reload if anything actually changed on disk.
- *
- * Caller must pass the system/config.byot subdoc separately; the
- * provisioner's onSnapshot watcher reads it from a sibling Firestore
- * doc, not the user doc.
- */
-export function syncByotForCustomer(userData: {
-  byotActive?: boolean;
-  username?: string;
-  provisioning?: { openclaw?: { status?: string } };
-  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
-}): void {
-  const desired = deriveDesiredByotState(userData);
-  const slug = userData.username;
-  if (!slug) return;
-
-  const changed = applyByotState(slug, desired.input);
-  if (changed) triggerSecretsReload();
-}

@@ -155,10 +155,22 @@ export interface ConfigPatchResult {
   config?: unknown;
 }
 
+export interface SecretsReloadResult {
+  /** Number of warnings encountered during reload (e.g. unresolved refs).
+   *  Reload still succeeds — last-known-good snapshot stays active for any
+   *  ref that fails to re-resolve. */
+  warningCount?: number;
+  ok?: boolean;
+}
+
 export interface GatewayRpcClient {
   configGet(): Promise<ConfigGetResult>;
   configPatch(patch: object, baseHash: string): Promise<ConfigPatchResult>;
   channelsStatus(): Promise<unknown>;
+  /** Trigger OpenClaw's atomic in-memory snapshot swap — re-resolves every
+   *  exec-provider SecretRef (including BYOT auth-profiles). Calls the
+   *  fork's `secrets.reload` method with operator.admin scope. */
+  secretsReload(): Promise<SecretsReloadResult>;
   /** Cheap up-probe: completes the handshake + a `channels.status` roundtrip
    *  within `timeoutMs`. Never throws. */
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
@@ -292,6 +304,40 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
 
     async channelsStatus() {
       return await call("channels.status", {});
+    },
+
+    async secretsReload() {
+      const payload = await call("secrets.reload", {});
+      // Response shape per openclaw fork:
+      //   { ok?: boolean, warningCount?: number }
+      // Last-known-good is preserved on failure inside the gateway, so a
+      // resolved promise always means "snapshot swap attempted". The
+      // `warningCount` lets the caller log "X SecretRefs failed to resolve"
+      // without making the call itself a failure.
+      if (!payload || typeof payload !== "object") {
+        throw new GatewayRpcError(
+          "invalid-response",
+          "secrets.reload returned non-object payload",
+        );
+      }
+      const p = payload as { ok?: unknown; warningCount?: unknown };
+      // Field-level validation. A regressed server returning
+      // `{ warningCount: "lots" }` would otherwise pass the object check
+      // and silently log "secrets reload ok" while the gateway is reporting
+      // unresolved refs (Number("lots") → NaN, NaN > 0 is false). Be loud.
+      if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
+        throw new GatewayRpcError(
+          "invalid-response",
+          `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`,
+        );
+      }
+      if (p.ok !== undefined && typeof p.ok !== "boolean") {
+        throw new GatewayRpcError(
+          "invalid-response",
+          `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`,
+        );
+      }
+      return p as SecretsReloadResult;
     },
 
     async isGatewayUp(timeoutMs) {

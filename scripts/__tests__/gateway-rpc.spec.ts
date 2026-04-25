@@ -266,6 +266,66 @@ describe("gateway-rpc", () => {
 
   // ── isGatewayUp ───────────────────────────────────────────────────────────
 
+  // ── secretsReload ─────────────────────────────────────────────────────────
+
+  describe("secretsReload", () => {
+    it("calls the `secrets.reload` method with empty params and returns the payload", async () => {
+      let captured: unknown = "not-called";
+      server.setHandler("secrets.reload", (params) => {
+        captured = params;
+        return { ok: true, payload: { ok: true, warningCount: 0 } };
+      });
+
+      const result = await client.secretsReload();
+
+      // BYOT prod fix: must call the openclaw fork's RPC method by name —
+      // mismatched method names silently no-op and leave the running gateway
+      // on the platform key (the original symptom).
+      expect(captured).toEqual({});
+      expect(result.ok).toBe(true);
+      expect(result.warningCount).toBe(0);
+    });
+
+    it("surfaces warningCount when the gateway reports unresolved refs", async () => {
+      server.setHandler("secrets.reload", () => ({
+        ok: true,
+        payload: { ok: true, warningCount: 3 },
+      }));
+      const result = await client.secretsReload();
+      expect(result.warningCount).toBe(3);
+    });
+
+    it("throws GatewayRpcError('invalid-response') if the gateway returns a non-object payload", async () => {
+      server.setHandler("secrets.reload", () => ({ ok: true, payload: "boom" }));
+      await expect(client.secretsReload()).rejects.toMatchObject({
+        name: "GatewayRpcError",
+        code: "invalid-response",
+      });
+    });
+
+    it("throws when warningCount is present but not a number (regression: silent NaN)", async () => {
+      server.setHandler("secrets.reload", () => ({
+        ok: true,
+        payload: { warningCount: "lots" },
+      }));
+      await expect(client.secretsReload()).rejects.toMatchObject({
+        name: "GatewayRpcError",
+        code: "invalid-response",
+      });
+    });
+
+    it("throws when ok is present but not a boolean", async () => {
+      server.setHandler("secrets.reload", () => ({
+        ok: true,
+        payload: { ok: "yes" },
+      }));
+      await expect(client.secretsReload()).rejects.toMatchObject({
+        name: "GatewayRpcError",
+        code: "invalid-response",
+      });
+    });
+  });
+
   describe("isGatewayUp", () => {
     it("returns true when the handshake succeeds", async () => {
       server.setHandler("channels.status", () => ({ ok: true, payload: { channels: [] } }));
