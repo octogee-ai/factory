@@ -93,6 +93,9 @@ describe("applyByotState — enabled write path", () => {
 
     const written = JSON.parse(fs.readFileSync(profilePath(slug), "utf8"));
     expect(written.profiles["anthropic:default"].type).toBe("api_key");
+    // Top-level provider is REQUIRED — OpenClaw's
+    // coercePersistedAuthProfileStore drops entries without it.
+    expect(written.profiles["anthropic:default"].provider).toBe("anthropic");
     expect(written.profiles["anthropic:default"].keyRef).toEqual({
       source: "exec",
       provider: "gcp-secret-manager",

@@ -41,8 +41,18 @@ export interface ExecSecretRef {
   id: string;
 }
 
+/**
+ * The credential entry MUST include a top-level `provider` string.
+ * OpenClaw's `coercePersistedAuthProfileStore` (auth-profiles/persisted.ts)
+ * passes no fallbackProvider when parsing entries from auth-profiles.json
+ * (only the legacy auth.json reader does). Without the explicit provider,
+ * `parseCredentialEntry` returns `{ ok: false, reason: "missing_provider" }`
+ * and OpenClaw silently logs `ignored invalid auth profile entries during
+ * store load` — leaving the customer's BYOT key dropped on the floor and
+ * the agent stuck on the platform key.
+ */
 export interface AuthProfilesJson {
-  profiles: Record<string, { type: "api_key"; keyRef: ExecSecretRef }>;
+  profiles: Record<string, { type: "api_key"; provider: string; keyRef: ExecSecretRef }>;
 }
 
 export interface CustomProviderEntry {
@@ -143,6 +153,7 @@ export function buildByotConfigForProvider(input: ByotConfigInput): ByotConfigOu
         profiles: {
           "anthropic:default": {
             type: "api_key",
+            provider: "anthropic",
             keyRef: {
               source: "exec",
               provider: SECRET_RESOLVER_PROVIDER,
@@ -163,6 +174,7 @@ export function buildByotConfigForProvider(input: ByotConfigInput): ByotConfigOu
         profiles: {
           "openai:default": {
             type: "api_key",
+            provider: "openai",
             keyRef: {
               source: "exec",
               provider: SECRET_RESOLVER_PROVIDER,

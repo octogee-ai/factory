@@ -24,7 +24,7 @@ import {
 } from "../../scripts/lib/byot-multi-provider-config";
 
 describe("buildByotConfigForProvider — anthropic (Phase 1 shape preserved)", () => {
-  test("emits auth-profiles.json with anthropic:default + keyRef", () => {
+  test("emits auth-profiles.json with anthropic:default + provider + keyRef", () => {
     const out = buildByotConfigForProvider({
       slug: "smile-wring-011b",
       provider: "anthropic",
@@ -33,6 +33,12 @@ describe("buildByotConfigForProvider — anthropic (Phase 1 shape preserved)", (
       profiles: {
         "anthropic:default": {
           type: "api_key",
+          // Top-level provider is REQUIRED — OpenClaw's
+          // coercePersistedAuthProfileStore (auth-profiles/persisted.ts:131)
+          // calls parseCredentialEntry without a fallbackProvider, so a
+          // missing top-level provider drops the entry as missing_provider
+          // and silently leaves the customer on the platform key.
+          provider: "anthropic",
           keyRef: {
             source: "exec",
             provider: "gcp-secret-manager",
@@ -47,7 +53,7 @@ describe("buildByotConfigForProvider — anthropic (Phase 1 shape preserved)", (
 });
 
 describe("buildByotConfigForProvider — openai (direct)", () => {
-  test("emits auth-profiles.json with openai:default + keyRef", () => {
+  test("emits auth-profiles.json with openai:default + provider + keyRef", () => {
     const out = buildByotConfigForProvider({
       slug: "smile-wring-011b",
       provider: "openai",
@@ -57,6 +63,7 @@ describe("buildByotConfigForProvider — openai (direct)", () => {
       profiles: {
         "openai:default": {
           type: "api_key",
+          provider: "openai",
           keyRef: {
             source: "exec",
             provider: "gcp-secret-manager",
