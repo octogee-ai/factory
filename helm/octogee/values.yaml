@@ -168,10 +168,6 @@ gateway:
     githubOrg: "octogee"
     mmUrl: "http://mattermost.octogee.svc.cluster.local:8065"
     chatProxyUrl: "https://chat.octogee.com"
-  pvc:
-    name: octogee-data
-    size: 50Gi
-    storageClass: standard-rwo
   resources:
     requests:
       cpu: "1000m"

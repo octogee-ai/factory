@@ -5,25 +5,27 @@ set -euo pipefail
 # Octogee Environment Teardown
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Design intent: teardown never touches PVCs. The test gateway runs on
-# emptyDir (cattle); Mattermost and Gitea are install-once pets backed by
-# PVCs that persist across teardown/setup cycles. If you ever need to wipe
-# a PVC deliberately, snapshot the disk first and delete it manually — see
-# RUNBOOK.md → Known-Good Reset.
+# Design intent: teardown leaves the irreplaceable PVCs alone. Mattermost
+# and Gitea are install-once pets backed by PVCs that persist across
+# teardown/setup cycles. The gateway agents PVC (octogee-gateway-agents)
+# is also preserved by default — it holds coach session history that is
+# only partially reconstructable from Mattermost — but --full deletes it
+# because clean-slate reinstalls assume the gateway boots empty.
 #
 # Default (no flags): `helm uninstall` and nothing else.
-#   Preserves: all PVCs, K8s secrets, namespace, Secret Manager, Cloud SQL,
-#              Firestore, Functions, Auth.
+#   Preserves: all PVCs (MM, Gitea, gateway agents), K8s secrets, namespace,
+#              Secret Manager, Cloud SQL, Firestore, Functions, Auth.
 #
 # --full: also drops the per-env Cloud SQL databases, wipes Firestore
 #         collections, deletes per-env Cloud Functions (chat proxy
-#         preserved), and deletes Firebase Auth users.
-#         Still preserves: all PVCs, all K8s secrets, namespace, Secret
-#         Manager. Secret rotation is never part of teardown.
+#         preserved), deletes Firebase Auth users, AND deletes the
+#         gateway agents PVC (octogee-gateway-agents). MM + Gitea PVCs
+#         are still preserved (irreplaceable). K8s secrets and Secret
+#         Manager are still preserved — rotation is never part of teardown.
 #
 # Does NOT delete (ever): GCP projects, GKE clusters, AR repos,
-#   Firebase projects, GCP Service Accounts, IAM bindings, any PVC,
-#   any K8s secret, any Secret Manager entry, the namespace itself.
+#   Firebase projects, GCP Service Accounts, IAM bindings, MM + Gitea
+#   PVCs, any K8s secret, any Secret Manager entry, the namespace itself.
 # To rotate a secret, use scripts/rotate-secret.sh.
 #
 # Usage:
@@ -60,8 +62,9 @@ for arg in "$@"; do
       echo "  (default)  helm uninstall only — preserves PVCs, K8s secrets,"
       echo "             namespace, Secret Manager, Cloud SQL, Firestore, Auth"
       echo "  --full     Also drops Cloud SQL DBs + wipes Firestore + Cloud"
-      echo "             Functions + Auth users. Still preserves PVCs, K8s"
-      echo "             secrets, Secret Manager, and the namespace."
+      echo "             Functions + Auth users + the gateway agents PVC."
+      echo "             Still preserves MM + Gitea PVCs (irreplaceable),"
+      echo "             K8s secrets, Secret Manager, and the namespace."
       echo ""
       echo "  To rotate a secret: scripts/rotate-secret.sh"
       exit 0
@@ -141,11 +144,16 @@ if $FULL; then
   echo -e "  ${RED}  + Firestore collections (all)${NC}"
   echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
   echo -e "  ${RED}  + Firebase Auth users (all)${NC}"
+  echo -e "  ${RED}  + Gateway agents PVC (octogee-gateway-agents — coach session history)${NC}"
 fi
 echo ""
 echo "  Will preserve:"
 echo "    • All K8s secrets in $K8S_NAMESPACE (rotate via scripts/rotate-secret.sh)"
-echo "    • All PVCs (mattermost-data, gitea-shared-storage, gateway PVC if any)"
+if $FULL; then
+  echo "    • MM + Gitea PVCs (mattermost-data, gitea-shared-storage — irreplaceable)"
+else
+  echo "    • All PVCs (mattermost-data, gitea-shared-storage, octogee-gateway-agents)"
+fi
 echo "    • Namespace: $K8S_NAMESPACE"
 echo "    • Secret Manager (every entry — never touched, even with --full)"
 echo "    • Cloud SQL instance (octogee-pg)"
@@ -375,6 +383,21 @@ admin.initializeApp({ credential: admin.credential.cert(sa as any), projectId: '
     fi
   else
     info "Keeping Auth users"
+  fi
+fi
+
+# ── 10. Full: Gateway agents PVC ──────────────────────────────────────────
+# Drops octogee-gateway-agents (coach session history). The PVC has
+# helm.sh/resource-policy: keep so `helm uninstall` left it in place;
+# this is the only path that removes it. MM + Gitea PVCs stay.
+if $FULL; then
+  echo ""
+  info "Deleting gateway agents PVC (octogee-gateway-agents)..."
+  if kubectl --context "$K8S_CONTEXT" get pvc octogee-gateway-agents -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
+    kubectl --context "$K8S_CONTEXT" delete pvc octogee-gateway-agents -n "$K8S_NAMESPACE" --wait=true 2>&1 || true
+    ok "Gateway agents PVC deleted"
+  else
+    info "Gateway agents PVC not present — skipping"
   fi
 fi
 

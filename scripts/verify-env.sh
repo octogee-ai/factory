@@ -344,39 +344,59 @@ else
 fi
 
 # ── 5e. Gateway Storage Mode ──────────────────────────────────────────────────
-# Gateway is always emptyDir — the fleet controller restores customer state
-# post-boot (docs/GATEWAY-FLEET-CONTROLLER-SPEC.md). This check catches
-# orphan PVCs from earlier pvc-mode installs.
+# Hybrid: `data` (regenerable: extensions, openclaw.json, sqlite indexes,
+# customer workspaces) is emptyDir; `agents` (durable: coach session
+# history, MEMORY.md, DREAMS) is the octogee-gateway-agents PVC.
+# See docs/GATEWAY-SESSION-PERSISTENCE-SPEC.md.
 set_section infra
 header "5e. Gateway Storage Mode"
 
-GW_VOLUME_JSON=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
+GW_DATA_VOLUME_JSON=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
   -o jsonpath='{.spec.template.spec.volumes[?(@.name=="data")]}' 2>/dev/null || echo "")
 
-if [[ -z "$GW_VOLUME_JSON" ]]; then
+if [[ -z "$GW_DATA_VOLUME_JSON" ]]; then
   fail "octogee-gateway has no 'data' volume (chart broken or deployment missing)"
-elif echo "$GW_VOLUME_JSON" | grep -q '"emptyDir"'; then
-  pass "Storage mode: emptyDir (cattle, expected)"
+elif echo "$GW_DATA_VOLUME_JSON" | grep -q '"emptyDir"'; then
+  pass "data volume: emptyDir (regenerable state, expected)"
 else
-  fail "Storage mode mismatch: expected emptyDir, got $GW_VOLUME_JSON"
+  fail "data volume mismatch: expected emptyDir, got $GW_DATA_VOLUME_JSON"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade with the chart defaults — gateway is always emptyDir now"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade with the chart defaults"
   fi
 fi
 
-# Check for orphan gateway PVCs left behind by a prior pvc-mode install.
-ORPHAN_PVCS=$(kubectl get pvc -n "$NAMESPACE" \
-  -l app.kubernetes.io/name=octogee-gateway -o name 2>/dev/null || echo "")
-if [[ -n "$ORPHAN_PVCS" ]]; then
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    fail "Orphan gateway PVC: $p (gateway runs on emptyDir; this PVC is unmounted dead weight)"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} kubectl delete $p -n $NAMESPACE"
-    fi
-  done <<< "$ORPHAN_PVCS"
+GW_AGENTS_VOLUME_JSON=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
+  -o jsonpath='{.spec.template.spec.volumes[?(@.name=="agents")]}' 2>/dev/null || echo "")
+GW_AGENTS_CLAIM=$(echo "$GW_AGENTS_VOLUME_JSON" | python3 -c \
+  'import json,sys; d=json.load(sys.stdin); print(d.get("persistentVolumeClaim",{}).get("claimName",""))' \
+  2>/dev/null || echo "")
+
+if [[ -z "$GW_AGENTS_VOLUME_JSON" ]]; then
+  fail "octogee-gateway has no 'agents' volume (PVC for coach sessions missing — chart broken or stale)"
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+  fi
+elif [[ "$GW_AGENTS_CLAIM" != "octogee-gateway-agents" ]]; then
+  fail "agents volume mismatch: expected PVC octogee-gateway-agents, got '$GW_AGENTS_CLAIM'"
 else
-  pass "No orphan gateway PVCs"
+  pass "agents volume: PVC octogee-gateway-agents (durable, expected)"
+fi
+
+PVC_JSON=$(kubectl get pvc octogee-gateway-agents -n "$NAMESPACE" -o json 2>/dev/null || echo "")
+if [[ -z "$PVC_JSON" ]]; then
+  fail "PVC octogee-gateway-agents is missing — coach session history will be wiped on every pod restart"
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+  fi
+else
+  PVC_PHASE=$(echo "$PVC_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",{}).get("phase",""))' 2>/dev/null || echo "")
+  PVC_SIZE=$(echo "$PVC_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("spec",{}).get("resources",{}).get("requests",{}).get("storage",""))' 2>/dev/null || echo "")
+  PVC_SC=$(echo "$PVC_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("spec",{}).get("storageClassName",""))' 2>/dev/null || echo "")
+  if [[ "$PVC_PHASE" == "Bound" ]]; then
+    pass "PVC octogee-gateway-agents: Bound, $PVC_SIZE, $PVC_SC"
+  else
+    fail "PVC octogee-gateway-agents: phase=$PVC_PHASE (expected Bound)"
+  fi
 fi
 
 # ── 5b. GKE Ingresses ─────────────────────────────────────────────────────────
