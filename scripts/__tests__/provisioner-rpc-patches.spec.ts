@@ -37,7 +37,6 @@ function mkCtx(): ProvisioningContext {
     slug: SLUG,
     tier: "trial",
     ownerName: SLUG,
-    businessName: SLUG,
     customerDir: "/var/empty/customers/marie",
     today: "2026-04-16",
     username: SLUG,

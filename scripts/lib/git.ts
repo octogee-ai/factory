@@ -650,11 +650,17 @@ export async function syncAllWorkspaces(): Promise<void> {
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-    // If no remote, initialize
+    // No remote means the workspace dir wasn't created by the lifecycle
+    // contract (orphan from a half-failed provision, or a manual ops
+    // intervention). Cattle stay dumb: log and skip. The fleet
+    // controller's next restore tick will re-mount via the contract,
+    // which has the recovery branch that creates the Gitea repo AND
+    // writes provisioning.git.repoUrl in the same operation. Doing the
+    // recovery here would re-create the original bug class (Gitea
+    // mutation without the canonical Firestore write).
     const remoteCheck = gitExec(coachDir, "remote get-url origin");
     if (remoteCheck === null) {
-      log(`[git-sync] ${slug}: no remote — initializing Gitea repo`);
-      await initWorkspaceRepo(coachDir, slug);
+      log(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
       continue;
     }
 

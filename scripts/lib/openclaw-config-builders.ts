@@ -51,7 +51,6 @@ export function projectsNeedingClone(
 export interface CustomerAgentInput {
   uid: string;
   slug: string;
-  businessName: string;
   customerDir: string;
   agentDir: string;
   /** Per-customer coach identity. Sourced from `agents/{uid}` (Builder's
@@ -75,9 +74,12 @@ export function buildCustomerAgent(
   c: CustomerAgentInput,
 ): Record<string, unknown> {
   const agentId = `octogee-${c.slug}-coach`;
+  // Parenthetical is the workspace slug, intentionally — not a human "business
+  // name." It's the canonical identifier visible in OpenClaw's agent list and
+  // helps disambiguate when an operator has multiple Builders' agents loaded.
   return {
     id: agentId,
-    name: `${c.coach.name} (${c.businessName})`,
+    name: `${c.coach.name} (${c.slug})`,
     workspace: c.customerDir,
     agentDir: c.agentDir,
     model: c.coach.model,

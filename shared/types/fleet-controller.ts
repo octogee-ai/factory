@@ -117,7 +117,6 @@ export interface CustomerSnapshot {
   uid: string;
   slug: string;
   tier: string;
-  businessName: string;
   gatewayId: string;
   repoUrl: string;
   agentIds: string[];

@@ -4,7 +4,7 @@
  *   - Writes `gateways/{gatewayId}` heartbeat every GATEWAY_HEARTBEAT_INTERVAL_MS.
  *   - Starts an HTTPS-ready server on `FLEET_CONTROLLER_PORT` bound to 0.0.0.0
  *     so Cloud Tasks can push jobs in-cluster.
- *   - Composes the production `RestoreAdapter` by wrapping the real
+ *   - Composes the production `CustomerLifecycleAdapter` by wrapping the real
  *     git/blob-sync/apply-config-patch/rpc helpers.
  *
  * Always-on — greenfield, no feature flag. The provisioner calls
@@ -14,19 +14,12 @@
  */
 
 import express from "express";
-import * as fs from "fs";
-import * as path from "path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { Server } from "http";
 import {
   GATEWAY_HEARTBEAT_INTERVAL_MS,
   GATEWAYS_COLLECTION,
-  type CustomerSnapshot,
 } from "../../shared/types/fleet-controller.js";
-import { applyConfigPatch } from "./apply-config-patch.js";
-import { blobSyncForSlug } from "./blob-sync.js";
-import { AGENTS_DIR, CUSTOMERS_DIR } from "./config.js";
-import { CREW_IDENTITY } from "./crew.js";
 import { ActiveRestoreSet, createRestoreCustomerHandler, IdempotencyCache } from "./fleet-http.js";
 import {
   writeGatewayHeartbeat,
@@ -35,24 +28,11 @@ import {
   type HeartbeatSnapshot,
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
-import {
-  cloneProjectRepo,
-  cloneWorkspaceRepo,
-  createGiteaUser,
-  customerSshKeyPath,
-  generateCustomerSshKey,
-} from "./git.js";
-import {
-  buildCustomerAgent,
-  buildCustomerBindings,
-  buildMattermostAccounts,
-  fetchCoachIdentities,
-  fetchCoachTokens,
-  resolveCoachIdentity,
-} from "./openclaw-config-builders.js";
-import type { RestoreAdapter } from "./restore-one-customer.js";
+import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
+import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 
-// ── Production adapter ──────────────────────────────────────────────────────
+// ── Stub kept for back-compat with anything still importing the old name. ──
+// The lifecycle adapter is the single per-customer side-effect surface now.
 
 export interface BuildAdapterOptions {
   db: Firestore;
@@ -62,175 +42,12 @@ export interface BuildAdapterOptions {
 }
 
 /**
- * Compose the real `RestoreAdapter` from the existing script helpers. This
- * stays in one place so the seams between the orchestrator and the
- * filesystem / Firestore / RPC are explicit and greppable.
- *
- * Split out from `startFleetController` so tests can construct partial
- * adapters against a real db + mocked rpc, without needing to spin up the
- * full HTTP server.
+ * @deprecated Use `buildProductionLifecycleAdapter` from
+ * `./customer-lifecycle-prod-adapter.js`. Kept as a thin re-export so
+ * downstream callers can migrate at their own pace.
  */
-export function buildProductionAdapter(opts: BuildAdapterOptions): RestoreAdapter {
-  const { db, rpc, log, adminMmUserId } = opts;
-
-  return {
-    log,
-
-    hasWorkspaceGitDir: (slug) =>
-      fs.existsSync(path.join(CUSTOMERS_DIR, slug, ".git")),
-
-    cloneWorkspaceRepo: (slug, repoUrl) => cloneWorkspaceRepo(slug, repoUrl),
-
-    hasCustomerSshKey: (slug) => fs.existsSync(customerSshKeyPath(slug)),
-    generateCustomerSshKey: (slug) => generateCustomerSshKey(slug),
-    createGiteaUser: (slug, pubKey) => createGiteaUser(slug, pubKey),
-    persistGiteaToken: async (uid, username, token) => {
-      await db
-        .collection("users")
-        .doc(uid)
-        .collection("system")
-        .doc("config")
-        .set(
-          { gitea: { username, token } },
-          { merge: true },
-        );
-    },
-
-    blobSyncForSlug: (slug) => blobSyncForSlug(slug),
-
-    listProjectsNeedingClone: async (slug) => {
-      const projSnap = await db
-        .collection("workspaces")
-        .doc(slug)
-        .collection("projects")
-        .get();
-      const out: Array<{ projectSlug: string; giteaRepoName: string }> = [];
-      for (const doc of projSnap.docs) {
-        const data = doc.data();
-        const repoName: string | null = data.giteaRepoName ?? null;
-        const state: string | undefined = data.provisioningState;
-        if (!repoName) continue;
-        if (state !== undefined && state !== "active") continue;
-        if (fs.existsSync(
-          path.join(CUSTOMERS_DIR, slug, "projects", doc.id, ".git"),
-        )) continue;
-        out.push({ projectSlug: doc.id, giteaRepoName: repoName });
-      }
-      return out;
-    },
-    cloneProjectRepo: (customerSlug, projectSlug, giteaRepoName) =>
-      cloneProjectRepo(customerSlug, projectSlug, giteaRepoName),
-
-    applyCustomerConfigPatch: async (snapshot: CustomerSnapshot) => {
-      // Fetch coach identity + PAT for this one customer. Both helpers take
-      // arrays; we just pass [snapshot] to match their contract.
-      const [tokens, identities] = await Promise.all([
-        fetchCoachTokens(
-          { db: db as unknown as never, log },
-          [{ uid: snapshot.uid, slug: snapshot.slug }],
-        ),
-        fetchCoachIdentities(
-          { db: db as unknown as never, log },
-          [{ uid: snapshot.uid, slug: snapshot.slug }],
-        ),
-      ]);
-      if (!tokens.has(snapshot.uid)) {
-        throw new Error(
-          `[restore:${snapshot.slug}] no coach PAT in Firestore — re-provision to heal`,
-        );
-      }
-
-      const accountsMap = buildMattermostAccounts(
-        [snapshot],
-        tokens,
-        adminMmUserId,
-        (m) => log(m),
-      );
-      const accountId = `${snapshot.slug}-coach`;
-      const accountEntry = accountsMap[accountId];
-      if (!accountEntry) {
-        throw new Error(
-          `[restore:${snapshot.slug}] buildMattermostAccounts refused to emit account (likely empty allowlist)`,
-        );
-      }
-
-      const identity = resolveCoachIdentity(identities.get(snapshot.uid), {
-        name: CREW_IDENTITY.coach.name,
-        emoji: CREW_IDENTITY.coach.emoji,
-      });
-      const agentEntry = buildCustomerAgent({
-        uid: snapshot.uid,
-        slug: snapshot.slug,
-        businessName: snapshot.businessName,
-        customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
-        agentDir: path.join(AGENTS_DIR, `octogee-${snapshot.slug}-coach`, "agent"),
-        coach: {
-          name: identity.name,
-          emoji: identity.emoji,
-          model: CREW_IDENTITY.coach.model,
-        },
-      });
-      const bindings = buildCustomerBindings([
-        { slug: snapshot.slug, channels: snapshot.channels },
-      ]);
-      const agentId = `octogee-${snapshot.slug}-coach`;
-
-      const startedAt = Date.now();
-      await applyConfigPatch(
-        {
-          buildPatch: (current) => {
-            const currentCfg = current as {
-              bindings?: Array<{ agentId?: unknown }>;
-            };
-            const existingBindings = Array.isArray(currentCfg.bindings)
-              ? currentCfg.bindings.filter(
-                  (b) => (b as { agentId?: string }).agentId !== agentId,
-                )
-              : [];
-            return {
-              agents: { list: [agentEntry] },
-              bindings: [...existingBindings, ...bindings],
-              channels: {
-                mattermost: {
-                  accounts: { [accountId]: accountEntry },
-                },
-              },
-            };
-          },
-          logPrefix: `[restore:${snapshot.slug}]`,
-        },
-        { rpc },
-      );
-      return { elapsedMs: Date.now() - startedAt };
-    },
-
-    waitForAccountHealthy: async ({ slug, timeoutMs }) => {
-      const accountId = `${slug}-coach`;
-      const deadline = Date.now() + timeoutMs;
-      let attempt = 0;
-      while (Date.now() < deadline) {
-        attempt++;
-        try {
-          const snapshot = (await rpc.channelsStatus()) as {
-            channelAccounts?: Record<string, Record<string, unknown>>;
-          };
-          const mmAccounts = snapshot.channelAccounts?.mattermost ?? {};
-          const entry = mmAccounts[accountId] as
-            | { running?: boolean; connected?: boolean }
-            | undefined;
-          if (entry?.running === true && entry?.connected === true) {
-            return true;
-          }
-        } catch {
-          // Swallow; retry after backoff.
-        }
-        await new Promise<void>((r) =>
-          setTimeout(r, Math.min(2_000 * attempt, 5_000)),
-        );
-      }
-      return false;
-    },
-  };
+export function buildProductionAdapter(opts: BuildAdapterOptions): CustomerLifecycleAdapter {
+  return buildProductionLifecycleAdapter(opts);
 }
 
 // ── Heartbeat + HTTP server ─────────────────────────────────────────────────
@@ -455,22 +272,20 @@ export async function startFleetController(
       gatewayId: opts.gatewayId,
       stateDeps,
       activeRestores,
+      // The contract exposes onMounted/onUnmounted hooks for exactly this
+      // local heartbeat-state bookkeeping. Hooks are called only after the
+      // canonical mutation lands, so a failed config patch leaves
+      // mountedCustomers untouched — controller doesn't see a failed
+      // restore as mounted.
       adapter: {
         ...adapter,
-        // Wrap applyCustomerConfigPatch to track inFlight + mounted state
-        // locally so heartbeats stay accurate. The RPC is the only write
-        // path since 2026.4.24 — any thrown error aborts this wrapper
-        // without touching mountedCustomers, which is what we want (the
-        // controller shouldn't see a failed restore as mounted).
-        applyCustomerConfigPatch: async (snapshot) => {
-          const result = await adapter.applyCustomerConfigPatch(snapshot);
-          if (!runtime.mountedCustomers.includes(snapshot.slug)) {
-            runtime.mountedCustomers = [
-              ...runtime.mountedCustomers,
-              snapshot.slug,
-            ];
+        onMounted: (slug) => {
+          if (!runtime.mountedCustomers.includes(slug)) {
+            runtime.mountedCustomers = [...runtime.mountedCustomers, slug];
           }
-          return result;
+        },
+        onUnmounted: (slug) => {
+          runtime.mountedCustomers = runtime.mountedCustomers.filter((s) => s !== slug);
         },
       },
       cache,

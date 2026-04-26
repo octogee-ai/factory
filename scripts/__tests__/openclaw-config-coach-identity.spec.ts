@@ -32,7 +32,6 @@ function mkCustomer(overrides: Partial<CustomerAgentInput> = {}): CustomerAgentI
   return {
     uid: "uid-chris",
     slug: "chris-builds-a3f2",
-    businessName: "Chris's Workshop",
     customerDir: "/home/node/.openclaw/customers/chris-builds-a3f2",
     agentDir: "/home/node/.openclaw/agents/octogee-chris-builds-a3f2-coach/agent",
     coach: DEFAULT_COACH,
@@ -98,7 +97,7 @@ describe("buildCustomerAgent", () => {
     const agent = buildCustomerAgent(mkCustomer());
     expect(agent).toMatchObject({
       id: "octogee-chris-builds-a3f2-coach",
-      name: "Octo (Chris's Workshop)",
+      name: "Octo (chris-builds-a3f2)",
       workspace: "/home/node/.openclaw/customers/chris-builds-a3f2",
       agentDir: "/home/node/.openclaw/agents/octogee-chris-builds-a3f2-coach/agent",
       model: "anthropic/claude-sonnet-4-6",
@@ -107,11 +106,11 @@ describe("buildCustomerAgent", () => {
     });
   });
 
-  it("threads the customer's business name into the agent display name", () => {
+  it("threads the customer's slug into the agent display name", () => {
     const agent = buildCustomerAgent(
-      mkCustomer({ businessName: "Chris's Workshop", coach: { ...DEFAULT_COACH, name: "Scout" } }),
+      mkCustomer({ slug: "chris-shop", coach: { ...DEFAULT_COACH, name: "Scout" } }),
     );
-    expect(agent.name).toBe("Scout (Chris's Workshop)");
+    expect(agent.name).toBe("Scout (chris-shop)");
   });
 });
 
@@ -241,7 +240,6 @@ describe("fetchCoachIdentities", () => {
       return buildCustomerAgent({
         uid: c.uid,
         slug: c.slug,
-        businessName: `Biz ${c.slug}`,
         customerDir: `/tmp/${c.slug}`,
         agentDir: `/tmp/${c.slug}/agent`,
         coach: {

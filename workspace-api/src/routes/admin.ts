@@ -75,7 +75,7 @@ router.get("/dashboard", async (req: Request, res: Response, next: NextFunction)
 
       return {
         uid: doc.id,
-        businessName: d.businessName ?? d.email?.split("@")[0] ?? "(unknown)",
+        displayName: d.displayName ?? d.username ?? d.email?.split("@")[0] ?? "(unknown)",
         email: d.email ?? "",
         tier, subscriptionStatus,
         windowTokensUsed, windowSize, available,
@@ -165,8 +165,8 @@ router.post("/customer-detail", async (req: Request, res: Response, next: NextFu
     const csiData = csiSnap.exists ? csiSnap.data() as CSIDocument : null;
 
     res.json({
-      uid, email: d.email || "", displayName: d.username || "",
-      businessName: d.businessName || "", workspaceSlug: d.username || "", tier,
+      uid, email: d.email || "", displayName: d.displayName ?? d.username ?? d.email?.split("@")[0] ?? "(unknown)",
+      workspaceSlug: d.username || "", tier,
       subscription: {
         status: subscription.status || "none",
         stripeCustomerId: subscription.stripeCustomerId || null,
@@ -335,7 +335,7 @@ router.post("/workspace-usage", async (req: Request, res: Response, next: NextFu
 
         return {
           workspaceId:   slug,
-          businessName:  ws.data.businessName || userData.businessName || "Workspace",
+          displayName:   userData.displayName || userData.username || slug,
           summary: {
             totalTokens:       Number(summary.totalTokens) || 0,
             totalCostUsd:      Number(summary.totalCostUsd) || 0,
