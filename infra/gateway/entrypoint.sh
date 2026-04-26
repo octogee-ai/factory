@@ -219,9 +219,20 @@ fi
 
 # ── Helper: wait until no OpenClaw gateway process is running. ──────────────
 # Uses a /proc cmdline scan so we don't depend on procps (pgrep) — not
-# installed in node:22-slim. Matches any process whose command line
-# contains "openclaw gateway run", which is the server binary and not CLI
-# one-shots like `openclaw secrets reload`.
+# installed in node:22-slim. Matches two cmdline shapes the OpenClaw
+# server binary can take:
+#   1. "openclaw gateway run" — the literal entrypoint invocation, used by
+#      pre-2026.4.24 builds that didn't rename their process title.
+#   2. "openclaw-gateway" — set by `process.title = 'openclaw-gateway'` in
+#      OpenClaw v2026.4.24+. After SIGUSR1 self-respawn, the successor
+#      child ALWAYS appears with this title; matching only (1) misses it
+#      and the supervisor races by spawning a second runtime alongside
+#      OpenClaw's own child (observed 2026-04-26 in test after #707 bumped
+#      the base image — two processes fighting for port 18789, plugin
+#      extraction ENOTEMPTY, MM bot identity, PVC writes).
+# Neither pattern matches CLI one-shots like `openclaw secrets reload`,
+# which keep their literal subcommand in argv and never rename to
+# "openclaw-gateway".
 wait_for_gateway_exit() {
   while true; do
     running=""
@@ -229,7 +240,7 @@ wait_for_gateway_exit() {
       [ -r "$d/cmdline" ] || continue
       cmdline=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
       case "$cmdline" in
-        *"openclaw gateway run"*)
+        *"openclaw gateway run"*|*"openclaw-gateway"*)
           running="${d##*/}"
           break
           ;;
