@@ -100,6 +100,12 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     cloneWorkspaceRepo: async (_slug, _url) => {
       record("cloneWorkspaceRepo");
       if (state.cloneShouldFail) return false;
+      // Mirror real `git clone` semantics: refuses to land into a
+      // non-empty directory. The orchestrator must NOT pre-create the
+      // customer dir tree before the clone branch runs. (Original P0:
+      // pre-create looped restore on every cattle-pod restart.)
+      if (state.disk.customerDir) return false;
+      state.disk.customerDir = true;
       state.disk.workspaceGitDir = true;
       state.disk.gitRemote = true;
       return true;
@@ -326,6 +332,24 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
     await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
       /workspace clone from .* failed/,
     );
+  });
+
+  it("does NOT pre-create the customer dir before the clone (would break git clone)", async () => {
+    // Regression for the P0 in PR #703: previously the orchestrator called
+    // ensureCustomerDirectories before deciding clone-vs-init. Pre-created
+    // subdirs (projects/, memory/, ideas/, .system/) made `git clone` fail
+    // with "destination path 'slug' already exists and is not an empty
+    // directory" on every cattle-gateway restart.
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const ensureIdx = state.calls.indexOf("ensureCustomerDirectories");
+    const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
+    expect(cloneIdx).toBeGreaterThan(-1);
+    // ensureCustomerDirectories may run after the clone (to fill in subdirs
+    // not in the repo), but never before.
+    if (ensureIdx !== -1) {
+      expect(ensureIdx).toBeGreaterThan(cloneIdx);
+    }
   });
 
   it("still applies the config patch and verifies (the whole point of the restore)", async () => {
