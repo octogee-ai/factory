@@ -19,7 +19,7 @@
  *   8. Create the three workspace channels (coach, general, admin — all
  *      type "P"). Admin channel EXCLUDES the builder (#170).
  *   9. Mint the builder's personal access token.
- *   10. Create the `{slug}-coach` MM user, join it to the three channels,
+ *   10. Create the `{slug}-coach` MM bot, join it to the three channels,
  *      mint a PAT for it, and post the onboarding greeting to the coach
  *      channel.
  *
@@ -382,26 +382,37 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ no personal token created — chat will be read-only until fixed`);
     }
 
-    // Create per-customer coach MM user. Handle = `{username}-coach` — hyphen
-    // matches the platform-wide identifier convention (octogee-bot,
+    // Create per-customer coach MM bot. Handle = `{username}-coach` — hyphen
+    // matches the platform-wide identifier convention (mac-gw-prod,
     // {slug}-general, etc.). Collision-safe because Builder usernames are
     // auto-derived slugs (`{noun}-{verb}-{hash4}`) and no Builder can pick
     // `{something}-coach` by hand — usernames come from the slugifier, not
-    // free-form input. Display (first_name + nickname) is "Octo" by default;
-    // user renames via Settings or milestone, sync'd by the workspace-api
-    // PATCH /api/agents/me endpoint + the gateway sweep.
+    // free-form input.
+    //
+    // Created as a Mattermost BOT (POST /bots, not POST /users) so the MM
+    // UI tags it with the BOT badge — the coach IS an agent, not a person,
+    // and the badge makes that honest. Mac (the gateway bot) follows the
+    // same pattern, see scripts/setup-mattermost.sh. Bots have an underlying
+    // user record so PATs, channel/team membership, and avatar upload all
+    // work via the same /users/{id}/* endpoints. The bot create response
+    // returns `{user_id, ...}` (not `{id, ...}`) — normalized below so
+    // downstream code can treat the result like a user object.
+    //
+    // Display name is "Octo" by default; renamed via Settings or milestone,
+    // synced by the workspace-api PATCH /api/agents/me endpoint + the
+    // gateway sweep, which both call PUT /bots/{id} with `display_name`.
     const coachUsername = `${slug}-coach`;
-    let coachMmUser = await mmApiCall("POST", "/users", {
-      email: `coach-${slug}@octogee.local`,
+    const createdBot = await mmApiCall("POST", "/bots", {
       username: coachUsername,
-      password: generatePassword(),
-      first_name: "Octo",
-      last_name: "",
-      nickname: "Octo",
+      display_name: "Octo",
+      description: `Coach for ${firstName || slug}`,
     });
+    let coachMmUser: any = createdBot?.user_id
+      ? { id: createdBot.user_id, ...createdBot }
+      : null;
     if (!coachMmUser) {
       coachMmUser = await mmApiCall("GET", `/users/username/${coachUsername}`);
-      if (coachMmUser) log(`[mattermost] coach user ${coachUsername} already exists, reusing`);
+      if (coachMmUser) log(`[mattermost] coach bot ${coachUsername} already exists, reusing`);
     }
 
     let coachMmUserId: string | null = null;
@@ -415,9 +426,7 @@ export async function provisionMattermostUser(
       });
       await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: coachMmUser.id });
       // Coach is a member of general so it can author posts there and
-      // surface as the canonical Octo in the Members panel (MM-COACH-IDENTITY
-      // D4 + M5). Under PR3 the shared octogee-bot is out of customer
-      // channels; the coach is the only bot-style identity the user sees.
+      // surface as Octo in the Members panel.
       if (generalChannelId) {
         await mmApiCall("POST", `/channels/${generalChannelId}/members`, { user_id: coachMmUser.id });
       }
@@ -425,7 +434,7 @@ export async function provisionMattermostUser(
       if (adminChannelId) {
         await mmApiCall("POST", `/channels/${adminChannelId}/members`, { user_id: coachMmUser.id });
       }
-      log(`[mattermost] coach user created: ${coachUsername} (${coachMmUser.id})`);
+      log(`[mattermost] coach bot created: ${coachUsername} (${coachMmUser.id})`);
 
       // Mint a PAT for the coach and persist to `users/{uid}/secrets/coachMattermost`.
       // OpenClaw authenticates per-workspace using this token (PR2) so that
@@ -450,7 +459,7 @@ export async function provisionMattermostUser(
         log(`[mattermost] ⚠ coach PAT creation failed — coach identity will fall back to octogee-bot until re-provisioned`);
       }
     } else {
-      log(`[mattermost] ⚠ failed to create coach user ${coachUsername} — coach identity will use defaults`);
+      log(`[mattermost] ⚠ failed to create coach bot ${coachUsername} — coach identity will use defaults`);
     }
 
     return {

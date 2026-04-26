@@ -14,16 +14,17 @@ import { mmApi } from "../lib/mattermost";
 
 const router = Router();
 
-// Coach MM patches only touch user-visible fields; the stable `{username}-coach`
-// MM username is never changed. Avatar imagery is owned by Mattermost (single
-// profile source); image uploads land via /api/profile/avatar which syncs
-// directly to MM's /users/{id}/image endpoint, not through this PATCH.
+// Coach MM patches only touch the bot's display name; the stable
+// `{username}-coach` MM username is never changed. Avatar imagery is owned
+// by Mattermost (single profile source); image uploads land via
+// /api/profile/avatar which syncs directly to MM's /users/{id}/image
+// endpoint (works for bots too), not through this PATCH.
 const ALLOWED_COACH_PATCH_FIELDS = ["name", "persona"] as const;
 type CoachPatchField = (typeof ALLOWED_COACH_PATCH_FIELDS)[number];
 
 // ── PATCH /me — update the caller's agent (coach) identity ────────────────
 // Settings UI writes here. Updates agents/{uid} and patches the coach MM
-// user's nickname + first_name when `name` changes.
+// bot's display_name when `name` changes.
 
 router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -51,15 +52,16 @@ router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextF
       { merge: true },
     );
 
-    // Sync display fields to MM when `name` changed. MM username stays stable.
+    // Sync display name to MM when `name` changed. MM username stays stable.
+    // Coach is a MM bot — uses PUT /bots/{id} with `display_name`, not the
+    // user `/users/{id}/patch` endpoint with first_name/nickname.
     if (typeof patch.name === "string" && patch.name) {
       try {
         const agent = await readAgent(uid);
         const coachMmUserId = agent?.mattermost.userId;
         if (coachMmUserId) {
-          await mmApi(`/users/${coachMmUserId}/patch`, "PUT", {
-            first_name: patch.name,
-            nickname: patch.name,
+          await mmApi(`/bots/${coachMmUserId}`, "PUT", {
+            display_name: patch.name,
           });
         }
       } catch (err) {
