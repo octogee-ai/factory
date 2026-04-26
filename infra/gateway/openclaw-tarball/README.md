@@ -33,20 +33,51 @@ artifact — bump the substitution to roll forward.
 ## Rebuilding + uploading a new tarball
 
 From the OpenClaw fork checkout (`~/workspace/openclaw/openclaw`,
-branch `octogee/gateway-scaling-patches`):
+typically on a branch named `octogee/gateway-scaling-patches[-vX.Y.Z]`):
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm run build:docker
-pnpm pack --pack-destination /tmp/openclaw-fork
-# record the short SHA
-SHA=$(git rev-parse --short HEAD)
+pnpm build                           # full build (not build:docker — prepack needs the full dist tree)
+npm pack --pack-destination /tmp/openclaw-fork --ignore-scripts
+SHA=$(git rev-parse --short=8 HEAD)
 gcloud storage cp /tmp/openclaw-fork/openclaw-*.tgz \
   gs://octogee-openclaw-fork/openclaw-fork-${SHA}.tgz --project=octogee
 ```
 
 Then bump `_OPENCLAW_FORK_SHA` in `cloudbuild-base.yaml` to `$SHA` and
 submit the base image build.
+
+### Why `npm pack`, not `pnpm pack`
+
+Through v2026.4.20 the RUNBOOK said `pnpm pack`. From v2026.4.24 onward
+the OpenClaw `package.json` `exports` map has 309 entries and `dist/`
+holds ~108k files. pnpm pack's file-inclusion check is roughly
+`O(files × exports × glob_negations)` and hits catastrophic regex
+backtracking — the process pegs 100% CPU with frozen memory and
+identical stack across samples, never completing.
+
+`npm pack` uses `npm-packlist` (a different algorithm) and finishes in
+~5 seconds with a structurally identical tarball (~13MB, 7730 files).
+This is a one-package pack (no workspace deps), so the artifacts are
+file-content identical — the `package.json` `files` declaration is
+what both tools honor.
+
+`--ignore-scripts` skips the `prepack` lifecycle hook
+(`scripts/openclaw-prepack.ts`), which has the same regex-walk
+problem in `writeDistInventory`. The full `pnpm build` above produces
+all the dist artifacts prepack would have produced — the only thing
+prepack adds is `dist/postinstall-inventory.json`, which the gateway
+base image doesn't consume.
+
+### Why `pnpm build`, not `pnpm run build:docker`
+
+`build:docker` is a partial build (`tsdown` + a few helpers) that's
+faster but doesn't build every extension. If the resulting `dist/`
+tree is missing files referenced by `npm pack`'s file walk you'll get
+`ENOENT: lstat 'dist/extensions/<name>/index.js'` and the pack
+aborts. The full `pnpm build` runs the complete build-all script,
+including every extension's tsdown step. It's slower but it's the
+only build that produces a packable dist tree.
 
 ## Local docker build
 
