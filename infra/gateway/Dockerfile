@@ -19,10 +19,6 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Shared Astro deps (all customer sites symlink to this) ──────────────────
-COPY --chown=node:node templates/general/package.json /opt/octogee-site-deps/package.json
-RUN cd /opt/octogee-site-deps && npm install --production && chown -R node:node /opt/octogee-site-deps
-
 # ── Octogee provisioner + site API ──────────────────────────────────────────
 COPY --chown=node:node scripts/package.json scripts/package-lock.json* /octogee/scripts/
 WORKDIR /octogee/scripts
