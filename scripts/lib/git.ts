@@ -412,7 +412,19 @@ export async function cloneProjectRepo(
 
 // ── Workspace Repo ──────────────────────────────────────────────────────────────
 
-/** Initialize a git repo for a customer workspace and push to Gitea. */
+/**
+ * Initialize a customer workspace repo + create the empty Gitea repo.
+ *
+ * Does NOT commit or push. The first commit happens later — either when
+ * the agent finishes the BOOTSTRAP.md ritual and explicitly commits, or
+ * (more reliably) when the next git-sync tick fires after BOOTSTRAP.md
+ * has been deleted. git-sync skips workspaces with BOOTSTRAP.md present
+ * (see syncAllWorkspaces below), so the first commit captures the
+ * bootstrapped state — not the template defaults — for a clean history.
+ *
+ * Returns the canonical Gitea URL for the repo so the caller can
+ * persist `provisioning.git.repoUrl` to Firestore in the same step.
+ */
 export async function initWorkspaceRepo(coachDir: string, slug: string): Promise<string | null> {
   if (!GIT_API_TOKEN) {
     log(`[git] Skipping repo init for ${slug} — GIT_API_TOKEN not set`);
@@ -420,10 +432,9 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   }
 
   const repoName = `${slug}-workspace`;
-  const sshKey = customerSshKeyPath(slug);
-  const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-  // Write .gitignore
+  // Write .gitignore so the agent's first `git add -A` only stages the
+  // user-visible files, not the provisioner-managed system files.
   const gitignore = [
     "# Octogee workspace — track user-visible files, exclude system/build artifacts",
     "",
@@ -459,15 +470,15 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
 
   log(`[git] Initializing repo in ${coachDir}`);
   const initResult = gitExec(coachDir, "init -b main");
-  log(`[git] init: ${initResult ?? "FAILED"}`);
+  if (initResult === null) {
+    log(`⚠ [git] git init failed for ${slug} — aborting repo setup`);
+    return null;
+  }
+  log(`[git] init: ${initResult}`);
   gitExec(coachDir, `config user.email "${slug}@octogee.com"`);
   gitExec(coachDir, `config user.name "Octo (${slug})"`);
-  const addResult = gitExec(coachDir, "add -A");
-  log(`[git] add: ${addResult === "" ? "OK" : addResult ?? "FAILED"}`);
-  const commitResult = gitExec(coachDir, 'commit -m "initial: workspace provisioned"');
-  log(`[git] commit: ${commitResult?.substring(0, 80) ?? "FAILED"}`);
 
-  // Create Gitea repo (admin token)
+  // Create Gitea repo (admin token). 409 = already exists, idempotent OK.
   try {
     const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
       method: "POST",
@@ -493,21 +504,24 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   // Grant per-customer Gitea user access to the repo
   await grantRepoAccess(repoName, slug);
 
-  // Add remote + push (SSH with per-customer key)
+  // Add remote (SSH with per-customer key when one exists). NO push —
+  // git-sync handles the first commit + push once BOOTSTRAP.md is gone.
+  // Fail loud if remote add doesn't take (e.g. .git was clobbered, disk
+  // full, permissions). Without this guard the contract would persist
+  // `provisioning.git.repoUrl` to Firestore and the workspace would
+  // silently never sync — same class of bug as the git-sync recovery
+  // shadow path that motivated the lifecycle refactor.
   const originUrl = sshRemoteUrl(repoName);
   const remoteResult = gitExec(coachDir, `remote add origin ${originUrl}`);
-  log(`[git] remote add: ${remoteResult === "" ? "OK" : remoteResult ?? "FAILED"}`);
-  const pushResult = gitExec(coachDir, "push -u origin main", keyArg);
-  log(`[git] push: ${pushResult !== null ? "OK" : "FAILED"}`);
-
-  if (pushResult === null) {
-    log(`⚠ [git] Failed to push initial commit for ${slug}`);
+  if (remoteResult === null) {
+    log(`⚠ [git] remote add failed for ${slug} — aborting (would leak orphan Firestore repoUrl)`);
     return null;
   }
+  log(`[git] remote add: ${remoteResult === "" ? "OK" : remoteResult}`);
 
   const gitHost = new URL(GIT_API_URL).origin;
   const repoUrlDisplay = `${gitHost}/${GIT_ORG}/${repoName}`;
-  log(`[git] ✅ Workspace repo created: ${repoUrlDisplay}`);
+  log(`[git] ✅ Workspace repo skeleton ready (commit deferred until bootstrap completes): ${repoUrlDisplay}`);
   return repoUrlDisplay;
 }
 
@@ -647,6 +661,21 @@ export async function syncAllWorkspaces(): Promise<void> {
     const gitDir = path.join(coachDir, ".git");
     if (!fs.existsSync(gitDir)) continue;
 
+    // Bootstrap gate. Until the agent finishes the BOOTSTRAP.md ritual
+    // and deletes the file, the workspace is "draft" — local edits to
+    // SOUL/USER/MEMORY do not get pushed to Gitea. A pod restart at
+    // this point intentionally re-clones the initial state and re-runs
+    // bootstrap from scratch, rather than persisting a half-finished
+    // identity. The strengthened BOOTSTRAP.md / AGENTS.md prompts give
+    // the agent a concrete reason to delete the file ("until you do,
+    // your work doesn't survive a restart"). See AGENTS.md "First Run".
+    if (fs.existsSync(path.join(coachDir, "BOOTSTRAP.md"))) {
+      log(
+        `[git-sync] ${slug}: BOOTSTRAP.md present — skipping (workspace persists once bootstrap completes)`,
+      );
+      continue;
+    }
+
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
@@ -678,7 +707,14 @@ export async function syncAllWorkspaces(): Promise<void> {
       committed = gitExec(coachDir, `commit -m "auto: ${new Date().toISOString()}"`) !== null;
     }
 
-    gitExec(coachDir, "pull --rebase origin main", keyArg);
+    // Skip pull when origin has no `main` branch yet — i.e. this is the
+    // first sync after BOOTSTRAP.md was deleted, before the initial
+    // push lands. Without the guard `pull --rebase` fails with "fatal:
+    // couldn't find remote ref main" on every first-bootstrap commit.
+    const remoteMain = gitExec(coachDir, "ls-remote --heads origin main", keyArg);
+    if (remoteMain) {
+      gitExec(coachDir, "pull --rebase origin main", keyArg);
+    }
 
     if (committed) {
       const pushResult = gitExec(coachDir, "push origin main", keyArg);

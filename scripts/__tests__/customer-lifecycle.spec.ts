@@ -34,6 +34,14 @@ interface DiskState {
   sshKey: boolean;
   templatesWritten: boolean;
   customerConfigWritten: boolean;
+  /**
+   * Mirrors `git rev-parse --verify HEAD` — true when the repo has at
+   * least one commit. Used by the contract's empty-Gitea-clone branch
+   * to decide whether to re-write templates after a mid-bootstrap
+   * restore. Must be a git-level check, not a file-presence check
+   * (system files like AGENTS.md are gitignored and never in Gitea).
+   */
+  repoHasCommits: boolean;
 }
 
 interface MockState {
@@ -44,6 +52,13 @@ interface MockState {
   /** Firestore field writes captured for assertions. */
   writes: Array<{ field: string; value: unknown }>;
   cloneShouldFail: boolean;
+  /**
+   * Simulates `git clone` of an empty Gitea repo: clone "succeeds" but
+   * leaves no working tree files (no AGENTS.md). Mirrors the
+   * mid-bootstrap restore case where provision time created the Gitea
+   * repo without pushing the first commit.
+   */
+  cloneSimulatesEmptyRepo: boolean;
   initShouldFail: boolean;
   giteaRegisterShouldFail: boolean;
   blobSyncShouldFail: boolean;
@@ -77,6 +92,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     hasCustomerDir: () => state.disk.customerDir,
     hasWorkspaceGitDir: () => state.disk.workspaceGitDir,
     hasGitRemote: () => state.disk.gitRemote,
+    repoHasCommits: () => state.disk.repoHasCommits,
     ensureCustomerDirectories: () => {
       record("ensureCustomerDirectories");
       state.disk.customerDir = true;
@@ -84,6 +100,9 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     writeCustomerTemplateFiles: async () => {
       record("writeCustomerTemplateFiles");
       state.disk.templatesWritten = true;
+      // writeCustomerTemplateFiles itself doesn't create commits — only
+      // a successful subsequent commit/push (or clone of a populated
+      // repo) flips repoHasCommits.
       return { dataApiKey: "test-data-api-key" };
     },
     writeCustomerConfig: () => {
@@ -108,6 +127,11 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       state.disk.customerDir = true;
       state.disk.workspaceGitDir = true;
       state.disk.gitRemote = true;
+      // Empty-repo clone has no commits. Otherwise the clone delivered
+      // a populated history (i.e. agent finished bootstrap + pushed).
+      if (!state.cloneSimulatesEmptyRepo) {
+        state.disk.repoHasCommits = true;
+      }
       return true;
     },
     initWorkspaceRepoFromExistingDir: async () => {
@@ -206,6 +230,7 @@ function emptyDisk(): DiskState {
     sshKey: false,
     templatesWritten: false,
     customerConfigWritten: false,
+    repoHasCommits: false,
   };
 }
 
@@ -216,6 +241,7 @@ function makeState(snapshot: UserSnapshot | null, disk: DiskState): MockState {
     calls: [],
     writes: [],
     cloneShouldFail: false,
+    cloneSimulatesEmptyRepo: false,
     initShouldFail: false,
     giteaRegisterShouldFail: false,
     blobSyncShouldFail: false,
@@ -406,6 +432,61 @@ describe("addCustomerToGateway — recovery from orphan dir (the bug class)", ()
   });
 });
 
+describe("addCustomerToGateway — empty-Gitea restore (mid-bootstrap pod loss)", () => {
+  it("re-writes templates when the cloned repo has no working tree", async () => {
+    // Mid-bootstrap restore: provision created the Gitea repo + wrote
+    // repoUrl to Firestore but never pushed (the agent hadn't deleted
+    // BOOTSTRAP.md yet). Pod cycles, restore enters the clone branch,
+    // clone "succeeds" with an empty working tree. Without the
+    // template-restore the agent wakes up with no AGENTS.md to read.
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      emptyDisk(),
+    );
+    state.cloneSimulatesEmptyRepo = true;
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    // Both clone AND write-templates fire.
+    expect(result.steps).toContain("clone-workspace-repo");
+    expect(result.steps).toContain("write-templates");
+    // Order: clone before write-templates (we only know the repo is
+    // empty after the clone returns).
+    const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
+    const writeIdx = state.calls.indexOf("writeCustomerTemplateFiles");
+    expect(writeIdx).toBeGreaterThan(cloneIdx);
+  });
+
+  it("does NOT re-write templates when the clone delivers a populated working tree", async () => {
+    // Normal restore (post-bootstrap completion + first push): the
+    // clone has AGENTS.md + everything. Re-writing templates would
+    // clobber the customer's actual identity files.
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      emptyDisk(),
+    );
+    // cloneSimulatesEmptyRepo defaults false → AGENTS.md lands via clone.
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).toContain("clone-workspace-repo");
+    expect(result.steps).not.toContain("write-templates");
+    expect(state.calls).not.toContain("writeCustomerTemplateFiles");
+  });
+});
+
 describe("addCustomerToGateway — idempotent re-add", () => {
   it("is a near-no-op on a fully-mounted customer (only patch + verify fire)", async () => {
     const state = makeState(
@@ -423,6 +504,7 @@ describe("addCustomerToGateway — idempotent re-add", () => {
         sshKey: true,
         templatesWritten: true,
         customerConfigWritten: true,
+        repoHasCommits: true,
       },
     );
 
@@ -547,6 +629,7 @@ describe("removeCustomerFromGateway", () => {
         gitRemote: true,
         sshKey: true,
         templatesWritten: true,
+        repoHasCommits: true,
         customerConfigWritten: true,
       },
     );
@@ -589,6 +672,7 @@ describe("unmount + re-add round trip", () => {
         workspaceGitDir: true,
         gitRemote: true,
         sshKey: true,
+        repoHasCommits: true,
         templatesWritten: true,
         customerConfigWritten: true,
       },
