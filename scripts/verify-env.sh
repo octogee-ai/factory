@@ -655,26 +655,35 @@ else
 fi
 
 # ── 8. Chat Proxy ─────────────────────────────────────────────────────────────
+# chat-proxy runs as a sidecar of the octogee-gateway pod (loopback to gateway
+# is required for OpenClaw silent device pairing). The chat-proxy Service +
+# Ingress still exist as standalone resources, just re-pointed at the gateway
+# pod selector. See helm/octogee/charts/gateway/values.yaml for rationale.
 set_section infra
 header "8. chat-proxy"
-CHAT_DEPLOY_READY=$(kubectl get deployment chat-proxy -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-CHAT_IMAGE=$(kubectl get deployment chat-proxy -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+GATEWAY_READY=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+CHAT_IMAGE=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].image}' 2>/dev/null || echo "unknown")
 CHAT_ENDPOINTS=$(kubectl get endpoints chat-proxy -n "$NAMESPACE" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || echo "")
 
-if [[ "${CHAT_DEPLOY_READY:-0}" -ge 1 ]]; then
-  pass "chat-proxy deployment ready (image: $CHAT_IMAGE)"
+if [[ "${GATEWAY_READY:-0}" -ge 1 && -n "$CHAT_IMAGE" && "$CHAT_IMAGE" != "unknown" ]]; then
+  pass "chat-proxy sidecar ready in octogee-gateway pod (image: $CHAT_IMAGE)"
   status "chat-proxy service has endpoints" "chat-proxy service has no ready endpoints" "$CHAT_ENDPOINTS"
+elif [[ -z "$CHAT_IMAGE" || "$CHAT_IMAGE" == "unknown" ]]; then
+  fail "chat-proxy sidecar not found in octogee-gateway deployment"
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+  fi
 else
-  fail "chat-proxy deployment not ready (readyReplicas=${CHAT_DEPLOY_READY:-0})"
+  fail "octogee-gateway deployment not ready (readyReplicas=${GATEWAY_READY:-0}) — chat-proxy sidecar unavailable"
   if $FIX; then
     echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 
-# Derive chat-proxy health URL from Ingress host + readinessProbe path
+# Derive chat-proxy health URL from Ingress host + sidecar readinessProbe path
 CHAT_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
-CHAT_HEALTH_PATH=$(kubectl get deployment chat-proxy -n "$NAMESPACE" \
-  -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
+CHAT_HEALTH_PATH=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
 if [[ -n "$CHAT_HOST" ]]; then
   CHAT_HEALTH_URL="https://${CHAT_HOST}${CHAT_HEALTH_PATH}"
   CHAT_HEALTH_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$CHAT_HEALTH_URL" 2>/dev/null || echo "000")
@@ -683,14 +692,14 @@ if [[ -n "$CHAT_HOST" ]]; then
   else
     warn "$CHAT_HEALTH_URL → HTTP $CHAT_HEALTH_CODE"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/chat-proxy --since=30m | tail -100"
+      echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/octogee-gateway -c chat-proxy --since=30m | tail -100"
     fi
   fi
 fi
 
 set_section bootstrap
-LEGACY_MM_TEAM=$(kubectl get deployment chat-proxy -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MM_TEAM_ID")].value}' 2>/dev/null || echo "")
-MM_COMMUNITY_TEAM=$(kubectl get deployment chat-proxy -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MM_COMMUNITY_TEAM_ID")].value}' 2>/dev/null || echo "")
+LEGACY_MM_TEAM=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_TEAM_ID")].value}' 2>/dev/null || echo "")
+MM_COMMUNITY_TEAM=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_COMMUNITY_TEAM_ID")].value}' 2>/dev/null || echo "")
 if [[ -n "$LEGACY_MM_TEAM" ]]; then
   warn "chat-proxy still carries dead MM_TEAM_ID env config. Remove it; MM_COMMUNITY_TEAM_ID is the only valid team env now."
 fi
