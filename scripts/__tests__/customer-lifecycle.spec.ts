@@ -64,8 +64,10 @@ interface MockState {
   blobSyncShouldFail: boolean;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
-  greetingChannelId: string | undefined;
-  greetingPat: string | undefined;
+  /** When set, the most recent scheduleBootGreetingCron call's params. */
+  lastGreetingCronParams: unknown;
+  /** Forces the greeting-cron scheduler to throw when true. */
+  greetingCronShouldFail: boolean;
 }
 
 function makeAdapter(state: MockState): CustomerLifecycleAdapter {
@@ -171,14 +173,18 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       record("provisionMattermostUser");
       const update: MmUpdate = {
         "mattermost.userId": "mm-user-123",
-        "mattermost.channelId": state.greetingChannelId ?? "channel-abc",
-        _coachPersonalToken: state.greetingPat ?? "coach-pat",
+        "mattermost.channelId": "channel-abc",
+        _coachPersonalToken: "coach-pat",
       };
       return update;
     },
-    postOnboardingGreeting: async () => {
-      record("postOnboardingGreeting");
-      return { postId: "post-xyz" };
+    scheduleBootGreetingCron: async (params) => {
+      record("scheduleBootGreetingCron");
+      state.lastGreetingCronParams = params;
+      if (state.greetingCronShouldFail) {
+        throw new Error("cron.add rejected: simulated failure");
+      }
+      return { jobId: "cron-job-abc" };
     },
 
     applyAddCustomerConfigPatch: async () => {
@@ -247,8 +253,8 @@ function makeState(snapshot: UserSnapshot | null, disk: DiskState): MockState {
     blobSyncShouldFail: false,
     healthy: true,
     pendingProjects: [],
-    greetingChannelId: undefined,
-    greetingPat: undefined,
+    lastGreetingCronParams: undefined,
+    greetingCronShouldFail: false,
   };
 }
 
@@ -264,7 +270,10 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.newCustomer).toBe(true);
-    expect(result.verified).toBe(true);
+    // verify-channel-ready runs BEFORE the greeting cron is scheduled — the
+    // cron's announce delivery only lands when the MM channel is up, so we
+    // gate the schedule on a real ready signal. Notify-ops is last so a
+    // half-finished mount doesn't ping #ops.
     expect(result.steps).toEqual([
       "claim-slot",
       "write-templates",
@@ -273,10 +282,10 @@ describe("addCustomerToGateway — first-time provisioning", () => {
       "blob-sync",
       "mattermost-provision",
       "config-patch",
-      "greeting",
+      "verify-channel-ready",
+      "schedule-greeting-cron",
       "mark-complete",
       "notify-ops",
-      "verify",
     ]);
   });
 
@@ -301,16 +310,64 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     expect(state.writes.find((w) => w.field === "provisioning.git.repoUrl")).toBeUndefined();
   });
 
-  it("posts the onboarding greeting once and persists the result", async () => {
-    state.greetingChannelId = "channel-greet";
-    state.greetingPat = "pat-greet";
+  it("schedules the boot-greeting cron once and persists the job id", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    expect(state.calls).toContain("postOnboardingGreeting");
+    expect(state.calls).toContain("scheduleBootGreetingCron");
+    expect(state.lastGreetingCronParams).toMatchObject({
+      slug: "test",
+      agentId: "octogee-test-coach",
+      accountId: "test-coach",
+    });
     const greetWrite = state.writes.find(
       (w) => w.field === "provisioning.openclaw.greeting",
     );
-    expect(greetWrite?.value).toMatchObject({ ok: true, postId: "post-xyz" });
+    expect(greetWrite?.value).toMatchObject({ ok: true, jobId: "cron-job-abc" });
+  });
+
+  it("only schedules the greeting cron AFTER the channel reports ready", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const verifyIdx = state.calls.indexOf("waitForAccountHealthy");
+    const cronIdx = state.calls.indexOf("scheduleBootGreetingCron");
+    expect(verifyIdx).toBeGreaterThan(-1);
+    expect(cronIdx).toBeGreaterThan(verifyIdx);
+  });
+
+  it("aborts loudly if the channel never reaches running+connected (no half-mounts)", async () => {
+    state.healthy = false;
+    await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
+      /didn't reach running\+connected/,
+    );
+    // Verify ran, cron schedule did NOT — fleet retries the whole mount.
+    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(state.calls).not.toContain("scheduleBootGreetingCron");
+    // mark-complete and notify-ops also did not happen — half-mounts shouldn't
+    // ping #ops or flip provisioning.openclaw.status to complete.
+    expect(state.writes.find((w) => w.field === "provisioning.openclaw.status" && w.value === "complete")).toBeUndefined();
+  });
+
+  it("throws on greeting cron failure so the fleet retries the whole mount", async () => {
+    // Cron-schedule is now FATAL: the frontend interstitial gates the
+    // user redirect on the agent having actually posted, so silently
+    // skipping the cron would deadlock the user on the loading screen.
+    // Fleet retry is the right recovery — verify-channel-ready will
+    // pass again on the next attempt and the cron schedule will be retried.
+    state.greetingCronShouldFail = true;
+    await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
+      /cron\.add rejected/,
+    );
+
+    // The failure reason was persisted before the throw so we can see it
+    // in Firestore even if the mount never completes.
+    const greetWrite = state.writes.find(
+      (w) => w.field === "provisioning.openclaw.greeting",
+    );
+    expect(greetWrite?.value).toMatchObject({ ok: false });
+    // Mark-complete + notify-ops did NOT fire — half-mounts mustn't ping
+    // #ops or flip provisioning status to complete.
+    expect(state.writes.find((w) => w.field === "provisioning.openclaw.status" && w.value === "complete")).toBeUndefined();
+    expect(state.calls).not.toContain("notifyOpsOfSignup");
   });
 
   it("notifies ops on first-time provision only", async () => {
@@ -345,11 +402,11 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
     expect(result.steps).not.toContain("write-templates");
   });
 
-  it("does NOT re-provision Mattermost or re-post the greeting", async () => {
+  it("does NOT re-provision Mattermost or re-schedule the greeting cron", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(state.calls).not.toContain("provisionMattermostUser");
-    expect(state.calls).not.toContain("postOnboardingGreeting");
+    expect(state.calls).not.toContain("scheduleBootGreetingCron");
     expect(state.calls).not.toContain("notifyOpsOfSignup");
   });
 
@@ -383,7 +440,7 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
 
     expect(state.calls).toContain("applyAddCustomerConfigPatch");
     expect(state.calls).toContain("waitForAccountHealthy");
-    expect(result.verified).toBe(true);
+    expect(result.steps).toContain("verify-channel-ready");
   });
 });
 
@@ -517,12 +574,12 @@ describe("addCustomerToGateway — idempotent re-add", () => {
     expect(result.steps).not.toContain("init-workspace-repo");
     expect(result.steps).not.toContain("ssh-key");
     expect(result.steps).not.toContain("mattermost-provision");
-    expect(result.steps).not.toContain("greeting");
+    expect(result.steps).not.toContain("schedule-greeting-cron");
     expect(result.steps).not.toContain("notify-ops");
     // Always-fire steps: blob sync (idempotent pull), config patch, verify.
     expect(result.steps).toContain("blob-sync");
     expect(result.steps).toContain("config-patch");
-    expect(result.steps).toContain("verify");
+    expect(result.steps).toContain("verify-channel-ready");
   });
 });
 
@@ -544,7 +601,7 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
     expect(state.calls).toContain("generateCustomerSshKey");
     expect(state.calls).toContain("createGiteaUser");
     // Non-fatal: completes despite the registration failure.
-    expect(result.verified).toBe(true);
+    expect(result.steps).toContain("verify-channel-ready");
     expect(state.writes.find((w) => w.field === "system/config.gitea")).toBeUndefined();
   });
 
@@ -576,7 +633,10 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
     expect(result.steps.filter((s) => s === "project-clone")).toHaveLength(2);
   });
 
-  it("warns but completes when verify times out", async () => {
+  it("throws when verify times out — restores must NOT silently succeed on a broken mount", async () => {
+    // Tightening from "warns but completes" to "throws": a restore that
+    // can't reach running+connected is a real failure (the user lands in
+    // an empty channel forever). Better to fail and let the fleet retry.
     const state = makeState(
       snap({
         status: "complete",
@@ -594,10 +654,11 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
     );
     state.healthy = false;
 
-    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
-
-    expect(result.verified).toBe(false);
-    // Mounted state still set (config patch landed).
+    await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
+      /didn't reach running\+connected/,
+    );
+    // The MM-config patch landed before the verify failed, so onMounted
+    // still fires (we want pod-local bookkeeping to track the patch).
     expect(state.calls).toContain("onMounted");
   });
 });
@@ -689,7 +750,7 @@ describe("unmount + re-add round trip", () => {
     expect(reAdd.steps).toContain("clone-workspace-repo");
     expect(reAdd.steps).not.toContain("init-workspace-repo");
     // No re-greeting / re-mm-provision / re-notify.
-    expect(reAdd.steps).not.toContain("greeting");
+    expect(reAdd.steps).not.toContain("schedule-greeting-cron");
     expect(reAdd.steps).not.toContain("mattermost-provision");
     expect(reAdd.steps).not.toContain("notify-ops");
   });

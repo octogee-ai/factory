@@ -264,6 +264,90 @@ describe("gateway-rpc", () => {
     });
   });
 
+  // ── cronAdd ───────────────────────────────────────────────────────────────
+
+  describe("cronAdd", () => {
+    it("calls `cron.add` with the job spec verbatim and returns the server payload", async () => {
+      let captured: unknown = "not-called";
+      server.setHandler("cron.add", (params) => {
+        captured = params;
+        return {
+          ok: true,
+          payload: {
+            id: "job-abc",
+            name: "test-job",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            enabled: true,
+            schedule: { kind: "at", at: "2030-01-01T00:00:00Z" },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "hi" },
+            state: {},
+          },
+        };
+      });
+
+      const job = {
+        name: "test-job",
+        agentId: "octogee-test-coach",
+        enabled: true,
+        deleteAfterRun: true,
+        schedule: { kind: "at" as const, at: "2030-01-01T00:00:00Z" },
+        sessionTarget: "isolated" as const,
+        wakeMode: "now" as const,
+        payload: { kind: "agentTurn" as const, message: "hi" },
+        delivery: {
+          mode: "announce" as const,
+          channel: "mattermost" as const,
+          accountId: "test-coach",
+          bestEffort: true,
+        },
+      };
+      const result = await client.cronAdd(job);
+
+      expect(captured).toEqual(job);
+      expect(result.id).toBe("job-abc");
+    });
+
+    it("throws GatewayRpcError('invalid-response') if the server returns a non-object payload", async () => {
+      server.setHandler("cron.add", () => ({ ok: true, payload: "boom" }));
+      await expect(
+        client.cronAdd({
+          name: "x",
+          enabled: true,
+          schedule: { kind: "at", at: "2030-01-01T00:00:00Z" },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "hi" },
+        }),
+      ).rejects.toMatchObject({
+        name: "GatewayRpcError",
+        code: "invalid-response",
+      });
+    });
+
+    it("surfaces server-side validation errors as 'rpc-error'", async () => {
+      server.setHandler("cron.add", () => ({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "invalid cron.add params: schedule.at must be ISO" },
+      }));
+      await expect(
+        client.cronAdd({
+          name: "x",
+          enabled: true,
+          schedule: { kind: "at", at: "bogus" },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "hi" },
+        }),
+      ).rejects.toMatchObject({
+        name: "GatewayRpcError",
+        code: "rpc-error",
+      });
+    });
+  });
+
   // ── isGatewayUp ───────────────────────────────────────────────────────────
 
   // ── secretsReload ─────────────────────────────────────────────────────────

@@ -171,11 +171,14 @@ export const JOB_TTL_MS = 10 * 60_000;
 
 /**
  * Budget for the gateway to verify a mounted account reached
- * `{running: true, connected: true}` via `channels.status` RPC. Soft — if
- * the budget runs out the gateway logs a warning but still acks the job as
- * done so the controller can move on.
+ * `{running: true, connected: true}` via `channels.status` RPC. The greeting
+ * cron is scheduled only after this verify passes, so the budget must cover
+ * the full cold-mount flow including any follow-up config patches that
+ * restart the MM channel mid-boot. Empirically the second restart finishes
+ * by ~25s on TEST so 120s is generous; a hard fail past this is the right
+ * signal that something is genuinely wrong with the mount.
  */
-export const VERIFY_ACCOUNT_TIMEOUT_MS = 30_000;
+export const VERIFY_ACCOUNT_TIMEOUT_MS = 120_000;
 
 /**
  * Cloud Tasks header name the controller uses to set an idempotency key.

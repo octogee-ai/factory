@@ -26,6 +26,7 @@ import sharingRoutes from "./routes/sharing";
 import projectRoutes from "./routes/projects";
 import entitiesRoutes from "./routes/entities";
 import profileRoutes from "./routes/profile";
+import onboardingRoutes from "./routes/onboarding";
 
 // Internal routes — reachable only via K8s DNS (ClusterIP), NOT via Ingress
 import agentRoutes from "./routes/agents";
@@ -128,6 +129,7 @@ app.use("/api/integrations", integrationRoutes);
 app.use("/api/discord", discordRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/profile", profileRoutes);
+app.use("/api/onboarding", onboardingRoutes);
 // Agent routes are mounted publicly (PATCH /me for Settings UI) AND internally
 // (activate / deprovision); each route selects its own auth middleware.
 app.use("/api/agents", agentRoutes);

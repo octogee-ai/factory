@@ -163,6 +163,52 @@ export interface SecretsReloadResult {
   ok?: boolean;
 }
 
+/**
+ * Cron job spec sent to `cron.add`. Mirrors `CronJobCreate` from the
+ * OpenClaw fork (see `~/workspace/openclaw/openclaw/src/cron/types.ts`)
+ * but kept loose here so we don't take a hard dep on internal OC types.
+ * The provisioner's only use today is a one-shot agentTurn with announce
+ * delivery to a Mattermost channel; richer shapes are accepted as `unknown`
+ * and forwarded verbatim.
+ */
+export interface CronAddSpec {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  deleteAfterRun?: boolean;
+  agentId?: string;
+  sessionKey?: string;
+  schedule: { kind: "at"; at: string } | { kind: "every"; everyMs: number } | { kind: "cron"; expr: string; tz?: string };
+  sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
+  wakeMode: "now" | "next-heartbeat";
+  payload:
+    | { kind: "systemEvent"; text: string }
+    | {
+        kind: "agentTurn";
+        message: string;
+        model?: string;
+        thinking?: string;
+        timeoutSeconds?: number;
+        lightContext?: boolean;
+        toolsAllow?: string[];
+      };
+  delivery?: {
+    mode: "none" | "announce" | "webhook";
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+    bestEffort?: boolean;
+  };
+}
+
+export interface CronAddResult {
+  /** Server-assigned job id; used later for cron.delete / cron.update. */
+  id: string;
+  /** Echoes back the rest of the job spec for the caller to log if needed. */
+  [extra: string]: unknown;
+}
+
 export interface GatewayRpcClient {
   configGet(): Promise<ConfigGetResult>;
   configPatch(patch: object, baseHash: string): Promise<ConfigPatchResult>;
@@ -171,6 +217,10 @@ export interface GatewayRpcClient {
    *  exec-provider SecretRef (including BYOT auth-profiles). Calls the
    *  fork's `secrets.reload` method with operator.admin scope. */
   secretsReload(): Promise<SecretsReloadResult>;
+  /** Schedule a cron job on the gateway. Used by the provisioner to fire a
+   *  one-shot greeting via the agent's normal turn pipeline (announce
+   *  delivery to MM coach channel) — no fork patches needed. */
+  cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
   /** Cheap up-probe: completes the handshake + a `channels.status` roundtrip
    *  within `timeoutMs`. Never throws. */
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
@@ -346,6 +396,18 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
 
     async channelsStatus() {
       return await call("channels.status", {});
+    },
+
+    async cronAdd(spec) {
+      const payload = await call("cron.add", spec);
+      if (!payload || typeof payload !== "object") {
+        throw new GatewayRpcError("invalid-response", "cron.add returned non-object payload");
+      }
+      const p = payload as { id?: unknown };
+      if (typeof p.id !== "string" || p.id.length === 0) {
+        throw new GatewayRpcError("invalid-response", "cron.add payload missing string `id`");
+      }
+      return payload as CronAddResult;
     },
 
     async secretsReload() {

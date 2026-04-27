@@ -487,11 +487,12 @@ export async function provisionMattermostUser(
       // directly from there.
       ...(coachPersonalToken ? { _coachPersonalToken: coachPersonalToken } : {}),
       ...(adminChannelId ? { "mattermost.adminChannelId": adminChannelId } : {}),
-      // The onboarding-greeting outcome key is intentionally not set here
-      // — the post is lifted up to `provisionCustomer` (workspace.ts) so
-      // it fires after the coach agent is bound. That orchestrator owns
-      // the outcome mirror into mmUpdate. See the regression guard in
-      // scripts/__tests__/provisioner-greeting-ordering.spec.ts.
+      // The boot-greeting outcome key is owned by the customer-lifecycle
+      // orchestrator — it schedules the cron AFTER verify-channel-ready
+      // passes and persists the cron jobId. Letting the schedule live here
+      // would re-open the ordering race the cron cutover closed (greeting
+      // fires before the coach agent is bound). See the regression guard
+      // in scripts/__tests__/provisioner-greeting-ordering.spec.ts.
     };
   } catch (e: any) {
     log(`[mattermost] ⚠ provisioning failed: ${e.message} — continuing without chat`);
