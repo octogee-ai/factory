@@ -56,9 +56,18 @@ COPY --chown=node:node templates/ /octogee/templates/
 
 # ── Plugin extensions (Face/Brain router, etc.) ─────────────────────────────
 # Staged at /octogee/extensions/ — entrypoint copies to ~/.openclaw/extensions/
-# node_modules are NOT copied here — entrypoint symlinks to /opt/octogee-router-deps/
-# (base image pre-installed @huggingface/transformers there to save build time)
+# octogee-router's node_modules are symlinked at runtime to
+# /opt/octogee-router-deps/ (base image pre-installed @huggingface/transformers
+# there to save build time; ~1.2 GB).
+# octogee-mattermost-tools is small (~50 MB firebase-admin + tiny typebox +
+# prom-client) so we npm install it inline below; the entrypoint's
+# `elif [ -d "$ext_dir/node_modules" ]` fallback then symlinks to it.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
+
+# octogee-mattermost-tools runtime deps
+WORKDIR /octogee/extensions/octogee-mattermost-tools
+RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -3 \
+    && chown -R node:node /octogee/extensions/octogee-mattermost-tools/node_modules
 
 # ── Config template (for ephemeral bootstrap) ──────────────────────────────
 # openclaw.template.json + envsubst replaces the old known-good config
