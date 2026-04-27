@@ -65,6 +65,37 @@ export function applyPreBootPatches(
     logFn(`set tools.profile=coding (gateway policy: openclaw "coding" defaults)`);
   }
 
+  // ── gateway.controlPlane.writeRateLimit ─────────────────────────────────
+  // OpenClaw fork v2026.4.25+ exposes a configurable ceiling for the
+  // control-plane write rate limit (config.patch / config.apply / update.run).
+  // Upstream defaults to 3 per 60s — too tight for a fleet provisioner that
+  // drives all customer mounts through one `gateway-client` device. We bump
+  // to 60 per 60s here so a normal signup burst (or a retry storm) doesn't
+  // throttle. Same pattern as `gateway.auth.rateLimit`. Drifted values get
+  // reset on next boot.
+  const TARGET_CP_MAX_REQUESTS = 60;
+  const TARGET_CP_WINDOW_MS = 60_000;
+  config.gateway ??= {};
+  config.gateway.controlPlane ??= {};
+  config.gateway.controlPlane.writeRateLimit ??= {};
+  const cpRl = config.gateway.controlPlane.writeRateLimit;
+  const prevCpMax = cpRl.maxRequests;
+  if (prevCpMax !== TARGET_CP_MAX_REQUESTS) {
+    cpRl.maxRequests = TARGET_CP_MAX_REQUESTS;
+    changed = true;
+    logFn(
+      `set gateway.controlPlane.writeRateLimit.maxRequests=${TARGET_CP_MAX_REQUESTS} (was ${prevCpMax ?? "<unset>"})`,
+    );
+  }
+  const prevCpWindow = cpRl.windowMs;
+  if (prevCpWindow !== TARGET_CP_WINDOW_MS) {
+    cpRl.windowMs = TARGET_CP_WINDOW_MS;
+    changed = true;
+    logFn(
+      `set gateway.controlPlane.writeRateLimit.windowMs=${TARGET_CP_WINDOW_MS} (was ${prevCpWindow ?? "<unset>"})`,
+    );
+  }
+
   // ── Octogee Router plugin config ────────────────────────────────────────
   // F&F: the router has no runtime-tweakable config. All per-customer knobs
   // (enforcementOverrides, faceModelOverrides, brainModelOverrides,

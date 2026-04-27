@@ -47,8 +47,15 @@ describe("applyPreBootPatches — tools.profile (new)", () => {
     expect(changed).toBe(true);
   });
 
-  it("is idempotent: a config already at coding reports no change", () => {
-    const config: any = { tools: { profile: "coding" } };
+  it("is idempotent: a config already at coding (with rate-limit pre-set) reports no change", () => {
+    const config: any = {
+      tools: { profile: "coding" },
+      gateway: {
+        controlPlane: {
+          writeRateLimit: { maxRequests: 60, windowMs: 60_000 },
+        },
+      },
+    };
     const changed = applyPreBootPatches(config, {});
     expect(changed).toBe(false);
     expect(config.tools.profile).toBe("coding");
@@ -130,11 +137,15 @@ describe("applyPreBootPatches — MM env sync", () => {
       },
     };
     // Have to start with profile already coding + commands.native false +
-    // url already matching to isolate the bot-token contribution to changed.
+    // url already matching + rate-limit already at target to isolate the
+    // bot-token contribution to `changed`.
     config.tools = { profile: "coding" };
     config.channels.mattermost.commands = { native: false };
     config.channels.mattermost.accounts.default.commands = { native: false };
     config.channels.mattermost.baseUrl = "https://mm.example";
+    config.gateway = {
+      controlPlane: { writeRateLimit: { maxRequests: 60, windowMs: 60_000 } },
+    };
     const changed = applyPreBootPatches(config, {
       MM_BOT_TOKEN: "same-tok",
       MM_URL: "https://mm.example",
@@ -205,6 +216,9 @@ describe("applyPreBootPatches — no-change reporting", () => {
   it("returns false when nothing in the config needs touching", () => {
     const config: any = {
       tools: { profile: "coding" },
+      gateway: {
+        controlPlane: { writeRateLimit: { maxRequests: 60, windowMs: 60_000 } },
+      },
       channels: {
         mattermost: {
           baseUrl: "https://mm.example",
@@ -224,5 +238,55 @@ describe("applyPreBootPatches — no-change reporting", () => {
       MM_URL: "https://mm.example",
     });
     expect(changed).toBe(false);
+  });
+});
+
+// ── gateway.controlPlane.writeRateLimit reconciliation ───────────────────────
+
+describe("applyPreBootPatches — control-plane writeRateLimit", () => {
+  it("seeds maxRequests=60 and windowMs=60000 on a config with no gateway.controlPlane", () => {
+    const config: any = {};
+    const changed = applyPreBootPatches(config, {});
+    expect(config.gateway.controlPlane.writeRateLimit).toEqual({
+      maxRequests: 60,
+      windowMs: 60_000,
+    });
+    expect(changed).toBe(true);
+  });
+
+  it("reconciles a drifted maxRequests back to 60", () => {
+    const config: any = {
+      gateway: {
+        controlPlane: { writeRateLimit: { maxRequests: 3, windowMs: 60_000 } },
+      },
+    };
+    applyPreBootPatches(config, {});
+    expect(config.gateway.controlPlane.writeRateLimit.maxRequests).toBe(60);
+  });
+
+  it("reconciles a drifted windowMs back to 60000", () => {
+    const config: any = {
+      gateway: {
+        controlPlane: { writeRateLimit: { maxRequests: 60, windowMs: 30_000 } },
+      },
+    };
+    applyPreBootPatches(config, {});
+    expect(config.gateway.controlPlane.writeRateLimit.windowMs).toBe(60_000);
+  });
+
+  it("does not clobber unrelated gateway.* keys", () => {
+    const config: any = {
+      gateway: {
+        port: 18789,
+        auth: { rateLimit: { maxAttempts: 10 } },
+      },
+    };
+    applyPreBootPatches(config, {});
+    expect(config.gateway.port).toBe(18789);
+    expect(config.gateway.auth.rateLimit.maxAttempts).toBe(10);
+    expect(config.gateway.controlPlane.writeRateLimit).toEqual({
+      maxRequests: 60,
+      windowMs: 60_000,
+    });
   });
 });
