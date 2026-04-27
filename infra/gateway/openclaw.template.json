@@ -162,7 +162,8 @@
     "allow": [
       "mattermost",
       "anthropic",
-      "memory-core"
+      "memory-core",
+      "octogee-mattermost-tools"
     ],
     "entries": {
       "mattermost": {
