@@ -8,6 +8,20 @@ import type { MmChannelMeta, MmPostsBundle, MmUserMeta } from "./shape.js";
 
 export type SearchScope = "current_channel" | "all_visible";
 
+/**
+ * Thrown when `scope: "current_channel"` is requested but no channel name
+ * can be supplied. Refusing the call is the right move — silently widening
+ * to `all_visible` (the previous behavior) lied to the agent: the response
+ * container still reported `scope: "current_channel"` but the search was
+ * actually unscoped.
+ */
+export class MmSearchScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MmSearchScopeError";
+  }
+}
+
 export interface SearchParams {
   query: string;
   /** Default `all_visible`. */
@@ -45,7 +59,19 @@ export async function mmSearch(
   const limit = clamp(params.limit ?? 10, 1, 20);
   const scope: SearchScope = params.scope ?? "all_visible";
   let terms = params.query.trim();
-  if (scope === "current_channel" && params.currentChannelName) {
+  if (scope === "current_channel") {
+    // Fail loud when the caller asked for current_channel scope but no
+    // channel name was resolved. Falling through to an unscoped search
+    // would silently violate the contract (and the response container
+    // would still claim `scope: "current_channel"`).
+    if (!params.currentChannelName) {
+      throw new MmSearchScopeError(
+        "scope=current_channel requires a resolved channel name; " +
+          "caller could not derive one from the agent context " +
+          "(missing deliveryContext.to or non-MM channel). " +
+          "Pass an explicit `channel` argument or use scope=all_visible.",
+      );
+    }
     // Append only if the agent didn't already specify in:
     if (!/\bin:\S+/i.test(terms)) {
       terms = `${terms} in:${params.currentChannelName}`;

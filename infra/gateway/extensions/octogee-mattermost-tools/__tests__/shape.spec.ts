@@ -53,6 +53,51 @@ describe("shapeBundle", () => {
     expect(out.posts[0].snippet).toBe("real");
   });
 
+  it("filters MULTIPLE coach-authored posts in one bundle — guards against `find` vs `filter`", () => {
+    // Catches a regression where the impl uses .find() (returns first non-coach
+    // match) or otherwise stops at the first hit. Posts arranged so coach
+    // and non-coach interleave — output must contain BOTH non-coach posts
+    // and NEITHER coach post.
+    const out = shapeBundle(
+      {
+        posts: {
+          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "coach echo 1", create_at: 1 },
+          p2: { id: "p2", channel_id: "ch1", user_id: "u-taylor", message: "real one", create_at: 2 },
+          p3: { id: "p3", channel_id: "ch1", user_id: COACH_USER_ID, message: "coach echo 2", create_at: 3 },
+          p4: { id: "p4", channel_id: "ch1", user_id: "u-other", message: "real two", create_at: 4 },
+        },
+        order: ["p1", "p2", "p3", "p4"],
+      },
+      baseCtx,
+    );
+    expect(out.posts.map((p) => p.post_id)).toEqual(["p2", "p4"]);
+  });
+
+  it("compares coach-author filter against post.user_id specifically (not username/display_name)", () => {
+    // If the impl ever swapped the filter to compare against author.username
+    // or author.display_name (they're easier to read in logs), the coach's
+    // post would slip through whenever its user metadata was missing or
+    // the username string didn't equal the coach id. This test pins the
+    // contract: filter is keyed on user_id even when username happens to
+    // collide with non-coach posts, AND when the coach has no user metadata.
+    const usersWithCoachMissing = new Map<string, MmUserMeta>([
+      ["u-taylor", { id: "u-taylor", username: "taylor" }],
+      // Coach's user metadata intentionally absent — the filter must still
+      // catch the post via user_id, not via author lookup.
+    ]);
+    const out = shapeBundle(
+      {
+        posts: {
+          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "echo", create_at: 1 },
+          p2: { id: "p2", channel_id: "ch1", user_id: "u-taylor", message: "real", create_at: 2 },
+        },
+        order: ["p1", "p2"],
+      },
+      { ...baseCtx, users: usersWithCoachMissing },
+    );
+    expect(out.posts.map((p) => p.post_id)).toEqual(["p2"]);
+  });
+
   it("filters soft-deleted and system posts", () => {
     const out = shapeBundle(
       {
@@ -92,7 +137,12 @@ describe("shapeBundle", () => {
     expect(out.posts[1].author.display_name).toBe("Otto");
   });
 
-  it("builds permalink from siteUrl + teamName", () => {
+  it("builds permalink as `<site>/<team>/pl/<id>` — the URL the MM web UI actually resolves", () => {
+    // Pinned literal — NOT a template that mirrors the impl. If MM's
+    // permalink shape ever changes (e.g. /post/<id>, /m/<id>, omitting the
+    // team segment), this test forces the contract change to be conscious
+    // rather than silent. Don't refactor to a template that uses SITE/TEAM
+    // constants — that re-introduces the same impl-mirroring bug.
     const out = shapeBundle(
       {
         posts: { p: { id: "p", channel_id: "ch1", user_id: "u-taylor", message: "hi", create_at: 1 } },
@@ -100,10 +150,42 @@ describe("shapeBundle", () => {
       },
       baseCtx,
     );
-    expect(out.posts[0].permalink).toBe(`${SITE}/${TEAM}/pl/p`);
+    expect(out.posts[0].permalink).toBe("https://mattermost.octogee.com/christopher/pl/p");
   });
 
-  it("snippet anchors around the longest query token (search mode)", () => {
+  it("strips a single trailing slash from siteUrl in permalinks", () => {
+    const out = shapeBundle(
+      {
+        posts: { p: { id: "p", channel_id: "ch1", user_id: "u-taylor", message: "hi", create_at: 1 } },
+        order: ["p"],
+      },
+      { ...baseCtx, siteUrl: "https://mattermost.octogee.com/" },
+    );
+    expect(out.posts[0].permalink).toBe("https://mattermost.octogee.com/christopher/pl/p");
+  });
+
+  it("snippet anchors around the longest query token when multiple match (search mode)", () => {
+    // Adversarial: the SHORT token ("the") appears EARLIER in the message,
+    // and the LONG token ("splitter") appears LATER. If the impl picks
+    // first-found instead of longest-token, the snippet will anchor on
+    // "the" near the start. The longest-token contract requires anchoring
+    // on "splitter" near the middle.
+    const message =
+      "the early section is filler ".repeat(15) +
+      "and now the actual payment splitter decision is here, " +
+      "and the rest trails off ".repeat(15);
+    const out = shapeBundle(
+      {
+        posts: { p: { id: "p", channel_id: "ch1", user_id: "u-taylor", message, create_at: 1 } },
+        order: ["p"],
+      },
+      { ...baseCtx, query: "the splitter" },
+    );
+    expect(out.posts[0].snippet).toMatch(/splitter/);
+    expect(out.posts[0].snippet.length).toBeLessThanOrEqual(220);
+  });
+
+  it("snippet falls back to first occurrence when only one token matches", () => {
     const long = "intro words ".repeat(40) + "the payment splitter decision happened here " + "trailing ".repeat(40);
     const out = shapeBundle(
       {

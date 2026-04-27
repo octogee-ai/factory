@@ -38,7 +38,7 @@ export interface HistoryResponse {
 
 export class HistoryParamError extends Error {
   constructor(
-    public readonly code: "missing-cursor" | "missing-channel" | "invalid-direction",
+    public readonly code: "missing-cursor" | "missing-channel" | "invalid-direction" | "invalid-limit",
     message: string,
   ) {
     super(message);
@@ -117,11 +117,21 @@ function endpointFor(
       return `/api/v4/users/${coachMmUserId}/channels/${channelId}/posts/unread?limit_before=0&limit_after=${limit}`;
     case "around": {
       requireCursor(cursor, "around");
-      // Symmetric split (spec §10 #6). Min 1 each side; if limit is odd,
-      // the extra goes to `after` (more weight to newer context).
-      const half = Math.max(1, Math.floor(limit / 2));
+      // `around` returns N before + 1 anchor + M after. Spec §10 #6 says
+      // "minimum 1 each side", which is incompatible with limit=1. Rather
+      // than silently violating the user's `limit` (returning 3 posts when
+      // they asked for 1) or silently dropping a side, refuse limits < 2.
+      if (limit < 2) {
+        throw new HistoryParamError(
+          "invalid-limit",
+          `direction "around" requires limit >= 2 (got ${limit}) — needs room for at least 1 before + 1 after the anchor`,
+        );
+      }
+      // Symmetric split. If limit is odd, the extra goes to `after`
+      // (more weight to newer context).
+      const half = Math.floor(limit / 2);
       const limitBefore = half;
-      const limitAfter = Math.max(1, limit - half);
+      const limitAfter = limit - half;
       return `/api/v4/channels/${channelId}/posts/${encodeURIComponent(cursor!)}/around?limit_before=${limitBefore}&limit_after=${limitAfter}`;
     }
     default: {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mmSearch } from "../mm-search.js";
+import { mmSearch, MmSearchScopeError } from "../mm-search.js";
 
 interface FakeClient {
   get: (path: string, pat: string) => Promise<any>;
@@ -68,6 +68,31 @@ describe("mmSearch", () => {
       currentChannelName: "builder-pulse",
     });
     expect(c.calls[0].body.terms).toBe("decision in:other-channel");
+  });
+
+  it("current_channel scope WITHOUT a resolved channel name fails loud (no silent widen)", async () => {
+    // Engineering principles: no silent failures. When the agent asks for
+    // current_channel scope but the runtime can't supply a channel name
+    // (e.g. no deliveryContext.to), the prior code path quietly fell
+    // through to all_visible while the response container still reported
+    // scope: "current_channel" — a lie. We now refuse the call with a
+    // typed error so the caller (index.ts) can surface a clear tool-result
+    // error instead of returning misleading results.
+    const c = makeClient({
+      // No POST should be made — fail before MM is touched.
+    });
+    await expect(
+      mmSearch(c, "PAT", TEAM, { query: "decision", scope: "current_channel" /* no currentChannelName */ }),
+    ).rejects.toBeInstanceOf(MmSearchScopeError);
+    expect(c.calls).toHaveLength(0);
+  });
+
+  it("current_channel scope WITH empty-string channel name fails loud too", async () => {
+    const c = makeClient({});
+    await expect(
+      mmSearch(c, "PAT", TEAM, { query: "decision", scope: "current_channel", currentChannelName: "" }),
+    ).rejects.toBeInstanceOf(MmSearchScopeError);
+    expect(c.calls).toHaveLength(0);
   });
 
   it("default scope is all_visible (no in: appended)", async () => {

@@ -90,6 +90,33 @@ describe("mmHistory dispatch", () => {
     expect(c.calls).toEqual([`GET ${path}`]);
   });
 
+  it("around rejects limit < 2 — symmetric split is meaningless when there's no room for both sides", async () => {
+    // The "around" semantics require at least one post before AND one after
+    // the cursor, plus the cursor itself. limit=1 is internally inconsistent
+    // with that contract — it would either silently return 3 posts (1+1+anchor,
+    // breaking the limit) or 1 post (skipping a side). Refuse the request
+    // with a typed error so the agent can correct.
+    const c = makeClient({});
+    await expect(
+      mmHistory(c, "PAT", { channelId: CH, coachMmUserId: COACH, direction: "around", cursor: "p2", limit: 1 }),
+    ).rejects.toBeInstanceOf(HistoryParamError);
+    expect(c.calls).toHaveLength(0);
+  });
+
+  it("around with limit=2 splits 1/1", async () => {
+    const path = `/api/v4/channels/${CH}/posts/p2/around?limit_before=1&limit_after=1`;
+    const c = makeClient({ [path]: SAMPLE });
+    await mmHistory(c, "PAT", { channelId: CH, coachMmUserId: COACH, direction: "around", cursor: "p2", limit: 2 });
+    expect(c.calls).toEqual([`GET ${path}`]);
+  });
+
+  it("around with limit=3 splits 1/2 (odd → extra to after)", async () => {
+    const path = `/api/v4/channels/${CH}/posts/p2/around?limit_before=1&limit_after=2`;
+    const c = makeClient({ [path]: SAMPLE });
+    await mmHistory(c, "PAT", { channelId: CH, coachMmUserId: COACH, direction: "around", cursor: "p2", limit: 3 });
+    expect(c.calls).toEqual([`GET ${path}`]);
+  });
+
   it("reverses MM order (newest-first → oldest-first)", async () => {
     const c = makeClient({ [`/api/v4/channels/${CH}/posts?per_page=10`]: SAMPLE });
     const out = await mmHistory(c, "PAT", { channelId: CH, coachMmUserId: COACH, direction: "latest", limit: 10 });
