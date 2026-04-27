@@ -163,7 +163,8 @@
       "mattermost",
       "anthropic",
       "memory-core",
-      "octogee-mattermost-tools"
+      "octogee-mattermost-tools",
+      "octogee-router"
     ],
     "entries": {
       "mattermost": {
@@ -179,6 +180,10 @@
           "siteUrl": "${MM_SITE_URL}",
           "patCacheTtlSeconds": 300
         }
+      },
+      "octogee-router": {
+        "enabled": true,
+        "config": {}
       }
     }
   }

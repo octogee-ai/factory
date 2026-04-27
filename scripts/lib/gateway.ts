@@ -143,22 +143,6 @@ export function ensureGatewayDefaults(): void {
     log("Set tools.elevated.enabled = false");
   }
 
-  const routerEnabled = process.env.OCTOGEE_ROUTER_ENABLED !== "false";
-
-  // Security: Explicit plugin allowlist. octogee-mattermost-tools is always
-  // on (no tier gate per docs/COACH-MATTERMOST-TOOLS-SPEC.md §3.1). The
-  // plugin's `enabled: true` in plugins.entries means nothing if it's not
-  // also in this allowlist — OpenClaw's loader gates on allow first.
-  config.plugins ??= {};
-  const desiredAllow = routerEnabled
-    ? ["mattermost", "octogee-router", "octogee-mattermost-tools"]
-    : ["mattermost", "octogee-mattermost-tools"];
-  if (JSON.stringify(config.plugins.allow ?? []) !== JSON.stringify(desiredAllow)) {
-    config.plugins.allow = desiredAllow;
-    changed = true;
-    log(`Set plugins.allow = ${JSON.stringify(desiredAllow)}`);
-  }
-
   // Security: Gateway auth rate limiting
   config.gateway ??= {};
   config.gateway.auth ??= {};
@@ -168,17 +152,26 @@ export function ensureGatewayDefaults(): void {
     log("Set gateway.auth.rateLimit (10 attempts/60s, 5min lockout)");
   }
 
-  // Plugin config structure
-  config.plugins ??= {};
-  config.plugins.entries ??= {};
-  if (routerEnabled) {
-    config.plugins.entries["octogee-router"] ??= {};
-    config.plugins.entries["octogee-router"].config ??= {};
-  } else if (config.plugins.entries["octogee-router"]) {
-    delete config.plugins.entries["octogee-router"];
-    changed = true;
-    log("Removed octogee-router plugin entry because OCTOGEE_ROUTER_ENABLED=false");
-  }
+  // ── REMOVED 2026-04-27: runtime plugins.allow + plugins.entries writes ────
+  // We previously overwrote `plugins.allow` to a custom list and seeded an
+  // empty `plugins.entries.octogee-router` here on every provisioner boot.
+  // After the OpenClaw v2026.4.20 → v2026.4.24 upgrade, ANY change under
+  // `plugins.*` triggers a full gateway SIGUSR1 restart (the upstream reload
+  // classifier got stricter). Our boot-time writes drifted plugins.* from
+  // the template state, then the FIRST customer config.patch's reload
+  // comparator saw the drift and triggered restart on every customer mount —
+  // ~30s downtime each, cascading into the WS instability storm we
+  // diagnosed on TEST 2026-04-27.
+  //
+  // The fix: bake `plugins.allow` + `plugins.entries.octogee-router` into
+  // the template (`infra/gateway/openclaw.template.json`). The entrypoint
+  // writes the template once at boot, the gateway loads it, and nothing
+  // mutates plugins.* afterwards. Per-customer router config syncs were
+  // already removed for F&F (see comment block below).
+  //
+  // If we ever need OCTOGEE_ROUTER_ENABLED=false again, do it via a separate
+  // pre-boot template variant or pre-boot-config.ts strip — NOT a runtime
+  // diff against the loaded config.
 
   if (changed) writeOpenClawConfig(config);
 }
