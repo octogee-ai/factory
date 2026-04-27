@@ -19,6 +19,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   addCustomerToGateway,
+  ConcurrentMountError,
+  _resetInFlightUidsForTests,
   removeCustomerFromGateway,
   type CustomerLifecycleAdapter,
   type UserSnapshot,
@@ -753,5 +755,84 @@ describe("unmount + re-add round trip", () => {
     expect(reAdd.steps).not.toContain("schedule-greeting-cron");
     expect(reAdd.steps).not.toContain("mattermost-provision");
     expect(reAdd.steps).not.toContain("notify-ops");
+  });
+});
+
+// ── Same-uid in-flight dedup ────────────────────────────────────────────────
+
+describe("addCustomerToGateway — same-uid in-flight dedup", () => {
+  beforeEach(() => {
+    _resetInFlightUidsForTests();
+  });
+
+  it("throws ConcurrentMountError when a second mount is started for the same uid mid-flight", async () => {
+    // Build an adapter where loadUserSnapshot blocks until we release it,
+    // so we can keep one mount mid-flight while starting a second.
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    const realAdapter = makeAdapter(state);
+
+    let releaseFirst!: () => void;
+    const firstReleased = new Promise<void>((r) => { releaseFirst = r; });
+
+    const dedupAdapter: CustomerLifecycleAdapter = {
+      ...realAdapter,
+      loadUserSnapshot: async (uid) => {
+        await firstReleased;
+        return realAdapter.loadUserSnapshot(uid);
+      },
+    };
+
+    const firstRun = addCustomerToGateway(dedupAdapter, "uid-test");
+
+    // Yield to let firstRun begin and add uid-test to the in-flight set.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Second mount for SAME uid — must throw before doing any work.
+    await expect(addCustomerToGateway(dedupAdapter, "uid-test")).rejects.toBeInstanceOf(
+      ConcurrentMountError,
+    );
+
+    // Release the first run; let it complete normally.
+    releaseFirst();
+    const result = await firstRun;
+    expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("clears the in-flight uid on success so a follow-up mount works", async () => {
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    // Subsequent mount for same uid should NOT throw — the first finished.
+    const state2 = makeState(snap({ status: "complete", agentIds: ["octogee-test-coach"], repoUrl: "http://gitea/octogee/test-workspace", mattermostUserId: "mm-x", greetingPosted: true }), { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true, repoHasCommits: true });
+    const result = await addCustomerToGateway(makeAdapter(state2), "uid-test");
+    expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("clears the in-flight uid on failure so the fleet can retry", async () => {
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    state.healthy = false; // Forces verify-channel-ready to throw.
+
+    await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
+      /didn't reach running\+connected/,
+    );
+
+    // Retry attempt with a healthy state — should NOT see ConcurrentMountError.
+    const state2 = makeState(snap({ status: "" }), emptyDisk());
+    const result = await addCustomerToGateway(makeAdapter(state2), "uid-test");
+    expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("isolates uids — different uids run concurrently without dedup interference", async () => {
+    const stateA = makeState(snap({ uid: "uid-a", slug: "alice" }), emptyDisk());
+    const stateB = makeState(snap({ uid: "uid-b", slug: "bob" }), emptyDisk());
+
+    // Concurrent mounts for DIFFERENT uids — both must succeed.
+    const [resA, resB] = await Promise.all([
+      addCustomerToGateway(makeAdapter(stateA), "uid-a"),
+      addCustomerToGateway(makeAdapter(stateB), "uid-b"),
+    ]);
+    expect(resA.steps).toContain("verify-channel-ready");
+    expect(resB.steps).toContain("verify-channel-ready");
   });
 });
