@@ -145,9 +145,14 @@ export function ensureGatewayDefaults(): void {
 
   const routerEnabled = process.env.OCTOGEE_ROUTER_ENABLED !== "false";
 
-  // Security: Explicit plugin allowlist
+  // Security: Explicit plugin allowlist. octogee-mattermost-tools is always
+  // on (no tier gate per docs/COACH-MATTERMOST-TOOLS-SPEC.md §3.1). The
+  // plugin's `enabled: true` in plugins.entries means nothing if it's not
+  // also in this allowlist — OpenClaw's loader gates on allow first.
   config.plugins ??= {};
-  const desiredAllow = routerEnabled ? ["mattermost", "octogee-router"] : ["mattermost"];
+  const desiredAllow = routerEnabled
+    ? ["mattermost", "octogee-router", "octogee-mattermost-tools"]
+    : ["mattermost", "octogee-mattermost-tools"];
   if (JSON.stringify(config.plugins.allow ?? []) !== JSON.stringify(desiredAllow)) {
     config.plugins.allow = desiredAllow;
     changed = true;

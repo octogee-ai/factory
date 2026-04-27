@@ -170,6 +170,14 @@
       },
       "anthropic": {
         "enabled": true
+      },
+      "octogee-mattermost-tools": {
+        "enabled": true,
+        "config": {
+          "mattermostUrl": "${MM_URL}",
+          "siteUrl": "${MM_SITE_URL}",
+          "patCacheTtlSeconds": 300
+        }
       }
     }
   }
