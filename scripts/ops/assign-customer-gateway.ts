@@ -34,8 +34,12 @@ import * as fs from "fs";
 import * as path from "path";
 
 // ── Config copy (mirror of functions/src/orchestrator/types.ts) ──────────
+//
+// The CLI duplicates the placement logic by design — scripts/ is a separate
+// npm workspace from functions/, and pulling the helper through a shared
+// package would add disproportionate complexity. The decision matrix is
+// kept byte-equivalent to functions/src/orchestrator/assign.ts.
 const ORCHESTRATOR_CONFIG_DOC = "config/orchestrator";
-const ORCHESTRATOR_DEFAULT_GATEWAY_FALLBACK = "gw-test";
 const GATEWAY_ID_PATTERN = /^[a-z0-9-]+$/;
 
 interface OrchestratorConfig {
@@ -43,23 +47,25 @@ interface OrchestratorConfig {
   overrides?: Record<string, string>;
 }
 
-async function readOrchestratorConfig(db: Firestore): Promise<OrchestratorConfig> {
+/** Returns null when the doc is missing or `defaultGatewayId` is invalid —
+ *  caller surfaces that as "config-missing" so ops fixes the doc instead of
+ *  the script silently routing customers at a hardcoded default. */
+async function readOrchestratorConfig(db: Firestore): Promise<OrchestratorConfig | null> {
   const snap = await db.doc(ORCHESTRATOR_CONFIG_DOC).get();
-  if (!snap.exists) return { defaultGatewayId: ORCHESTRATOR_DEFAULT_GATEWAY_FALLBACK };
+  if (!snap.exists) return null;
   const data = snap.data() as Partial<OrchestratorConfig> | undefined;
-  const defaultGatewayId =
-    typeof data?.defaultGatewayId === "string" && GATEWAY_ID_PATTERN.test(data.defaultGatewayId)
-      ? data.defaultGatewayId
-      : ORCHESTRATOR_DEFAULT_GATEWAY_FALLBACK;
+  if (typeof data?.defaultGatewayId !== "string" || !GATEWAY_ID_PATTERN.test(data.defaultGatewayId)) {
+    return null;
+  }
   const overrides =
-    data?.overrides && typeof data.overrides === "object"
+    data.overrides && typeof data.overrides === "object"
       ? Object.fromEntries(
           Object.entries(data.overrides).filter(
             ([, v]) => typeof v === "string" && GATEWAY_ID_PATTERN.test(v),
           ),
         )
       : undefined;
-  return { defaultGatewayId, overrides };
+  return { defaultGatewayId: data.defaultGatewayId, overrides };
 }
 
 type AssignResult =
@@ -88,6 +94,9 @@ async function assignOne(
     return { kind: "not-ready", uid, slug, reason: "not-approved" };
   }
   const config = await readOrchestratorConfig(db);
+  if (config === null) {
+    return { kind: "not-ready", uid, slug, reason: "config-missing" };
+  }
   const target = config.overrides?.[uid] ?? config.defaultGatewayId;
   const current: string | null = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;
   if (current === target) {
