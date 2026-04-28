@@ -411,15 +411,23 @@ if [[ -z "$CERTS" || "$CERTS" == "null" ]]; then
   warn "No managed certificates found"
 else
   for CERT_NAME in $(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['metadata']['name']) for i in d.get('items',[])]" 2>/dev/null); do
-    # Skip cross-env certs that drifted into this namespace (stale leftovers
-    # from prior helm renders). Convention: test certs have a -test suffix,
-    # prod certs don't. Custom namespaces are unaffected.
-    case "$ENV" in
-      prod) [[ "$CERT_NAME" == *-test ]] && continue ;;
-      test) [[ "$CERT_NAME" != *-test ]] && continue ;;
-    esac
     CERT_STATUS=$(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i.get('status',{}).get('certificateStatus','Unknown')) for i in d.get('items',[]) if i['metadata']['name']=='$CERT_NAME']" 2>/dev/null)
     CERT_DOMAIN=$(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['spec']['domains'][0]) for i in d.get('items',[]) if i['metadata']['name']=='$CERT_NAME']" 2>/dev/null)
+    # Classify: does this cert belong in this env? Convention is test certs
+    # have a -test suffix, prod certs don't. Custom namespaces opt out (any
+    # naming is fine since they're already namespace-isolated).
+    IS_STRANGER=false
+    case "$ENV" in
+      prod) [[ "$CERT_NAME" == *-test ]] && IS_STRANGER=true ;;
+      test) [[ "$CERT_NAME" != *-test ]] && IS_STRANGER=true ;;
+    esac
+    if $IS_STRANGER; then
+      warn "$CERT_NAME ($CERT_DOMAIN): cross-env cert in this namespace (stale leftover, status=$CERT_STATUS)"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} kubectl delete managedcertificate $CERT_NAME -n $NAMESPACE"
+      fi
+      continue
+    fi
     if [[ "$CERT_STATUS" == "Active" ]]; then
       pass "$CERT_NAME ($CERT_DOMAIN): Active"
     elif [[ "$CERT_STATUS" == "Provisioning" ]]; then
