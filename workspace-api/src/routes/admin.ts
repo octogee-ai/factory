@@ -10,7 +10,6 @@
  *   GET    /customer/:uid/throttle     — throttle history (last 50)
  *   GET    /customer/:uid/audit        — admin actions audit log (last 50)
  *   POST   /customer/:uid/ops          — ops knob writes (audit-logged)
- *   POST   /system-config              — global config (kill-switch, signups, banner)
  *
  * Spec: docs/ADMIN-DASHBOARD-SPEC.md §12.
  */
@@ -601,36 +600,6 @@ router.post("/customer/:uid/ops", async (req: Request, res: Response, next: Next
     });
 
     res.json({ success: true, action, field, before, after: value });
-  } catch (e) { next(e); }
-});
-
-// ── POST /system-config — global operator knobs ─────────────────────────────
-// Writes to system/config (admin-readable per existing rules). Only the
-// fields explicitly listed are accepted; unknown fields are ignored
-// rather than 400'd so we can iterate forward without breaking clients.
-
-const ALLOWED_SYSTEM_FIELDS = new Set([
-  "throttleEnabledGlobal",
-  "signupsOpen",
-  "banner",
-]);
-
-router.post("/system-config", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const update: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(body)) {
-      if (ALLOWED_SYSTEM_FIELDS.has(k)) update[k] = v;
-    }
-    if (Object.keys(update).length === 0) {
-      res.status(400).json({ error: "No accepted fields in body" });
-      return;
-    }
-    update.updatedAt = FieldValue.serverTimestamp();
-    update.updatedBy = req.uid ?? null;
-
-    await db.doc("system/config").set(update, { merge: true });
-    res.json({ success: true, updated: Object.keys(update) });
   } catch (e) { next(e); }
 });
 
