@@ -43,6 +43,11 @@ COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 # the `default` export survives — named imports (projectGeneralChannelName,
 # etc.) throw "does not provide an export" at runtime.
 # See docs/DATA-MODEL-REVIEW.md §11.6 (Build-context fixes).
+#
+# computeThrottleLevel + fleet-controller types + social types ALL live
+# under shared/types/ now — gateway-side scripts and the firebase
+# functions runtime both consume from here (functions/ via the
+# functions/src/_shared symlink that sidesteps its rootDir constraint).
 COPY --chown=node:node shared/ /octogee/shared/
 
 # ── Type-check provisioner (catches errors at build time) ───────────────────

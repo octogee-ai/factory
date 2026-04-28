@@ -1,17 +1,18 @@
 /**
  * Fleet controller types — CANONICAL source.
  *
- * Mirrored at `functions/src/fleet-controller/types.ts` until we migrate
- * Cloud Functions to TS project references. Any change here must be
- * mirrored there (and vice versa). Drift would surface at runtime as a
- * JSON-shape rejection on the gateway's POST /restore-customer handler.
- *
  * Spec: docs/GATEWAY-FLEET-CONTROLLER-SPEC.md
  *
- * The controller reads/writes these shapes in Firestore; both sides of the
- * wire consume the same declarations so drift can't open up. No runtime
- * validation here — types are compile-time only, consistent with the rest
- * of `@octogee/shared`.
+ * Consumed by:
+ *   - functions/src/fleet-controller/* via the `functions/src/_shared`
+ *     symlink (firebase-functions' rootDir: src constraint).
+ *   - scripts/lib/{customer-lifecycle,fleet-state,fleet-provisioner,fleet-http}
+ *     via `../../shared/types/fleet-controller.js`.
+ *   - workspace-api/* via the same relative path.
+ *
+ * No runtime validation here — types are compile-time only, consistent
+ * with the rest of `@octogee/shared`. Runtime helpers (e.g.
+ * `backoffMsForFailCount`) live below as plain functions.
  */
 
 // ── Gateway state ────────────────────────────────────────────────────────────
@@ -195,3 +196,27 @@ export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 /** Firestore collection names — constants to keep drift between writer + reader impossible. */
 export const GATEWAYS_COLLECTION = "gateways";
 export const RESTORE_JOBS_COLLECTION = "restoreJobs";
+
+/**
+ * Exponential backoff (in ms) keyed by cumulative failure count for a given
+ * customer on a gateway. Pick-next skips a slug while
+ *   now - lastFailedAt < backoffMsForFailCount(failCount)
+ *
+ *   failCount=1 → 2 min
+ *   failCount=2 → 4 min
+ *   failCount=3 → 8 min
+ *   failCount=5 → 32 min
+ *   failCount=7+ → capped at 120 min (2h)
+ *
+ * Rationale: the cheap fail case (Gateway returning a fast 400 for a corrupt
+ * user doc) previously spun at >1 attempt/sec because the controller re-
+ * picked the same candidate on every `inFlightJobId=null` transition. Even
+ * a 2-minute first cooldown is enough to restore sanity; the exponential
+ * growth keeps genuinely-broken customers quiet without forever-banning
+ * legitimate transients.
+ */
+export function backoffMsForFailCount(failCount: number): number {
+  if (failCount <= 0) return 0;
+  const minutes = Math.min(Math.pow(2, failCount), 120);
+  return minutes * 60 * 1000;
+}

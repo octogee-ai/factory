@@ -41,7 +41,7 @@ import {
   WINDOW_LENGTH_HOURS,
   windowBudgetUsdForTier,
 } from "../../shared/types/billing.js";
-import { computeThrottleLevel } from "../../functions/src/billing/throttle.js";
+import { computeThrottleLevel } from "../../shared/types/throttle.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
