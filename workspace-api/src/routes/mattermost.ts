@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response, NextFunction } from "express";
 import * as crypto from "crypto";
-import { requireAuth, requireAdmin } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
 import { db, FieldValue, Timestamp } from "../lib/db";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
 
@@ -52,47 +52,6 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
     const coachName = userData.onboarding?.coachName || null;
 
     res.json({ mmUserId, dmChannelId, proxyUrl, wsTicket: ticket, coachMmUserId, coachName });
-  } catch (e) { next(e); }
-});
-
-// ── GET /admin-token — admin MM credentials ───────────────────────────────
-
-router.get("/admin-token", requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const uid = req.uid!;
-
-    const personalToken = process.env.MM_ADMIN_TOKEN;
-    if (!personalToken) {
-      res.status(503).json({
-        status: "unavailable",
-        message: "Admin chat credentials not configured.",
-      });
-      return;
-    }
-
-    const adminDoc = await db.doc("system/mattermostAdmin").get();
-    const adminData = adminDoc.data() ?? {};
-    const mmUserId = adminData.userId;
-    const proxyUrl = adminData.proxyUrl || process.env.CHAT_PROXY_URL || "";
-
-    if (!mmUserId) {
-      res.status(503).json({
-        status: "unavailable",
-        message: "Admin chat credentials incomplete.",
-      });
-      return;
-    }
-
-    const ticket = crypto.randomUUID();
-    await db.doc(`wsTickets/${ticket}`).set({
-      uid,
-      isAdminTicket: true,
-      adminMmUserId: mmUserId,
-      createdAt: FieldValue.serverTimestamp(),
-      expiresAt: Date.now() + 30_000,
-    });
-
-    res.json({ mmUserId, dmChannelId: "", proxyUrl, wsTicket: ticket });
   } catch (e) { next(e); }
 });
 

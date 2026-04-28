@@ -398,17 +398,12 @@ describe('credential provisioning', () => {
     expect(calledOpts.headers['Authorization']).toBe('Bearer regular-mm-token');
   });
 
-  it('admin user → request proxied with system admin MM token', async () => {
-    mockMmResponse = { status: 200, body: JSON.stringify([{ id: 'team-admin' }]) };
-    const res = await request('/api/v4/users/me/teams', {
-      headers: { Authorization: 'Bearer admin-token' },
-    });
-    expect(res.status).toBe(200);
-    // Confirm fetch was called with the admin MM token (from MM_ADMIN_TOKEN env)
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [_url, calledOpts] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
-    expect(calledOpts.headers['Authorization']).toBe('Bearer admin-mm-token');
-  });
+  // NOTE: previously a test here asserted "admin user → request proxied with
+  // system admin MM token" via MM_ADMIN_TOKEN impersonation. That path was
+  // removed in this PR — admins now use the Mattermost web UI directly and
+  // chat-proxy's MM REST proxy treats admin users identically to regular
+  // users (personal MM token from users/{uid}/secrets/mattermost, or 502
+  // when not provisioned).
 
   it('MM returns non-200 → forwarded to client as-is', async () => {
     mockMmResponse = { status: 404, body: JSON.stringify({ message: 'Not found' }) };

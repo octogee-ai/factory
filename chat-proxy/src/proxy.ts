@@ -230,27 +230,6 @@ interface CachedToken {
 
 const tokenCache = new Map<string, CachedToken>();
 const TOKEN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const ADMIN_CACHE_KEY = "__admin__";
-
-// ── Role Cache ────────────────────────────────────────────────────────────────
-
-interface CachedRole {
-  isAdmin: boolean;
-  expiresAt: number;
-}
-
-const roleCache = new Map<string, CachedRole>();
-const ROLE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-async function isAdminUser(uid: string): Promise<boolean> {
-  const cached = roleCache.get(uid);
-  if (cached && cached.expiresAt > Date.now()) return cached.isAdmin;
-
-  const doc = await db.doc(`users/${uid}/system/config`).get();
-  const isAdmin = doc.data()?.role === "admin";
-  roleCache.set(uid, { isAdmin, expiresAt: Date.now() + ROLE_CACHE_TTL });
-  return isAdmin;
-}
 
 // Team validation removed — MM enforces channel/team membership natively.
 // The proxy authenticates, forwards to MM with the user's token, and MM rejects unauthorized access.
@@ -283,39 +262,6 @@ async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: str
     return { mmToken, mmUserId };
   } catch (e: any) {
     console.error(`[proxy] Failed to load MM token for ${uid}: ${e.message}`);
-    return null;
-  }
-}
-
-// Admin token — reads from system/mattermostAdmin (platform admin MM user)
-async function getAdminMmToken(): Promise<{ mmToken: string; mmUserId: string } | null> {
-  const cached = tokenCache.get(ADMIN_CACHE_KEY);
-  if (cached && cached.expiresAt > Date.now()) {
-    return { mmToken: cached.mmToken, mmUserId: cached.mmUserId };
-  }
-
-  try {
-    // MM_ADMIN_TOKEN injected as Cloud Run env var from Secret Manager at deploy time.
-    // Non-sensitive metadata (userId) still from Firestore.
-    const mmToken = process.env.MM_ADMIN_TOKEN || "";
-
-    const adminDoc = await db.doc("system/mattermostAdmin").get();
-    const mmUserId = adminDoc.data()?.userId || "";
-
-    if (!mmUserId || !mmToken) {
-      console.error(`[proxy] Admin MM credentials missing — mmUserId=${!!mmUserId} mmToken=${!!mmToken}`);
-      return null;
-    }
-
-    tokenCache.set(ADMIN_CACHE_KEY, {
-      mmToken,
-      mmUserId,
-      expiresAt: Date.now() + TOKEN_CACHE_TTL,
-    });
-
-    return { mmToken, mmUserId };
-  } catch (e: any) {
-    console.error(`[proxy] Failed to load admin MM token: ${e.message}`);
     return null;
   }
 }
@@ -419,16 +365,10 @@ async function handleRest(
     return;
   }
 
-  // Admin users: always use the system admin MM token (reads + writes).
-  // Regular users always use their personal token.
-  const isAdmin = await isAdminUser(uid);
-
   // Team validation removed — MM enforces channel/team membership natively.
   // The proxy authenticates the user and forwards to MM with their token.
   // MM rejects unauthorized access with 403.
-  const creds = isAdmin
-    ? await getAdminMmToken()
-    : await getMmToken(uid);
+  const creds = await getMmToken(uid);
   if (!creds) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Chat not provisioned" }));
@@ -598,9 +538,7 @@ function handleWsUpgrade(
       }
 
       const uid = ticketData.uid;
-      // Admin tickets use octogee-admin credentials
-      const isAdminTicket = ticketData.isAdminTicket === true;
-      const creds = isAdminTicket ? await getAdminMmToken() : await getMmToken(uid);
+      const creds = await getMmToken(uid);
       if (!creds) {
         socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
         socket.destroy();
@@ -909,10 +847,9 @@ function handleOpenClawWsUpgrade(
 
 // ── Test helpers ────────────────────────────────────────────────────────────────
 
-/** Clear in-process token/role caches. For test isolation only. */
+/** Clear in-process token cache. For test isolation only. */
 export function _clearCaches(): void {
   tokenCache.clear();
-  roleCache.clear();
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────
