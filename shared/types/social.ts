@@ -57,6 +57,13 @@ export type FollowTarget = StarTargetBuilder | StarTargetProject;
  *     - builder  → ownerUid
  *     - project  → ${workspaceSlug}_${projectSlug}
  *     - post     → postId
+ *
+ * **The id is opaque** — it's a content-addressable hash, not a parseable
+ * URL. Project ids embed `_` as a separator between workspaceSlug and
+ * projectSlug, and there's no escape if a slug ever contains `_`. Don't
+ * round-trip the id back into a target shape; the canonical shape is the
+ * doc fields (`actorUid`, `target`). Aggregator CFs and rules read the
+ * fields, never the id.
  */
 export function starDocId(actorUid: string, target: StarTarget): string {
   switch (target.type) {

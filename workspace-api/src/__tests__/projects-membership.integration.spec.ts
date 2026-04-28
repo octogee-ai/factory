@@ -316,7 +316,7 @@ describe("POST /api/projects/:wid/:pid/star", () => {
     expect(res.status).toBe(404);
   });
 
-  it("creates the star doc + bumps starCount on first call", async () => {
+  it("creates the typed-target star doc on first call (CF aggregator owns starCount)", async () => {
     seedPublicAliceGame();
     const app = createApp();
     const res = await request(app)
@@ -325,25 +325,34 @@ describe("POST /api/projects/:wid/:pid/star", () => {
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ starred: true });
-    expect(firestoreData["stars/caller-uid_alice_game"]).toMatchObject({
-      starrerUid: "caller-uid",
-      workspaceId: "alice",
-      projectSlug: "game",
-      projectOwnerUid: "alice-uid",
+    // Typed-target shape per BUILDER-SOCIAL-SPEC §10. Doc id derived via
+    // starDocId(uid, target): `{actorUid}_p_{workspaceSlug}_{projectSlug}`.
+    expect(firestoreData["stars/caller-uid_p_alice_game"]).toMatchObject({
+      actorUid: "caller-uid",
+      target: {
+        type: "project",
+        workspaceSlug: "alice",
+        projectSlug: "game",
+        ownerUid: "alice-uid",
+      },
     });
-    expect(mockUpdate).toHaveBeenCalledWith(
+    // starCount belongs to onStarCreated CF — endpoint must NOT update it.
+    expect(mockUpdate).not.toHaveBeenCalledWith(
       "workspaces/alice/projects/game",
-      expect.objectContaining({ starCount: expect.objectContaining({ __op: "increment", value: 1 }) }),
+      expect.objectContaining({ starCount: expect.anything() }),
     );
   });
 
-  it("removes the star doc + decrements starCount when toggled off", async () => {
+  it("removes the star doc when toggled off (CF aggregator decrements)", async () => {
     seedPublicAliceGame();
-    firestoreData["stars/caller-uid_alice_game"] = {
-      starrerUid: "caller-uid",
-      workspaceId: "alice",
-      projectSlug: "game",
-      projectOwnerUid: "alice-uid",
+    firestoreData["stars/caller-uid_p_alice_game"] = {
+      actorUid: "caller-uid",
+      target: {
+        type: "project",
+        workspaceSlug: "alice",
+        projectSlug: "game",
+        ownerUid: "alice-uid",
+      },
     };
     const app = createApp();
     const res = await request(app)
@@ -352,10 +361,10 @@ describe("POST /api/projects/:wid/:pid/star", () => {
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ starred: false });
-    expect(firestoreData["stars/caller-uid_alice_game"]).toBeUndefined();
-    expect(mockUpdate).toHaveBeenCalledWith(
+    expect(firestoreData["stars/caller-uid_p_alice_game"]).toBeUndefined();
+    expect(mockUpdate).not.toHaveBeenCalledWith(
       "workspaces/alice/projects/game",
-      expect.objectContaining({ starCount: expect.objectContaining({ __op: "increment", value: -1 }) }),
+      expect.objectContaining({ starCount: expect.anything() }),
     );
   });
 });
