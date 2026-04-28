@@ -76,6 +76,13 @@ export interface ResolvedGateway {
   /** True when we fell back to the canonical DNS shape because
    *  `gateways/{id}.internalUrl` was absent or empty. Logged but non-fatal. */
   usedFallback: boolean;
+  /** Raw `users/{uid}` document data, surfaced so callers that need other
+   *  fields (e.g. the chat-proxy WS upgrade needs `username` /
+   *  `defaultWorkspaceId` to derive `expectedAgentId`) avoid a second
+   *  Firestore read. Always present when the gateway resolved successfully
+   *  — by construction, `provisioning.openclaw.gatewayId` could only be
+   *  read from this doc. */
+  userData: Record<string, unknown>;
 }
 
 export async function resolveGatewayUrl(
@@ -96,7 +103,7 @@ export async function resolveGatewayUrl(
 
   const overrideUrl = opts.overrideUrl ?? process.env.OPENCLAW_GATEWAY_URL;
   if (typeof overrideUrl === "string" && overrideUrl.length > 0) {
-    return { gatewayId, url: overrideUrl, usedFallback: false };
+    return { gatewayId, url: overrideUrl, usedFallback: false, userData };
   }
 
   const gwSnap = await opts.db.doc(`gateways/${gatewayId}`).get();
@@ -110,11 +117,12 @@ export async function resolveGatewayUrl(
   const internalUrl = typeof gwData.internalUrl === "string" ? gwData.internalUrl : "";
 
   if (internalUrl.length > 0) {
-    return { gatewayId, url: internalUrl, usedFallback: false };
+    return { gatewayId, url: internalUrl, usedFallback: false, userData };
   }
   return {
     gatewayId,
     url: canonicalGatewayUrl(gatewayId, namespace, port),
     usedFallback: true,
+    userData,
   };
 }

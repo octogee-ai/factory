@@ -55,6 +55,11 @@ import {
   invalidateGatewayToken,
   GatewayTokenError,
 } from "./openclaw/gateway-token.js";
+import {
+  shouldForwardFrame,
+  deriveExpectedAgentId,
+  ExpectedAgentIdError,
+} from "./openclaw/frame-filter.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -118,6 +123,25 @@ const ocWsRotationRecoveredTotal = new Counter({
   help: 'OpenClaw upstream handshakes that succeeded after an auth-failed rotation retry',
   registers: [metricsRegistry],
 });
+
+// Per-user frame-filter counters (#728). `decision`=forward|drop. Forward
+// reasons: matched-identity / system-event / non-event-frame / unparseable.
+// Drop reasons: identity-mismatch / missing-identity / unknown-event-class.
+// A non-zero `drop` rate is the canary for cross-user gateway broadcast
+// being intercepted before it reaches the wrong browser.
+const ocWsFrameFilterTotal = new Counter({
+  name: 'chat_proxy_openclaw_ws_frame_filter_total',
+  help: 'Per-user frame-filter decisions on inbound gateway events',
+  labelNames: ['decision', 'reason'] as const,
+  registers: [metricsRegistry],
+});
+
+// Per-uid sample rate for the drop warn-log. The Prom counter above is the
+// canonical signal; the log line is forensic context for the FIRST hit per
+// uid in a 60s window. A real cross-user incident could otherwise produce
+// dozens of warn lines per dropped frame and bury the real signal.
+const FRAME_DROP_LOG_WINDOW_MS = 60_000;
+const lastFrameDropLogByUid = new Map<string, number>();
 
 // OpenClaw gateway auth token is fetched from Secret Manager per-request
 // (see ./openclaw/gateway-token.ts). The gateway publishes a fresh token
@@ -694,13 +718,34 @@ function handleOpenClawWsUpgrade(
 
       let gatewayUrl: string;
       let gatewayId: string;
+      let userData: Record<string, unknown>;
       try {
         const resolved = await resolveGatewayUrl({ db, uid });
         gatewayUrl = resolved.url;
         gatewayId = resolved.gatewayId;
+        userData = resolved.userData;
       } catch (e) {
         if (e instanceof GatewayResolveError) {
           console.log(`[proxy] OC WS: resolve failed — ${e.code}: ${e.message}`);
+          socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        throw e;
+      }
+
+      // Derive the expected agentId for this user from the SAME `users/{uid}`
+      // doc that resolveGatewayUrl already read — no second Firestore round
+      // trip on the WS upgrade path. Used by the per-user frame filter (#728)
+      // to scope inbound gateway broadcast events. If the user lacks the
+      // fields needed, refuse the upgrade rather than fall back to forwarding
+      // everything (fail-closed — see frame-filter.ts).
+      let expectedAgentId: string;
+      try {
+        expectedAgentId = deriveExpectedAgentId(uid, userData);
+      } catch (e) {
+        if (e instanceof ExpectedAgentIdError) {
+          console.error(`[proxy] OC WS: expectedAgentId derive failed — ${e.message}`);
           socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
           socket.destroy();
           return;
@@ -805,8 +850,35 @@ function handleOpenClawWsUpgrade(
           }
         });
         upstream.on("message", (data, isBinary) => {
-          if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(isBinary ? data : data.toString(), { binary: isBinary });
+          if (clientWs.readyState !== WebSocket.OPEN) return;
+          // Binary frames bypass the filter — gateway broadcast() carries
+          // per-user data only as JSON text. If that ever changes, the
+          // filter will need to grow; for now binary forwards as-is.
+          if (isBinary) {
+            clientWs.send(data, { binary: true });
+            return;
+          }
+          const text = data.toString();
+          const decision = shouldForwardFrame(text, { expectedAgentId });
+          ocWsFrameFilterTotal.inc({
+            decision: decision.forward ? "forward" : "drop",
+            reason: decision.reason,
+          });
+          if (decision.forward) {
+            clientWs.send(text);
+          } else {
+            // Sample-log dropped frames so we can spot real cross-user fan-out
+            // in production without flooding logs. Counter is the canonical
+            // signal; the log is for forensic context — at most one line per
+            // uid per 60s window.
+            const now = Date.now();
+            const last = lastFrameDropLogByUid.get(uid) ?? 0;
+            if (now - last >= FRAME_DROP_LOG_WINDOW_MS) {
+              lastFrameDropLogByUid.set(uid, now);
+              console.warn(
+                `[proxy] OC WS: dropped frame uid=${uid} reason=${decision.reason}`,
+              );
+            }
           }
         });
         clientWs.on("close", () => {
