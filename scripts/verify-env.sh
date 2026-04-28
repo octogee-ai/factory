@@ -411,6 +411,13 @@ if [[ -z "$CERTS" || "$CERTS" == "null" ]]; then
   warn "No managed certificates found"
 else
   for CERT_NAME in $(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['metadata']['name']) for i in d.get('items',[])]" 2>/dev/null); do
+    # Skip cross-env certs that drifted into this namespace (stale leftovers
+    # from prior helm renders). Convention: test certs have a -test suffix,
+    # prod certs don't. Custom namespaces are unaffected.
+    case "$ENV" in
+      prod) [[ "$CERT_NAME" == *-test ]] && continue ;;
+      test) [[ "$CERT_NAME" != *-test ]] && continue ;;
+    esac
     CERT_STATUS=$(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i.get('status',{}).get('certificateStatus','Unknown')) for i in d.get('items',[]) if i['metadata']['name']=='$CERT_NAME']" 2>/dev/null)
     CERT_DOMAIN=$(echo "$CERTS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['spec']['domains'][0]) for i in d.get('items',[]) if i['metadata']['name']=='$CERT_NAME']" 2>/dev/null)
     if [[ "$CERT_STATUS" == "Active" ]]; then
