@@ -83,6 +83,27 @@ function removeIfExists(target: string): boolean {
 }
 
 /**
+ * Detect a house-key auth-profiles.json (written by house-key-sync.ts at
+ * throttle level 3 for non-BYOT customers). The two writers share the
+ * same on-disk filename, so byot-sync MUST not delete or overwrite a
+ * house-key file when BYOT is off — it would silently undo the §9.4
+ * plan demotion every snapshot tick.
+ *
+ * Mirrors `isHouseKeyFile` in scripts/lib/house-key-sync.ts. Duplicated
+ * here (vs. importing) to keep byot-sync.ts dependency-free of the
+ * house-key module — they're meant to fail closed independently.
+ */
+function isHouseKeyAuthProfiles(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content);
+    const entry = parsed?.profiles?.["anthropic:default"];
+    return entry?.__octogeeHouseKey === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Reconcile every per-agent BYOT file (auth-profiles.json, models.json)
  * with the desired state. Returns true iff any file actually changed on
  * disk — caller uses that signal to decide whether to invoke
@@ -98,10 +119,22 @@ export function applyByotState(slug: string, input: ByotInput | null): boolean {
   const dir = agentDirForSlug(slug);
   const filePath = (f: ByotFile) => path.join(dir, f);
 
-  // Disabled — remove all BYOT files that exist.
+  // Disabled — remove all BYOT files that exist, EXCEPT a house-key
+  // auth-profiles.json (owned by house-key-sync.ts at level 3). Without
+  // this guard, every provisioner snapshot tick on a non-BYOT L3
+  // customer would clobber the just-written house-key file, leaving
+  // OpenClaw to resolve the platform key from openclaw.json and
+  // undermining §9.4 entirely. See review of PR #734.
   if (!input) {
     let changed = false;
-    for (const f of BYOT_FILES) changed = removeIfExists(filePath(f)) || changed;
+    for (const f of BYOT_FILES) {
+      const target = filePath(f);
+      if (f === "auth-profiles.json" && fs.existsSync(target)) {
+        const existing = fs.readFileSync(target, "utf8");
+        if (isHouseKeyAuthProfiles(existing)) continue;
+      }
+      changed = removeIfExists(target) || changed;
+    }
     if (changed) log(`[byot-sync] ${slug}: removed BYOT files (BYOT off)`);
     return changed;
   }
@@ -127,6 +160,20 @@ export function applyByotState(slug: string, input: ByotInput | null): boolean {
     const target = filePath(f);
     const want = desired[f];
     const existing = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
+
+    // §9.4 coexistence: a house-key auth-profiles.json signals "this
+    // non-BYOT customer is currently plan-demoted." If BYOT is enabled
+    // (input != null) the customer is paying their own way, so BYOT
+    // wins — overwrite the house-key file. Otherwise (caller bug —
+    // input only reaches this branch when BYOT is enabled), refuse.
+    if (f === "auth-profiles.json" && existing !== null && isHouseKeyAuthProfiles(existing) && want === null) {
+      // Should be unreachable: input != null → desired["auth-profiles.json"]
+      // is non-null for anthropic + openai providers. The openai-compatible
+      // case writes models.json, not auth-profiles.json — so we'd want to
+      // remove auth-profiles.json; but we still don't clobber a house-key
+      // file. Skip the remove and keep the L3 plan demote in effect.
+      continue;
+    }
 
     if (want == null) {
       changed = removeIfExists(target) || changed;

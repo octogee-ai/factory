@@ -282,6 +282,118 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(writes).toEqual([]);
   });
 
+  it("free-tier customer: throttleLevel forced to 3 (always on house key, §9.5)", async () => {
+    // Defends against the Free-tier semantic gap Copilot review caught:
+    // windowBudgetUsd=0 would route through computeThrottleLevel's
+    // "unlimited" path; tier-policy decision lives at the caller.
+    const { db, writes } = makeStubDb({
+      selectedTier: "free",
+      subscription: { tier: "free", status: "active" },
+      byotActive: false,
+      usage: {
+        windowCostUsd: 0,
+        windowStartedAt: { toDate: () => new Date(Date.now() - 1 * 60 * 60 * 1000) },
+      },
+    });
+    const agentDir = makeAgentDir("free-customer");
+
+    await reportUsage(
+      db as any,
+      "octogee-free-customer-coach",
+      "coach",
+      agentDir,
+      {
+        input: 100, output: 50, cacheRead: 0, cacheWrite: 0,
+        totalTokens: 150, costUsd: 0.001,
+        model: "anthropic/claude-haiku-4-5",
+        costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      new Map([["octogee-free-customer-coach", "free-uid"]]),
+      () => {},
+      "gw-test",
+    );
+
+    const userUpdate = writes.find((w) => w.path === "users/free-uid" && w.op === "update");
+    expect(userUpdate).toBeDefined();
+    expect(userUpdate!.data["usage.throttleLevel"]).toBe(3);
+    expect(userUpdate!.data["usage.throttleReason"]).toBe("free_tier_house_key");
+  });
+
+  it("BYOT customer: tracks cost but throttleLevel stays 0 even at 200% of budget", async () => {
+    // Per ADMIN-DASHBOARD-SPEC §9.3 — BYOT pays for itself, so no
+    // throttle is applied. We still record windowCostUsd for transparency
+    // but the level field stays at 0 even when cost > budget.
+    const { db, writes } = makeStubDb({
+      selectedTier: "hobby",
+      subscription: { tier: "hobby" },
+      byotActive: true,
+      usage: {
+        windowCostUsd: 100, // already way over any budget
+        windowStartedAt: { toDate: () => new Date(Date.now() - 1 * 60 * 60 * 1000) },
+      },
+    });
+    const agentDir = makeAgentDir("byot-customer");
+
+    await reportUsage(
+      db as any,
+      "octogee-byot-customer-coach",
+      "coach",
+      agentDir,
+      {
+        input: 1000, output: 500, cacheRead: 0, cacheWrite: 0,
+        totalTokens: 1500, costUsd: 50.0, // big spike
+        model: "anthropic/claude-sonnet-4-6",
+        costBreakdown: { input: 25, output: 25, cacheRead: 0, cacheWrite: 0 },
+      },
+      new Map([["octogee-byot-customer-coach", "byot-uid"]]),
+      () => {},
+      "gw-test",
+    );
+
+    const userUpdate = writes.find((w) => w.path === "users/byot-uid" && w.op === "update");
+    expect(userUpdate).toBeDefined();
+    // BYOT skip: throttle stays at 0 regardless of spend.
+    expect(userUpdate!.data["usage.throttleLevel"]).toBe(0);
+    // But cost is still recorded for transparency.
+    expect(userUpdate!.data["usage.windowCostUsd"]).toBeDefined();
+  });
+
+  it("non-BYOT customer past 100% USD budget: throttleLevel = 3 (plan demoted)", async () => {
+    // §9.2: ≥100% of windowBudgetUsd → level 3 (no longer level 2).
+    const { db, writes } = makeStubDb({
+      selectedTier: "hobby",
+      subscription: { tier: "hobby", status: "active" },
+      byotActive: false,
+      usage: {
+        windowCostUsd: 0.0,
+        windowStartedAt: { toDate: () => new Date(Date.now() - 1 * 60 * 60 * 1000) },
+      },
+    });
+    const agentDir = makeAgentDir("paid-customer");
+
+    // Hobby tier window budget ≈ $0.00878 — push way over.
+    await reportUsage(
+      db as any,
+      "octogee-paid-customer-coach",
+      "coach",
+      agentDir,
+      {
+        input: 100_000, output: 100_000, cacheRead: 0, cacheWrite: 0,
+        totalTokens: 200_000, costUsd: 5.0, // far above hobby's ~$0.0088 window
+        model: "anthropic/claude-sonnet-4-6",
+        costBreakdown: { input: 2.5, output: 2.5, cacheRead: 0, cacheWrite: 0 },
+      },
+      new Map([["octogee-paid-customer-coach", "paid-uid"]]),
+      () => {},
+      "gw-test",
+    );
+
+    const userUpdate = writes.find((w) => w.path === "users/paid-uid" && w.op === "update");
+    expect(userUpdate).toBeDefined();
+    expect(userUpdate!.data["usage.throttleLevel"]).toBe(3);
+    expect(userUpdate!.data["usage.throttleLevel"]).not.toBe(2); // L2 retired
+  });
+
   it("skips workspace-scoped writes when customer-config.json has no slug", async () => {
     const { db, writes } = makeStubDb({
       selectedTier: "pro",

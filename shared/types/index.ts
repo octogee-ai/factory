@@ -55,6 +55,21 @@ export type {
   MemberRole,
 } from './member';
 
+// Billing constants — trial budget tapering, refill window length, USD
+// derivations. Imported by scripts/, tests/, and (via local mirror)
+// functions/. See ADMIN-DASHBOARD-SPEC §9.5.
+export {
+  TRIAL_DAILY_BUDGETS_USD,
+  TRIAL_TOTAL_BUDGET_USD,
+  WINDOW_LENGTH_HOURS,
+  WINDOWS_PER_DAY,
+  SONNET_BLENDED_USD_PER_M_TOKENS,
+  trialDayBudgetUsd,
+  trialWindowBudgetUsd,
+  trialDayN,
+  windowBudgetUsdForTier,
+} from './billing';
+
 // Notification types
 export type {
   NotificationCategory,

@@ -37,6 +37,11 @@ import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import { formatUsageLogLine } from "./usage-log-line.js";
+import {
+  WINDOW_LENGTH_HOURS,
+  windowBudgetUsdForTier,
+} from "../../shared/types/billing.js";
+import { computeThrottleLevel } from "../../functions/src/billing/throttle.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -181,42 +186,80 @@ export async function reportUsage(
       const usageData = data.usage || {};
       const tier = data.selectedTier || data.subscription?.tier || "trial";
 
-      // ── Window-based refill logic ──────────────────────────────────
-      const REFILL_MS = 4 * 60 * 60 * 1000;
-      const WINDOWS_PER_WEEK = 42;
-      const WEEKLY_BUDGETS: Record<string, number> = {
-        free: 50_000, hobby: 200_000, pro: 500_000,
-        max: 1_500_000, trial: 1_500_000,
-      };
-      const weeklyBudget = WEEKLY_BUDGETS[tier] ?? 50_000;
-      const windowSize = weeklyBudget === 0 ? 0 : Math.floor(weeklyBudget / WINDOWS_PER_WEEK);
+      // ── Window-based refill logic (USD-driven, 5h windows) ─────────
+      // §9.2 of ADMIN-DASHBOARD-SPEC: throttle math reads windowCostUsd.
+      // Tokens are kept for diagnostic display only.
+      const REFILL_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
+      const trialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
+      const subscriptionStatus = data.subscription?.status ?? "active";
+      const byotActive = data.byotActive === true;
+
+      // For trial users we tier-derive in USD via tapered curve. Paid
+      // tiers convert weekly token budget at the Sonnet blended rate.
+      const windowBudgetUsd = windowBudgetUsdForTier(tier, trialStartedAt);
 
       const windowStartedAt = usageData.windowStartedAt?.toDate?.() || null;
       const now = new Date();
       const windowExpired = !windowStartedAt ||
         (now.getTime() - windowStartedAt.getTime()) >= REFILL_MS;
 
-      let newWindowUsed: number;
+      let newWindowCostUsd: number;
+      let newWindowTokensUsed: number;
       const windowUpdates: Record<string, any> = {};
 
       if (windowExpired) {
-        newWindowUsed = usage.totalTokens;
+        newWindowCostUsd    = usage.costUsd;
+        newWindowTokensUsed = usage.totalTokens;
+        windowUpdates["usage.windowCostUsd"]    = usage.costUsd;
         windowUpdates["usage.windowTokensUsed"] = usage.totalTokens;
         windowUpdates["usage.windowStartedAt"]  = now;
-        windowUpdates["usage.windowSize"]       = windowSize;
+        windowUpdates["usage.windowBudgetUsd"]  = windowBudgetUsd;
       } else {
-        newWindowUsed = (usageData.windowTokensUsed || 0) + usage.totalTokens;
+        newWindowCostUsd    = (usageData.windowCostUsd ?? 0) + usage.costUsd;
+        newWindowTokensUsed = (usageData.windowTokensUsed ?? 0) + usage.totalTokens;
+        windowUpdates["usage.windowCostUsd"]    = FieldValue.increment(usage.costUsd);
         windowUpdates["usage.windowTokensUsed"] = FieldValue.increment(usage.totalTokens);
+        // Refresh budget every turn so day-N tapering takes effect
+        // immediately on rollover without a separate cron.
+        windowUpdates["usage.windowBudgetUsd"]  = windowBudgetUsd;
       }
 
-      let throttleLevel = 0;
-      if (windowSize > 0) {
-        const pct = (newWindowUsed / windowSize) * 100;
-        if (pct >= 100) throttleLevel = 2;
-        else if (pct >= 80) throttleLevel = 1;
+      // ── Throttle level (§9.2 + §9.3) ─────────────────────────────
+      // BYOT customers pay Anthropic directly — never throttled.
+      // Otherwise delegate to functions/src/billing/throttle.ts so the
+      // gateway-side compute (this file) and the trigger-side compute
+      // (functions/src/triggers/onUsageUpdate.ts) can never drift.
+      // Trial users with no trialStartedAt fall through with budget=0,
+      // which the trigger treats as "unlimited" — log so ops can spot
+      // stuck users before they become free riders.
+      if (tier === "trial" && !trialStartedAt && !byotActive) {
+        log(`⚠ usage: trial user ${uid} has no subscription.trialStartedAt — running on platform key with no USD budget`);
       }
 
-      // ── Legacy user-level write (kept for backward compat + throttle) ──
+      let throttleLevel: 0 | 1 | 3 = 0;
+      let throttleReason = "normal";
+      if (byotActive) {
+        throttleReason = "byot_skip";
+      } else if (tier === "free") {
+        // §9.5: free tier is always on the house key, no real budget.
+        // Without this branch, windowBudgetUsd=0 would route through
+        // computeThrottleLevel's "unlimited" path and free users would
+        // silently get unlimited service on the platform's dime.
+        throttleLevel = 3;
+        throttleReason = "free_tier_house_key";
+      } else {
+        const state = computeThrottleLevel(
+          newWindowCostUsd,
+          windowBudgetUsd,
+          subscriptionStatus,
+          windowStartedAt,
+        );
+        // Compute returns 0|1|2|3 in type but never emits 2 — narrow.
+        throttleLevel = (state.level === 2 ? 3 : state.level) as 0 | 1 | 3;
+        throttleReason = state.reason;
+      }
+
+      // ── User-level write — diagnostic totals + throttle state ──────
       t.update(userRef, {
         ...windowUpdates,
         "usage.totalTokensUsed":    FieldValue.increment(usage.totalTokens),
@@ -225,6 +268,7 @@ export async function reportUsage(
         "usage.interactionCount":   FieldValue.increment(1),
         "usage.requestsThisHour":   FieldValue.increment(1),
         "usage.throttleLevel":      throttleLevel,
+        "usage.throttleReason":     throttleReason,
         "usage.lastUpdated":        FieldValue.serverTimestamp(),
       });
 
