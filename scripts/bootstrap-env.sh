@@ -6,7 +6,8 @@ set -euo pipefail
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Runs setup-mattermost.sh and setup-secrets.sh in the correct order,
-# then validates the result with verify-secrets.sh.
+# then validates the result with verify-secrets.sh, then seeds the
+# orchestrator config so signups can flow.
 #
 # This is the script to run when:
 #   - Setting up a fresh environment
@@ -18,9 +19,14 @@ set -euo pipefail
 #   ./scripts/bootstrap-env.sh --env=prod
 #
 # What it does (in order):
-#   1. setup-mattermost.sh  → admin PAT, bot token, team, K8s secret
-#   2. setup-secrets.sh     → remaining K8s secrets (gitea, stripe, etc.)
-#   3. verify-secrets.sh    → validates all required secrets + keys
+#   1. setup-mattermost.sh         → admin PAT, bot token, team, K8s secret
+#   2. setup-secrets.sh            → remaining K8s secrets (gitea, stripe, etc.)
+#   3. verify-secrets.sh           → validates all required secrets + keys
+#   4. seed-orchestrator-config.ts → seeds config/orchestrator in Firestore
+#                                    so the onCustomerAssignGateway trigger can
+#                                    place new signups (PROD bit this twice
+#                                    — once on first setup, once after a --full
+#                                    teardown wiped the doc, see runbook)
 #
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -64,7 +70,7 @@ echo ""
 kubectl create namespace "$NS" 2>/dev/null || true
 
 # ── Step 0: Gitea SSH key ───────────────────────────────────────────────
-echo -e "${BOLD}[0/3] Gitea SSH key${NC}"
+echo -e "${BOLD}[0/4] Gitea SSH key${NC}"
 echo ""
 
 if kubectl get secret gitea-ssh-key -n "$NS" >/dev/null 2>&1; then
@@ -105,21 +111,40 @@ fi
 echo ""
 
 # ── Step 1: Mattermost bootstrap ────────────────────────────────────────
-echo -e "${BOLD}[1/3] Mattermost bootstrap${NC}"
+echo -e "${BOLD}[1/4] Mattermost bootstrap${NC}"
 echo ""
 "$SCRIPT_DIR/setup-mattermost.sh" --env="$ENV" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 echo ""
 
 # ── Step 2: Remaining secrets ───────────────────────────────────────────
-echo -e "${BOLD}[2/3] Remaining K8s secrets${NC}"
+echo -e "${BOLD}[2/4] Remaining K8s secrets${NC}"
 echo ""
 "$SCRIPT_DIR/setup-secrets.sh" --env="$ENV" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 echo ""
 
 # ── Step 3: Verify everything ──────────────────────────────────────────
-echo -e "${BOLD}[3/3] Verification${NC}"
+echo -e "${BOLD}[3/4] Verification${NC}"
 echo ""
-if "$SCRIPT_DIR/verify-secrets.sh" --env="$ENV"; then
+if ! "$SCRIPT_DIR/verify-secrets.sh" --env="$ENV"; then
+  echo ""
+  echo -e "${RED}${BOLD}Bootstrap incomplete — see errors above.${NC}"
+  echo ""
+  echo "  Some secrets failed verification. Fix the issues above and re-run:"
+  echo "    ./scripts/bootstrap-env.sh --env=${ENV}"
+  echo ""
+  exit 1
+fi
+echo ""
+
+# ── Step 4: Orchestrator config (Firestore seed) ───────────────────────
+# Seeds config/orchestrator.defaultGatewayId so the
+# onCustomerAssignGateway trigger has somewhere to place new signups.
+# Idempotent — re-running with the same default-gateway is a no-op.
+# Refuses to overwrite a deliberate override (e.g. canary placement)
+# unless re-run with --force.
+echo -e "${BOLD}[4/4] Orchestrator config (Firestore seed)${NC}"
+echo ""
+if (cd "$SCRIPT_DIR" && npx tsx ops/seed-orchestrator-config.ts --env="$ENV"); then
   echo ""
   echo -e "${GREEN}${BOLD}Bootstrap complete — environment is ready for helm upgrade.${NC}"
   echo ""
@@ -133,10 +158,13 @@ if "$SCRIPT_DIR/verify-secrets.sh" --env="$ENV"; then
   echo ""
 else
   echo ""
-  echo -e "${RED}${BOLD}Bootstrap incomplete — see errors above.${NC}"
+  echo -e "${RED}${BOLD}Bootstrap incomplete — orchestrator seed failed.${NC}"
   echo ""
-  echo "  Some secrets failed verification. Fix the issues above and re-run:"
+  echo "  Resolve the seed error above and re-run:"
   echo "    ./scripts/bootstrap-env.sh --env=${ENV}"
+  echo ""
+  echo "  Or seed the orchestrator manually:"
+  echo "    tsx scripts/ops/seed-orchestrator-config.ts --env=${ENV}"
   echo ""
   exit 1
 fi

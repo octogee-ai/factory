@@ -2,9 +2,17 @@
  * Octogee Provisioner — Git Operations
  *
  * Per-customer SSH keys: each customer gets their own ed25519 keypair at
- * customers/{slug}/.ssh/id_ed25519. The key is registered as a user SSH key
- * on a per-customer Gitea user (ws-{slug}), which is a collaborator on
- * only that customer's repos.
+ * customer-keys/{slug}/id_ed25519 (a SIBLING of customers/, never nested
+ * inside the customer's workspace dir). The key is registered as a user
+ * SSH key on a per-customer Gitea user (ws-{slug}), which is a
+ * collaborator on only that customer's repos.
+ *
+ * The keys-out-of-workspace layout matters: when keys lived at
+ * `customers/{slug}/.ssh/`, generateCustomerSshKey() implicitly mkdir'd
+ * `customers/{slug}/`, which then made `git clone <url> {slug}` fail on
+ * the restore branch with "destination path 'slug' already exists and is
+ * not an empty directory" — observed on TEST 2026-04-29 (buildera looped
+ * on every Cloud Tasks retry forever).
  *
  * The provisioner uses the global GIT_API_TOKEN (admin) for repo creation,
  * user management, and deploy key registration. Git operations (clone, push,
@@ -15,7 +23,7 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { log, GIT_API_URL, GIT_API_TOKEN, GIT_ORG, GIT_SSH_HOST, CUSTOMERS_DIR } from "./config.js";
+import { log, GIT_API_URL, GIT_API_TOKEN, GIT_ORG, GIT_SSH_HOST, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } from "./config.js";
 
 /** Admin API headers for Gitea. Content-Type included for POST/PUT/PATCH. */
 function adminHeaders(includeContentType = true): Record<string, string> {
@@ -28,15 +36,16 @@ function adminHeaders(includeContentType = true): Record<string, string> {
 
 // ── SSH Key Management ────────────────────────────────────────────────────────
 
-/** Path to a customer's SSH private key. */
+/** Path to a customer's SSH private key. Lives OUTSIDE the workspace dir
+ *  (see file header) so generating the key never pre-creates customers/{slug}. */
 export function customerSshKeyPath(slug: string): string {
-  return path.join(CUSTOMERS_DIR, slug, ".ssh", "id_ed25519");
+  return path.join(CUSTOMER_KEYS_DIR, slug, "id_ed25519");
 }
 
 /** Generate an SSH keypair for a customer. Returns the public key. */
 export function generateCustomerSshKey(slug: string): string {
-  const sshDir = path.join(CUSTOMERS_DIR, slug, ".ssh");
-  const keyPath = path.join(sshDir, "id_ed25519");
+  const keyDir = path.join(CUSTOMER_KEYS_DIR, slug);
+  const keyPath = path.join(keyDir, "id_ed25519");
   const pubPath = keyPath + ".pub";
 
   if (fs.existsSync(keyPath)) {
@@ -44,12 +53,12 @@ export function generateCustomerSshKey(slug: string): string {
     return fs.readFileSync(pubPath, "utf-8").trim();
   }
 
-  fs.mkdirSync(sshDir, { recursive: true });
+  fs.mkdirSync(keyDir, { recursive: true });
   execSync(`ssh-keygen -t ed25519 -N "" -f "${keyPath}" -C "octogee-${slug}@gateway" -q`, {
     stdio: "pipe",
   });
   // Harden permissions — prevent other customers' agents from reading
-  fs.chmodSync(sshDir, 0o700);
+  fs.chmodSync(keyDir, 0o700);
   fs.chmodSync(keyPath, 0o600);
   fs.chmodSync(pubPath, 0o644);
 

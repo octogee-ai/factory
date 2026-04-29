@@ -21,6 +21,13 @@ export const AGENTS_DIR = process.env.OPENCLAW_AGENTS_DIR
 export const AGENT_PREFIX = process.env.AGENT_PREFIX ?? "octogee-";
 export const GATEWAY_ID = process.env.GATEWAY_ID ?? "local";
 export const CUSTOMERS_DIR = path.join(OPENCLAW_DIR, "customers");
+// Per-customer SSH keys live OUTSIDE the customer's workspace dir. If keys
+// were nested at `customers/{slug}/.ssh/` (the prior layout), generating
+// them implicitly mkdir'd `customers/{slug}/` — which then made
+// `git clone <url> {slug}` fail with "destination path already exists and
+// is not an empty directory" on the restore branch (observed on TEST
+// 2026-04-29 — buildera looped on every Cloud Tasks retry).
+export const CUSTOMER_KEYS_DIR = path.join(OPENCLAW_DIR, "customer-keys");
 
 // Templates: container default is /nucrew/templates; local dev falls back to ../templates
 export const TEMPLATES_DIR = process.env.OCTOGEE_TEMPLATES_DIR || path.resolve(__dirname, "..", "..", "templates");
