@@ -183,34 +183,108 @@ CURRENT_CTX=$(kubectl config current-context)
 ok "kubectl context: $CURRENT_CTX"
 
 # ── 1a. Full: wipe Gitea on-disk repos ───────────────────────────────────
-# Must run BEFORE helm uninstall — once the Gitea pod is gone we can't
-# kubectl-exec into it. The PVC (gitea-shared-storage) is preserved per
-# the script's data-safety contract, but the on-disk bare repos at
+# The PVC (gitea-shared-storage) is preserved per the script's data-
+# safety contract, but the on-disk bare repos at
 # /data/git/repositories/<org>/<repo>.git/ would otherwise outlive the
 # DROP DATABASE in step 5 and cause "repository files already exist"
 # 500s on the first re-onboarding after teardown (Gitea checks both DB
 # and filesystem when creating a repo). Org-scoped wipe only — leaves
 # Gitea config / SSH host keys / sessions on the PVC untouched.
+#
+# Two paths:
+#   (a) Statefulset is up   → kubectl exec into the running Gitea pod.
+#   (b) No statefulset/pod  → spin up an ephemeral alpine pod with the
+#       PVC mounted and run the wipe from there. This case happens when
+#       a prior teardown already uninstalled Helm (PVC stays bound but
+#       no pod is left to exec into). PVC absence is the only state
+#       that's truly a "fresh slate" — having a bound PVC with no
+#       attached pod is NOT.
+wipe_gitea_repos_via_ephemeral_pod() {
+  local pod_name="gitea-pvc-wipe-$$"
+  # Apply Pod manifest, wait for terminal phase, fetch logs, delete.
+  # Explicit manifest is more deterministic than `kubectl run --overrides`,
+  # which has known sharp edges around mixing args after `--` with overrides.
+  if ! kubectl apply -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" -f - <<EOF >/dev/null 2>&1
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $pod_name
+  labels:
+    app: gitea-pvc-wipe
+spec:
+  restartPolicy: Never
+  containers:
+    - name: wipe
+      image: alpine:3
+      command:
+        - sh
+        - -c
+        - 'set -e; rm -rf /data/git/repositories/octogee; mkdir -p /data/git/repositories/octogee; chown -R 1000:1000 /data/git/repositories/octogee; echo "after wipe:"; ls -la /data/git/repositories/'
+      volumeMounts:
+        - mountPath: /data
+          name: gitea-data
+  volumes:
+    - name: gitea-data
+      persistentVolumeClaim:
+        claimName: gitea-shared-storage
+EOF
+  then
+    return 1
+  fi
+
+  # Poll for terminal phase (Succeeded or Failed). 90s should be plenty —
+  # the container is alpine + a handful of fs ops on a few-GB PVC.
+  local phase="" elapsed=0
+  while (( elapsed < 90 )); do
+    phase=$(kubectl get pod "$pod_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+      -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+    [[ "$phase" == "Succeeded" || "$phase" == "Failed" ]] && break
+    sleep 3; elapsed=$((elapsed + 3))
+  done
+
+  # Echo container logs (indented) so the operator sees what landed.
+  kubectl logs "$pod_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" 2>/dev/null \
+    | sed 's/^/      /' || true
+
+  # Always clean up — non-fatal if the pod's already gone.
+  kubectl delete pod "$pod_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+    --grace-period=5 --wait=false >/dev/null 2>&1 || true
+
+  [[ "$phase" == "Succeeded" ]] && return 0 || return 1
+}
+
 if $FULL; then
   echo ""
   info "Wiping stale Gitea on-disk repos (PVC preserved, DB will be dropped)..."
   if kubectl get statefulset octogee-gitea -n "$K8S_NAMESPACE" \
       --context "$K8S_CONTEXT" >/dev/null 2>&1; then
+    # Path (a): statefulset present — exec into running pod
     GITEA_POD=$(kubectl get pod -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
       -l app.kubernetes.io/name=gitea \
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
     if [[ -n "$GITEA_POD" ]]; then
-      kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" "$GITEA_POD" -- \
-        sh -c 'rm -rf /data/git/repositories/octogee 2>/dev/null; mkdir -p /data/git/repositories/octogee; chown -R 1000:1000 /data/git/repositories/octogee 2>/dev/null; ls /data/git/repositories/octogee' \
-        >/dev/null 2>&1 \
-        && ok "Gitea on-disk repos wiped (octogee org)" \
-        || warn "Gitea repo wipe returned non-zero — verify manually with: kubectl exec -n $K8S_NAMESPACE $GITEA_POD -- ls /data/git/repositories/octogee"
+      if kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" "$GITEA_POD" -- \
+          sh -c 'rm -rf /data/git/repositories/octogee && mkdir -p /data/git/repositories/octogee && chown -R 1000:1000 /data/git/repositories/octogee' \
+          >/dev/null 2>&1; then
+        ok "Gitea on-disk repos wiped (octogee org, via running pod)"
+      else
+        die "Gitea repo wipe failed via running pod — aborting before DB drop. Manual verify: kubectl exec -n $K8S_NAMESPACE $GITEA_POD -- ls /data/git/repositories/octogee"
+      fi
     else
-      warn "Gitea statefulset present but no running pod — wipe deferred"
-      warn "After re-install, run: kubectl exec -n $K8S_NAMESPACE statefulset/octogee-gitea -- rm -rf /data/git/repositories/octogee/* (BEFORE setup-gitea.sh)"
+      die "Gitea statefulset present but no running pod — refuse to proceed (would drop DB while leaving stale repo files on PVC). Either wait for the pod to come up, or scale the statefulset to 0 + delete it so we fall through to the ephemeral-pod wipe path."
+    fi
+  elif kubectl get pvc gitea-shared-storage -n "$K8S_NAMESPACE" \
+      --context "$K8S_CONTEXT" >/dev/null 2>&1; then
+    # Path (b): no statefulset but PVC exists — could carry stale repos
+    # from a prior install. Mount it via a one-shot pod and wipe.
+    info "No Gitea statefulset, but PVC gitea-shared-storage is bound — wiping via ephemeral pod..."
+    if wipe_gitea_repos_via_ephemeral_pod; then
+      ok "Gitea on-disk repos wiped (octogee org, via ephemeral pod)"
+    else
+      die "Ephemeral-pod wipe failed — aborting before DB drop to avoid PVC/DB drift. Inspect with: kubectl run gitea-pvc-inspect -n $K8S_NAMESPACE --rm -it --restart=Never --image=alpine:3 --overrides='{\"spec\":{\"containers\":[{\"name\":\"x\",\"image\":\"alpine:3\",\"stdin\":true,\"tty\":true,\"command\":[\"sh\"],\"volumeMounts\":[{\"mountPath\":\"/data\",\"name\":\"d\"}]}],\"volumes\":[{\"name\":\"d\",\"persistentVolumeClaim\":{\"claimName\":\"gitea-shared-storage\"}}]}}' -- sh"
     fi
   else
-    info "Gitea statefulset not present — nothing on-disk to wipe (fresh PVC)"
+    info "No Gitea statefulset and no PVC bound — truly fresh slate, nothing to wipe"
   fi
 fi
 
