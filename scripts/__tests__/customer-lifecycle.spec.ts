@@ -278,9 +278,9 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     // half-finished mount doesn't ping #ops.
     expect(result.steps).toEqual([
       "claim-slot",
+      "ssh-key",
       "write-templates",
       "init-workspace-repo",
-      "ssh-key",
       "blob-sync",
       "mattermost-provision",
       "config-patch",

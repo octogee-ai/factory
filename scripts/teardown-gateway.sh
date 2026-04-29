@@ -182,6 +182,38 @@ CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || { echo -e "  ${RED}❌ Wrong context: $CURRENT_CTX${NC}"; exit 1; }
 ok "kubectl context: $CURRENT_CTX"
 
+# ── 1a. Full: wipe Gitea on-disk repos ───────────────────────────────────
+# Must run BEFORE helm uninstall — once the Gitea pod is gone we can't
+# kubectl-exec into it. The PVC (gitea-shared-storage) is preserved per
+# the script's data-safety contract, but the on-disk bare repos at
+# /data/git/repositories/<org>/<repo>.git/ would otherwise outlive the
+# DROP DATABASE in step 5 and cause "repository files already exist"
+# 500s on the first re-onboarding after teardown (Gitea checks both DB
+# and filesystem when creating a repo). Org-scoped wipe only — leaves
+# Gitea config / SSH host keys / sessions on the PVC untouched.
+if $FULL; then
+  echo ""
+  info "Wiping stale Gitea on-disk repos (PVC preserved, DB will be dropped)..."
+  if kubectl get statefulset octogee-gitea -n "$K8S_NAMESPACE" \
+      --context "$K8S_CONTEXT" >/dev/null 2>&1; then
+    GITEA_POD=$(kubectl get pod -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+      -l app.kubernetes.io/name=gitea \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [[ -n "$GITEA_POD" ]]; then
+      kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" "$GITEA_POD" -- \
+        sh -c 'rm -rf /data/git/repositories/octogee 2>/dev/null; mkdir -p /data/git/repositories/octogee; chown -R 1000:1000 /data/git/repositories/octogee 2>/dev/null; ls /data/git/repositories/octogee' \
+        >/dev/null 2>&1 \
+        && ok "Gitea on-disk repos wiped (octogee org)" \
+        || warn "Gitea repo wipe returned non-zero — verify manually with: kubectl exec -n $K8S_NAMESPACE $GITEA_POD -- ls /data/git/repositories/octogee"
+    else
+      warn "Gitea statefulset present but no running pod — wipe deferred"
+      warn "After re-install, run: kubectl exec -n $K8S_NAMESPACE statefulset/octogee-gitea -- rm -rf /data/git/repositories/octogee/* (BEFORE setup-gitea.sh)"
+    fi
+  else
+    info "Gitea statefulset not present — nothing on-disk to wipe (fresh PVC)"
+  fi
+fi
+
 # ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
 echo ""
 if $FORCE && [[ "$ENV" == "test" ]]; then
