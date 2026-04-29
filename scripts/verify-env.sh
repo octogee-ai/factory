@@ -714,6 +714,47 @@ if [[ -n "$CHAT_HOST" ]]; then
   fi
 fi
 
+# ── 8b. Orchestrator Config (Firestore) ──────────────────────────────────────
+# `config/orchestrator.defaultGatewayId` is what onCustomerAssignGateway reads
+# to place every new signup. There is no hardcoded fallback — if the doc is
+# missing the trigger returns `not-ready` with reason: "config-missing" and
+# the customer's gatewayId never gets set. This bit PROD on 2026-04-28 (first
+# setup, never seeded) and 2026-04-29 (--full teardown wiped Firestore, the
+# manual rebuild path forgot to reseed). bootstrap-env.sh now seeds it as
+# Step 4, but verify-env confirms it independently — so a manual rebuild
+# that bypasses bootstrap-env.sh (per RUNBOOK ops flow) still gets caught.
+#
+# Probes via the seed script's --dry-run, which already encodes the right
+# defaultGatewayId per env and surfaces drift vs. missing distinctly.
+set_section bootstrap
+header "8b. Orchestrator Config"
+
+if [[ "$ENV" == "custom" ]]; then
+  info "Custom namespaces don't use config/orchestrator — skipping"
+else
+  ORCH_OUTPUT=$( (cd "$REPO_DIR/scripts" && npx tsx ops/seed-orchestrator-config.ts --env="$ENV" --dry-run) 2>&1 || true)
+  if echo "$ORCH_OUTPUT" | grep -q "already seeded"; then
+    pass "config/orchestrator.defaultGatewayId = gw-$ENV (matches expected)"
+  elif echo "$ORCH_OUTPUT" | grep -q "(DRY-RUN) seeding"; then
+    fail "config/orchestrator missing — every new signup will stall with reason 'config-missing'"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV)"
+      echo -e "  ${YELLOW}     ${NC} then re-fire any pending placements: (cd scripts && npx tsx ops/assign-customer-gateway.ts --env=$ENV --all)"
+    fi
+  elif echo "$ORCH_OUTPUT" | grep -q "OVERWRITING\|Refusing to overwrite"; then
+    DRIFT_LINE=$(echo "$ORCH_OUTPUT" | grep -E "Refusing|OVERWRITING" | head -1)
+    fail "config/orchestrator drift: $DRIFT_LINE"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} review: (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV --dry-run)"
+      echo -e "  ${YELLOW}     ${NC} overwrite if intentional: (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV --force)"
+    fi
+  elif echo "$ORCH_OUTPUT" | grep -q "SA key not found"; then
+    warn "Cannot verify orchestrator config — SA key not found at ~/.openclaw/secrets/octogee*-sa-key.json"
+  else
+    warn "Orchestrator config probe failed unexpectedly: $(echo "$ORCH_OUTPUT" | head -1)"
+  fi
+fi
+
 set_section bootstrap
 LEGACY_MM_TEAM=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_TEAM_ID")].value}' 2>/dev/null || echo "")
 MM_COMMUNITY_TEAM=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_COMMUNITY_TEAM_ID")].value}' 2>/dev/null || echo "")
