@@ -138,6 +138,7 @@ echo "  Will remove:"
 echo "    • Helm release 'octogee' (gateway, workspace-api, chat-proxy, MM + Gitea pods)"
 if $FULL; then
   echo -e "  ${RED}  + Cloud SQL DBs: $MM_DB_NAME, $GITEA_DB_NAME (DROP DATABASE)${NC}"
+  echo -e "  ${RED}  + PVCs: mattermost-data, gitea-shared-storage (Helm-recreated on rebuild)${NC}"
   echo -e "  ${RED}  + Firestore collections (all)${NC}"
   echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
   echo -e "  ${RED}  + Firebase Auth users (all)${NC}"
@@ -145,7 +146,9 @@ fi
 echo ""
 echo "  Will preserve:"
 echo "    • All K8s secrets in $K8S_NAMESPACE (rotate via scripts/rotate-secret.sh)"
-echo "    • All PVCs (mattermost-data, gitea-shared-storage)"
+if ! $FULL; then
+  echo "    • All PVCs (mattermost-data, gitea-shared-storage)"
+fi
 echo "    • Namespace: $K8S_NAMESPACE"
 echo "    • Secret Manager (every entry — never touched, even with --full)"
 echo "    • Cloud SQL instance (octogee-pg)"
@@ -182,110 +185,35 @@ CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || { echo -e "  ${RED}❌ Wrong context: $CURRENT_CTX${NC}"; exit 1; }
 ok "kubectl context: $CURRENT_CTX"
 
-# ── 1a. Full: wipe Gitea on-disk repos ───────────────────────────────────
-# The PVC (gitea-shared-storage) is preserved per the script's data-
-# safety contract, but the on-disk bare repos at
-# /data/git/repositories/<org>/<repo>.git/ would otherwise outlive the
-# DROP DATABASE in step 5 and cause "repository files already exist"
-# 500s on the first re-onboarding after teardown (Gitea checks both DB
-# and filesystem when creating a repo). Org-scoped wipe only — leaves
-# Gitea config / SSH host keys / sessions on the PVC untouched.
+# ── 1a. Full: delete PVCs ────────────────────────────────────────────────
+# Pre-customer / F&F discipline: --full already drops Cloud SQL DBs and
+# wipes Firestore — there is no "data-preservation" contract to honor at
+# this stage. The previous wipe-ceremony tried to surgically wipe the
+# octogee/ org subtree on the Gitea PVC to avoid PVC/DB drift, but it
+# only handled the Gitea-as-statefulset shape (PROD runs Gitea as a
+# Deployment, no statefulset selector match → ephemeral-pod fallback →
+# RWO Multi-Attach failure when the Deployment pod still held the PVC).
 #
-# Two paths:
-#   (a) Statefulset is up   → kubectl exec into the running Gitea pod.
-#   (b) No statefulset/pod  → spin up an ephemeral alpine pod with the
-#       PVC mounted and run the wipe from there. This case happens when
-#       a prior teardown already uninstalled Helm (PVC stays bound but
-#       no pod is left to exec into). PVC absence is the only state
-#       that's truly a "fresh slate" — having a bound PVC with no
-#       attached pod is NOT.
-wipe_gitea_repos_via_ephemeral_pod() {
-  local pod_name="gitea-pvc-wipe-$$"
-  # Apply Pod manifest, wait for terminal phase, fetch logs, delete.
-  # Explicit manifest is more deterministic than `kubectl run --overrides`,
-  # which has known sharp edges around mixing args after `--` with overrides.
-  if ! kubectl apply -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" -f - <<EOF >/dev/null 2>&1
-apiVersion: v1
-kind: Pod
-metadata:
-  name: $pod_name
-  labels:
-    app: gitea-pvc-wipe
-spec:
-  restartPolicy: Never
-  containers:
-    - name: wipe
-      image: alpine:3
-      command:
-        - sh
-        - -c
-        - 'set -e; rm -rf /data/git/repositories/octogee; mkdir -p /data/git/repositories/octogee; chown -R 1000:1000 /data/git/repositories/octogee; echo "after wipe:"; ls -la /data/git/repositories/'
-      volumeMounts:
-        - mountPath: /data
-          name: gitea-data
-  volumes:
-    - name: gitea-data
-      persistentVolumeClaim:
-        claimName: gitea-shared-storage
-EOF
-  then
-    return 1
-  fi
-
-  # Poll for terminal phase (Succeeded or Failed). 90s should be plenty —
-  # the container is alpine + a handful of fs ops on a few-GB PVC.
-  local phase="" elapsed=0
-  while (( elapsed < 90 )); do
-    phase=$(kubectl get pod "$pod_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
-      -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-    [[ "$phase" == "Succeeded" || "$phase" == "Failed" ]] && break
-    sleep 3; elapsed=$((elapsed + 3))
-  done
-
-  # Echo container logs (indented) so the operator sees what landed.
-  kubectl logs "$pod_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" 2>/dev/null \
-    | sed 's/^/      /' || true
-
-  # Always clean up — non-fatal if the pod's already gone.
-  kubectl delete pod "$pod_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
-    --grace-period=5 --wait=false >/dev/null 2>&1 || true
-
-  [[ "$phase" == "Succeeded" ]] && return 0 || return 1
-}
-
+# Cleaner: delete the PVCs. Helm install on rebuild auto-recreates fresh
+# ones from the chart manifests. --wait=false so the delete returns
+# immediately; PVCs enter Terminating until the Helm uninstall (next
+# step) drains the pods that hold them, at which point finalizers
+# complete and the PVs (Delete reclaim policy on standard-rwo) are GC'd
+# by GKE. Re-introduce preservation when F&F users have data on disk.
 if $FULL; then
   echo ""
-  info "Wiping stale Gitea on-disk repos (PVC preserved, DB will be dropped)..."
-  if kubectl get statefulset octogee-gitea -n "$K8S_NAMESPACE" \
-      --context "$K8S_CONTEXT" >/dev/null 2>&1; then
-    # Path (a): statefulset present — exec into running pod
-    GITEA_POD=$(kubectl get pod -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
-      -l app.kubernetes.io/name=gitea \
-      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    if [[ -n "$GITEA_POD" ]]; then
-      if kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" "$GITEA_POD" -- \
-          sh -c 'rm -rf /data/git/repositories/octogee && mkdir -p /data/git/repositories/octogee && chown -R 1000:1000 /data/git/repositories/octogee' \
-          >/dev/null 2>&1; then
-        ok "Gitea on-disk repos wiped (octogee org, via running pod)"
-      else
-        die "Gitea repo wipe failed via running pod — aborting before DB drop. Manual verify: kubectl exec -n $K8S_NAMESPACE $GITEA_POD -- ls /data/git/repositories/octogee"
-      fi
+  info "Deleting PVCs (Helm-recreated on rebuild)..."
+  for pvc in gitea-shared-storage mattermost-data; do
+    if kubectl get pvc "$pvc" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+        >/dev/null 2>&1; then
+      kubectl delete pvc "$pvc" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+        --wait=false >/dev/null 2>&1 \
+        && ok "PVC $pvc deletion requested (will finalize after Helm uninstall)" \
+        || warn "PVC $pvc delete request failed — non-fatal; Helm uninstall continues"
     else
-      die "Gitea statefulset present but no running pod — refuse to proceed (would drop DB while leaving stale repo files on PVC). Either wait for the pod to come up, or scale the statefulset to 0 + delete it so we fall through to the ephemeral-pod wipe path."
+      info "PVC $pvc not present — already gone"
     fi
-  elif kubectl get pvc gitea-shared-storage -n "$K8S_NAMESPACE" \
-      --context "$K8S_CONTEXT" >/dev/null 2>&1; then
-    # Path (b): no statefulset but PVC exists — could carry stale repos
-    # from a prior install. Mount it via a one-shot pod and wipe.
-    info "No Gitea statefulset, but PVC gitea-shared-storage is bound — wiping via ephemeral pod..."
-    if wipe_gitea_repos_via_ephemeral_pod; then
-      ok "Gitea on-disk repos wiped (octogee org, via ephemeral pod)"
-    else
-      die "Ephemeral-pod wipe failed — aborting before DB drop to avoid PVC/DB drift. Inspect with: kubectl run gitea-pvc-inspect -n $K8S_NAMESPACE --rm -it --restart=Never --image=alpine:3 --overrides='{\"spec\":{\"containers\":[{\"name\":\"x\",\"image\":\"alpine:3\",\"stdin\":true,\"tty\":true,\"command\":[\"sh\"],\"volumeMounts\":[{\"mountPath\":\"/data\",\"name\":\"d\"}]}],\"volumes\":[{\"name\":\"d\",\"persistentVolumeClaim\":{\"claimName\":\"gitea-shared-storage\"}}]}}' -- sh"
-    fi
-  else
-    info "No Gitea statefulset and no PVC bound — truly fresh slate, nothing to wipe"
-  fi
+  done
 fi
 
 # ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
