@@ -42,6 +42,38 @@ export function customerSshKeyPath(slug: string): string {
   return path.join(CUSTOMER_KEYS_DIR, slug, "id_ed25519");
 }
 
+/**
+ * Pin `core.sshCommand` in the customer's repo `.git/config` so any `git`
+ * invocation from inside the repo (including ones the agent runs via Bash)
+ * uses the per-customer key without an env var.
+ *
+ * Why repo-scoped, not env / global config / ~/.ssh:
+ *   - Provisioner-side TS sets GIT_SSH_COMMAND per-call; that env var
+ *     does NOT propagate into the per-customer agent process. The agent
+ *     boots inheriting the gateway pod's env, where GIT_SSH_COMMAND is
+ *     intentionally unset (it would have to be one specific customer's
+ *     key — a global is wrong).
+ *   - `~/.ssh/config` is shared across all customers' agents in the pod;
+ *     adding a global IdentityFile there would let any agent push as any
+ *     customer. We deliberately keep ~/.ssh/config IdentityFile-less.
+ *   - `.git/config` lives inside the customer's isolated workspace dir
+ *     and is read by every git operation from that repo. Right scope.
+ *
+ * No-op when the key isn't on disk yet (boot-sync window — repo gets
+ * cloned via HTTP+admin-token before the per-customer SSH key is
+ * generated; the next sync tick sets sshCommand once the key shows up).
+ *
+ * Idempotent: `git config` overwrites a single-value key in place.
+ */
+export function setRepoSshCommand(repoDir: string, slug: string): void {
+  const keyPath = customerSshKeyPath(slug);
+  if (!fs.existsSync(keyPath)) return;
+  const sshCmd = `ssh -i ${keyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
+  // Use `git config` (not direct .git/config write) so we don't fight git's
+  // own config-file format if it ever changes.
+  gitExec(repoDir, `config core.sshCommand "${sshCmd}"`);
+}
+
 /** Generate an SSH keypair for a customer. Returns the public key. */
 export function generateCustomerSshKey(slug: string): string {
   const keyDir = path.join(CUSTOMER_KEYS_DIR, slug);
@@ -340,6 +372,8 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 
   gitExec(dest, `config user.email "${slug}@octogee.com"`);
   gitExec(dest, `config user.name "Octo (${slug})"`);
+  // ssh-cmd: pin per-repo so agent's `git push` uses the customer key
+  setRepoSshCommand(dest, slug);
 
   log(`[git] ✅ Cloned ${GIT_ORG}/${repoName} → customers/${slug}/`);
   return true;
@@ -414,6 +448,8 @@ export async function cloneProjectRepo(
 
   gitExec(dest, `config user.email "${slug}@octogee.com"`);
   gitExec(dest, `config user.name "Octo (${slug})"`);
+  // ssh-cmd: project repos push through the same per-customer key
+  setRepoSshCommand(dest, slug);
 
   log(`[git] ✅ Cloned ${GIT_ORG}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
   return true;
@@ -486,6 +522,8 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   log(`[git] init: ${initResult}`);
   gitExec(coachDir, `config user.email "${slug}@octogee.com"`);
   gitExec(coachDir, `config user.name "Octo (${slug})"`);
+  // ssh-cmd: agent runs git push from inside coachDir; pin the key
+  setRepoSshCommand(coachDir, slug);
 
   // Create Gitea repo (admin token). 409 = already exists, idempotent OK.
   try {
@@ -568,6 +606,8 @@ export async function initProjectRepo(
   gitExec(projectDir, "init -b main");
   gitExec(projectDir, `config user.email "${committerEmail}"`);
   gitExec(projectDir, `config user.name "${committerName}"`);
+  // ssh-cmd: pin before any agent-driven push from the project dir
+  setRepoSshCommand(projectDir, slug);
   gitExec(projectDir, "add -A");
   const commitResult = gitExec(projectDir, `commit -m "initial: ${projectName} project created"`);
   if (commitResult === null) {
@@ -669,6 +709,12 @@ export async function syncAllWorkspaces(): Promise<void> {
     const coachDir = path.join(CUSTOMERS_DIR, slug);
     const gitDir = path.join(coachDir, ".git");
     if (!fs.existsSync(gitDir)) continue;
+
+    // ssh-cmd backfill: idempotent re-pin every sync tick. Catches
+    // workspaces created before the per-repo core.sshCommand was added,
+    // and self-heals if anything ever clobbers .git/config (e.g. an
+    // agent stomping it). No-op when the customer key isn't on disk.
+    setRepoSshCommand(coachDir, slug);
 
     // Bootstrap gate. Until the agent finishes the BOOTSTRAP.md ritual
     // and deletes the file, the workspace is "draft" — local edits to

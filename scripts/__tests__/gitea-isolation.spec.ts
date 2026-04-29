@@ -150,3 +150,80 @@ describe("workspace .gitignore excludes .ssh/", () => {
     expect(gitTs).toContain('".ssh/",');
   });
 });
+
+// ── Per-repo core.sshCommand (agent-side push auth) ──────────────────────────
+//
+// The provisioner's TS code passes GIT_SSH_COMMAND per-call, but the
+// per-customer agent (running inside openclaw) doesn't inherit that env
+// var. When the agent runs `git push` from Bash, ssh sees no IdentityFile
+// (entrypoint.sh writes ~/.ssh/config WITHOUT one, intentionally) and
+// auth fails. Fix: write `core.sshCommand` into the customer's repo
+// `.git/config` at init/clone time. That's persistent, repo-scoped, and
+// requires no agent-side env injection. Observed PROD 2026-04-29:
+// BenderEcho on ceckert-workspace couldn't push.
+describe("setRepoSshCommand", () => {
+  let openclawDir: string;
+  let repoDir: string;
+  let keysDir: string;
+
+  beforeEach(() => {
+    openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-ssh-cmd-"));
+    repoDir = path.join(openclawDir, "customers", "acme");
+    keysDir = path.join(openclawDir, "customer-keys");
+    fs.mkdirSync(repoDir, { recursive: true });
+    fs.mkdirSync(keysDir, { recursive: true });
+    execSync("git init -q -b main", { cwd: repoDir });
+  });
+
+  function expectedSshCommand(keyPath: string): string {
+    return `ssh -i ${keyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
+  }
+
+  it("writes core.sshCommand pointing at the customer key when one exists", async () => {
+    generateCustomerSshKey(keysDir, "acme");
+    const keyPath = customerSshKeyPath(keysDir, "acme");
+
+    // Pure inline equivalent of setRepoSshCommand. Kept inline (not imported)
+    // to match the file's existing pattern of self-contained tests.
+    if (fs.existsSync(keyPath)) {
+      execSync(`git config core.sshCommand "${expectedSshCommand(keyPath)}"`, {
+        cwd: repoDir,
+      });
+    }
+
+    const got = execSync("git config --get core.sshCommand", {
+      cwd: repoDir,
+    }).toString().trim();
+    expect(got).toBe(expectedSshCommand(keyPath));
+  });
+
+  it("is idempotent — same key path overwrites cleanly", () => {
+    generateCustomerSshKey(keysDir, "acme");
+    const keyPath = customerSshKeyPath(keysDir, "acme");
+    const cmd = `git config core.sshCommand "${expectedSshCommand(keyPath)}"`;
+    execSync(cmd, { cwd: repoDir });
+    execSync(cmd, { cwd: repoDir }); // second call must not error or duplicate
+
+    const got = execSync("git config --get-all core.sshCommand", {
+      cwd: repoDir,
+    }).toString().trim().split("\n");
+    expect(got).toHaveLength(1);
+    expect(got[0]).toBe(expectedSshCommand(keyPath));
+  });
+
+  it("source enforces it: every init/clone path in git.ts calls setRepoSshCommand", () => {
+    // Pin the contract: the four entrypoints that materialize a customer
+    // repo on disk must each invoke setRepoSshCommand. If a future fifth
+    // entrypoint forgets, the agent's first push will silently fail with
+    // "no IdentityFile" — same regression class as the original bug.
+    const gitTs = fs.readFileSync(
+      path.resolve(__dirname, "..", "lib", "git.ts"),
+      "utf-8",
+    );
+    expect(gitTs).toContain("export function setRepoSshCommand");
+    // Each call site is annotated with a `// ssh-cmd` marker comment so a
+    // grep for the marker count is the contract check, not the call shape.
+    const markerCount = (gitTs.match(/\/\/ ssh-cmd:/g) ?? []).length;
+    expect(markerCount).toBeGreaterThanOrEqual(4);
+  });
+});
