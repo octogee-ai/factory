@@ -183,7 +183,10 @@
       },
       "octogee-router": {
         "enabled": true,
-        "config": {}
+        "config": {},
+        "hooks": {
+          "allowConversationAccess": true
+        }
       }
     }
   }
