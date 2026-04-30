@@ -43,12 +43,22 @@ mattermost:
     name: mattermost_prod
     passwordSecret: mattermost-cloud-sql
     passwordKey: password
-  siteUrl: "https://chat.octogee.com"
+  # Default SiteURL is the IAP-protected admin host (overridable per-env).
+  # Browser-direct path uses MM_PUBLIC_URL + ALLOWCORSFROM, not SiteURL.
+  siteUrl: "https://mattermost.octogee.com"
   allowedInternalConnections: "octogee-gateway.octogee.svc.cluster.local"
+  # Space-separated origins allowed to call MM cross-origin (REST + WS).
+  # Required for browser-direct access from app.octogee.com → mm.octogee.com.
+  # Override per-env.
+  allowedCorsOrigins: ""
   serviceAccountName: octogee-gateway
   pvc:
     size: 20Gi
     storageClass: standard-rwo
+  # Single public ingress for Mattermost. Pre-Option-C this was IAP-gated
+  # for ops-only access; Option C drops IAP so the browser app can hit MM
+  # directly with a per-user PAT (no Google OAuth in the data path).
+  # Admin login still requires the MM admin password; Cloud Armor rate-limits.
   ingress:
     enabled: false
     host: ""

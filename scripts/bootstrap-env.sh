@@ -2,7 +2,50 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Octogee Environment Bootstrap — Single entry point
+# ⚠️  DEPRECATED — DO NOT USE
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The canonical install sequence is the one printed by `teardown-gateway.sh`.
+# It runs the 9 steps directly: setup-secrets → helm → setup-mattermost →
+# setup-gitea → setup-secrets → kubectl rollout → firebase deploy → seed
+# orchestrator config → verify-env. That sequence is what we actually use
+# for clean rebuilds and is regression-tested every teardown.
+#
+# This wrapper is left in place only so any cron / CI / human muscle memory
+# pointing at it gets a loud redirect. It exits non-zero immediately.
+#
+# Repeat the full canonical sequence: ./scripts/teardown-gateway.sh --env=$ENV
+# (without --full) prints it without actually tearing anything down.
+# ═══════════════════════════════════════════════════════════════════════════
+
+cat >&2 <<'EOF'
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║  bootstrap-env.sh is DEPRECATED                                       ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+This wrapper omitted setup-gitea.sh and the post-bootstrap setup-secrets
+re-run, so it produced under-provisioned environments. Use the canonical
+sequence instead:
+
+  1. ./scripts/setup-secrets.sh   --env=ENV
+  2. helm upgrade --install octogee helm/octogee -f helm/octogee/values.ENV.yaml ...
+  3. ./scripts/setup-mattermost.sh --env=ENV
+  4. ./scripts/setup-gitea.sh      --env=ENV
+  5. ./scripts/setup-secrets.sh    --env=ENV
+  6. kubectl rollout restart deploy -n NAMESPACE
+  7. firebase deploy --project FIREBASE_PROJECT
+  8. (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=ENV)
+  9. ./scripts/verify-env.sh       --env=ENV
+
+The teardown script prints this list with exact arguments substituted —
+just run teardown without --full to dry-run the steps.
+
+EOF
+exit 1
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Legacy implementation below (kept for reference only — exit above blocks it)
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Runs setup-mattermost.sh and setup-secrets.sh in the correct order,

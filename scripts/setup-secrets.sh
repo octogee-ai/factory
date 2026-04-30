@@ -2,19 +2,27 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Octogee Pre-Helm Secrets Setup
+# Octogee K8s Secrets Materialization
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Creates ALL K8s secrets required by the Helm chart before helm install.
-# Safe to re-run — uses --dry-run=client -o yaml | kubectl apply (idempotent).
+# Idempotent — safe to re-run any time (uses kubectl apply, not delete+create).
+# Run TWICE in the canonical install sequence:
 #
-# Reads from: .env.test / .env + Secret Manager (octogee project)
+#   Phase 1 (pre-helm):  creates the secrets MM/Gitea/gateway pods need to
+#                        BOOT (gitea-ssh-key, mattermost-cloud-sql DB pass,
+#                        gitea-credentials with stable SECRET_KEY/INTERNAL_TOKEN,
+#                        empty mattermost-gateway + gitea-token shells, etc.).
+#                        Helm install can now schedule pods that mount these.
 #
-# IMPORTANT:
-# - This script owns K8s secret materialization.
-# - It does NOT fully bootstrap Mattermost or Gitea app state.
-# - If Mattermost admin/bot/team/PAT state is missing or stale, run
-#   setup-mattermost.sh first, then re-run this script if needed.
+#   Phase 2 (post-bootstrap): re-reads .env after setup-mattermost.sh +
+#                        setup-gitea.sh have populated MM_BOT_TOKEN,
+#                        MM_TEAM_ID, GIT_API_TOKEN, etc., and re-materializes
+#                        mattermost-gateway + gitea-token with REAL values.
+#                        kubectl rollout restart afterwards picks them up.
+#
+# Reads from: .env.test / .env + Secret Manager (octogee project).
+#
+# Canonical sequence printed by ./scripts/teardown-gateway.sh.
 #
 # Usage:
 #   ./scripts/setup-secrets.sh --env=test [--yes]
@@ -664,10 +672,17 @@ echo -e "${GREEN}═════════════════════
 echo ""
 VALUES_FILE="values.${ENV}.yaml"
 [[ "$ENV" == "custom" ]] && VALUES_FILE="values.$CUSTOM_NS.yaml (rendered from template)"
-echo "  Next: helm upgrade --install octogee helm/octogee \\"
-echo "          -f helm/octogee/$VALUES_FILE \\"
-echo "          -n $K8S_NAMESPACE \\"
-echo "          --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
-echo "          --kube-context $K8S_CONTEXT \\"
-echo "          --wait --timeout=10m"
+echo "  Canonical sequence (run teardown-gateway.sh --env=$ENV to see all 9 steps)."
+echo ""
+echo "  Next (Phase 1 → Helm):"
+echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee)"
+echo "    helm upgrade --install octogee helm/octogee \\"
+echo "      -f helm/octogee/$VALUES_FILE \\"
+echo "      -n $K8S_NAMESPACE \\"
+echo "      --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
+echo "      --kube-context $K8S_CONTEXT \\"
+echo "      --wait --timeout=10m"
+echo ""
+echo "  Phase 2 callers should run after setup-mattermost + setup-gitea, then"
+echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE."
 echo ""

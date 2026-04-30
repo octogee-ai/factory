@@ -474,6 +474,7 @@ esac
 if [[ -z "$FLEET_IP_NAME" ]]; then
   warn "Unknown namespace '$NAMESPACE' — skipping fleet-control checks"
 else
+
   # Static IP — lives in the CLUSTER project (not the namespace/Firebase
   # project), because GKE Ingress resolves `global-static-ip-name` against
   # the cluster's project. See PR #656 for the root-cause history.
@@ -620,28 +621,77 @@ fi
 
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
 # Derive URLs from K8s Ingress resources — no hardcoded env-specific URLs.
+# Post-Option C: chat-proxy-ingress has TWO hosts (coach.* primary +
+# chat.* alias for rollback); both are checked. mattermost-public-ingress
+# is the new browser-direct path for MM REST + WS — confirms the public
+# MM cert is Active and the public Service NEG is wired.
 set_section bootstrap
 header "5d. Endpoint Health"
-for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress octogee-gateway-fleet-control-ingress; do
-  HOST=$(kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
-  if [[ -z "$HOST" ]]; then
+for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress mattermost-ingress octogee-gateway-fleet-control-ingress; do
+  if ! kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
+    continue
+  fi
+  # Iterate over every host on the ingress so the chat-proxy alias host
+  # (chat.* during the Option-C transition) gets checked too.
+  HOSTS=$(kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" -o jsonpath='{range .spec.rules[*]}{.host}{"\n"}{end}' 2>/dev/null || echo "")
+  if [[ -z "$HOSTS" ]]; then
     warn "$INGRESS_NAME — no host found"
     continue
   fi
-  # Read health path from the readinessProbe of the matching deployment
-  DEPLOY_NAME="${INGRESS_NAME%-ingress}"
-  HEALTH_PATH=$(kubectl get deployment "$DEPLOY_NAME" -n "$NAMESPACE" \
-    -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}' 2>/dev/null || echo "/health")
-  URL="https://${HOST}${HEALTH_PATH}"
-  HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$URL" 2>/dev/null || echo "000")
-  if [[ "$HTTP_CODE" == "200" ]]; then
-    pass "$URL → $HTTP_CODE"
-  elif [[ "$HTTP_CODE" == "000" ]]; then
-    warn "$URL → unreachable (TLS or DNS issue)"
-  else
-    warn "$URL → HTTP $HTTP_CODE"
-  fi
+  # Probe path: the gateway's MM ingress has no /health route, but
+  # /api/v4/system/ping is what the BackendConfig health check uses.
+  # chat-proxy's health endpoint lives on the sidecar in octogee-gateway,
+  # not on a deployment named chat-proxy.
+  case "$INGRESS_NAME" in
+    mattermost-ingress)
+      HEALTH_PATH="/api/v4/system/ping"
+      ;;
+    chat-proxy-ingress)
+      HEALTH_PATH=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
+        -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
+      ;;
+    *)
+      DEPLOY_NAME="${INGRESS_NAME%-ingress}"
+      HEALTH_PATH=$(kubectl get deployment "$DEPLOY_NAME" -n "$NAMESPACE" \
+        -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}' 2>/dev/null || echo "/health")
+      ;;
+  esac
+  while IFS= read -r HOST; do
+    [[ -z "$HOST" ]] && continue
+    URL="https://${HOST}${HEALTH_PATH}"
+    HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$URL" 2>/dev/null || echo "000")
+    if [[ "$HTTP_CODE" == "200" ]]; then
+      pass "$URL → $HTTP_CODE"
+    elif [[ "$HTTP_CODE" == "000" ]]; then
+      warn "$URL → unreachable (TLS or DNS issue)"
+    else
+      warn "$URL → HTTP $HTTP_CODE"
+    fi
+  done <<< "$HOSTS"
 done
+
+# ── 5d.b Mattermost credential mint (Option C) ────────────────────────────────
+# The mint endpoint at coach.octogee.com (chat-proxy) is the only path that
+# hands the user's PAT to the browser. Hitting it without auth must return
+# 401 — that proves the route exists and the new chat-proxy build is
+# deployed. A 200/404 here means something is mis-deployed.
+COACH_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+if [[ -n "$COACH_HOST" ]]; then
+  MINT_URL="https://${COACH_HOST}/api/auth/mattermost"
+  MINT_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 -X POST "$MINT_URL" 2>/dev/null || echo "000")
+  if [[ "$MINT_CODE" == "401" ]]; then
+    pass "$MINT_URL → 401 (credential mint route present, auth-gated)"
+  elif [[ "$MINT_CODE" == "404" ]]; then
+    fail "$MINT_URL → 404 — chat-proxy is running an OLD build (pre-Option-C) or route not deployed"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} kubectl rollout restart deployment/octogee-gateway -n $NAMESPACE"
+    fi
+  elif [[ "$MINT_CODE" == "000" ]]; then
+    warn "$MINT_URL → unreachable (TLS or DNS issue)"
+  else
+    warn "$MINT_URL → HTTP $MINT_CODE (expected 401 unauthenticated)"
+  fi
+fi
 
 # ── 6. Site (Firebase Hosting) ────────────────────────────────────────────────
 set_section infra
@@ -676,8 +726,12 @@ fi
 # is required for OpenClaw silent device pairing). The chat-proxy Service +
 # Ingress still exist as standalone resources, just re-pointed at the gateway
 # pod selector. See helm/octogee/charts/gateway/values.yaml for rationale.
+#
+# Option C: chat-proxy is no longer in the MM data path. It owns just two
+# routes — POST /api/auth/mattermost (credential mint) and the OpenClaw
+# WS bridge. The browser talks to MM directly at mm[-test].octogee.com.
 set_section infra
-header "8. chat-proxy"
+header "8. chat-proxy (Option C: mint + OpenClaw bridge only)"
 GATEWAY_READY=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
 CHAT_IMAGE=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].image}' 2>/dev/null || echo "unknown")
 CHAT_ENDPOINTS=$(kubectl get endpoints chat-proxy -n "$NAMESPACE" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || echo "")
@@ -756,13 +810,35 @@ else
 fi
 
 set_section bootstrap
-LEGACY_MM_TEAM=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_TEAM_ID")].value}' 2>/dev/null || echo "")
-MM_COMMUNITY_TEAM=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_COMMUNITY_TEAM_ID")].value}' 2>/dev/null || echo "")
-if [[ -n "$LEGACY_MM_TEAM" ]]; then
-  warn "chat-proxy still carries dead MM_TEAM_ID env config. Remove it; MM_COMMUNITY_TEAM_ID is the only valid team env now."
+# ── Option C env contract ──────────────────────────────────────────────
+# chat-proxy must read MM_PUBLIC_URL (the public mm.* host returned by
+# the credential mint), NOT the legacy MM_INTERNAL_URL. If the old env
+# var is still on the pod, the chart hasn't been re-rendered against
+# the post-Option-C values.{env}.yaml.
+CHAT_MM_PUBLIC_URL=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_PUBLIC_URL")].value}' 2>/dev/null || echo "")
+CHAT_MM_INTERNAL_URL=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_INTERNAL_URL")].value}' 2>/dev/null || echo "")
+if [[ -n "$CHAT_MM_PUBLIC_URL" ]]; then
+  pass "chat-proxy MM_PUBLIC_URL=$CHAT_MM_PUBLIC_URL (Option C)"
+else
+  fail "chat-proxy missing MM_PUBLIC_URL — credential mint will boot-fail. Re-render helm with values.${ENV}.yaml."
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+  fi
 fi
-if [[ -n "$MM_COMMUNITY_TEAM" ]]; then
-  pass "chat-proxy uses MM_COMMUNITY_TEAM_ID (expected)"
+if [[ -n "$CHAT_MM_INTERNAL_URL" ]]; then
+  warn "chat-proxy still carries legacy MM_INTERNAL_URL env — remove it (Option C uses MM_PUBLIC_URL)."
+fi
+
+# Mattermost must have ALLOWCORSFROM populated for the browser-direct
+# path. Empty = MM rejects every preflight from app.octogee.com.
+MM_CORS=$(kubectl get deployment mattermost -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MM_SERVICESETTINGS_ALLOWCORSFROM")].value}' 2>/dev/null || echo "")
+if [[ -n "$MM_CORS" ]]; then
+  pass "Mattermost MM_SERVICESETTINGS_ALLOWCORSFROM populated"
+else
+  fail "Mattermost ALLOWCORSFROM empty — browser-direct fetches/WS will fail with CORS"
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} ensure mattermost.allowedCorsOrigins is set in values.${ENV}.yaml, then helm upgrade"
+  fi
 fi
 set_section infra
 

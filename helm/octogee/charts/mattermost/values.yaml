@@ -8,8 +8,13 @@ db:
   passwordSecret: mattermost-cloud-sql
   passwordKey: password
 
-siteUrl: "https://chat.octogee.com"
+siteUrl: "https://mm.octogee.com"
 allowedInternalConnections: "octogee-gateway.octogee.svc.cluster.local"
+
+# Space-separated list of origins that may call MM cross-origin (REST + WS).
+# Browser-direct path: app.octogee.com → mm.octogee.com requires the app
+# origin here. Set per-env in helm/octogee/values.{test,prod}.yaml.
+allowedCorsOrigins: ""
 
 # Link-preview / OpenGraph fetches. When true, MM's `POST /api/v4/opengraph`
 # handler is active and returns metadata for URLs posted in chat; when

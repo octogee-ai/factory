@@ -2,19 +2,23 @@
  * proxy-server.spec.ts
  *
  * Server-level (HTTP integration) tests for the chat-proxy.
- * Starts a real HTTP server on a random port, sends real HTTP requests,
- * and asserts on status codes and response bodies.
+ *
+ * Post-Option-C architecture: chat-proxy no longer proxies Mattermost. Browser
+ * talks to mm.octogee.com directly. ChatProxy retains:
+ *   1. POST /api/auth/mattermost — Firebase ID token → { mmUrl, mmToken, mmUserId }
+ *   2. /api/openclaw/ws/<ticket> — OpenClaw gateway bridge (covered elsewhere)
+ *   3. /healthz, /health, /_health, /metrics — observability
  *
  * Scenarios covered:
  *  - Health endpoints → 200 (no auth required)
  *  - Metrics endpoint → 200 (no auth required)
- *  - Unauthenticated request → 401
- *  - Invalid/expired Firebase token → 401
- *  - Authenticated request to disallowed endpoint → 403
- *  - Oversized proxied request body → 413
- *  - Provisioned user credential path → proxied to MM (200)
- *  - Unprovisioned user (no MM token in Firestore) → 502
- *  - Admin credential path → proxied with admin MM token (200)
+ *  - POST /api/auth/mattermost — 200 returns { mmUrl, mmToken, mmUserId }
+ *  - POST /api/auth/mattermost — 401 unauthenticated / invalid Firebase token
+ *  - POST /api/auth/mattermost — 502 when user is not provisioned in MM
+ *  - POST /api/auth/mattermost — does not log the PAT
+ *  - CORS preflight on the mint endpoint
+ *  - MM REST paths return 404 (no longer proxied)
+ *  - MM WebSocket upgrade returns 404 (no longer proxied)
  */
 
 import { describe, expect, it, vi, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -23,15 +27,13 @@ import type { AddressInfo } from 'node:net';
 
 // ── Env setup (must happen before any imports from proxy) ─────────────────────
 process.env.NODE_ENV = 'test';
-process.env.MM_INTERNAL_URL = 'http://mattermost.internal';
-process.env.MM_ADMIN_TOKEN = 'admin-mm-token';
+process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
 
 // ── Firebase admin mock ───────────────────────────────────────────────────────
 
 const verifyIdToken = vi.fn(async (token: string) => {
   if (token === 'regular-token') return { uid: 'regular-uid' };
   if (token === 'noproxy-token') return { uid: 'noproxy-uid' };
-  if (token === 'admin-token') return { uid: 'admin-uid' };
   throw Object.assign(new Error('auth/id-token-expired'), { code: 'auth/id-token-expired' });
 });
 
@@ -39,27 +41,18 @@ const verifyIdToken = vi.fn(async (token: string) => {
  * Firestore doc mock: returns different data shapes depending on the doc path.
  *
  * Paths wired up:
- *   users/regular-uid/system/config → { role: 'user' }         (not admin)
  *   users/regular-uid              → { mattermost: { userId: 'mm-user-1' } }
  *   users/regular-uid/secrets/mattermost → { personalToken: 'regular-mm-token' }
  *
- *   users/noproxy-uid/system/config → { role: 'user' }
  *   users/noproxy-uid              → {}  (no mattermost field)
  *   users/noproxy-uid/secrets/mattermost → {}  (no personalToken)
- *
- *   users/admin-uid/system/config  → { role: 'admin' }
- *   system/mattermostAdmin         → { userId: 'mm-admin-user-1' }
  */
 const firestoreDoc = vi.fn((path: string) => {
   const data: Record<string, unknown> = (() => {
-    if (path === 'users/regular-uid/system/config') return { role: 'user' };
     if (path === 'users/regular-uid') return { mattermost: { userId: 'mm-user-1' } };
     if (path === 'users/regular-uid/secrets/mattermost') return { personalToken: 'regular-mm-token' };
-    if (path === 'users/noproxy-uid/system/config') return { role: 'user' };
     if (path === 'users/noproxy-uid') return {};
     if (path === 'users/noproxy-uid/secrets/mattermost') return {};
-    if (path === 'users/admin-uid/system/config') return { role: 'admin' };
-    if (path === 'system/mattermostAdmin') return { userId: 'mm-admin-user-1' };
     return {};
   })();
   return { get: async () => ({ exists: true, data: () => data }) };
@@ -73,48 +66,6 @@ vi.mock('firebase-admin', () => ({
     auth: () => ({ verifyIdToken }),
   },
 }));
-
-// ── Global fetch mock ─────────────────────────────────────────────────────────
-// We mock global.fetch to intercept proxied requests to Mattermost.
-// Tests that need MM responses can override `mockMmResponse`.
-
-let mockMmResponse: { status: number; body: string; contentType?: string } = {
-  status: 200,
-  body: JSON.stringify([]),
-  contentType: 'application/json',
-};
-
-const fetchMock = vi.fn(async (_url: unknown, _opts: unknown) => {
-  const { status, body, contentType = 'application/json' } = mockMmResponse;
-  return {
-    status,
-    headers: {
-      get: (name: string) => {
-        if (name === 'content-type') return contentType;
-        if (name === 'content-disposition') return null;
-        if (name === 'location') return null;
-        return null;
-      },
-    },
-    body: {
-      getReader: () => {
-        let sent = false;
-        return {
-          read: async () => {
-            if (!sent) {
-              sent = true;
-              return { done: false, value: Buffer.from(body) };
-            }
-            return { done: true, value: undefined };
-          },
-        };
-      },
-    },
-  };
-});
-
-// @ts-ignore — override global fetch
-global.fetch = fetchMock;
 
 // ── Import proxy and start server ─────────────────────────────────────────────
 
@@ -139,58 +90,21 @@ afterAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   _clearCaches();
-  // Re-attach mocks cleared by clearAllMocks
   verifyIdToken.mockImplementation(async (token: string) => {
     if (token === 'regular-token') return { uid: 'regular-uid' };
     if (token === 'noproxy-token') return { uid: 'noproxy-uid' };
-    if (token === 'admin-token') return { uid: 'admin-uid' };
     throw Object.assign(new Error('auth/id-token-expired'), { code: 'auth/id-token-expired' });
   });
   firestoreDoc.mockImplementation((path: string) => {
     const data: Record<string, unknown> = (() => {
-      if (path === 'users/regular-uid/system/config') return { role: 'user' };
       if (path === 'users/regular-uid') return { mattermost: { userId: 'mm-user-1' } };
       if (path === 'users/regular-uid/secrets/mattermost') return { personalToken: 'regular-mm-token' };
-      if (path === 'users/noproxy-uid/system/config') return { role: 'user' };
       if (path === 'users/noproxy-uid') return {};
       if (path === 'users/noproxy-uid/secrets/mattermost') return {};
-      if (path === 'users/admin-uid/system/config') return { role: 'admin' };
-      if (path === 'system/mattermostAdmin') return { userId: 'mm-admin-user-1' };
       return {};
     })();
     return { get: async () => ({ exists: true, data: () => data }) };
   });
-  // @ts-ignore
-  global.fetch = fetchMock;
-  fetchMock.mockImplementation(async (_url: unknown, _opts: unknown) => {
-    const { status, body, contentType = 'application/json' } = mockMmResponse;
-    return {
-      status,
-      headers: {
-        get: (name: string) => {
-          if (name === 'content-type') return contentType;
-          if (name === 'content-disposition') return null;
-          if (name === 'location') return null;
-          return null;
-        },
-      },
-      body: {
-        getReader: () => {
-          let sent = false;
-          return {
-            read: async () => {
-              if (!sent) {
-                sent = true;
-                return { done: false, value: Buffer.from(body) };
-              }
-              return { done: true, value: undefined };
-            },
-          };
-        },
-      },
-    };
-  });
-  mockMmResponse = { status: 200, body: JSON.stringify([]), contentType: 'application/json' };
 });
 
 // ── Helper ────────────────────────────────────────────────────────────────────
@@ -235,7 +149,6 @@ async function request(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-// /health is the canonical endpoint; /healthz and /_health remain compatibility aliases.
 describe('health endpoints', () => {
   it('GET /healthz → 200 with status:ok (no auth)', async () => {
     const res = await request('/healthz');
@@ -261,162 +174,213 @@ describe('metrics endpoint', () => {
     const res = await request('/metrics');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/plain/);
-    // Prometheus exposition format: should include at least one metric name
     expect(res.body).toMatch(/chat_proxy_/);
   });
 });
 
-describe('authentication', () => {
-  it('request with no Authorization header → 401', async () => {
-    const res = await request('/api/v4/users/me/teams');
+describe('POST /api/auth/mattermost — credential mint', () => {
+  it('with no Authorization header → 401', async () => {
+    const res = await request('/api/auth/mattermost', { method: 'POST' });
     expect(res.status).toBe(401);
     expect(JSON.parse(res.body)).toMatchObject({ error: 'Unauthenticated' });
   });
 
-  it('request with invalid/expired Firebase token → 401', async () => {
-    const res = await request('/api/v4/users/me/teams', {
+  it('with invalid Firebase token → 401', async () => {
+    const res = await request('/api/auth/mattermost', {
+      method: 'POST',
       headers: { Authorization: 'Bearer expired-or-bad-token' },
     });
     expect(res.status).toBe(401);
-    expect(JSON.parse(res.body)).toMatchObject({ error: 'Unauthenticated' });
   });
 
-  it('BEARER (uppercase) with invalid token → 401', async () => {
-    const res = await request('/api/v4/users/me/teams', {
-      headers: { Authorization: 'BEARER not-a-real-token' },
-    });
-    expect(res.status).toBe(401);
-    expect(JSON.parse(res.body)).toMatchObject({ error: 'Unauthenticated' });
-  });
-});
-
-describe('route allowlist', () => {
-  it('authenticated request to disallowed endpoint → 403', async () => {
-    const res = await request('/api/v4/config', {
-      headers: { Authorization: 'Bearer regular-token' },
-    });
-    expect(res.status).toBe(403);
-    expect(JSON.parse(res.body)).toMatchObject({ error: 'Endpoint not allowed' });
-  });
-
-  it('authenticated DELETE to system endpoint → 403', async () => {
-    const res = await request('/api/v4/system/ping', {
-      method: 'DELETE',
-      headers: { Authorization: 'Bearer regular-token' },
-    });
-    expect(res.status).toBe(403);
-  });
-
-  it('authenticated GET to /api/v4/users (list all users) → 403', async () => {
-    const res = await request('/api/v4/users', {
-      headers: { Authorization: 'Bearer regular-token' },
-    });
-    expect(res.status).toBe(403);
-  });
-});
-
-describe('oversized request body', () => {
-  it('payload exceeding MAX_BODY_BYTES via streaming → 413', async () => {
-    // Override MAX_BODY_BYTES to 8 bytes for this test so we don't need huge buffers.
-    const tinyBody = Buffer.alloc(9, 'x'); // 9 bytes > 8 — triggers streaming limit
-    process.env.MAX_BODY_BYTES = '8';
-    try {
-      const res = await request('/api/v4/posts', {
-        method: 'POST',
-        headers: {
-          Authorization: 'Bearer regular-token',
-          'Content-Type': 'application/json',
-        },
-        body: tinyBody,
-      });
-      expect(res.status).toBe(413);
-      expect(JSON.parse(res.body)).toMatchObject({ error: 'Payload too large' });
-    } finally {
-      delete process.env.MAX_BODY_BYTES;
-    }
-  });
-
-  it('Content-Length fast-path: Content-Length header exceeds limit → 413 (checked before reading body)', async () => {
-    // The proxy checks the Content-Length header before buffering any data.
-    // Use a limit of 50 bytes and a body of 51 bytes so Content-Length == actual size
-    // (avoids HTTP keep-alive corruption from mismatched Content-Length).
-    process.env.MAX_BODY_BYTES = '50';
-    try {
-      const oversizedBody = Buffer.alloc(51, 'x'); // 51 > 50 → triggers fast-path via Content-Length
-      const res = await request('/api/v4/posts', {
-        method: 'POST',
-        headers: {
-          Authorization: 'Bearer regular-token',
-          'Content-Type': 'application/json',
-        },
-        body: oversizedBody,
-      });
-      expect(res.status).toBe(413);
-      expect(JSON.parse(res.body)).toMatchObject({ error: 'Payload too large' });
-    } finally {
-      delete process.env.MAX_BODY_BYTES;
-    }
-  });
-
-  it('normal-sized body is still proxied successfully after limit hardening', async () => {
-    // Regression guard: make sure the fast-path and streaming guard don't break normal flow.
-    mockMmResponse = { status: 200, body: JSON.stringify({ id: 'new-post' }) };
-    const smallBody = JSON.stringify({ channel_id: 'abc', message: 'hello' });
-    const res = await request('/api/v4/posts', {
+  it('with valid token but no MM provisioning → 502', async () => {
+    const res = await request('/api/auth/mattermost', {
       method: 'POST',
-      headers: {
-        Authorization: 'Bearer regular-token',
-        'Content-Type': 'application/json',
-      },
-      body: smallBody,
-    });
-    expect(res.status).toBe(200);
-    expect(JSON.parse(res.body)).toMatchObject({ id: 'new-post' });
-  });
-});
-
-describe('credential provisioning', () => {
-  it('user with no MM credentials → 502 "Chat not provisioned"', async () => {
-    const res = await request('/api/v4/users/me/teams', {
       headers: { Authorization: 'Bearer noproxy-token' },
     });
     expect(res.status).toBe(502);
     expect(JSON.parse(res.body)).toMatchObject({ error: 'Chat not provisioned' });
   });
 
-  it('provisioned regular user → request proxied to MM, returns MM status', async () => {
-    mockMmResponse = { status: 200, body: JSON.stringify([{ id: 'team1' }]) };
-    const res = await request('/api/v4/users/me/teams', {
+  it('with Firestore lookup throwing → 503 (outage, not "not provisioned")', async () => {
+    // Simulate a transient Firestore failure mid-lookup. Mapping this to
+    // 502 "Chat not provisioned" used to be misleading — operators would
+    // see the same error code as a not-yet-onboarded user.
+    firestoreDoc.mockImplementation((_path: string) => ({
+      get: async () => {
+        throw new Error('ETIMEDOUT');
+      },
+    }));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request('/api/auth/mattermost', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer regular-token' },
+      });
+      expect(res.status).toBe(503);
+      expect(JSON.parse(res.body)).toMatchObject({
+        error: 'Credential lookup unavailable',
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('with valid token and provisioning → 200 with mmUrl, mmToken, mmUserId', async () => {
+    const res = await request('/api/auth/mattermost', {
+      method: 'POST',
       headers: { Authorization: 'Bearer regular-token' },
     });
     expect(res.status).toBe(200);
-    expect(JSON.parse(res.body)).toEqual([{ id: 'team1' }]);
-    // Confirm fetch was called with the user's personal MM token
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [calledUrl, calledOpts] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
-    expect(calledUrl).toBe('http://mattermost.internal/api/v4/users/me/teams');
-    expect(calledOpts.headers['Authorization']).toBe('Bearer regular-mm-token');
+    const body = JSON.parse(res.body);
+    expect(body).toEqual({
+      mmUrl: 'https://mm.test.octogee.com',
+      mmToken: 'regular-mm-token',
+      mmUserId: 'mm-user-1',
+    });
   });
 
-  // NOTE: previously a test here asserted "admin user → request proxied with
-  // system admin MM token" via MM_ADMIN_TOKEN impersonation. That path was
-  // removed in this PR — admins now use the Mattermost web UI directly and
-  // chat-proxy's MM REST proxy treats admin users identically to regular
-  // users (personal MM token from users/{uid}/secrets/mattermost, or 502
-  // when not provisioned).
+  it('does not log the PAT', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await request('/api/auth/mattermost', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer regular-token' },
+      });
+      const allLogs = [
+        ...logSpy.mock.calls.flat().map(String),
+        ...errSpy.mock.calls.flat().map(String),
+      ].join('\n');
+      expect(allLogs).not.toContain('regular-mm-token');
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
 
-  it('MM returns non-200 → forwarded to client as-is', async () => {
-    mockMmResponse = { status: 404, body: JSON.stringify({ message: 'Not found' }) };
-    const res = await request('/api/v4/users/me/teams', {
+  it('OPTIONS preflight → 204 with CORS headers', async () => {
+    const res = await request('/api/auth/mattermost', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://octogee.web.app' },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('https://octogee.web.app');
+  });
+
+  it('GET /api/auth/mattermost (wrong method) → 404', async () => {
+    // The mint endpoint is POST-only. Anything else falls through to the
+    // default 404 handler — there's no MM proxy fallback any more.
+    const res = await request('/api/auth/mattermost', {
+      method: 'GET',
       headers: { Authorization: 'Bearer regular-token' },
     });
     expect(res.status).toBe(404);
   });
 });
 
-describe('CORS preflight', () => {
-  it('OPTIONS → 204 (no auth required)', async () => {
+describe('Mattermost proxying is removed', () => {
+  // After Option C, chat-proxy is no longer in the MM REST or WS path. The
+  // browser talks to mm.octogee.com directly. Any request to legacy MM paths
+  // on chat-proxy should fall through to the default 404.
+  it('GET /api/v4/users/me/teams → 404 (no longer proxied)', async () => {
+    const res = await request('/api/v4/users/me/teams', {
+      headers: { Authorization: 'Bearer regular-token' },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /api/v4/posts → 404 (no longer proxied)', async () => {
     const res = await request('/api/v4/posts', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer regular-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ channel_id: 'abc', message: 'hi' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('keep-alive survives a POST-with-body to a 404 path (server drains body)', async () => {
+    // Regression for the body-drain on the default 404 path: a legacy client
+    // could POST a JSON body to /api/v4/posts. If chat-proxy responds 404
+    // without consuming the body, the next request on the same connection
+    // sees stray bytes and the keep-alive is broken.
+    const result: { first: number; second: number } = await new Promise(
+      (resolve, reject) => {
+        const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+        const body = JSON.stringify({ channel_id: 'abc', message: 'hi' });
+        const opts = {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': String(Buffer.byteLength(body)),
+          },
+          agent,
+        } as http.RequestOptions;
+        const first = http.request(`${baseUrl}/api/v4/posts`, opts, (res1) => {
+          res1.resume();
+          res1.on('end', () => {
+            const second = http.request(`${baseUrl}/healthz`, { agent }, (res2) => {
+              res2.resume();
+              res2.on('end', () => {
+                agent.destroy();
+                resolve({ first: res1.statusCode ?? 0, second: res2.statusCode ?? 0 });
+              });
+            });
+            second.on('error', reject);
+            second.end();
+          });
+        });
+        first.on('error', reject);
+        first.write(body);
+        first.end();
+      },
+    );
+    expect(result.first).toBe(404);
+    expect(result.second).toBe(200);
+  });
+
+  it('WebSocket upgrade to /api/v4/websocket/<ticket> → 404', async () => {
+    // WS upgrade requests with no matching handler should be rejected at the
+    // upgrade phase. We test this by sending a manual upgrade request.
+    const res: { status: number; statusText: string } = await new Promise(
+      (resolve, reject) => {
+        const req = http.request(
+          `${baseUrl}/api/v4/websocket/00000000-0000-0000-0000-000000000000`,
+          {
+            method: 'GET',
+            headers: {
+              Connection: 'Upgrade',
+              Upgrade: 'websocket',
+              'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+              'Sec-WebSocket-Version': '13',
+            },
+          },
+        );
+        req.on('upgrade', (_res, socket) => {
+          socket.destroy();
+          reject(new Error('unexpected upgrade success'));
+        });
+        req.on('response', (response) => {
+          response.resume();
+          resolve({
+            status: response.statusCode ?? 0,
+            statusText: response.statusMessage ?? '',
+          });
+        });
+        req.on('error', reject);
+        req.end();
+      },
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('CORS preflight', () => {
+  it('OPTIONS to unknown path → 204 (preflight handled before route)', async () => {
+    const res = await request('/anything', {
       method: 'OPTIONS',
       headers: { Origin: 'https://octogee.web.app' },
     });

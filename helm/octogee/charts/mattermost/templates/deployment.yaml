@@ -62,6 +62,19 @@ spec:
               value: "false"
             - name: MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS
               value: {{ .Values.allowedInternalConnections | quote }}
+            # Browser-direct access (Option C migration): the app at
+            # app.octogee.com talks to mm.octogee.com directly. MM's REST
+            # responses + WebSocket handshake reject cross-origin requests
+            # unless the origin is listed here. Space-separated list, exact
+            # matches; configured via .Values.allowedCorsOrigins.
+            - name: MM_SERVICESETTINGS_ALLOWCORSFROM
+              value: {{ .Values.allowedCorsOrigins | default "" | quote }}
+            # The browser auths with Authorization: Bearer <PAT>, never with
+            # cookies, so credentialed cross-origin is not needed. Leaving
+            # it false avoids a CSRF foothold (browser would otherwise send
+            # MM-issued cookies cross-origin to mm.* on every fetch).
+            - name: MM_SERVICESETTINGS_CORSALLOWCREDENTIALS
+              value: "false"
             # When true, `POST /api/v4/opengraph` responds 200 with link
             # metadata. When unset MM 11.x returns 404, which Safari/Chrome
             # log at the network layer even though the app handles the miss

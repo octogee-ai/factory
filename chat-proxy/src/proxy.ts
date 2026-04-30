@@ -1,43 +1,20 @@
 /**
- * Octogee Chat Proxy — Firebase Auth → Mattermost
+ * Octogee Chat Proxy — Firebase Auth → Mattermost credential mint + OpenClaw bridge
  *
- * Stateless Cloud Run service that:
- * 1. Validates Firebase Auth tokens on every request
- * 2. Maps Firebase UID → Mattermost personal access token (from Firestore)
- * 3. Proxies whitelisted MM REST endpoints + WebSocket
- * 4. Mattermost stays fully internal (no public exposure)
+ * Stateless service with two responsibilities:
  *
- * Team model: team-per-workspace (Phase 4+5). Each workspace gets its own
- * MM team (ws-{slug}). The proxy validates that API requests target a team
- * the user belongs to. DM channels (no team) pass through without checks.
- * Team-per-workspace: each user's teamId lives on workspaces/{slug}.mattermost.teamId (v3.1).
+ *   1. POST /api/auth/mattermost — exchange a Firebase ID token for the user's
+ *      Mattermost credentials. Browser then talks to Mattermost directly at
+ *      MM_PUBLIC_URL using its personal access token.
  *
- * Endpoints proxied:
- *   GET  /api/v4/users/me/teams/{id}/channels  (list channels — team-scoped, includes private)
- *   POST /api/v4/users/ids                      (profile lookup)
- *   GET  /api/v4/users/{id}                     (single user profile)
- *   GET  /api/v4/users/{id}/image               (profile avatar)
- *   POST /api/v4/users/status/ids               (bulk user status)
- *   GET  /api/v4/channels/{id}/posts            (message history)
- *   POST /api/v4/posts                          (send message)
- *   GET  /api/v4/files/{id}                     (file download)
- *   GET  /api/v4/files/{id}/thumbnail           (file thumbnail)
- *   GET  /api/v4/posts/{id}/files/info          (file metadata)
- *   POST /api/v4/files                          (file upload)
- *   POST /api/v4/reactions                      (add reaction)
- *   DELETE /api/v4/users/{uid}/posts/{id}/reactions/{emoji}  (remove reaction)
- *   GET  /api/v4/posts/{id}/reactions           (list reactions on a post)
- *   POST /api/v4/channels/direct               (create DM channel)
- *   POST /api/v4/users/search                   (user search for DM creation)
- *   GET  /api/v4/channels/{id}/members          (list channel members)
- *   POST /api/v4/channels/{id}/members          (add channel member)
- *   DELETE /api/v4/channels/{id}/members/{uid}  (remove channel member)
- *   PUT  /api/v4/channels/{id}/members/{uid}/notify_props  (notification prefs)
- *   PUT  /api/v4/users/{id}/status              (set own status)
- *   PUT  /api/v4/users/{id}/image               (upload avatar)
- *   PUT  /api/v4/users/{id}/patch               (update profile)
- *   POST /api/v4/opengraph                      (OpenGraph link previews)
- *   WS   /api/v4/websocket                      (real-time events)
+ *   2. WS /api/openclaw/ws/<ticket> — bridge the browser to the user's
+ *      assigned OpenClaw gateway, with per-user frame filtering. The browser
+ *      gets a normal WebSocket; this service handles the Ed25519 device
+ *      handshake, gateway-token rotation, and cross-user fan-out blocking.
+ *
+ * Mattermost REST and WebSocket traffic is NOT proxied here any more. mm.octogee.com
+ * (Mattermost ingress) is the path for that. See docs/RUNBOOK.md for the
+ * Option-C migration notes.
  */
 
 import http from "node:http";
@@ -64,13 +41,15 @@ import {
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
-const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL; // e.g. http://mattermost.octogee.svc.cluster.local:8065
-// MM_TEAM_ID removed — legacy shared team, no longer used (team-per-workspace)
+// Public-facing URL of the Mattermost ingress (e.g. https://mm.octogee.com).
+// Returned to the browser by the credential-mint endpoint so the client can
+// hit MM directly. Required.
+const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL;
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
-if (!MM_INTERNAL_URL) {
-  console.error("FATAL: MM_INTERNAL_URL is required");
+if (!MM_PUBLIC_URL) {
+  console.error("FATAL: MM_PUBLIC_URL is required");
   process.exit(1);
 }
 
@@ -79,23 +58,10 @@ if (!MM_INTERNAL_URL) {
 const metricsRegistry = new Registry();
 collectDefaultMetrics({ register: metricsRegistry });
 
-const wsConnectionsActive = new Gauge({
-  name: 'chat_proxy_ws_connections_active',
-  help: 'Number of active WebSocket connections',
-  registers: [metricsRegistry],
-});
-
-const wsMessagesTotal = new Counter({
-  name: 'chat_proxy_ws_messages_total',
-  help: 'Total WebSocket messages proxied',
-  labelNames: ['direction'] as const,
-  registers: [metricsRegistry],
-});
-
-const httpProxiedTotal = new Counter({
-  name: 'chat_proxy_http_requests_total',
-  help: 'Total HTTP requests proxied to Mattermost',
-  labelNames: ['method', 'status'] as const,
+const mintRequestsTotal = new Counter({
+  name: 'chat_proxy_mint_requests_total',
+  help: 'Mattermost credential-mint requests',
+  labelNames: ['outcome'] as const,
   registers: [metricsRegistry],
 });
 
@@ -169,100 +135,60 @@ if (SA_KEY_PATH) {
 }
 const db = admin.firestore();
 
-// ── Allowed Endpoints (whitelist) ─────────────────────────────────────────────
+// ── MM credential cache ───────────────────────────────────────────────────────
 
-const ALLOWED_ROUTES: Array<{ method: string; pattern: RegExp }> = [
-  // List teams the user belongs to (for multi-team channel fetch)
-  { method: "GET", pattern: /^\/api\/v4\/users\/me\/teams$/ },
-  // Channel listing per team
-  { method: "GET", pattern: /^\/api\/v4\/users\/me\/teams\/[a-z0-9]+\/channels/ },
-  // Profile lookup
-  { method: "POST", pattern: /^\/api\/v4\/users\/ids$/ },
-  // Get single user profile
-  { method: "GET", pattern: /^\/api\/v4\/users\/[a-z0-9]+$/ },
-  // Profile avatar image
-  { method: "GET", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/image$/ },
-  // Bulk user status (online/away/offline/dnd)
-  { method: "POST", pattern: /^\/api\/v4\/users\/status\/ids$/ },
-  // Message history
-  { method: "GET", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/posts/ },
-  // Send message
-  { method: "POST", pattern: /^\/api\/v4\/posts$/ },
-  // File operations
-  { method: "GET", pattern: /^\/api\/v4\/files\/[a-z0-9]+(\/(thumbnail|preview))?$/ },
-  { method: "GET", pattern: /^\/api\/v4\/posts\/[a-z0-9]+\/files\/info$/ },
-  { method: "POST", pattern: /^\/api\/v4\/files$/ },
-  // Reactions
-  { method: "POST", pattern: /^\/api\/v4\/reactions$/ },
-  { method: "DELETE", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/posts\/[a-z0-9]+\/reactions\/[a-z0-9_+-]+$/ },
-  { method: "GET", pattern: /^\/api\/v4\/posts\/[a-z0-9]+\/reactions$/ },
-  // DM creation + user search
-  { method: "POST", pattern: /^\/api\/v4\/channels\/direct$/ },
-  { method: "POST", pattern: /^\/api\/v4\/users\/search$/ },
-  // Channel member management
-  // Querystring is stripped before allowlist check (see handleRest), so these
-  // match the path portion only. MM's GET /members supports ?page=N&per_page=M.
-  { method: "GET", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members$/ },
-  { method: "POST", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members$/ },
-  { method: "DELETE", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members\/[a-z0-9]+$/ },
-  { method: "PUT", pattern: /^\/api\/v4\/channels\/[a-z0-9]+\/members\/[a-z0-9]+\/notify_props$/ },
-  // User profile + status
-  { method: "PUT", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/status$/ },
-  { method: "PUT", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/image$/ },
-  { method: "PUT", pattern: /^\/api\/v4\/users\/[a-z0-9]+\/patch$/ },
-  // OpenGraph link previews
-  { method: "POST", pattern: /^\/api\/v4\/opengraph$/ },
-];
-
-export function isAllowedRoute(method: string, path: string): boolean {
-  return ALLOWED_ROUTES.some(
-    (r) => r.method === method && r.pattern.test(path)
-  );
-}
-
-// ── Token Cache ───────────────────────────────────────────────────────────────
-
-interface CachedToken {
+interface CachedMmCreds {
   mmToken: string;
   mmUserId: string;
   expiresAt: number;
 }
 
-const tokenCache = new Map<string, CachedToken>();
-const TOKEN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const mmCredsCache = new Map<string, CachedMmCreds>();
+const MM_CREDS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-// Team validation removed — MM enforces channel/team membership natively.
-// The proxy authenticates, forwards to MM with the user's token, and MM rejects unauthorized access.
+/**
+ * Result discriminator: differentiate "user has no MM provisioning yet"
+ * from "Firestore is unreachable / threw mid-lookup". The mint endpoint
+ * maps these to different HTTP statuses (502 vs 503) so dashboards can
+ * tell a not-yet-onboarded user from a chat-proxy ↔ Firestore outage.
+ */
+type GetMmCredsResult =
+  | { ok: true; mmToken: string; mmUserId: string }
+  | { ok: false; reason: 'not-provisioned' }
+  | { ok: false; reason: 'lookup-error' };
 
-async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: string } | null> {
-  const cached = tokenCache.get(uid);
-  if (cached && cached.expiresAt > Date.now()) {
-    return { mmToken: cached.mmToken, mmUserId: cached.mmUserId };
+async function getMmCreds(uid: string): Promise<GetMmCredsResult> {
+  const cached = mmCredsCache.get(uid);
+  if (cached) {
+    if (cached.expiresAt > Date.now()) {
+      return { ok: true, mmToken: cached.mmToken, mmUserId: cached.mmUserId };
+    }
+    // Evict expired so the Map size tracks the active-user set rather than
+    // the historical-user set.
+    mmCredsCache.delete(uid);
   }
 
   try {
-    // Read MM credentials from Firestore
     const [userDoc, secretDoc] = await Promise.all([
       db.doc(`users/${uid}`).get(),
       db.doc(`users/${uid}/secrets/mattermost`).get(),
     ]);
 
-    const userData = userDoc.data();
-    const mmUserId = userData?.mattermost?.userId;
+    const mmUserId = userDoc.data()?.mattermost?.userId;
     const mmToken = secretDoc.data()?.personalToken;
 
-    if (!mmUserId || !mmToken) return null;
+    if (!mmUserId || !mmToken) return { ok: false, reason: 'not-provisioned' };
 
-    tokenCache.set(uid, {
+    mmCredsCache.set(uid, {
       mmToken,
       mmUserId,
-      expiresAt: Date.now() + TOKEN_CACHE_TTL,
+      expiresAt: Date.now() + MM_CREDS_CACHE_TTL,
     });
 
-    return { mmToken, mmUserId };
+    return { ok: true, mmToken, mmUserId };
   } catch (e: any) {
-    console.error(`[proxy] Failed to load MM token for ${uid}: ${e.message}`);
-    return null;
+    console.error(`[proxy] Failed to load MM creds for ${uid}: ${e.message}`);
+    return { ok: false, reason: 'lookup-error' };
   }
 }
 
@@ -270,13 +196,13 @@ async function getMmToken(uid: string): Promise<{ mmToken: string; mmUserId: str
 
 export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
   const authHeader = req.headers.authorization;
-  
+
   // MM Client4 SDK sends "BEARER" (uppercase), standard is "Bearer"
   let token: string | null = null;
   if (authHeader?.startsWith("Bearer ")) token = authHeader.slice(7);
   else if (authHeader?.startsWith("BEARER ")) token = authHeader.slice(7);
   else if (authHeader?.startsWith("Token ")) token = authHeader.slice(6);
-  
+
   if (!token) return null;
 
   try {
@@ -319,22 +245,20 @@ export function setCors(req: http.IncomingMessage, res: http.ServerResponse): vo
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-// ── REST Proxy ────────────────────────────────────────────────────────────────
+// ── HTTP request handler ──────────────────────────────────────────────────────
 
-async function handleRest(
+async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse
 ): Promise<void> {
   setCors(req, res);
 
-  // CORS preflight
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
     return;
   }
 
-  // Metrics endpoint
   if (req.url === "/metrics") {
     const metrics = await metricsRegistry.metrics();
     res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
@@ -342,260 +266,80 @@ async function handleRest(
     return;
   }
 
-  // Health check
   if (req.url === "/healthz" || req.url === "/health" || req.url === "/_health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok" }));
     return;
   }
 
-  // Auth
+  const urlPath = (req.url || "").split("?")[0];
+
+  if (urlPath === "/api/auth/mattermost" && req.method === "POST") {
+    return handleMattermostMint(req, res);
+  }
+
+  // Drain any inbound body before responding so a legacy POST (e.g. an old
+  // client still calling `/api/v4/posts`) doesn't leave bytes on the socket
+  // and break HTTP keep-alive on the next request.
+  req.resume();
+  res.writeHead(404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "Not found" }));
+}
+
+// ── Mattermost credential mint ────────────────────────────────────────────────
+//
+// POST /api/auth/mattermost
+//   Authorization: Bearer <firebase-id-token>
+//
+// → 200 { mmUrl, mmToken, mmUserId }
+//
+// SECURITY NOTE: this returns the user's per-user MM PAT to the browser. The
+// PAT is per-user-scoped and revocable. The browser holds it in memory only
+// (not localStorage). Never log the response body or the mmToken value.
+
+async function handleMattermostMint(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
   const uid = await verifyAuth(req);
   if (!uid) {
+    mintRequestsTotal.inc({ outcome: 'unauthenticated' });
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Unauthenticated" }));
     return;
   }
 
-  // Route check
-  const urlPath = (req.url || "").split("?")[0];
-  if (!isAllowedRoute(req.method || "GET", urlPath)) {
-    res.writeHead(403, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Endpoint not allowed" }));
-    return;
-  }
-
-  // Team validation removed — MM enforces channel/team membership natively.
-  // The proxy authenticates the user and forwards to MM with their token.
-  // MM rejects unauthorized access with 403.
-  const creds = await getMmToken(uid);
-  if (!creds) {
+  const result = await getMmCreds(uid);
+  if (!result.ok) {
+    if (result.reason === 'lookup-error') {
+      // Firestore unreachable / threw mid-read — operator-facing problem,
+      // not the user's. 503 so dashboards bucket it under "outage" rather
+      // than "user-not-onboarded" (which 502 means below).
+      mintRequestsTotal.inc({ outcome: 'lookup-error' });
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Credential lookup unavailable" }));
+      return;
+    }
+    mintRequestsTotal.inc({ outcome: 'not-provisioned' });
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Chat not provisioned" }));
     return;
   }
 
-  // Proxy to MM
-  const proxyUrl = req.url || "";
-  const targetUrl = `${MM_INTERNAL_URL}${proxyUrl}`;
-
-  // Fast-path: reject oversized requests before buffering any body data.
-  // Only applies when the client sends a Content-Length header.
-  const maxBodyBytes = Number(process.env.MAX_BODY_BYTES || DEFAULT_MAX_BODY_BYTES);
-  const declaredLength = parseInt(req.headers["content-length"] || "0", 10);
-  if (!isNaN(declaredLength) && declaredLength > maxBodyBytes) {
-    req.resume(); // drain so the socket stays healthy
-    res.writeHead(413, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Payload too large" }));
-    return;
-  }
-
-  try {
-    const body = await readBody(req, maxBodyBytes);
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${creds.mmToken}`,
-    };
-
-    // Forward content-type (important for file uploads)
-    const ct = req.headers["content-type"];
-    if (ct) headers["Content-Type"] = ct;
-
-    const mmResp = await fetch(targetUrl, {
-      method: req.method || "GET",
-      headers,
-      redirect: "manual", // Don't follow redirects — forward them to the client
-      ...(body.length > 0 ? { body: new Uint8Array(body) } : {}),
-    });
-
-    // Forward redirects (e.g. MM /users/{id}/image → default avatar)
-    if (mmResp.status >= 300 && mmResp.status < 400) {
-      const location = mmResp.headers.get("location");
-      if (location) {
-        // If redirect points to internal MM, rewrite to proxy-relative path
-        const mmBase = MM_INTERNAL_URL!.replace(/\/$/, "");
-        const rewritten = location.startsWith(mmBase)
-          ? location.slice(mmBase.length)
-          : location;
-        res.writeHead(mmResp.status, { Location: rewritten });
-      } else {
-        res.writeHead(mmResp.status);
-      }
-      res.end();
-      return;
-    }
-
-    // Forward response headers
-    const respCt = mmResp.headers.get("content-type");
-    if (respCt) res.setHeader("Content-Type", respCt);
-
-    // Forward content-disposition for file downloads
-    const cd = mmResp.headers.get("content-disposition");
-    if (cd) res.setHeader("Content-Disposition", cd);
-
-    res.writeHead(mmResp.status);
-    httpProxiedTotal.inc({ method: req.method || "GET", status: String(mmResp.status) });
-
-    if (mmResp.body) {
-      const reader = mmResp.body.getReader();
-      const pump = async () => {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
-        }
-        res.end();
-      };
-      await pump();
-    } else {
-      res.end();
-    }
-  } catch (e: any) {
-    console.error(`[proxy] REST error: ${e.message}`);
-    if (!res.headersSent) {
-      if (e?.message === "Payload too large") {
-        res.writeHead(413, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Payload too large" }));
-        return;
-      }
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Upstream error" }));
-    } else {
-      res.end();
-    }
-  }
-}
-
-export const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
-
-export function readBody(
-  req: http.IncomingMessage,
-  maxBytes = Number(process.env.MAX_BODY_BYTES || DEFAULT_MAX_BODY_BYTES),
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-
-    req.on("data", (chunk) => {
-      if (settled) return;
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      total += buf.length;
-      if (total > maxBytes) {
-        settled = true;
-        reject(new Error("Payload too large"));
-        // Drain remaining data without destroying the socket so the 413
-        // response can still be sent to the client.
-        req.resume();
-        return;
-      }
-      chunks.push(buf);
-    });
-
-    req.on("end", () => { if (!settled) resolve(Buffer.concat(chunks)); });
-    req.on("error", (err) => { if (!settled) { settled = true; reject(err); } });
-  });
-}
-
-// ── WebSocket Proxy ───────────────────────────────────────────────────────────
-
-function handleWsUpgrade(
-  wss: WebSocketServer,
-  req: http.IncomingMessage,
-  socket: any,
-  head: Buffer
-): void {
-  // Extract ticket from path: /api/v4/websocket/<ticket>
-  // Using path segment (not query param) avoids corruption from MM WebSocketClient
-  // which appends its own ?connection_id=... params.
-  const urlPath = (req.url || "").split("?")[0];
-  const pathMatch = urlPath.match(/\/api\/v4\/websocket\/([a-f0-9-]{36})$/);
-  const ticket = pathMatch?.[1] || null;
-
-  if (!ticket) {
-    console.log(`[proxy] WS: no ticket`);
-    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-    socket.destroy();
-    return;
-  }
-  (async () => {
-    try {
-      const ticketRef = db.doc(`wsTickets/${ticket}`);
-      const ticketDoc = await ticketRef.get();
-
-      if (!ticketDoc.exists) {
-        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-
-      const ticketData = ticketDoc.data()!;
-      await ticketRef.delete();
-
-      if (ticketData.expiresAt < Date.now()) {
-        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-
-      const uid = ticketData.uid;
-      const creds = await getMmToken(uid);
-      if (!creds) {
-        socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-
-      const mmWsUrl = MM_INTERNAL_URL!.replace(/^http/, "ws");
-      const mmWs = new WebSocket(`${mmWsUrl}/api/v4/websocket`);
-
-      mmWs.on("open", () => {
-        mmWs.send(JSON.stringify({
-          seq: 1,
-          action: "authentication_challenge",
-          data: { token: creds.mmToken },
-        }));
-
-        wss.handleUpgrade(req, socket, head, (clientWs) => {
-          wsConnectionsActive.inc();
-          clientWs.on("message", (data, isBinary) => {
-            wsMessagesTotal.inc({ direction: "inbound" });
-            if (mmWs.readyState === WebSocket.OPEN) {
-              mmWs.send(isBinary ? data : data.toString(), { binary: isBinary });
-            }
-          });
-          mmWs.on("message", (data, isBinary) => {
-            wsMessagesTotal.inc({ direction: "outbound" });
-            if (clientWs.readyState === WebSocket.OPEN) {
-              // MM sends JSON as text frames — ensure we forward as text, not binary
-              clientWs.send(isBinary ? data : data.toString(), { binary: isBinary });
-            }
-          });
-          clientWs.on("close", () => { wsConnectionsActive.dec(); mmWs.close(); });
-          mmWs.on("close", () => clientWs.close());
-          clientWs.on("error", () => mmWs.close());
-          mmWs.on("error", () => clientWs.close());
-        });
-      });
-
-      mmWs.on("error", (err) => {
-        console.error(`[proxy] WS MM error: ${err.message}`);
-        socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-        socket.destroy();
-      });
-    } catch (e: any) {
-      console.error(`[proxy] WS error: ${e.message}`);
-      socket.write("HTTP/1.1 500 Internal Error\r\n\r\n");
-      socket.destroy();
-    }
-  })();
+  mintRequestsTotal.inc({ outcome: 'ok' });
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({
+    mmUrl: MM_PUBLIC_URL,
+    mmToken: result.mmToken,
+    mmUserId: result.mmUserId,
+  }));
 }
 
 // ── OpenClaw WebSocket Proxy ──────────────────────────────────────────────────
 //
-// Parallel path to the MM proxy above. Browser opens
-// `wss://chat-proxy/api/openclaw/ws/<ticket>`; we validate the one-time
-// ticket from `ocTickets/{ticket}` (minted by workspace-api after Firebase
-// auth), resolve the user's assigned gateway, open an authenticated
+// Browser opens `wss://chat-proxy/api/openclaw/ws/<ticket>`; we validate the
+// one-time ticket from `ocTickets/{ticket}` (minted by workspace-api after
+// Firebase auth), resolve the user's assigned gateway, open an authenticated
 // upstream WS via the Ed25519 device handshake, and pipe frames.
 // The browser sees a normal WS; it never needs to know about Ed25519
 // nonces or the gateway URL.
@@ -847,22 +591,20 @@ function handleOpenClawWsUpgrade(
 
 // ── Test helpers ────────────────────────────────────────────────────────────────
 
-/** Clear in-process token cache. For test isolation only. */
+/** Clear in-process credential cache. For test isolation only. */
 export function _clearCaches(): void {
-  tokenCache.clear();
+  mmCredsCache.clear();
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
 export function createServer() {
-  const server = http.createServer(handleRest);
+  const server = http.createServer(handleRequest);
   const wss = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", (req, socket, head) => {
     const urlPath = (req.url || "").split("?")[0];
-    if (urlPath.startsWith("/api/v4/websocket")) {
-      handleWsUpgrade(wss, req, socket, head);
-    } else if (urlPath.startsWith("/api/openclaw/ws/")) {
+    if (urlPath.startsWith("/api/openclaw/ws/")) {
       handleOpenClawWsUpgrade(wss, req, socket, head);
     } else {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -877,7 +619,7 @@ if (process.env.NODE_ENV !== "test") {
   const server = createServer();
   server.listen(PORT, () => {
     console.log(`[chat-proxy] listening on :${PORT}`);
-    console.log(`[chat-proxy] MM backend: ${MM_INTERNAL_URL}`);
+    console.log(`[chat-proxy] MM public URL: ${MM_PUBLIC_URL}`);
     console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
   });
 }

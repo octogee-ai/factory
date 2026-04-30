@@ -49,8 +49,10 @@ chat-proxy:
   image:
     repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-chat-proxy
   env:
-    MM_INTERNAL_URL: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
-    MM_COMMUNITY_TEAM_ID: ""
+    # Internal-only namespaces have no public MM ingress; the mint endpoint
+    # still returns a URL but custom envs don't drive a real browser flow.
+    # Port-forward to mattermost:8065 directly when testing locally.
+    MM_PUBLIC_URL: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
     FIREBASE_PROJECT: "octogee-test"
   ingress:
     enabled: false
