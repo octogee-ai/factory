@@ -12,12 +12,16 @@ spec:
   timeoutSec: 3600
   connectionDraining:
     drainingTimeoutSec: 300
-  {{- if .Values.gitea.webIngress.iap.enabled }}
+  # Always render iap.enabled — GKE BackendConfig controller ignores absent
+  # fields rather than treating them as "disable", so an `if` guard around
+  # the entire block silently strands IAP enabled on the GCP backend service.
+  # Same fix as mattermost-ingress.yaml.
   iap:
-    enabled: true
+    enabled: {{ .Values.gitea.webIngress.iap.enabled | default false }}
+    {{- if .Values.gitea.webIngress.iap.enabled }}
     oauthclientCredentials:
       secretName: {{ .Values.gitea.webIngress.iap.oauthClientCredentialsSecretName }}
-  {{- end }}
+    {{- end }}
 ---
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate

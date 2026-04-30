@@ -12,12 +12,19 @@ spec:
   timeoutSec: 3600
   connectionDraining:
     drainingTimeoutSec: 300
-  {{- if .Values.mattermost.ingress.iap.enabled }}
+  # GKE BackendConfig controller treats `iap` field absent as "leave the
+  # GCP backend service's IAP setting alone" — which means `if iap.enabled`
+  # blocks silently fail to disable IAP after a previous enable. Render
+  # `iap.enabled` always so the controller actually pushes the flip down
+  # to GCP. (Confirmed empirically: `gcloud compute backend-services
+  # describe` showed iap.enabled=True on both envs even after the chart
+  # stopped declaring an iap block — Apr 30 2026.)
   iap:
-    enabled: true
+    enabled: {{ .Values.mattermost.ingress.iap.enabled | default false }}
+    {{- if .Values.mattermost.ingress.iap.enabled }}
     oauthclientCredentials:
       secretName: {{ .Values.mattermost.ingress.iap.oauthClientCredentialsSecretName }}
-  {{- end }}
+    {{- end }}
 ---
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
