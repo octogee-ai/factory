@@ -69,12 +69,19 @@ spec:
             # list, exact matches; configured via .Values.allowedCorsOrigins.
             - name: MM_SERVICESETTINGS_ALLOWCORSFROM
               value: {{ .Values.allowedCorsOrigins | default "" | quote }}
-            # The browser auths with Authorization: Bearer <PAT>, never with
-            # cookies, so credentialed cross-origin is not needed. Leaving
-            # it false avoids a CSRF foothold (browser would otherwise send
-            # MM-issued cookies cross-origin to mm.* on every fetch).
+            # Required true — Mattermost's Client4 SDK (used by the app)
+            # issues cross-origin fetches in `credentials: 'include'` mode,
+            # and the browser rejects responses where this header is "false".
+            # The earlier "we use Bearer, no need" reasoning was wrong: the
+            # SDK doesn't expose a way to opt out of credentials mode, so
+            # MM has to permit it at the CORS layer or every chat REST
+            # call fails with "Credentials flag is true, but Access-
+            # Control-Allow-Credentials is not 'true'". CSRF concern is
+            # bounded because auth is Bearer (browsers won't auto-send
+            # Authorization headers cross-origin) and the cookies that
+            # would ride along are MM session cookies that we don't use.
             - name: MM_SERVICESETTINGS_CORSALLOWCREDENTIALS
-              value: "false"
+              value: "true"
             # When true, `POST /api/v4/opengraph` responds 200 with link
             # metadata. When unset MM 11.x returns 404, which Safari/Chrome
             # log at the network layer even though the app handles the miss
