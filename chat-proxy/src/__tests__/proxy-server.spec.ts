@@ -4,7 +4,7 @@
  * Server-level (HTTP integration) tests for the chat-proxy.
  *
  * Post-Option-C architecture: chat-proxy no longer proxies Mattermost. Browser
- * talks to mm.octogee.com directly. ChatProxy retains:
+ * talks to mattermost[-test].octogee.com directly. ChatProxy retains:
  *   1. POST /api/auth/mattermost — Firebase ID token → { mmUrl, mmToken, mmUserId }
  *   2. /api/openclaw/ws/<ticket> — OpenClaw gateway bridge (covered elsewhere)
  *   3. /healthz, /health, /_health, /metrics — observability
@@ -281,8 +281,8 @@ describe('POST /api/auth/mattermost — credential mint', () => {
 
 describe('Mattermost proxying is removed', () => {
   // After Option C, chat-proxy is no longer in the MM REST or WS path. The
-  // browser talks to mm.octogee.com directly. Any request to legacy MM paths
-  // on chat-proxy should fall through to the default 404.
+  // browser talks to mattermost[-test].octogee.com directly. Any request to
+  // legacy MM paths on chat-proxy should fall through to the default 404.
   it('GET /api/v4/users/me/teams → 404 (no longer proxied)', async () => {
     const res = await request('/api/v4/users/me/teams', {
       headers: { Authorization: 'Bearer regular-token' },

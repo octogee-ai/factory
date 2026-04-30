@@ -12,9 +12,9 @@
  *      gets a normal WebSocket; this service handles the Ed25519 device
  *      handshake, gateway-token rotation, and cross-user fan-out blocking.
  *
- * Mattermost REST and WebSocket traffic is NOT proxied here any more. mm.octogee.com
- * (Mattermost ingress) is the path for that. See docs/RUNBOOK.md for the
- * Option-C migration notes.
+ * Mattermost REST and WebSocket traffic is NOT proxied here any more. The
+ * Mattermost ingress (mattermost[-test].octogee.com, IAP off) is the path
+ * for that. See docs/RUNBOOK.md for the Option-C migration notes.
  */
 
 import http from "node:http";
@@ -41,9 +41,11 @@ import {
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
-// Public-facing URL of the Mattermost ingress (e.g. https://mm.octogee.com).
+// Public-facing URL of the Mattermost ingress (e.g. https://mattermost.octogee.com).
 // Returned to the browser by the credential-mint endpoint so the client can
-// hit MM directly. Required.
+// hit MM directly. Required — the chart wraps it with `required` at render
+// time but we still defensively process.exit(1) here to catch a manually
+// applied manifest with the env stripped.
 const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL;
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;

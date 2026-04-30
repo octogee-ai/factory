@@ -63,10 +63,10 @@ spec:
             - name: MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS
               value: {{ .Values.allowedInternalConnections | quote }}
             # Browser-direct access (Option C migration): the app at
-            # app.octogee.com talks to mm.octogee.com directly. MM's REST
-            # responses + WebSocket handshake reject cross-origin requests
-            # unless the origin is listed here. Space-separated list, exact
-            # matches; configured via .Values.allowedCorsOrigins.
+            # app.octogee.com talks to mattermost.octogee.com directly. MM's
+            # REST responses + WebSocket handshake reject cross-origin
+            # requests unless the origin is listed here. Space-separated
+            # list, exact matches; configured via .Values.allowedCorsOrigins.
             - name: MM_SERVICESETTINGS_ALLOWCORSFROM
               value: {{ .Values.allowedCorsOrigins | default "" | quote }}
             # The browser auths with Authorization: Bearer <PAT>, never with

@@ -8,7 +8,7 @@ db:
   passwordSecret: mattermost-cloud-sql
   passwordKey: password
 
-siteUrl: "https://mm.octogee.com"
+siteUrl: "https://mattermost.octogee.com"
 allowedInternalConnections: "octogee-gateway.octogee.svc.cluster.local"
 
 # Space-separated list of origins that may call MM cross-origin (REST + WS).

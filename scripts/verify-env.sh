@@ -621,10 +621,10 @@ fi
 
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
 # Derive URLs from K8s Ingress resources — no hardcoded env-specific URLs.
-# Post-Option C: chat-proxy-ingress has TWO hosts (coach.* primary +
-# chat.* alias for rollback); both are checked. mattermost-public-ingress
-# is the new browser-direct path for MM REST + WS — confirms the public
-# MM cert is Active and the public Service NEG is wired.
+# Post-Option C: chat-proxy-ingress hosts the credential-mint endpoint and
+# the OpenClaw bridge (no longer the MM REST/WS proxy). mattermost-ingress
+# is the browser-direct MM path with IAP off — single hostname per role,
+# no aliases, no parallel public ingresses.
 set_section bootstrap
 header "5d. Endpoint Health"
 for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress mattermost-ingress octogee-gateway-fleet-control-ingress; do
@@ -671,13 +671,13 @@ for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress mattermost-ingress 
 done
 
 # ── 5d.b Mattermost credential mint (Option C) ────────────────────────────────
-# The mint endpoint at coach.octogee.com (chat-proxy) is the only path that
-# hands the user's PAT to the browser. Hitting it without auth must return
-# 401 — that proves the route exists and the new chat-proxy build is
-# deployed. A 200/404 here means something is mis-deployed.
-COACH_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
-if [[ -n "$COACH_HOST" ]]; then
-  MINT_URL="https://${COACH_HOST}/api/auth/mattermost"
+# The mint endpoint on chat[-test].octogee.com is the only path that hands
+# the user's PAT to the browser. Hitting it without auth must return 401 —
+# proves the route exists and the new chat-proxy build is deployed. A
+# 200/404 here means something is mis-deployed.
+CHAT_PROXY_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+if [[ -n "$CHAT_PROXY_HOST" ]]; then
+  MINT_URL="https://${CHAT_PROXY_HOST}/api/auth/mattermost"
   MINT_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 -X POST "$MINT_URL" 2>/dev/null || echo "000")
   if [[ "$MINT_CODE" == "401" ]]; then
     pass "$MINT_URL → 401 (credential mint route present, auth-gated)"
