@@ -9,19 +9,26 @@ Docker build runs; local docker builds need it copied manually.
 
 ## Current patches
 
-- **MM WebSocket keepalive ping** — `extensions/mattermost/src/mattermost/monitor-websocket.ts`
-  sends `ws.ping()` every 15s (half of MM's ~30s server-side idle deadline)
-  so idle WSes don't get swept by MM's read timeout. Without this, all
-  coach accounts disconnect in lockstep every 2–4 minutes when the gateway
-  has been idle.
-  Log proof at runtime: `[octogee-patch] mattermost ws keepalive armed: pingIntervalMs=15000`
-- **MM per-message latency instrumentation** — new `extensions/mattermost/src/mattermost/monitor-timing.ts`
-  module plus hooks in `monitor.ts`. Emits one `[mm-timing]` log line per
-  delivered (or failed) reply with span durations (ws→handle, handle→typing,
-  typing→first, first→delivered). Replaces the need for
-  `OPENCLAW_LOG_LEVEL=debug` + grep-a-dozen-landmarks when diagnosing
-  inbound→reply latency.
-  Log proof at runtime: `[mm-timing] channel=… post=… total=…ms | ws→handle=…ms | …`
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.4.29 the fork carries a single patch:
+
+- **Per-account surgical channel reload** — `src/gateway/config-reload-plan.ts`,
+  `src/gateway/server-reload-handlers.ts`. Adds a per-account bucket to
+  `GatewayReloadPlan` so a `config.patch` that only touches
+  `channels.mattermost.accounts.<slug>.*` calls `stopChannel(kind, accountId)`
+  + `startChannel(kind, accountId)` — leaving every other tenant's MM
+  WebSocket connected. Without this, a single customer signup
+  disconnects every other coach account at once.
+  Log proof at runtime: `[octogee-patch] restarting mattermost account=<slug>-coach`
+
+Patches deleted at the v2026.4.29 roll-forward (kept in git history on
+`octogee/gateway-scaling-patches-v2026.4.24` and `-v2026.4.25` if you need
+to spelunk):
+
+- MM WebSocket keepalive ping → landed upstream as `0e97f962ac` (#73979).
+- AJV plugin defaults leaking into `event.sourceConfig` (the SIGUSR1-on-mount cascade) → landed upstream as `057b8276cc` (#73267) in v2026.4.28.
+- Channel/sidecar startup-handshake hang (4.25/4.26 blocker) → landed upstream as `8d58ad4c15`.
+- MM per-message latency instrumentation + emit-timing-summary-on-settle — diagnostic-only, dropped now that the bugs they helped chase are fixed.
+- Control-plane write rate-limit configurable — never deployed; surgical reload kept actual `config.patch` traffic well below the 3/60s upstream cap.
 
 ## GCS bucket
 
