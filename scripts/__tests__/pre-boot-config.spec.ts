@@ -48,12 +48,7 @@ describe("applyPreBootPatches — tools.profile (new)", () => {
   });
 
   it("is idempotent: a config already at coding reports no change", () => {
-    const config: any = {
-      tools: { profile: "coding" },
-      gateway: {
-        controlPlane: { writeRateLimit: { maxRequests: 60, windowMs: 60_000 } },
-      },
-    };
+    const config: any = { tools: { profile: "coding" } };
     const changed = applyPreBootPatches(config, {});
     expect(changed).toBe(false);
     expect(config.tools.profile).toBe("coding");
@@ -140,9 +135,6 @@ describe("applyPreBootPatches — MM env sync", () => {
     config.channels.mattermost.commands = { native: false };
     config.channels.mattermost.accounts.default.commands = { native: false };
     config.channels.mattermost.baseUrl = "https://mm.example";
-    config.gateway = {
-      controlPlane: { writeRateLimit: { maxRequests: 60, windowMs: 60_000 } },
-    };
     const changed = applyPreBootPatches(config, {
       MM_BOT_TOKEN: "same-tok",
       MM_URL: "https://mm.example",
@@ -225,9 +217,6 @@ describe("applyPreBootPatches — no-change reporting", () => {
           },
         },
       },
-      gateway: {
-        controlPlane: { writeRateLimit: { maxRequests: 60, windowMs: 60_000 } },
-      },
       plugins: { entries: {} },
     };
     const changed = applyPreBootPatches(config, {
@@ -238,55 +227,10 @@ describe("applyPreBootPatches — no-change reporting", () => {
   });
 });
 
-// ── gateway.controlPlane.writeRateLimit reconciliation ───────────────────────
-// Restored on the 4.24 patch stack (PR #1 on ceckert/openclaw cherry-picks the
-// fork patch onto octogee/gateway-scaling-patches-v2026.4.24). Same shape as
-// the original block from before #725 / dd4163d4.
-
-describe("applyPreBootPatches — control-plane writeRateLimit", () => {
-  it("seeds maxRequests=60 and windowMs=60000 on a config with no gateway.controlPlane", () => {
-    const config: any = {};
-    const changed = applyPreBootPatches(config, {});
-    expect(config.gateway.controlPlane.writeRateLimit).toEqual({
-      maxRequests: 60,
-      windowMs: 60_000,
-    });
-    expect(changed).toBe(true);
-  });
-
-  it("reconciles a drifted maxRequests back to 60", () => {
-    const config: any = {
-      gateway: {
-        controlPlane: { writeRateLimit: { maxRequests: 3, windowMs: 60_000 } },
-      },
-    };
-    applyPreBootPatches(config, {});
-    expect(config.gateway.controlPlane.writeRateLimit.maxRequests).toBe(60);
-  });
-
-  it("reconciles a drifted windowMs back to 60000", () => {
-    const config: any = {
-      gateway: {
-        controlPlane: { writeRateLimit: { maxRequests: 60, windowMs: 30_000 } },
-      },
-    };
-    applyPreBootPatches(config, {});
-    expect(config.gateway.controlPlane.writeRateLimit.windowMs).toBe(60_000);
-  });
-
-  it("does not clobber unrelated gateway.* keys", () => {
-    const config: any = {
-      gateway: {
-        port: 18789,
-        auth: { rateLimit: { maxAttempts: 10 } },
-      },
-    };
-    applyPreBootPatches(config, {});
-    expect(config.gateway.port).toBe(18789);
-    expect(config.gateway.auth.rateLimit.maxAttempts).toBe(10);
-    expect(config.gateway.controlPlane.writeRateLimit).toEqual({
-      maxRequests: 60,
-      windowMs: 60_000,
-    });
-  });
-});
+// ── gateway.controlPlane.writeRateLimit reconciliation removed ───────────────
+// The 60-per-60s bump only worked alongside our fork patch that exposed
+// the field as a config knob, and that fork patch was dropped at the
+// v2026.4.29 roll-forward. Pre-boot writes of an unknown field were dead
+// drift — see the block-removal comment in pre-boot-config.ts. Restore both
+// when the rate limit becomes a bottleneck again and the field becomes
+// configurable upstream or back on our fork.

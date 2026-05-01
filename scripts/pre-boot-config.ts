@@ -65,36 +65,16 @@ export function applyPreBootPatches(
     logFn(`set tools.profile=coding (gateway policy: openclaw "coding" defaults)`);
   }
 
-  // ── gateway.controlPlane.writeRateLimit ─────────────────────────────────
-  // OpenClaw fork v2026.4.24 (with cherry-picked patch from 4.25) exposes a
-  // configurable ceiling for the control-plane write rate limit
-  // (config.patch / config.apply / update.run). Upstream defaults to 3 per
-  // 60s — too tight for a fleet provisioner that drives all customer mounts
-  // through one `gateway-client` device. We bump to 60 per 60s here so a
-  // normal signup burst (or a retry storm) doesn't throttle. Same pattern
-  // as `gateway.auth.rateLimit`. Drifted values get reset on next boot.
-  const TARGET_CP_MAX_REQUESTS = 60;
-  const TARGET_CP_WINDOW_MS = 60_000;
-  config.gateway ??= {};
-  config.gateway.controlPlane ??= {};
-  config.gateway.controlPlane.writeRateLimit ??= {};
-  const cpRl = config.gateway.controlPlane.writeRateLimit;
-  const prevCpMax = cpRl.maxRequests;
-  if (prevCpMax !== TARGET_CP_MAX_REQUESTS) {
-    cpRl.maxRequests = TARGET_CP_MAX_REQUESTS;
-    changed = true;
-    logFn(
-      `set gateway.controlPlane.writeRateLimit.maxRequests=${TARGET_CP_MAX_REQUESTS} (was ${prevCpMax ?? "<unset>"})`,
-    );
-  }
-  const prevCpWindow = cpRl.windowMs;
-  if (prevCpWindow !== TARGET_CP_WINDOW_MS) {
-    cpRl.windowMs = TARGET_CP_WINDOW_MS;
-    changed = true;
-    logFn(
-      `set gateway.controlPlane.writeRateLimit.windowMs=${TARGET_CP_WINDOW_MS} (was ${prevCpWindow ?? "<unset>"})`,
-    );
-  }
+  // ── REMOVED 2026-05-01: gateway.controlPlane.writeRateLimit ──────────────
+  // Was bumping the upstream control-plane write rate-limit (3-per-60s) to
+  // 60-per-60s. The bump only worked when paired with our fork patch that
+  // exposed the field as a config knob; that fork patch was dropped at the
+  // v2026.4.29 roll-forward (never deployed in production, surgical reload
+  // kept actual config.patch traffic well below the 3-per-60s cap on TEST).
+  // Upstream still hard-codes the limit, so writing the field here is dead
+  // drift — openclaw.json carried an unknown key on every boot. Bring this
+  // back when (a) the upstream rate limit becomes a real bottleneck again
+  // and (b) the field becomes configurable upstream or back on our fork.
 
   // ── Octogee Router plugin config ────────────────────────────────────────
   // F&F: the router has no runtime-tweakable config. All per-customer knobs
