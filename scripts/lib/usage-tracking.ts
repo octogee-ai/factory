@@ -190,9 +190,25 @@ export async function reportUsage(
       // §9.2 of ADMIN-DASHBOARD-SPEC: throttle math reads windowCostUsd.
       // Tokens are kept for diagnostic display only.
       const REFILL_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
-      const trialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
       const subscriptionStatus = data.subscription?.status ?? "active";
       const byotActive = data.byotActive === true;
+      let trialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
+
+      // Lazy backfill: trial users with no trialStartedAt fall through
+      // to windowBudgetUsd=0 below, which the throttle trigger and the
+      // dashboard treat as "no budget" → all-red UI + a warning log
+      // every single agent turn. The missing field is just a hole in
+      // our onboarding write path; the user IS on trial, we just never
+      // recorded when. Treat the first turn we see them on as day 1
+      // and persist that decision in the same transaction so all
+      // future turns see a populated field.
+      const trialStartedAtUpdate: Record<string, any> = {};
+      if (tier === "trial" && !trialStartedAt && !byotActive) {
+        const now = new Date();
+        trialStartedAt = now;
+        trialStartedAtUpdate["subscription.trialStartedAt"] = now;
+        log(`usage: backfilled subscription.trialStartedAt=now for trial user ${uid} (was missing)`);
+      }
 
       // For trial users we tier-derive in USD via tapered curve. Paid
       // tiers convert weekly token budget at the Sonnet blended rate.
@@ -262,6 +278,7 @@ export async function reportUsage(
       // ── User-level write — diagnostic totals + throttle state ──────
       t.update(userRef, {
         ...windowUpdates,
+        ...trialStartedAtUpdate,
         "usage.totalTokensUsed":    FieldValue.increment(usage.totalTokens),
         "usage.tokensUsed":         FieldValue.increment(usage.totalTokens),
         "usage.costUsd":            FieldValue.increment(usage.costUsd),

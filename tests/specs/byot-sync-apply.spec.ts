@@ -220,3 +220,124 @@ describe("applyByotState — disabled remove path", () => {
     expect(applyByotState(slug, null)).toBe(false);
   });
 });
+
+describe("applyByotState — `.byot-managed` marker (auth-profiles.json collision guard)", () => {
+  // OpenClaw's own per-agent auth caching layer also writes
+  // auth-profiles.json into the same agent dir. Without the marker,
+  // applyByotState(slug, null) would happily delete OpenClaw's cache on
+  // every Firestore tick — the watcher fires on every usage update,
+  // every agent turn writes a usage update, so OpenClaw's cache got
+  // wiped each turn → re-resolution + secrets.reload + channel restart →
+  // first-message slowness. The marker is the proof-of-prior-BYOT-write
+  // that tells us a file under one of the BYOT_FILES names was actually
+  // created by us and is therefore safe to delete.
+
+  function markerPath(slug: string): string {
+    return path.join(agentDirFor(slug), ".byot-managed");
+  }
+
+  test("disable WITHOUT a marker leaves a pre-existing auth-profiles.json untouched", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    const dir = agentDirFor(slug);
+    fs.mkdirSync(dir, { recursive: true });
+
+    // Simulate OpenClaw having written its own auth-profiles.json — same
+    // path we'd target, but no marker so applyByotState must leave it.
+    const openclawCacheBody = '{"profiles":{"sample":{"type":"oauth"}}}';
+    fs.writeFileSync(profilePath(slug), openclawCacheBody);
+    expect(fs.existsSync(markerPath(slug))).toBe(false);
+
+    expect(applyByotState(slug, null)).toBe(false);
+    expect(fs.existsSync(profilePath(slug))).toBe(true);
+    expect(fs.readFileSync(profilePath(slug), "utf8")).toBe(openclawCacheBody);
+  });
+
+  test("BYOT-on writes the marker file alongside auth-profiles.json", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
+    expect(fs.existsSync(markerPath(slug))).toBe(true);
+
+    const markerContent = JSON.parse(fs.readFileSync(markerPath(slug), "utf8"));
+    expect(typeof markerContent.managedSince).toBe("string");
+  });
+
+  test("BYOT-on idempotent: second call does NOT rewrite the marker", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, { slug, provider: "anthropic" });
+    const firstMarker = fs.readFileSync(markerPath(slug), "utf8");
+
+    // Sleep so any ISO timestamp regeneration would visibly differ.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(false);
+    const secondMarker = fs.readFileSync(markerPath(slug), "utf8");
+    expect(secondMarker).toBe(firstMarker);
+  });
+
+  test("disable WITH the marker present removes both BYOT_FILES AND the marker", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, { slug, provider: "anthropic" });
+    expect(fs.existsSync(profilePath(slug))).toBe(true);
+    expect(fs.existsSync(markerPath(slug))).toBe(true);
+
+    expect(applyByotState(slug, null)).toBe(true);
+    expect(fs.existsSync(profilePath(slug))).toBe(false);
+    expect(fs.existsSync(markerPath(slug))).toBe(false);
+  });
+
+  test("re-enable after disable rewrites both auth-profiles.json AND the marker", async () => {
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    applyByotState(slug, { slug, provider: "anthropic" });
+    applyByotState(slug, null);
+    expect(fs.existsSync(profilePath(slug))).toBe(false);
+    expect(fs.existsSync(markerPath(slug))).toBe(false);
+
+    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
+    expect(fs.existsSync(profilePath(slug))).toBe(true);
+    expect(fs.existsSync(markerPath(slug))).toBe(true);
+  });
+
+  test("BYOT-on writes marker even when content already matches (pre-marker rollouts)", async () => {
+    // Pre-marker code paths (or any prior rollout that wrote
+    // BYOT_FILES without writing the marker) must self-heal: the
+    // first applyByotState call after this code ships should backfill
+    // the marker even though no file content changes. Otherwise the
+    // BYOT-off path stays a permanent no-op for those users and we
+    // can never clean up their stale BYOT files.
+    const { applyByotState } = await loadModule();
+    const slug = "smile-wring-011b";
+    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+
+    // Bootstrap files via the current code, then forcibly remove the
+    // marker to simulate a pre-marker rollout state on disk.
+    applyByotState(slug, { slug, provider: "anthropic" });
+    fs.unlinkSync(markerPath(slug));
+    expect(fs.existsSync(profilePath(slug))).toBe(true);
+    expect(fs.existsSync(markerPath(slug))).toBe(false);
+
+    // Re-apply the same input. File content already matches → no file
+    // changes → `changed === false`. But the marker MUST be written
+    // anyway so disable can find it on next BYOT-off.
+    const changed = applyByotState(slug, { slug, provider: "anthropic" });
+    expect(changed).toBe(false);
+    expect(fs.existsSync(markerPath(slug))).toBe(true);
+
+    // And now disable cleans up correctly.
+    expect(applyByotState(slug, null)).toBe(true);
+    expect(fs.existsSync(profilePath(slug))).toBe(false);
+    expect(fs.existsSync(markerPath(slug))).toBe(false);
+  });
+});

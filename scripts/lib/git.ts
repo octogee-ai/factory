@@ -492,6 +492,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     "customer-config.json",
     "crew-webhooks.json",
     "_pending_*.json",
+    ".byot-managed",
     ".system/",
     ".openclaw/",
     ".ssh/",
