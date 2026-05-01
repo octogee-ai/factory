@@ -480,9 +480,9 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null,
-      username: null,
-      coachUserId: null,
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
       coachDmChannelId: null,
       generalChannelId: null,
       adminChannelId: null,
@@ -520,9 +520,9 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: null,
-      userId: null,
-      username: null,
-      coachUserId: null,
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
       coachDmChannelId: null,
       generalChannelId: null,
       adminChannelId: null,
@@ -546,9 +546,9 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null,
-      username: null,
-      coachUserId: null,
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
       coachDmChannelId: null,
       generalChannelId: null,
       adminChannelId: null,
@@ -575,6 +575,26 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       kind: "general",
       mattermost: { channelId: "ch-new-123" },
     });
+    // Channel must be created as type "P" (private). All MM channels in
+    // Octogee are private by principle — membership is explicitly managed
+    // by workspace-api at every life-cycle point.
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels",
+      "POST",
+      expect.objectContaining({ type: "P" }),
+    );
+    // Owner + agent (Octo) MUST be added as channel members — admin-token
+    // creation makes only the system_admin user an auto-member.
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels/ch-new-123/members",
+      "POST",
+      { user_id: "mock-mm-user" },
+    );
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels/ch-new-123/members",
+      "POST",
+      { user_id: "mock-mm-coach" },
+    );
     // Gitea side effects (phase 5 §D12): repo created + README seeded.
     expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
       "alice-proj-mygame",
@@ -589,12 +609,109 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     );
   });
 
+  it("returns 502 + marks failed when callerCtx.userId is null (owner not provisioned)", async () => {
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: null,
+      username: null,
+      coachUserId: "mock-mm-coach",
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    mockMmApi.mockResolvedValue({ id: "ch-noowner-1" });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects")
+      .set(authHeaders())
+      .send({ name: "My Game", slug: "mygame", visibility: "public" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/channel members/i);
+    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    expect(doc.provisioningState).toBe("failed");
+    expect(doc.provisioningError).toMatch(/owner has no Mattermost userId/i);
+    // Channels/general doc must NOT be written — provisioning failed
+    // before we'd commit the success state.
+    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
+  });
+
+  it("returns 502 + marks failed when callerCtx.coachUserId is null (agent not provisioned)", async () => {
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: null,
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    // Channel-create + owner-add succeed; the missing coachUserId is the
+    // only thing that prevents progression to active.
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if (method === "POST" && path === "/channels") return { id: "ch-noagent-1" };
+      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
+        return { user_id: "ok" };
+      }
+      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects")
+      .set(authHeaders())
+      .send({ name: "My Game", slug: "mygame", visibility: "public" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/channel members/i);
+    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    expect(doc.provisioningState).toBe("failed");
+    expect(doc.provisioningError).toMatch(/agent has no Mattermost userId/i);
+  });
+
+  it("returns 502 + marks failed when membership POST throws", async () => {
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if (method === "POST" && path === "/channels") return { id: "ch-flaky-1" };
+      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
+        throw new Error("MM 502: gateway timeout on member add");
+      }
+      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects")
+      .set(authHeaders())
+      .send({ name: "My Game", slug: "mygame", visibility: "public" });
+
+    expect(res.status).toBe(502);
+    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    expect(doc.provisioningState).toBe("failed");
+    expect(doc.provisioningError).toMatch(/Add owner.*gateway timeout/i);
+  });
+
   it("passes private=true to Gitea when the requested visibility is private", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null, username: null, coachUserId: null,
+      userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
     mockMmApi.mockResolvedValue({ id: "ch-priv-1" });
@@ -618,7 +735,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null, username: null, coachUserId: null,
+      userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
     mockMmApi.mockResolvedValue({ id: "ch-new-999" });
@@ -678,9 +795,9 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null,
-      username: null,
-      coachUserId: null,
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
       coachDmChannelId: null,
       generalChannelId: null,
       adminChannelId: null,
@@ -695,6 +812,11 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       }
       if (method === "POST" && path === "/channels") {
         return { id: "ch-retry-456" };
+      }
+      // Owner + agent membership adds — the agent in the project
+      // channel is the whole point of the channel.
+      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
+        return { user_id: "ok", channel_id: "ch-retry-456", roles: "channel_user" };
       }
       throw new Error(`Unexpected MM call: ${method} ${path}`);
     });
@@ -755,7 +877,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null, username: null, coachUserId: null,
+      userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
     // MM side of the retry succeeds.
@@ -796,17 +918,24 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null,
-      username: null,
-      coachUserId: null,
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
       coachDmChannelId: null,
       generalChannelId: null,
       adminChannelId: null,
     });
     // Lookup succeeds → retry must NOT create a duplicate channel.
+    // Existing channel returns type "P" so the O→P conversion path
+    // doesn't fire (covered separately).
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
-        return { id: "ch-existing-999" };
+        return { id: "ch-existing-999", type: "P" };
+      }
+      // Owner + agent membership adds — idempotent on the existing
+      // channel.
+      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
+        return { user_id: "ok", channel_id: "ch-existing-999", roles: "channel_user" };
       }
       throw new Error(`Unexpected MM call: ${method} ${path}`);
     });
@@ -824,9 +953,221 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
       mattermost: { channelId: "ch-existing-999" },
     });
-    // No POST — the channel already existed.
-    const postCalls = mockMmApi.mock.calls.filter((c) => c[1] === "POST");
-    expect(postCalls).toHaveLength(0);
+    // No POST to /channels (the create endpoint) — the channel already
+    // existed. POSTs to /channels/{id}/members ARE expected (membership
+    // ensure is idempotent).
+    const channelCreateCalls = mockMmApi.mock.calls.filter(
+      (c) => c[1] === "POST" && c[0] === "/channels",
+    );
+    expect(channelCreateCalls).toHaveLength(0);
+    // Owner + agent membership ensure both fired even though the channel
+    // pre-existed (idempotent on MM's side, mandatory on ours).
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels/ch-existing-999/members",
+      "POST",
+      { user_id: "mock-mm-user" },
+    );
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels/ch-existing-999/members",
+      "POST",
+      { user_id: "mock-mm-coach" },
+    );
+  });
+
+  it("converts a legacy type-O channel to type-P during retry (pre-fix data)", async () => {
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      id: "mygame",
+      ownerUid: "caller-uid",
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "private",
+      pendingVisibility: "public",
+      provisioningState: "active",
+    };
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    // Lookup returns a legacy type-O channel — retry must convert it to P
+    // via PUT /channels/{id}/privacy. Project channels carry an Octo
+    // agent and must be private.
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
+        return { id: "ch-legacy-O", type: "O" };
+      }
+      if (method === "PUT" && /^\/channels\/[^/]+\/privacy$/.test(path)) {
+        return { ok: true };
+      }
+      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
+        return { user_id: "ok" };
+      }
+      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/retry-provisioning")
+      .set(authHeaders())
+      .send({});
+
+    expect(res.status).toBe(200);
+    // O→P conversion fired exactly once with the right payload.
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels/ch-legacy-O/privacy",
+      "PUT",
+      { privacy: "P" },
+    );
+  });
+
+  it("returns 502 + keeps state as failed when membership POST throws during retry", async () => {
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      id: "mygame",
+      ownerUid: "caller-uid",
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "private",
+      pendingVisibility: "public",
+      provisioningState: "failed",
+    };
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    // Channel found; member-add explodes on first call.
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
+        return { id: "ch-flaky-retry", type: "P" };
+      }
+      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
+        throw new Error("MM 502: gateway timeout on member add");
+      }
+      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/retry-provisioning")
+      .set(authHeaders())
+      .send({});
+
+    expect(res.status).toBe(502);
+    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    expect(doc.provisioningState).toBe("failed");
+    expect(doc.provisioningError).toMatch(/Add owner.*gateway timeout/i);
+  });
+
+  it("returns 502 + marks failed when O→P conversion fails (hard requirement)", async () => {
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      id: "mygame",
+      ownerUid: "caller-uid",
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "private",
+      pendingVisibility: "public",
+      provisioningState: "active",
+    };
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    // Lookup returns a legacy type-O channel; the O→P conversion errors.
+    // Project channels carry an Octo agent and MUST be private — the
+    // handler must NOT continue past this and silently mark the project
+    // active with an open channel.
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
+        return { id: "ch-stuck-O", type: "O" };
+      }
+      if (method === "PUT" && /^\/channels\/[^/]+\/privacy$/.test(path)) {
+        const err = new Error("MM 403: insufficient privileges to convert") as Error & { status: number };
+        err.status = 403;
+        throw err;
+      }
+      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/retry-provisioning")
+      .set(authHeaders())
+      .send({});
+
+    expect(res.status).toBe(502);
+    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    expect(doc.provisioningState).toBe("failed");
+    expect(doc.provisioningError).toMatch(/insufficient privileges/i);
+    // No channels/general subdoc should have been written — provisioning
+    // failed before that step.
+    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
+  });
+
+  it("returns 502 + keeps state as failed when callerCtx.coachUserId is null on retry", async () => {
+    firestoreData["workspaces/alice/projects/mygame"] = {
+      id: "mygame",
+      ownerUid: "caller-uid",
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "private",
+      pendingVisibility: "public",
+      provisioningState: "failed",
+    };
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: "caller-uid",
+      slug: "alice",
+      teamId: "team-abc",
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: null, // agent doc not provisioned (race or stale)
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
+        return { id: "ch-active-1", type: "P" };
+      }
+      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
+        return { user_id: "ok" };
+      }
+      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/retry-provisioning")
+      .set(authHeaders())
+      .send({});
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/channel members/i);
+    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    expect(doc.provisioningState).toBe("failed");
+    expect(doc.provisioningError).toMatch(/agent has no Mattermost userId/i);
   });
 
   it("repairs an active project missing the channels/general subdoc (the existing TEST data shape)", async () => {
@@ -845,9 +1186,9 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null,
-      username: null,
-      coachUserId: null,
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
       coachDmChannelId: null,
       generalChannelId: null,
       adminChannelId: null,
@@ -909,9 +1250,9 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       ownerUid: "caller-uid",
       slug: "alice",
       teamId: "team-abc",
-      userId: null,
-      username: null,
-      coachUserId: null,
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
       coachDmChannelId: null,
       generalChannelId: null,
       adminChannelId: null,

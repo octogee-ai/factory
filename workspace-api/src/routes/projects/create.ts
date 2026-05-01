@@ -180,7 +180,12 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
         team_id: teamId,
         name: channelName,
         display_name: name.trim(),
-        type: "O", // public within the team
+        // Project channels carry an Octo agent — they're always private.
+        // (Open channels expose agent activity to anyone on the team and
+        // also don't auto-add the owner, who'd then be missing from
+        // their own project's chat. See scripts/lib/mattermost/channels.ts
+        // — the canonical project channel pattern in the provisioner.)
+        type: "P",
       })) as { id?: string };
       if (!ch?.id) throw new Error("MM returned no channel id");
       mmChannelId = ch.id;
@@ -194,6 +199,47 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       logger.error(`[projects] MM channel creation failed for ${workspaceId}/${slug}:`, { err });
       res.status(502).json({
         error: "Project provisioning failed — could not create chat channel",
+        workspaceId,
+        slug,
+      });
+      return;
+    }
+
+    // Add owner + agent (Octo) as channel members. The MM admin token
+    // creates the channel which makes the admin user the only auto-member;
+    // without explicit adds the owner can't see their own project channel
+    // and — more importantly — the agent isn't there to receive OpenClaw
+    // RPCs. The agent in the channel is the entire reason the channel
+    // exists. Treat missing IDs / add failures as hard errors that flip
+    // the project to `provisioningState: 'failed'` so /retry-provisioning
+    // can reconcile cleanly. Best-effort here would hide a broken state
+    // behind a green "active" flag.
+    const memberAdds: Array<{ id: string | null; label: string }> = [
+      { id: callerCtx.userId, label: "owner" },
+      { id: callerCtx.coachUserId, label: "agent" },
+    ];
+    const memberFailure = await (async (): Promise<string | null> => {
+      for (const m of memberAdds) {
+        if (!m.id) {
+          return `${m.label} has no Mattermost userId — provisioning incomplete`;
+        }
+        try {
+          await mmApi(`/channels/${mmChannelId}/members`, "POST", { user_id: m.id });
+        } catch (err) {
+          return `Add ${m.label} ${m.id} failed: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+      return null;
+    })();
+    if (memberFailure) {
+      await projectRef.update({
+        provisioningState: "failed",
+        provisioningError: memberFailure.slice(0, 500),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      logger.error(`[projects] Channel membership failed for ${workspaceId}/${slug}: ${memberFailure}`);
+      res.status(502).json({
+        error: "Project provisioning failed — could not add channel members",
         workspaceId,
         slug,
       });
