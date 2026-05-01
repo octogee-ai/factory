@@ -182,7 +182,14 @@ gateway:
     requests:
       cpu: "1000m"
       memory: "2560Mi"
-      ephemeral-storage: "1Gi"
+      # 5Gi (matching the limit) so GKE Autopilot's VPA webhook can't
+      # squash the limit down to the request — the cost-optimized compute
+      # class enforces requests==limits for ephemeral-storage and pinned
+      # both to 1Gi, evicting the pod ~7m after boot once memory-core's
+      # bundled-runtime-deps (~437 MB) + customer Gitea checkouts crossed
+      # the gateway+chat-proxy combined 2 Gi cap. See subchart
+      # charts/gateway/values.yaml for the full note.
+      ephemeral-storage: "5Gi"
     limits:
       cpu: "4000m"
       memory: "4Gi"
