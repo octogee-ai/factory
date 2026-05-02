@@ -127,6 +127,36 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
       return;
     }
 
+    // Activity sibling — idempotent on retry (provisionActivityPair finds
+    // the existing channel by name when MM rejects the second create).
+    try {
+      const { provisionActivityPair } = await import("../../lib/activityPair");
+      await provisionActivityPair({
+        primaryName: channelName,
+        primaryChannelId: mmChannelId,
+        teamId,
+        type: "P",
+        kind: "project",
+        members: memberAdds.map((m) => m.id),
+        recordActivityChannelId: async (activityChannelId) => {
+          await projectRef
+            .collection("channels")
+            .doc("general")
+            .set({ mattermost: { activityChannelId } }, { merge: true });
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await projectRef.update({
+        provisioningState: "failed",
+        provisioningError: message.slice(0, 500),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      logger.error(`[projects] Retry activity-pair failed for ${wid}/${pid}: ${message}`);
+      res.status(502).json({ error: "Retry failed — could not provision activity channel" });
+      return;
+    }
+
     await projectRef.collection("channels").doc("general").set({
       id: "general",
       kind: "general",

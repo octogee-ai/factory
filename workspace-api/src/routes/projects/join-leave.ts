@@ -84,6 +84,7 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
     // Add to project MM channel (look up from channels subcollection).
     const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
     const mmChannelId = generalChan?.mattermost?.channelId;
+    const activityChannelId = generalChan?.mattermost?.activityChannelId;
     if (mmChannelId && joinerMmUserId) {
       try {
         await mmApi(`/channels/${mmChannelId}/members`, "POST", {
@@ -94,6 +95,16 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
         if (!msg.includes("409")) {
           logger.warn(`[projects] MM channel join failed:`, { err });
         }
+      }
+    }
+    // Mirror membership to the activity sibling channel (Activity Stream
+    // spec §4.1 + G.O — atomic membership across the pair).
+    if (activityChannelId && joinerMmUserId) {
+      try {
+        const { syncActivityMembershipAdd } = await import("../../lib/activityPair");
+        await syncActivityMembershipAdd(activityChannelId, joinerMmUserId);
+      } catch (err) {
+        logger.warn(`[projects] activity-channel join failed:`, { err });
       }
     }
 
@@ -146,6 +157,7 @@ router.post("/:wid/:pid/leave", strictRateLimit, async (req: Request, res: Respo
 
     const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
     const mmChannelId = generalChan?.mattermost?.channelId;
+    const activityChannelId = generalChan?.mattermost?.activityChannelId;
     if (mmChannelId && leaverMmUserId) {
       try {
         await mmApi(`/channels/${mmChannelId}/members/${leaverMmUserId}`, "DELETE");
@@ -154,6 +166,15 @@ router.post("/:wid/:pid/leave", strictRateLimit, async (req: Request, res: Respo
         if (!msg.includes("404")) {
           logger.warn(`[projects] MM channel leave failed:`, { err });
         }
+      }
+    }
+    // Mirror leave on the activity sibling.
+    if (activityChannelId && leaverMmUserId) {
+      try {
+        const { syncActivityMembershipRemove } = await import("../../lib/activityPair");
+        await syncActivityMembershipRemove(activityChannelId, leaverMmUserId);
+      } catch (err) {
+        logger.warn(`[projects] activity-channel leave failed:`, { err });
       }
     }
 

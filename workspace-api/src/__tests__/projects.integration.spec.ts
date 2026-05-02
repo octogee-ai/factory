@@ -33,14 +33,43 @@ function resetFirestoreMocks() {
 
 // ── db mock ──────────────────────────────────────────────────────────────────
 
+function deepMerge(target: any, source: any): any {
+  if (typeof target !== "object" || target === null) return source;
+  if (typeof source !== "object" || source === null) return source;
+  const out: any = { ...target };
+  for (const key of Object.keys(source)) {
+    const srcVal = source[key];
+    const tgtVal = target[key];
+    if (
+      srcVal &&
+      typeof srcVal === "object" &&
+      !Array.isArray(srcVal) &&
+      tgtVal &&
+      typeof tgtVal === "object" &&
+      !Array.isArray(tgtVal)
+    ) {
+      out[key] = deepMerge(tgtVal, srcVal);
+    } else {
+      out[key] = srcVal;
+    }
+  }
+  return out;
+}
+
 vi.mock("../lib/db", () => {
   const makeDocRef = (path: string): any => ({
     get: async () => {
       const data = firestoreData[path];
       return { exists: !!data, data: () => data };
     },
-    set: async (data: any) => {
-      firestoreData[path] = { ...(firestoreData[path] || {}), ...data };
+    set: async (data: any, options?: { merge?: boolean }) => {
+      // Real Firestore's `set(data, { merge: true })` performs a deep merge.
+      // The default shallow merge here was incorrect for nested objects;
+      // the Activity Stream patch path (mattermost.activityChannelId)
+      // surfaced this as a regression on otherwise-passing tests.
+      const prev = firestoreData[path] || {};
+      const merge = options?.merge === true;
+      firestoreData[path] = merge ? deepMerge(prev, data) : { ...prev, ...data };
       mockSet(path, data);
     },
     update: async (data: any) => {
@@ -928,14 +957,21 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     // Lookup succeeds → retry must NOT create a duplicate channel.
     // Existing channel returns type "P" so the O→P conversion path
     // doesn't fire (covered separately).
-    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+    mockMmApi.mockImplementation(async (path: string, method?: string, body?: any) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         return { id: "ch-existing-999", type: "P" };
       }
       // Owner + agent membership adds — idempotent on the existing
-      // channel.
+      // channel. Same handler covers activity-sibling member adds since
+      // they POST to the same /channels/{id}/members shape.
       if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
         return { user_id: "ok", channel_id: "ch-existing-999", roles: "channel_user" };
+      }
+      // Activity Stream Phase 1: retry creates the activity sibling for
+      // existing projects that didn't have one. The primary already exists;
+      // only the sibling create lands here.
+      if (method === "POST" && path === "/channels") {
+        return { id: "ch-activity-existing-999", type: "P", name: body?.name };
       }
       throw new Error(`Unexpected MM call: ${method} ${path}`);
     });
@@ -953,13 +989,13 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
       mattermost: { channelId: "ch-existing-999" },
     });
-    // No POST to /channels (the create endpoint) — the channel already
-    // existed. POSTs to /channels/{id}/members ARE expected (membership
-    // ensure is idempotent).
-    const channelCreateCalls = mockMmApi.mock.calls.filter(
-      (c) => c[1] === "POST" && c[0] === "/channels",
+    // Primary channel was NOT re-created (lookup-by-name found it). The
+    // single POST /channels we expect is the activity sibling — new on
+    // retry for projects that pre-date the Activity Stream rollout.
+    const primaryCreateCalls = mockMmApi.mock.calls.filter(
+      (c) => c[1] === "POST" && c[0] === "/channels" && /general$/.test(c[2]?.name ?? ""),
     );
-    expect(channelCreateCalls).toHaveLength(0);
+    expect(primaryCreateCalls).toHaveLength(0);
     // Owner + agent membership ensure both fired even though the channel
     // pre-existed (idempotent on MM's side, mandatory on ours).
     expect(mockMmApi).toHaveBeenCalledWith(
@@ -999,7 +1035,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     // Lookup returns a legacy type-O channel — retry must convert it to P
     // via PUT /channels/{id}/privacy. Project channels carry an Octo
     // agent and must be private.
-    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+    mockMmApi.mockImplementation(async (path: string, method?: string, body?: any) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         return { id: "ch-legacy-O", type: "O" };
       }
@@ -1008,6 +1044,11 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       }
       if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
         return { user_id: "ok" };
+      }
+      // Activity Stream sibling create on retry — same idempotency window
+      // as the existing-channel test above.
+      if (method === "POST" && path === "/channels") {
+        return { id: "ch-activity-legacy", type: "P", name: body?.name };
       }
       throw new Error(`Unexpected MM call: ${method} ${path}`);
     });

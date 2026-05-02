@@ -56,6 +56,16 @@ export function ensureGatewayDefaults(): void {
     log("Set agents.defaults.subagents.maxConcurrent = 8");
   }
 
+  // Activity Stream Phase 1: bump verboseDefault from "off" to "on" so the
+  // bridge sees tool args / patches / plans / thinking. The "useful agent"
+  // gate (spec A7 / §8) is implicit — users without a provisioned agent
+  // have no sessions for this default to apply to.
+  if (config.agents.defaults.verboseDefault !== "on") {
+    config.agents.defaults.verboseDefault = "on";
+    changed = true;
+    log('Set agents.defaults.verboseDefault = "on" (Activity Stream Phase 1)');
+  }
+
   // Security: Enforce tool restrictions on ALL existing Coach agents.
   const agentList = config.agents?.list ?? [];
   for (const agent of agentList) {

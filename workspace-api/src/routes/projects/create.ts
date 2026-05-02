@@ -173,9 +173,9 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       return;
     }
 
+    const channelName = projectGeneralChannelName(workspaceId, slug);
     let mmChannelId: string;
     try {
-      const channelName = projectGeneralChannelName(workspaceId, slug);
       const ch = (await mmApi("/channels", "POST", {
         team_id: teamId,
         name: channelName,
@@ -253,6 +253,42 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       mattermost: { channelId: mmChannelId },
       createdAt: FieldValue.serverTimestamp(),
     });
+
+    // Activity sibling channel (Activity Stream Phase 1, spec §4.1). Atomic
+    // with primary: if the sibling create or member-add fails, flip the
+    // project's provisioningState to "failed" so /retry-provisioning can
+    // reconcile rather than leaving a half-provisioned pair.
+    try {
+      const { provisionActivityPair } = await import("../../lib/activityPair");
+      await provisionActivityPair({
+        primaryName: channelName,
+        primaryChannelId: mmChannelId,
+        teamId,
+        type: "P",
+        kind: "project",
+        members: memberAdds.map((m) => m.id),
+        recordActivityChannelId: async (activityChannelId) => {
+          await projectRef
+            .collection("channels")
+            .doc("general")
+            .set({ mattermost: { activityChannelId } }, { merge: true });
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await projectRef.update({
+        provisioningState: "failed",
+        provisioningError: message.slice(0, 500),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      logger.error(`[projects] activity-pair provisioning failed for ${workspaceId}/${slug}: ${message}`);
+      res.status(502).json({
+        error: "Project provisioning failed — could not create activity channel",
+        workspaceId,
+        slug,
+      });
+      return;
+    }
 
     // Gitea repo + seeded README (PROJECTS-CANVAS-SPEC §D12).
     // Failure here flips the project to `failed` so the UI can retry;

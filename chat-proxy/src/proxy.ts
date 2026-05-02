@@ -20,7 +20,16 @@
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
-import { Registry, collectDefaultMetrics, Counter, Gauge } from "prom-client";
+import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from "prom-client";
+import { startMetricsBaseline } from "./openclaw/metrics-baseline.js";
+import {
+  startActivityBridge,
+  type ActivityBridgeHandle,
+  type AgentEventPayload,
+} from "./openclaw/activity-bridge.js";
+import { createApprovalCallbackHandler } from "./openclaw/approval-callback.js";
+import { signApprovalContext } from "./openclaw/approval-callback.js";
+import { createMmClientFactory } from "./openclaw/mm-client.js";
 import { generateIdentity, type DeviceIdentity } from "./openclaw/device-identity.js";
 import { openUpstream, UpstreamError } from "./openclaw/upstream.js";
 import {
@@ -103,6 +112,107 @@ const ocWsFrameFilterTotal = new Counter({
   labelNames: ['decision', 'reason'] as const,
   registers: [metricsRegistry],
 });
+
+// Phase 0.5: capture OC plugin-load-per-turn timings as a no-regression
+// baseline before Phase 1 ships. See docs/ACTIVITY-STREAM-SPEC.md §9.3.
+const ocPluginLookupDurationMs = new Histogram({
+  name: 'octogee_oc_plugin_lookup_duration_ms',
+  help: 'OpenClaw plugin lookup duration scraped from gateway /metrics, by stage',
+  labelNames: ['stage'] as const,
+  // Buckets sized for typical plugin-lookup observations (sub-ms to ~1s).
+  buckets: [0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500],
+  registers: [metricsRegistry],
+});
+
+// ── Activity bridge metrics (Phase 1, spec §9.1) ──────────────────────────────
+const bridgeMetrics = {
+  eventsReceived: new Counter({
+    name: 'octogee_bridge_event_received_total',
+    help: 'Agent events received by the activity bridge from the gateway upstream WS',
+    labelNames: ['stream'] as const,
+    registers: [metricsRegistry],
+  }),
+  eventsPosted: new Counter({
+    name: 'octogee_bridge_event_posted_total',
+    help: 'Agent events successfully posted/edited to the activity channel',
+    labelNames: ['stream', 'kind'] as const,
+    registers: [metricsRegistry],
+  }),
+  eventsDropped: new Counter({
+    name: 'octogee_bridge_event_dropped_total',
+    help: 'Agent events dropped by the bridge with structured reason',
+    labelNames: ['stream', 'reason'] as const,
+    registers: [metricsRegistry],
+  }),
+  postLatencyMsCreate: new Histogram({
+    name: 'octogee_bridge_mm_post_create_ms',
+    help: 'MM createPost latency from the bridge',
+    labelNames: ['kind', 'status_class'] as const,
+    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
+    registers: [metricsRegistry],
+  }),
+  postLatencyMsEdit: new Histogram({
+    name: 'octogee_bridge_mm_post_edit_ms',
+    help: 'MM editPost latency from the bridge',
+    labelNames: ['kind', 'status_class'] as const,
+    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
+    registers: [metricsRegistry],
+  }),
+  resolutionMs: new Histogram({
+    name: 'octogee_bridge_resolution_ms',
+    help: 'Agent identity + channel resolution latency',
+    labelNames: ['outcome'] as const,
+    buckets: [0.5, 1, 5, 10, 25, 50, 100, 250, 500],
+    registers: [metricsRegistry],
+  }),
+  approvalDispatchMs: new Histogram({
+    name: 'octogee_bridge_approval_dispatch_ms',
+    help: 'Approval-callback dispatch latency to OC typed RPC',
+    labelNames: ['outcome'] as const,
+    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500],
+    registers: [metricsRegistry],
+  }),
+  reactionDispatchMs: new Histogram({
+    name: 'octogee_bridge_reaction_dispatch_ms',
+    help: 'MM reaction → OC abort/redirect dispatch latency',
+    labelNames: ['emoji', 'outcome'] as const,
+    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500],
+    registers: [metricsRegistry],
+  }),
+  e2eRootPostMs: new Histogram({
+    name: 'octogee_bridge_e2e_root_post_ms',
+    help: 'End-to-end lifecycle.start → root post visible',
+    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
+    registers: [metricsRegistry],
+  }),
+  e2eApprovalVisibleMs: new Histogram({
+    name: 'octogee_bridge_e2e_approval_visible_ms',
+    help: 'End-to-end approval click → buttons removed',
+    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
+    registers: [metricsRegistry],
+  }),
+  upstreamReconnects: new Counter({
+    name: 'octogee_bridge_upstream_reconnects_total',
+    help: 'Bridge upstream-WS reconnect count',
+    registers: [metricsRegistry],
+  }),
+};
+
+const approvalDroppedCounter = new Counter({
+  name: 'octogee_bridge_approval_dropped_total',
+  help: 'Approval callback drops with reason',
+  labelNames: ['reason'] as const,
+  registers: [metricsRegistry],
+});
+
+// Activity bridge runtime state. Initialized at boot (see bottom of file)
+// when NODE_ENV !== "test"; in test mode the proxy serves but the bridge
+// stays unwired (test mode protects against accidental upstream connects).
+// The approval callback HTTP route at handleRequest checks this against
+// null and returns 503 to surface "service not initialized" honestly.
+let approvalCallbackHandler:
+  | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
+  | null = null;
 
 // Per-uid sample rate for the drop warn-log. The Prom counter above is the
 // canonical signal; the log line is forensic context for the FIRST hit per
@@ -278,6 +388,25 @@ async function handleRequest(
 
   if (urlPath === "/api/auth/mattermost" && req.method === "POST") {
     return handleMattermostMint(req, res);
+  }
+
+  // ── Activity Stream approval callback (Phase 1, spec §6) ────────────────────
+  // MM Interactive Message buttons POST here when an owner clicks Approve/Deny.
+  // The handler verifies HMAC, IP allowlist, owner authorization, then
+  // dispatches OC's typed approval RPCs (exec.approval.resolve / plugin.approval.resolve).
+  //
+  // Route by path first; the handler itself returns 405 for non-POST so GET/etc
+  // distinguish "route exists but wrong method" (405) from "no such route" (404).
+  // This is what the wiring smoke tests assert.
+  if (urlPath === "/api/openclaw/approval/callback") {
+    if (!approvalCallbackHandler) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ error: "service_unavailable", reason: "approval handler not initialized" }),
+      );
+      return;
+    }
+    return approvalCallbackHandler(req, res);
   }
 
   // Drain any inbound body before responding so a legacy POST (e.g. an old
@@ -624,4 +753,165 @@ if (process.env.NODE_ENV !== "test") {
     console.log(`[chat-proxy] MM public URL: ${MM_PUBLIC_URL}`);
     console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
   });
+
+  // Phase 0.5: capture OC plugin-load-per-turn baseline. Single scraper
+  // hits the colocated gateway's /metrics over loopback every 30s and
+  // observes each parsed stage into `ocPluginLookupDurationMs`. The
+  // histogram lives on chat-proxy's /metrics so one Prometheus scrape
+  // config picks up both surfaces. See docs/ACTIVITY-STREAM-SPEC.md
+  // §10 Phase 0.5 + §9.3.
+  const gatewayMetricsUrl = process.env.OPENCLAW_GATEWAY_METRICS_URL
+    ?? "http://127.0.0.1:18789/metrics";
+  startMetricsBaseline({
+    fetchGatewayMetrics: async () => {
+      const res = await fetch(gatewayMetricsUrl);
+      if (!res.ok) {
+        throw new Error(`gateway /metrics returned ${res.status}`);
+      }
+      return res.text();
+    },
+    intervalMs: 30_000,
+    log: (msg) => console.warn(msg),
+    onSample: (sample) => {
+      ocPluginLookupDurationMs.observe({ stage: 'registrySnapshot' }, sample.registrySnapshotMs);
+      ocPluginLookupDurationMs.observe({ stage: 'manifestRegistry' }, sample.manifestRegistryMs);
+      ocPluginLookupDurationMs.observe({ stage: 'startupPlan' }, sample.startupPlanMs);
+      ocPluginLookupDurationMs.observe({ stage: 'ownerMaps' }, sample.ownerMapsMs);
+      ocPluginLookupDurationMs.observe({ stage: 'total' }, sample.totalMs);
+    },
+  });
+
+  // ── Activity Stream Phase 1: bridge boot ──────────────────────────────────
+  // Singleton bridge — one extra upstream gateway WS per chat-proxy pod that
+  // sees ALL `agent` events and posts to MM activity channels. See
+  // docs/ACTIVITY-STREAM-SPEC.md §4.1 + §4.2.
+  void (async () => {
+    const mmAdminPat = process.env.MM_ADMIN_PAT ?? '';
+    if (!mmAdminPat || mmAdminPat.trim().length === 0) {
+      console.warn(
+        '[chat-proxy] MM_ADMIN_PAT not mounted — skipping activity bridge boot. ' +
+        'Mount K8s secret `mattermost-gateway/admin_token` to enable. See ' +
+        'helm/octogee/charts/gateway/templates/deployment.yaml.',
+      );
+      return;
+    }
+    const { wireActivityBridge, connectBridgeUpstream } = await import('./openclaw/bridge-boot.js');
+    let wired: Awaited<ReturnType<typeof wireActivityBridge>>;
+    try {
+      wired = wireActivityBridge({
+        // Firebase Admin Firestore satisfies our FirestoreLike interface at
+        // runtime; the type-cast bridges the structural-vs-nominal gap (the
+        // SDK's QueryDocumentSnapshot.ref.parent.parent CAN be null, but for
+        // the doc paths we read it never is).
+        db: db as unknown as Parameters<typeof wireActivityBridge>[0]['db'],
+        upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+        gatewayToken: '', // bridge-boot fetches a fresh token via existing chat-proxy path on each upstream connect
+        mmAdminPat,
+        identity: getOpenClawIdentity(),
+        mmBaseUrl: MM_PUBLIC_URL,
+        metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
+        log: (msg) => console.warn(msg),
+      });
+    } catch (err) {
+      console.error(
+        `[chat-proxy] activity bridge wire failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    approvalCallbackHandler = wired.approvalCallbackHandler;
+
+    // Open the dedicated upstream WS for the bridge (separate from per-user
+    // upstreams in the WS-upgrade flow). The bridge sees every agent event
+    // exactly once via this connection.
+    try {
+      const gatewayId = 'sidecar';
+      const tokenResolved = await fetchGatewayToken({ gatewayId });
+      const ws = await openUpstream({
+        url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+        token: tokenResolved,
+        identity: getOpenClawIdentity(),
+      });
+      await connectBridgeUpstream(wired, {
+        ws,
+        log: (msg) => console.warn(msg),
+        metrics: bridgeMetrics,
+      });
+      console.log('[chat-proxy] activity bridge upstream WS connected');
+
+      // Phase 3 runtime: open MM WebSocket for reaction_added events.
+      // Routes 🛑 / 🔀 reactions to the reaction-handler which dispatches
+      // chat.abort over the bridge's RPC client.
+      const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
+      const { startMmReactionListener } = await import('./openclaw/mm-reaction-listener.js');
+      const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
+      const { resolveChannelOwnerUid } = await import('./openclaw/owner-resolution.js');
+      startMmReactionListener({
+        mmWsUrl,
+        mmAdminPat,
+        log: (msg) => console.warn(msg),
+        openWebSocket: () => new WebSocket(mmWsUrl),
+        isTrackedChannel: (channelId) =>
+          wired.handle.isTrackedActivityChannel?.(channelId) ?? false,
+        onReaction: async (reaction) => {
+          await handleReactionAdded(reaction, {
+            resolveRunForRootPost: (postId) =>
+              wired.handle.getRunStateByRootPostId?.(postId) ?? null,
+            resolveChannelOwnerUid: (channelId) =>
+              resolveChannelOwnerUid(channelId, {
+                db: db as never,
+                log: (msg) => console.warn(msg),
+              }),
+            resolveOctogeeUidByMmUser: async (mmUserId) => {
+              try {
+                const snap = await db
+                  .collectionGroup('users' as never)
+                  .where('mattermost.userId' as never, '==' as never, mmUserId as never)
+                  .get();
+                const docs = (snap as unknown as { docs: Array<{ id: string }> }).docs;
+                return docs[0]?.id ?? null;
+              } catch (err) {
+                console.warn(
+                  `[reaction-handler] resolveOctogeeUidByMmUser failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                return null;
+              }
+            },
+            effects: {
+              dispatchAbort: async (sessionKey) => {
+                // Use the bridge's RPC client (set by connectBridgeUpstream).
+                // Read it via the same internal seam approval-callback uses.
+                // If the upstream isn't connected, dispatch is a no-op + metric.
+                const wiredAny = wired as unknown as {
+                  __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
+                };
+                const rpc = wiredAny.__getRpcClient?.();
+                if (!rpc) {
+                  console.warn(
+                    `[reaction-handler] abort dispatch skipped — no upstream RPC client for session ${sessionKey}`,
+                  );
+                  return;
+                }
+                await rpc.call('chat.abort', { sessionKey });
+              },
+            },
+            log: (msg) => console.warn(msg),
+            metrics: {
+              reactionDispatchMs: bridgeMetrics.reactionDispatchMs,
+              reactionDropped: new Counter({
+                name: 'octogee_bridge_reaction_dropped_total',
+                help: 'Reaction-handler drops with reason',
+                labelNames: ['reason'] as const,
+                registers: [metricsRegistry],
+              }),
+            },
+          });
+        },
+      });
+      console.log('[chat-proxy] MM reaction listener started');
+    } catch (err) {
+      console.error(
+        `[chat-proxy] activity bridge upstream connect failed: ${err instanceof Error ? err.message : String(err)} — bridge will not receive agent events until restart`,
+      );
+    }
+  })();
 }
