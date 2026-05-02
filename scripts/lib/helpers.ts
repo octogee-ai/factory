@@ -52,7 +52,11 @@ export function copyDirSync(src: string, dest: string): void {
     if (entry.name === "node_modules" || entry.name === ".git") continue;
     const s = path.join(src, entry.name);
     const d = path.join(dest, entry.name);
-    entry.isDirectory() ? copyDirSync(s, d) : fs.copyFileSync(s, d);
+    if (entry.isDirectory()) {
+      copyDirSync(s, d);
+    } else {
+      fs.copyFileSync(s, d);
+    }
   }
 }
 

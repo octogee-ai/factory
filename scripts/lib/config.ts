@@ -38,6 +38,11 @@ export const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS
 
 // ── Git-Backed Workspaces (Gitea) ───────────────────────────────────────────────
 
+// In-cluster gateway → Gitea calls go over the default ClusterIP service,
+// which is plain HTTP. Network policy + workload identity bound the
+// blast radius; HTTPS would require self-signed certs everyone in-cluster
+// then has to trust. eslint-disable for the in-cluster URL only.
+// eslint-disable-next-line sonarjs/no-clear-text-protocols -- in-cluster ClusterIP, not internet-exposed
 export const GIT_API_URL = process.env.GIT_API_URL || "http://gitea-http.octogee.svc.cluster.local:3000/api/v1";
 export const GIT_API_TOKEN = process.env.GIT_API_TOKEN || "";
 export const GIT_ORG = process.env.GIT_ORG || "octogee";

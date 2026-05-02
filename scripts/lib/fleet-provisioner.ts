@@ -222,6 +222,7 @@ export async function startFleetController(
   // HTTP server. Raw body capture is required so the signature verifier
   // can sign against byte-exact bytes.
   const app = express();
+  app.disable("x-powered-by"); // suppress version disclosure
   app.use(
     express.json({
       verify: (req: express.Request & { rawBody?: string }, _res, buf) => {

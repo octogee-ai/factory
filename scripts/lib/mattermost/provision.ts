@@ -271,6 +271,10 @@ export async function provisionMattermostUser(
       const ok = await mmUploadAvatar(mmUser.id, photoURL);
       if (ok) log(`[mattermost] avatar uploaded from OAuth photo`);
     } else if (email && !email.endsWith("@octogee.local")) {
+      // Gravatar protocol REQUIRES md5(email) as the URL identifier — see
+      // https://docs.gravatar.com/api/avatars/. Not a security context;
+      // the hash is just an opaque-to-us avatar key.
+      // eslint-disable-next-line sonarjs/hashing -- Gravatar API spec requires md5(email)
       const hash = crypto.createHash("md5").update(email.toLowerCase().trim()).digest("hex");
       const gravatarUrl = `https://gravatar.com/avatar/${hash}?d=identicon&s=200`;
       const ok = await mmUploadAvatar(mmUser.id, gravatarUrl);

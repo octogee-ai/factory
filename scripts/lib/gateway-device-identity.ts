@@ -75,6 +75,12 @@ function resolveDefaultIdentityPath(): string {
 // ── Encoding ────────────────────────────────────────────────────────────────
 
 function base64UrlEncode(buf: Buffer): string {
+  // The `=+$` regex is bounded — base64 padding is at most 2 trailing `=`,
+  // so the `+` quantifier matches at most 2 chars. The flagged super-linear
+  // backtracking risk requires an unbounded backtracking surface, which
+  // doesn't exist here. eslint-disable with this rationale rather than
+  // rewriting to a slightly-more-awkward form.
+  // eslint-disable-next-line sonarjs/slow-regex -- bounded match (≤2 trailing `=`); not ReDoS-able
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
 

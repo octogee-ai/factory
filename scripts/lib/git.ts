@@ -86,13 +86,23 @@ export function generateCustomerSshKey(slug: string): string {
   }
 
   fs.mkdirSync(keyDir, { recursive: true });
+  // ssh-keygen, run inside the gateway image. Args are validated upstream
+  // (slug is sanitizeSlug-checked); PATH belongs to the image, not the
+  // operator. Same justification as the kubectl/tar shell-outs in
+  // scripts/ops/fleet.ts and scripts/lib/fleet-http-migration.ts.
+  // eslint-disable-next-line sonarjs/os-command -- PATH controlled, args validated
   execSync(`ssh-keygen -t ed25519 -N "" -f "${keyPath}" -C "octogee-${slug}@gateway" -q`, {
     stdio: "pipe",
   });
-  // Harden permissions — prevent other customers' agents from reading
+  // Harden permissions — restrictive perms ARE the right thing here:
+  // 0o700 on the dir + 0o600 on the private key prevent other customers'
+  // agents on the same gateway from reading them. SonarJS flags any
+  // chmod for review; in this case the constants are correct.
+  /* eslint-disable sonarjs/file-permissions -- restrictive (private key dir), correct */
   fs.chmodSync(keyDir, 0o700);
   fs.chmodSync(keyPath, 0o600);
   fs.chmodSync(pubPath, 0o644);
+  /* eslint-enable sonarjs/file-permissions */
 
   log(`[git] SSH keypair generated for ${slug}`);
   return fs.readFileSync(pubPath, "utf-8").trim();

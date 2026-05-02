@@ -24,16 +24,12 @@
  * need one.
  */
 
-import { OPENCLAW_CONFIG as _OPENCLAW_CONFIG, log as defaultLog } from "./config.js";
+import { log as defaultLog } from "./config.js";
 import {
   GatewayRpcError,
   createGatewayRpc,
   type GatewayRpcClient,
 } from "./gateway-rpc.js";
-
-// Kept imported for its side effect of declaring the config-path constant;
-// no runtime use remains after the file-write fallback was removed.
-void _OPENCLAW_CONFIG;
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
