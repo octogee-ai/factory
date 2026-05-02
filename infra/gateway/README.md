@@ -2,7 +2,7 @@
 
 Container image for the OpenClaw gateway + Firestore provisioner. Deployed to GKE Autopilot via Helm.
 
-> **Architecture docs:** [docs/GATEWAY-ARCHITECTURE.md](../../docs/GATEWAY-ARCHITECTURE.md) · [docs/RUNBOOK.md](../../docs/RUNBOOK.md)
+> **Architecture docs:** [docs/architecture/GATEWAY-PLATFORM-SPEC.md](../../docs/architecture/GATEWAY-PLATFORM-SPEC.md) · [docs/operations/RUNBOOK.md](../../docs/operations/RUNBOOK.md)
 
 ---
 
@@ -68,6 +68,6 @@ cd infra/gateway && ./setup.sh
 
 ## See also
 
-- [docs/GATEWAY-ARCHITECTURE.md](../../docs/GATEWAY-ARCHITECTURE.md) — canonical architecture (GKE, Mattermost, provisioner)
-- [docs/RUNBOOK.md](../../docs/RUNBOOK.md) — operations runbook (cluster map, deploy, troubleshooting)
-- [docs/CHAT-PROXY.md](../../docs/CHAT-PROXY.md) — chat proxy service details
+- [docs/architecture/GATEWAY-PLATFORM-SPEC.md](../../docs/architecture/GATEWAY-PLATFORM-SPEC.md) — gateway platform model
+- [docs/operations/RUNBOOK.md](../../docs/operations/RUNBOOK.md) — operations runbook (cluster map, deploy, troubleshooting)
+- [docs/operations/MATTERMOST.md](../../docs/operations/MATTERMOST.md) — chat-proxy + Mattermost architecture
