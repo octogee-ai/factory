@@ -838,20 +838,50 @@ if (process.env.NODE_ENV !== "test") {
       });
       console.log('[chat-proxy] activity bridge upstream WS connected');
 
-      // Phase 3 runtime: open MM WebSocket for reaction_added events.
-      // Routes 🛑 / 🔀 reactions to the reaction-handler which dispatches
-      // chat.abort over the bridge's RPC client.
+      // Phase 3 runtime: open MM WebSocket for reaction_added + posted events.
+      // Routes 🛑 / 🔀 reactions to the reaction-handler (chat.abort) and
+      // thread replies on tracked run roots to chat.send {deliver:false}
+      // (reply-as-steer, spec §7) — both over the bridge's RPC client.
       const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
-      const { startMmReactionListener } = await import('./openclaw/mm-reaction-listener.js');
+      const { startMmEventListener } = await import('./openclaw/mm-event-listener.js');
       const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
       const { resolveChannelOwnerUid } = await import('./openclaw/owner-resolution.js');
-      startMmReactionListener({
+      const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
+        const wiredAny = wired as unknown as {
+          __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
+        };
+        return wiredAny.__getRpcClient?.() ?? null;
+      };
+      startMmEventListener({
         mmWsUrl,
         mmAdminPat,
         log: (msg) => console.warn(msg),
         openWebSocket: () => new WebSocket(mmWsUrl),
         isTrackedChannel: (channelId) =>
           wired.handle.isTrackedActivityChannel?.(channelId) ?? false,
+        resolveRunForRootPost: (postId) =>
+          wired.handle.getRunStateByRootPostId?.(postId) ?? null,
+        onReply: async (reply) => {
+          const rpc = getRpcClient();
+          if (!rpc) {
+            console.warn(
+              `[mm-event-listener] reply-as-steer skipped — no upstream RPC client for session ${reply.sessionKey}`,
+            );
+            return;
+          }
+          try {
+            await rpc.call('chat.send', {
+              sessionKey: reply.sessionKey,
+              message: reply.message,
+              deliver: false,
+              idempotencyKey: reply.replyPostId,
+            });
+          } catch (err) {
+            console.warn(
+              `[mm-event-listener] chat.send (reply-as-steer) failed for session ${reply.sessionKey}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        },
         onReaction: async (reaction) => {
           await handleReactionAdded(reaction, {
             resolveRunForRootPost: (postId) =>
@@ -878,13 +908,7 @@ if (process.env.NODE_ENV !== "test") {
             },
             effects: {
               dispatchAbort: async (sessionKey) => {
-                // Use the bridge's RPC client (set by connectBridgeUpstream).
-                // Read it via the same internal seam approval-callback uses.
-                // If the upstream isn't connected, dispatch is a no-op + metric.
-                const wiredAny = wired as unknown as {
-                  __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
-                };
-                const rpc = wiredAny.__getRpcClient?.();
+                const rpc = getRpcClient();
                 if (!rpc) {
                   console.warn(
                     `[reaction-handler] abort dispatch skipped — no upstream RPC client for session ${sessionKey}`,
@@ -907,7 +931,7 @@ if (process.env.NODE_ENV !== "test") {
           });
         },
       });
-      console.log('[chat-proxy] MM reaction listener started');
+      console.log('[chat-proxy] MM event listener started (reactions + reply-as-steer)');
     } catch (err) {
       console.error(
         `[chat-proxy] activity bridge upstream connect failed: ${err instanceof Error ? err.message : String(err)} — bridge will not receive agent events until restart`,

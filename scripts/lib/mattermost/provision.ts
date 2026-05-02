@@ -46,7 +46,7 @@ import { mmApiCall } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
 import { mintAndPersistCoachToken } from "./coach-pat.js";
 import { createOrRestoreChannel } from "./channels.js";
-import { communityChannelIds } from "./community.js";
+import { communityChannelIds, communityActivityChannelIds } from "./community.js";
 import { mmUploadAvatar } from "./avatars.js";
 
 export async function provisionMattermostUser(
@@ -278,13 +278,18 @@ export async function provisionMattermostUser(
     }
 
     // Auto-join community channels (legacy — for workspaces using shared team)
-    for (const chId of communityChannelIds) {
+    // including their activity-stream siblings (spec OI5) so the bridge's
+    // posts are visible to every member of the primary social channel.
+    const joinIds = [...communityChannelIds, ...communityActivityChannelIds];
+    for (const chId of joinIds) {
       await mmApiCall("POST", `/channels/${chId}/members`, {
         user_id: mmUser.id,
       });
     }
-    if (communityChannelIds.length > 0) {
-      log(`[mattermost] joined ${communityChannelIds.length} community channels`);
+    if (joinIds.length > 0) {
+      log(
+        `[mattermost] joined ${communityChannelIds.length} community + ${communityActivityChannelIds.length} activity siblings`,
+      );
     }
 
     // ── Create channels in workspace team ───────────────────────────────────
