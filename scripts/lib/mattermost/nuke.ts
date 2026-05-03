@@ -1,24 +1,6 @@
-/**
- * Nuke helpers — destructive MM operations for the `scripts/nuke.ts`
- * workspace-tear-down flow.
- *
- * `destroyMmUser` does a PERMANENT delete (not deactivate) via MM's
- * admin API. `destroyMmChannel` archives (MM's soft delete; message
- * history is preserved in MM admin). Both are idempotent — a 404
- * response is treated as success.
- *
- * `getMmUserChannels` lists the caller's channels in a team so nuke can
- * walk them before destroying the user.
- */
-
 import { log } from "../config.js";
 import { getMmAdminToken, mmApiCall } from "./client.js";
 
-/**
- * Permanently delete a Mattermost user (not deactivate — full delete).
- * Uses the MM admin API: DELETE /users/{userId}
- * Idempotent: 404 is treated as success.
- */
 export async function destroyMmUser(userId: string): Promise<void> {
   if (!process.env.MM_URL || !userId) return;
 

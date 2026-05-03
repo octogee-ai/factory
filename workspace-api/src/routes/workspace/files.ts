@@ -1,12 +1,3 @@
-/**
- * File read endpoints — GET /files (directory listing) + GET /file
- * (single file content, git-backed or blob-backed).
- *
- * File authorization runs through `withFileTarget` (lib/fileTarget.ts),
- * which resolves the target repo + GCS prefix and enforces workspace or
- * project ownership/membership. The route body only runs once that gate
- * has passed.
- */
 import { Router } from "express";
 import { storage } from "../../lib/db";
 import { validateFilePath } from "../../lib/path-validation";

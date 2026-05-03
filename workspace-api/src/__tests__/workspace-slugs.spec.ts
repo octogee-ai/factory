@@ -1,10 +1,3 @@
-/**
- * workspace-slugs — unit tests for the helper that resolves a user's
- * workspace slug(s). Per docs/DATA-MODEL-REVIEW.md §11, the user doc's
- * `username` field IS the workspace slug — there is no separate slug
- * resolution, just a readthrough. The helper stays because callers fan
- * out reads via a list shape (forward-compat for multi-workspace).
- */
 import { describe, it, expect } from "vitest";
 
 import { primaryWorkspaceSlug, workspaceSlugsForUser } from "../lib/workspace-slugs";

@@ -89,7 +89,6 @@ describe('workspace-api middleware stack', () => {
   });
 
   it('parses JSON bodies on internal routes', async () => {
-    // INTERNAL_SERVICE_KEY unset in test — dev fallback allows through so we can check JSON parsing
     delete process.env.INTERNAL_SERVICE_KEY;
     const app = createApp();
     const res = await request(app)
@@ -99,8 +98,6 @@ describe('workspace-api middleware stack', () => {
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Missing uid' });
   });
-
-  // ── Security headers (Helmet) ─────────────────────────────────────────────
 
   it('sets X-Content-Type-Options: nosniff on all responses', async () => {
     const app = createApp();
@@ -131,10 +128,6 @@ describe('workspace-api middleware stack', () => {
   });
 
   it('sets a lockdown CSP header (default-src none, no scripts/forms/frames)', async () => {
-    // CodeQL js/insecure-helmet-configuration flagged disabled CSP. A JSON
-    // API doesn't need script/img/style allowances — even if a response
-    // leaks into a browser, `default-src 'none'` blocks execution. If we
-    // ever serve HTML we'll declare a narrower per-route CSP.
     const app = createApp();
     const res = await request(app).get('/api/health');
 
@@ -146,16 +139,11 @@ describe('workspace-api middleware stack', () => {
     expect(csp).toContain("base-uri 'none'");
   });
 
-  // ── Rate limiting ─────────────────────────────────────────────────────────
-
   it('health endpoint is exempt from rate limiting (no RateLimit header)', async () => {
     const app = createApp();
     const res = await request(app).get('/health');
 
-    // When a request is skipped by the rate limiter, no RateLimit header is set.
-    // Helmet + rate-limit draft-7 headers would be 'RateLimit' — absent means skipped.
     expect(res.status).toBe(200);
-    // Should still have Helmet headers — exempt only from rate limiting
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
@@ -169,11 +157,8 @@ describe('workspace-api middleware stack', () => {
 
   it('non-exempt endpoints include RateLimit response headers', async () => {
     const app = createApp();
-    // /api/leads does not exist but still passes through the rate limiter
     const res = await request(app).get('/api/leads');
 
-    // draft-7 RateLimit header should be present for non-exempt routes
-    // (even 404s pass through rate limiting middleware)
     expect(res.headers['ratelimit-limit'] ?? res.headers['ratelimit']).toBeDefined();
   });
 

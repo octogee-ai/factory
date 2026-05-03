@@ -3,10 +3,6 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-// We test readOpenClawConfig/writeOpenClawConfig/agentExists by importing their
-// implementations directly, but they depend on OPENCLAW_CONFIG path. To test
-// round-trip behavior we replicate the logic with temp files.
-
 describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
   let tmpDir: string;
   let configPath: string;

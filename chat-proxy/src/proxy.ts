@@ -1,22 +1,3 @@
-/**
- * Octogee Chat Proxy — Firebase Auth → Mattermost credential mint + OpenClaw bridge
- *
- * Stateless service with two responsibilities:
- *
- *   1. POST /api/auth/mattermost — exchange a Firebase ID token for the user's
- *      Mattermost credentials. Browser then talks to Mattermost directly at
- *      MM_PUBLIC_URL using its personal access token.
- *
- *   2. WS /api/openclaw/ws/<ticket> — bridge the browser to the user's
- *      assigned OpenClaw gateway, with per-user frame filtering. The browser
- *      gets a normal WebSocket; this service handles the Ed25519 device
- *      handshake, gateway-token rotation, and cross-user fan-out blocking.
- *
- * Mattermost REST and WebSocket traffic is NOT proxied here any more. The
- * Mattermost ingress (mattermost[-test].octogee.com, IAP off) is the path
- * for that. See docs/RUNBOOK.md for the Option-C migration notes.
- */
-
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
@@ -47,14 +28,7 @@ import {
   ExpectedAgentIdError,
 } from "./openclaw/frame-filter.js";
 
-// ── Config ────────────────────────────────────────────────────────────────────
-
 const PORT = parseInt(process.env.PORT || "8080", 10);
-// Public-facing URL of the Mattermost ingress (e.g. https://mattermost.octogee.com).
-// Returned to the browser by the credential-mint endpoint so the client can
-// hit MM directly. Required — the chart wraps it with `required` at render
-// time but we still defensively process.exit(1) here to catch a manually
-// applied manifest with the env stripped.
 const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL;
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
@@ -63,8 +37,6 @@ if (!MM_PUBLIC_URL) {
   console.error("FATAL: MM_PUBLIC_URL is required");
   process.exit(1);
 }
-
-// ── Prometheus metrics ────────────────────────────────────────────────────────
 
 const metricsRegistry = new Registry();
 collectDefaultMetrics({ register: metricsRegistry });
@@ -76,8 +48,6 @@ const mintRequestsTotal = new Counter({
   registers: [metricsRegistry],
 });
 
-// OpenClaw gateway proxy counters — separate label space so dashboards
-// don't conflate MM WS traffic with OC WS traffic.
 const ocWsConnectionsActive = new Gauge({
   name: 'chat_proxy_openclaw_ws_connections_active',
   help: 'Active OpenClaw gateway proxy connections',
@@ -91,21 +61,12 @@ const ocWsHandshakeTotal = new Counter({
   registers: [metricsRegistry],
 });
 
-// Separate counter for successful rotation-recovery attempts. Stays out of
-// `ocWsHandshakeTotal` (which counts first-try outcomes) so alerting on a
-// sustained high rotation-recovery rate is straightforward: it would mean
-// the gateway pod is cycling more often than expected.
 const ocWsRotationRecoveredTotal = new Counter({
   name: 'chat_proxy_openclaw_ws_rotation_recovered_total',
   help: 'OpenClaw upstream handshakes that succeeded after an auth-failed rotation retry',
   registers: [metricsRegistry],
 });
 
-// Per-user frame-filter counters (#728). `decision`=forward|drop. Forward
-// reasons: matched-identity / system-event / non-event-frame / unparseable.
-// Drop reasons: identity-mismatch / missing-identity / unknown-event-class.
-// A non-zero `drop` rate is the canary for cross-user gateway broadcast
-// being intercepted before it reaches the wrong browser.
 const ocWsFrameFilterTotal = new Counter({
   name: 'chat_proxy_openclaw_ws_frame_filter_total',
   help: 'Per-user frame-filter decisions on inbound gateway events',
@@ -113,18 +74,14 @@ const ocWsFrameFilterTotal = new Counter({
   registers: [metricsRegistry],
 });
 
-// Phase 0.5: capture OC plugin-load-per-turn timings as a no-regression
-// baseline before Phase 1 ships. See docs/ACTIVITY-STREAM-SPEC.md §9.3.
 const ocPluginLookupDurationMs = new Histogram({
   name: 'octogee_oc_plugin_lookup_duration_ms',
   help: 'OpenClaw plugin lookup duration scraped from gateway /metrics, by stage',
   labelNames: ['stage'] as const,
-  // Buckets sized for typical plugin-lookup observations (sub-ms to ~1s).
   buckets: [0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500],
   registers: [metricsRegistry],
 });
 
-// ── Activity bridge metrics (Phase 1, spec §9.1) ──────────────────────────────
 const bridgeMetrics = {
   eventsReceived: new Counter({
     name: 'octogee_bridge_event_received_total',
@@ -205,37 +162,19 @@ const approvalDroppedCounter = new Counter({
   registers: [metricsRegistry],
 });
 
-// Activity bridge runtime state. Initialized at boot (see bottom of file)
-// when NODE_ENV !== "test"; in test mode the proxy serves but the bridge
-// stays unwired (test mode protects against accidental upstream connects).
-// The approval callback HTTP route at handleRequest checks this against
-// null and returns 503 to surface "service not initialized" honestly.
 let approvalCallbackHandler:
   | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
   | null = null;
 
-// Per-uid sample rate for the drop warn-log. The Prom counter above is the
-// canonical signal; the log line is forensic context for the FIRST hit per
-// uid in a 60s window. A real cross-user incident could otherwise produce
-// dozens of warn lines per dropped frame and bury the real signal.
 const FRAME_DROP_LOG_WINDOW_MS = 60_000;
 const lastFrameDropLogByUid = new Map<string, number>();
 
-// OpenClaw gateway auth token is fetched from Secret Manager per-request
-// (see ./openclaw/gateway-token.ts). The gateway publishes a fresh token
-// on every pod boot under `gateway-auth-token-{gatewayId}`; chat-proxy
-// caches briefly and invalidates on auth-failed to pick up rotations
-// within one upgrade attempt. Device identity is generated once per pod
-// — OpenClaw grants scopes by the token + signed payload, not by any
-// pre-registered identity, so in-memory is fine.
 let openclawIdentity: DeviceIdentity | null = null;
 function getOpenClawIdentity(): DeviceIdentity {
   if (!openclawIdentity) openclawIdentity = generateIdentity();
   return openclawIdentity;
 }
 
-// Initialize Firebase Admin — use explicit SA key if provided (cross-project),
-// otherwise fall back to ADC (same-project).
 if (SA_KEY_PATH) {
   const fs = await import("node:fs");
   const sa = JSON.parse(fs.readFileSync(SA_KEY_PATH, "utf-8"));
@@ -247,8 +186,6 @@ if (SA_KEY_PATH) {
 }
 const db = admin.firestore();
 
-// ── MM credential cache ───────────────────────────────────────────────────────
-
 interface CachedMmCreds {
   mmToken: string;
   mmUserId: string;
@@ -256,14 +193,8 @@ interface CachedMmCreds {
 }
 
 const mmCredsCache = new Map<string, CachedMmCreds>();
-const MM_CREDS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const MM_CREDS_CACHE_TTL = 5 * 60 * 1000;
 
-/**
- * Result discriminator: differentiate "user has no MM provisioning yet"
- * from "Firestore is unreachable / threw mid-lookup". The mint endpoint
- * maps these to different HTTP statuses (502 vs 503) so dashboards can
- * tell a not-yet-onboarded user from a chat-proxy ↔ Firestore outage.
- */
 type GetMmCredsResult =
   | { ok: true; mmToken: string; mmUserId: string }
   | { ok: false; reason: 'not-provisioned' }
@@ -275,8 +206,6 @@ async function getMmCreds(uid: string): Promise<GetMmCredsResult> {
     if (cached.expiresAt > Date.now()) {
       return { ok: true, mmToken: cached.mmToken, mmUserId: cached.mmUserId };
     }
-    // Evict expired so the Map size tracks the active-user set rather than
-    // the historical-user set.
     mmCredsCache.delete(uid);
   }
 
@@ -304,12 +233,9 @@ async function getMmCreds(uid: string): Promise<GetMmCredsResult> {
   }
 }
 
-// ── Firebase Auth Verification ────────────────────────────────────────────────
-
 export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
   const authHeader = req.headers.authorization;
 
-  // MM Client4 SDK sends "BEARER" (uppercase), standard is "Bearer"
   let token: string | null = null;
   if (authHeader?.startsWith("Bearer ")) token = authHeader.slice(7);
   else if (authHeader?.startsWith("BEARER ")) token = authHeader.slice(7);
@@ -325,8 +251,6 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
     return null;
   }
 }
-
-// ── CORS ──────────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = new Set([
   "https://octogee.web.app",
@@ -356,8 +280,6 @@ export function setCors(req: http.IncomingMessage, res: http.ServerResponse): vo
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Max-Age", "86400");
 }
-
-// ── HTTP request handler ──────────────────────────────────────────────────────
 
 async function handleRequest(
   req: http.IncomingMessage,
@@ -390,14 +312,6 @@ async function handleRequest(
     return handleMattermostMint(req, res);
   }
 
-  // ── Activity Stream approval callback (Phase 1, spec §6) ────────────────────
-  // MM Interactive Message buttons POST here when an owner clicks Approve/Deny.
-  // The handler verifies HMAC, IP allowlist, owner authorization, then
-  // dispatches OC's typed approval RPCs (exec.approval.resolve / plugin.approval.resolve).
-  //
-  // Route by path first; the handler itself returns 405 for non-POST so GET/etc
-  // distinguish "route exists but wrong method" (405) from "no such route" (404).
-  // This is what the wiring smoke tests assert.
   if (urlPath === "/api/openclaw/approval/callback") {
     if (!approvalCallbackHandler) {
       res.writeHead(503, { "Content-Type": "application/json" });
@@ -409,24 +323,10 @@ async function handleRequest(
     return approvalCallbackHandler(req, res);
   }
 
-  // Drain any inbound body before responding so a legacy POST (e.g. an old
-  // client still calling `/api/v4/posts`) doesn't leave bytes on the socket
-  // and break HTTP keep-alive on the next request.
   req.resume();
   res.writeHead(404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ error: "Not found" }));
 }
-
-// ── Mattermost credential mint ────────────────────────────────────────────────
-//
-// POST /api/auth/mattermost
-//   Authorization: Bearer <firebase-id-token>
-//
-// → 200 { mmUrl, mmToken, mmUserId }
-//
-// SECURITY NOTE: this returns the user's per-user MM PAT to the browser. The
-// PAT is per-user-scoped and revocable. The browser holds it in memory only
-// (not localStorage). Never log the response body or the mmToken value.
 
 async function handleMattermostMint(
   req: http.IncomingMessage,
@@ -443,9 +343,6 @@ async function handleMattermostMint(
   const result = await getMmCreds(uid);
   if (!result.ok) {
     if (result.reason === 'lookup-error') {
-      // Firestore unreachable / threw mid-read — operator-facing problem,
-      // not the user's. 503 so dashboards bucket it under "outage" rather
-      // than "user-not-onboarded" (which 502 means below).
       mintRequestsTotal.inc({ outcome: 'lookup-error' });
       res.writeHead(503, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Credential lookup unavailable" }));
@@ -465,15 +362,6 @@ async function handleMattermostMint(
     mmUserId: result.mmUserId,
   }));
 }
-
-// ── OpenClaw WebSocket Proxy ──────────────────────────────────────────────────
-//
-// Browser opens `wss://chat-proxy/api/openclaw/ws/<ticket>`; we validate the
-// one-time ticket from `ocTickets/{ticket}` (minted by workspace-api after
-// Firebase auth), resolve the user's assigned gateway, open an authenticated
-// upstream WS via the Ed25519 device handshake, and pipe frames.
-// The browser sees a normal WS; it never needs to know about Ed25519
-// nonces or the gateway URL.
 
 function handleOpenClawWsUpgrade(
   wss: WebSocketServer,
@@ -496,12 +384,6 @@ function handleOpenClawWsUpgrade(
     try {
       const ticketRef = db.doc(`ocTickets/${ticket}`);
 
-      // Atomic claim: read + delete inside a transaction so two concurrent
-      // upgrades with the same ticket can't both pass the validation window.
-      // One transaction commits the delete; the other sees a missing doc
-      // and rejects. Also validates shape (uid type, expiresAt number) inside
-      // the transaction so a malformed doc — missing expiresAt yields
-      // `undefined < Date.now()` → false → non-expired — is rejected too.
       const TICKET_INVALID = "TICKET_INVALID";
       let uid: string;
       try {
@@ -547,12 +429,6 @@ function handleOpenClawWsUpgrade(
         throw e;
       }
 
-      // Derive the expected agentId for this user from the SAME `users/{uid}`
-      // doc that resolveGatewayUrl already read — no second Firestore round
-      // trip on the WS upgrade path. Used by the per-user frame filter (#728)
-      // to scope inbound gateway broadcast events. If the user lacks the
-      // fields needed, refuse the upgrade rather than fall back to forwarding
-      // everything (fail-closed — see frame-filter.ts).
       let expectedAgentId: string;
       try {
         expectedAgentId = deriveExpectedAgentId(uid, userData);
@@ -566,10 +442,6 @@ function handleOpenClawWsUpgrade(
         throw e;
       }
 
-      // Auth token lookup. Missing secret / empty secret / unreachable SM
-      // is a 503 (misconfigured deploy) rather than a 502 (bad gateway) —
-      // the gateway itself is probably fine; the operator just hasn't
-      // wired the secret yet.
       let token: string;
       try {
         token = await fetchGatewayToken({ gatewayId });
@@ -583,12 +455,6 @@ function handleOpenClawWsUpgrade(
         throw e;
       }
 
-      // Handshake. On auth-failed the cached token may have been superseded
-      // by a fresh gateway boot — invalidate + retry ONCE with a forced
-      // re-fetch. Closes the rotation race without surfacing a stale-token
-      // 502 to the user. `upstream` initialized to null so TypeScript's
-      // definite-assignment checker catches any future branch that
-      // forgets to assign before the `wss.handleUpgrade` call below.
       let upstream: WebSocket | null = null;
       const tryOpen = (authToken: string) =>
         openUpstream({
@@ -603,10 +469,6 @@ function handleOpenClawWsUpgrade(
         const code = e instanceof UpstreamError ? e.code : "unknown";
         if (code === "auth-failed") {
           invalidateGatewayToken(gatewayId);
-          // Re-fetch step. A failure here (SM unreachable, permission
-          // denied, placeholder still in place) is a token-source
-          // problem, not a gateway outage — respond 503 so dashboards
-          // bucket it correctly and clients know to retry later.
           let fresh: string;
           try {
             fresh = await fetchGatewayToken({ gatewayId, skipCache: true });
@@ -645,9 +507,6 @@ function handleOpenClawWsUpgrade(
         }
       }
       if (!upstream) {
-        // Unreachable — every path above either assigns or returns. Guard
-        // against future refactors that split the try/catch chain without
-        // preserving the invariant.
         console.error("[proxy] OC WS: upstream was never assigned — bug");
         socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
         socket.destroy();
@@ -664,9 +523,6 @@ function handleOpenClawWsUpgrade(
         });
         upstream.on("message", (data, isBinary) => {
           if (clientWs.readyState !== WebSocket.OPEN) return;
-          // Binary frames bypass the filter — gateway broadcast() carries
-          // per-user data only as JSON text. If that ever changes, the
-          // filter will need to grow; for now binary forwards as-is.
           if (isBinary) {
             clientWs.send(data, { binary: true });
             return;
@@ -680,10 +536,6 @@ function handleOpenClawWsUpgrade(
           if (decision.forward) {
             clientWs.send(text);
           } else {
-            // Sample-log dropped frames so we can spot real cross-user fan-out
-            // in production without flooding logs. Counter is the canonical
-            // signal; the log is for forensic context — at most one line per
-            // uid per 60s window.
             const now = Date.now();
             const last = lastFrameDropLogByUid.get(uid) ?? 0;
             if (now - last >= FRAME_DROP_LOG_WINDOW_MS) {
@@ -698,17 +550,13 @@ function handleOpenClawWsUpgrade(
           ocWsConnectionsActive.dec();
           try {
             upstream.close();
-          } catch {
-            // ignore
-          }
+          } catch {}
         });
         upstream.on("close", () => clientWs.close());
         clientWs.on("error", () => {
           try {
             upstream.close();
-          } catch {
-            // ignore
-          }
+          } catch {}
         });
         upstream.on("error", () => clientWs.close());
       });
@@ -720,14 +568,9 @@ function handleOpenClawWsUpgrade(
   })();
 }
 
-// ── Test helpers ────────────────────────────────────────────────────────────────
-
-/** Clear in-process credential cache. For test isolation only. */
 export function _clearCaches(): void {
   mmCredsCache.clear();
 }
-
-// ── Server ────────────────────────────────────────────────────────────────────
 
 export function createServer() {
   const server = http.createServer(handleRequest);
@@ -754,12 +597,6 @@ if (process.env.NODE_ENV !== "test") {
     console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
   });
 
-  // Phase 0.5: capture OC plugin-load-per-turn baseline. Single scraper
-  // hits the colocated gateway's /metrics over loopback every 30s and
-  // observes each parsed stage into `ocPluginLookupDurationMs`. The
-  // histogram lives on chat-proxy's /metrics so one Prometheus scrape
-  // config picks up both surfaces. See docs/ACTIVITY-STREAM-SPEC.md
-  // §10 Phase 0.5 + §9.3.
   const gatewayMetricsUrl = process.env.OPENCLAW_GATEWAY_METRICS_URL
     ?? "http://127.0.0.1:18789/metrics";
   startMetricsBaseline({
@@ -781,10 +618,6 @@ if (process.env.NODE_ENV !== "test") {
     },
   });
 
-  // ── Activity Stream Phase 1: bridge boot ──────────────────────────────────
-  // Singleton bridge — one extra upstream gateway WS per chat-proxy pod that
-  // sees ALL `agent` events and posts to MM activity channels. See
-  // docs/ACTIVITY-STREAM-SPEC.md §4.1 + §4.2.
   void (async () => {
     const mmAdminPat = process.env.MM_ADMIN_PAT ?? '';
     if (!mmAdminPat || mmAdminPat.trim().length === 0) {
@@ -799,13 +632,9 @@ if (process.env.NODE_ENV !== "test") {
     let wired: Awaited<ReturnType<typeof wireActivityBridge>>;
     try {
       wired = wireActivityBridge({
-        // Firebase Admin Firestore satisfies our FirestoreLike interface at
-        // runtime; the type-cast bridges the structural-vs-nominal gap (the
-        // SDK's QueryDocumentSnapshot.ref.parent.parent CAN be null, but for
-        // the doc paths we read it never is).
         db: db as unknown as Parameters<typeof wireActivityBridge>[0]['db'],
         upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
-        gatewayToken: '', // bridge-boot fetches a fresh token via existing chat-proxy path on each upstream connect
+        gatewayToken: '',
         mmAdminPat,
         identity: getOpenClawIdentity(),
         mmBaseUrl: MM_PUBLIC_URL,
@@ -820,9 +649,6 @@ if (process.env.NODE_ENV !== "test") {
     }
     approvalCallbackHandler = wired.approvalCallbackHandler;
 
-    // Open the dedicated upstream WS for the bridge (separate from per-user
-    // upstreams in the WS-upgrade flow). The bridge sees every agent event
-    // exactly once via this connection.
     try {
       const gatewayId = 'sidecar';
       const tokenResolved = await fetchGatewayToken({ gatewayId });
@@ -838,10 +664,6 @@ if (process.env.NODE_ENV !== "test") {
       });
       console.log('[chat-proxy] activity bridge upstream WS connected');
 
-      // Phase 3 runtime: open MM WebSocket for reaction_added + posted events.
-      // Routes 🛑 / 🔀 reactions to the reaction-handler (chat.abort) and
-      // thread replies on tracked run roots to chat.send {deliver:false}
-      // (reply-as-steer, spec §7) — both over the bridge's RPC client.
       const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
       const { startMmEventListener } = await import('./openclaw/mm-event-listener.js');
       const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');

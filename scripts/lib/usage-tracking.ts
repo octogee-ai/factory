@@ -1,37 +1,3 @@
-/**
- * Octogee Usage Tracking — reusable module
- *
- * Tails OpenClaw session JSONL files for Octogee agents and reports
- * token usage to Firestore in real-time.
- *
- * Firestore paths written:
- *   Legacy (backward compat):
- *     users/{uid}                              ← usage.* fields + throttle
- *     users/{uid}/usage_logs/{date}            ← daily rollup
- *
- *   Workspace-scoped (v3.1 — rooted at top-level workspaces/{slug}):
- *     workspaces/{slug}/usage_sessions/{date}              ← daily session rollup
- *     workspaces/{slug}/usage_models/{model}_{date}        ← per-model per-day
- *     workspaces/{slug}/usage_summary/current              ← rolling totals
- *
- *   Each rollup carries (uid, workspace slug, role, model). Rollup dimensions
- *   are therefore workspace slug × role × model.
- *
- *   Why no key fingerprint: OpenClaw's session JSONL doesn't expose which
- *   API key billed a turn. With BYOT in play we can't reliably distinguish
- *   platform-billed turns from customer-billed turns inside this stream.
- *   The user's own Anthropic dashboard is the source of truth for that.
- *   We attribute by uid + slug; the BYOT echo block in /api/billing/usage
- *   tells the UI "is BYOT on for this user, what's the configured key" via
- *   `users/{uid}/system/config.byot.fingerprint` (the workspace-api writer
- *   for that field is authoritative — see workspace-api/src/routes/billing/byot.ts).
- *
- * The earlier v2 path `users/{uid}/workspaces/{wid}/usage/...` was abandoned
- * in the v3.1 collection cleanup (DATA-MODEL-REVIEW.md). Writes there were
- * silently failing because `.doc("sessions/{date}")` from a 5-segment
- * collection reference produces a 7-segment path (collection, not document).
- */
-
 import { Firestore, FieldValue } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
@@ -42,8 +8,6 @@ import {
   windowBudgetUsdForTier,
 } from "../../shared/types/billing.js";
 import { computeThrottleLevel } from "../../shared/types/throttle.js";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 export type LogFn = (msg: string) => void;
 
@@ -70,8 +34,6 @@ interface UsageData {
   };
 }
 
-// ── Role extraction ───────────────────────────────────────────────────────────
-
 /**
  * Extract role from agent ID.
  * Pattern: octogee-{slug}-{role}  e.g. octogee-swift-harbor-coach → "coach"
@@ -83,8 +45,6 @@ export function extractRole(agentId: string): string {
   }
   return "coach";
 }
-
-// ── Read workspace ID from customer-config.json ───────────────────────────────
 
 /**
  * Read the workspace slug (workspace ID) from customer-config.json in an agent dir.
@@ -116,8 +76,6 @@ export function readWorkspaceId(agentDir: string): string | null {
   return null;
 }
 
-// ── Parse JSONL line ──────────────────────────────────────────────────────────
-
 function parseLineForUsage(line: string): UsageData | null {
   try {
     const data = JSON.parse(line);
@@ -148,13 +106,10 @@ function parseLineForUsage(line: string): UsageData | null {
   }
 }
 
-// ── Safe model key (Firestore doc IDs cannot contain "/") ────────────────────
-
+// Firestore doc IDs cannot contain "/"
 function modelKey(model: string): string {
   return model.replace(/\//g, "_").slice(0, 100);
 }
-
-// ── Report usage to Firestore ─────────────────────────────────────────────────
 
 // Exported for unit testing. Not part of the public module surface — callers
 // should go through startUsageTracking(), which tails session JSONL files
@@ -186,7 +141,6 @@ export async function reportUsage(
       const usageData = data.usage || {};
       const tier = data.selectedTier || data.subscription?.tier || "trial";
 
-      // ── Window-based refill logic (USD-driven, 5h windows) ─────────
       // §9.2 of ADMIN-DASHBOARD-SPEC: throttle math reads windowCostUsd.
       // Tokens are kept for diagnostic display only.
       const REFILL_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
@@ -240,7 +194,7 @@ export async function reportUsage(
         windowUpdates["usage.windowBudgetUsd"]  = windowBudgetUsd;
       }
 
-      // ── Throttle level (§9.2 + §9.3) ─────────────────────────────
+      // Throttle level (§9.2 + §9.3).
       // BYOT customers pay Anthropic directly — never throttled.
       // Otherwise delegate to functions/src/billing/throttle.ts so the
       // gateway-side compute (this file) and the trigger-side compute
@@ -275,7 +229,6 @@ export async function reportUsage(
         throttleReason = state.reason;
       }
 
-      // ── User-level write — diagnostic totals + throttle state ──────
       t.update(userRef, {
         ...windowUpdates,
         ...trialStartedAtUpdate,
@@ -306,7 +259,6 @@ export async function reportUsage(
         "breakdown.costCacheWrite":    FieldValue.increment(usage.costBreakdown.cacheWrite),
       }, { merge: true });
 
-      // ── Workspace-scoped writes (v3.1) ──────────────────────────────
       // workspaceId is the slug (e.g. "eckert"); the top-level workspaces
       // collection is the v3.1 authoritative parent. Three parallel
       // subcollections keep reads cheap and rules simple. Rollups are
@@ -380,8 +332,6 @@ export async function reportUsage(
   }
 }
 
-// ── Process one session file ──────────────────────────────────────────────────
-
 async function processFile(
   filePath: string,
   watchedFiles: Map<string, WatchedFile>,
@@ -427,8 +377,6 @@ async function processFile(
   watched.position = stats.size;
 }
 
-// ── Find all session files ────────────────────────────────────────────────────
-
 function findSessionFiles(agentsDir: string, agentPrefix: string): string[] {
   const files: string[] = [];
   if (!fs.existsSync(agentsDir)) return files;
@@ -445,8 +393,6 @@ function findSessionFiles(agentsDir: string, agentPrefix: string): string[] {
   }
   return files;
 }
-
-// ── Main export ───────────────────────────────────────────────────────────────
 
 /**
  * Start the usage tracking loop.

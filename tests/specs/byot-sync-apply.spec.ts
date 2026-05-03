@@ -1,15 +1,3 @@
-/**
- * Filesystem-side tests for byot-sync.applyByotState.
- *
- * Critical behaviors:
- *   - REFUSES to write when the agent dir doesn't exist (no auto-mkdir)
- *     — this protects against silently materializing orphan agent
- *     directories when BYOT flips on for an unprovisioned customer.
- *   - Writes auth-profiles.json with mode 0o600.
- *   - Idempotent: returns false when the on-disk content already matches.
- *   - Removes the file (and reports change) when disabled.
- *   - Atomic write — never leaves a half-written file behind.
- */
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
@@ -20,7 +8,6 @@ let TMP_ROOT: string;
 beforeEach(async () => {
   TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "byot-sync-test-"));
   process.env.OPENCLAW_AGENTS_DIR = path.join(TMP_ROOT, "agents");
-  // Force re-import so the module picks up the new env var.
   vi.resetModules();
 });
 
@@ -93,8 +80,6 @@ describe("applyByotState — enabled write path", () => {
 
     const written = JSON.parse(fs.readFileSync(profilePath(slug), "utf8"));
     expect(written.profiles["anthropic:default"].type).toBe("api_key");
-    // Top-level provider is REQUIRED — OpenClaw's
-    // coercePersistedAuthProfileStore drops entries without it.
     expect(written.profiles["anthropic:default"].provider).toBe("anthropic");
     expect(written.profiles["anthropic:default"].keyRef).toEqual({
       source: "exec",
@@ -111,7 +96,7 @@ describe("applyByotState — enabled write path", () => {
     applyByotState(slug, { slug, provider: "anthropic" });
     const raw = fs.readFileSync(profilePath(slug), "utf8");
     expect(raw).not.toContain("sk-ant-");
-    expect(raw).not.toMatch(/"key"\s*:/); // sibling plaintext field MUST NOT appear
+    expect(raw).not.toMatch(/"key"\s*:/);
   });
 
   test("no .tmp file lingers after successful write (atomic rename)", async () => {
@@ -131,14 +116,12 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
 
-    // Start: anthropic BYOT.
     applyByotState(slug, { slug, provider: "anthropic" });
     const authPath = profilePath(slug);
     const modelsPath = path.join(agentDirFor(slug), "models.json");
     expect(fs.existsSync(authPath)).toBe(true);
     expect(fs.existsSync(modelsPath)).toBe(false);
 
-    // Switch: openai-compatible.
     const changed = applyByotState(slug, {
       slug,
       provider: "openai-compatible",
@@ -147,11 +130,9 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
     });
     expect(changed).toBe(true);
 
-    // auth-profiles.json must be GONE; models.json must exist.
     expect(fs.existsSync(authPath)).toBe(false);
     expect(fs.existsSync(modelsPath)).toBe(true);
 
-    // models.json content has the expected shape (api adapter + keyRef + models[]).
     const mj = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
     expect(mj.providers[`custom-${slug}`].api).toBe("openai-completions");
     expect(mj.providers[`custom-${slug}`].apiKey.source).toBe("exec");
@@ -222,16 +203,6 @@ describe("applyByotState — disabled remove path", () => {
 });
 
 describe("applyByotState — `.byot-managed` marker (auth-profiles.json collision guard)", () => {
-  // OpenClaw's own per-agent auth caching layer also writes
-  // auth-profiles.json into the same agent dir. Without the marker,
-  // applyByotState(slug, null) would happily delete OpenClaw's cache on
-  // every Firestore tick — the watcher fires on every usage update,
-  // every agent turn writes a usage update, so OpenClaw's cache got
-  // wiped each turn → re-resolution + secrets.reload + channel restart →
-  // first-message slowness. The marker is the proof-of-prior-BYOT-write
-  // that tells us a file under one of the BYOT_FILES names was actually
-  // created by us and is therefore safe to delete.
-
   function markerPath(slug: string): string {
     return path.join(agentDirFor(slug), ".byot-managed");
   }
@@ -242,8 +213,6 @@ describe("applyByotState — `.byot-managed` marker (auth-profiles.json collisio
     const dir = agentDirFor(slug);
     fs.mkdirSync(dir, { recursive: true });
 
-    // Simulate OpenClaw having written its own auth-profiles.json — same
-    // path we'd target, but no marker so applyByotState must leave it.
     const openclawCacheBody = '{"profiles":{"sample":{"type":"oauth"}}}';
     fs.writeFileSync(profilePath(slug), openclawCacheBody);
     expect(fs.existsSync(markerPath(slug))).toBe(false);
@@ -273,7 +242,6 @@ describe("applyByotState — `.byot-managed` marker (auth-profiles.json collisio
     applyByotState(slug, { slug, provider: "anthropic" });
     const firstMarker = fs.readFileSync(markerPath(slug), "utf8");
 
-    // Sleep so any ISO timestamp regeneration would visibly differ.
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(false);
@@ -311,31 +279,19 @@ describe("applyByotState — `.byot-managed` marker (auth-profiles.json collisio
   });
 
   test("BYOT-on writes marker even when content already matches (pre-marker rollouts)", async () => {
-    // Pre-marker code paths (or any prior rollout that wrote
-    // BYOT_FILES without writing the marker) must self-heal: the
-    // first applyByotState call after this code ships should backfill
-    // the marker even though no file content changes. Otherwise the
-    // BYOT-off path stays a permanent no-op for those users and we
-    // can never clean up their stale BYOT files.
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
     fs.mkdirSync(agentDirFor(slug), { recursive: true });
 
-    // Bootstrap files via the current code, then forcibly remove the
-    // marker to simulate a pre-marker rollout state on disk.
     applyByotState(slug, { slug, provider: "anthropic" });
     fs.unlinkSync(markerPath(slug));
     expect(fs.existsSync(profilePath(slug))).toBe(true);
     expect(fs.existsSync(markerPath(slug))).toBe(false);
 
-    // Re-apply the same input. File content already matches → no file
-    // changes → `changed === false`. But the marker MUST be written
-    // anyway so disable can find it on next BYOT-off.
     const changed = applyByotState(slug, { slug, provider: "anthropic" });
     expect(changed).toBe(false);
     expect(fs.existsSync(markerPath(slug))).toBe(true);
 
-    // And now disable cleans up correctly.
     expect(applyByotState(slug, null)).toBe(true);
     expect(fs.existsSync(profilePath(slug))).toBe(false);
     expect(fs.existsSync(markerPath(slug))).toBe(false);

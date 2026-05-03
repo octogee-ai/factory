@@ -1,18 +1,3 @@
-/**
- * Admin routes — operator console for the F&F launch and beyond.
- *
- * Endpoints (all under requireAdmin):
- *   GET    /customers                  — cursor-paginated list (replaces /dashboard)
- *   GET    /customers/stats            — stat cards + CSI rollup
- *   GET    /funnel                     — trial conversion funnel rollup
- *   GET    /customer/:uid              — drill-in (replaces POST /customer-detail)
- *   GET    /customer/:uid/usage        — per-workspace usage (replaces POST /workspace-usage)
- *   GET    /customer/:uid/throttle     — throttle history (last 50)
- *   GET    /customer/:uid/audit        — admin actions audit log (last 50)
- *   POST   /customer/:uid/ops          — ops knob writes (audit-logged)
- *
- * Spec: docs/ADMIN-DASHBOARD-SPEC.md §12.
- */
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
@@ -30,8 +15,6 @@ import {
   type CustomerSummary,
 } from "./admin-shape";
 
-// ── Workspace-slug helper (with observability) ──────────────────────────────
-
 function warnIfNoSlug(slugs: string[], uid: string): string[] {
   if (slugs.length === 0) {
     logger.warn(
@@ -48,8 +31,6 @@ router.use(requireAdmin);
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
 
-// ── Helpers: read-side ──────────────────────────────────────────────────────
-
 async function readCSIByUids(uids: string[]): Promise<Map<string, CSIDocument>> {
   if (uids.length === 0) return new Map();
   const refs = uids.map((uid) => db.doc(`users/${uid}/csi/latest`));
@@ -62,8 +43,6 @@ async function readCSIByUids(uids: string[]): Promise<Map<string, CSIDocument>> 
   }
   return out;
 }
-
-// ── GET /customers — cursor-paginated list ──────────────────────────────────
 
 router.get("/customers", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -100,11 +79,9 @@ router.get("/customers", async (req: Request, res: Response, next: NextFunction)
     const hasMore = docs.length > pageSize;
     const pageDocs = hasMore ? docs.slice(0, pageSize) : docs;
 
-    // Batch-load CSI for the page
     const uids = pageDocs.map((d) => d.id);
     const csiByUid = await readCSIByUids(uids);
 
-    // Build summaries
     let items: CustomerSummary[] = pageDocs.map((doc) =>
       buildCustomerSummary(doc.id, doc.data() as Record<string, any>, csiByUid.get(doc.id) ?? null),
     );
@@ -154,8 +131,6 @@ router.get("/customers", async (req: Request, res: Response, next: NextFunction)
   } catch (e) { next(e); }
 });
 
-// ── GET /customers/stats — top-of-page stat cards ───────────────────────────
-
 router.get("/customers/stats", async (_req: Request, res: Response, next: NextFunction) => {
   try {
     // Aggregate across ALL users — same as the old /dashboard's stats block,
@@ -202,8 +177,6 @@ router.get("/customers/stats", async (_req: Request, res: Response, next: NextFu
   } catch (e) { next(e); }
 });
 
-// ── GET /funnel — conversion funnel rollup ──────────────────────────────────
-
 router.get("/funnel", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const windowDays = Math.max(1, Math.min(365,
@@ -228,8 +201,6 @@ router.get("/funnel", async (req: Request, res: Response, next: NextFunction) =>
     res.json(rollup);
   } catch (e) { next(e); }
 });
-
-// ── GET /customer/:uid — drill-in ───────────────────────────────────────────
 
 router.get("/customer/:uid", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -263,9 +234,7 @@ router.get("/customer/:uid", async (req: Request, res: Response, next: NextFunct
     const mmContext = await getWorkspaceMmContext(uid, undefined, d);
 
     res.json({
-      // Top-level — derived from the same shape the list uses
       summary,
-      // Plus the heavy per-customer data the list view doesn't need
       subscription: {
         status: subscription.status || "none",
         stripeCustomerId: subscription.stripeCustomerId || null,
@@ -341,7 +310,6 @@ router.get("/customer/:uid", async (req: Request, res: Response, next: NextFunct
       })(),
       createdAt: toISODate(d.createdAt),
       approved: d.approved || false,
-      // Full CSI doc for detail view (CSI-T trial state lives inside)
       csi: csiData ? {
         healthScore: csiData.healthScore,
         sentiment: csiData.sentiment,
@@ -391,8 +359,6 @@ router.get("/customer/:uid", async (req: Request, res: Response, next: NextFunct
     });
   } catch (e) { next(e); }
 });
-
-// ── GET /customer/:uid/usage — per-workspace usage breakdown ────────────────
 
 router.get("/customer/:uid/usage", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -478,8 +444,6 @@ router.get("/customer/:uid/usage", async (req: Request, res: Response, next: Nex
   } catch (e) { next(e); }
 });
 
-// ── GET /customer/:uid/throttle — last 50 throttle history entries ──────────
-
 router.get("/customer/:uid/throttle", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.params.uid;
@@ -510,8 +474,6 @@ router.get("/customer/:uid/throttle", async (req: Request, res: Response, next: 
   } catch (e) { next(e); }
 });
 
-// ── GET /customer/:uid/audit — admin actions audit log ──────────────────────
-
 router.get("/customer/:uid/audit", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.params.uid;
@@ -541,7 +503,6 @@ router.get("/customer/:uid/audit", async (req: Request, res: Response, next: Nex
   } catch (e) { next(e); }
 });
 
-// ── POST /customer/:uid/ops — consolidated ops knob writes ──────────────────
 // Body: { action, value }
 // Records the change to users/{uid}/admin_actions in the same write batch
 // so audit + state can never drift (§8.4).
@@ -587,7 +548,6 @@ router.post("/customer/:uid/ops", async (req: Request, res: Response, next: Next
 
     await userRef.update(update);
 
-    // Audit row
     const auditRef = userRef.collection("admin_actions").doc();
     await auditRef.set({
       at: FieldValue.serverTimestamp(),
@@ -603,7 +563,6 @@ router.post("/customer/:uid/ops", async (req: Request, res: Response, next: Next
   } catch (e) { next(e); }
 });
 
-// ── POST /customer/:uid/csi-refresh — force CSI recompute ──────────────────
 // Convenience for the operator: when a customer does something interesting,
 // the dashboard's "Refresh" button can hit this to compute CSI-T immediately
 // rather than waiting for the cron.

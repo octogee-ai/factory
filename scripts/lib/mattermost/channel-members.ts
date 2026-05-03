@@ -1,21 +1,3 @@
-/**
- * Pure decision fn for "who belongs in which customer channel".
- *
- * Under OpenClaw's multi-account MM plugin config (`channels.mattermost.
- * accounts.{accountId}.botToken`), each `{slug}-coach` authenticates its
- * OWN WebSocket subscription with its own PAT. MM pushes channel events
- * to the coach's WS because the coach is a member of its own channels —
- * no shared `octogee-bot` intermediary needed. The bot is no longer a
- * required channel member, and the Members panel stays clean.
- *
- * Customer channels get:
- *   - `coach`, `general`, `project` → customer + coach + admin
- *   - `admin`                         → admin + coach (customer NOT invited, #170)
- *
- * Pure function so tests lock the "never bot" invariant — any regression
- * that re-adds the bot (restoring the Members-panel wart) fails here.
- */
-
 export type CustomerChannelKind = "coach" | "general" | "admin" | "project";
 
 export interface CustomerChannelMemberIds {

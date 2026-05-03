@@ -1,15 +1,3 @@
-/**
- * Channel create / restore + project channel provisioning.
- *
- * `createOrRestoreChannel` is the internal helper that handles the
- * "name already taken by an archived channel" case — MM returns 400 on
- * the create, 404 on the name lookup, so we fall through to a search
- * with `include_deleted` and restore.
- *
- * `createProjectChannel` is the public entry point used when a new
- * project gets its own MM channel under the workspace team.
- */
-
 import { log } from "../config.js";
 import {
   projectGeneralChannelName,
@@ -18,10 +6,6 @@ import { computeProjectChannelDisplayName } from "../../../shared/types/display-
 import { mmApiCall } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
 
-/**
- * Create or restore a channel. Handles the case where the channel name exists
- * but is archived (MM returns 400 on create, 404 on name lookup).
- */
 export async function createOrRestoreChannel(
   teamId: string, name: string, displayName: string, type: string, purpose: string,
 ): Promise<any | null> {

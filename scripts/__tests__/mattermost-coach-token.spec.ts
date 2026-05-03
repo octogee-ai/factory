@@ -1,13 +1,3 @@
-/**
- * Unit tests for `mintAndPersistCoachToken` — the small helper that mints
- * a PAT for `{slug}-coach` and stores it at `users/{uid}/secrets/coachMattermost`.
- *
- * Spec: docs/MM-COACH-IDENTITY-SPEC.md — Decision D2, acceptance M1.
- *
- * Dependency-injected so tests use plain vi.fn()s for mmApiCall + db, no
- * module-level mocking. Production call site lives in provisionMattermostUser.
- */
-
 import { describe, it, expect, vi } from "vitest";
 import { mintAndPersistCoachToken } from "../lib/mattermost.js";
 
@@ -18,9 +8,6 @@ function mkDeps() {
   const doc1 = vi.fn(() => ({ collection: collection2 }));
   const collection1 = vi.fn(() => ({ doc: doc1 }));
   const db = { collection: collection1 } as any;
-  // Default mock: MM returns empty token list (no stale tokens) for GET,
-  // and the caller-supplied value for POST. Tests can override via
-  // mockImplementation if they need to simulate existing tokens.
   const mmApiCall = vi.fn(async (method: string, endpoint: string) => {
     if (method === "GET" && endpoint.endsWith("/tokens")) return [];
     return undefined;
@@ -30,11 +17,6 @@ function mkDeps() {
   return { db, mmApiCall, now, log, setSpy, collection1, doc1, collection2, doc2 };
 }
 
-/**
- * Script an mmApiCall mock that serves a GET-tokens list and a POST-tokens
- * response distinctly. The production helper lists-then-mints — default
- * impls fail with "unexpected call" to surface any extra traffic.
- */
 function scriptMm(opts: {
   tokens?: any[];
   postResult?: any;
@@ -79,7 +61,6 @@ describe("mintAndPersistCoachToken", () => {
 
     await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
 
-    // Path: users / uid-chris / secrets / coachMattermost
     expect(deps.collection1).toHaveBeenCalledWith("users");
     expect(deps.doc1).toHaveBeenCalledWith("uid-chris");
     expect(deps.collection2).toHaveBeenCalledWith("secrets");
@@ -148,7 +129,6 @@ describe("mintAndPersistCoachToken — replace-not-append (PR3 P0 #2)", () => {
 
     await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
 
-    // Revoke called exactly for the two matching tokens, not the unrelated one.
     const revokeCalls = deps.mmApiCall.mock.calls.filter(
       (c: any[]) => c[0] === "POST" && c[1] === "/users/tokens/revoke",
     );
@@ -165,7 +145,6 @@ describe("mintAndPersistCoachToken — replace-not-append (PR3 P0 #2)", () => {
     const result = await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
 
     expect(result).toEqual({ token: "pat-new" });
-    // No revoke calls when there's nothing to revoke.
     const revokeCalls = deps.mmApiCall.mock.calls.filter(
       (c: any[]) => c[0] === "POST" && c[1] === "/users/tokens/revoke",
     );
@@ -182,7 +161,6 @@ describe("mintAndPersistCoachToken — replace-not-append (PR3 P0 #2)", () => {
     const result = await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
 
     expect(result).toEqual({ token: "pat-new" });
-    // Warning was logged (structured, with coach user id).
     expect(deps.log).toHaveBeenCalled();
     const warnMsg = (deps.log.mock.calls[0] as unknown as string[])[0];
     expect(warnMsg).toContain("coach-mm-id-1");

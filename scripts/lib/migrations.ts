@@ -1,17 +1,7 @@
-/**
- * Octogee Provisioner — Data Migrations
- */
-
 import * as fs from "fs";
 import * as path from "path";
 import { log, CUSTOMERS_DIR } from "./config.js";
 
-// ── AGENTS.md Migration ─────────────────────────────────────────────────────────
-
-/**
- * Migrate stale AGENTS.md files across all customer workspaces.
- * Runs on startup to fix old milestone names without requiring manual patches.
- */
 export function migrateAgentsMd(): void {
   if (!fs.existsSync(CUSTOMERS_DIR)) return;
   const migrations: [RegExp, string][] = [

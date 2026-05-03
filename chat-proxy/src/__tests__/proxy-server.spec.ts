@@ -1,35 +1,9 @@
-/**
- * proxy-server.spec.ts
- *
- * Server-level (HTTP integration) tests for the chat-proxy.
- *
- * Post-Option-C architecture: chat-proxy no longer proxies Mattermost. Browser
- * talks to mattermost[-test].octogee.com directly. ChatProxy retains:
- *   1. POST /api/auth/mattermost — Firebase ID token → { mmUrl, mmToken, mmUserId }
- *   2. /api/openclaw/ws/<ticket> — OpenClaw gateway bridge (covered elsewhere)
- *   3. /healthz, /health, /_health, /metrics — observability
- *
- * Scenarios covered:
- *  - Health endpoints → 200 (no auth required)
- *  - Metrics endpoint → 200 (no auth required)
- *  - POST /api/auth/mattermost — 200 returns { mmUrl, mmToken, mmUserId }
- *  - POST /api/auth/mattermost — 401 unauthenticated / invalid Firebase token
- *  - POST /api/auth/mattermost — 502 when user is not provisioned in MM
- *  - POST /api/auth/mattermost — does not log the PAT
- *  - CORS preflight on the mint endpoint
- *  - MM REST paths return 404 (no longer proxied)
- *  - MM WebSocket upgrade returns 404 (no longer proxied)
- */
-
 import { describe, expect, it, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-// ── Env setup (must happen before any imports from proxy) ─────────────────────
 process.env.NODE_ENV = 'test';
 process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
-
-// ── Firebase admin mock ───────────────────────────────────────────────────────
 
 const verifyIdToken = vi.fn(async (token: string) => {
   if (token === 'regular-token') return { uid: 'regular-uid' };
@@ -37,16 +11,6 @@ const verifyIdToken = vi.fn(async (token: string) => {
   throw Object.assign(new Error('auth/id-token-expired'), { code: 'auth/id-token-expired' });
 });
 
-/**
- * Firestore doc mock: returns different data shapes depending on the doc path.
- *
- * Paths wired up:
- *   users/regular-uid              → { mattermost: { userId: 'mm-user-1' } }
- *   users/regular-uid/secrets/mattermost → { personalToken: 'regular-mm-token' }
- *
- *   users/noproxy-uid              → {}  (no mattermost field)
- *   users/noproxy-uid/secrets/mattermost → {}  (no personalToken)
- */
 const firestoreDoc = vi.fn((path: string) => {
   const data: Record<string, unknown> = (() => {
     if (path === 'users/regular-uid') return { mattermost: { userId: 'mm-user-1' } };
@@ -66,8 +30,6 @@ vi.mock('firebase-admin', () => ({
     auth: () => ({ verifyIdToken }),
   },
 }));
-
-// ── Import proxy and start server ─────────────────────────────────────────────
 
 const { createServer, _clearCaches } = await import('../proxy');
 
@@ -107,8 +69,6 @@ beforeEach(() => {
   });
 });
 
-// ── Helper ────────────────────────────────────────────────────────────────────
-
 async function request(
   path: string,
   opts: {
@@ -146,8 +106,6 @@ async function request(
     req.end();
   });
 }
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('health endpoints', () => {
   it('GET /healthz → 200 with status:ok (no auth)', async () => {
@@ -203,9 +161,6 @@ describe('POST /api/auth/mattermost — credential mint', () => {
   });
 
   it('with Firestore lookup throwing → 503 (outage, not "not provisioned")', async () => {
-    // Simulate a transient Firestore failure mid-lookup. Mapping this to
-    // 502 "Chat not provisioned" used to be misleading — operators would
-    // see the same error code as a not-yet-onboarded user.
     firestoreDoc.mockImplementation((_path: string) => ({
       get: async () => {
         throw new Error('ETIMEDOUT');
@@ -269,8 +224,6 @@ describe('POST /api/auth/mattermost — credential mint', () => {
   });
 
   it('GET /api/auth/mattermost (wrong method) → 404', async () => {
-    // The mint endpoint is POST-only. Anything else falls through to the
-    // default 404 handler — there's no MM proxy fallback any more.
     const res = await request('/api/auth/mattermost', {
       method: 'GET',
       headers: { Authorization: 'Bearer regular-token' },
@@ -280,9 +233,6 @@ describe('POST /api/auth/mattermost — credential mint', () => {
 });
 
 describe('Mattermost proxying is removed', () => {
-  // After Option C, chat-proxy is no longer in the MM REST or WS path. The
-  // browser talks to mattermost[-test].octogee.com directly. Any request to
-  // legacy MM paths on chat-proxy should fall through to the default 404.
   it('GET /api/v4/users/me/teams → 404 (no longer proxied)', async () => {
     const res = await request('/api/v4/users/me/teams', {
       headers: { Authorization: 'Bearer regular-token' },
@@ -303,10 +253,6 @@ describe('Mattermost proxying is removed', () => {
   });
 
   it('keep-alive survives a POST-with-body to a 404 path (server drains body)', async () => {
-    // Regression for the body-drain on the default 404 path: a legacy client
-    // could POST a JSON body to /api/v4/posts. If chat-proxy responds 404
-    // without consuming the body, the next request on the same connection
-    // sees stray bytes and the keep-alive is broken.
     const result: { first: number; second: number } = await new Promise(
       (resolve, reject) => {
         const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
@@ -343,8 +289,6 @@ describe('Mattermost proxying is removed', () => {
   });
 
   it('WebSocket upgrade to /api/v4/websocket/<ticket> → 404', async () => {
-    // WS upgrade requests with no matching handler should be rejected at the
-    // upgrade phase. We test this by sending a manual upgrade request.
     const res: { status: number; statusText: string } = await new Promise(
       (resolve, reject) => {
         const req = http.request(

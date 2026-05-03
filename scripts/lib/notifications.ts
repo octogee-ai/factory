@@ -1,16 +1,7 @@
-/**
- * Octogee Provisioner — Notifications
- *
- * Discord webhook notifications for ops events (new signups, errors, etc.)
- */
-
 import { log } from "./config.js";
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_OPS_WEBHOOK_URL || "";
 
-/**
- * Send a Discord webhook message. Fails silently (best-effort).
- */
 async function sendDiscordWebhook(content: string, username = "Octogee Ops"): Promise<void> {
   if (!DISCORD_WEBHOOK_URL) {
     log("[notify] DISCORD_OPS_WEBHOOK_URL not set — skipping notification");

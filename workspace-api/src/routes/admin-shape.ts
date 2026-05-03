@@ -1,13 +1,3 @@
-/**
- * Admin response shape helpers.
- *
- * Pure mapping from Firestore documents → admin API response shapes.
- * Shared between the old /dashboard endpoint, the new cursor-paginated
- * /customers endpoint, and the funnel rollup.
- *
- * No I/O, no logging — easy to unit-test (see admin-shape.spec.ts).
- */
-
 import {
   getTierConfig,
   calculateAvailableTokens,
@@ -18,8 +8,6 @@ import type {
   TrialState,
   TrialFunnelStage,
 } from "../csi/types";
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
 
 export function toISODate(val: unknown): string | null {
   if (!val) return null;

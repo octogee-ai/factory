@@ -1,17 +1,3 @@
-/**
- * Canonical Project type — used by both frontend (app/) and backend.
- *
- * Stored in Firestore at `workspaces/{workspaceId}/projects/{slug}`
- * (doc ID = the user-chosen project slug). Per DATA-MODEL-REVIEW v3 §6.11.
- *
- * MM channel naming: `{workspaceId}-proj-{slug}-general` (moved into a
- * channels subcollection per v3 §6.3; doc: `channels/{cid}`).
- * Gitea repo naming: `{workspaceId}-proj-{slug}`.
- *
- * Membership lives in the `members/{uid}` subcollection (v3 §6.10) —
- * no `guestUids[]` array on the doc.
- */
-
 export type ProjectVisibility = 'private' | 'public' | 'unlisted';
 export type ProjectStatus = 'idea' | 'building' | 'launched' | 'paused' | 'archived';
 export type ProjectProvisioningState = 'provisioning' | 'active' | 'failed';

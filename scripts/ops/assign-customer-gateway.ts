@@ -1,12 +1,4 @@
 /**
- * Manually assign customer(s) to a gateway via the orchestrator.
- *
- * Sole purpose: the ops entry-point for placement decisions, until the
- * provisioning pipeline wires up a direct call to `assignCustomerGateway`.
- * Keeps the "orchestrator is the correct location" invariant honest without
- * a Firestore trigger (which caused racy re-fires and a "bounce the doc"
- * ops flow we're deliberately avoiding).
- *
  * Usage:
  *   # Assign one customer by uid (reads config/orchestrator from Firestore):
  *   tsx scripts/ops/assign-customer-gateway.ts --env=test --uid=qv7tA8MmwKYc...
@@ -19,13 +11,6 @@
  *
  *   # Dry-run (show what would happen, no writes):
  *   tsx scripts/ops/assign-customer-gateway.ts --env=test --all --dry-run
- *
- * The decision logic (config/orchestrator → overrides[uid] ?? defaultGatewayId)
- * is duplicated here from functions/src/orchestrator/assign.ts by design —
- * scripts/ is a separate npm workspace from functions/, and pulling the
- * helper through a shared package would add disproportionate complexity for
- * ~30 lines of code. Canonical source: functions/src/orchestrator/assign.ts.
- * Keep the two in sync.
  */
 
 import { initializeApp, cert } from "firebase-admin/app";
@@ -33,12 +18,6 @@ import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
 
-// ── Config copy (mirror of functions/src/orchestrator/types.ts) ──────────
-//
-// The CLI duplicates the placement logic by design — scripts/ is a separate
-// npm workspace from functions/, and pulling the helper through a shared
-// package would add disproportionate complexity. The decision matrix is
-// kept byte-equivalent to functions/src/orchestrator/assign.ts.
 const ORCHESTRATOR_CONFIG_DOC = "config/orchestrator";
 const GATEWAY_ID_PATTERN = /^[a-z0-9-]+$/;
 

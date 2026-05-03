@@ -1,31 +1,9 @@
-/**
- * Octogee Provisioner — Git Operations
- *
- * Per-customer SSH keys: each customer gets their own ed25519 keypair at
- * customer-keys/{slug}/id_ed25519 (a SIBLING of customers/, never nested
- * inside the customer's workspace dir). The key is registered as a user
- * SSH key on a per-customer Gitea user (ws-{slug}), which is a
- * collaborator on only that customer's repos.
- *
- * The keys-out-of-workspace layout matters: when keys lived at
- * `customers/{slug}/.ssh/`, generateCustomerSshKey() implicitly mkdir'd
- * `customers/{slug}/`, which then made `git clone <url> {slug}` fail on
- * the restore branch with "destination path 'slug' already exists and is
- * not an empty directory" — observed on TEST 2026-04-29 (buildera looped
- * on every Cloud Tasks retry forever).
- *
- * The provisioner uses the global GIT_API_TOKEN (admin) for repo creation,
- * user management, and deploy key registration. Git operations (clone, push,
- * pull) use per-customer SSH keys via GIT_SSH_COMMAND.
- */
-
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { log, GIT_API_URL, GIT_API_TOKEN, GIT_ORG, GIT_SSH_HOST, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } from "./config.js";
 
-/** Admin API headers for Gitea. Content-Type included for POST/PUT/PATCH. */
 function adminHeaders(includeContentType = true): Record<string, string> {
   return {
     Authorization: `token ${GIT_API_TOKEN}`,
@@ -34,47 +12,17 @@ function adminHeaders(includeContentType = true): Record<string, string> {
   };
 }
 
-// ── SSH Key Management ────────────────────────────────────────────────────────
-
-/** Path to a customer's SSH private key. Lives OUTSIDE the workspace dir
- *  (see file header) so generating the key never pre-creates customers/{slug}. */
 export function customerSshKeyPath(slug: string): string {
   return path.join(CUSTOMER_KEYS_DIR, slug, "id_ed25519");
 }
 
-/**
- * Pin `core.sshCommand` in the customer's repo `.git/config` so any `git`
- * invocation from inside the repo (including ones the agent runs via Bash)
- * uses the per-customer key without an env var.
- *
- * Why repo-scoped, not env / global config / ~/.ssh:
- *   - Provisioner-side TS sets GIT_SSH_COMMAND per-call; that env var
- *     does NOT propagate into the per-customer agent process. The agent
- *     boots inheriting the gateway pod's env, where GIT_SSH_COMMAND is
- *     intentionally unset (it would have to be one specific customer's
- *     key — a global is wrong).
- *   - `~/.ssh/config` is shared across all customers' agents in the pod;
- *     adding a global IdentityFile there would let any agent push as any
- *     customer. We deliberately keep ~/.ssh/config IdentityFile-less.
- *   - `.git/config` lives inside the customer's isolated workspace dir
- *     and is read by every git operation from that repo. Right scope.
- *
- * No-op when the key isn't on disk yet (boot-sync window — repo gets
- * cloned via HTTP+admin-token before the per-customer SSH key is
- * generated; the next sync tick sets sshCommand once the key shows up).
- *
- * Idempotent: `git config` overwrites a single-value key in place.
- */
 export function setRepoSshCommand(repoDir: string, slug: string): void {
   const keyPath = customerSshKeyPath(slug);
   if (!fs.existsSync(keyPath)) return;
   const sshCmd = `ssh -i ${keyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
-  // Use `git config` (not direct .git/config write) so we don't fight git's
-  // own config-file format if it ever changes.
   gitExec(repoDir, `config core.sshCommand "${sshCmd}"`);
 }
 
-/** Generate an SSH keypair for a customer. Returns the public key. */
 export function generateCustomerSshKey(slug: string): string {
   const keyDir = path.join(CUSTOMER_KEYS_DIR, slug);
   const keyPath = path.join(keyDir, "id_ed25519");
@@ -86,18 +34,10 @@ export function generateCustomerSshKey(slug: string): string {
   }
 
   fs.mkdirSync(keyDir, { recursive: true });
-  // ssh-keygen, run inside the gateway image. Args are validated upstream
-  // (slug is sanitizeSlug-checked); PATH belongs to the image, not the
-  // operator. Same justification as the kubectl/tar shell-outs in
-  // scripts/ops/fleet.ts and scripts/lib/fleet-http-migration.ts.
   // eslint-disable-next-line sonarjs/os-command -- PATH controlled, args validated
   execSync(`ssh-keygen -t ed25519 -N "" -f "${keyPath}" -C "octogee-${slug}@gateway" -q`, {
     stdio: "pipe",
   });
-  // Harden permissions — restrictive perms ARE the right thing here:
-  // 0o700 on the dir + 0o600 on the private key prevent other customers'
-  // agents on the same gateway from reading them. SonarJS flags any
-  // chmod for review; in this case the constants are correct.
   /* eslint-disable sonarjs/file-permissions -- restrictive (private key dir), correct */
   fs.chmodSync(keyDir, 0o700);
   fs.chmodSync(keyPath, 0o600);
@@ -108,18 +48,10 @@ export function generateCustomerSshKey(slug: string): string {
   return fs.readFileSync(pubPath, "utf-8").trim();
 }
 
-// ── Gitea User Management (admin API — provisioner only) ──────────────────────
-
-/** Gitea username for a customer workspace. */
 export function giteaUsername(slug: string): string {
   return `ws-${slug}`;
 }
 
-/**
- * Create a per-customer Gitea user, add their SSH key, and generate an API token.
- * Returns the API token (personal access token) for the user.
- * Idempotent — if user already exists, recreates SSH key and token.
- */
 export async function createGiteaUser(slug: string, pubKey: string): Promise<string | null> {
   if (!GIT_API_TOKEN) return null;
 
@@ -127,7 +59,6 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
   const password = crypto.randomBytes(32).toString("hex");
   const headers = adminHeaders();
 
-  // 1. Create user (idempotent — 422 if exists)
   const createResp = await fetch(`${GIT_API_URL}/admin/users`, {
     method: "POST",
     headers,
@@ -149,7 +80,6 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
     return null;
   }
 
-  // 2. Add SSH key (delete existing first for idempotency)
   const keysResp = await fetch(`${GIT_API_URL}/users/${username}/keys`, { headers });
   if (keysResp.ok) {
     const keys = (await keysResp.json()) as any[];
@@ -175,7 +105,6 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
     log(`⚠ [git] Failed to register SSH key for ${username}: ${keyResp.status} ${body}`);
   }
 
-  // 3. Generate personal access token (delete existing first via admin Sudo)
   const sudoHeaders = { ...headers, Sudo: username };
   const tokensResp = await fetch(`${GIT_API_URL}/users/${username}/tokens`, {
     method: "GET",
@@ -202,10 +131,6 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
     }),
   });
   if (!tokenResp.ok) {
-    // Gitea's `POST /users/{name}/tokens` requires Basic Auth; admin token
-    // + Sudo isn't accepted, so this returns 401 by design. The per-customer
-    // SSH keypair registered above is the primary git auth path;
-    // workspace-api falls back to the global admin token for REST calls.
     log(`[git] PAT skipped for ${username} (Gitea admin-sudo limitation on /users/${username}/tokens) — SSH is the primary auth path`);
     return null;
   }
@@ -221,10 +146,6 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
   return token;
 }
 
-/**
- * Grant a per-customer Gitea user collaborator access to a repo.
- * Called after repo creation and when sharing workspaces.
- */
 export async function grantRepoAccess(repoName: string, slug: string, permission = "write"): Promise<void> {
   if (!GIT_API_TOKEN) return;
 
@@ -243,10 +164,6 @@ export async function grantRepoAccess(repoName: string, slug: string, permission
   }
 }
 
-/**
- * Delete a per-customer Gitea user. Cascades: removes SSH keys, tokens,
- * and all collaborator grants. Called during nuke.
- */
 export async function deleteGiteaUser(slug: string): Promise<void> {
   if (!GIT_API_TOKEN) return;
 
@@ -264,28 +181,15 @@ export async function deleteGiteaUser(slug: string): Promise<void> {
   }
 }
 
-// ── Remote URLs ──────────────────────────────────────────────────────────────
-
-/** SSH remote URL — requires per-customer key via GIT_SSH_COMMAND. */
 function sshRemoteUrl(repoName: string): string {
   return `git@${GIT_SSH_HOST}:${GIT_ORG}/${repoName}.git`;
 }
 
-/** HTTP clone URL with admin token — used only by boot-sync for initial clone.
- *  The admin token is embedded in the URL for the clone, but the remote is
- *  immediately switched to SSH after clone (don't persist credentials). */
 function httpCloneUrl(repoName: string): string {
   const gitHost = new URL(GIT_API_URL).origin;
   return `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
 }
 
-// ── Git Exec ────────────────────────────────────────────────────────────────────
-
-/**
- * Run a git command in a directory.
- * When sshKeyPath is provided, sets GIT_SSH_COMMAND to use that specific key.
- * Returns stdout or null on failure.
- */
 export function gitExec(cwd: string, args: string, sshKeyPath?: string): string | null {
   try {
     const env: Record<string, string | undefined> = {
@@ -295,15 +199,7 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
     if (sshKeyPath) {
       env.GIT_SSH_COMMAND = `ssh -i "${sshKeyPath}" -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
     }
-    // CodeQL flags this as js/shell-command-injection-from-environment
-    // because `args` composes into the shell string and callers sometimes
-    // interpolate slugs / URLs. Every caller in this file validates those
-    // inputs upstream: `sanitizeSlug` (/^[a-z0-9-]{1,60}$/) rejects any
-    // shell metachars; `cloneUrl` is constructed from hardcoded env +
-    // token; `commitAndPush` now single-quote-wraps the user message
-    // (see safeMessage). The function is internal — no callers expose
-    // `args` to request bodies.
-    // eslint-disable-next-line sonarjs/os-command -- args constructed by trusted callers; each input validated upstream (see comment above)
+    // eslint-disable-next-line sonarjs/os-command -- args constructed by trusted callers; each input validated upstream
     return execSync(`git ${args}`, {
       cwd,
       encoding: "utf8",
@@ -319,16 +215,6 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
   }
 }
 
-// ── Clone Workspace Repo ────────────────────────────────────────────────────────
-
-/**
- * Clone a customer workspace repo from Gitea to the local PVC.
- *
- * Uses per-customer SSH key if available. Falls back to HTTP clone
- * with the admin token (for boot-sync, where per-customer keys don't
- * exist yet). HTTP credentials are not persisted in the remote URL —
- * after clone, the remote is switched to SSH.
- */
 export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promise<boolean> {
   const dest = path.join(CUSTOMERS_DIR, slug);
   const gitDir = path.join(dest, ".git");
@@ -344,7 +230,6 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
   const sshKey = customerSshKeyPath(slug);
   const hasCustomerKey = fs.existsSync(sshKey);
 
-  // Verify repo exists on Gitea
   try {
     const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
       headers: adminHeaders(false),
@@ -358,17 +243,14 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
     return false;
   }
 
-  // Clone: SSH with per-customer key if available, HTTP with admin token otherwise
   let result: string | null;
   if (hasCustomerKey) {
     const cloneUrl = sshRemoteUrl(repoName);
     result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`, sshKey);
   } else {
-    // HTTP clone for boot-sync (no per-customer key yet)
     const cloneUrl = httpCloneUrl(repoName);
     log(`[git] Cloning ${slug} via HTTP (no per-customer SSH key yet)`);
     result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`);
-    // Switch remote to SSH (don't persist admin token in remote URL)
     if (result !== null) {
       gitExec(dest, `remote set-url origin ${sshRemoteUrl(repoName)}`);
     }
@@ -382,28 +264,13 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 
   gitExec(dest, `config user.email "${slug}@octogee.com"`);
   gitExec(dest, `config user.name "Octo (${slug})"`);
-  // ssh-cmd: pin per-repo so agent's `git push` uses the customer key
+  // ssh-cmd: cloneCustomerRepo
   setRepoSshCommand(dest, slug);
 
   log(`[git] ✅ Cloned ${GIT_ORG}/${repoName} → customers/${slug}/`);
   return true;
 }
 
-// ── Clone Project Repo (boot-sync) ──────────────────────────────────────────
-//
-// Parallel to `cloneWorkspaceRepo` — restores a single project repo from
-// Gitea into `customers/{slug}/projects/{projectSlug}/`. Used by boot-sync
-// so a fresh PVC (new cluster, node failure) self-heals every project
-// directory, matching the cattle-gateway principle in
-// docs/GATEWAY-PLATFORM-SPEC.md + docs/PROJECTS-CANVAS-SPEC.md §D11.
-//
-// `giteaRepoName` is read from the Firestore project doc — avoids the
-// workspace-api vs provisioner naming discrepancy (two code paths
-// historically picked different repo names; neither is fixed in this PR).
-
-/** Clone a project's Gitea repo into `customers/{slug}/projects/{projectSlug}/`.
- *  Returns true if the project dir already has `.git` OR was cloned; false
- *  if the repo is absent on Gitea or clone failed. */
 export async function cloneProjectRepo(
   slug: string,
   projectSlug: string,
@@ -458,28 +325,13 @@ export async function cloneProjectRepo(
 
   gitExec(dest, `config user.email "${slug}@octogee.com"`);
   gitExec(dest, `config user.name "Octo (${slug})"`);
-  // ssh-cmd: project repos push through the same per-customer key
+  // ssh-cmd: initWorkspaceRepo
   setRepoSshCommand(dest, slug);
 
   log(`[git] ✅ Cloned ${GIT_ORG}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
   return true;
 }
 
-// ── Workspace Repo ──────────────────────────────────────────────────────────────
-
-/**
- * Initialize a customer workspace repo + create the empty Gitea repo.
- *
- * Does NOT commit or push. The first commit happens later — either when
- * the agent finishes the BOOTSTRAP.md ritual and explicitly commits, or
- * (more reliably) when the next git-sync tick fires after BOOTSTRAP.md
- * has been deleted. git-sync skips workspaces with BOOTSTRAP.md present
- * (see syncAllWorkspaces below), so the first commit captures the
- * bootstrapped state — not the template defaults — for a clean history.
- *
- * Returns the canonical Gitea URL for the repo so the caller can
- * persist `provisioning.git.repoUrl` to Firestore in the same step.
- */
 export async function initWorkspaceRepo(coachDir: string, slug: string): Promise<string | null> {
   if (!GIT_API_TOKEN) {
     log(`[git] Skipping repo init for ${slug} — GIT_API_TOKEN not set`);
@@ -488,8 +340,6 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
 
   const repoName = `${slug}-workspace`;
 
-  // Write .gitignore so the agent's first `git add -A` only stages the
-  // user-visible files, not the provisioner-managed system files.
   const gitignore = [
     "# Octogee workspace — track user-visible files, exclude system/build artifacts",
     "",
@@ -533,10 +383,9 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   log(`[git] init: ${initResult}`);
   gitExec(coachDir, `config user.email "${slug}@octogee.com"`);
   gitExec(coachDir, `config user.name "Octo (${slug})"`);
-  // ssh-cmd: agent runs git push from inside coachDir; pin the key
+  // ssh-cmd: initCoachRepo
   setRepoSshCommand(coachDir, slug);
 
-  // Create Gitea repo (admin token). 409 = already exists, idempotent OK.
   try {
     const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
       method: "POST",
@@ -559,16 +408,8 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     return null;
   }
 
-  // Grant per-customer Gitea user access to the repo
   await grantRepoAccess(repoName, slug);
 
-  // Add remote (SSH with per-customer key when one exists). NO push —
-  // git-sync handles the first commit + push once BOOTSTRAP.md is gone.
-  // Fail loud if remote add doesn't take (e.g. .git was clobbered, disk
-  // full, permissions). Without this guard the contract would persist
-  // `provisioning.git.repoUrl` to Firestore and the workspace would
-  // silently never sync — same class of bug as the git-sync recovery
-  // shadow path that motivated the lifecycle refactor.
   const originUrl = sshRemoteUrl(repoName);
   const remoteResult = gitExec(coachDir, `remote add origin ${originUrl}`);
   if (remoteResult === null) {
@@ -583,9 +424,6 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   return repoUrlDisplay;
 }
 
-// ── Project Repo ────────────────────────────────────────────────────────────────
-
-/** Initialize a git repo for a project and push to Gitea. */
 export async function initProjectRepo(
   projectDir: string,
   slug: string,
@@ -617,7 +455,7 @@ export async function initProjectRepo(
   gitExec(projectDir, "init -b main");
   gitExec(projectDir, `config user.email "${committerEmail}"`);
   gitExec(projectDir, `config user.name "${committerName}"`);
-  // ssh-cmd: pin before any agent-driven push from the project dir
+  // ssh-cmd: initProjectRepo
   setRepoSshCommand(projectDir, slug);
   gitExec(projectDir, "add -A");
   const commitResult = gitExec(projectDir, `commit -m "initial: ${projectName} project created"`);
@@ -626,7 +464,6 @@ export async function initProjectRepo(
     return null;
   }
 
-  // Create Gitea repo (admin token)
   try {
     const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
       method: "POST",
@@ -649,7 +486,6 @@ export async function initProjectRepo(
     return null;
   }
 
-  // Grant per-customer Gitea user access
   await grantRepoAccess(repoName, slug);
 
   const originUrl = sshRemoteUrl(repoName);
@@ -668,11 +504,7 @@ export async function initProjectRepo(
   return repoUrlDisplay;
 }
 
-// ── Commit and Push ─────────────────────────────────────────────────────────
-
-/** Stage all changes, commit, and push to origin main. */
 export async function commitAndPush(repoDir: string, message: string): Promise<boolean> {
-  // Derive slug from path: customers/{slug}/... → slug
   const relPath = path.relative(CUSTOMERS_DIR, repoDir);
   const slug = relPath.split(path.sep)[0];
   const sshKey = customerSshKeyPath(slug);
@@ -684,12 +516,6 @@ export async function commitAndPush(repoDir: string, message: string): Promise<b
     return true;
   }
   gitExec(repoDir, "add -A");
-  // The earlier `message.replace(/"/g, '\\"')` only escaped double-quotes,
-  // not backslashes/backticks/`$` — CodeQL js/incomplete-sanitization. Use
-  // single-quote wrapping + the shell-standard `'\''` for embedded single
-  // quotes, which is fully literal under POSIX sh (no expansion, no
-  // escapes). `gitExec` runs under `/bin/sh` via Node's execSync, so this
-  // is safe across bash/dash/zsh.
   const safeMessage = `'${message.replace(/'/g, "'\\''")}'`;
   const commitResult = gitExec(repoDir, `commit -m ${safeMessage}`);
   if (commitResult === null) {
@@ -705,9 +531,6 @@ export async function commitAndPush(repoDir: string, message: string): Promise<b
   return true;
 }
 
-// ── Sync All Workspaces ─────────────────────────────────────────────────────────
-
-/** Sync all dirty workspaces to Gitea. Pulls remote changes. */
 export async function syncAllWorkspaces(): Promise<void> {
   if (!GIT_API_TOKEN) return;
   if (!fs.existsSync(CUSTOMERS_DIR)) return;
@@ -721,20 +544,9 @@ export async function syncAllWorkspaces(): Promise<void> {
     const gitDir = path.join(coachDir, ".git");
     if (!fs.existsSync(gitDir)) continue;
 
-    // ssh-cmd backfill: idempotent re-pin every sync tick. Catches
-    // workspaces created before the per-repo core.sshCommand was added,
-    // and self-heals if anything ever clobbers .git/config (e.g. an
-    // agent stomping it). No-op when the customer key isn't on disk.
+    // ssh-cmd: refreshAllCoachRepos
     setRepoSshCommand(coachDir, slug);
 
-    // Bootstrap gate. Until the agent finishes the BOOTSTRAP.md ritual
-    // and deletes the file, the workspace is "draft" — local edits to
-    // SOUL/USER/MEMORY do not get pushed to Gitea. A pod restart at
-    // this point intentionally re-clones the initial state and re-runs
-    // bootstrap from scratch, rather than persisting a half-finished
-    // identity. The strengthened BOOTSTRAP.md / AGENTS.md prompts give
-    // the agent a concrete reason to delete the file ("until you do,
-    // your work doesn't survive a restart"). See AGENTS.md "First Run".
     if (fs.existsSync(path.join(coachDir, "BOOTSTRAP.md"))) {
       log(
         `[git-sync] ${slug}: BOOTSTRAP.md present — skipping (workspace persists once bootstrap completes)`,
@@ -745,21 +557,12 @@ export async function syncAllWorkspaces(): Promise<void> {
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-    // No remote means the workspace dir wasn't created by the lifecycle
-    // contract (orphan from a half-failed provision, or a manual ops
-    // intervention). Cattle stay dumb: log and skip. The fleet
-    // controller's next restore tick will re-mount via the contract,
-    // which has the recovery branch that creates the Gitea repo AND
-    // writes provisioning.git.repoUrl in the same operation. Doing the
-    // recovery here would re-create the original bug class (Gitea
-    // mutation without the canonical Firestore write).
     const remoteCheck = gitExec(coachDir, "remote get-url origin");
     if (remoteCheck === null) {
       log(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
       continue;
     }
 
-    // Ensure remote uses SSH (migrate old HTTP remotes)
     if (remoteCheck.startsWith("http")) {
       const repoName = `${slug}-workspace`;
       gitExec(coachDir, `remote set-url origin ${sshRemoteUrl(repoName)}`);
@@ -773,10 +576,6 @@ export async function syncAllWorkspaces(): Promise<void> {
       committed = gitExec(coachDir, `commit -m "auto: ${new Date().toISOString()}"`) !== null;
     }
 
-    // Skip pull when origin has no `main` branch yet — i.e. this is the
-    // first sync after BOOTSTRAP.md was deleted, before the initial
-    // push lands. Without the guard `pull --rebase` fails with "fatal:
-    // couldn't find remote ref main" on every first-bootstrap commit.
     const remoteMain = gitExec(coachDir, "ls-remote --heads origin main", keyArg);
     if (remoteMain) {
       gitExec(coachDir, "pull --rebase origin main", keyArg);
@@ -793,9 +592,6 @@ export async function syncAllWorkspaces(): Promise<void> {
   }
 }
 
-// ── Archive Repos ───────────────────────────────────────────────────────────────
-
-/** Archive a Gitea workspace repo. */
 export async function archiveWorkspaceRepo(slug: string): Promise<void> {
   if (!GIT_API_TOKEN) return;
 
@@ -812,7 +608,6 @@ export async function archiveWorkspaceRepo(slug: string): Promise<void> {
   }
 }
 
-/** Archive a project Gitea repo. */
 export async function archiveProjectRepo(slug: string, projectName: string): Promise<void> {
   if (!GIT_API_TOKEN) return;
 
@@ -829,9 +624,6 @@ export async function archiveProjectRepo(slug: string, projectName: string): Pro
   }
 }
 
-// ── Delete Repo (Nuke) ──────────────────────────────────────────────────────
-
-/** Permanently delete a Gitea repo. Irreversible. Idempotent. */
 export async function deleteRepo(repoName: string): Promise<void> {
   if (!GIT_API_TOKEN || !GIT_ORG) return;
 

@@ -1,14 +1,3 @@
-/**
- * Multi-provider key format validation.
- *
- * Phase 2 generalizes Phase 1's anthropic-only validator. Format-only —
- * the live probe (`provider-probe.ts`) is the authority on whether the
- * key actually works.
- *
- * For openai-compatible upstreams (OpenRouter, Groq, Mistral, Fireworks,
- * Together, etc.), key formats are entirely upstream-defined. We only
- * check non-empty + no whitespace; the probe does the rest.
- */
 import { validateAnthropicKey, type KeyValidationResult } from "./anthropic-key-format";
 
 export type Provider = "anthropic" | "openai" | "openai-compatible";
@@ -19,7 +8,7 @@ export function isSupportedProvider(input: unknown): input is Provider {
   return typeof input === "string" && (SUPPORTED as string[]).includes(input);
 }
 
-const OPENAI_PREFIXES = ["sk-proj-", "sk-svcacct-", "sk-"]; // longest first
+const OPENAI_PREFIXES = ["sk-proj-", "sk-svcacct-", "sk-"];
 const OPENAI_MIN_LENGTH = 32;
 
 function validateOpenAi(input: unknown): KeyValidationResult {
@@ -45,9 +34,6 @@ function validateOpenAi(input: unknown): KeyValidationResult {
 }
 
 function validateOpenAiCompatible(input: unknown): KeyValidationResult {
-  // OpenRouter, Groq, Mistral, Fireworks, Together — formats vary
-  // wildly. The upstream probe will reject bad keys; format check just
-  // catches whitespace junk and empty strings.
   if (typeof input !== "string") return { valid: false, reason: "API key is required" };
   const trimmed = input.trim();
   if (!trimmed) return { valid: false, reason: "API key is required (empty)" };

@@ -1,22 +1,9 @@
-/**
- * Expected Mattermost post shapes the activity bridge produces for each
- * agent-event kind. These are the assertion targets for T1-4 (per-event-kind
- * markdown shape table). Real bridge output should match these byte-for-byte
- * in the markdown body and structurally in props.attachments + props.octogee.
- */
-
 export interface ExpectedMmPostShape {
-  /** Channel the post lands in. Tests pass an expected `activityChannelId`. */
   channelId: string;
-  /** The `root_id` field — empty for the run's root post, set for replies. */
   rootId?: string;
-  /** Markdown body. Compared as exact-string match unless `bodyMatch` is regex. */
   message: string;
-  /** Optional regex for posts with timestamps / dynamic content. */
   bodyMatch?: RegExp;
-  /** props.octogee.kind tag used by the PWA's row renderers. */
   kindTag: string;
-  /** props.attachments[] — present only for color band or action buttons. */
   attachments?: ReadonlyArray<{
     color?: string;
     actions?: ReadonlyArray<{
@@ -28,22 +15,18 @@ export interface ExpectedMmPostShape {
   }>;
 }
 
-// ── Run root post (lifecycle.start) ───────────────────────────────────────────
-
 export const expectedRunRootPost = (params: {
   channelId: string;
   agentSlug: string;
   runIntent?: string;
 }): ExpectedMmPostShape => ({
   channelId: params.channelId,
-  // No rootId — this IS the root.
   message: `▶️ ${params.agentSlug} · ${params.runIntent ?? 'working...'}`,
   bodyMatch: /^▶️ /,
   kindTag: 'activity.run-root',
-  attachments: [{ color: '#3b82f6' }], // blue running pill
+  attachments: [{ color: '#3b82f6' }],
 });
 
-// Run root edit on lifecycle.end (completed).
 export const expectedRunRootEditCompleted = (params: {
   agentSlug: string;
   runIntent?: string;
@@ -54,8 +37,6 @@ export const expectedRunRootEditCompleted = (params: {
   kindTag: 'activity.run-root',
   attachments: [{ color: '#22c55e' }],
 });
-
-// ── item (tool/command/search/analysis) ───────────────────────────────────────
 
 export const expectedToolStartReply = (params: {
   channelId: string;
@@ -88,8 +69,6 @@ export const expectedToolEndEdit = (params: {
   attachments: [{ color: params.status === 'completed' ? '#22c55e' : '#ef4444' }],
 });
 
-// ── patch ────────────────────────────────────────────────────────────────────
-
 export const expectedPatchReply = (params: {
   channelId: string;
   rootId: string;
@@ -111,8 +90,6 @@ export const expectedPatchReply = (params: {
   };
 };
 
-// ── plan ─────────────────────────────────────────────────────────────────────
-
 export const expectedPlanReply = (params: {
   channelId: string;
   rootId: string;
@@ -127,8 +104,6 @@ export const expectedPlanReply = (params: {
   kindTag: 'activity.plan',
   attachments: [{ color: '#3b82f6' }],
 });
-
-// ── command_output ───────────────────────────────────────────────────────────
 
 export const expectedCommandReply = (params: {
   channelId: string;
@@ -148,8 +123,6 @@ export const expectedCommandReply = (params: {
   attachments: [{ color: params.status === 'completed' ? '#22c55e' : params.status === 'failed' ? '#ef4444' : '#3b82f6' }],
 });
 
-// ── thinking ─────────────────────────────────────────────────────────────────
-
 export const expectedThinkingReply = (params: {
   channelId: string;
   rootId: string;
@@ -161,8 +134,6 @@ export const expectedThinkingReply = (params: {
   kindTag: 'activity.thinking',
   attachments: [{ color: '#a3a3a3' }],
 });
-
-// ── approval ─────────────────────────────────────────────────────────────────
 
 export const expectedApprovalReply = (params: {
   channelId: string;
@@ -226,11 +197,8 @@ export const expectedApprovalResolvedEdit = (params: {
     `### ${params.decision === 'approved' ? '✅' : '❌'} ${params.decision} by ${params.resolvedBy}\n` +
     `**Command:** \`${params.command}\`\n**Host:** ${params.host}\n**Scope:** ${params.scope}`,
   kindTag: 'activity.approval',
-  // Buttons removed.
   attachments: [{ color: params.decision === 'approved' ? '#22c55e' : '#ef4444' }],
 });
-
-// ── compaction ───────────────────────────────────────────────────────────────
 
 export const expectedCompactionReply = (params: {
   channelId: string;

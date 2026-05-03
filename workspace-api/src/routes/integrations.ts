@@ -1,7 +1,3 @@
-/**
- * Integration routes — Google/Microsoft OAuth, IMAP, Twilio.
- * Migrated from functions/src/integrations/*.ts
- */
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../middleware/auth";
 import { logger } from "../middleware/logging";
@@ -11,8 +7,6 @@ import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validatio
 
 const router = Router();
 const APP_URL = process.env.APP_URL || "https://octogee.com";
-
-// ── Google OAuth ───────────────────────────────────────────────────────────
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";

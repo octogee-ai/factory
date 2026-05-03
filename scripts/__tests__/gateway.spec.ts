@@ -2,8 +2,6 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 
-// ── Verify advisory mode code is completely removed ─────────────────────────────
-
 describe("advisory mode removal", () => {
   const libDir = path.resolve(__dirname, "..", "lib");
 

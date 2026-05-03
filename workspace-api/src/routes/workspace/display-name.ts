@@ -1,17 +1,3 @@
-/**
- * PATCH /display-name — rename the Builder's MM team.
- *
- * Spec: docs/WORKSPACE-NAMING-CANONICAL-SPEC §"Phase 5 — Settings modal".
- * MM is canonical for workspace team display_name; Firestore stores only
- * opaque identity (slug + teamId). This route reads the caller's workspace
- * from Firestore (lookup only), verifies ownership, then writes the new
- * display_name to MM via the admin API. Zero Firestore writes — the
- * sidebar re-reads team name from the MM websocket feed automatically.
- *
- * Fails loudly on missing/invalid input (400), missing workspace (404),
- * missing teamId (409, provisioning not finished), non-owner (403), or
- * MM error (surfaced as 5xx via the error middleware).
- */
 import { Router, Request, Response, NextFunction } from "express";
 import { readWorkspace } from "../../lib/firestoreReads";
 import { mmApi } from "../../lib/mattermost";
@@ -19,7 +5,7 @@ import { logger } from "../../middleware/logging";
 
 const router = Router();
 
-const MM_TEAM_DISPLAY_NAME_MAX = 64; // MM's own limit on the display_name field
+const MM_TEAM_DISPLAY_NAME_MAX = 64;
 
 router.patch("/display-name", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -37,9 +23,6 @@ router.patch("/display-name", async (req: Request, res: Response, next: NextFunc
       return;
     }
 
-    // Resolve the caller's workspace. Per v3 §2 the user's username IS the
-    // workspace slug; `workspaceId` is the denormalized copy used on the
-    // user doc for convenient lookup without a join.
     const userData = req.user ?? {};
     const slug = userData.workspaceId || userData.username;
     if (!slug) {
@@ -59,17 +42,12 @@ router.patch("/display-name", async (req: Request, res: Response, next: NextFunc
 
     const teamId = workspace.mattermost.teamId;
     if (!teamId) {
-      // Workspace exists but MM provisioning hasn't produced a team id yet.
-      // 409 (Conflict) signals "try again once provisioning finishes" rather
-      // than 404 ("no such thing") — the thing exists, it's just not ready.
       res.status(409).json({ error: "Workspace is not yet provisioned" });
       return;
     }
 
     await mmApi(`/teams/${teamId}`, "PUT", { display_name: displayName });
 
-    // Deliberately no Firestore write. MM is canonical for display_name;
-    // the app reads it back via the MM websocket.
     res.json({ ok: true, displayName });
   } catch (err) {
     logger.error(`[workspace] PATCH /display-name failed`, {

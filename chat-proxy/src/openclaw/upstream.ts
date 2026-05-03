@@ -1,21 +1,3 @@
-/**
- * Long-lived upstream WebSocket to an OpenClaw gateway.
- *
- * Ports just the handshake half of `scripts/lib/gateway-rpc.ts`
- * (`openAndConnect` + `sendRequest` + challenge tracker) without the
- * short-lived RPC client wrapper. Returns an authenticated `WebSocket`
- * ready for bidirectional frame relay.
- *
- * The three-phase dance, mirrored byte-for-byte from OpenClaw's protocol:
- *   1. TCP connect + WS upgrade.
- *   2. Capture the server-pushed `connect.challenge` event (nonce).
- *   3. Send signed `connect` request frame with token + scopes; await
- *      `hello-ok` response.
- *
- * Listeners attach BEFORE `open` fires because OpenClaw emits the challenge
- * the instant it accepts the upgrade, and the `ws` library does not buffer
- * messages across listener gaps.
- */
 import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import {
@@ -23,16 +5,10 @@ import {
   type DeviceIdentity,
 } from "./device-identity.js";
 
-// ── Errors ─────────────────────────────────────────────────────────────────
-
 export type UpstreamErrorCode =
-  /** Socket never opened (DNS / refused / timeout before open). */
   | "connect-failed"
-  /** Gateway rejected the `connect` frame (bad/missing token). */
   | "auth-failed"
-  /** Request exceeded timeout without a response. */
   | "timeout"
-  /** Server replied with a shape we couldn't parse. */
   | "invalid-response";
 
 export class UpstreamError extends Error {
@@ -45,42 +21,25 @@ export class UpstreamError extends Error {
   }
 }
 
-// ── Public surface ─────────────────────────────────────────────────────────
-
 const PROTOCOL_VERSION = 3;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 export interface OpenUpstreamParams {
-  /** Gateway URL, e.g. `http://octogee-gateway.octogee-test.svc.cluster.local:18789`. */
   url: string;
-  /** OPENCLAW_GATEWAY_TOKEN — resolved from env before calling. */
   token: string;
-  /** Ed25519 device identity for signing the challenge nonce. */
   identity: DeviceIdentity;
-  /** Operator scopes to request. Default: ["operator.admin"]. */
   scopes?: string[];
-  /** ms for every phase (open + challenge + connect). Default 30s. */
   timeoutMs?: number;
 }
 
-/**
- * Open a WebSocket to the gateway, complete the device-auth handshake,
- * and return the authenticated socket ready for bidirectional relay.
- * Throws `UpstreamError` on any phase failure.
- */
 export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocket> {
   const scopes = params.scopes ?? ["operator.admin"];
   const timeoutMs = params.timeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
-  // URL comes in as http(s)://; ws library accepts ws(s):// so convert.
   const wsUrl = params.url.replace(/^http/, "ws");
   const ws = new WebSocket(wsUrl);
 
-  // Permanent swallow-listener prevents node from crashing on an async
-  // `error` during cleanup of a still-connecting socket.
   ws.on("error", () => {});
 
-  // Start capturing the challenge BEFORE open — OpenClaw emits it the
-  // instant it accepts the upgrade, which races our post-open attach.
   const nonceTracker = startConnectChallengeTracker(ws);
 
   try {
@@ -118,7 +77,7 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
         ...(params.token ? { auth: { token: params.token } } : {}),
       },
       timeoutMs,
-      /* mapConnectErrors */ true,
+      true,
     );
 
     return ws;
@@ -126,13 +85,11 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
     try {
       ws.terminate();
     } catch {
-      // ignore
+      /* */
     }
     throw err;
   }
 }
-
-// ── Phase helpers ──────────────────────────────────────────────────────────
 
 function waitForOpen(ws: WebSocket, timeoutMs: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -141,7 +98,7 @@ function waitForOpen(ws: WebSocket, timeoutMs: number): Promise<void> {
       try {
         ws.terminate();
       } catch {
-        // ignore
+        /* */
       }
       reject(
         new UpstreamError("connect-failed", `WS open timed out after ${timeoutMs}ms`),
@@ -156,7 +113,7 @@ function waitForOpen(ws: WebSocket, timeoutMs: number): Promise<void> {
       try {
         ws.terminate();
       } catch {
-        // ignore
+        /* */
       }
       reject(new UpstreamError("connect-failed", `WS open failed: ${err.message}`));
     };
@@ -252,8 +209,6 @@ function startConnectChallengeTracker(ws: WebSocket): {
   };
 }
 
-// ── Request/response envelope (only used for the `connect` call) ───────────
-
 interface ResponseFrame {
   type: "res";
   id: string;
@@ -307,10 +262,6 @@ async function sendRequest(
       }
     };
 
-    // If the socket closes or errors before a response arrives, fail the
-    // pending request immediately instead of waiting out the full timeout
-    // (previously up to 30s of dead waiting during handshake failures).
-    // Mirrors scripts/lib/gateway-rpc.ts's sendRequest wiring.
     const onClose = () => {
       cleanup();
       reject(

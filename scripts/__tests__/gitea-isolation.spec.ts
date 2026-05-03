@@ -1,23 +1,8 @@
-/**
- * Unit tests for per-customer Gitea isolation.
- *
- * Tests SSH key generation, permissions, slug-to-path derivation,
- * Gitea username conventions, and gitignore coverage.
- *
- * KEY LAYOUT (post-2026-04-29): per-customer SSH keys live at
- * `customer-keys/{slug}/id_ed25519`, a sibling of `customers/`. They MUST
- * NOT live nested inside the workspace dir; doing so pre-creates
- * `customers/{slug}/` and breaks `git clone <url> {slug}` on the restore
- * branch. The "key gen does not pre-create the workspace dir" test below
- * is the canonical regression pin for that bug class.
- */
 import { describe, it, expect, beforeEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
-
-// ── Inline pure functions from git.ts ──────────────────────────────────────
 
 function customerSshKeyPath(keysDir: string, slug: string): string {
   return path.join(keysDir, slug, "id_ed25519");

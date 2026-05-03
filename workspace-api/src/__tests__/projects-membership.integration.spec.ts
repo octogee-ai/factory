@@ -1,27 +1,5 @@
-/**
- * Integration tests for the project membership endpoints — join, leave,
- * star, and remove-guest. All four used to be untested before the
- * per-endpoint file split made them obvious holes.
- *
- * Scope:
- * - POST   /api/projects/:wid/:pid/join  — auth state transitions,
- *     visibility gate, owner self-join rejection, idempotent re-join.
- * - POST   /api/projects/:wid/:pid/leave — owner self-leave rejection,
- *     no-op-on-not-a-member, member-count decrement.
- * - POST   /api/projects/:wid/:pid/star  — toggle semantics (two calls
- *     → starred then unstarred), 404 for missing project.
- * - DELETE /api/projects/:wid/:pid/members/:guestUid — owner-only guard,
- *     can't remove the owner, member-count decrement, idempotent unknown-
- *     member case.
- *
- * The Firestore + MM + Gitea mocks match the pattern established in
- * projects.integration.spec.ts (same in-memory `firestoreData` store,
- * same mmApi / giteaApi vi.fn spies).
- */
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-// ── Firestore mock state ────────────────────────────────────────────────────
 
 const firestoreData: Record<string, any> = {};
 const mockSet = vi.fn(async (_path: string, _data: any) => undefined);
@@ -98,9 +76,6 @@ function authHeaders() {
   return { Authorization: "Bearer valid-token" };
 }
 
-// Shared fixture: an Alice-owned public project with Bob as a pre-existing
-// member. Individual tests mutate `firestoreData` to get the shape they
-// want (private visibility, missing member, etc.).
 function seedPublicAliceGame() {
   firestoreData["workspaces/alice/projects/game"] = {
     id: "game",
@@ -134,11 +109,8 @@ beforeEach(() => {
   mockMmApi.mockReset();
   mockGiteaApi.mockReset();
   mockGetWorkspaceMmContext.mockReset();
-  // Sensible default — owner's workspace has an MM team.
   mockGetWorkspaceMmContext.mockResolvedValue({ teamId: "team-alice" });
 });
-
-// ─── POST /:wid/:pid/join ────────────────────────────────────────────────────
 
 describe("POST /api/projects/:wid/:pid/join", () => {
   it("returns 404 when the project does not exist", async () => {
@@ -187,7 +159,6 @@ describe("POST /api/projects/:wid/:pid/join", () => {
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true, alreadyMember: true });
-    // Didn't bump memberCount on the no-op path.
     expect(mockUpdate).not.toHaveBeenCalledWith(
       "workspaces/alice/projects/game",
       expect.objectContaining({ memberCount: expect.anything() }),
@@ -196,7 +167,6 @@ describe("POST /api/projects/:wid/:pid/join", () => {
 
   it("adds the caller as a member + increments memberCount on first join", async () => {
     seedPublicAliceGame();
-    // MM team-membership check: 404 means "not a member yet, add them".
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if (method === "POST" && path === "/teams/team-alice/members") return { ok: true };
       if (method === "POST" && path.includes("/channels/ch-alice-game/members")) return { ok: true };
@@ -215,12 +185,10 @@ describe("POST /api/projects/:wid/:pid/join", () => {
       id: "caller-uid",
       role: "member",
     });
-    // MemberCount bumped.
     expect(mockUpdate).toHaveBeenCalledWith(
       "workspaces/alice/projects/game",
       expect.objectContaining({ memberCount: expect.objectContaining({ __op: "increment", value: 1 }) }),
     );
-    // Gitea read-access grant fired.
     expect(mockGiteaApi).toHaveBeenCalledWith(
       "alice-proj-game/collaborators/ws-bob",
       "PUT",
@@ -228,8 +196,6 @@ describe("POST /api/projects/:wid/:pid/join", () => {
     );
   });
 });
-
-// ─── POST /:wid/:pid/leave ───────────────────────────────────────────────────
 
 describe("POST /api/projects/:wid/:pid/leave", () => {
   it("returns 404 when the project does not exist", async () => {
@@ -262,7 +228,6 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true, notAMember: true });
-    // No memberCount change on the no-op path.
     expect(mockUpdate).not.toHaveBeenCalledWith(
       "workspaces/alice/projects/game",
       expect.objectContaining({ memberCount: expect.anything() }),
@@ -291,20 +256,16 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
       "workspaces/alice/projects/game",
       expect.objectContaining({ memberCount: expect.objectContaining({ __op: "increment", value: -1 }) }),
     );
-    // MM channel leave attempted.
     expect(mockMmApi).toHaveBeenCalledWith(
       "/channels/ch-alice-game/members/mm-bob",
       "DELETE",
     );
-    // Gitea access revoke attempted.
     expect(mockGiteaApi).toHaveBeenCalledWith(
       "alice-proj-game/collaborators/ws-bob",
       "DELETE",
     );
   });
 });
-
-// ─── POST /:wid/:pid/star — toggle ───────────────────────────────────────────
 
 describe("POST /api/projects/:wid/:pid/star", () => {
   it("returns 404 when the project does not exist (first star attempt)", async () => {
@@ -325,8 +286,6 @@ describe("POST /api/projects/:wid/:pid/star", () => {
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ starred: true });
-    // Typed-target shape per BUILDER-SOCIAL-SPEC §10. Doc id derived via
-    // starDocId(uid, target): `{actorUid}_p_{workspaceSlug}_{projectSlug}`.
     expect(firestoreData["stars/caller-uid_p_alice_game"]).toMatchObject({
       actorUid: "caller-uid",
       target: {
@@ -336,7 +295,6 @@ describe("POST /api/projects/:wid/:pid/star", () => {
         ownerUid: "alice-uid",
       },
     });
-    // starCount belongs to onStarCreated CF — endpoint must NOT update it.
     expect(mockUpdate).not.toHaveBeenCalledWith(
       "workspaces/alice/projects/game",
       expect.objectContaining({ starCount: expect.anything() }),
@@ -369,8 +327,6 @@ describe("POST /api/projects/:wid/:pid/star", () => {
   });
 });
 
-// ─── DELETE /:wid/:pid/members/:guestUid ─────────────────────────────────────
-
 describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
   it("returns 404 when the project does not exist", async () => {
     const app = createApp();
@@ -382,7 +338,6 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
 
   it("returns 403 when the caller is not the project owner", async () => {
     seedPublicAliceGame();
-    // caller-uid is bob, owner is alice-uid — so caller isn't the owner.
     const app = createApp();
     const res = await request(app)
       .delete("/api/projects/alice/game/members/guest-uid")

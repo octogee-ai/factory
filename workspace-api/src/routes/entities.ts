@@ -1,30 +1,4 @@
 /**
- * Entity membership — unified members endpoints for workspaces and projects.
- *
- * GET    /api/entities/:kind/:id/members
- * DELETE /api/entities/:kind/:id/members/:mmUserId
- *
- *   kind: 'workspace' | 'project'
- *   id:
- *     - workspace: workspace slug (e.g. "grand-raven")
- *     - project:   Firestore project doc id (e.g. "grand-raven_sprint-1")
- *
- * Membership source of truth is Mattermost — if you're in the MM channel,
- * you're a member of the entity, full stop. GET uses the caller's own MM
- * token (not the admin token) so MM enforces the usual "you can only see
- * channels you belong to" rule natively; non-members get a 403 from MM
- * which we surface as-is. No separate permission layer.
- *
- * DELETE is owner-only and keyed by MM user ID (not Firestore UID) so
- * owners can evict users who haven't finished provisioning their
- * Firestore profile yet — the mid-provisioning edge case that was
- * blocked in MembershipSection before this endpoint existed.
- *
- * The GET response hydrates each MM user with Firestore profile data
- * (avatar, displayName) via a reverse lookup on `mattermost.userId`.
- * If a MM user has no Firestore profile yet, the MM first_name /
- * username is used as fallback.
- *
  * TODO (tracked in PR #462 review): hydration is currently N+1 — one
  * Firestore read per member for the avatarUrl. Move avatarUrl onto the
  * main users/{uid} doc or batch via chunked `in` queries once channels
@@ -73,7 +47,6 @@ interface MmUser {
   last_name: string;
 }
 
-/** Read the caller's MM personal access token from Firestore. */
 async function getCallerMmToken(uid: string): Promise<string | null> {
   const secretDoc = await db.doc(`users/${uid}/secrets/mattermost`).get();
   const token = secretDoc.data()?.personalToken;
@@ -159,7 +132,6 @@ async function hydrateFromFirestore(
     userChunks.push(snap.docs.map((doc) => ({ uid: doc.id, data: doc.data() })));
   }
 
-  // Collect { uid, mmId, displayName } entries, then batch-fetch avatars.
   const baseEntries = userChunks.flat().flatMap((u) => {
     const mmId = u.data?.mattermost?.userId;
     if (!mmId) return [];
@@ -170,7 +142,6 @@ async function hydrateFromFirestore(
     }];
   });
 
-  // Fetch each avatar from users/{uid}/profile/public in parallel.
   await Promise.all(
     baseEntries.map(async (entry) => {
       const publicDoc = await db.doc(`users/${entry.uid}/profile/public`).get();
@@ -184,8 +155,6 @@ async function hydrateFromFirestore(
 
   return byMmId;
 }
-
-// ── GET /:kind/:id/members ──────────────────────────────────────────────────
 
 router.get("/:kind/:id/members", async (req: Request, res: Response) => {
   const uid = req.uid!;
@@ -218,7 +187,6 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
       return;
     }
 
-    // Resolve owner's MM user ID so we can flag the owner in the response.
     let ownerMmUserId: string | null = null;
     if (ownerUid) {
       const od = await db.doc(`users/${ownerUid}`).get();
@@ -250,7 +218,6 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
       return;
     }
 
-    // Hydrate with MM user profiles (bulk).
     const mmUserIds = mmMembers.map((m) => m.user_id);
     const mmUsers = (await mmApi(
       `/users/ids`,
@@ -260,7 +227,6 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
     )) as MmUser[];
     const mmUsersById = new Map(mmUsers.map((u) => [u.id, u]));
 
-    // Hydrate with Firestore profile data (best-effort).
     const firestoreByMmId = await hydrateFromFirestore(mmUserIds);
 
     const members: MemberResponse[] = mmMembers.map((m) => {
@@ -281,7 +247,6 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
       };
     });
 
-    // Owner first, then alphabetical by displayName.
     members.sort((a, b) => {
       if (a.role === "owner" && b.role !== "owner") return -1;
       if (a.role !== "owner" && b.role === "owner") return 1;
@@ -295,8 +260,6 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
   }
 });
 
-// ── DELETE /:kind/:id/members/:mmUserId ─────────────────────────────────────
-//
 // Owner-only. Keyed by MM user ID, not Firestore UID, so owners can evict
 // users who are mid-provisioning and don't have a Firestore profile yet
 // (the reason this endpoint exists at all — see PR #462 review #8).

@@ -1,29 +1,9 @@
-/**
- * Unit tests for `applyConfigPatch` — the single path for runtime config
- * writes.
- *
- * Contract (post 2026.4.24):
- *   - Happy path: configGet → buildPatch → configPatch → return { mode: 'rpc' }
- *   - Transient error (connect-failed, timeout, rpc-error): retry with
- *     capped exponential backoff. Default `maxRetries: Infinity` — tests
- *     inject a small finite number to exercise the exhaustion path.
- *   - Hash-mismatch: refetch hash and retry immediately (no backoff);
- *     also unbounded by default.
- *   - Permanent error (auth-failed, invalid-patch, invalid-response):
- *     throw immediately. No file-write fallback — the cascading chokidar
- *     reload from fallback was what made one slow restore blip every
- *     tenant's MM WS, which is exactly the outcome we don't want.
- *
- * Tests inject a `sleep` stub so retry delays don't burn real time.
- */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { applyConfigPatch } from "../lib/apply-config-patch.js";
 import { GatewayRpcError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
-
-// ── Fixtures ────────────────────────────────────────────────────────────────
 
 function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
   return {

@@ -1,9 +1,3 @@
-/**
- * Unit tests for the Ed25519 device-identity helpers ported from the
- * OpenClaw client. These are pure — no Firebase, no sockets — so they
- * double as a regression guard against drift vs OpenClaw's server-side
- * verifier.
- */
 import { describe, it, expect } from 'vitest';
 import {
   generateIdentity,
@@ -16,7 +10,7 @@ import * as crypto from 'node:crypto';
 describe('generateIdentity', () => {
   it('returns a stable-shape identity with Ed25519 PEM keys + deviceId', () => {
     const id = generateIdentity();
-    expect(id.deviceId).toMatch(/^[0-9a-f]{64}$/); // sha256 hex
+    expect(id.deviceId).toMatch(/^[0-9a-f]{64}$/);
     expect(id.publicKeyPem).toMatch(/^-----BEGIN PUBLIC KEY-----/);
     expect(id.privateKeyPem).toMatch(/^-----BEGIN PRIVATE KEY-----/);
   });
@@ -59,7 +53,6 @@ describe('buildDeviceAuthPayloadV3', () => {
       platform: '  Linux  ',
       deviceFamily: '  Pod  ',
     });
-    // v3 | d | gateway-client | backend | operator | "" | 0 | "" | n | linux | pod
     expect(p.endsWith('|linux|pod')).toBe(true);
   });
 
@@ -73,7 +66,7 @@ describe('buildDeviceAuthPayloadV3', () => {
       signedAtMs: 0,
       nonce: 'n',
     });
-    expect(p).toContain('||n||'); // token empty, platform empty, deviceFamily empty
+    expect(p).toContain('||n||');
   });
 });
 
@@ -92,8 +85,6 @@ describe('signConnectDevice', () => {
       signedAtMs: 1000,
     });
 
-    // Re-derive the payload and verify the signature with the identity's
-    // public key — this is what the OpenClaw server does on the other end.
     const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
       clientId: 'gateway-client',

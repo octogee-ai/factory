@@ -1,29 +1,9 @@
-/**
- * Pre-boot config patching — pure function tests.
- *
- * Pinning the contract for `applyPreBootPatches(config, env)`:
- *   - Sets `tools.profile = "coding"` (gateway-wide policy that matches a
- *     fresh `openclaw` install). Reconciled on every boot.
- *   - Reconciles MM bot token + baseUrl from env into
- *     `channels.mattermost.accounts.default.*` and
- *     `channels.mattermost.baseUrl`.
- *   - Forces `channels.mattermost.commands.native = false` at the channel
- *     level AND on every per-account entry (regression: MM slash-command
- *     storm on reconnect).
- *   - Strips stale octogee-router plugin keys; removes the plugin entirely
- *     when `OCTOGEE_ROUTER_ENABLED === "false"`.
- *   - Returns `true` iff the config was mutated, so the caller can decide
- *     whether to atomic-write.
- *   - Pure: no I/O, no `process.env` reads — env is a parameter.
- */
 import { describe, it, expect } from "vitest";
 import { applyPreBootPatches } from "../pre-boot-config.js";
 
 function emptyConfig(): any {
   return {};
 }
-
-// ── tools.profile = coding ───────────────────────────────────────────────────
 
 describe("applyPreBootPatches — tools.profile (new)", () => {
   it("sets tools.profile=coding on a config with no tools field", () => {
@@ -54,8 +34,6 @@ describe("applyPreBootPatches — tools.profile (new)", () => {
     expect(config.tools.profile).toBe("coding");
   });
 });
-
-// ── MM commands.native = false ───────────────────────────────────────────────
 
 describe("applyPreBootPatches — MM commands.native", () => {
   it("forces commands.native=false at the channel level when missing", () => {
@@ -98,8 +76,6 @@ describe("applyPreBootPatches — MM commands.native", () => {
   });
 });
 
-// ── MM bot token + baseUrl sync from env ─────────────────────────────────────
-
 describe("applyPreBootPatches — MM env sync", () => {
   it("syncs MM_BOT_TOKEN into accounts.default.botToken", () => {
     const config: any = { channels: { mattermost: { accounts: {} } } };
@@ -129,8 +105,6 @@ describe("applyPreBootPatches — MM env sync", () => {
         mattermost: { accounts: { default: { botToken: "same-tok" } } },
       },
     };
-    // Have to start with profile already coding + commands.native false +
-    // url already matching to isolate the bot-token contribution to `changed`.
     config.tools = { profile: "coding" };
     config.channels.mattermost.commands = { native: false };
     config.channels.mattermost.accounts.default.commands = { native: false };
@@ -148,8 +122,6 @@ describe("applyPreBootPatches — MM env sync", () => {
     expect(config.channels.mattermost.baseUrl).toBe("https://chat.example.com");
   });
 });
-
-// ── octogee-router stale-key cleanup ─────────────────────────────────────────
 
 describe("applyPreBootPatches — octogee-router cleanup", () => {
   it("removes the router from plugins.allow + plugins.entries when OCTOGEE_ROUTER_ENABLED=false", () => {
@@ -199,8 +171,6 @@ describe("applyPreBootPatches — octogee-router cleanup", () => {
   });
 });
 
-// ── No-change path ───────────────────────────────────────────────────────────
-
 describe("applyPreBootPatches — no-change reporting", () => {
   it("returns false when nothing in the config needs touching", () => {
     const config: any = {
@@ -227,10 +197,3 @@ describe("applyPreBootPatches — no-change reporting", () => {
   });
 });
 
-// ── gateway.controlPlane.writeRateLimit reconciliation removed ───────────────
-// The 60-per-60s bump only worked alongside our fork patch that exposed
-// the field as a config knob, and that fork patch was dropped at the
-// v2026.4.29 roll-forward. Pre-boot writes of an unknown field were dead
-// drift — see the block-removal comment in pre-boot-config.ts. Restore both
-// when the rate limit becomes a bottleneck again and the field becomes
-// configurable upstream or back on our fork.

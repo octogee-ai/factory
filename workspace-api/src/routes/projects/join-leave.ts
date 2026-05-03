@@ -1,14 +1,3 @@
-/**
- * Project membership — join + leave endpoints.
- *
- * POST /:wid/:pid/join  — add the caller as a project member (not owner).
- * POST /:wid/:pid/leave — remove the caller from a project they don't own.
- *
- * Membership model (epic #428): workspace and project membership are
- * independent. Joining a project adds the caller to the MM team for channel
- * access but does NOT add them to the workspace members subcollection.
- * Leaving a project removes them from the project channel only.
- */
 import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security";
 import { db, FieldValue } from "../../lib/db";

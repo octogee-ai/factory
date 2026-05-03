@@ -1,9 +1,3 @@
-/**
- * Unit tests for the Firestore → gateway-URL resolver.
- *
- * Uses a minimal in-memory stub of the firebase-admin Firestore shape so
- * the test never touches a real client.
- */
 import { describe, it, expect } from 'vitest';
 import {
   canonicalGatewayUrl,
@@ -32,7 +26,6 @@ describe('canonicalGatewayUrl', () => {
     expect(canonicalGatewayUrl('gw-a', 'octogee-test', '18789')).toBe(
       'http://octogee-gateway.octogee-test.svc.cluster.local:18789',
     );
-    // gatewayId argument is retained for signature stability but unused:
     expect(canonicalGatewayUrl('gw-prod', 'octogee', '18789')).toBe(
       'http://octogee-gateway.octogee.svc.cluster.local:18789',
     );
@@ -54,9 +47,6 @@ describe('resolveGatewayUrl', () => {
   });
 
   it('honors overrideUrl (sidecar mode) and skips the gateways/{id} read', async () => {
-    // gateways/{id} is intentionally absent — proves we never read it when
-    // the override is set. If the resolver fell through, the missing doc
-    // would throw `gateway-not-registered`.
     const db = mkDb({
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
     });

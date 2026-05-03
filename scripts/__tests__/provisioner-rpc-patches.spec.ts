@@ -1,19 +1,3 @@
-/**
- * Unit tests for the patch-builder side of `provisionSteps.ts`. These are the
- * pure functions that produce merge-patch fragments handed to OpenClaw's
- * `config.patch` RPC — compared to `wireCoachMattermostBindings` /
- * `wireCoachMattermostAccount` / `registerCoachAgent` which remain the
- * in-place mutators used by the file-write fallback.
- *
- * What we lock in:
- *   - Builder output is a function of (current snapshot, ctx/mmUpdate only) —
- *     no side effects on `current`.
- *   - Existing bindings for OTHER agents are preserved.
- *   - Bindings with the same (agentId, peer.id) pair are REPLACED (same
- *     legacy-binding-upgrade contract as the in-place mutator).
- *   - The coach account entry is OMITTED when token / allowlist is missing
- *     (never send an empty-allowlist or placeholder-token account).
- */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildCoachAgentEntry,
@@ -65,8 +49,6 @@ afterEach(() => {
   else process.env.MM_ADMIN_USER_ID = ORIG_ADMIN_ID;
 });
 
-// ── buildCoachAgentEntry ────────────────────────────────────────────────────
-
 describe("buildCoachAgentEntry", () => {
   it("produces an agent entry keyed by octogee-{slug}-coach", () => {
     const entry = buildCoachAgentEntry(mkCtx()) as Record<string, unknown>;
@@ -82,8 +64,6 @@ describe("buildCoachAgentEntry", () => {
     expect(a).toEqual(b);
   });
 });
-
-// ── buildCoachBindings ──────────────────────────────────────────────────────
 
 describe("buildCoachBindings", () => {
   it("emits one binding per channel with accountId pinned to {slug}-coach", () => {
@@ -106,19 +86,16 @@ describe("buildCoachBindings", () => {
     const bindings = buildCoachBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
     const otherAgentEntries = bindings.filter((b: any) => b.agentId === "octogee-other-coach");
     expect(otherAgentEntries).toHaveLength(1);
-    // No mutation on input
     expect(existing.bindings).toHaveLength(1);
   });
 
   it("REPLACES a pre-existing binding that matches on (agentId, peer.id)", () => {
-    // Pre-existing binding WITHOUT accountId (legacy multi-account-less).
     const existing = {
       bindings: [
         { agentId: AGENT_ID, match: { channel: "mattermost", peer: { kind: "group", id: "ch-coach-dm" } } },
       ],
     };
     const bindings = buildCoachBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
-    // Old one replaced in place — not duplicated
     const coachDmBindings = bindings.filter((b: any) => b.agentId === AGENT_ID && b.match?.peer?.id === "ch-coach-dm");
     expect(coachDmBindings).toHaveLength(1);
     expect(coachDmBindings[0].match.accountId).toBe(ACCOUNT_ID);
@@ -130,8 +107,6 @@ describe("buildCoachBindings", () => {
     expect(existing.bindings).toEqual([]);
   });
 });
-
-// ── buildCoachAccountFragment ───────────────────────────────────────────────
 
 describe("buildCoachAccountFragment", () => {
   it("returns the account entry keyed by {slug}-coach with allowlist scoped to owner + admin", () => {
@@ -147,7 +122,6 @@ describe("buildCoachAccountFragment", () => {
   it("omits the account entry when no coach PAT is available", () => {
     const frag = buildCoachAccountFragment(SLUG, mkMmUpdate({ _coachPersonalToken: "" }));
     expect(frag.accounts).toEqual({});
-    // defaultAccount is always safe to assert — it's independent of the PAT.
     expect(frag.defaultAccount).toBe("default");
   });
 

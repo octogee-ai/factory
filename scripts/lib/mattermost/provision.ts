@@ -1,34 +1,3 @@
-/**
- * `provisionMattermostUser` — the big end-to-end "new Builder MM setup"
- * flow. Called once per new customer during workspace provisioning.
- *
- * Does (in order):
- *   1. Idempotency short-circuit if user doc already has an MM userId
- *      (and backfills the coach PAT if missing — for pre-spec customers).
- *   2. Create MM user (reuse by username or email if it already exists,
- *      reactivating if deleted).
- *   3. Create the per-workspace team (`name = slug`; display name comes
- *      from `computeWorkspaceDisplayName`).
- *   4. Archive the auto-created `town-square` / `off-topic` / `general`
- *      MM channels so they don't clutter the admin sidebar.
- *   5. Join user + admin bot to the workspace team; join user to the
- *      community team.
- *   6. Upload avatar (OAuth photo > Gravatar > none).
- *   7. Auto-join community channels (legacy — for workspaces using the
- *      shared team).
- *   8. Create the three workspace channels (coach, general, admin — all
- *      type "P"). Admin channel EXCLUDES the builder (#170).
- *   9. Mint the builder's personal access token.
- *   10. Create the `{slug}-coach` MM bot, join it to the three channels,
- *      mint a PAT for it, and post the onboarding greeting to the coach
- *      channel.
- *
- * Returns the `mmUpdate` map that `markProvisioningComplete` flattens
- * onto `users/{uid}/system/config`. `_coachPersonalToken` is EPHEMERAL —
- * filtered out at write time because the authoritative copy lives at
- * `users/{uid}/secrets/coachMattermost`.
- */
-
 import * as crypto from "crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { log } from "../config.js";
@@ -192,7 +161,6 @@ export async function provisionMattermostUser(
       return {};
     }
 
-    // ── Create workspace team (team-per-workspace: Phase 4) ──────────────────
     // Team name = username (v3 §2 — username is everything).
     // Team display_name is MM-canonical and computed deterministically from
     // (slug, firstName, vibe). See shared/types/display-names.ts and the
@@ -247,7 +215,6 @@ export async function provisionMattermostUser(
       }
     }
 
-    // Add admin bot to workspace team
     if (MM_ADMIN_USER_ID) {
       await mmApiCall("POST", `/teams/${teamId}/members`, {
         team_id: teamId,
@@ -256,7 +223,6 @@ export async function provisionMattermostUser(
       log(`[mattermost] admin bot added to workspace team ${teamName}`);
     }
 
-    // Join user to community team
     const communityTeamId = MM_COMMUNITY_TEAM_ID;
     if (communityTeamId && communityTeamId !== teamId) {
       await mmApiCall("POST", `/teams/${communityTeamId}/members`, {
@@ -266,7 +232,6 @@ export async function provisionMattermostUser(
       log(`[mattermost] joined community team ${communityTeamId}`);
     }
 
-    // Upload avatar
     if (photoURL) {
       const ok = await mmUploadAvatar(mmUser.id, photoURL);
       if (ok) log(`[mattermost] avatar uploaded from OAuth photo`);
@@ -295,8 +260,6 @@ export async function provisionMattermostUser(
         `[mattermost] joined ${communityChannelIds.length} community + ${communityActivityChannelIds.length} activity siblings`,
       );
     }
-
-    // ── Create channels in workspace team ───────────────────────────────────
 
     // Octo coach channel — MM type "P" (private) so octogee-admin can
     // observe, but rendered as a DM in the UI by convention. Display name
@@ -375,7 +338,6 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ failed to create admin channel for ${slug} — non-fatal`);
     }
 
-    // Create personal access token
     const tokenResult = await mmApiCall("POST", `/users/${mmUser.id}/tokens`, {
       description: "Octogee workspace chat",
     });

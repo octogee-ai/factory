@@ -1,32 +1,3 @@
-/**
- * Unit tests for the multi-account MM config emitted by boot-sync.
- *
- * Current shape (post-epic):
- *   - `default` account = octogee-bot's token. NOT written here — OpenClaw
- *     materializes it at load time by migrating the top-level `botToken`
- *     that the entrypoint + pre-boot-config seed. System agents use it.
- *   - `{slug}-coach` account = the customer's coach PAT, with
- *     `groupPolicy: "allowlist"` and `groupAllowFrom: [customer, admin]`.
- *     Only sees that tenant's channel events — isolation at the MM auth
- *     layer.
- *
- * Historical note: an earlier iteration also emitted an `admin` account
- * with `botToken: "${MM_BOT_TOKEN}"` as a placeholder. OpenClaw's env-var
- * substitution only fires for the account literally named "default", so
- * `admin` ended up sending the literal placeholder string → 401 →
- * reconnect loop → event-loop starvation that prevented other per-account
- * WSes from starting. That path is gone; see the regression guard below.
- *
- * Three extracted helpers are tested:
- *   - `fetchCoachTokens(deps, customers)` — async, reads each customer's
- *     `users/{uid}/secrets/coachMattermost.personalToken` from Firestore.
- *   - `buildMattermostAccounts(customers, tokens, adminMmUserId, warn?)` —
- *     pure, returns the accounts map: one `{slug}-coach` entry per
- *     customer with a mint'd PAT AND a non-empty `groupAllowFrom`.
- *   - `buildCustomerBindings(customers)` — pure, returns the flat list of
- *     `{ agentId, match: { channel, accountId, peer } }` bindings.
- */
-
 import { describe, it, expect, vi } from "vitest";
 import {
   buildMattermostAccounts,
@@ -35,8 +6,6 @@ import {
   mergeAccountsPreservingDefault,
   type CoachTokenDeps,
 } from "../lib/openclaw-config-builders.js";
-
-// ── fetchCoachTokens ────────────────────────────────────────────────────────
 
 describe("fetchCoachTokens", () => {
   function mkDeps(
@@ -129,16 +98,7 @@ describe("fetchCoachTokens", () => {
   });
 });
 
-// ── buildMattermostAccounts ─────────────────────────────────────────────────
-
 describe("buildMattermostAccounts", () => {
-  // Regression guard: NEVER emit an `admin` account. OpenClaw's env-var
-  // `${MM_BOT_TOKEN}` substitution only fires for the account literally
-  // named "default", so `admin: { botToken: "${MM_BOT_TOKEN}" }` sends the
-  // literal placeholder as a bearer token → MM 401 → reconnect loop →
-  // event-loop starvation that prevents coach WSes from starting. The
-  // `default` account exists at runtime via OpenClaw's auto-migration of
-  // the top-level botToken (written by pre-boot-config).
   it("emits NO entries on empty input — no admin, no placeholders", () => {
     const accounts = buildMattermostAccounts([], new Map());
     expect(accounts).toEqual({});
@@ -165,10 +125,6 @@ describe("buildMattermostAccounts", () => {
       ]),
       "mm-admin",
     );
-    // Per-account `commands.native: false` is pinned on every coach account
-    // so the MM monitor's slash-command registration dance early-returns
-    // instead of making 50+ HTTP calls to MM on every account mount. See
-    // buildMattermostAccounts for the rationale on the interface comment.
     expect(accounts["chris-coach"]).toEqual({
       botToken: "tok-chris",
       groupPolicy: "allowlist",
@@ -187,7 +143,7 @@ describe("buildMattermostAccounts", () => {
     const accounts = buildMattermostAccounts(
       [
         { uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" },
-        { uid: "uid-b", slug: "sam" }, // no token
+        { uid: "uid-b", slug: "sam" },
       ],
       new Map([["uid-a", "tok-chris"]]),
       "mm-admin",
@@ -200,11 +156,6 @@ describe("buildMattermostAccounts", () => {
     expect(Object.values(accounts).every((a) => a.botToken.length > 0)).toBe(true);
   });
 
-  // Regression guard: each customer's token must land under their OWN
-  // accountId. A Map-lookup bug that indexed by slug-position instead of
-  // uid could cross tenants — this test drives three customers and asserts
-  // each account's token matches its uid source AND each allowlist
-  // contains that customer's OWN MM user id (not another tenant's).
   it("routes tokens + allowlists per-uid — no cross-workspace bleed", () => {
     const accounts = buildMattermostAccounts(
       [
@@ -225,30 +176,20 @@ describe("buildMattermostAccounts", () => {
   });
 
   it("coach-only-for-admin: when customerMmUserId is absent, allowlist is {admin} — the customer cannot trigger their own coach", () => {
-    // This is a tenant-breaking outcome (customer can't use their own
-    // coach), not a graceful fallback. Documented here because the emit
-    // still happens — the builder doesn't have enough signal to know if
-    // this is a re-provisioning race or actual data corruption. Operators
-    // should fix the missing customerMmUserId in Firestore.
     const accounts = buildMattermostAccounts(
-      [{ uid: "uid-a", slug: "chris" /* no customerMmUserId */ }],
+      [{ uid: "uid-a", slug: "chris" }],
       new Map([["uid-a", "tok-chris"]]),
       "mm-admin",
     );
     expect(accounts["chris-coach"].groupAllowFrom).toEqual(["mm-admin"]);
   });
 
-  // Regression guard for P1-4. Before: `groupAllowFrom: []` + `groupPolicy:
-  // "allowlist"` means every group message is silently dropped. After:
-  // skip the account upsert entirely + warn, so the gap surfaces as
-  // "coach offline" (visible) rather than "coach ignores messages"
-  // (invisible).
   it("REFUSES to emit when both customerMmUserId and adminMmUserId are missing (warns; skips account)", () => {
     const warn = vi.fn();
     const accounts = buildMattermostAccounts(
-      [{ uid: "uid-a", slug: "chris" /* no customerMmUserId */ }],
+      [{ uid: "uid-a", slug: "chris" }],
       new Map([["uid-a", "tok-chris"]]),
-      undefined /* no admin */,
+      undefined,
       warn,
     );
     expect(accounts["chris-coach"]).toBeUndefined();
@@ -257,8 +198,6 @@ describe("buildMattermostAccounts", () => {
     );
   });
 });
-
-// ── buildCustomerBindings ───────────────────────────────────────────────────
 
 describe("buildCustomerBindings", () => {
   it("emits one binding per customer channel with accountId pinned to {slug}-coach", () => {
@@ -288,12 +227,6 @@ describe("buildCustomerBindings", () => {
     ]);
   });
 
-  // Core multi-tenant invariant. Under the OLD single-account model, an MM
-  // event for chris-ch-1 could theoretically fan out to sam's agent if
-  // bindings matched only on channelId. Under the new model every binding
-  // pins accountId, so OpenClaw filters events at the WS-receiver layer
-  // before agent resolution. This test locks that pinning so a future
-  // refactor that drops accountId fails loudly.
   it("NEVER emits a binding without accountId (multi-tenant isolation lock)", () => {
     const bindings = buildCustomerBindings([
       { slug: "chris", channels: [{ channelId: "ch-1" }] },
@@ -326,13 +259,11 @@ describe("buildCustomerBindings", () => {
   });
 });
 
-// ── mergeAccountsPreservingDefault ─────────────────────────────────────────
-
 describe("mergeAccountsPreservingDefault", () => {
   it("takes all coach entries from the fresh list and preserves `default` from existing", () => {
     const existing = {
       default: { botToken: "bot-token-xyz" },
-      "chris-coach": { botToken: "stale-coach-abc" }, // will be dropped (not in fresh)
+      "chris-coach": { botToken: "stale-coach-abc" },
     };
     const coach = {
       "marie-coach": { botToken: "marie-tok", groupPolicy: "allowlist" as const, groupAllowFrom: ["u1"] },
@@ -342,7 +273,6 @@ describe("mergeAccountsPreservingDefault", () => {
       default: { botToken: "bot-token-xyz" },
       "marie-coach": { botToken: "marie-tok", groupPolicy: "allowlist", groupAllowFrom: ["u1"] },
     });
-    // Stale coach not in fresh list is dropped — nuked-customer cleanup.
     expect(merged).not.toHaveProperty("chris-coach");
   });
 
@@ -359,7 +289,7 @@ describe("mergeAccountsPreservingDefault", () => {
   it("preserves ONLY `default` — stale non-coach entries (e.g. legacy `admin`) are dropped", () => {
     const existing = {
       default: { botToken: "bot" },
-      admin: { botToken: "legacy-admin-that-must-not-survive" }, // historical footgun
+      admin: { botToken: "legacy-admin-that-must-not-survive" },
     };
     const merged = mergeAccountsPreservingDefault(existing, {});
     expect(merged).toEqual({ default: { botToken: "bot" } });
@@ -375,11 +305,6 @@ describe("mergeAccountsPreservingDefault", () => {
   });
 
   it("REGRESSION: reboot with ≥1 customer must retain `default` (the hang-on-reboot bug)", () => {
-    // Scenario: pod rebooted, existing on-disk openclaw.json has both
-    // `default` (from template) and `chris1969-coach` (from prior session).
-    // boot-sync regens with Firestore listing chris1969 as still-present.
-    // Pre-fix: `accounts: coachAccounts` replaced the whole map, dropping
-    // `default`, which tanked OpenClaw's channel-init.
     const existing = {
       default: { botToken: "octogee-bot-token" },
       "chris1969-coach": { botToken: "stale-pat", groupPolicy: "allowlist" as const, groupAllowFrom: [] },

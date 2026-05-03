@@ -1,14 +1,3 @@
-/**
- * Unit tests for formatUsageLogLine() — the `✓ usage: ...` line emitted
- * per turn by the gateway provisioner.
- *
- * Traceability is by (uid, workspace slug). The API key identity is
- * intentionally NOT in the line — see the module header for the
- * rationale (JSONL doesn't expose which key billed each turn; the
- * customer's provider dashboard is the source of truth for that).
- *
- * Pure function; no Firebase, no filesystem.
- */
 import { test, expect, describe } from "vitest";
 import { formatUsageLogLine } from "../../scripts/lib/usage-log-line";
 
@@ -47,11 +36,6 @@ describe("formatUsageLogLine", () => {
   });
 
   test("line never contains raw secret material — the format does not include keys", () => {
-    // Belt-and-suspenders: even if a future field accidentally surfaces a
-    // key-shaped string in any contributing field, the formatter shape
-    // doesn't include API-key tokens. Lock in the absence of `key=` and
-    // `sk-ant-` prefixes so a regression that re-introduces fingerprint
-    // plumbing fails this test.
     const line = formatUsageLogLine(base);
     expect(line).not.toContain("key=");
     expect(line).not.toMatch(/sk-ant-api\d+/);

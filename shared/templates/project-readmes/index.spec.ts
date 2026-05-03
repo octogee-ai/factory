@@ -1,8 +1,3 @@
-/**
- * Tests for the README-template renderer shared between workspace-api
- * (UI-driven project creation) and scripts/lib/projects.ts (Face-driven
- * project creation). See PROJECTS-CANVAS-SPEC §D3.
- */
 import { describe, it, expect } from "vitest";
 import { renderReadmeTemplate, substitute } from "./index.js";
 
@@ -42,7 +37,6 @@ describe("renderReadmeTemplate", () => {
     expect(out).toContain("A tiny rogue-like");
     expect(out).toContain("[@dannyboy](dannyboy)");
     expect(out).toContain("2026-04-19");
-    // Game-specific section appears.
     expect(out).toMatch(/engine/i);
   });
 
@@ -75,7 +69,6 @@ describe("renderReadmeTemplate", () => {
     const t = renderReadmeTemplate("trip", baseVars);
     const s = renderReadmeTemplate("social", baseVars);
     const p = renderReadmeTemplate("planner", baseVars);
-    // Distinct marker phrases per type guard against regression to default.
     expect(g).toMatch(/engine/i);
     expect(t).toMatch(/itinerary/i);
     expect(s).toMatch(/audience/i);

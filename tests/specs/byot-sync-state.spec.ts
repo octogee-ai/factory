@@ -1,12 +1,3 @@
-/**
- * Unit tests for deriveDesiredByotState() — the pure decision function
- * that maps a Firestore user doc to "should this customer have
- * auth-profiles.json written right now?"
- *
- * Guards the provisioner against writing BYOT profiles for customers
- * whose provisioning isn't complete (the agent dir wouldn't even exist
- * yet) or whose byotActive flag isn't set.
- */
 import { describe, test, expect } from "vitest";
 import { deriveDesiredByotState } from "../../scripts/lib/byot-sync";
 
@@ -93,9 +84,6 @@ describe("deriveDesiredByotState", () => {
   });
 
   test("disabled when username is missing, even if provisioning status is complete", () => {
-    // Per DATA-MODEL-REVIEW §11: username IS the workspace slug. No
-    // separate provisioning.openclaw.slug fallback remains — a user doc
-    // without a username is unprovisioned for slug-derivation purposes.
     const out = deriveDesiredByotState({
       byotActive: true,
       provisioning: { openclaw: { status: "complete" } },

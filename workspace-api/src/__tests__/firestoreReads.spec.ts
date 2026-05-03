@@ -1,20 +1,3 @@
-/**
- * Unit tests for the typed Firestore read wrappers.
- *
- * Covers each reader:
- *   - returns null on missing doc
- *   - returns a typed value on a present doc (the `as Project` cast is
- *     a compile-time assertion — the runtime contract is "you get
- *     whatever Firestore returned, typed")
- *
- * readWorkspace additionally gates on USERNAME_RE so a malformed slug
- * can't steer the Firestore path. That belt-and-suspenders check gets
- * its own suite below.
- *
- * Firestore is stubbed via vi.mock('../lib/db') the same way fileTarget.spec.ts
- * and withProject.spec.ts do it — each `db.doc(path)` returns a ref whose
- * `.get()` reads from a shared `firestoreData` map.
- */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const firestoreData: Record<string, any> = {};
@@ -35,7 +18,6 @@ vi.mock('../lib/db', () => ({
   },
 }));
 
-// Import AFTER the mock so the readers see the stub.
 import {
   readAgent,
   readChannel,
@@ -47,8 +29,6 @@ import {
 beforeEach(() => {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];
 });
-
-// ─── readProject ────────────────────────────────────────────────────────────
 
 describe('readProject', () => {
   it('returns null when the doc does not exist', async () => {
@@ -74,8 +54,6 @@ describe('readProject', () => {
   });
 });
 
-// ─── readWorkspace ──────────────────────────────────────────────────────────
-
 describe('readWorkspace', () => {
   it('returns null when the doc does not exist', async () => {
     expect(await readWorkspace('nobody')).toBeNull();
@@ -99,7 +77,6 @@ describe('readWorkspace', () => {
   });
 
   it('returns null for a slug that fails the username regex (no Firestore read)', async () => {
-    // Even if a doc happens to exist under that path, the slug gate trips first.
     firestoreData['workspaces/BAD SLUG'] = { id: 'x', ownerUid: 'u', slug: 'x' };
     expect(await readWorkspace('BAD SLUG')).toBeNull();
   });
@@ -108,8 +85,6 @@ describe('readWorkspace', () => {
     expect(await readWorkspace('../other')).toBeNull();
   });
 });
-
-// ─── readAgent ──────────────────────────────────────────────────────────────
 
 describe('readAgent', () => {
   it('returns null when the doc does not exist', async () => {
@@ -130,8 +105,6 @@ describe('readAgent', () => {
   });
 });
 
-// ─── readMember ─────────────────────────────────────────────────────────────
-
 describe('readMember', () => {
   it('returns null when the doc does not exist', async () => {
     const ref = makeDocRef('workspaces/alice/projects/game/members/u-bob') as any;
@@ -150,8 +123,6 @@ describe('readMember', () => {
     expect(member!.role).toBe('member');
   });
 });
-
-// ─── readChannel ────────────────────────────────────────────────────────────
 
 describe('readChannel', () => {
   it('returns null when the doc does not exist', async () => {

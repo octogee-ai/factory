@@ -1,22 +1,3 @@
-/**
- * Octogee identity — the canonical module.
- *
- * Single source of truth for every rule about usernames, channel names,
- * and project identifiers. Every package (app, workspace-api, chat-proxy,
- * functions, scripts, site, tests) imports from here directly. No mirrors,
- * no re-export shims, no drift-pin tests.
- *
- * Spec: `docs/DATA-MODEL-REVIEW.md` §11 (v3.1 finalization — username IS
- * the workspace slug, the MM team name, the Gitea team name, the coach
- * id, the URL path segment; derived channel names use it as a prefix).
- *
- * Compatibility: `USERNAME_RE` is a strict subset of Mattermost's team-name
- * regex (`server/public/model/team.go`). The length budget below fits
- * inside MM's 64-char channel-name cap by construction.
- */
-
-// ── Length + regex constants ─────────────────────────────────────────────────
-
 /** MM's hard cap on channel names. Our generator budget fits inside this. */
 export const CHANNEL_NAME_MAX_LENGTH = 64;
 
@@ -48,8 +29,6 @@ export const USERNAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const PROJECT_ID_RE = /^[a-z0-9]+$/;
 export const CUSTOM_CHANNEL_RE = /^[a-z0-9]+$/;
 
-// ── Reserved sets ────────────────────────────────────────────────────────────
-
 export const PROJECT_DISCRIMINATOR = 'proj' as const;
 export const COMMUNITY_PREFIX = 'community' as const;
 
@@ -72,21 +51,12 @@ export const RESERVED_USERNAMES: ReadonlySet<string> = new Set<string>([
   COMMUNITY_PREFIX,
 ]);
 
-// ── Validators ───────────────────────────────────────────────────────────────
-
 export function isValidUsername(name: unknown): name is string {
   if (typeof name !== 'string') return false;
   if (name.length < USERNAME_MIN_LENGTH) return false;
   if (name.length > USERNAME_MAX_LENGTH) return false;
   if (!USERNAME_RE.test(name)) return false;
   if (RESERVED_USERNAMES.has(name)) return false;
-  // Any hyphen-delimited segment that collides with a canonical delimiter
-  // or reserved channel suffix would create a parsing ambiguity in
-  // {username}-based channel names. Example: with the segment-level check
-  // off, `foo-proj-bar-general` could parse as either
-  // `{foo-proj-bar}-general` (workspace) or `{foo}-proj-bar-general`
-  // (project). We reject at validation so every channel name has a
-  // single canonical parse. See also deriveJoinedUsernames().
   for (const segment of name.split('-')) {
     if (RESERVED_USERNAMES.has(segment)) return false;
   }
@@ -134,8 +104,6 @@ export function isValidCustomChannelName(name: unknown): name is string {
   return CUSTOM_CHANNEL_RE.test(name);
 }
 
-// ── Channel name generators ──────────────────────────────────────────────────
-
 export function workspaceGeneralChannelName(username: string): string {
   return `${username}-general`;
 }
@@ -160,8 +128,6 @@ export function projectChannelName(username: string, project: string, channel: s
   return `${username}-${PROJECT_DISCRIMINATOR}-${project}-${channel}`;
 }
 
-// ── Recognizers ──────────────────────────────────────────────────────────────
-
 export function isMmSystemChannel(name: string): boolean {
   return MM_SYSTEM_CHANNELS.has(name);
 }
@@ -169,8 +135,6 @@ export function isMmSystemChannel(name: string): boolean {
 export function isCommunityChannel(name: string): boolean {
   return typeof name === 'string' && name.startsWith(`${COMMUNITY_PREFIX}-`);
 }
-
-// ── Parser ───────────────────────────────────────────────────────────────────
 
 export type ParsedChannel =
   | { kind: 'workspace'; username: string; channel: string; reserved: boolean }
@@ -201,7 +165,6 @@ export function parseChannelName(name: string, username: string): ParsedChannel 
 
   const parts = rest.split('-');
 
-  // Project channel: proj-{project}-{channel} — exactly three segments.
   if (parts.length === 3 && parts[0] === PROJECT_DISCRIMINATOR) {
     const project = parts[1];
     const channel = parts[2];
@@ -212,7 +175,6 @@ export function parseChannelName(name: string, username: string): ParsedChannel 
     return { kind: 'unknown', name };
   }
 
-  // Workspace channel: exactly one segment (reserved or custom, both no-hyphen).
   if (parts.length === 1) {
     const channel = parts[0];
     const reserved = (RESERVED_WORKSPACE_CHANNELS as readonly string[]).includes(channel);

@@ -1,22 +1,3 @@
-/**
- * Tier template file discovery — `listTierTemplateFiles`.
- *
- * Contract: each tier's directory under `templates/tiers/{tier}/` is the
- * canonical source of truth for which files get copied into the customer
- * workspace at provision time. Adding a file to a tier directory means it
- * gets shipped; removing one means it doesn't. No file lists hardcoded
- * elsewhere — that drift caused the F&F trial-template change to need a
- * coordinated edit in two places (template dir + provisionSteps.ts), and
- * we'd rather have one place.
- *
- * This spec pins:
- *   - Trial-only files (e.g. IDENTITY.md) ship for trial without leaking
- *     to other tiers.
- *   - Files removed from one tier (e.g. MEMORY.md from trial) don't ship
- *     for that tier even though sibling tiers still have them.
- *   - Only `.md` files at the top level — directories and dotfiles are
- *     not copied as if they were templates.
- */
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -44,8 +25,6 @@ function seedTier(tier: string, files: string[]): void {
 }
 
 async function load() {
-  // Re-import after env var is set so TEMPLATES_DIR resolves freshly each
-  // test (it's read at module load).
   const mod = await import(
     "../lib/provisionSteps.ts?t=" + Date.now()
   );
@@ -66,7 +45,7 @@ describe("listTierTemplateFiles", () => {
   });
 
   it("does not include files removed from a tier", async () => {
-    seedTier("trial", ["AGENTS.md", "BOOTSTRAP.md", "SOUL.md"]); // no MEMORY
+    seedTier("trial", ["AGENTS.md", "BOOTSTRAP.md", "SOUL.md"]);
     const { listTierTemplateFiles } = await load();
     expect(listTierTemplateFiles("trial")).not.toContain("MEMORY.md");
   });

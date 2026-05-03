@@ -1,31 +1,15 @@
-/**
- * bridge-upstream-rpc.ts — request/response correlation for the bridge's
- * upstream gateway WebSocket.
- *
- * The bridge sends typed RPC requests (exec.approval.resolve,
- * plugin.approval.resolve) over the same WS it subscribes to for `agent`
- * events. Responses arrive on that same socket as `{type: "response",
- * id, ok, result|error}` envelopes. This module owns the in-flight
- * Map<id, resolver> and timeout enforcement.
- *
- * Tested by: chat-proxy/src/__tests__/bridge-upstream-rpc.spec.ts
- */
-
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 
 export interface UpstreamRpcClient {
-  /** Send a typed RPC; resolves with `ok:true|false` (never rejects). */
   call<T = unknown>(
     method: string,
     params: Record<string, unknown>,
   ): Promise<{ ok: true; result: T } | { ok: false; reason: string }>;
-  /** Detach all listeners and reject every in-flight call. */
   dispose(): void;
 }
 
 export interface AttachUpstreamRpcOptions {
-  /** Per-call timeout in milliseconds. Default 10s. */
   timeoutMs?: number;
 }
 
@@ -101,7 +85,6 @@ export function attachUpstreamRpcClient(
           resolve({ ok: false, reason: `rpc-timeout after ${timeoutMs}ms (${method})` });
         }
       }, timeoutMs);
-      // Don't keep the loop alive just for an in-flight RPC.
       if (typeof timer.unref === "function") {
         timer.unref();
       }
@@ -141,7 +124,7 @@ export function attachUpstreamRpcClient(
       ws.off("message", onMessage);
       ws.off("close", onClose);
     } catch {
-      // ignore
+      /* */
     }
   };
 

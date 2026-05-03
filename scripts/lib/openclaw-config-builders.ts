@@ -1,21 +1,3 @@
-/**
- * Pure builders for `openclaw.json` customer fragments — agent entries,
- * coach MM accounts, bindings, identity resolution, token/identity readers.
- *
- * Used by:
- *   - scripts/lib/fleet-provisioner.ts (per-customer config.patch at restore)
- *   - functions/src/fleet-controller/controller.ts (snapshot building at enqueue)
- *   - scripts/lib/provisionSteps.ts (greenfield provisionCustomer path)
- *
- * Previously lived in scripts/boot-sync.ts alongside the orchestration that's
- * been retired in favor of the fleet controller. The builders are still
- * needed — just as standalone pure functions with no fs/RPC side effects.
- *
- * Spec: docs/GATEWAY-FLEET-CONTROLLER-SPEC.md §Gateway HTTP endpoint
- */
-
-// ── Project restore input (pure selector) ───────────────────────────────────
-
 export interface ProjectRestoreInput {
   customerSlug: string;
   projectSlug: string;
@@ -23,15 +5,6 @@ export interface ProjectRestoreInput {
   provisioningState?: string;
 }
 
-/**
- * Pure selector: given Firestore project rows + a filesystem-check callback,
- * return the subset that needs cloning.
- *
- * Rules:
- *   - Skip docs with no `giteaRepoName` (nothing to clone).
- *   - Skip docs whose `provisioningState` is anything other than `active`.
- *   - Skip docs whose on-disk dir already has `.git`.
- */
 export function projectsNeedingClone(
   inputs: readonly ProjectRestoreInput[],
   isProjectCloned: (customerSlug: string, projectSlug: string) => boolean,
@@ -44,32 +17,14 @@ export function projectsNeedingClone(
   });
 }
 
-// ── Per-customer agent entry ────────────────────────────────────────────────
-
-/** Minimal customer shape the pure agent builder needs. Decouples the helper
- *  from CustomerState so it can be tested without fs / crew constants. */
 export interface CustomerAgentInput {
   uid: string;
   slug: string;
   customerDir: string;
   agentDir: string;
-  /** Per-customer coach identity. Sourced from `agents/{uid}` (Builder's
-   * chosen `name` + `avatarEmoji`) with CREW_IDENTITY defaults on miss.
-   * OpenClaw uses this block to set `override_username` /
-   * `override_icon_emoji` on every MM post the agent authors, so each
-   * Builder sees their own customized Octo. */
   coach: { name: string; emoji: string; model: string };
 }
 
-/**
- * Pure builder — takes a customer + resolved per-customer coach identity
- * and returns the openclaw.json agent entry. No `mattermost` key — OpenClaw
- * uses `channels.mattermost.accounts.default.botToken` for system posts and
- * per-coach accounts (`channels.mattermost.accounts.{slug}-coach`) for
- * tenant posts; per-agent posting identity is driven by the `identity`
- * block via `override_username` / `override_icon_emoji` rather than
- * per-agent auth.
- */
 export function buildCustomerAgent(
   c: CustomerAgentInput,
 ): Record<string, unknown> {
@@ -88,8 +43,6 @@ export function buildCustomerAgent(
     tools: { fs: { workspaceOnly: true } },
   };
 }
-
-// ── Coach identity (Builder's chosen name + emoji) ──────────────────────────
 
 /** DI-friendly deps so the loop can be tested with a plain object mock. */
 export interface CoachIdentityDeps {
@@ -177,8 +130,6 @@ export async function fetchCoachIdentities(
   return out;
 }
 
-// ── Coach PATs ──────────────────────────────────────────────────────────────
-
 export interface CoachTokenDeps {
   db: {
     collection: (name: string) => {
@@ -236,8 +187,6 @@ export async function fetchCoachTokens(
   }
   return out;
 }
-
-// ── Mattermost account entries (per-customer coach accounts) ────────────────
 
 export interface MattermostAccountInput {
   uid: string;
@@ -327,8 +276,6 @@ export function mergeAccountsPreservingDefault(
   }
   return merged;
 }
-
-// ── Bindings ────────────────────────────────────────────────────────────────
 
 /** Shape of a single channel binding emitted to openclaw.json. */
 export interface OpenClawBinding {

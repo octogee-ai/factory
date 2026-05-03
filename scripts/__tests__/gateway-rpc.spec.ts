@@ -1,15 +1,3 @@
-/**
- * Unit tests for the gateway WS JSON-RPC client used by the provisioner.
- *
- * Drives a real `ws.WebSocketServer` on a loopback port so the full handshake
- * (connect → hello-ok → RPC req/res) is covered. Per-test handler overrides
- * let each test inject success, auth-failure, hash-mismatch, or malformed
- * response behavior without having to stub the client's internals.
- *
- * The client is short-lived: each high-level method opens a WS, authenticates,
- * issues its request, and closes. That matches the provisioner's use pattern
- * (one RPC per signup step) and keeps the surface area tight.
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import * as crypto from "node:crypto";
@@ -27,12 +15,10 @@ function makeTestIdentity(): DeviceIdentity {
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }) as string;
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
   const raw = publicKey.export({ type: "spki", format: "der" }) as Buffer;
-  const rawKey = raw.length === 44 ? raw.subarray(12) : raw; // strip SPKI prefix for Ed25519
+  const rawKey = raw.length === 44 ? raw.subarray(12) : raw;
   const deviceId = crypto.createHash("sha256").update(rawKey).digest("hex");
   return { deviceId, publicKeyPem, privateKeyPem };
 }
-
-// ── Mock gateway server ─────────────────────────────────────────────────────
 
 type RpcHandler = (params: unknown) => { ok: true; payload: unknown } | { ok: false; error: { code: string; message: string } };
 
@@ -162,8 +148,6 @@ async function startMockGateway(): Promise<MockServerHandle> {
   };
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────
-
 describe("gateway-rpc", () => {
   let server: MockServerHandle;
   let client: GatewayRpcClient;
@@ -183,8 +167,6 @@ describe("gateway-rpc", () => {
     await client.close();
     await server.close();
   });
-
-  // ── configPatch ────────────────────────────────────────────────────────────
 
   describe("configPatch", () => {
     it("sends a JSON-RPC request with raw + baseHash and returns the server payload on success", async () => {
@@ -237,8 +219,6 @@ describe("gateway-rpc", () => {
     });
   });
 
-  // ── configGet ─────────────────────────────────────────────────────────────
-
   describe("configGet", () => {
     it("returns the config snapshot and its hash", async () => {
       server.setHandler("config.get", () => ({
@@ -263,8 +243,6 @@ describe("gateway-rpc", () => {
       });
     });
   });
-
-  // ── cronAdd ───────────────────────────────────────────────────────────────
 
   describe("cronAdd", () => {
     it("calls `cron.add` with the job spec verbatim and returns the server payload", async () => {
@@ -348,10 +326,6 @@ describe("gateway-rpc", () => {
     });
   });
 
-  // ── isGatewayUp ───────────────────────────────────────────────────────────
-
-  // ── secretsReload ─────────────────────────────────────────────────────────
-
   describe("secretsReload", () => {
     it("calls the `secrets.reload` method with empty params and returns the payload", async () => {
       let captured: unknown = "not-called";
@@ -418,7 +392,6 @@ describe("gateway-rpc", () => {
 
     it("returns false when the WS port is not reachable", async () => {
       await server.close();
-      // Point the client at a port we know nothing is listening on.
       const offline = createGatewayRpc({
         url: "ws://127.0.0.1:1",
         token: "test-token",
@@ -438,8 +411,6 @@ describe("gateway-rpc", () => {
       expect(await client.isGatewayUp(500)).toBe(false);
     });
   });
-
-  // ── auth & transport failures ─────────────────────────────────────────────
 
   describe("auth + transport errors", () => {
     it("throws GatewayRpcError('auth-failed') when the server rejects the connect frame", async () => {
@@ -485,8 +456,6 @@ describe("gateway-rpc", () => {
     });
   });
 
-  // ── GatewayRpcError.is helper ─────────────────────────────────────────────
-
   describe("GatewayRpcError", () => {
     it("exposes code + message and is instanceof Error", () => {
       const e = new GatewayRpcError("hash-mismatch", "stale hash");
@@ -496,8 +465,6 @@ describe("gateway-rpc", () => {
       expect(e.name).toBe("GatewayRpcError");
     });
   });
-
-  // ── connect-frame shape ───────────────────────────────────────────────────
 
   describe("connect frame", () => {
     it("requests operator.admin scope, signs the challenge nonce with the device identity, and identifies itself in `client.displayName`", async () => {
@@ -568,14 +535,6 @@ describe("gateway-rpc", () => {
       expect(crypto.verify(null, Buffer.from(payload, "utf8"), pubKey, sigBuf)).toBe(true);
     });
   });
-
-  // ── Connect trace instrumentation (#3) ────────────────────────────────────
-  //
-  // Every connect attempt — success OR failure — emits a `ConnectTrace` with
-  // per-phase timings. This is the diagnostic hook we'll rely on when the
-  // gateway's event loop pins during plugin init: the trace tells us
-  // whether the stall was in TCP+upgrade (`ws-open`), challenge receive
-  // (`challenge`), or the connect frame itself (`connect`).
 
   describe("onConnectTrace", () => {
     it("fires with success=true, stage=done, and all three phase timings on a clean connect", async () => {
@@ -685,8 +644,6 @@ describe("gateway-rpc", () => {
   });
 });
 
-// ── Token resolution: env → openclaw.json → empty ──────────────────────────
-//
 // Production deployments rarely plumb OPENCLAW_GATEWAY_TOKEN into the
 // provisioner's env; the token lives in the gateway's openclaw.json at
 // `gateway.auth.token` instead. Client must fall back to reading that file
@@ -802,7 +759,6 @@ describe("token resolution", () => {
   });
 
   it("sends no auth block when neither env nor file has a token (server rejects, caller falls back)", async () => {
-    // File exists but has no token.
     const fs = require("node:fs") as typeof import("node:fs");
     fs.writeFileSync(configPath, JSON.stringify({ gateway: { auth: { mode: "none" } } }));
 
@@ -851,8 +807,6 @@ describe("token resolution", () => {
       identity: makeTestIdentity(),
     });
     try {
-      // If the file-read threw, this would reject with a non-RPC error;
-      // instead we expect the normal connect-failed path.
       expect(await rpc.isGatewayUp(100)).toBe(false);
     } finally {
       await rpc.close();
@@ -860,8 +814,6 @@ describe("token resolution", () => {
   });
 });
 
-// ── Crash-safety: unhandled error on terminate ─────────────────────────────
-//
 // Regression for the April 16 TEST-cluster provisioner crash. The original
 // `openAndConnect` timeout path did `cleanup()` (removing the 'error'
 // listener) then `ws.terminate()`. `terminate()` emits an async 'error'

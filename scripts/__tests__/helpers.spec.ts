@@ -11,8 +11,6 @@ import {
   BUSINESS_TYPE_TEMPLATES,
 } from "../lib/helpers.js";
 
-// ── slugify ─────────────────────────────────────────────────────────────────────
-
 describe("slugify", () => {
   it("lowercases and replaces non-alphanumeric with hyphens", () => {
     expect(slugify("My Cool Business")).toBe("my-cool-business");

@@ -1,14 +1,8 @@
-/**
- * Octogee Provisioner — Firebase Initialization
- */
-
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import * as fs from "fs";
 import { SA_KEY_PATH } from "./config.js";
-
-// ── Firebase Init ───────────────────────────────────────────────────────────────
 
 export let FIREBASE_PROJECT_ID = process.env.GCLOUD_PROJECT || "unknown";
 

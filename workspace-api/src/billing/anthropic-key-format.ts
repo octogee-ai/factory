@@ -1,16 +1,6 @@
-/**
- * Format validation for a customer-supplied Anthropic API key, before we
- * spend an Anthropic round-trip probing it.
- *
- * Only a format check — a well-formed key may still be invalid / revoked.
- * The caller is expected to follow up with a 1-token `POST /v1/messages`
- * probe (see `anthropic-probe.ts`) before persisting.
- */
-
 export interface KeyValidationResult {
   valid: boolean;
   reason?: string;
-  /** Trimmed key; only set when `valid === true`. */
   normalized?: string;
 }
 

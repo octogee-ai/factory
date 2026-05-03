@@ -6,28 +6,6 @@ import {
   ExpectedAgentIdError,
 } from "../openclaw/frame-filter";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Per-user event scoping at the chat-proxy boundary (#728).
-//
-// Background: OpenClaw gateway's broadcast() is single-tenant by design — every
-// connected WS client is meant to be co-trusted (same operator, same user).
-// We violated that assumption by inserting chat-proxy in front, where N
-// distinct Firebase users share one upstream gateway pod via N WS connections.
-// Without filtering, gateway-side broadcast for user A's run is forwarded to
-// every chat-proxy connection, including user B's.
-//
-// Fix: chat-proxy parses each inbound frame from the upstream gateway and
-// drops per-user event-class frames whose embedded agentId doesn't belong to
-// the connection's uid. SessionKey is the canonical identity field — gateway
-// builds it as `agent:<agentId>:<key>` (canonicalizeSessionKeyForAgent in
-// session-store-key.ts), so a prefix check is enough to scope.
-//
-// System-class events (heartbeat, tick, health, cron, presence, etc.) are
-// gateway-wide infra signals and forward unconditionally.
-//
-// Fail-closed: unknown event classes drop with a "unknown-event-class" reason.
-// ─────────────────────────────────────────────────────────────────────────────
-
 const EXPECTED = "octogee-dave-coach";
 const ctx = { expectedAgentId: EXPECTED };
 
@@ -76,11 +54,6 @@ describe("shouldForwardFrame — per-user event scoping (#728)", () => {
     });
 
     it("drops events tagged with a different agent in the same user (sub-agent NOT auto-trusted)", () => {
-      // Today's Octogee architecture is single-coach-per-user (chief-of-staff
-      // model). If a sub-agent surface emerges (e.g. octogee-{slug}-research),
-      // exact-match drops its events with identity-mismatch — the counter
-      // surfaces it and we add an explicit allow-list keyed off the slug
-      // rather than re-introducing prefix matching.
       const frame = eventFrame("agent", {
         runId: "run-sub",
         sessionKey: "agent:octogee-dave-research:default",
@@ -94,9 +67,6 @@ describe("shouldForwardFrame — per-user event scoping (#728)", () => {
     });
 
     it("does not match a different user whose slug shares a single-token prefix", () => {
-      // octogee-davekins-coach vs expected octogee-dave-coach — exact match
-      // covers this: the trailing `:` in the comparison ensures davekins
-      // can't slip through.
       const frame = eventFrame("agent", {
         runId: "run-4",
         sessionKey: "agent:octogee-davekins-coach:default",
@@ -110,11 +80,6 @@ describe("shouldForwardFrame — per-user event scoping (#728)", () => {
     });
 
     it("does not match a different user whose hyphenated slug shares a token (regression for review P0)", () => {
-      // USERNAME_RE in shared/types/identity.ts allows hyphens, so a
-      // first-token prefix match like `octogee-bloom-` would over-match
-      // any `octogee-bloom-*` user and re-open the leak.
-      // Expected here is `octogee-bloom-marketing-coach`; a frame tagged
-      // for `octogee-bloom-other-coach` MUST drop.
       const hyphenatedCtx = { expectedAgentId: "octogee-bloom-marketing-coach" };
       const frame = eventFrame("agent", {
         runId: "run-hyphen",
@@ -273,10 +238,6 @@ describe("shouldForwardFrame — per-user event scoping (#728)", () => {
   });
 
   describe("non-event frames", () => {
-    // OpenClaw's RPC envelope uses `req` / `res` (see
-    // chat-proxy/src/openclaw/upstream.ts:343 for `req`, line 258 for `res`).
-    // The filter only special-cases `type: "event"` — anything else flows
-    // through as `non-event-frame` regardless of the literal value.
     it("forwards response frames (type: 'res') — per-connection, not broadcast", () => {
       const frame = JSON.stringify({
         type: "res",
@@ -352,8 +313,6 @@ describe("shouldForwardFrame — per-user event scoping (#728)", () => {
     });
 
     it("preserves hyphens in the slug (works with hyphenated usernames)", () => {
-      // USERNAME_RE allows hyphens — the agentId must round-trip the full slug
-      // so the exact-match in shouldForwardFrame works correctly.
       expect(
         deriveExpectedAgentId("uid-1", { username: "bloom-marketing" }),
       ).toBe("octogee-bloom-marketing-coach");
@@ -410,9 +369,6 @@ describe("shouldForwardFrame — per-user event scoping (#728)", () => {
 
   describe("malformed input", () => {
     it("forwards unparseable frames (binary blobs, invalid JSON)", () => {
-      // Filter doesn't try to parse non-JSON. Binary/upload frames are
-      // forwarded as-is — gateway's broadcast() doesn't carry per-user data
-      // through these paths.
       expect(shouldForwardFrame("not-json{{", ctx)).toEqual({
         forward: true,
         reason: "unparseable",
@@ -420,8 +376,6 @@ describe("shouldForwardFrame — per-user event scoping (#728)", () => {
     });
 
     it("forwards JSON values that aren't event-shaped objects", () => {
-      // e.g. the gateway sometimes sends bare JSON arrays or nulls; those
-      // don't match the {type, event, payload} envelope and aren't broadcasts.
       expect(shouldForwardFrame("[1,2,3]", ctx)).toEqual({
         forward: true,
         reason: "non-event-frame",

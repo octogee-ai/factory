@@ -1,11 +1,5 @@
-/**
- * Octogee Provisioner — Gateway Configuration
- */
-
 import { log, readOpenClawConfig, writeOpenClawConfig } from "./config.js";
 import { db } from "./firebase.js";
-
-// ── Agent-to-UID Mapping ────────────────────────────────────────────────────────
 
 export const agentToUid = new Map<string, string>();
 
@@ -29,8 +23,6 @@ export function registerAgentIds(uid: string, agentIds: string[]): void {
   agentIds.forEach(id => agentToUid.set(id, uid));
 }
 
-// ── Gateway Defaults ────────────────────────────────────────────────────────────
-
 /**
  * Ensure global gateway settings are applied to the config on every startup.
  * Idempotent — safe to run repeatedly.
@@ -41,7 +33,6 @@ export function ensureGatewayDefaults(): void {
 
   let changed = false;
 
-  // Agent concurrency
   config.agents ??= {};
   config.agents.defaults ??= {};
   if (!config.agents.defaults.maxConcurrent || config.agents.defaults.maxConcurrent < 8) {
@@ -56,17 +47,12 @@ export function ensureGatewayDefaults(): void {
     log("Set agents.defaults.subagents.maxConcurrent = 8");
   }
 
-  // Activity Stream Phase 1: bump verboseDefault from "off" to "on" so the
-  // bridge sees tool args / patches / plans / thinking. The "useful agent"
-  // gate (spec A7 / §8) is implicit — users without a provisioned agent
-  // have no sessions for this default to apply to.
   if (config.agents.defaults.verboseDefault !== "on") {
     config.agents.defaults.verboseDefault = "on";
     changed = true;
     log('Set agents.defaults.verboseDefault = "on" (Activity Stream Phase 1)');
   }
 
-  // Security: Enforce tool restrictions on ALL existing Coach agents.
   const agentList = config.agents?.list ?? [];
   for (const agent of agentList) {
     if (/^octogee-.+-coach$/.test(agent.id)) {
@@ -78,7 +64,6 @@ export function ensureGatewayDefaults(): void {
         agentChanged = true;
       }
 
-      // exec/process blocking moved to router plugin
       const deny = agent.tools.deny ?? [];
       const execDenyItems = deny.filter((t: string) => t === "exec" || t === "process");
       if (execDenyItems.length > 0) {
@@ -87,12 +72,6 @@ export function ensureGatewayDefaults(): void {
         log(`${agent.id} → removed exec/process from agent deny (moved to router plugin)`);
       }
 
-      // Face model: Sonnet 4.6 for F&F. Per-customer overrides were driven
-      // by writes to `plugins.entries.octogee-router.config.faceModelOverrides`,
-      // which tripped the `plugins.*` restart rule — the exact cascade that
-      // bounced every tenant's MM WS on signup. Removed for F&F; bring back
-      // via applyConfigPatch + a plugin-hot-reload declaration when the
-      // per-customer model knob actually ships.
       const faceModel = "anthropic/claude-sonnet-4-6";
       if (agent.model !== faceModel) {
         const oldModel = agent.model ?? "default";
@@ -101,7 +80,6 @@ export function ensureGatewayDefaults(): void {
         log(`Model: ${agent.id} → ${faceModel} (was ${oldModel})`);
       }
 
-      // Heartbeat: ensure target + lightContext for brain status monitoring
       agent.heartbeat ??= { every: "45s" };
       if (agent.heartbeat.target !== "last" || !agent.heartbeat.lightContext || agent.heartbeat.every !== "45s") {
         agent.heartbeat.every = "45s";
@@ -119,7 +97,6 @@ export function ensureGatewayDefaults(): void {
     }
   }
 
-  // Brain (sub-agent) tool access
   config.tools ??= {};
   config.tools.subagents ??= {};
   config.tools.subagents.tools ??= {};
@@ -131,7 +108,6 @@ export function ensureGatewayDefaults(): void {
     log("Brain tool access: ensured exec/process NOT denied for sub-agents");
   }
 
-  // Brain model
   config.agents.defaults.subagents ??= {};
   if (config.agents.defaults.subagents.model !== "anthropic/claude-sonnet-4-6") {
     config.agents.defaults.subagents.model = "anthropic/claude-sonnet-4-6";
@@ -139,21 +115,18 @@ export function ensureGatewayDefaults(): void {
     log("Set agents.defaults.subagents.model = anthropic/claude-sonnet-4-6");
   }
 
-  // Brain timeout
   if (!config.agents.defaults.subagents.runTimeoutSeconds || config.agents.defaults.subagents.runTimeoutSeconds < 900) {
     config.agents.defaults.subagents.runTimeoutSeconds = 900;
     changed = true;
     log("Set agents.defaults.subagents.runTimeoutSeconds = 900");
   }
 
-  // Security: Disable elevated tools globally
   if (config.tools.elevated?.enabled !== false) {
     config.tools.elevated = { enabled: false };
     changed = true;
     log("Set tools.elevated.enabled = false");
   }
 
-  // Security: Gateway auth rate limiting
   config.gateway ??= {};
   config.gateway.auth ??= {};
   if (!config.gateway.auth.rateLimit) {
@@ -162,47 +135,5 @@ export function ensureGatewayDefaults(): void {
     log("Set gateway.auth.rateLimit (10 attempts/60s, 5min lockout)");
   }
 
-  // ── REMOVED 2026-04-27: runtime plugins.allow + plugins.entries writes ────
-  // We previously overwrote `plugins.allow` to a custom list and seeded an
-  // empty `plugins.entries.octogee-router` here on every provisioner boot.
-  // After the OpenClaw v2026.4.20 → v2026.4.24 upgrade, ANY change under
-  // `plugins.*` triggers a full gateway SIGUSR1 restart (the upstream reload
-  // classifier got stricter). Our boot-time writes drifted plugins.* from
-  // the template state, then the FIRST customer config.patch's reload
-  // comparator saw the drift and triggered restart on every customer mount —
-  // ~30s downtime each, cascading into the WS instability storm we
-  // diagnosed on TEST 2026-04-27.
-  //
-  // The fix: bake `plugins.allow` + `plugins.entries.octogee-router` into
-  // the template (`infra/gateway/openclaw.template.json`). The entrypoint
-  // writes the template once at boot, the gateway loads it, and nothing
-  // mutates plugins.* afterwards. Per-customer router config syncs were
-  // already removed for F&F (see comment block below).
-  //
-  // If we ever need OCTOGEE_ROUTER_ENABLED=false again, do it via a separate
-  // pre-boot template variant or pre-boot-config.ts strip — NOT a runtime
-  // diff against the loaded config.
-
   if (changed) writeOpenClawConfig(config);
 }
-
-// ── Removed for F&F: per-customer router config syncs ──────────────────────────
-//
-// The following sync functions used to write to
-// `plugins.entries.octogee-router.config.*`:
-//
-//   - syncEnforcementOverrides  (per-customer faceBrainEnforcement)
-//   - syncBrainGatedSlugs       (free-tier brain gating)
-//   - syncModelOverrides        (per-customer face/brain model)
-//
-// Each wrote openclaw.json directly, which chokidar picked up and fed into
-// the reload plan. `plugins.*` matches `BASE_RELOAD_RULES_TAIL` with
-// `kind: "restart"` — a FULL GATEWAY RESTART — so every onSnapshot fire on
-// `users/{uid}` (including the terminal `provisioning.openclaw.status =
-// "complete"` write) bounced every tenant's MM WS.
-//
-// F&F defaults (sonnet-4-6 face, observe-only router, no brain gating,
-// liberal tools) don't need any of these knobs. Bring them back post-F&F
-// via `applyConfigPatch` + a plugin-scoped `hotPrefixes` declaration so
-// value tweaks hot-reload instead of restarting the pod.
-

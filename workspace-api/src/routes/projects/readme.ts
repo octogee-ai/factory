@@ -1,13 +1,3 @@
-/**
- * Public project README endpoint — registered BEFORE requireAuth in the
- * barrel so anonymous visitors can view public + unlisted project pages.
- *
- * GET /:wid/:pid/readme
- *
- * Returns the rendered markdown body of the project's Canvas file (same
- * data the public project page on site/ renders — §D13). Private projects
- * return 404 to avoid leaking existence via URL guessing.
- */
 import { Router, Request, Response } from "express";
 import { db } from "../../lib/db";
 import { giteaApi } from "../../lib/gitea";

@@ -1,10 +1,3 @@
-/**
- * Upload an MM user's avatar from a remote image URL (OAuth photo,
- * Gravatar, etc.). Used by both the provisioner (first-time upload on
- * workspace creation) and the profile-sync loop (customer changes
- * photoURL post-signup).
- */
-
 import { log } from "../config.js";
 import { getMmAdminToken } from "./client.js";
 

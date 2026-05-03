@@ -1,7 +1,3 @@
-/**
- * Structured logger — replaces per-file `import { logger } from "firebase-functions/v2"`.
- * In GKE, stdout JSON is picked up by Cloud Logging automatically.
- */
 import { Request, Response, NextFunction } from "express";
 
 export const logger = {
@@ -13,9 +9,6 @@ export const logger = {
     console.error(JSON.stringify({ severity: "ERROR", message: msg, ...meta })),
 };
 
-/**
- * Request logging middleware.
- */
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
   const start = Date.now();
   res.on("finish", () => {

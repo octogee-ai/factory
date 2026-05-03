@@ -1,9 +1,3 @@
-/**
- * Idempotent Gitea reconciler — create the project repo if missing + seed
- * README if missing. Shared by POST /api/projects (first create) and the
- * retry-provisioning endpoint (repair). Both `createProjectGiteaRepo` and
- * `giteaWriteFile` no-op when the target already exists.
- */
 import { createProjectGiteaRepo, giteaWriteFile } from "../../lib/gitea";
 import { renderReadmeTemplate } from "@shared/templates/project-readmes";
 

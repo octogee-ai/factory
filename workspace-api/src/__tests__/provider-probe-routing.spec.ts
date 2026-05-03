@@ -1,10 +1,3 @@
-/**
- * provider-probe routing — picks the right endpoint per provider.
- *
- * Pure unit test: stubs global `fetch` and asserts which URL/headers
- * each provider hits. The real upstream behavior is covered by the
- * existing anthropic-probe and provider-probe-classify tests.
- */
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 
 const fetchSpy = vi.fn();

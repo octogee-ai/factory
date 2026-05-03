@@ -1,8 +1,3 @@
-/**
- * Mattermost API client — uses K8s DNS, no env var IPs.
- *
- * In-cluster: http://mattermost.{namespace}.svc.cluster.local:8065
- */
 import { logger } from "../middleware/logging";
 
 const MM_URL =
@@ -36,8 +31,6 @@ export async function mmApi(
     logger.error(`MM API error: ${resp.status} ${method} ${path}`, {
       response: text.slice(0, 500),
     });
-    // Attach the numeric status so callers can branch on it without parsing
-    // the message string (brittle, caught us once — see PROJECTS-CANVAS-SPEC §D4).
     const err = new Error(`MM API ${resp.status}: ${text.slice(0, 200)}`) as Error & { status: number };
     err.status = resp.status;
     throw err;

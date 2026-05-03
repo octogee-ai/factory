@@ -1,10 +1,3 @@
-/**
- * Agent routes — activation, deprovisioning, and per-Builder coach updates.
- *
- * Mounted at both /api/agents (public via Ingress, requireAuth) and
- * /internal/agents (K8s DNS only, requireAgentKeyForUser / requireAdmin). Each
- * route picks its own auth middleware.
- */
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth, requireAgentKeyForUser, requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
@@ -14,15 +7,8 @@ import { mmApi } from "../lib/mattermost";
 
 const router = Router();
 
-// Coach MM patches only touch the bot's display name; the stable
-// `{username}-coach` MM username is never changed. Avatar imagery is owned
-// by Mattermost (single profile source); image uploads land via
-// /api/profile/avatar which syncs directly to MM's /users/{id}/image
-// endpoint (works for bots too), not through this PATCH.
 const ALLOWED_COACH_PATCH_FIELDS = ["name", "persona"] as const;
 type CoachPatchField = (typeof ALLOWED_COACH_PATCH_FIELDS)[number];
-
-// ── PATCH /me — update the caller's agent (coach) identity ────────────────
 // Settings UI writes here. Updates agents/{uid} and patches the coach MM
 // bot's display_name when `name` changes.
 

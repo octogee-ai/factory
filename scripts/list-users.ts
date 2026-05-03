@@ -1,5 +1,4 @@
 /**
- * list-users.ts — quick Firestore user dump for debugging/cleanup
  * Usage: npx tsx list-users.ts
  */
 import { initializeApp, cert, getApps } from "firebase-admin/app";

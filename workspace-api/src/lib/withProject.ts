@@ -1,30 +1,3 @@
-/**
- * withProject — shared prelude for project-doc route handlers.
- *
- * Every project/sharing route that touches a specific project follows the
- * same prelude: validate slugs, fetch the project doc, 404 if missing,
- * 403 if the caller isn't the owner, 500 with logger.error on unhandled
- * throw. This helper collapses that into one call so the routes can focus
- * on the business logic they actually differ on.
- *
- * Example:
- *
- *     router.post("/:wid/:pid/some-action", async (req, res) => {
- *       const { wid, pid } = req.params;
- *       await withProject(req, res, wid, pid, {
- *         ownerOnly: true,
- *         ownerErrorMessage: "Only the project owner can ...",
- *         errorMessage: "Action failed",
- *         logTag: "[projects] Some-action",
- *       }, async ({ projectRef, project, uid }) => {
- *         // business logic — throw for unhandled errors (→ 500)
- *       });
- *     });
- *
- * Security: validates `wid` against the workspace-slug regex and `pid`
- * against the project-id regex before constructing a Firestore path, so
- * malformed slugs can't steer the doc lookup at unrelated collections.
- */
 import type { Request, Response } from "express";
 import type { Project } from "@shared/types";
 import { db } from "./db";
@@ -41,30 +14,13 @@ export type ProjectCtx = {
 };
 
 export type WithProjectOptions = {
-  /** Require the caller's uid to equal project.ownerUid. Returns 403 if not. */
   ownerOnly?: boolean;
-  /** Custom 403 message when ownerOnly fails. */
   ownerErrorMessage?: string;
-  /** If set, project.provisioningState must be in this list, else 409. */
   allowStates?: string[];
-  /**
-   * Log tag prefix for unhandled errors caught by the outer wrapper.
-   * The helper appends ` ${wid}/${pid}:` and the error automatically.
-   */
   logTag?: string;
-  /** Body for the 500 response on unhandled throw. */
   errorMessage?: string;
 };
 
-/**
- * Fetch a project doc with the standard 404/403/500 prelude. The handler
- * runs only on the happy path; any throw inside it is caught, logged via
- * `logTag`, and turned into a 500 with `errorMessage` (unless the handler
- * already sent a response). Business-logic errors where the handler wants
- * to respond with a specific status (502, 409, etc.) should set the
- * response themselves and `return` — the outer catch respects
- * `res.headersSent`.
- */
 export async function withProject(
   req: Request,
   res: Response,

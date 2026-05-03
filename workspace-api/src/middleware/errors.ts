@@ -1,9 +1,3 @@
-/**
- * Global error handler — replaces per-handler try/catch → res.status(500).
- *
- * Routes can throw or call next(err) and this catches everything.
- * Known error messages map to specific HTTP status codes.
- */
 import { Request, Response, NextFunction } from "express";
 import { logger } from "./logging";
 
@@ -32,13 +26,11 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ): void {
-  // ApiError has an explicit status code
   if (err instanceof ApiError) {
     res.status(err.statusCode).json({ error: err.message });
     return;
   }
 
-  // Map known error messages to status codes
   const status = STATUS_MAP[err.message] || 500;
 
   if (status >= 500) {

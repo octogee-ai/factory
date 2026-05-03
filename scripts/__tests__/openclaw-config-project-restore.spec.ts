@@ -1,19 +1,3 @@
-/**
- * Unit tests for the project-restoration selector in boot-sync.
- *
- * Cattle-gateway principle (docs/GATEWAY-PLATFORM-SPEC.md + PROJECTS-CANVAS-SPEC §D11):
- * a fresh PVC should self-heal every project directory without manual
- * intervention. `projectsNeedingClone` is the pure decision function —
- * given Firestore rows + a filesystem check, which ones do we clone?
- *
- * The selection rules the test locks:
- *   - Missing `giteaRepoName` → never clone (nothing to clone).
- *   - Already on disk (`.git` present) → skip.
- *   - `provisioningState` absent → treat as active and clone if missing.
- *   - `provisioningState: 'active'` + missing on disk + has repo → clone.
- *   - `provisioningState: 'provisioning' | 'failed'` → never clone here;
- *     those are the retry endpoint's responsibility (spec §D4).
- */
 import { describe, it, expect } from "vitest";
 import { projectsNeedingClone, type ProjectRestoreInput } from "../lib/openclaw-config-builders.js";
 

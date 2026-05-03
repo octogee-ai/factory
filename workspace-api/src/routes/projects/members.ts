@@ -1,10 +1,3 @@
-/**
- * DELETE /:wid/:pid/members/:guestUid — remove a project guest (owner only).
- *
- * Owners can't be evicted via this endpoint (400). Unknown members are a
- * no-op (200 with `{ notAMember: true }`) — idempotent against a UI that
- * double-clicks the remove button.
- */
 import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security";
 import { db, FieldValue } from "../../lib/db";

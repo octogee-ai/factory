@@ -1,15 +1,3 @@
-/**
- * Project creation endpoints.
- *
- * GET  /slug-available — check if a slug is free in the caller's workspace
- * POST /                — create a new project (user-typed slug)
- *
- * Create is the most complex single flow in the projects routes: Firestore
- * write → MM channel provision → Gitea repo seed. Any failure in the outer
- * chain flips the project to `provisioningState: 'failed'` + returns 502 so
- * the UI can show a retry affordance (PROJECTS-CANVAS-SPEC §D4). No silent
- * swallowing.
- */
 import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security";
 import { db, FieldValue } from "../../lib/db";

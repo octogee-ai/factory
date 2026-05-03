@@ -1,17 +1,3 @@
-/**
- * bridge-upstream-rpc.spec.ts — composition test for the bridge's
- * upstream-WS RPC dispatch.
- *
- * The activity bridge dispatches typed approval RPCs (exec.approval.resolve
- * / plugin.approval.resolve) to OC over the same gateway WebSocket it
- * subscribes to for `agent` events. This test verifies the request/response
- * correlation: send → match by id → resolve / reject.
- *
- * Without this wiring, every Approve click in MM dispatches to chat-proxy,
- * passes HMAC + IP + owner checks, then 502s with reason
- * "bridge-not-connected-to-upstream". Tests prevent that regression.
- */
-
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -19,14 +5,12 @@ import {
   type UpstreamRpcClient,
 } from "../openclaw/bridge-upstream-rpc.js";
 
-// Minimal WebSocket-like stub. Mirrors only the surface the rpc client uses.
 class FakeWs extends EventEmitter {
-  readyState = 1; // OPEN
+  readyState = 1;
   sent: string[] = [];
   send(data: string) {
     this.sent.push(data);
   }
-  // Helper for tests to simulate gateway responses.
   simulateMessage(data: unknown) {
     this.emit("message", JSON.stringify(data));
   }
@@ -60,7 +44,6 @@ describe("attachUpstreamRpcClient", () => {
     });
     expect(typeof sent.id).toBe("string");
 
-    // Simulate the matching response.
     ws.simulateMessage({ type: "response", id: sent.id, ok: true, result: { ok: true } });
     const result = await promise;
     expect(result).toEqual({ ok: true, result: { ok: true } });
@@ -86,7 +69,6 @@ describe("attachUpstreamRpcClient", () => {
   it("ignores response envelopes whose id doesn't match any in-flight call (no crash)", async () => {
     const promise = client.call("exec.approval.resolve", { approvalId: "appr-4" });
     ws.simulateMessage({ type: "response", id: "unrelated-id", ok: true, result: {} });
-    // Real response still resolves the original call.
     const sentId = JSON.parse(ws.sent[0]).id;
     ws.simulateMessage({ type: "response", id: sentId, ok: true, result: {} });
     await expect(promise).resolves.toMatchObject({ ok: true });
@@ -94,8 +76,7 @@ describe("attachUpstreamRpcClient", () => {
 
   it("ignores non-response frames (e.g. agent events bound for another consumer)", async () => {
     ws.simulateMessage({ type: "event", event: "agent", payload: { runId: "r" } });
-    ws.simulateMessage("not-json"); // no crash
-    // No in-flight calls — this is just a "doesn't blow up" assertion.
+    ws.simulateMessage("not-json");
     expect(true).toBe(true);
   });
 

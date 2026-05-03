@@ -1,23 +1,4 @@
 /**
- * Fleet controller types — CANONICAL source.
- *
- * Spec: docs/GATEWAY-FLEET-CONTROLLER-SPEC.md
- *
- * Consumed by:
- *   - functions/src/fleet-controller/* via the `functions/src/_shared`
- *     symlink (firebase-functions' rootDir: src constraint).
- *   - scripts/lib/{customer-lifecycle,fleet-state,fleet-provisioner,fleet-http}
- *     via `../../shared/types/fleet-controller.js`.
- *   - workspace-api/* via the same relative path.
- *
- * No runtime validation here — types are compile-time only, consistent
- * with the rest of `@octogee/shared`. Runtime helpers (e.g.
- * `backoffMsForFailCount`) live below as plain functions.
- */
-
-// ── Gateway state ────────────────────────────────────────────────────────────
-
-/**
  * Gateway lifecycle status, authored by the gateway's provisioner.
  *
  *   booting       — pod is up, OpenClaw may still be starting; do not enqueue jobs.
@@ -89,8 +70,6 @@ export interface GatewayState {
   failedCustomers?: Record<string, { failCount: number; lastFailedAt: unknown /* Timestamp */ }>;
 }
 
-// ── Restore jobs ─────────────────────────────────────────────────────────────
-
 /**
  * Restore job state machine.
  *
@@ -148,8 +127,6 @@ export interface RestoreJob {
   error: string | null;
   snapshot: CustomerSnapshot;
 }
-
-// ── Constants shared across controller + gateway ─────────────────────────────
 
 /** Gateway heartbeat cadence. */
 export const GATEWAY_HEARTBEAT_INTERVAL_MS = 15_000;

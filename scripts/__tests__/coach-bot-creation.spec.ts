@@ -1,17 +1,3 @@
-/**
- * Regression guard: the per-Builder coach is a Mattermost BOT, not a regular
- * user. Created via `POST /api/v4/bots`, renamed via `PUT /api/v4/bots/{id}`.
- *
- * Context: pre-#702 the coach was a regular MM user (POST /users). It worked
- * but the MM UI didn't show the BOT badge — visually inconsistent with the
- * gateway bot (mac-gw-prod) and dishonest about what the coach is. The
- * conversion uses bot endpoints across creation + rename so the badge shows
- * up everywhere the coach surfaces.
- *
- * Static-analysis style — same approach as provisioner-greeting-ordering.spec.ts.
- * Mocking the full provisioner dependency tree to assert one HTTP verb adds
- * brittle test maintenance with no extra signal over reading the source.
- */
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";

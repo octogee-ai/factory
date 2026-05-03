@@ -1,7 +1,3 @@
-/**
- * Octogee Provisioner — Pure Helper Functions
- */
-
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -9,8 +5,6 @@ import { FieldValue } from "firebase-admin/firestore";
 import { uniqueNamesGenerator, adjectives, animals } from "unique-names-generator";
 import { DATA_API_URL } from "./config.js";
 import { db } from "./firebase.js";
-
-// ── Slugify ─────────────────────────────────────────────────────────────────────
 
 export function slugify(name: string): string {
   return name
@@ -20,10 +14,6 @@ export function slugify(name: string): string {
     .slice(0, 30);
 }
 
-/**
- * Generate a memorable, neutral two-word slug for Personal tier workspaces.
- * e.g. "swift-harbor", "bold-cedar", "calm-river"
- */
 export function generatePersonalSlug(): string {
   return uniqueNamesGenerator({
     dictionaries: [adjectives, animals],
@@ -33,8 +23,6 @@ export function generatePersonalSlug(): string {
   });
 }
 
-// ── Data API Key ────────────────────────────────────────────────────────────────
-
 export async function generateDataApiKey(uid: string): Promise<string> {
   const apiKey = crypto.randomBytes(32).toString("hex");
   await db.doc(`users/${uid}/settings/api`).set({
@@ -43,8 +31,6 @@ export async function generateDataApiKey(uid: string): Promise<string> {
   }, { merge: true });
   return apiKey;
 }
-
-// ── Directory Copy ──────────────────────────────────────────────────────────────
 
 export function copyDirSync(src: string, dest: string): void {
   fs.mkdirSync(dest, { recursive: true });
@@ -60,9 +46,6 @@ export function copyDirSync(src: string, dest: string): void {
   }
 }
 
-// ── Template Helpers ────────────────────────────────────────────────────────────
-
-/** Apply common {{placeholder}} replacements to a template string. */
 export function applyTemplatePlaceholders(template: string, vars: Record<string, string>): string {
   let result = template;
   for (const [key, value] of Object.entries(vars)) {
@@ -70,8 +53,6 @@ export function applyTemplatePlaceholders(template: string, vars: Record<string,
   }
   return result;
 }
-
-// ── Business Type → Website Template ────────────────────────────────────────────
 
 export const BUSINESS_TYPE_TEMPLATES: Record<string, string> = {
   "salon":        "hair-salon",
@@ -101,8 +82,6 @@ export function getTemplateForBusinessType(businessType: string): string {
   const normalized = businessType.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-");
   return BUSINESS_TYPE_TEMPLATES[normalized] ?? "general";
 }
-
-// ── MIME Types ──────────────────────────────────────────────────────────────────
 
 export const MIME_TYPES: Record<string, string> = {
   ".png": "image/png",

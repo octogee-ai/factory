@@ -1,12 +1,3 @@
-/**
- * File upload endpoints — text via Gitea (POST /upload) and binary via GCS
- * + manifest (POST /upload-blob).
- *
- * /upload accepts JSON with a file list + base64 content — authored from
- * the editor UI. /upload-blob is multipart/form-data (Busboy) for images
- * and large files; it also generates a 128px thumbnail for supported
- * image types.
- */
 import { Router, Request, Response, NextFunction } from "express";
 import Busboy from "busboy";
 import { storage } from "../../lib/db";
@@ -49,7 +40,7 @@ router.post("/upload", withFileTarget(async (req, res, _next, target) => {
     try {
       const existing = (await customerGiteaApi(req, `${repoName}/contents/${filePath}`)) as { sha?: string };
       sha = existing.sha;
-    } catch { /* new file */ }
+    } catch { /* ignore */ }
 
     try {
       await customerGiteaApi(req, `${repoName}/contents/${filePath}`, "PUT", {
@@ -71,8 +62,6 @@ router.post("/upload", withFileTarget(async (req, res, _next, target) => {
   res.json({ results });
 }));
 
-// ── /upload-blob — multipart binary upload ────────────────────────────────
-
 interface ParsedUpload {
   slug: string;
   projectSlug: string | null;
@@ -82,10 +71,6 @@ interface ParsedUpload {
   mimeType: string;
 }
 
-// Only these multipart field names are honored. Busboy will still emit
-// events for unexpected names, but we drop them so the fields object
-// stays a known-shape Record<AllowedField, string> and a malicious
-// uploader can't write arbitrary keys (e.g. `__proto__`) onto it.
 const ALLOWED_FIELDS = new Set(["slug", "project", "path"] as const);
 type AllowedField = typeof ALLOWED_FIELDS extends Set<infer T> ? T : never;
 
@@ -137,8 +122,6 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
     const parsed = await parseMultipart(req);
     const { path: filePath, fileBuffer, mimeType } = parsed;
 
-    // Multipart parsing happens before the route wrapper could run, so
-    // resolve the target explicitly here using the parsed fields.
     const targetResult = await resolveFileTarget({
       slug: parsed.slug,
       projectSlug: parsed.projectSlug,
@@ -161,7 +144,6 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
     const file = bucket.file(gcsPath);
     await file.save(fileBuffer, { metadata: { contentType: mimeType || getMimeType(ext) } });
 
-    // Generate thumbnail for images
     let thumbnailUrl: string | undefined;
     let thumbnailError: string | undefined;
     if (IMAGE_EXTENSIONS.has(ext)) {

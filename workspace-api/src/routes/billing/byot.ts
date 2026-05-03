@@ -1,22 +1,3 @@
-/**
- * BYOT — Bring Your Own Token — endpoints.
- *
- * POST   /byot-key — validate + store the customer's provider key
- * DELETE /byot-key — archive the stored key + flip byotActive off
- *
- * Flow for POST (Phase 1+):
- *   1. Format-validate the key (fast-fail without an upstream call).
- *   2. 1-token probe against the provider so a bad key is rejected here,
- *      not mid-chat. Classifies user-fault (400) vs upstream-transient (503).
- *   3. Store ciphertext in GCP Secret Manager (Google-managed encryption).
- *   4. Write METADATA ONLY to Firestore (fingerprint, keyHash, secret
- *      name, status). NEVER plaintext.
- *   5. Flip byotActive — provisioner picks up on next 30s poll and writes
- *      the per-agent auth-profiles.json with a keyRef to Secret Manager.
- *
- * DELETE archives all Secret Manager versions (non-destructive — audit
- * logs retain full history) and clears the Firestore metadata.
- */
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { logger } from "../../middleware/logging";

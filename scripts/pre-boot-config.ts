@@ -1,22 +1,3 @@
-/**
- * pre-boot-config.ts — patch openclaw.json before OpenClaw starts.
- *
- * Runs once at container startup from entrypoint.sh. Responsibilities:
- *   - Reconcile gateway-wide `tools.profile = "coding"` so every agent
- *     starts with the same tool defaults as a fresh `openclaw` install.
- *   - Strip stale octogee-router plugin config keys (F&F: no runtime syncs).
- *   - Reconcile MM bot token + baseUrl + native-commands from env into
- *     `channels.mattermost.accounts.*` — the secret-rotation path that
- *     previously required a post-boot restart.
- *
- * The patching logic is exported as a pure function so it can be unit-
- * tested without touching the filesystem. `main()` is the I/O wrapper.
- *
- * No Firestore queries live here anymore — the enforcement-override sync
- * that required them was removed (see banner in the router-config section
- * below).
- */
-
 import * as fs from "fs";
 import * as path from "path";
 
@@ -54,7 +35,6 @@ export function applyPreBootPatches(
 ): boolean {
   let changed = false;
 
-  // ── tools.profile = "coding" ────────────────────────────────────────────
   // Matches the default of a fresh `openclaw` install. Gateway policy
   // wins — a drifted value is reset to "coding" on next boot, same shape
   // as commands.native below.
@@ -65,7 +45,7 @@ export function applyPreBootPatches(
     logFn(`set tools.profile=coding (gateway policy: openclaw "coding" defaults)`);
   }
 
-  // ── REMOVED 2026-05-01: gateway.controlPlane.writeRateLimit ──────────────
+  // REMOVED 2026-05-01: gateway.controlPlane.writeRateLimit
   // Was bumping the upstream control-plane write rate-limit (3-per-60s) to
   // 60-per-60s. The bump only worked when paired with our fork patch that
   // exposed the field as a config knob; that fork patch was dropped at the
@@ -76,7 +56,6 @@ export function applyPreBootPatches(
   // back when (a) the upstream rate limit becomes a real bottleneck again
   // and (b) the field becomes configurable upstream or back on our fork.
 
-  // ── Octogee Router plugin config ────────────────────────────────────────
   // F&F: the router has no runtime-tweakable config. All per-customer knobs
   // (enforcementOverrides, faceModelOverrides, brainModelOverrides,
   // brainGatedSlugs) were removed because every Firestore-driven write hit
@@ -114,7 +93,6 @@ export function applyPreBootPatches(
     }
   }
 
-  // ── MM bot token + baseUrl sync ─────────────────────────────────────────
   // Secret-rotation reconciliation: if MM_BOT_TOKEN in env differs from
   // what's on disk (k8s secret rotated since last boot), update in place.
   // Canonical location is `channels.mattermost.accounts.default.botToken`
@@ -139,7 +117,7 @@ export function applyPreBootPatches(
       logFn(`MM baseUrl synced from MM_URL env var: ${envMmUrl}`);
     }
 
-    // ── Force native slash commands OFF ────────────────────────────────────
+    // Force native slash commands OFF.
     // Octogee users talk to Octo in natural language — we don't use native
     // MM slash commands (/help, /info, etc.). Leaving `commands.native` at
     // its OpenClaw default ("auto", which historically resolves false but

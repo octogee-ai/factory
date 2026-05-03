@@ -1,16 +1,4 @@
 /**
- * set-admin-role.ts — grant or revoke admin role on an Octogee user
- *
- * Admin role lives in the system/config subcollection:
- *   users/{uid}/system/config → { role: 'admin' }
- *
- * This is checked by:
- *   - workspace-api requireAdmin middleware
- *   - OnboardingFlow (redirect to /admin)
- *   - AdminPage (dashboard access)
- *
- * Does NOT set role on the top-level user doc (legacy pattern, deprecated).
- *
  * Usage:
  *   npx tsx scripts/set-admin-role.ts <email-or-uid> --project=octogee-test
  *   npx tsx scripts/set-admin-role.ts <email-or-uid> --project=octogee --revoke

@@ -1,37 +1,16 @@
-/**
- * Integration tests for /api/projects — v3 nested + user-named slug schema.
- *
- * Projects live at `workspaces/{wid}/projects/{pid}` with channels + members
- * subcollections (DATA-MODEL-REVIEW v3 §§6.3, 6.10, 6.11, 6.12).
- *
- * Coverage:
- * - Slug validator + availability endpoint (pure server-side guards).
- * - POST / creation: hard-fail path when MM channel can't be created
- *   (docs/PROJECTS-CANVAS-SPEC.md §D4 — no silent failures). On MM error
- *   the project doc persists with `provisioningState: 'failed'` and the
- *   endpoint returns 502 so the client can surface the state.
- * - POST /:wid/:pid/retry-provisioning: idempotent repair — creates the
- *   MM channel + `channels/general` subcollection for a project that
- *   either failed provisioning or is active-but-missing its channels doc.
- */
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-// ── Firestore mock state ────────────────────────────────────────────────────
 
 const firestoreData: Record<string, any> = {};
 
 const mockSet = vi.fn(async (_path: string, _data: any) => undefined);
 const mockUpdate = vi.fn(async (_path: string, _data: any) => undefined);
 
-// Record calls to assert on side effects (channel creation, state flips).
 function resetFirestoreMocks() {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];
   mockSet.mockClear();
   mockUpdate.mockClear();
 }
-
-// ── db mock ──────────────────────────────────────────────────────────────────
 
 function deepMerge(target: any, source: any): any {
   if (typeof target !== "object" || target === null) return source;
@@ -63,10 +42,6 @@ vi.mock("../lib/db", () => {
       return { exists: !!data, data: () => data };
     },
     set: async (data: any, options?: { merge?: boolean }) => {
-      // Real Firestore's `set(data, { merge: true })` performs a deep merge.
-      // The default shallow merge here was incorrect for nested objects;
-      // the Activity Stream patch path (mattermost.activityChannelId)
-      // surfaced this as a regression on otherwise-passing tests.
       const prev = firestoreData[path] || {};
       const merge = options?.merge === true;
       firestoreData[path] = merge ? deepMerge(prev, data) : { ...prev, ...data };
@@ -99,22 +74,16 @@ vi.mock("../lib/db", () => {
   };
 });
 
-// ── MM mock ──────────────────────────────────────────────────────────────────
-
 const mockMmApi = vi.fn();
 vi.mock("../lib/mattermost", () => ({
   mmApi: (...args: any[]) => mockMmApi(...args),
 }));
 
-// Stubbed MM context resolver — tests set the return directly to control
-// whether the caller has a usable teamId without simulating the multi-doc read.
 const mockGetWorkspaceMmContext = vi.fn();
 vi.mock("../lib/mattermost-context", () => ({
   getWorkspaceMmContext: (...args: any[]) => mockGetWorkspaceMmContext(...args),
 }));
 
-// Mock the Gitea helpers used by the project routes (phase 5 §D12). Each
-// spec overrides these as needed via `mockClear` + `mockImplementation`.
 const mockCreateProjectGiteaRepo = vi.fn();
 const mockGiteaWriteFile = vi.fn();
 const mockGiteaApi = vi.fn();
@@ -129,8 +98,6 @@ import { createApp } from "../index";
 function authHeaders() {
   return { Authorization: "Bearer valid-token" };
 }
-
-// ── Deploy preview endpoint (phase 7 §D14) ──────────────────────────────────
 
 describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
   const ORIG_BUILD_URL = process.env.SITE_BUILD_API_URL;
@@ -292,8 +259,6 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
   });
 });
 
-// ── Public README endpoint (phase 6 §D13) ───────────────────────────────────
-
 describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   beforeEach(() => {
     resetFirestoreMocks();
@@ -316,7 +281,6 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
     expect(res.status).toBe(200);
     expect(res.body.content).toBe("# Hello from repo");
     expect(res.body.path).toBe("README.md");
-    // Confirm no Authorization header was required — bypass requireAuth.
     expect(mockGiteaApi).toHaveBeenCalledWith("alice-proj-mygame/contents/README.md");
   });
 
@@ -374,13 +338,10 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
     expect(r1.status).toBe(404);
     const r2 = await request(app).get("/api/projects/alice/MY-GAME/readme");
     expect(r2.status).toBe(404);
-    // Path traversal via a malformed wid segment shouldn't even hit Gitea.
     expect(mockGiteaApi).not.toHaveBeenCalled();
   });
 
   it("falls back to README.md when canvasFile contains a path traversal", async () => {
-    // Owners can write canvasFile directly (Firestore rules §D8). Make sure
-    // a malicious value can't steer the admin-token Gitea fetch.
     firestoreData["workspaces/alice/projects/mygame"] = {
       visibility: "public",
       giteaRepoName: "alice-proj-mygame",
@@ -393,9 +354,7 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
     const app = createApp();
     const res = await request(app).get("/api/projects/alice/mygame/readme");
     expect(res.status).toBe(200);
-    // Path in the response is the safe fallback, not the owner's input.
     expect(res.body.path).toBe("README.md");
-    // And the Gitea call used the safe fallback too.
     expect(mockGiteaApi).toHaveBeenCalledWith("alice-proj-mygame/contents/README.md");
   });
 
@@ -431,7 +390,6 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   });
 });
 
-// ── Availability endpoint ────────────────────────────────────────────────────
 
 describe("GET /api/projects/slug-available", () => {
   beforeEach(() => {
@@ -487,7 +445,6 @@ describe("GET /api/projects/slug-available", () => {
   });
 });
 
-// ── POST / creation — hard-fail path per spec §D4 ───────────────────────────
 
 describe("POST /api/projects — MM channel failure is hard-failure", () => {
   beforeEach(() => {
@@ -495,9 +452,6 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
     mockMmApi.mockReset();
     mockGetWorkspaceMmContext.mockReset();
-    // Gitea calls resolve by default so the MM-failure path isn't affected
-    // by Gitea mock state from a previous test; individual Gitea tests
-    // override these.
     mockCreateProjectGiteaRepo.mockReset();
     mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
     mockGiteaWriteFile.mockReset();
@@ -526,21 +480,14 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
 
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/provisioning/i);
-    // Project doc must persist so the client can retry or surface the state.
     const doc = firestoreData["workspaces/alice/projects/mygame"];
     expect(doc).toBeDefined();
     expect(doc.provisioningState).toBe("failed");
     expect(doc.provisioningError).toBeTruthy();
-    // Must NOT have been flipped to active.
     expect(doc.provisioningState).not.toBe("active");
-    // No channels/general doc should have been written.
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
-    // Caller's target visibility is preserved so retry can restore it
-    // without the client having to re-submit. `visibility` stays `private`
-    // (half-provisioned docs shouldn't surface in discovery).
     expect(doc.visibility).toBe("private");
     expect(doc.pendingVisibility).toBe("public");
-    // `giteaRepoName` is deterministic, written up-front.
     expect(doc.giteaRepoName).toBe("alice-proj-mygame");
   });
 
@@ -566,7 +513,6 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     expect(res.status).toBe(502);
     const doc = firestoreData["workspaces/alice/projects/mygame"];
     expect(doc?.provisioningState).toBe("failed");
-    // MM API should not have been called — we failed pre-flight.
     expect(mockMmApi).not.toHaveBeenCalled();
   });
 
@@ -595,8 +541,6 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     expect(res.body.channelId).toBe("ch-new-123");
     const doc = firestoreData["workspaces/alice/projects/mygame"];
     expect(doc.provisioningState).toBe("active");
-    // After success, visibility flips from 'private' to the requested target
-    // and the pendingVisibility staging field is cleared.
     expect(doc.visibility).toBe("public");
     expect(doc.pendingVisibility).toBeNull();
     expect(doc.giteaRepoName).toBe("alice-proj-mygame");
@@ -604,16 +548,11 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       kind: "general",
       mattermost: { channelId: "ch-new-123" },
     });
-    // Channel must be created as type "P" (private). All MM channels in
-    // Octogee are private by principle — membership is explicitly managed
-    // by workspace-api at every life-cycle point.
     expect(mockMmApi).toHaveBeenCalledWith(
       "/channels",
       "POST",
       expect.objectContaining({ type: "P" }),
     );
-    // Owner + agent (Octo) MUST be added as channel members — admin-token
-    // creation makes only the system_admin user an auto-member.
     expect(mockMmApi).toHaveBeenCalledWith(
       "/channels/ch-new-123/members",
       "POST",
@@ -624,11 +563,10 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       "POST",
       { user_id: "mock-mm-coach" },
     );
-    // Gitea side effects (phase 5 §D12): repo created + README seeded.
     expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
       "alice-proj-mygame",
       expect.any(String),
-      false, // public visibility → private=false
+      false,
     );
     expect(mockGiteaWriteFile).toHaveBeenCalledWith(
       "alice-proj-mygame",
@@ -663,8 +601,6 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const doc = firestoreData["workspaces/alice/projects/mygame"];
     expect(doc.provisioningState).toBe("failed");
     expect(doc.provisioningError).toMatch(/owner has no Mattermost userId/i);
-    // Channels/general doc must NOT be written — provisioning failed
-    // before we'd commit the success state.
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
   });
 
@@ -680,8 +616,6 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    // Channel-create + owner-add succeed; the missing coachUserId is the
-    // only thing that prevents progression to active.
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if (method === "POST" && path === "/channels") return { id: "ch-noagent-1" };
       if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
@@ -781,15 +715,11 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const doc = firestoreData["workspaces/alice/projects/mygame"];
     expect(doc.provisioningState).toBe("failed");
     expect(doc.provisioningError).toMatch(/Gitea down/);
-    // MM channel + channels subdoc should still have been written — the
-    // Gitea step fires AFTER the MM step succeeds.
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
       mattermost: { channelId: "ch-new-999" },
     });
   });
 });
-
-// ── POST /:wid/:pid/retry-provisioning — repair endpoint ────────────────────
 
 describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   beforeEach(() => {
@@ -804,10 +734,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   });
 
   it("creates the MM channel + channels/general doc and restores requested visibility (failed → active)", async () => {
-    // Seed a failed project owned by the caller. The creation handler
-    // would have written `visibility: 'private'` (hide while provisioning)
-    // and parked the caller's requested 'public' target on
-    // `pendingVisibility`. Retry restores it.
     firestoreData["workspaces/alice/projects/mygame"] = {
       id: "mygame",
       ownerUid: "caller-uid",
@@ -831,8 +757,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    // Lookup-by-name 404s → forces the create branch, exercising the
-    // POST-on-404 code path (regression coverage per review P1).
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         const err = new Error("MM API 404: channel not found") as Error & { status: number };
@@ -842,8 +766,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       if (method === "POST" && path === "/channels") {
         return { id: "ch-retry-456" };
       }
-      // Owner + agent membership adds — the agent in the project
-      // channel is the whole point of the channel.
       if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
         return { user_id: "ok", channel_id: "ch-retry-456", roles: "channel_user" };
       }
@@ -861,14 +783,12 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const doc = firestoreData["workspaces/alice/projects/mygame"];
     expect(doc.provisioningState).toBe("active");
     expect(doc.provisioningError).toBeNull();
-    // Caller's original intent is honored.
     expect(doc.visibility).toBe("public");
     expect(doc.pendingVisibility).toBeNull();
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
       kind: "general",
       mattermost: { channelId: "ch-retry-456" },
     });
-    // Both lookup-by-name and the create POST were exercised.
     expect(mockMmApi).toHaveBeenCalledWith(
       "/teams/team-abc/channels/name/alice-proj-mygame-general",
     );
@@ -877,7 +797,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       "POST",
       expect.objectContaining({ team_id: "team-abc", name: "alice-proj-mygame-general" }),
     );
-    // Gitea reconcile: repo + README seeded alongside the MM work (§D12).
     expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
       "alice-proj-mygame",
       expect.any(String),
@@ -909,14 +828,12 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
-    // MM side of the retry succeeds.
     mockMmApi.mockImplementation(async (_path: string, method?: string) => {
       if (method === "POST") return { id: "ch-retry-gitea-fail" };
       const err = new Error("MM API 404: not found") as Error & { status: number };
       err.status = 404;
       throw err;
     });
-    // Gitea side fails.
     mockCreateProjectGiteaRepo.mockRejectedValue(new Error("Gitea unreachable"));
 
     const app = createApp();
@@ -954,22 +871,13 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    // Lookup succeeds → retry must NOT create a duplicate channel.
-    // Existing channel returns type "P" so the O→P conversion path
-    // doesn't fire (covered separately).
     mockMmApi.mockImplementation(async (path: string, method?: string, body?: any) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         return { id: "ch-existing-999", type: "P" };
       }
-      // Owner + agent membership adds — idempotent on the existing
-      // channel. Same handler covers activity-sibling member adds since
-      // they POST to the same /channels/{id}/members shape.
       if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
         return { user_id: "ok", channel_id: "ch-existing-999", roles: "channel_user" };
       }
-      // Activity Stream Phase 1: retry creates the activity sibling for
-      // existing projects that didn't have one. The primary already exists;
-      // only the sibling create lands here.
       if (method === "POST" && path === "/channels") {
         return { id: "ch-activity-existing-999", type: "P", name: body?.name };
       }
@@ -989,15 +897,10 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
       mattermost: { channelId: "ch-existing-999" },
     });
-    // Primary channel was NOT re-created (lookup-by-name found it). The
-    // single POST /channels we expect is the activity sibling — new on
-    // retry for projects that pre-date the Activity Stream rollout.
     const primaryCreateCalls = mockMmApi.mock.calls.filter(
       (c) => c[1] === "POST" && c[0] === "/channels" && /general$/.test(c[2]?.name ?? ""),
     );
     expect(primaryCreateCalls).toHaveLength(0);
-    // Owner + agent membership ensure both fired even though the channel
-    // pre-existed (idempotent on MM's side, mandatory on ours).
     expect(mockMmApi).toHaveBeenCalledWith(
       "/channels/ch-existing-999/members",
       "POST",
@@ -1032,9 +935,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    // Lookup returns a legacy type-O channel — retry must convert it to P
-    // via PUT /channels/{id}/privacy. Project channels carry an Octo
-    // agent and must be private.
     mockMmApi.mockImplementation(async (path: string, method?: string, body?: any) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         return { id: "ch-legacy-O", type: "O" };
@@ -1045,8 +945,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
         return { user_id: "ok" };
       }
-      // Activity Stream sibling create on retry — same idempotency window
-      // as the existing-channel test above.
       if (method === "POST" && path === "/channels") {
         return { id: "ch-activity-legacy", type: "P", name: body?.name };
       }
@@ -1060,7 +958,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       .send({});
 
     expect(res.status).toBe(200);
-    // O→P conversion fired exactly once with the right payload.
     expect(mockMmApi).toHaveBeenCalledWith(
       "/channels/ch-legacy-O/privacy",
       "PUT",
@@ -1090,7 +987,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    // Channel found; member-add explodes on first call.
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         return { id: "ch-flaky-retry", type: "P" };
@@ -1135,10 +1031,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    // Lookup returns a legacy type-O channel; the O→P conversion errors.
-    // Project channels carry an Octo agent and MUST be private — the
-    // handler must NOT continue past this and silently mark the project
-    // active with an open channel.
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         return { id: "ch-stuck-O", type: "O" };
@@ -1161,8 +1053,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const doc = firestoreData["workspaces/alice/projects/mygame"];
     expect(doc.provisioningState).toBe("failed");
     expect(doc.provisioningError).toMatch(/insufficient privileges/i);
-    // No channels/general subdoc should have been written — provisioning
-    // failed before that step.
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
   });
 
@@ -1183,7 +1073,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       teamId: "team-abc",
       userId: "mock-mm-user",
       username: "alice-mm",
-      coachUserId: null, // agent doc not provisioned (race or stale)
+      coachUserId: null,
       coachDmChannelId: null,
       generalChannelId: null,
       adminChannelId: null,
@@ -1212,8 +1102,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   });
 
   it("repairs an active project missing the channels/general subdoc (the existing TEST data shape)", async () => {
-    // This is the state dannyboy's three TEST projects are in: the project
-    // doc exists as 'active' but no channels/general was ever written.
     firestoreData["workspaces/alice/projects/mygame"] = {
       id: "mygame",
       ownerUid: "caller-uid",

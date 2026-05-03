@@ -1,17 +1,4 @@
 /**
- * One-shot repair: backfill missing `channels/general` subdocs (and their
- * matching Mattermost channels) for projects that were created before the
- * hard-failure fix in docs/PROJECTS-CANVAS-SPEC.md §D4.
- *
- * Before the fix, the create handler's MM channel `try/catch` silently
- * warned and returned `{success: true}` even when no MM channel was ever
- * created. The result is projects in Firestore with
- * `provisioningState: 'active'` but no `channels/general` subcollection.
- *
- * This script finds them, creates the MM channel (or looks up an existing
- * one by name), writes the subdoc, and clears any lingering
- * `provisioningError`. Idempotent — safe to run repeatedly.
- *
  * Usage:
  *   GOOGLE_APPLICATION_CREDENTIALS=~/.openclaw/secrets/octogee-test-sa-key.json \
  *   MM_URL=https://chat-test.octogee.com \

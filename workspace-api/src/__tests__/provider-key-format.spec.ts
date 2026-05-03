@@ -1,14 +1,3 @@
-/**
- * Multi-provider key format validation.
- *
- * The Anthropic-specific validator from Phase 1 stays as-is and is reused
- * by this wrapper. Phase 2 adds:
- *   - openai:           sk-... or sk-proj-... or sk-svcacct-... (≥ 32 chars)
- *   - openai-compatible: any non-empty trimmed string. The probe is the
- *                        only real validator since arbitrary upstreams
- *                        accept arbitrary key formats (Groq vs OpenRouter
- *                        vs Mistral all differ).
- */
 import { describe, test, expect } from "vitest";
 import { validateProviderKey, isSupportedProvider, type Provider } from "../billing/provider-key-format";
 

@@ -1,17 +1,6 @@
-/**
- * mm-client.ts — concrete MmClient implementation used by the activity bridge.
- *
- * The bridge's MmClient interface (activity-bridge.ts) exposes createPost /
- * editPost / deletePost / withUserToken. This module implements them against
- * the Mattermost REST API. All calls use bearer-token auth — the agent's
- * coach PAT for activity posts, the admin PAT for bridge-owned operations
- * (approval-post edits, heartbeat-root deletes).
- */
-
 import type { MmClient, MmPostInput } from "./activity-bridge.js";
 
 export interface MmClientFactoryOptions {
-  /** MM API base, e.g. `https://mattermost.octogee.com`. */
   baseUrl: string;
 }
 
@@ -54,7 +43,6 @@ export function createMmClientFactory(options: MmClientFactoryOptions): (token: 
     },
 
     async editPost(postId: string, input: Pick<MmPostInput, "message" | "props">): Promise<void> {
-      // PUT /posts/{post_id}/patch supports partial updates including props.
       const body: Record<string, unknown> = { id: postId, message: input.message };
       if (input.props) {
         body.props = input.props;

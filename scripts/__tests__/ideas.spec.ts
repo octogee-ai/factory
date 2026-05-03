@@ -4,8 +4,6 @@ import * as path from "path";
 import * as os from "os";
 import { validateIdeaSlug, ideaExists, listIdeas } from "../lib/ideas.js";
 
-// ── validateIdeaSlug ────────────────────────────────────────────────────────────
-
 describe("validateIdeaSlug", () => {
   it("accepts a simple slug", () => {
     expect(validateIdeaSlug("coffee-shop-app")).toBe(true);

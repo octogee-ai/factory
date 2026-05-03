@@ -1,9 +1,3 @@
-/**
- * CORS middleware for workspace-api.
- *
- * Origins list is explicit and minimal — new people can understand
- * it at a glance. Only localhost gets a regex (for dev flexibility).
- */
 import cors from "cors";
 
 const ALLOWED_ORIGINS = new Set([
@@ -26,7 +20,6 @@ function isAllowedOrigin(origin: string): boolean {
 
 export const corsMiddleware = cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (server-to-server, curl)
     if (!origin) {
       callback(null, true);
       return;

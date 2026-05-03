@@ -1,33 +1,8 @@
-/**
- * usage-tracking — writer path tests.
- *
- * Pins the v3.1 Firestore paths so a regression to the old
- * `users/{uid}/workspaces/{wid}/usage/*` schema (which silently wrote
- * nothing because of invalid segment counts) fails loudly.
- *
- * We stub just enough of the Firestore Admin SDK to:
- *   - Record every `.doc()` path ever referenced
- *   - Record every `t.set()` / `t.update()` with (path, data) tuples
- *   - Return a plausible user doc from `t.get(userRef)`
- *
- * Then we call reportUsage() once and assert:
- *   - Exactly the three v3.1 paths were written
- *   - The (role, model, tokens, cost, gateway, slug) attribution lands on
- *     usage_sessions and usage_models
- *   - The deprecated user-subtree workspace path is never touched
- *   - No `keyFingerprint` / `keyFingerprints` / `lastKeyFingerprint` fields
- *     are written — the JSONL session feed doesn't expose which key billed
- *     each turn, so any per-turn key field would lie. (See module header.)
- */
 import { describe, it, expect, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-// Unwrap FieldValue sentinels so assertions can see the actual numbers
-// written. Without this, FieldValue.increment(150) is an opaque object and
-// a regression that swapped `usage.totalTokens` for `usage.input` (150 → 100)
-// would sail through the test.
 vi.mock("firebase-admin/firestore", async () => {
   const actual = await vi.importActual<any>("firebase-admin/firestore");
   return {
@@ -94,8 +69,6 @@ function makeStubDb(userData: Record<string, any>) {
   };
 }
 
-/** Writes a minimal customer-config.json into a throwaway dir so
- * readWorkspaceId() returns the test slug. */
 function makeAgentDir(slug: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-test-"));
   fs.writeFileSync(
@@ -116,8 +89,8 @@ describe("reportUsage — v3.1 workspace paths", () => {
 
     await reportUsage(
       db as any,
-      "octogee-eckert-coach",          // agentId
-      "coach",                          // role
+      "octogee-eckert-coach",
+      "coach",
       agentDir,
       {
         input: 100,
@@ -130,7 +103,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
         costBreakdown: { input: 0.001, output: 0.001, cacheRead: 0, cacheWrite: 0 },
       },
       new Map([["octogee-eckert-coach", "eckert-uid"]]),
-      () => {},                         // log
+      () => {},
       "gw-test",
     );
 
@@ -138,12 +111,10 @@ describe("reportUsage — v3.1 workspace paths", () => {
 
     const paths = writes.map((w) => w.path);
 
-    // v3.1 writes land at these exact paths
     expect(paths).toContain(`workspaces/eckert/usage_sessions/${today}`);
     expect(paths).toContain(`workspaces/eckert/usage_models/anthropic_claude-haiku-4-5_${today}`);
     expect(paths).toContain("workspaces/eckert/usage_summary/current");
 
-    // Deprecated user-subtree workspace path is never used
     const deprecated = paths.filter((p) =>
       /^users\/[^/]+\/workspaces\/[^/]+\/usage/.test(p),
     );
@@ -181,7 +152,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(modelWrite).toBeDefined();
     expect(summaryWrite).toBeDefined();
 
-    // Session doc: gateway, slug, role-attributed token count, breakdown
     expect(sessionWrite!.data.gatewayId).toBe("gw-test");
     expect(sessionWrite!.data.workspaceId).toBe("christopher");
     expect(sessionWrite!.data.tokensUsed).toEqual({ __op: "increment", value: 35 });
@@ -192,7 +162,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(sessionWrite!.data["token_breakdown.output"]).toEqual({ __op: "increment", value: 20 });
     expect(sessionWrite!.data["token_breakdown.cacheRead"]).toEqual({ __op: "increment", value: 5 });
 
-    // Model doc: role + model + slug + token/cost increments
     expect(modelWrite!.data.model).toBe("anthropic/claude-sonnet-4-6");
     expect(modelWrite!.data.role).toBe("brain");
     expect(modelWrite!.data.workspaceId).toBe("christopher");
@@ -200,8 +169,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(modelWrite!.data.cost_usd).toEqual({ __op: "increment", value: 0.01 });
     expect(modelWrite!.data.interaction_count).toEqual({ __op: "increment", value: 1 });
 
-    // Summary: rolling totals + per-model cost by normalized model key
-    // (slash → underscore).
     expect(summaryWrite!.data.workspaceId).toBe("christopher");
     expect(summaryWrite!.data.totalTokens).toEqual({ __op: "increment", value: 35 });
     expect(summaryWrite!.data.totalCostUsd).toEqual({ __op: "increment", value: 0.01 });
@@ -211,11 +178,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
       value: 0.01,
     });
 
-    // Regression guard: the writer used to stamp `keyFingerprint`,
-    // `keyFingerprints`, and `lastKeyFingerprint` with a hardcoded
-    // platform fingerprint — wrong for BYOT customers and unprovable
-    // either way. They're gone. If a future change re-introduces them,
-    // this test fails so we have to revisit the design.
     for (const w of [sessionWrite!, modelWrite!, summaryWrite!]) {
       expect(w.data).not.toHaveProperty("keyFingerprint");
       expect(w.data).not.toHaveProperty("keyFingerprints");
@@ -224,7 +186,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
   });
 
   it("user-level write does NOT carry lastKeyFingerprint", async () => {
-    // Same regression class as above, on the legacy user-doc write.
     const { db, writes } = makeStubDb({
       selectedTier: "pro",
       usage: {},
@@ -274,7 +235,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
         totalTokens: 2, costUsd: 0.0001, model: "anthropic/claude-haiku-4-5",
         costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map(),                        // empty map
+      new Map(),
       () => {},
       "gw-test",
     );
@@ -283,9 +244,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
   });
 
   it("free-tier customer: throttleLevel forced to 3 (always on house key, §9.5)", async () => {
-    // Defends against the Free-tier semantic gap Copilot review caught:
-    // windowBudgetUsd=0 would route through computeThrottleLevel's
-    // "unlimited" path; tier-policy decision lives at the caller.
     const { db, writes } = makeStubDb({
       selectedTier: "free",
       subscription: { tier: "free", status: "active" },
@@ -320,15 +278,12 @@ describe("reportUsage — v3.1 workspace paths", () => {
   });
 
   it("BYOT customer: tracks cost but throttleLevel stays 0 even at 200% of budget", async () => {
-    // Per ADMIN-DASHBOARD-SPEC §9.3 — BYOT pays for itself, so no
-    // throttle is applied. We still record windowCostUsd for transparency
-    // but the level field stays at 0 even when cost > budget.
     const { db, writes } = makeStubDb({
       selectedTier: "hobby",
       subscription: { tier: "hobby" },
       byotActive: true,
       usage: {
-        windowCostUsd: 100, // already way over any budget
+        windowCostUsd: 100,
         windowStartedAt: { toDate: () => new Date(Date.now() - 1 * 60 * 60 * 1000) },
       },
     });
@@ -341,7 +296,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
       agentDir,
       {
         input: 1000, output: 500, cacheRead: 0, cacheWrite: 0,
-        totalTokens: 1500, costUsd: 50.0, // big spike
+        totalTokens: 1500, costUsd: 50.0,
         model: "anthropic/claude-sonnet-4-6",
         costBreakdown: { input: 25, output: 25, cacheRead: 0, cacheWrite: 0 },
       },
@@ -352,14 +307,11 @@ describe("reportUsage — v3.1 workspace paths", () => {
 
     const userUpdate = writes.find((w) => w.path === "users/byot-uid" && w.op === "update");
     expect(userUpdate).toBeDefined();
-    // BYOT skip: throttle stays at 0 regardless of spend.
     expect(userUpdate!.data["usage.throttleLevel"]).toBe(0);
-    // But cost is still recorded for transparency.
     expect(userUpdate!.data["usage.windowCostUsd"]).toBeDefined();
   });
 
   it("non-BYOT customer past 100% USD budget: throttleLevel = 3 (plan demoted)", async () => {
-    // §9.2: ≥100% of windowBudgetUsd → level 3 (no longer level 2).
     const { db, writes } = makeStubDb({
       selectedTier: "hobby",
       subscription: { tier: "hobby", status: "active" },
@@ -371,7 +323,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
     });
     const agentDir = makeAgentDir("paid-customer");
 
-    // Hobby tier window budget ≈ $0.00878 — push way over.
     await reportUsage(
       db as any,
       "octogee-paid-customer-coach",
@@ -379,7 +330,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
       agentDir,
       {
         input: 100_000, output: 100_000, cacheRead: 0, cacheWrite: 0,
-        totalTokens: 200_000, costUsd: 5.0, // far above hobby's ~$0.0088 window
+        totalTokens: 200_000, costUsd: 5.0,
         model: "anthropic/claude-sonnet-4-6",
         costBreakdown: { input: 2.5, output: 2.5, cacheRead: 0, cacheWrite: 0 },
       },
@@ -391,7 +342,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
     const userUpdate = writes.find((w) => w.path === "users/paid-uid" && w.op === "update");
     expect(userUpdate).toBeDefined();
     expect(userUpdate!.data["usage.throttleLevel"]).toBe(3);
-    expect(userUpdate!.data["usage.throttleLevel"]).not.toBe(2); // L2 retired
+    expect(userUpdate!.data["usage.throttleLevel"]).not.toBe(2);
   });
 
   it("skips workspace-scoped writes when customer-config.json has no slug", async () => {
@@ -399,7 +350,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
       selectedTier: "pro",
       usage: {},
     });
-    // Empty config — readWorkspaceId returns null.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-test-"));
     fs.writeFileSync(path.join(dir, "customer-config.json"), JSON.stringify({}));
 
@@ -421,7 +371,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
     const wsWrites = writes.filter((w) => w.path.startsWith("workspaces/"));
     expect(wsWrites).toEqual([]);
 
-    // But legacy writes still happen.
     const legacyWrites = writes.filter((w) => w.path.startsWith("users/"));
     expect(legacyWrites.length).toBeGreaterThan(0);
   });

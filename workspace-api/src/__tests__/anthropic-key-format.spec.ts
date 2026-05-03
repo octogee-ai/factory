@@ -1,8 +1,3 @@
-/**
- * Unit tests for validateAnthropicKey() — format check for a customer-supplied
- * BYOT Anthropic API key, *before* we spend an IO round-trip on a validation
- * probe. Pure; must reject obvious garbage without touching Anthropic.
- */
 import { describe, test, expect } from "vitest";
 import { validateAnthropicKey } from "../billing/anthropic-key-format";
 

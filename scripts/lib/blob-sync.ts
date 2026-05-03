@@ -1,14 +1,8 @@
-/**
- * Octogee Provisioner — Blob Sync (GCS ↔ Local)
- */
-
 import * as fs from "fs";
 import * as path from "path";
 import { getStorage } from "firebase-admin/storage";
 import { log, CUSTOMERS_DIR, BLOB_SYNC_MAX_CONCURRENT, BLOB_SYNC_MAX_SIZE } from "./config.js";
 import { MIME_TYPES } from "./helpers.js";
-
-// ── Types ───────────────────────────────────────────────────────────────────────
 
 export interface ManifestEntry {
   type: "blob";
@@ -21,9 +15,6 @@ export interface ManifestEntry {
 
 export type Manifest = Record<string, ManifestEntry>;
 
-// ── Helpers ─────────────────────────────────────────────────────────────────────
-
-/** Recursively list all files in a directory, returning relative paths. Skips hidden files. */
 export function listFilesRecursive(dir: string, base: string): string[] {
   if (!fs.existsSync(dir)) return [];
   const results: string[] = [];
@@ -39,9 +30,6 @@ export function listFilesRecursive(dir: string, base: string): string[] {
   return results;
 }
 
-// ── Blob Sync ───────────────────────────────────────────────────────────────────
-
-/** Sync blobs for all customer workspaces. Fire-and-forget with error logging. */
 export async function blobSyncAll(): Promise<void> {
   if (!fs.existsSync(CUSTOMERS_DIR)) return;
 
@@ -58,7 +46,6 @@ export async function blobSyncAll(): Promise<void> {
   }
 }
 
-/** Sync blobs for a single customer workspace. */
 export async function blobSyncForSlug(slug: string): Promise<void> {
   const customerDir = path.join(CUSTOMERS_DIR, slug);
   const manifestPath = path.join(customerDir, ".files", "manifest.json");
@@ -83,14 +70,13 @@ export async function blobSyncForSlug(slug: string): Promise<void> {
   if (fs.existsSync(syncStatePath)) {
     try {
       prevSyncedPaths = JSON.parse(fs.readFileSync(syncStatePath, "utf-8"));
-    } catch { /* ignore corrupt state */ }
+    } catch { /* */ }
   }
 
   const bucket = getStorage().bucket();
   const manifestPaths = new Set(Object.keys(manifest));
   const prevSet = new Set(prevSyncedPaths);
 
-  // ── Downloads ──────────────────────────────────────────────────────────────
   const downloadQueue: Array<{ blobPath: string; entry: ManifestEntry }> = [];
 
   for (const [blobPath, entry] of Object.entries(manifest)) {
@@ -126,7 +112,6 @@ export async function blobSyncForSlug(slug: string): Promise<void> {
     }));
   }
 
-  // ── Uploads (agent-created blobs) ──────────────────────────────────────────
   const localBlobs = listFilesRecursive(blobsDir, blobsDir);
   let uploadCount = 0;
   let manifestDirty = false;
@@ -164,7 +149,6 @@ export async function blobSyncForSlug(slug: string): Promise<void> {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf-8");
   }
 
-  // ── Cleanup (blob deleted via UI → manifest entry removed) ─────────────────
   let cleanupCount = 0;
   for (const prevPath of prevSyncedPaths) {
     if (!manifestPaths.has(prevPath)) {

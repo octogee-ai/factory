@@ -1,22 +1,3 @@
-/**
- * Phase 2 — multi-provider per-agent config builders.
- *
- * For each customer's BYOT, the provisioner writes one or two files
- * inside their agent dir, depending on which provider they chose:
- *
- *   anthropic:
- *     auth-profiles.json:  { "anthropic:default": { type, keyRef → byok-{slug}-anthropic } }
- *     (Phase 1 unchanged)
- *
- *   openai (direct API):
- *     auth-profiles.json:  { "openai:default": { type, keyRef → byok-{slug}-openai } }
- *
- *   openai-compatible (OpenRouter, Groq, Mistral, Fireworks, Together, ...):
- *     models.json:         { providers.custom-{slug}: { baseUrl, apiKey: SecretRef → byok-{slug}-openai-compatible } }
- *     (no auth-profiles.json — apiKey lives directly on the provider entry)
- *
- * Pure builders. Tests cover shape and Secret Manager id grammar.
- */
 import { describe, test, expect } from "vitest";
 import {
   buildByotConfigForProvider,
@@ -33,11 +14,6 @@ describe("buildByotConfigForProvider — anthropic (Phase 1 shape preserved)", (
       profiles: {
         "anthropic:default": {
           type: "api_key",
-          // Top-level provider is REQUIRED — OpenClaw's
-          // coercePersistedAuthProfileStore (auth-profiles/persisted.ts:131)
-          // calls parseCredentialEntry without a fallbackProvider, so a
-          // missing top-level provider drops the entry as missing_provider
-          // and silently leaves the customer on the platform key.
           provider: "anthropic",
           keyRef: {
             source: "exec",
@@ -78,7 +54,6 @@ describe("buildByotConfigForProvider — openai (direct)", () => {
 
   test("agentModelOverride defaults when no model is specified", () => {
     const out = buildByotConfigForProvider({ slug: "x", provider: "openai" });
-    // We pick a sensible default OpenAI model when the customer didn't choose.
     expect(out.agentModelOverride).toBeTruthy();
     expect(out.agentModelOverride!.startsWith("openai/")).toBe(true);
   });
@@ -95,9 +70,6 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
     expect(out.models).toEqual({
       providers: {
         "custom-smile-wring-011b": {
-          // OpenClaw needs `api` to know which request adapter to use.
-          // openai-completions covers OpenRouter, Groq, Mistral, Fireworks,
-          // Together, and any other OpenAI-schema endpoint.
           api: "openai-completions",
           baseUrl: "https://openrouter.ai/api/v1",
           apiKey: {
@@ -105,16 +77,11 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
             provider: "gcp-secret-manager",
             id: "byok-smile-wring-011b-openai-compatible/latest",
           },
-          // Explicit models[] entry so OpenClaw doesn't have to guess
-          // when the agent ref namespaces the customer's model.
           models: [{ id: "anthropic/claude-3.5-sonnet", name: "anthropic/claude-3.5-sonnet" }],
         },
       },
     });
-    // No auth-profiles.json — apiKey lives on the provider entry.
     expect(out.authProfiles).toBeNull();
-    // Agent model namespaced under the custom provider. OpenClaw splits
-    // model refs on the FIRST `/` to separate provider from model id.
     expect(out.agentModelOverride).toBe("custom-smile-wring-011b/anthropic/claude-3.5-sonnet");
   });
 

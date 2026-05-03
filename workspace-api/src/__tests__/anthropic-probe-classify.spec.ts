@@ -1,9 +1,3 @@
-/**
- * Unit tests for classifyHttp() — separating "user's key is bad" from
- * "Anthropic is having a moment." The whole point of the classification
- * is to never tell a customer their key is invalid because we got a
- * transient 429 or 5xx.
- */
 import { describe, test, expect } from "vitest";
 import { classifyHttp } from "../billing/anthropic-probe";
 

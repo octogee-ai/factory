@@ -1,11 +1,4 @@
 /**
- * Seed `systemTypingPhrases/{vibe}` docs with the default phrase lists from
- * `shared/types/display-names.ts`.
- *
- * Idempotent: re-runs overwrite each doc's `phrases` array with the current
- * default only if you pass `--force`. Admins edit the docs via the Phrase
- * Manager UI; `--force` resets to shipped defaults.
- *
  * Usage:
  *   GOOGLE_APPLICATION_CREDENTIALS=~/.openclaw/secrets/octogee-test-sa-key.json \
  *   npx tsx scripts/seed-typing-phrases.ts

@@ -1,18 +1,3 @@
-/**
- * POST /:wid/:pid/star — toggle a star on the project.
- *
- * Writes the typed-target shape per BUILDER-SOCIAL-SPEC §10:
- *   stars/{actorUid}_p_{workspaceSlug}_{projectSlug}
- *   { actorUid, target: { type: 'project', ... }, createdAt }
- *
- * `starCount` (on both the project doc and the owner's profile) is
- * maintained by `functions/src/triggers/social.ts:onStarCreated`/
- * `onStarDeleted` via `starDeltas` — the endpoint MUST NOT increment
- * counters itself or it will double-count. Likewise no `actorUsername`
- * denorm: the CF aggregator reads `users/{actorUid}/profile/public.username`
- * fresh for every notification + feed event, so denorming it here would
- * just be a stale-data risk.
- */
 import { Router, Request, Response } from "express";
 import { db, FieldValue } from "../../lib/db";
 import { logger } from "../../middleware/logging";

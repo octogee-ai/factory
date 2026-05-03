@@ -1,26 +1,3 @@
-/**
- * Project README templates + renderer.
- *
- * Per PROJECTS-CANVAS-SPEC §D3 the provisioner seeds `README.md` into
- * every new project so Canvas has real content on day 1. Templates are
- * plain markdown embedded as TypeScript strings so they ship inside every
- * package's compile output — no fs lookup, no deploy-image layout worry.
- *
- * Shared between `workspace-api` (UI-driven project creation, phase 5)
- * and `scripts/lib/projects.ts` (Face-driven project creation).
- *
- * Placeholders recognized by `renderReadmeTemplate`:
- *   {{name}}            - human-readable project name
- *   {{tagline}}         - one-line project description (placeholder used when blank)
- *   {{owner}}           - owning username (workspace slug)
- *   {{workspaceSlug}}   - same as owner; aliased for clarity in template bodies
- *   {{projectSlug}}     - project slug
- *   {{date}}            - ISO date (YYYY-MM-DD) of README generation
- *
- * Unknown placeholders are left as literal `{{var}}` — surfaces template
- * bugs at provisioning instead of silently rendering blanks.
- */
-
 export interface ReadmeTemplateVars {
   name: string;
   tagline: string;
@@ -194,10 +171,6 @@ export function renderReadmeTemplate(
   });
 }
 
-/**
- * Pure string substitution — exported so unit tests can lock the
- * behavior without touching the filesystem.
- */
 export function substitute(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
     return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match;

@@ -1,12 +1,3 @@
-/**
- * POST /:wid/:pid/retry-provisioning — idempotent MM channel + Gitea repair.
- *
- * Two entry points (docs/PROJECTS-CANVAS-SPEC.md §D4):
- *   1. provisioningState === 'failed' — initial create couldn't reach MM.
- *   2. provisioningState === 'active' but channels/general is missing —
- *      legacy pre-PR data where the old silent catch swallowed the error.
- * Idempotent: if the MM channel already exists (by name), reuses its id.
- */
 import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security";
 import { db, FieldValue } from "../../lib/db";

@@ -1,13 +1,3 @@
-/**
- * Canonical Workspace type — used by both frontend and backend.
- *
- * Stored in Firestore at `workspaces/{username}` (doc ID = the Builder's username).
- * 1:1 with the user, forever. Other Builders join into this workspace via
- * `workspaces/{wid}/members/{uid}` (subcollection). The username IS the
- * workspace slug AND the Builder's display handle in MM/Gitea/URL — per
- * DATA-MODEL-REVIEW v3 §2.
- */
-
 import type { WorkspaceVibe } from './display-names';
 
 export type WorkspaceVisibility = 'public' | 'private' | 'unlisted';

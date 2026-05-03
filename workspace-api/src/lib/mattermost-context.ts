@@ -1,13 +1,3 @@
-/**
- * Workspace-scoped Mattermost context resolver.
- *
- * Per DATA-MODEL-REVIEW v3.1 §10.2: the root user-doc `mattermost` field
- * carries only {userId, username} (per-user MM identity for reverse
- * lookup). All workspace-scoped MM identifiers — teamId, coach DM channel,
- * general channel, admin channel, coach agent user ID — live on the
- * canonical workspace / channels / agents docs. This helper fans out the
- * reads in parallel and returns the resolved context for a given user.
- */
 import { db } from "./db";
 import { readAgent, readChannel, readWorkspace } from "./firestoreReads";
 

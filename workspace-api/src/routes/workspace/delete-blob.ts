@@ -1,9 +1,3 @@
-/**
- * POST /delete-blob — remove a blob from Storage + manifest.
- *
- * Idempotent: missing blob / thumbnail files are silently skipped so a
- * double-delete from the UI doesn't surface as an error.
- */
 import { Router } from "express";
 import { storage } from "../../lib/db";
 import { validateFilePath } from "../../lib/path-validation";

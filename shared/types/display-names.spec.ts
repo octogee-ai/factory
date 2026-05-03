@@ -1,15 +1,3 @@
-/**
- * Tests for the deterministic workspace display_name compute + vibe taxonomy.
- *
- * Encodes the MM-canonical naming rule from WORKSPACE-NAMING-CANONICAL-SPEC:
- *   display_name = "{firstName}'s {TitleCase(vibe)}"  when both firstName + vibe
- *                = "{firstName}'s Workspace"          when firstName only
- *                = "{slug}'s Workspace"               when no firstName
- *
- * Vibe values are stored lowercase ('office', 'garage', …) alongside other
- * slug/enum conventions; TitleCase is computed for display only. Invalid or
- * unknown vibes fall back to the default "Workspace" noun.
- */
 import { describe, it, expect } from "vitest";
 import {
   WORKSPACE_VIBE_PRESETS,

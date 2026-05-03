@@ -1,14 +1,3 @@
-/**
- * Ensure admin Mattermost credentials are stored where the platform can
- * find them. Called on provisioner startup.
- *
- * The token goes to GCP Secret Manager (not Firestore — it's a
- * credential). Non-sensitive metadata (userId, proxyUrl) goes to
- * `system/mattermostAdmin` so the `adminMattermostToken` Cloud Function
- * can generate tickets for the admin user without pulling the token
- * itself into Firestore.
- */
-
 import { FieldValue } from "firebase-admin/firestore";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { log } from "../config.js";

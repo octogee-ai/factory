@@ -1,14 +1,3 @@
-/**
- * Tests for the GCP Secret Manager gateway-token fetcher. Covers:
- *   - Fresh fetch hits SM with the per-gatewayId name
- *   - Cache hit avoids SM on the second call
- *   - `skipCache` forces an SM round-trip
- *   - `invalidateGatewayToken` drops the entry
- *   - Empty payload → `empty-token` error
- *   - SM access error → `fetch-failed` error (unless env fallback applies)
- *   - Env-var fallback kicks in ONLY when SM is unreachable AND env is set
- *     (not when SM returns an explicit not-found / access-denied)
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetGatewayTokenCacheForTest,
@@ -20,8 +9,6 @@ import { GATEWAY_TOKEN_PLACEHOLDER } from "../openclaw/gateway-token-constants";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeClient(result: unknown, throws?: Error): any {
-  // Match the real `accessSecretVersion` 3-tuple shape [response, request?,
-  // options?] — production code destructures only the first element.
   const accessSecretVersion = vi.fn(async () => {
     if (throws) throw throws;
     return [result, undefined, undefined];
@@ -86,8 +73,6 @@ describe("fetchGatewayToken", () => {
   });
 
   it("per-gateway cache does not cross-contaminate", async () => {
-    // gw-a and gw-b should hit SM independently — useful for the future
-    // multi-pod fleet where users are routed to different gateway ids.
     const client = makeClient({
       payload: { data: Buffer.from("value", "utf8") },
     });
@@ -114,8 +99,6 @@ describe("fetchGatewayToken", () => {
   });
 
   it("falls back to OPENCLAW_GATEWAY_TOKEN env when SM is unreachable (code=14)", async () => {
-    // gRPC UNAVAILABLE is the canonical SM-down signal; a local-dev loop
-    // without network to GCP should fall through to the env var.
     process.env.OPENCLAW_GATEWAY_TOKEN = "dev-token";
     const err = Object.assign(new Error("14 UNAVAILABLE"), { code: 14 });
     const client = makeClient(undefined, err);
@@ -132,11 +115,6 @@ describe("fetchGatewayToken", () => {
   });
 
   it("does NOT use env fallback when SM returns a real error (permission, not-found)", async () => {
-    // Permission denied / not-found SHOULD surface as fetch-failed so
-    // prod misconfig isn't silently masked by a dev-fallback happening
-    // to be set. The tightened heuristic keys off err.code, not the
-    // message string, so a plain "NOT_FOUND" Error object stays in
-    // fetch-failed territory even when OPENCLAW_GATEWAY_TOKEN is set.
     process.env.OPENCLAW_GATEWAY_TOKEN = "dev-token";
     const err = Object.assign(new Error("NOT_FOUND: secret missing"), { code: 5 });
     const client = makeClient(undefined, err);
@@ -146,10 +124,6 @@ describe("fetchGatewayToken", () => {
   });
 
   it("does NOT fall back on a legit error whose message happens to contain UNAVAILABLE", async () => {
-    // Regression guard for the original String(err) regex. A legit
-    // permission error with "UNAVAILABLE" in its message (e.g.
-    // "secret is in state UNAVAILABLE") must NOT silently fall through
-    // to the env-var fallback.
     process.env.OPENCLAW_GATEWAY_TOKEN = "dev-token";
     const err = Object.assign(new Error("secret is in state UNAVAILABLE"), { code: 7 });
     const client = makeClient(undefined, err);

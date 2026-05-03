@@ -1,19 +1,7 @@
-/**
- * Mattermost API client — admin session token + low-level `mmApiCall`.
- *
- * Both primitives read `MM_URL` / admin credentials from env on first use.
- * The token is cached on the module singleton for the lifetime of the
- * process; callers don't need to plumb it through.
- */
-
 import { log } from "../config.js";
 
 let _mmAdminToken: string | null = null;
 
-/**
- * Get an admin session token by logging in with MM_ADMIN_USER/MM_ADMIN_PASS.
- * Caches the token for the lifetime of the process.
- */
 export async function getMmAdminToken(): Promise<string | null> {
   if (_mmAdminToken) return _mmAdminToken;
 

@@ -1,11 +1,3 @@
-/**
- * POST /extract-zip — extract a ZIP from Storage into the workspace repo.
- *
- * ZIP-bomb guard: 200 MB archive cap, 50 MB per-entry cap, 10 k entry cap.
- * Text files land in Gitea (base64); binaries go to GCS + manifest. The
- * original zip is deleted from GCS and de-listed from the manifest on
- * success.
- */
 import { Router, Request, Response, NextFunction } from "express";
 import JSZip from "jszip";
 import { storage } from "../../lib/db";
@@ -36,9 +28,7 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
 
     const zipFile = bucket.file(gcsZipPath);
     const [zipBuffer] = await zipFile.download();
-    // ZIP-bomb guard: the upload path caps archive size in GCS, but re-cap
-    // here so a misconfigured bucket rule can't feed us a 10GB tarball.
-    const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024; // 200 MB
+    const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
     if (zipBuffer.length > MAX_ARCHIVE_BYTES) {
       res.status(413).json({ error: "Archive exceeds 200MB limit" });
       return;
@@ -57,9 +47,6 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
 
     const fileEntries = Object.entries(zip.files).filter(([, f]) => !f.dir);
 
-    // Per-entry cap + entry-count cap complete the ZIP-bomb guard started at
-    // the archive-size check above. 50MB / 10k entries is generous enough
-    // for legitimate design-asset uploads while killing "42.zip"-style fan-out.
     const MAX_ENTRY_BYTES = 50 * 1024 * 1024;
     const MAX_ENTRIES = 10000;
     if (fileEntries.length > MAX_ENTRIES) {
@@ -84,7 +71,7 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
         try {
           const existing = (await customerGiteaApi(req, `${repoName}/contents/${targetPath}`)) as { sha?: string };
           sha = existing.sha;
-        } catch { /* new file */ }
+        } catch { /* ignore */ }
 
         await customerGiteaApi(req, `${repoName}/contents/${targetPath}`, "PUT", {
           message: `zip-extract: ${relativePath}`,
@@ -116,8 +103,6 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
       logger.warn(`Failed to delete ZIP after extraction: ${msg}`);
     }
 
-    // Remove the original zip from the manifest if it was tracked there
-    // (e.g. the user uploaded it via /upload-blob before extracting).
     await removeFromManifest(
       getCustomerGiteaToken(req),
       repoName,

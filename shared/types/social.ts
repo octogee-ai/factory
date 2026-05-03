@@ -1,19 +1,3 @@
-/**
- * Social edges — Star + Follow target types and doc-id derivation.
- *
- * Per BUILDER-SOCIAL-SPEC §10.1:
- *
- *   stars/{actorUid}_{type}_{targetId}     ← Builder · Project · Post
- *   follows/{actorUid}_{type}_{targetId}   ← Builder · Project (no Post)
- *
- * The doc id is computed from the actor + target so the optimistic-toggle
- * pattern can hit `getDoc(stars/{key})` without a query. The id is opaque
- * to readers — `targetType`, `targetId`, and `targetOwnerUid` live as
- * fields on the doc for query and CF-aggregator use.
- */
-
-// ── Target discriminated unions ──────────────────────────────────────────
-
 export interface StarTargetBuilder {
   type: 'builder';
   /** Firebase UID of the Builder being starred. */
@@ -45,25 +29,16 @@ export type StarTarget = StarTargetBuilder | StarTargetProject | StarTargetPost;
 /** Follow targets are a subset — Posts are not Followable (use Star instead). */
 export type FollowTarget = StarTargetBuilder | StarTargetProject;
 
-// ── Doc id derivation ────────────────────────────────────────────────────
-
 /**
  * Stable doc id for a star edge. Deterministic over (actor, target) so the
  * optimistic toggle can read/write `stars/{starDocId(...)}` directly.
  *
  * Format: `{actorUid}_{shortType}_{targetSlug}`
  *   - shortType: 'b' (builder), 'p' (project), 'post' (post)
- *   - targetSlug:
- *     - builder  → ownerUid
- *     - project  → ${workspaceSlug}_${projectSlug}
- *     - post     → postId
+ *   - targetSlug: builder → ownerUid; project → `${workspaceSlug}_${projectSlug}`; post → postId
  *
- * **The id is opaque** — it's a content-addressable hash, not a parseable
- * URL. Project ids embed `_` as a separator between workspaceSlug and
- * projectSlug, and there's no escape if a slug ever contains `_`. Don't
- * round-trip the id back into a target shape; the canonical shape is the
- * doc fields (`actorUid`, `target`). Aggregator CFs and rules read the
- * fields, never the id.
+ * The id is opaque — don't round-trip it back into a target shape; the
+ * canonical shape is the doc fields.
  */
 export function starDocId(actorUid: string, target: StarTarget): string {
   switch (target.type) {
@@ -85,8 +60,6 @@ export function followDocId(actorUid: string, target: FollowTarget): string {
       return `${actorUid}_p_${target.workspaceSlug}_${target.projectSlug}`;
   }
 }
-
-// ── Type guards (for runtime validation, e.g. CF doc payload checks) ─────
 
 export function isStarTarget(v: unknown): v is StarTarget {
   if (!v || typeof v !== 'object') return false;
@@ -111,7 +84,7 @@ export function isStarTarget(v: unknown): v is StarTarget {
 export function isFollowTarget(v: unknown): v is FollowTarget {
   if (!v || typeof v !== 'object') return false;
   const t = (v as { type?: unknown }).type;
-  if (t === 'post') return false; // Posts aren't followable
+  if (t === 'post') return false;
   return isStarTarget(v);
 }
 

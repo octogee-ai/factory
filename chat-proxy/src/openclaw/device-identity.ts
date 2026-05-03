@@ -1,20 +1,3 @@
-/**
- * Ed25519 device identity for chat-proxy's upstream OpenClaw handshake.
- *
- * OpenClaw's gateway auth grants zero scopes to a shared-token client that
- * connects without a signed device payload (see `server.auth.default-token.
- * suite.ts` in the OpenClaw source). This module gives chat-proxy the
- * minimum surface area to participate in the handshake: generate/load a
- * keypair, derive a deviceId, sign the v3 auth payload.
- *
- * Scope: pod-local, in-memory by default. chat-proxy runs stateless on
- * Cloud Run — each pod generates its own identity at startup; the server
- * accepts any valid signature that goes with a valid token + scopes
- * payload, so ephemeral identity is fine. Same logic lives in
- * `scripts/lib/gateway-device-identity.ts` for the provisioner (which
- * persists the keypair in its PVC); consolidate into a shared package
- * when a third consumer appears.
- */
 import * as crypto from "node:crypto";
 
 export interface DeviceIdentity {
@@ -23,14 +6,9 @@ export interface DeviceIdentity {
   privateKeyPem: string;
 }
 
-// OpenClaw's SPKI prefix for an Ed25519 raw public key. Stripping it from
-// the PEM-exported DER gives the raw 32 bytes the server compares against.
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 function base64UrlEncode(buf: Buffer): string {
-  // Strip trailing `=` padding without using a super-linear regex. A simple
-  // while loop is O(n) and immune to the backtracking pathology sonarjs
-  // flags on `/=+$/`.
   let s = buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_");
   while (s.endsWith("=")) s = s.slice(0, -1);
   return s;
@@ -70,8 +48,6 @@ export function generateIdentity(): DeviceIdentity {
   };
 }
 
-// ── Auth payload (v3) ───────────────────────────────────────────────────────
-
 export interface DeviceAuthPayloadV3Params {
   deviceId: string;
   clientId: string;
@@ -85,11 +61,6 @@ export interface DeviceAuthPayloadV3Params {
   deviceFamily?: string | null;
 }
 
-/**
- * Normalize metadata fields exactly the way OpenClaw does — trim +
- * ASCII-lowercase. Must stay byte-identical so the server's re-derivation
- * matches; otherwise every signature fails verification.
- */
 function normalizeDeviceMetadataForAuth(value: string | null | undefined): string {
   if (typeof value !== "string") return "";
   const trimmed = value.trim();
@@ -140,11 +111,6 @@ export interface SignConnectDeviceParams {
   signedAtMs?: number;
 }
 
-/**
- * Build the signed `device` block for the OpenClaw `connect` frame. Caller
- * supplies the nonce (from the server's `connect.challenge` event) and
- * wires the result into the outbound connect params.
- */
 export function signConnectDevice(params: SignConnectDeviceParams): SignedDevicePayload {
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayloadV3({

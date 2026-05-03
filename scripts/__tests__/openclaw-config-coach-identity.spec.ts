@@ -1,22 +1,3 @@
-/**
- * Unit tests for the per-customer coach identity wiring in boot-sync.
- *
- * OpenClaw authenticates MM writes with ONE shared `octogee-bot` token; it
- * does not support per-agent auth. The per-customer personalization path
- * is the agent's `identity` block (`{ name, emoji }`) — OpenClaw's MM
- * plugin uses that to set `override_username` / `override_icon_emoji` on
- * each post, so each Builder's workspace shows their chosen coach
- * identity in chat bubbles + Members-panel presence.
- *
- * Two extracted helpers power the wiring:
- *   - `buildCustomerAgent(customer)` — pure, returns the openclaw.json
- *     agent entry with its `identity` block populated from the input.
- *   - `fetchCoachIdentities(deps, customers)` — async, reads each
- *     customer's `agents/{uid}` Firestore doc for `name` + `avatarEmoji`
- *     and returns a Map keyed by uid. Missing docs log a structured
- *     warning; callers fall back to platform defaults.
- */
-
 import { describe, it, expect, vi } from "vitest";
 import {
   buildCustomerAgent,
@@ -64,10 +45,6 @@ describe("resolveCoachIdentity", () => {
     ).toEqual({ name: "Octo", emoji: "🧠" });
   });
 
-  // The specific regression the reviewer called out: if a caller refactors
-  // the `||` fallback to `??`, empty-string customization would silently
-  // land in the identity block and OpenClaw would render "" as the coach
-  // name on posts. This test locks the empty-string-as-missing semantics.
   it("treats empty strings as missing (regression guard against `||` → `??` refactor)", () => {
     expect(
       resolveCoachIdentity({ name: "", emoji: "" }, DEFAULTS),
@@ -218,10 +195,6 @@ describe("fetchCoachIdentities", () => {
     );
   });
 
-  // Regression for cross-workspace bleed: each customer's agent entry
-  // must carry its OWN identity, not another customer's. Drives the
-  // production-shape loop (pre-fetch identities, map over customers,
-  // look up by uid) and asserts each agent gets its own identity.
   it("distributes identities per customer — no cross-workspace bleed on Map lookup", async () => {
     const deps = mkDeps({
       "agents/uid-a": { name: "Scout", avatarEmoji: "🧠" },
@@ -254,8 +227,6 @@ describe("fetchCoachIdentities", () => {
     expect((agents[1].identity as any)).toEqual({ name: "Pix", emoji: "🦊" });
     expect((agents[2].identity as any)).toEqual({ name: "Marlo", emoji: "🐢" });
 
-    // All distinct identity names — no Map-keying regression re-uses one
-    // customer's coach on another's agent.
     const names = agents.map((a) => (a.identity as any).name);
     expect(new Set(names).size).toBe(3);
   });

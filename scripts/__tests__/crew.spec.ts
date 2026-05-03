@@ -7,15 +7,11 @@ import {
   TIERS,
 } from "../lib/crew.js";
 
-// ── CREW_ROLES ──────────────────────────────────────────────────────────────────
-
 describe("CREW_ROLES", () => {
   it("contains only coach", () => {
     expect(CREW_ROLES).toEqual(["coach"]);
   });
 });
-
-// ── CREW_IDENTITY ───────────────────────────────────────────────────────────────
 
 describe("CREW_IDENTITY", () => {
   it("coach is Octo with octopus emoji and Sonnet as the provisioning default", () => {
@@ -25,15 +21,11 @@ describe("CREW_IDENTITY", () => {
   });
 });
 
-// ── TIERS ───────────────────────────────────────────────────────────────────────
-
 describe("TIERS", () => {
   it("has 5 tiers", () => {
     expect(TIERS).toEqual(["trial", "free", "hobby", "pro", "max"]);
   });
 });
-
-// ── TIER_CREW_ACCESS ────────────────────────────────────────────────────────────
 
 describe("TIER_CREW_ACCESS", () => {
   it("all tiers get only coach", () => {
@@ -42,8 +34,6 @@ describe("TIER_CREW_ACCESS", () => {
     }
   });
 });
-
-// ── getProvisioning ─────────────────────────────────────────────────────────────
 
 describe("getProvisioning", () => {
   it("extracts provisioning data from valid doc", () => {

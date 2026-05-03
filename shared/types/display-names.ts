@@ -1,21 +1,4 @@
 /**
- * Vibe taxonomy + deterministic human-readable display names for workspaces,
- * workspace channels, and project channels. Pure functions — no Firestore,
- * no MM, no I/O.
- *
- * Single source of truth for:
- *   - The 6 vibe presets (stored lowercase; TitleCase computed for display).
- *   - Workspace team display_name (`{firstName}'s {Vibe}` etc.).
- *   - Workspace channel display names (General / Admin / Coach).
- *   - Project channel display names (`{projectName} {channelName}`).
- *   - Typing-phrase lists per vibe (coach personalization).
- *
- * See docs/WORKSPACE-NAMING-CANONICAL-SPEC.md.
- */
-
-// ── Vibe taxonomy ────────────────────────────────────────────────────────────
-
-/**
  * The 6 vibes a Builder picks at onboarding. Stored lowercase to match the
  * codebase's slug/enum conventions; TitleCase is only ever a display transform.
  * Any stored value outside this set falls back to the default noun "Workspace"
@@ -53,8 +36,6 @@ export function titleCaseVibe(vibe: string | null | undefined): string {
   return vibe.charAt(0).toUpperCase() + vibe.slice(1);
 }
 
-// ── Workspace team display_name ──────────────────────────────────────────────
-
 /**
  * Compute the MM team display_name for a workspace.
  *
@@ -85,8 +66,6 @@ export function computeWorkspaceDisplayName(params: {
   return `${owner}'s ${noun}`;
 }
 
-// ── Workspace channels ───────────────────────────────────────────────────────
-
 /**
  * Display names for the three workspace channels. Spec §Naming rules:
  *   general → "General"
@@ -100,8 +79,6 @@ export const WORKSPACE_CHANNEL_DISPLAY_NAMES = {
 } as const;
 
 export type WorkspaceChannelKind = keyof typeof WORKSPACE_CHANNEL_DISPLAY_NAMES;
-
-// ── Project channels ─────────────────────────────────────────────────────────
 
 /**
  * Compute the display_name for a project channel.
@@ -131,8 +108,6 @@ export function computeProjectChannelDisplayName(params: {
 
   return `${trimmedProject} ${trimmedChannel}`;
 }
-
-// ── Typing-phrase personalization (coach typing indicator) ───────────────────
 
 /**
  * Per-vibe phrase lists used by the typing indicator. Seeded into

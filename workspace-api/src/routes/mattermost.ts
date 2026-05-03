@@ -1,7 +1,3 @@
-/**
- * Mattermost routes — token exchange, admin token, channel invites.
- * Migrated from functions/src/mattermost/{token,adminToken,invite}.ts
- */
 import { Router, Request, Response, NextFunction } from "express";
 import * as crypto from "crypto";
 import { requireAuth } from "../middleware/auth";
@@ -9,8 +5,6 @@ import { db, FieldValue, Timestamp } from "../lib/db";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
 
 const router = Router();
-
-// ── GET /token — user MM credentials ──────────────────────────────────────
 
 router.get("/token", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
