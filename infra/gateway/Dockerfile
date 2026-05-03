@@ -14,11 +14,6 @@ FROM ${OPENCLAW_BASE_IMAGE}
 
 USER root
 
-# ── SSH client (for Gitea git operations via SSH) ──────────────────────────
-# TODO: move to Dockerfile.base on next base image rebuild
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
-    && rm -rf /var/lib/apt/lists/*
-
 # ── Octogee provisioner + site API ──────────────────────────────────────────
 COPY --chown=node:node scripts/package.json scripts/package-lock.json* /octogee/scripts/
 WORKDIR /octogee/scripts

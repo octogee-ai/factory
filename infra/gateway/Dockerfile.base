@@ -8,7 +8,7 @@
 #
 # What lives here (changes rarely → cached across gateway builds):
 #   - OpenClaw npm install
-#   - All apt packages (curl, jq, python3, chromium, git, vim, sqlite3, etc.)
+#   - All apt packages (curl, jq, python3, git, ripgrep, ffmpeg, gh, etc.)
 #   - @huggingface/transformers (1.2GB — heaviest dep, almost never changes)
 #   - octogee-router npm install (node_modules for the classifier extension)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -25,13 +25,28 @@ FROM node:24-bookworm-slim
 
 # ── All system packages in one layer ────────────────────────────────────────
 # Combining apt runs avoids duplicate update overhead and saves ~30s per build.
+# "Storage is cheap" — ship everything the agent needs to be productive.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Runtime essentials
-    curl jq python3 \
+    curl jq python3 python3-pip python3-venv \
     sqlite3 xxd rsync \
-    ca-certificates \
+    ca-certificates openssh-client \
     # Developer experience (available in running pod)
     bash-completion git vim less \
+    # Code search & analysis
+    ripgrep tree cloc \
+    # Build tools
+    make build-essential \
+    # Archive & file utilities
+    wget unzip zip file bc \
+    # Media processing
+    ffmpeg imagemagick \
+    # Document conversion
+    pandoc \
+    # Debugging & diagnostics
+    htop strace dnsutils net-tools \
+    # Fuzzy finder
+    fzf \
     && rm -rf /var/lib/apt/lists/*
 
 # ── OpenClaw from private fork tarball ──────────────────────────────────────
@@ -43,6 +58,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG OPENCLAW_VERSION=latest
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
 RUN npm install -g /tmp/openclaw-fork.tgz && openclaw --version && rm /tmp/openclaw-fork.tgz
+
+# ── GitHub CLI ───────────────────────────────────────────────────────────────
+# Not in Debian repos — installed from GitHub's own apt source.
+# Used heavily by the github skill for PRs, issues, CI logs, and code review.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── ACP coding agents (Claude Code + Codex) ──────────────────────────────────
+# Pre-installed so they're available for ACP runtime sessions without
+# per-boot npm install delays or network dependency.
+RUN npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -5
+
+# ── Python essentials ────────────────────────────────────────────────────────
+# Common packages for data work, scraping, and config parsing.
+RUN pip3 install --break-system-packages \
+    pyyaml beautifulsoup4 pandas matplotlib
 
 # ── Non-root user ────────────────────────────────────────────────────────────
 RUN groupadd -r node 2>/dev/null || true && \
