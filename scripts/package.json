@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "provision": "tsx local-provisioner.ts",
+    "fleet": "tsx ops/fleet.ts",
     "test": "npx vitest run __tests__"
   },
   "dependencies": {

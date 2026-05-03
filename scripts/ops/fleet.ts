@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * fleet — solo-operator CLI for the gateway fleet.
+ * fleet — Octogee gateway fleet operations CLI.
  *
  * Wraps the existing fleet controller (functions/src/fleet-controller/*) +
  * Firestore + helm + kubectl into one verb surface. Reads/writes the same
@@ -8,13 +8,8 @@
  * the trigger the controller is waiting for, so the heavy lifting (mount,
  * pick-next, restore-customer task) keeps happening in Cloud Functions.
  *
- * Phase 1 (this file): read-only `ls` verbs + simple Firestore-write verbs.
- * Phase 2: live customer migration (separate file, gateway RPCs).
- *
- * Usage:
- *   tsx scripts/ops/fleet.ts --env=prod ls gateways
- *   tsx scripts/ops/fleet.ts --env=prod ls customers
- *   tsx scripts/ops/fleet.ts --env=prod ls customers --gateway=gw-prod
+ * Run `npm run fleet -- --help` for the verb menu, or
+ * `npm run fleet -- help <verb>` for per-verb help with examples.
  *
  * Bootstrap mirrors scripts/ops/assign-customer-gateway.ts — same SA key
  * convention (~/.openclaw/secrets/octogee[-test]-sa-key.json), same
@@ -25,6 +20,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   type GatewayState,
   type GatewayStatus,
@@ -38,35 +34,197 @@ import {
   describeStep,
 } from "../lib/fleet-migration.js";
 
-const USAGE = `Usage: tsx scripts/ops/fleet.ts --env=test|prod <verb> [args]
+// ── Color helpers ───────────────────────────────────────────────────────────
+// ANSI escapes guarded by isTTY so piped output stays clean. NO_COLOR env
+// var (per https://no-color.org) disables colors when set to ANY non-empty
+// value — the spec is "presence is the signal," not a specific value.
+const COLOR_ENABLED =
+  process.stdout.isTTY === true &&
+  (process.env.NO_COLOR === undefined || process.env.NO_COLOR === "");
+const ESC = "\x1b[";
+const c = {
+  reset: COLOR_ENABLED ? `${ESC}0m` : "",
+  bold: COLOR_ENABLED ? `${ESC}1m` : "",
+  dim: COLOR_ENABLED ? `${ESC}2m` : "",
+  red: COLOR_ENABLED ? `${ESC}31m` : "",
+  green: COLOR_ENABLED ? `${ESC}32m` : "",
+  yellow: COLOR_ENABLED ? `${ESC}33m` : "",
+  cyan: COLOR_ENABLED ? `${ESC}36m` : "",
+};
+const bold = (s: string) => `${c.bold}${s}${c.reset}`;
+const dim = (s: string) => `${c.dim}${s}${c.reset}`;
+const red = (s: string) => `${c.red}${s}${c.reset}`;
+const green = (s: string) => `${c.green}${s}${c.reset}`;
+const yellow = (s: string) => `${c.yellow}${s}${c.reset}`;
+const cyan = (s: string) => `${c.cyan}${s}${c.reset}`;
 
-Read verbs:
-  ls gateways                          List gateways with pod status + customer count.
-  ls customers [--gateway=GW_ID]       List customers, optionally filtered by gateway.
-  inspect customer <slug>              Full diagnostic for one customer (assignment +
-                                       gateway state + recent restoreJobs).
-  inspect gateway <id>                 Full diagnostic for one gateway (mounted +
-                                       failed + in-flight + recent jobs).
+const CHECK = COLOR_ENABLED ? "✓" : "[ok]";
+const CROSS = COLOR_ENABLED ? "✗" : "[x]";
+const ARROW = COLOR_ENABLED ? "→" : "->";
 
-Write verbs (require --apply to commit; default is dry-run):
-  unstick-customer <slug>              Clear failedCustomers backoff + nudge user
-                                       doc to fire the controller. Targeted recovery
-                                       for the SSH-key-race bug class.
-  add-customer <slug> --to=<gw-id>     Override placement: write
-                                       users/{uid}.provisioning.openclaw.gatewayId.
-                                       Existing controller picks up via trigger.
-  migrate-customer <slug> --to=<gw-id> Show the migration plan for moving a
-                                       customer from their current gateway
-                                       to the target. Plan-only — gateway-side
-                                       /quiesce + /export + /import RPCs land
-                                       in a follow-up. See lib/fleet-migration.ts.
+// ── Help / version ──────────────────────────────────────────────────────────
+const VERSION = readVersion();
 
-Examples:
-  tsx scripts/ops/fleet.ts --env=prod inspect customer ceckert
-  tsx scripts/ops/fleet.ts --env=prod inspect gateway gw-prod
-  tsx scripts/ops/fleet.ts --env=prod unstick-customer ceckert         # dry-run
-  tsx scripts/ops/fleet.ts --env=prod unstick-customer ceckert --apply # commit
-  tsx scripts/ops/fleet.ts --env=prod add-customer ceckert --to=gw-prod-canary --apply`;
+function readVersion(): string {
+  // Read from the scripts/ workspace package.json so a single bump there
+  // updates `--version` everywhere. Falls back gracefully when the file
+  // can't be read (e.g., installed elsewhere).
+  //
+  // `fileURLToPath` is the platform-correct way to convert `import.meta.url`
+  // to a fs path — `new URL(...).pathname` mishandles percent-encoded chars
+  // on macOS/Linux and breaks outright on Windows (`/C:/foo` shape).
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const pkgPath = path.join(here, "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+const BANNER = `${bold("fleet")} ${dim("v" + VERSION)} ${dim("— Octogee gateway fleet operations")}`;
+
+interface VerbHelp {
+  verb: string;
+  summary: string;
+  args: string;
+  description: string;
+  examples: readonly string[];
+  /** Whether the verb writes (requires --apply). */
+  writes: boolean;
+}
+
+const VERBS: readonly VerbHelp[] = [
+  {
+    verb: "ls gateways",
+    summary: "List gateways with pod status + customer count.",
+    args: "",
+    description:
+      "Joins Firestore `gateways/*` with `kubectl get pods -l app=octogee-gateway`. Surfaces stuck pods + heartbeat age that are otherwise invisible without dropping into kubectl directly.",
+    examples: ["fleet --env=prod ls gateways"],
+    writes: false,
+  },
+  {
+    verb: "ls customers",
+    summary: "List customers; optionally filter by gateway. Reports drift in both directions.",
+    args: "[--gateway=<gw-id>]",
+    description:
+      "MISSING = Firestore says assigned, gateway doesn't claim mounted.\nORPHANS = mounted on a gateway but not assigned in Firestore (separate table at the bottom).",
+    examples: [
+      "fleet --env=prod ls customers",
+      "fleet --env=prod ls customers --gateway=gw-prod",
+    ],
+    writes: false,
+  },
+  {
+    verb: "inspect customer",
+    summary: "Full diagnostic for one customer.",
+    args: "<slug>",
+    description:
+      "Shows user state, gateway state focused on this slug, drift verdict, recent restoreJobs (latest 5). The verb-shaped version of the ad-hoc fix-ceckert.ts triage script.",
+    examples: ["fleet --env=prod inspect customer ceckert"],
+    writes: false,
+  },
+  {
+    verb: "inspect gateway",
+    summary: "Full diagnostic for one gateway.",
+    args: "<gw-id>",
+    description:
+      "Mounted set, failedCustomers backoff, recent restoreJobs across the gateway, pod status. Single-screen state dump.",
+    examples: ["fleet --env=prod inspect gateway gw-prod"],
+    writes: false,
+  },
+  {
+    verb: "unstick-customer",
+    summary: "Clear stuck-customer backoff + nudge the controller.",
+    args: "<slug> [--apply]",
+    description:
+      "Clears `failedCustomers[slug]` if set and rewrites `users/{uid}.provisioning.openclaw` to fire the `onUserUpdatedForFleet` trigger.\n\nTargeted recovery for the SSH-key-race bug class. Will NOT remove from `mountedCustomers` (that's a forced unmount, separate concern). Refuses if user provisioning is incomplete or no gateway is assigned.\n\nDry-run by default. Pass `--apply` to commit.",
+    examples: [
+      "fleet --env=prod unstick-customer ceckert         # dry-run",
+      "fleet --env=prod unstick-customer ceckert --apply # commit",
+    ],
+    writes: true,
+  },
+  {
+    verb: "add-customer",
+    summary: "Override placement: assign customer to a specific gateway.",
+    args: "<slug> --to=<gw-id> [--apply]",
+    description:
+      "Writes `users/{uid}.provisioning.openclaw.gatewayId`. Refuses if the gateway doesn't exist or is `unreachable`. Same downstream path as `assign-customer-gateway.ts`, but lets ops force a specific gateway (canary placement, repair).\n\nDry-run by default. Pass `--apply` to commit.",
+    examples: [
+      "fleet --env=prod add-customer ceckert --to=gw-prod-canary",
+      "fleet --env=prod add-customer ceckert --to=gw-prod-canary --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "migrate-customer",
+    summary: "Show the migration plan for moving a customer between gateways.",
+    args: "<slug> --to=<gw-id>",
+    description:
+      "Plan-only. Renders the forward + rollback steps the orchestrator would take to move <slug> from their current gateway to <gw-id>. Useful for ops review before live migration ships.\n\nLive execution requires the gateway-side /quiesce, /export, /import, /unmount RPCs. The state machine lives in scripts/lib/fleet-migration.ts; orchestrator wiring + chat-proxy reroute are the remaining pieces.",
+    examples: ["fleet --env=prod migrate-customer ceckert --to=gw-prod-v2"],
+    writes: false,
+  },
+];
+
+const verbsByName = new Map<string, VerbHelp>(VERBS.map((v) => [v.verb, v]));
+
+function renderTopHelp(): string {
+  const readVerbs = VERBS.filter((v) => !v.writes);
+  const writeVerbs = VERBS.filter((v) => v.writes);
+  const fmtVerb = (v: VerbHelp) => {
+    const name = v.verb.padEnd(20);
+    const args = v.args ? ` ${dim(v.args)}` : "";
+    return `  ${cyan(name)}${args}\n      ${v.summary}`;
+  };
+  return [
+    BANNER,
+    "",
+    bold("USAGE"),
+    "  fleet --env=test|prod <verb> [args]",
+    "",
+    bold("READ VERBS"),
+    ...readVerbs.map(fmtVerb),
+    "",
+    bold("WRITE VERBS") + dim(" (dry-run by default; --apply commits)"),
+    ...writeVerbs.map(fmtVerb),
+    "",
+    bold("OPTIONS"),
+    `  ${cyan("--env=test|prod")}      ${dim("Required.")} Targets PROD or TEST Firestore + cluster.`,
+    `  ${cyan("--apply")}              Commit changes (write verbs only). Without it, runs as dry-run.`,
+    `  ${cyan("--help")}               Show this help.`,
+    `  ${cyan("--version")}            Print version (${VERSION}).`,
+    "",
+    bold("LEARN MORE"),
+    `  fleet help <verb>      Detailed help, args, and examples for one verb.`,
+    "",
+  ].join("\n");
+}
+
+function renderVerbHelp(verb: VerbHelp): string {
+  const command = `fleet --env=<env> ${verb.verb}${verb.args ? " " + verb.args : ""}`;
+  return [
+    BANNER,
+    "",
+    bold(verb.verb.toUpperCase()) + dim(verb.writes ? " (write — requires --apply)" : " (read-only)"),
+    "",
+    bold("SUMMARY"),
+    "  " + verb.summary,
+    "",
+    bold("USAGE"),
+    "  " + cyan(command),
+    "",
+    bold("DESCRIPTION"),
+    ...verb.description.split("\n").map((l) => "  " + l),
+    "",
+    bold("EXAMPLES"),
+    ...verb.examples.map((e) => "  " + e),
+    "",
+  ].join("\n");
+}
 
 // ── Argv parsing ────────────────────────────────────────────────────────────
 interface ParsedArgs {
@@ -75,42 +233,83 @@ interface ParsedArgs {
   flags: Record<string, string | true>;
 }
 
+// Flags that take a value (vs. boolean toggles). `--env`, `--to`,
+// `--gateway` accept either form: `--flag=value` or `--flag value`. Boolean
+// flags (`--apply`, `--help`, `--version`) take no value.
+const VALUE_FLAGS = new Set(["env", "to", "gateway"]);
+
 function parseArgs(argv: readonly string[]): ParsedArgs {
   const out: ParsedArgs = { env: "", positional: [], flags: {} };
-  for (const a of argv) {
-    if (a.startsWith("--")) {
-      const eq = a.indexOf("=");
-      if (eq > 0) {
-        const k = a.slice(2, eq);
-        const v = a.slice(eq + 1);
-        if (k === "env") {
-          out.env = v as "test" | "prod";
-        } else {
-          out.flags[k] = v;
-        }
-      } else {
-        out.flags[a.slice(2)] = true;
-      }
-    } else {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith("--")) {
       out.positional.push(a);
+      continue;
     }
+    const eq = a.indexOf("=");
+    if (eq > 0) {
+      const k = a.slice(2, eq);
+      const v = a.slice(eq + 1);
+      if (k === "env") out.env = v as "test" | "prod";
+      else out.flags[k] = v;
+      continue;
+    }
+    const k = a.slice(2);
+    // Space-separated form: consume the next argv as the value, but only
+    // for known value-taking flags. Otherwise treat as boolean.
+    if (VALUE_FLAGS.has(k) && i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+      const v = argv[++i];
+      if (k === "env") out.env = v as "test" | "prod";
+      else out.flags[k] = v;
+      continue;
+    }
+    out.flags[k] = true;
   }
   return out;
 }
 
 const args = parseArgs(process.argv.slice(2));
 
-if (args.flags.help === true || args.positional[0] === "help" || args.positional.length === 0) {
-  console.log(USAGE);
+// ── Top-level short-circuits ────────────────────────────────────────────────
+// `--version`, `--help`, no-args, and `help [verb]` ALL bypass the --env
+// requirement so users can read help without a SA key on disk.
+
+if (args.flags.version === true) {
+  console.log(VERSION);
+  process.exit(0);
+}
+
+if (args.positional.length === 0 || args.flags.help === true) {
+  console.log(renderTopHelp());
   process.exit(args.positional.length === 0 ? 1 : 0);
 }
 
+if (args.positional[0] === "help") {
+  // `fleet help <verb>` or `fleet help <verb> <subverb>` — look up by
+  // joining the rest of positionals.
+  const target = args.positional.slice(1).join(" ").trim();
+  if (!target) {
+    console.log(renderTopHelp());
+    process.exit(0);
+  }
+  const verb = verbsByName.get(target);
+  if (!verb) {
+    console.error(red(`Unknown verb: '${target}'`));
+    console.error(dim(`Run \`fleet --help\` for the verb list.`));
+    process.exit(1);
+  }
+  console.log(renderVerbHelp(verb));
+  process.exit(0);
+}
+
 if (!args.env) {
-  console.error(`--env is required (test or prod)\n${USAGE}`);
+  console.error(red(`--env is required (test or prod).`));
+  console.error(dim(`Example: fleet --env=prod ls gateways`));
+  console.error(dim(`Run \`fleet --help\` for the verb list.`));
   process.exit(1);
 }
 if (args.env !== "test" && args.env !== "prod") {
-  console.error(`--env must be 'test' or 'prod' (got: '${args.env}')\n${USAGE}`);
+  console.error(red(`--env must be 'test' or 'prod' (got: '${args.env}').`));
   process.exit(1);
 }
 
@@ -121,7 +320,8 @@ const saPath = path.join(
   `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
 );
 if (!fs.existsSync(saPath)) {
-  console.error(`SA key not found at ${saPath}`);
+  console.error(red(`${CROSS} SA key not found at ${saPath}`));
+  console.error(dim(`  Expected file used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
   process.exit(1);
 }
 initializeApp({
@@ -402,7 +602,7 @@ async function lsCustomers(): Promise<void> {
     }
   }
   if (orphans.length > 0) {
-    console.log("\nORPHANS (in gateway.mountedCustomers but not assigned to that gateway in Firestore):");
+    console.log("\n" + yellow(bold("ORPHANS")) + dim("  in gateway.mountedCustomers but not assigned to that gateway in Firestore"));
     console.log(table(orphans));
   }
 }
@@ -410,11 +610,11 @@ async function lsCustomers(): Promise<void> {
 async function inspectCustomer(slug: string): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
-    console.error(`No user found with slug or username '${slug}'.`);
+    console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
     process.exit(1);
   }
   const oc = user.data.provisioning?.openclaw ?? {};
-  console.log(`=== USER ${slug} (uid=${user.uid}) ===`);
+  console.log(bold(`USER ${slug}`) + dim(`  uid=${user.uid}`));
   console.log(table([
     {
       field: "username",
@@ -439,19 +639,19 @@ async function inspectCustomer(slug: string): Promise<void> {
   ]));
 
   if (!oc.gatewayId) {
-    console.log("\n(no gateway assigned — placement hasn't run; check config/orchestrator)");
+    console.log("\n" + yellow(`No gateway assigned — placement hasn't run; check config/orchestrator.`));
     return;
   }
 
   const gwSnap = await db.collection(GATEWAYS_COLLECTION).doc(oc.gatewayId).get();
   if (!gwSnap.exists) {
-    console.log(`\n!! gateways/${oc.gatewayId} does not exist — assigned to a gateway that isn't registered.`);
+    console.log("\n" + red(`${CROSS} gateways/${oc.gatewayId} does not exist — assigned to a gateway that isn't registered.`));
     return;
   }
   const gw = gwSnap.data() as GatewayDoc;
   const mounted = (gw.mountedCustomers ?? []).includes(slug);
   const failed = gw.failedCustomers?.[slug];
-  console.log(`\n=== GATEWAY ${oc.gatewayId} ===`);
+  console.log("\n" + bold(`GATEWAY ${oc.gatewayId}`));
   console.log(table([
     { field: "status", value: gw.status ?? "-" },
     { field: "heartbeat", value: ts(gw.lastHeartbeatAt) },
@@ -466,19 +666,21 @@ async function inspectCustomer(slug: string): Promise<void> {
   ]));
 
   // Drift verdict — combine the user state with the gateway state.
-  console.log("\n=== DRIFT ===");
+  console.log("\n" + bold("DRIFT"));
   if (oc.status === "complete" && !mounted && !failed) {
-    console.log("✗ MISSING — assigned + complete but gateway hasn't mounted; trigger may be wedged. Try: unstick-customer");
+    console.log(red(`${CROSS} MISSING`) + " — assigned + complete but gateway hasn't mounted; trigger may be wedged.");
+    console.log(dim(`  Try: fleet --env=${args.env} unstick-customer ${slug} --apply`));
   } else if (oc.status === "complete" && !mounted && failed) {
-    console.log(`✗ STUCK IN BACKOFF — failCount=${failed.failCount}. Try: unstick-customer`);
+    console.log(red(`${CROSS} STUCK IN BACKOFF`) + ` — failCount=${failed.failCount}.`);
+    console.log(dim(`  Try: fleet --env=${args.env} unstick-customer ${slug} --apply`));
   } else if (oc.status !== "complete") {
-    console.log("· upstream provisioning incomplete; not a fleet-controller issue");
+    console.log(yellow("·") + " upstream provisioning incomplete; not a fleet-controller issue.");
   } else {
-    console.log("· healthy (mounted on the assigned gateway)");
+    console.log(green(`${CHECK} healthy`) + " — mounted on the assigned gateway.");
   }
 
   const jobs = await recentRestoreJobs(slug, 5);
-  console.log(`\n=== RECENT RESTORE JOBS (latest 5 of ${jobs.length}) ===`);
+  console.log("\n" + bold(`RECENT RESTORE JOBS`) + dim(`  latest 5 of ${jobs.length}`));
   if (jobs.length === 0) {
     console.log("(none)");
   } else {
@@ -498,11 +700,11 @@ async function inspectCustomer(slug: string): Promise<void> {
 async function inspectGateway(gatewayId: string): Promise<void> {
   const gwSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!gwSnap.exists) {
-    console.error(`No gateway doc at gateways/${gatewayId}.`);
+    console.error(red(`${CROSS} No gateway doc at gateways/${gatewayId}.`));
     process.exit(1);
   }
   const gw = gwSnap.data() as GatewayDoc;
-  console.log(`=== GATEWAY ${gatewayId} ===`);
+  console.log(bold(`GATEWAY ${gatewayId}`));
   console.log(table([
     { field: "status", value: gw.status ?? "-" },
     { field: "version", value: gw.version ?? "-" },
@@ -514,12 +716,12 @@ async function inspectGateway(gatewayId: string): Promise<void> {
   ]));
 
   const mounted = (gw.mountedCustomers ?? []).slice().sort();
-  console.log(`\n=== MOUNTED (${mounted.length}) ===`);
-  console.log(mounted.length === 0 ? "(none)" : mounted.join(", "));
+  console.log("\n" + bold(`MOUNTED`) + dim(`  ${mounted.length}`));
+  console.log(mounted.length === 0 ? dim("  (none)") : "  " + mounted.join(", "));
 
   const failed = gw.failedCustomers ?? {};
   const failedKeys = Object.keys(failed).sort();
-  console.log(`\n=== FAILED-CUSTOMERS BACKOFF (${failedKeys.length}) ===`);
+  console.log("\n" + bold(`FAILED-CUSTOMERS BACKOFF`) + dim(`  ${failedKeys.length}`));
   if (failedKeys.length === 0) {
     console.log("(none)");
   } else {
@@ -540,7 +742,7 @@ async function inspectGateway(gatewayId: string): Promise<void> {
     .map((d) => ({ id: d.id, ...(d.data() as RestoreJobDoc) }))
     .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
     .slice(0, 10);
-  console.log(`\n=== RECENT RESTORE JOBS (latest 10 of ${allJobs.size}) ===`);
+  console.log("\n" + bold(`RECENT RESTORE JOBS`) + dim(`  latest 10 of ${allJobs.size}`));
   console.log(table(jobs.map((j) => ({
     id: j.id.slice(0, 12),
     slug: j.slug ?? "-",
@@ -568,7 +770,7 @@ async function inspectGateway(gatewayId: string): Promise<void> {
 async function unstickCustomer(slug: string, apply: boolean): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
-    console.error(`No user found with slug or username '${slug}'.`);
+    console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
     process.exit(1);
   }
   const oc = user.data.provisioning?.openclaw ?? {};
@@ -593,20 +795,20 @@ async function unstickCustomer(slug: string, apply: boolean): Promise<void> {
   const failed = gw.failedCustomers?.[slug];
   const mounted = (gw.mountedCustomers ?? []).includes(slug);
 
-  console.log(`=== unstick-customer ${slug} ===`);
-  console.log(`uid:                ${user.uid}`);
-  console.log(`gatewayId:          ${oc.gatewayId}`);
-  console.log(`gateway status:     ${gw.status}`);
-  console.log(`mountedCustomers:   ${mounted ? "includes slug (healthy — won't touch)" : "does NOT include slug (pending — will resolve via nudge)"}`);
-  console.log(`failedCustomers:    ${failed ? `failCount=${failed.failCount} → will CLEAR` : "no entry — nothing to clear"}`);
-  console.log(`nudge:              users/${user.uid} (forces onUserUpdatedForFleet)`);
+  console.log(bold(`UNSTICK-CUSTOMER ${slug}`));
+  console.log(`  uid               ${user.uid}`);
+  console.log(`  gatewayId         ${oc.gatewayId}`);
+  console.log(`  gateway status    ${gw.status}`);
+  console.log(`  mountedCustomers  ${mounted ? dim("includes slug (healthy — won't touch)") : yellow("does NOT include slug (pending — will resolve via nudge)")}`);
+  console.log(`  failedCustomers   ${failed ? yellow(`failCount=${failed.failCount} ${ARROW} will CLEAR`) : dim("no entry — nothing to clear")}`);
+  console.log(`  nudge             ${dim(`users/${user.uid} (forces onUserUpdatedForFleet)`)}`);
 
   if (mounted && !failed) {
-    console.log("\n· Customer appears healthy. unstick will only nudge the trigger; harmless but probably unnecessary.");
+    console.log("\n" + dim(`Customer appears healthy. Unstick will only nudge the trigger; harmless but probably unnecessary.`));
   }
 
   if (!apply) {
-    console.log("\n--- DRY RUN (re-run with --apply to commit) ---");
+    console.log("\n" + dim(`--- DRY RUN (re-run with --apply to commit) ---`));
     return;
   }
 
@@ -615,7 +817,7 @@ async function unstickCustomer(slug: string, apply: boolean): Promise<void> {
   // verb that would need a real /unmount RPC, not just a Firestore edit).
   if (failed) {
     await gwRef.update({ [`failedCustomers.${slug}`]: FieldValue.delete() });
-    console.log(`\n✓ gateways/${oc.gatewayId}.failedCustomers.${slug} cleared`);
+    console.log("\n" + green(`${CHECK} gateways/${oc.gatewayId}.failedCustomers.${slug} cleared`));
   }
 
   // Always nudge — fires `onUserUpdatedForFleet` so the controller re-runs
@@ -630,91 +832,87 @@ async function unstickCustomer(slug: string, apply: boolean): Promise<void> {
       },
     },
   }, { merge: true });
-  console.log(`✓ users/${user.uid} nudged`);
+  console.log(green(`${CHECK} users/${user.uid} nudged`));
   if (!mounted) {
-    console.log(`\nWatch gateways/${oc.gatewayId}.mountedCustomers for '${slug}' to appear within ~30s.`);
+    console.log("\n" + dim(`Watch gateways/${oc.gatewayId}.mountedCustomers for '${slug}' to appear within ~30s.`));
   }
 }
 
 async function addCustomer(slug: string, gatewayId: string, apply: boolean): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
-    console.error(`No user found with slug or username '${slug}'.`);
+    console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
     process.exit(1);
   }
   if (user.data.approved !== true) {
-    console.error(`User '${slug}' is not approved=true. Refusing to assign.`);
+    console.error(red(`${CROSS} User '${slug}' is not approved=true. Refusing to assign.`));
     process.exit(1);
   }
   const gwSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!gwSnap.exists) {
-    console.error(
-      `Gateway doc gateways/${gatewayId} doesn't exist. Use \`fleet ls gateways\` to see registered gateways.`,
-    );
+    console.error(red(`${CROSS} Gateway doc gateways/${gatewayId} doesn't exist.`));
+    console.error(dim(`  Run \`fleet --env=${args.env} ls gateways\` to see registered gateways.`));
     process.exit(1);
   }
   const gw = gwSnap.data() as GatewayDoc;
   if (gw.status === "unreachable") {
-    console.error(
-      `Gateway '${gatewayId}' is in 'unreachable' status. Refusing to assign — the customer would never get mounted.`,
-    );
+    console.error(red(`${CROSS} Gateway '${gatewayId}' is in 'unreachable' status.`));
+    console.error(dim(`  Refusing to assign — the customer would never get mounted.`));
     process.exit(1);
   }
   const current = user.data.provisioning?.openclaw?.gatewayId ?? null;
   if (current === gatewayId) {
-    console.log(`'${slug}' is already assigned to '${gatewayId}'. Nothing to do.`);
+    console.log(yellow(`'${slug}' is already assigned to '${gatewayId}'. Nothing to do.`));
     return;
   }
 
-  console.log(`=== add-customer ${slug} → ${gatewayId} ===`);
-  console.log(`uid:                ${user.uid}`);
-  console.log(`current gatewayId:  ${current ?? "(none)"}`);
-  console.log(`new gatewayId:      ${gatewayId}`);
-  console.log(`gateway status:     ${gw.status}`);
+  console.log(bold(`ADD-CUSTOMER ${slug}`) + dim(`  ${ARROW} ${gatewayId}`));
+  console.log(`  uid                 ${user.uid}`);
+  console.log(`  current gatewayId   ${current ?? dim("(none)")}`);
+  console.log(`  new gatewayId       ${cyan(gatewayId)}`);
+  console.log(`  gateway status      ${gw.status}`);
   if (current && current !== gatewayId) {
-    console.log(`!! moving from '${current}' to '${gatewayId}'. Old gateway will keep ${slug} in mountedCustomers until next reboot or explicit unmount — that's drift until Phase 2 ships /unmount RPC.`);
+    console.log("\n" + yellow(`!  moving from '${current}' to '${gatewayId}'. Old gateway will keep ${slug} in mountedCustomers until next reboot or explicit unmount — that's drift until Phase 2 ships /unmount RPC.`));
   }
 
   if (!apply) {
-    console.log("\n--- DRY RUN (re-run with --apply to commit) ---");
+    console.log("\n" + dim(`--- DRY RUN (re-run with --apply to commit) ---`));
     return;
   }
 
   await db.collection("users").doc(user.uid).update({
     "provisioning.openclaw.gatewayId": gatewayId,
   });
-  console.log(`\n✓ users/${user.uid}.provisioning.openclaw.gatewayId = ${gatewayId}`);
-  console.log(`Controller's onUserUpdatedForFleet will fire and pick-next on ${gatewayId}.`);
+  console.log("\n" + green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayId = ${gatewayId}`));
+  console.log(dim(`  Controller's onUserUpdatedForFleet will fire and pick-next on ${gatewayId}.`));
 }
 
 async function migrateCustomerPlan(slug: string, toGatewayId: string): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
-    console.error(`No user found with slug or username '${slug}'.`);
+    console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
     process.exit(1);
   }
   const oc = user.data.provisioning?.openclaw ?? {};
   const fromGatewayId = oc.gatewayId;
   if (!fromGatewayId) {
-    console.error(
-      `User '${slug}' is not currently assigned to any gateway. Use 'add-customer' to place them first.`,
-    );
+    console.error(red(`${CROSS} User '${slug}' is not currently assigned to any gateway.`));
+    console.error(dim(`  Use \`fleet --env=${args.env} add-customer ${slug} --to=<gw-id> --apply\` to place them first.`));
     process.exit(1);
   }
   if (fromGatewayId === toGatewayId) {
-    console.log(`'${slug}' is already on '${toGatewayId}'. Nothing to migrate.`);
+    console.log(yellow(`'${slug}' is already on '${toGatewayId}'. Nothing to migrate.`));
     return;
   }
   const targetSnap = await db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get();
   if (!targetSnap.exists) {
-    console.error(`Target gateway 'gateways/${toGatewayId}' does not exist.`);
+    console.error(red(`${CROSS} Target gateway 'gateways/${toGatewayId}' does not exist.`));
     process.exit(1);
   }
   const target = targetSnap.data() as GatewayDoc;
   if (target.status !== "ready") {
-    console.error(
-      `Target gateway '${toGatewayId}' is in status '${target.status}'. Refusing to plan a migration to a non-ready gateway.`,
-    );
+    console.error(red(`${CROSS} Target gateway '${toGatewayId}' is in status '${target.status}'.`));
+    console.error(dim(`  Refusing to plan a migration to a non-ready gateway.`));
     process.exit(1);
   }
 
@@ -728,31 +926,29 @@ async function migrateCustomerPlan(slug: string, toGatewayId: string): Promise<v
 
   const forward = fullPlan(initial);
 
-  console.log(`=== migrate-customer ${slug}: ${fromGatewayId} → ${toGatewayId} ===`);
-  console.log(`uid: ${user.uid}`);
-  console.log("");
-  console.log("FORWARD PLAN");
+  console.log(bold(`MIGRATE-CUSTOMER ${slug}`) + dim(`  ${fromGatewayId} ${ARROW} ${toGatewayId}`));
+  console.log(`  uid  ${user.uid}`);
+
+  console.log("\n" + bold(`FORWARD PLAN`));
   forward.forEach((step, i) => {
-    console.log(`  ${i + 1}. ${describeStep(step)}`);
+    console.log(`  ${cyan(`${i + 1}.`)} ${describeStep(step)}`);
   });
 
-  console.log("");
-  console.log("ROLLBACK SAFETY NET (steps to recover if forward fails at each phase):");
+  console.log("\n" + bold(`ROLLBACK SAFETY NET`) + dim(`  recovery if forward fails at any phase`));
+  console.log(dim(`  Pre-cutover (initial / source-quiesced / state-transferred):`));
+  console.log(dim(`    Source still owns; un-quiesce + leave target leak for lazy cleanup.`));
   // Roll back from the worst-case post-cutover point — that's the most
   // dangerous boundary and the one operators most need to know about.
   const postCutover = rollbackPlan({ ...initial, phase: "cutover-done" });
-  console.log("  if forward fails at or after 'cutover-firestore':");
+  console.log(yellow(`  Post-cutover (cutover-done):`));
   postCutover.forEach((step) => {
-    console.log(`    - ${describeStep(step)}`);
+    console.log(`    ${ARROW} ${describeStep(step)}`);
   });
-  console.log("  if forward fails before cutover, source still owns; un-quiesce + leave target leak for lazy cleanup.");
 
-  console.log("");
-  console.log("--- PLAN ONLY ---");
-  console.log("Live execution requires the gateway-side /quiesce, /export,");
-  console.log("/import, /unmount RPCs (Phase 2.2). State machine + tests are");
-  console.log("in place at scripts/lib/fleet-migration.ts so the orchestrator");
-  console.log("can be wired up in a small follow-up PR.");
+  console.log("\n" + dim(`--- PLAN ONLY ---`));
+  console.log(dim(`Live execution requires the gateway-side /quiesce, /export, /import, /unmount`));
+  console.log(dim(`RPCs (state machine + handlers shipped; orchestrator wiring + chat-proxy reroute`));
+  console.log(dim(`are the remaining pieces). See scripts/lib/fleet-migration.ts for the contract.`));
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────
@@ -768,14 +964,12 @@ async function main(): Promise<void> {
       return lsCustomers();
     case "inspect customer":
       if (!args.positional[2]) {
-        console.error(`'inspect customer' needs a slug.\nExample: tsx scripts/ops/fleet.ts --env=prod inspect customer ceckert`);
-        process.exit(1);
+        return missingArg("inspect customer");
       }
       return inspectCustomer(args.positional[2]);
     case "inspect gateway":
       if (!args.positional[2]) {
-        console.error(`'inspect gateway' needs a gatewayId.\nExample: tsx scripts/ops/fleet.ts --env=prod inspect gateway gw-prod`);
-        process.exit(1);
+        return missingArg("inspect gateway");
       }
       return inspectGateway(args.positional[2]);
   }
@@ -783,29 +977,51 @@ async function main(): Promise<void> {
   switch (verb) {
     case "unstick-customer":
       if (!args.positional[1]) {
-        console.error(`'unstick-customer' needs a slug.\nExample: tsx scripts/ops/fleet.ts --env=prod unstick-customer ceckert --apply`);
-        process.exit(1);
+        return missingArg("unstick-customer");
       }
       return unstickCustomer(args.positional[1], apply);
     case "add-customer": {
-      const to = args.flags.to as string | undefined;
+      // Validate `--to` is a string (not boolean true from `--to --apply`
+      // arg-shape). The router falls into missing-args path when invalid,
+      // pointing the user at `fleet help <verb>`.
+      const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       if (!args.positional[1] || !to) {
-        console.error(`'add-customer' needs a slug and --to=<gatewayId>.\nExample: tsx scripts/ops/fleet.ts --env=prod add-customer ceckert --to=gw-prod-canary --apply`);
-        process.exit(1);
+        return missingArg("add-customer");
       }
       return addCustomer(args.positional[1], to, apply);
     }
     case "migrate-customer": {
-      const to = args.flags.to as string | undefined;
+      // Validate `--to` is a string (not boolean true from `--to --apply`
+      // arg-shape). The router falls into missing-args path when invalid,
+      // pointing the user at `fleet help <verb>`.
+      const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       if (!args.positional[1] || !to) {
-        console.error(`'migrate-customer' needs a slug and --to=<gatewayId>.\nExample: tsx scripts/ops/fleet.ts --env=prod migrate-customer ceckert --to=gw-prod-v2`);
-        process.exit(1);
+        return missingArg("migrate-customer");
       }
       return migrateCustomerPlan(args.positional[1], to);
     }
   }
 
-  console.error(`Unknown verb: '${verb} ${sub}'.trim()\n${USAGE}`);
+  const triedVerb = `${verb}${sub ? " " + sub : ""}`;
+  console.error(red(`${CROSS} Unknown verb: '${triedVerb}'`));
+  console.error(dim(`  Run \`fleet --help\` for the verb list,`));
+  console.error(dim(`  or \`fleet help <verb>\` for per-verb usage.`));
+  process.exit(1);
+}
+
+/** Print the canonical usage block for a verb when its required positional
+ *  or flag args are missing. Sources from the VERBS table so the example
+ *  shown here matches the help output exactly. */
+function missingArg(verbName: string): never {
+  const verb = verbsByName.get(verbName);
+  if (!verb) {
+    console.error(red(`${CROSS} Internal: unknown verb '${verbName}' in router.`));
+    process.exit(1);
+  }
+  console.error(red(`${CROSS} '${verb.verb}' is missing required arguments.`));
+  console.error(dim(`  Usage: fleet --env=<env> ${verb.verb}${verb.args ? " " + verb.args : ""}`));
+  console.error(dim(`  Example: ${verb.examples[0]}`));
+  console.error(dim(`  Full help: fleet help ${verb.verb}`));
   process.exit(1);
 }
 
