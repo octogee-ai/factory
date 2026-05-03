@@ -300,13 +300,9 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
           onConnectTrace,
         });
         try {
-          await sendRequest(ws, "channels.status", {}, t);
-          return true;
-        } finally {
-          try {
-            ws.close();
-          } catch { /* */ }
-        }
+          ws.close();
+        } catch { /* */ }
+        return true;
       } catch {
         return false;
       }

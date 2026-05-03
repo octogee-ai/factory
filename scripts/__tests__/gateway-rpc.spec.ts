@@ -386,8 +386,17 @@ describe("gateway-rpc", () => {
 
   describe("isGatewayUp", () => {
     it("returns true when the handshake succeeds", async () => {
-      server.setHandler("channels.status", () => ({ ok: true, payload: { channels: [] } }));
       expect(await client.isGatewayUp(500)).toBe(true);
+    });
+
+    it("does NOT call channels.status (or any other RPC) — handshake completion is the liveness signal", async () => {
+      // The handshake itself uses the `connect` frame internally, but
+      // isGatewayUp must NOT follow up with channels.status (or any
+      // other method). On real gateways under load that follow-up RPC
+      // can take seconds, blowing the caller's tight budget and
+      // wedging fleet-provisioner.ts:waitForGatewayReady.
+      expect(await client.isGatewayUp(500)).toBe(true);
+      expect(server.callCount("channels.status")).toBe(0);
     });
 
     it("returns false when the WS port is not reachable", async () => {

@@ -113,7 +113,7 @@ export async function startFleetController(
   const waitForGatewayReady = async (): Promise<void> => {
     while (runtime.status !== "ready") {
       try {
-        const up = await opts.rpc.isGatewayUp(2_000);
+        const up = await opts.rpc.isGatewayUp(10_000);
         if (up) {
           runtime.status = "ready";
           opts.log(
