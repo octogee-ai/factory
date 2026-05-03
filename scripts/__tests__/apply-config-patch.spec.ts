@@ -327,3 +327,108 @@ describe("applyConfigPatch — timing instrumentation", () => {
     expect(lines.some((l) => /OK attempt=2/.test(l))).toBe(true);
   });
 });
+
+// ── Config cache (skip configGet between successive patches) ────────────────
+//
+// Each customer-add costs ~5-6s in configGet round-trip even when the
+// provisioner already knows the current config (it just patched). Threading a
+// small mutable `{ current, hash }` cache through applyConfigPatch lets the
+// adapter skip configGet entirely after the first successful patch. The
+// gateway's config.patch response carries the new hash and merged config —
+// updating the cache from that response is a one-liner.
+
+describe("applyConfigPatch — config cache", () => {
+  it("uses cached current+hash on first attempt instead of calling configGet", async () => {
+    const cache = { current: { bindings: [{ agentId: "a" }] }, hash: "cached-hash" };
+    const configGet = vi.fn(async () => ({ config: {}, hash: "fresh" }));
+    const configPatch = vi.fn(async () => ({
+      ok: true as const,
+      hash: "new-hash",
+      config: { bindings: [{ agentId: "a" }, { agentId: "b" }] },
+    }));
+
+    let seen: unknown;
+    await applyConfigPatch(
+      {
+        buildPatch: (cfg) => {
+          seen = cfg;
+          return {};
+        },
+      },
+      { ...baseOpts({ cache }), rpc: makeFakeRpc({ configGet, configPatch }) },
+    );
+
+    expect(configGet).not.toHaveBeenCalled();
+    expect(seen).toEqual({ bindings: [{ agentId: "a" }] });
+    expect(configPatch.mock.calls[0][1]).toBe("cached-hash");
+  });
+
+  it("updates cache with hash + config from successful configPatch response", async () => {
+    const cache = { current: { v: 1 }, hash: "h1" };
+    const configPatch = vi.fn(async () => ({
+      ok: true as const,
+      hash: "h2",
+      config: { v: 2 },
+    }));
+
+    await applyConfigPatch(
+      { buildPatch: () => ({ v: 2 }) },
+      { ...baseOpts({ cache }), rpc: makeFakeRpc({ configPatch }) },
+    );
+
+    expect(cache.hash).toBe("h2");
+    expect(cache.current).toEqual({ v: 2 });
+  });
+
+  it("falls back to configGet when cache hash is empty (first call)", async () => {
+    const cache = { current: undefined as unknown, hash: "" };
+    const configGet = vi.fn(async () => ({ config: { v: 1 }, hash: "fresh" }));
+    const configPatch = vi.fn(async () => ({
+      ok: true as const,
+      hash: "after",
+      config: { v: 2 },
+    }));
+
+    await applyConfigPatch(
+      { buildPatch: () => ({ v: 2 }) },
+      { ...baseOpts({ cache }), rpc: makeFakeRpc({ configGet, configPatch }) },
+    );
+
+    expect(configGet).toHaveBeenCalledOnce();
+    expect(cache.hash).toBe("after");
+    expect(cache.current).toEqual({ v: 2 });
+  });
+
+  it("on hash-mismatch with cache, refetches via configGet and retries (cache then refreshed)", async () => {
+    const cache = { current: { v: 0 }, hash: "stale" };
+    const configGet = vi.fn(async () => ({ config: { v: 1 }, hash: "fresh" }));
+    const configPatch = vi
+      .fn()
+      .mockRejectedValueOnce(new GatewayRpcError("hash-mismatch", "config changed since last load"))
+      .mockResolvedValueOnce({ ok: true as const, hash: "after", config: { v: 2 } });
+
+    await applyConfigPatch(
+      { buildPatch: () => ({ v: 2 }) },
+      { ...baseOpts({ cache }), rpc: makeFakeRpc({ configGet, configPatch }) },
+    );
+
+    expect(configPatch.mock.calls[0][1]).toBe("stale");
+    expect(configPatch.mock.calls[1][1]).toBe("fresh");
+    expect(configGet).toHaveBeenCalledOnce();
+    expect(cache.hash).toBe("after");
+    expect(cache.current).toEqual({ v: 2 });
+  });
+
+  it("clears cache hash when configPatch response omits hash (server pre-fork-patch)", async () => {
+    const cache = { current: { v: 1 }, hash: "h1" };
+    const configPatch = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+
+    await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      { ...baseOpts({ cache }), rpc: makeFakeRpc({ configPatch }) },
+    );
+
+    // No fresh hash returned ⇒ next call must refetch
+    expect(cache.hash).toBe("");
+  });
+});

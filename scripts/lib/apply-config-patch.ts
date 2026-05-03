@@ -10,6 +10,19 @@ export interface ApplyConfigPatchArgs {
   logPrefix?: string;
 }
 
+/**
+ * Mutable single-slot cache so a long-running provisioner (e.g. the fleet
+ * controller) can chain customer-add patches without paying ~5s of
+ * `config.get` round-trip on every call. The cache is updated from the
+ * `config.patch` response (which carries the post-write hash + merged
+ * config). On hash-mismatch the cache is refreshed via `config.get` and the
+ * patch retried.
+ */
+export interface ConfigCache {
+  current: unknown;
+  hash: string;
+}
+
 export interface ApplyConfigPatchOptions {
   rpc?: GatewayRpcClient;
   log?: (msg: string) => void;
@@ -17,6 +30,7 @@ export interface ApplyConfigPatchOptions {
   retryBackoffMaxMs?: number;
   maxRetries?: number;
   sleep?: (ms: number) => Promise<void>;
+  cache?: ConfigCache;
 }
 
 export interface ApplyConfigPatchResult {
@@ -43,20 +57,47 @@ export async function applyConfigPatch(
   let attempts = 0;
   let currentBackoff = initialBackoff;
 
+  const cache = opts.cache;
+
   try {
     while (true) {
       attempts++;
       const attemptStartedAt = Date.now();
       try {
-        const getStart = Date.now();
-        const { config, hash } = await rpc.configGet();
-        const getMs = Date.now() - getStart;
+        let config: unknown;
+        let hash: string;
+        let getMs = 0;
+        if (cache && cache.hash !== "" && cache.current !== undefined) {
+          config = cache.current;
+          hash = cache.hash;
+        } else {
+          const getStart = Date.now();
+          const fetched = await rpc.configGet();
+          getMs = Date.now() - getStart;
+          config = fetched.config;
+          hash = fetched.hash;
+          if (cache) {
+            cache.current = config;
+            cache.hash = hash;
+          }
+        }
 
         const patch = args.buildPatch(config);
 
         const patchStart = Date.now();
-        await rpc.configPatch(patch, hash);
+        const patchResult = await rpc.configPatch(patch, hash);
         const patchMs = Date.now() - patchStart;
+
+        if (cache) {
+          if (typeof patchResult.hash === "string" && patchResult.hash.length > 0) {
+            cache.hash = patchResult.hash;
+            cache.current = patchResult.config ?? cache.current;
+          } else {
+            // Stock-OC or pre-fork-patch server. Mark stale so next call
+            // pays a fresh configGet rather than reusing a now-bogus hash.
+            cache.hash = "";
+          }
+        }
 
         log(
           `${prefix}config.patch OK attempt=${attempts} configGet=${getMs}ms configPatch=${patchMs}ms totalMs=${Date.now() - startedAt}`,
@@ -86,6 +127,12 @@ export async function applyConfigPatch(
               `⚠ ${prefix}config.patch hash-mismatch exhausted after attempts=${attempts} — bubbling`,
             );
             throw err;
+          }
+          // Invalidate cache so the retry re-fetches via config.get rather
+          // than re-trying the same stale hash in a loop.
+          if (cache) {
+            cache.hash = "";
+            cache.current = undefined;
           }
           log(
             `${prefix}config.patch attempt=${attempts} hash-mismatch after ${elapsed}ms — re-fetching hash and retrying immediately`,
