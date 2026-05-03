@@ -3,6 +3,7 @@ import {
   addCustomerToGateway,
   ConcurrentMountError,
   _resetInFlightUidsForTests,
+  pubKeysMatch,
   removeCustomerFromGateway,
   type CustomerLifecycleAdapter,
   type UserSnapshot,
@@ -43,6 +44,22 @@ interface MockState {
   cloneSimulatesEmptyRepo: boolean;
   initShouldFail: boolean;
   giteaRegisterShouldFail: boolean;
+  /** Pubkey Gitea currently has registered for the customer (matches what
+   *  the verify-and-resync path reads). null = no key registered. */
+  giteaRegisteredPubKey: string | null;
+  /** Simulate transient failure (5xx, network) reading Gitea — distinct
+   *  from "no key registered". The verify-and-resync path must NOT
+   *  conflate the two. */
+  giteaReadShouldThrow: boolean;
+  /** Mirrors `users/{uid}/system/config.gitea.token` so
+   *  `hasPersistedGiteaToken` reflects whether persistGiteaToken has run.
+   *  Tests that exercise the resync-recovers-from-failed-persist case
+   *  start with this null + persistGiteaTokenShouldFail true on first
+   *  attempt, then flip both for the recovery attempt. */
+  persistedGiteaToken: string | null;
+  /** Force persistGiteaToken to throw — simulates a transient Firestore
+   *  failure mid-mount. */
+  persistGiteaTokenShouldFail: boolean;
   blobSyncShouldFail: boolean;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
@@ -65,8 +82,13 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
 
     setProvisioningStatus: async (_uid, status) => write("provisioning.openclaw.status", status),
     setRepoUrl: async (_uid, repoUrl) => write("provisioning.git.repoUrl", repoUrl),
-    persistGiteaToken: async (_uid, username, token) =>
-      write("system/config.gitea", { username, token }),
+    persistGiteaToken: async (_uid, username, token) => {
+      if (state.persistGiteaTokenShouldFail) {
+        throw new Error("persistGiteaToken failed (test)");
+      }
+      write("system/config.gitea", { username, token });
+      state.persistedGiteaToken = token;
+    },
     setMattermostFields: async (_uid, fields) => write("mattermost.*", fields),
     setGreetingResult: async (_uid, result) =>
       write("provisioning.openclaw.greeting", result),
@@ -130,15 +152,39 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     generateCustomerSshKey: () => {
       record("generateCustomerSshKey");
       state.disk.sshKey = true;
+      // Deliberately do NOT touch state.giteaRegisteredPubKey here —
+      // generation only writes to disk. Gitea side is updated by
+      // createGiteaUser. This enforces the generate → register → verify
+      // sequence the production code requires; if anything skips
+      // createGiteaUser, the verify step's giteaRegisteredPubKey check
+      // would catch it.
       return "ssh-pubkey";
     },
-    createGiteaUser: async () => {
+    createGiteaUser: async (_slug, pubKey) => {
       record("createGiteaUser");
       if (state.giteaRegisterShouldFail) {
         throw new Error("gitea register failed");
       }
+      // Real `createGiteaUser` is delete-old-then-add-new on the
+      // `octogee-gateway` title. Mirror by replacing whatever's in Gitea
+      // with the freshly-registered pubkey — this is what the verify
+      // step compares against.
+      state.giteaRegisteredPubKey = pubKey;
       return "gitea-pat-token";
     },
+    readLocalCustomerPubKey: () => (state.disk.sshKey ? "ssh-pubkey" : null),
+    readGiteaCustomerPubKey: async () => {
+      if (state.giteaReadShouldThrow) {
+        throw new Error("Gitea key read failed (test transient)");
+      }
+      return state.giteaRegisteredPubKey;
+    },
+    deleteCustomerSshKey: async () => {
+      record("deleteCustomerSshKey");
+      state.disk.sshKey = false;
+    },
+    hasPersistedGiteaToken: async () =>
+      typeof state.persistedGiteaToken === "string" && state.persistedGiteaToken.length > 0,
 
     blobSyncForSlug: async () => {
       record("blobSyncForSlug");
@@ -230,6 +276,10 @@ function makeState(snapshot: UserSnapshot | null, disk: DiskState): MockState {
     cloneSimulatesEmptyRepo: false,
     initShouldFail: false,
     giteaRegisterShouldFail: false,
+    giteaRegisteredPubKey: null,
+    giteaReadShouldThrow: false,
+    persistedGiteaToken: null,
+    persistGiteaTokenShouldFail: false,
     blobSyncShouldFail: false,
     healthy: true,
     pendingProjects: [],
@@ -550,7 +600,13 @@ describe("addCustomerToGateway — idempotent re-add", () => {
 });
 
 describe("addCustomerToGateway — partial-state scenarios", () => {
-  it("regenerates SSH key + Gitea token if missing on disk (non-fatal on register failure)", async () => {
+  it("FAILS LOUD when Gitea SSH key registration fails — and rolls back the local key", async () => {
+    // Pre-2026-05-03 this was non-fatal: log + continue. That left the
+    // local key on disk with no matching Gitea registration, then
+    // cloneWorkspaceRepo silently failed forever via the SSH path until
+    // ops manually swapped Gitea's key. Now we throw so the restore-
+    // customer task fails cleanly, exponential backoff kicks in, and
+    // the next attempt regenerates because the local key was deleted.
     const state = makeState(
       snap({
         status: "complete",
@@ -562,12 +618,207 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
     );
     state.giteaRegisterShouldFail = true;
 
-    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    await expect(
+      addCustomerToGateway(makeAdapter(state), "uid-test"),
+    ).rejects.toThrow(/SSH key registration failed/);
 
     expect(state.calls).toContain("generateCustomerSshKey");
     expect(state.calls).toContain("createGiteaUser");
-    expect(result.steps).toContain("verify-channel-ready");
+    // Rollback: local key was deleted so the next restore attempt
+    // regenerates from scratch instead of seeing the orphaned key and
+    // skipping registration.
+    expect(state.calls).toContain("deleteCustomerSshKey");
+    expect(state.disk.sshKey).toBe(false);
+    // Never reached the verify-channel step because we threw.
     expect(state.writes.find((w) => w.field === "system/config.gitea")).toBeUndefined();
+  });
+
+  it("rolls back local SSH key when Gitea registration appears to succeed but the key isn't actually persisted", async () => {
+    // Simulates createGiteaUser returning a token (so the surface-level
+    // call looks fine) but the verify step finds Gitea has no matching
+    // key — the real createGiteaUser silently swallows failed key-add
+    // POSTs. Defensive verify catches this and rolls back local state.
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+      }),
+      emptyDisk(),
+    );
+
+    // Custom adapter: createGiteaUser succeeds AND the local-pubkey
+    // setter is bypassed — so the verify step compares
+    // generated-pubkey vs Gitea-side null (or wrong key) and fails.
+    const adapter = makeAdapter(state);
+    const orig = adapter.createGiteaUser;
+    adapter.createGiteaUser = async (slug, pubKey) => {
+      // Token granted, but Gitea state intentionally not updated.
+      await orig(slug, pubKey);
+      state.giteaRegisteredPubKey = null;
+      return "gitea-pat-token";
+    };
+
+    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow(
+      /SSH key registration failed.*giteaPub=absent/,
+    );
+    expect(state.calls).toContain("deleteCustomerSshKey");
+    expect(state.disk.sshKey).toBe(false);
+  });
+
+  it("self-heals stale Gitea-side key on existing-key path (the ceckert bug)", async () => {
+    // The scenario that hit ceckert twice: gateway pod cycled, fresh
+    // emptyDir generated a new local keypair, but Gitea still has the
+    // previous pod's key registered. addCustomerToGateway sees the
+    // local key, hasCustomerSshKey=true, used to skip registration.
+    // Now the verify step detects drift and re-registers.
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      {
+        ...emptyDisk(),
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        repoHasCommits: true,
+      },
+    );
+    // Gitea has a STALE key from a previous gateway pod's registration.
+    state.giteaRegisteredPubKey = "ssh-stale-from-old-pod";
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    // Resync ran: createGiteaUser called to re-register the local key.
+    expect(state.calls).toContain("createGiteaUser");
+    expect(result.steps).toContain("ssh-key-resync");
+    // Generation did NOT run — local key was already on disk.
+    expect(state.calls).not.toContain("generateCustomerSshKey");
+    // After resync, Gitea has the local pubkey.
+    expect(state.giteaRegisteredPubKey).toBe("ssh-pubkey");
+  });
+
+  it("does NOT resync when local + Gitea keys match AND PAT is persisted (healthy state)", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      {
+        ...emptyDisk(),
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        repoHasCommits: true,
+      },
+    );
+    // Healthy state requires both: matching keys AND PAT in Firestore.
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    state.persistedGiteaToken = "gitea-pat-token";
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).not.toContain("ssh-key");
+    expect(result.steps).not.toContain("ssh-key-resync");
+    expect(state.calls).not.toContain("createGiteaUser");
+  });
+
+  it("RESYNCS when keys match but PAT is missing in Firestore (mid-flight persist failure recovery)", async () => {
+    // Simulates the failure mode Copilot flagged: previous restore
+    // attempt registered the SSH key in Gitea successfully, then
+    // persistGiteaToken threw mid-flight (transient Firestore blip).
+    // Retry: keys match (SSH is correct), but config.gitea.token is
+    // missing. Without the token-presence check, retry would skip the
+    // whole block and the customer would be left without a PAT
+    // forever. With the check, we re-enter the resync path,
+    // re-register (which mints a fresh PAT), and persist.
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      {
+        ...emptyDisk(),
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey"; // SSH is correct
+    state.persistedGiteaToken = null; // but PAT was never persisted
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).toContain("ssh-key-resync");
+    expect(state.calls).toContain("createGiteaUser");
+    // PAT now persisted.
+    expect(state.persistedGiteaToken).toBe("gitea-pat-token");
+  });
+
+  it("treats transient Gitea-read failure as ERROR, not as 'key absent' (no spurious resync)", async () => {
+    // The previous swallow-everything-as-null behavior in
+    // readGiteaCustomerPubKey would cause this case to look like
+    // drift → trigger an unnecessary key rotation against an
+    // existing customer. Now it propagates so the restore-customer
+    // task fails cleanly and the controller retries with backoff.
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+      }),
+      {
+        ...emptyDisk(),
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    state.persistedGiteaToken = "gitea-pat-token";
+    state.giteaReadShouldThrow = true;
+
+    await expect(
+      addCustomerToGateway(makeAdapter(state), "uid-test"),
+    ).rejects.toThrow(/Gitea key read failed/);
+    // Did NOT call createGiteaUser — no spurious key rotation.
+    expect(state.calls).not.toContain("createGiteaUser");
+  });
+
+  it("rolls back local key when persistGiteaToken fails on first-time mount", async () => {
+    // Atomic block: if persistGiteaToken fails after Gitea registration
+    // succeeded, rollback the local key so the next restore regenerates
+    // everything cleanly. (Without the rollback, the next restore would
+    // see `keysMatch && !tokenPersisted` and enter the resync path —
+    // also valid, but the rollback path is more conservative.)
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+      }),
+      emptyDisk(),
+    );
+    state.persistGiteaTokenShouldFail = true;
+
+    await expect(
+      addCustomerToGateway(makeAdapter(state), "uid-test"),
+    ).rejects.toThrow(/SSH key registration failed/);
+
+    expect(state.calls).toContain("deleteCustomerSshKey");
+    expect(state.disk.sshKey).toBe(false);
+    // Token was never persisted in Firestore.
+    expect(state.persistedGiteaToken).toBeNull();
   });
 
   it("clones project repos that have giteaRepoName but no on-disk clone", async () => {
@@ -784,5 +1035,39 @@ describe("addCustomerToGateway — same-uid in-flight dedup", () => {
     ]);
     expect(resA.steps).toContain("verify-channel-ready");
     expect(resB.steps).toContain("verify-channel-ready");
+  });
+});
+
+describe("pubKeysMatch", () => {
+  // Compares OpenSSH-format pubkey lines on type + base64 only, ignoring
+  // the trailing comment. Used by the SSH key verify-and-resync path.
+
+  it("matches identical keys", () => {
+    const k = "ssh-ed25519 AAAAC3Nz...etc octogee-chris@gateway";
+    expect(pubKeysMatch(k, k)).toBe(true);
+  });
+
+  it("matches same type + key bytes with different comments", () => {
+    const a = "ssh-ed25519 AAAAC3Nz...etc octogee-chris@gateway";
+    const b = "ssh-ed25519 AAAAC3Nz...etc anything-else";
+    expect(pubKeysMatch(a, b)).toBe(true);
+  });
+
+  it("matches when one side has trailing whitespace", () => {
+    const a = "ssh-ed25519 AAAAC3Nz...etc octogee-chris@gateway\n";
+    const b = "ssh-ed25519 AAAAC3Nz...etc octogee-chris@gateway";
+    expect(pubKeysMatch(a, b)).toBe(true);
+  });
+
+  it("rejects different key bytes (the drift case)", () => {
+    const a = "ssh-ed25519 AAAAC3Nz...stale octogee-chris@gateway";
+    const b = "ssh-ed25519 AAAAC3Nz...fresh octogee-chris@gateway";
+    expect(pubKeysMatch(a, b)).toBe(false);
+  });
+
+  it("rejects different key types", () => {
+    const a = "ssh-ed25519 AAAAC3Nz...";
+    const b = "ssh-rsa     AAAAB3Nz...";
+    expect(pubKeysMatch(a, b)).toBe(false);
   });
 });
