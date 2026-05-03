@@ -197,6 +197,92 @@ export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 export const GATEWAYS_COLLECTION = "gateways";
 export const RESTORE_JOBS_COLLECTION = "restoreJobs";
 
+// ── Migration RPCs (gateway-side, called by orchestrator) ────────────────────
+//
+// Endpoints exposed by every gateway pod for live customer migration. The
+// orchestrator (CLI verb `fleet migrate-customer --apply`, lands in a follow-
+// up PR) drives the four-step state machine from scripts/lib/fleet-migration.ts
+// against these RPCs. Authentication is the same HMAC scheme as
+// /restore-customer — `X-Fleet-Controller-Signature` over the canonical
+// payload — and the same `FLEET_CONTROLLER_SECRET` shared secret.
+//
+//   POST /quiesce/{gatewayId}    — drain in-flight runs for the slug's agent.
+//                                  Returns when sessions.json shows no
+//                                  `status: "running"` sessions for that
+//                                  agent, or 408 on timeout.
+//   POST /export/{gatewayId}     — stream a tarball of the slug's agent dir
+//                                  (~/.openclaw/agents/{agentId}) + customer
+//                                  SSH keys. Response Content-Type is
+//                                  application/x-tar; orchestrator pipes it
+//                                  to the target's /import.
+//   POST /import/{gatewayId}     — accept a tarball as request body. Unpacks
+//                                  to the same paths on this gateway, then
+//                                  registers the agent in OpenClaw (config
+//                                  patch). Body is the tarball; HMAC signs
+//                                  the X-Migration-Id + slug header pair (no
+//                                  body-bytes signing — orchestrator uses
+//                                  Content-Length + tar magic to validate).
+//   POST /unmount/{gatewayId}    — release the slug from this gateway:
+//                                  remove from openclaw config, delete
+//                                  on-disk state. Identical to the existing
+//                                  removeCustomerFromGateway flow.
+
+export interface MigrationRequestBody {
+  /** Stable id for the whole migration (orchestrator-generated, used for
+   *  HMAC + idempotency across the four RPCs). */
+  migrationId: string;
+  /** Customer slug being migrated. */
+  slug: string;
+}
+
+export interface QuiesceRequestBody extends MigrationRequestBody {
+  /** Max time to wait for in-flight runs to drain. Defaults to 60_000 ms
+   *  on the gateway when omitted. */
+  timeoutMs?: number;
+}
+
+export interface QuiesceResponse {
+  migrationId: string;
+  slug: string;
+  /** True if all sessions for the agent reached non-running state before
+   *  the timeout. False with `runningCount > 0` means the gateway gave up
+   *  waiting; the orchestrator should decide whether to abort or force. */
+  drained: boolean;
+  /** Number of running sessions observed at the moment of return. Always
+   *  0 when `drained: true`. */
+  runningCount: number;
+}
+
+// /export request body is the base `MigrationRequestBody` shape ({migrationId,
+// slug}) — no extra fields, so no separate type. The response is a binary
+// tar stream (Content-Type: application/x-tar); errors before streaming
+// begins return the standard { error, message } JSON shape.
+
+export interface ImportResponse {
+  migrationId: string;
+  slug: string;
+  /** True when the import succeeded — tarball unpacked + agent registered
+   *  in OpenClaw. */
+  imported: boolean;
+}
+
+export interface UnmountRequestBody extends MigrationRequestBody {}
+
+export interface UnmountResponse {
+  migrationId: string;
+  slug: string;
+  /** True if the slug was mounted prior to this call. False is not an
+   *  error — it means the gateway didn't have this customer to unmount
+   *  (already gone, never mounted). */
+  unmounted: boolean;
+}
+
+/** Headers the gateway expects on /import (where body is the tarball, not
+ *  JSON). The HMAC is computed over `${migrationId}\n${slug}` instead of
+ *  the body, since the body is a streamed tar. */
+export const MIGRATION_ID_HEADER = "X-Migration-Id";
+export const MIGRATION_SLUG_HEADER = "X-Migration-Slug";
+
 /**
  * Exponential backoff (in ms) keyed by cumulative failure count for a given
  * customer on a gateway. Pick-next skips a slug while

@@ -22,6 +22,12 @@ import {
 } from "../../shared/types/fleet-controller.js";
 import { ActiveRestoreSet, createRestoreCustomerHandler, IdempotencyCache } from "./fleet-http.js";
 import {
+  createExportHandler,
+  createImportHandler,
+  createQuiesceHandler,
+  createUnmountHandler,
+} from "./fleet-http-migration.js";
+import {
   writeGatewayHeartbeat,
   type FleetStateDeps,
   type FleetStateFirestore,
@@ -252,47 +258,71 @@ export async function startFleetController(
   // on mismatch — guards against an LB URL map bug routing to the wrong
   // backend. Belt-and-suspenders; HMAC already bounds what a misrouted
   // request can do.
+  // Adapter wrapped with onMounted / onUnmounted hooks for local heartbeat
+  // state bookkeeping. Both /restore-customer and the four migration
+  // routes share this — the migration's import path triggers onMounted via
+  // its `activateImportedCustomer → addCustomerToGateway` tail; /unmount
+  // hits onUnmounted via `removeCustomerFromGateway`.
+  const wrappedAdapter = {
+    ...adapter,
+    onMounted: (slug: string) => {
+      if (!runtime.mountedCustomers.includes(slug)) {
+        runtime.mountedCustomers = [...runtime.mountedCustomers, slug];
+      }
+    },
+    onUnmounted: (slug: string) => {
+      runtime.mountedCustomers = runtime.mountedCustomers.filter((s) => s !== slug);
+    },
+  };
+
+  // Path-param gatewayId guard. Same shape for /restore-customer and the
+  // migration routes — controller URL templates the gatewayId into the
+  // path; mismatches mean a misrouted request and we 400 out before
+  // touching state. HMAC bounds blast radius regardless.
+  const gatewayIdGuard: express.RequestHandler = (req, res, next) => {
+    if (req.params.gatewayId !== opts.gatewayId) {
+      opts.log(
+        `[fleet-http] ⚠ path gatewayId=${req.params.gatewayId} does not match this pod's gatewayId=${opts.gatewayId} — rejecting`,
+      );
+      res.status(400).json({
+        error: "path gatewayId does not match this gateway",
+        pathGatewayId: req.params.gatewayId,
+        podGatewayId: opts.gatewayId,
+      });
+      return;
+    }
+    next();
+  };
+
   app.post(
     "/restore-customer/:gatewayId",
-    (req, res, next) => {
-      if (req.params.gatewayId !== opts.gatewayId) {
-        opts.log(
-          `[fleet-http] ⚠ path gatewayId=${req.params.gatewayId} does not match this pod's gatewayId=${opts.gatewayId} — rejecting`,
-        );
-        res.status(400).json({
-          error: "path gatewayId does not match this gateway",
-          pathGatewayId: req.params.gatewayId,
-          podGatewayId: opts.gatewayId,
-        });
-        return;
-      }
-      next();
-    },
+    gatewayIdGuard,
     createRestoreCustomerHandler({
       secret: opts.secret,
       gatewayId: opts.gatewayId,
       stateDeps,
       activeRestores,
-      // The contract exposes onMounted/onUnmounted hooks for exactly this
-      // local heartbeat-state bookkeeping. Hooks are called only after the
-      // canonical mutation lands, so a failed config patch leaves
-      // mountedCustomers untouched — controller doesn't see a failed
-      // restore as mounted.
-      adapter: {
-        ...adapter,
-        onMounted: (slug) => {
-          if (!runtime.mountedCustomers.includes(slug)) {
-            runtime.mountedCustomers = [...runtime.mountedCustomers, slug];
-          }
-        },
-        onUnmounted: (slug) => {
-          runtime.mountedCustomers = runtime.mountedCustomers.filter((s) => s !== slug);
-        },
-      },
+      adapter: wrappedAdapter,
       cache,
       log: opts.log,
     }),
   );
+
+  // Migration routes — the four-step state machine in
+  // scripts/lib/fleet-migration.ts is driven against these by the
+  // orchestrator (CLI verb in a follow-up PR). Same auth + path-param
+  // guard as /restore-customer; per-handler logic lives in
+  // fleet-http-migration.ts.
+  const migrationDeps = {
+    secret: opts.secret,
+    gatewayId: opts.gatewayId,
+    adapter: wrappedAdapter,
+    log: opts.log,
+  };
+  app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
+  app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
+  app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
+  app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
 
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
