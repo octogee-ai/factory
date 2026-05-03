@@ -111,7 +111,9 @@ router.get(
   },
 );
 
-function inferChannelKind(ref: unknown): "project" | "coach-dm" | "workspace" | "unknown" {
+function inferChannelKind(
+  ref: unknown,
+): "project" | "coach-dm" | "workspace" | "social" | "unknown" {
   // Walk the ref chain back to a path. ref.id is the channel doc id;
   // ref.parent.parent.id is the parent doc (project or workspace);
   // ref.parent.parent.parent.id tells us which collection holds the parent.
@@ -121,6 +123,11 @@ function inferChannelKind(ref: unknown): "project" | "coach-dm" | "workspace" | 
     if (typeof cur.id === "string") segments.unshift(cur.id);
     cur = cur.parent;
   }
+  // Builder Social channels live at `community/main/channels/{name}` —
+  // detect via the top-level `community` segment so they're not
+  // mis-tagged as workspace-kind (their visibility default is off, not
+  // on, per spec §G.S).
+  if (segments[0] === "community") return "social";
   if (segments.includes("projects")) return "project";
   const lastTwo = segments.slice(-2).join("/");
   if (lastTwo === "channels/coach-dm") return "coach-dm";
