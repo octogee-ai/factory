@@ -24,17 +24,12 @@ spec:
         - podSelector:
             matchLabels:
               app: octogee-gateway
+      # gateway pod hosts workspace-api as a sidecar (Phase 6.B), so this
+      # one selector covers gateway, chat-proxy, AND workspace-api egress
+      # to gitea (file read/write, repo management).
       ports:
         - protocol: TCP
           port: 3000
         - protocol: TCP
           port: 2222
-    # Allow from workspace-api (file read/write, repo management)
-    - from:
-        - podSelector:
-            matchLabels:
-              app: workspace-api
-      ports:
-        - protocol: TCP
-          port: 3000
 {{- end }}

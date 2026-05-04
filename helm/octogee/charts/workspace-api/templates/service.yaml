@@ -5,8 +5,13 @@ metadata:
   labels:
     {{- include "workspace-api.labels" . | nindent 4 }}
 spec:
+  # Phase 6.B collocation: workspace-api now runs as a sidecar inside the
+  # octogee-gateway pod. Selector flips from `app: workspace-api` to the
+  # gateway pod's labels so the existing api[-test].octogee.com ingress
+  # (still pointed at this Service) routes to the new sidecar port. Same
+  # pattern chat-proxy already uses.
   selector:
-    app: workspace-api
+    app: octogee-gateway
   ports:
     - port: {{ .Values.port }}
       targetPort: {{ .Values.port }}

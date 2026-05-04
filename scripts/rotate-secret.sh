@@ -235,8 +235,8 @@ case "$SECRET" in
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     ok "K8s secret internal-service-key updated"
 
-    info "Restarting workspace-api + octogee-gateway..."
-    rollout_restart workspace-api octogee-gateway
+    info "Restarting octogee-gateway-default (workspace-api + chat-proxy are sidecars in the same pod)..."
+    rollout_restart octogee-gateway-default
 
     info "Cron jobs read the secret on each invocation — no restart needed."
     ok "Rotation complete"
@@ -270,14 +270,14 @@ print(json.dumps(d))
     $YES && local_yes="--yes"
     "$SCRIPT_DIR/setup-mattermost.sh" --env="$ENV" $local_yes
 
-    info "Restarting consumers..."
-    rollout_restart workspace-api chat-proxy octogee-gateway
+    info "Restarting consumers (workspace-api + chat-proxy are sidecars in the gateway pod)..."
+    rollout_restart octogee-gateway-default
     ok "Rotation complete"
     ;;
 
   # ── Gitea API token ─────────────────────────────────────────────────────
   gitea-pat)
-    confirm "Rotate Gitea API token (octogee-gateway + workspace-api must restart)?" || { info "Cancelled"; exit 0; }
+    confirm "Rotate Gitea API token (octogee-gateway-default must restart — covers gateway + workspace-api sidecar)?" || { info "Cancelled"; exit 0; }
 
     info "Clearing cached token from gitea-token secret to force rotation..."
     kubectl create secret generic gitea-token -n "$K8S_NAMESPACE" \
@@ -291,7 +291,7 @@ print(json.dumps(d))
     "$SCRIPT_DIR/setup-gitea.sh" --env="$ENV" $local_yes
 
     info "Restarting consumers..."
-    rollout_restart octogee-gateway workspace-api
+    rollout_restart octogee-gateway-default
     ok "Rotation complete"
     ;;
 
