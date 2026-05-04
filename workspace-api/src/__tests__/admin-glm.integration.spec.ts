@@ -166,7 +166,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "gw-test-canary",
       instanceName: "canary",
-      imageRepository: "repo/octogee-gateway",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(202);
@@ -180,7 +180,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(gwWrite?.data).toMatchObject({
       gatewayId: "gw-test-canary",
       instanceName: "canary",
-      imageRepository: "repo/octogee-gateway",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       desiredStatus: "running",
       createdBy: "admin-user",
@@ -200,6 +200,18 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects 400 when imageRepository is not the canonical Artifact Registry repo", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-typo",
+      instanceName: "typo",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogeee/octogee-gateway",
+      imageTag: "abc1234",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/imageRepository/i);
+  });
+
   it("returns 409 when the gatewayId already exists", async () => {
     glmGatewaysDocs["gw-existing"] = {
       gatewayId: "gw-existing",
@@ -209,7 +221,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "gw-existing",
       instanceName: "another",
-      imageRepository: "repo/x",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "v1",
     });
     expect(res.status).toBe(409);
@@ -224,7 +236,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "gw-new",
       instanceName: "default",
-      imageRepository: "repo/x",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "v1",
     });
     expect(res.status).toBe(409);

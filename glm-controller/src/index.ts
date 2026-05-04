@@ -7,8 +7,17 @@ import {
   type GatewayDesiredState,
   type Operation,
 } from "../../shared/types/glm.js";
-import { buildInstancesMap, diffInstancesMap } from "./reconcile-plan.js";
-import { createLoggingHelmRunner, type HelmRunner } from "./helm-runner.js";
+import {
+  buildHelmTargetMap,
+  buildInstancesMap,
+  diffInstancesMap,
+} from "./reconcile-plan.js";
+import {
+  createHelmSubprocessRunner,
+  createLoggingHelmRunner,
+  spawnHelm,
+  type HelmRunner,
+} from "./helm-runner.js";
 import {
   routeOperation,
   stubHandler,
@@ -43,26 +52,35 @@ export function startReconciler(deps: ControllerDeps): () => void {
       const desired: GatewayDesiredState[] = snap.docs.map(
         (d) => d.data() as GatewayDesiredState,
       );
-      const desiredMap = buildInstancesMap(desired);
       const actualMap = await deps.helm.readDeployedInstances({
         release: HELM_RELEASE,
         namespace: NAMESPACE,
       });
+      const desiredMap = buildInstancesMap(desired);
       const changes = diffInstancesMap(actualMap, desiredMap);
-      if (changes.length === 0) {
+      const actionable = changes.filter((c) => c.kind !== "drift");
+      const drift = changes.filter((c) => c.kind === "drift");
+      if (drift.length > 0) {
+        deps.log(
+          `[glm-controller] drift detected (preserved, not removed): ${drift.map((d) => d.instanceName).join(", ")}`,
+        );
+      }
+      if (actionable.length === 0) {
         deps.log(
           `[glm-controller] reconcile tick: no changes (${desired.length} desired, ${Object.keys(actualMap).length} actual)`,
         );
         return;
       }
+      const summary = actionable.map((c) => `${c.kind}:${c.instanceName}`).join(", ");
       deps.log(
-        `[glm-controller] reconcile tick: ${changes.length} change(s) — ${changes.map((c) => `${c.kind}:${c.instanceName}`).join(", ")}`,
+        `[glm-controller] reconcile tick: ${actionable.length} change(s) — ${summary}`,
       );
+      const targetMap = buildHelmTargetMap(desired, actualMap);
       await deps.helm.upgrade({
         release: HELM_RELEASE,
         chart: HELM_CHART,
         namespace: NAMESPACE,
-        instances: desiredMap,
+        instances: targetMap,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -152,15 +170,18 @@ async function processOperation(
     rolledBack: result.rolledBack ?? false,
   });
 
-  deps.log(
-    `[glm-controller] op=${op.id} → ${result.success ? "succeeded" : "failed"}${result.error ? ` (${result.error})` : ""}`,
-  );
+  const status = result.success ? "succeeded" : "failed";
+  const errSuffix = result.error ? ` (${result.error})` : "";
+  deps.log(`[glm-controller] op=${op.id} → ${status}${errSuffix}`);
 }
 
 async function main(): Promise<void> {
   initializeApp({ credential: applicationDefault() });
   const db = getFirestore();
-  const helm = createLoggingHelmRunner(log);
+  const helm =
+    process.env.HELM_RUNNER_MODE === "stub"
+      ? createLoggingHelmRunner(log)
+      : createHelmSubprocessRunner({ runHelm: spawnHelm, log });
 
   const handlers = await buildHandlers(db, log);
 

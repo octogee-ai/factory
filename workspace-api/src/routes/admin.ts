@@ -722,6 +722,12 @@ async function createOperation(opts: NewOperationInput): Promise<string> {
   return ref.id;
 }
 
+const GATEWAY_IMAGE_REPO_PREFIX = "us-central1-docker.pkg.dev/octogee/octogee/";
+
+function isValidGatewayImageRepository(repo: string): boolean {
+  return repo.startsWith(GATEWAY_IMAGE_REPO_PREFIX);
+}
+
 router.post("/gateways", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = req.body as Partial<{
@@ -734,6 +740,14 @@ router.post("/gateways", async (req: Request, res: Response, next: NextFunction)
       res.status(400).json({
         error: "missing required fields",
         required: ["gatewayId", "instanceName", "imageRepository", "imageTag"],
+      });
+      return;
+    }
+    if (!isValidGatewayImageRepository(body.imageRepository)) {
+      res.status(400).json({
+        error: "imageRepository must be the canonical Octogee Artifact Registry repo",
+        expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
+        got: body.imageRepository,
       });
       return;
     }

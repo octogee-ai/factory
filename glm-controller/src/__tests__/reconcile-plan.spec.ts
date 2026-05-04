@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildHelmTargetMap,
   buildInstancesMap,
   diffInstancesMap,
   type ReconcileChange,
@@ -89,14 +90,16 @@ describe("diffInstancesMap", () => {
     expect(changes[0]).toMatchObject({ kind: "create", instanceName: "canary" });
   });
 
-  it("reports a `remove` when actual has an instance desired doesn't", () => {
+  it("reports `drift` (NOT `remove`) when actual has an instance desired doesn't — never auto-deletes", () => {
     const actual: HelmInstancesMap = {
       default: baseInstance("abc"),
       old: baseInstance("xyz"),
     };
     const desired: HelmInstancesMap = { default: baseInstance("abc") };
     const changes = diffInstancesMap(actual, desired);
-    expect(changes).toEqual([{ kind: "remove", instanceName: "old" }]);
+    expect(changes).toEqual([
+      { kind: "drift", instanceName: "old", current: actual.old },
+    ]);
   });
 
   it("reports an `update` when image tag differs for the same instance", () => {
@@ -118,7 +121,7 @@ describe("diffInstancesMap", () => {
     expect(changes[0].kind).toBe("update");
   });
 
-  it("reports multiple independent changes in a single diff", () => {
+  it("reports multiple independent changes in a single diff (create + update + drift)", () => {
     const actual: HelmInstancesMap = {
       stale: baseInstance("old"),
       default: baseInstance("abc"),
@@ -129,6 +132,68 @@ describe("diffInstancesMap", () => {
     };
     const changes = diffInstancesMap(actual, desired);
     const kinds = changes.map((c) => c.kind).sort();
-    expect(kinds).toEqual(["create", "remove", "update"]);
+    expect(kinds).toEqual(["create", "drift", "update"]);
+  });
+});
+
+describe("buildHelmTargetMap", () => {
+  const REPO_PATH = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+  const desired = (overrides: Partial<GatewayDesiredState>): GatewayDesiredState => ({
+    gatewayId: "gw-test-default",
+    instanceName: "default",
+    imageRepository: REPO_PATH,
+    imageTag: "abc1234",
+    desiredStatus: "running",
+    createdBy: "ci:abc1234",
+    ...overrides,
+  });
+
+  it("preserves drifted instances (in actual but no glmGateways doc) — never deletes", () => {
+    const actual: HelmInstancesMap = {
+      default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
+      old: { enabled: true, image: { repository: REPO_PATH, tag: "xyz" }, gatewayId: "gw-test-old" },
+    };
+    const target = buildHelmTargetMap([desired({})], actual);
+    expect(Object.keys(target).sort()).toEqual(["default", "old"]);
+    expect(target.old).toEqual(actual.old);
+  });
+
+  it("applies non-retired glmGateways on top of actual (overriding the matching instance)", () => {
+    const actual: HelmInstancesMap = {
+      default: { enabled: true, image: { repository: REPO_PATH, tag: "old" }, gatewayId: "gw-test" },
+    };
+    const target = buildHelmTargetMap(
+      [desired({ instanceName: "default", imageTag: "new" })],
+      actual,
+    );
+    expect(target.default.image.tag).toBe("new");
+  });
+
+  it("adds new instances from glmGateways that aren't in actual yet (the create case)", () => {
+    const actual: HelmInstancesMap = {};
+    const target = buildHelmTargetMap(
+      [desired({ instanceName: "canary", gatewayId: "gw-test-canary" })],
+      actual,
+    );
+    expect(target.canary.gatewayId).toBe("gw-test-canary");
+  });
+
+  it("does NOT remove instances from actual on retire (PR 4 owns the retire flow)", () => {
+    const actual: HelmInstancesMap = {
+      default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
+    };
+    const target = buildHelmTargetMap(
+      [desired({ instanceName: "default", desiredStatus: "retired" })],
+      actual,
+    );
+    expect(target.default).toEqual(actual.default);
+  });
+
+  it("returns the unchanged actual map when no desired-state docs exist (drift-only state)", () => {
+    const actual: HelmInstancesMap = {
+      default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
+    };
+    const target = buildHelmTargetMap([], actual);
+    expect(target).toEqual(actual);
   });
 });
