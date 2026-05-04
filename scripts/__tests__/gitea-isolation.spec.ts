@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -210,5 +210,69 @@ describe("setRepoSshCommand", () => {
     // grep for the marker count is the contract check, not the call shape.
     const markerCount = (gitTs.match(/\/\/ ssh-cmd:/g) ?? []).length;
     expect(markerCount).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("pushInitialSkeleton", () => {
+  let workDir: string;
+  let coachDir: string;
+  let originDir: string;
+
+  beforeEach(() => {
+    workDir = fs.mkdtempSync(path.join(os.tmpdir(), "init-skeleton-"));
+    coachDir = path.join(workDir, "coach");
+    originDir = path.join(workDir, "origin.git");
+    fs.mkdirSync(coachDir);
+    fs.mkdirSync(originDir);
+    execSync("git init -q --bare -b main", { cwd: originDir, stdio: "pipe" });
+    execSync("git init -q -b main", { cwd: coachDir, stdio: "pipe" });
+    execSync(`git config user.email "test@octogee.com"`, { cwd: coachDir });
+    execSync(`git config user.name "Test"`, { cwd: coachDir });
+    execSync(`git remote add origin "${originDir}"`, { cwd: coachDir });
+  });
+  afterEach(() => fs.rmSync(workDir, { recursive: true, force: true }));
+
+  function originHas(ref: string): boolean {
+    try {
+      execSync(`git show-ref --verify --quiet ${ref}`, { cwd: originDir });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function originLog(): string {
+    return execSync("git log --oneline main", { cwd: originDir }).toString();
+  }
+
+  it("commits and pushes when working tree is dirty", async () => {
+    fs.writeFileSync(path.join(coachDir, "SOUL.md"), "# Soul\n");
+    const { pushInitialSkeleton } = await import("../lib/git.js");
+    pushInitialSkeleton(coachDir, "test-slug");
+    expect(originHas("refs/heads/main")).toBe(true);
+    expect(originLog()).toContain("initial workspace skeleton");
+  });
+
+  it("pushes existing local history when working tree is clean (recovery path)", async () => {
+    fs.writeFileSync(path.join(coachDir, "SOUL.md"), "# Soul\n");
+    execSync("git add -A && git commit -q -m 'pre-existing'", { cwd: coachDir });
+    expect(originHas("refs/heads/main")).toBe(false);
+    const { pushInitialSkeleton } = await import("../lib/git.js");
+    pushInitialSkeleton(coachDir, "test-slug");
+    expect(originHas("refs/heads/main")).toBe(true);
+    expect(originLog()).toContain("pre-existing");
+    expect(originLog()).not.toContain("initial workspace skeleton");
+  });
+});
+
+describe("syncAllWorkspaces no longer gates on BOOTSTRAP.md", () => {
+  it("the BOOTSTRAP.md skip block is gone from git.ts", () => {
+    const gitTs = fs.readFileSync(
+      path.resolve(__dirname, "..", "lib", "git.ts"),
+      "utf-8",
+    );
+    expect(gitTs).not.toContain("BOOTSTRAP.md present — skipping");
+    expect(gitTs).not.toMatch(
+      /existsSync\(path\.join\(coachDir,\s*["']BOOTSTRAP\.md["']\)\)/,
+    );
   });
 });

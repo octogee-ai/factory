@@ -487,9 +487,13 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   }
   log(`[git] remote add: ${remoteResult === "" ? "OK" : remoteResult}`);
 
+  const sshKey = customerSshKeyPath(slug);
+  const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
+  pushInitialSkeleton(coachDir, slug, keyArg);
+
   const gitHost = new URL(GIT_API_URL).origin;
   const repoUrlDisplay = `${gitHost}/${GIT_ORG}/${repoName}`;
-  log(`[git] ✅ Workspace repo skeleton ready (commit deferred until bootstrap completes): ${repoUrlDisplay}`);
+  log(`[git] ✅ Workspace repo ready: ${repoUrlDisplay}`);
   return repoUrlDisplay;
 }
 
@@ -573,6 +577,24 @@ export async function initProjectRepo(
   return repoUrlDisplay;
 }
 
+export function pushInitialSkeleton(
+  coachDir: string,
+  slug: string,
+  sshKeyPath?: string,
+): void {
+  if (gitExec(coachDir, "status --porcelain")) {
+    gitExec(coachDir, "add -A");
+    if (gitExec(coachDir, `commit -m "initial workspace skeleton"`) === null) {
+      log(`⚠ [git] ${slug} initial commit failed — sync will retry`);
+    }
+  }
+  if (gitExec(coachDir, "push -u origin main", sshKeyPath) === null) {
+    log(`⚠ [git] ${slug} initial push failed — sync will retry`);
+  } else {
+    log(`[git] ${slug} initial push: OK`);
+  }
+}
+
 export async function commitAndPush(repoDir: string, message: string): Promise<boolean> {
   const relPath = path.relative(CUSTOMERS_DIR, repoDir);
   const slug = relPath.split(path.sep)[0];
@@ -615,13 +637,6 @@ export async function syncAllWorkspaces(): Promise<void> {
 
     // ssh-cmd: refreshAllCoachRepos
     setRepoSshCommand(coachDir, slug);
-
-    if (fs.existsSync(path.join(coachDir, "BOOTSTRAP.md"))) {
-      log(
-        `[git-sync] ${slug}: BOOTSTRAP.md present — skipping (workspace persists once bootstrap completes)`,
-      );
-      continue;
-    }
 
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
