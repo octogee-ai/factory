@@ -204,3 +204,14 @@ gateway:
 # ── Service Account ──────────────────────────────────────────────────────────
 serviceAccount:
   gcpServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"
+
+# ── glm-controller (subchart values) ─────────────────────────────────────────
+# Helm subchart values must be nested under the chart name. Without this
+# block the glm-controller subchart sees gcpServiceAccount: "" and renders
+# a KSA missing the iam.gke.io/gcp-service-account annotation, so Workload
+# Identity falls back to the cluster's default node identity which lacks
+# Firestore access. Reuses the gateway GSA — which already has
+# roles/datastore.user — so we don't need a separate GSA for it. Per-env
+# override in values.{test,prod}.yaml swaps to the env's GSA.
+glm-controller:
+  gcpServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"

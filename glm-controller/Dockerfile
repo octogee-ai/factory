@@ -31,6 +31,13 @@ RUN npm ci
 COPY glm-controller/tsconfig.json ./
 COPY glm-controller/src ./src
 COPY shared /app/shared
+# glm-controller's migrate-customer handler imports from scripts/lib
+# (fleet-migration-{client,runner,signature}, fleet-migration). The
+# tsconfig's `rootDir: ".."` lets `import "../../../scripts/lib/foo.js"`
+# resolve, but the compiler still needs the .ts files on disk. They are
+# self-contained (no other scripts/ deps; only `crypto` + relative
+# siblings + shared/types), so copying just scripts/lib is enough.
+COPY scripts/lib /app/scripts/lib
 
 RUN npx tsc \
   && npm prune --omit=dev
