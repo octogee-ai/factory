@@ -20,7 +20,6 @@ import {
 } from "./helm-runner.js";
 import {
   routeOperation,
-  stubHandler,
   type OperationHandlers,
 } from "./operation-router.js";
 import { createOperationContext } from "./operation-context.js";
@@ -28,6 +27,7 @@ import { computeBootstrapWrites } from "./bootstrap.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
+import { createRolloutHandler } from "./handlers/rollout.js";
 import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
 
 const log = (msg: string) => console.log(msg);
@@ -402,11 +402,54 @@ async function buildHandlers(
     log: logFn,
   });
 
+  const rollout = createRolloutHandler({
+    helm,
+    readCurrentSpec: async (gatewayId) => {
+      const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+      if (!doc.exists) return null;
+      const data = doc.data() as GatewayDesiredState | undefined;
+      if (!data?.instanceName || !data.imageRepository || !data.imageTag) return null;
+      return {
+        instanceName: data.instanceName,
+        imageRepository: data.imageRepository,
+        imageTag: data.imageTag,
+      };
+    },
+    updateGlmGatewayImage: async (gatewayId, imageRepository, imageTag) => {
+      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({
+        imageRepository,
+        imageTag,
+      });
+    },
+    readGatewayHeartbeat: async (gatewayId) => {
+      const doc = await db.collection("gateways").doc(gatewayId).get();
+      if (!doc.exists) return null;
+      const data = doc.data() as
+        | { version?: unknown; lastHeartbeatAt?: { toMillis?: () => number } | number | Date }
+        | undefined;
+      const version = typeof data?.version === "string" ? data.version : null;
+      const raw = data?.lastHeartbeatAt;
+      let lastHeartbeatAt = 0;
+      if (typeof raw === "number") lastHeartbeatAt = raw;
+      else if (raw instanceof Date) lastHeartbeatAt = raw.getTime();
+      else if (typeof (raw as { toMillis?: () => number })?.toMillis === "function") {
+        lastHeartbeatAt = (raw as { toMillis: () => number }).toMillis();
+      }
+      return { version, lastHeartbeatAt };
+    },
+    helmRenderTimeoutMs: 60_000,
+    heartbeatTimeoutMs: 240_000,
+    pollIntervalMs: 5_000,
+    now: () => Date.now(),
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    log: logFn,
+  });
+
   return {
     "add-gateway": addGateway,
     "migrate-customer": migrateCustomer,
     "retire-gateway": retireGateway,
-    rollout: stubHandler("rollout", logFn),
+    rollout,
   };
 }
 

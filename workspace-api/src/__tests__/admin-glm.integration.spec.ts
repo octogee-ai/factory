@@ -35,10 +35,19 @@ vi.mock("../lib/db", () => {
       where: (field: string, _op: string, value: unknown) =>
         whereChain(collectionName, { field, value }),
       get: async () => {
-        if (collectionName === "glmOperations" && !filter) {
+        if (collectionName === "glmOperations") {
+          const docs = filter
+            ? glmOperationsDocs.filter((d) => {
+                const v = d.data[filter.field];
+                if (Array.isArray(filter.value)) {
+                  return (filter.value as unknown[]).includes(v);
+                }
+                return v === filter.value;
+              })
+            : glmOperationsDocs;
           return {
-            docs: glmOperationsDocs.map((d) => ({ id: d.id, data: () => d.data })),
-            size: glmOperationsDocs.length,
+            docs: docs.map((d) => ({ id: d.id, data: () => d.data })),
+            size: docs.length,
           };
         }
         if (collectionName === "glmGateways" && filter) {
@@ -402,6 +411,147 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
       (c) => c.collection === "glmGateways" && c.op === "doc.update",
     );
     expect(update).toBeUndefined();
+  });
+});
+
+describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
+  const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+
+  it("creates a rollout op with the new imageTag (and inherited repo)", async () => {
+    glmGatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: REPO,
+      imageTag: "oldSha",
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-test/rollout")
+      .send({ imageTag: "abcdef1" });
+    expect(res.status).toBe(202);
+    const op = calls.find((c) => c.collection === "glmOperations");
+    expect(op?.data).toMatchObject({
+      kind: "rollout",
+      input: { gatewayId: "gw-test", imageTag: "abcdef1" },
+      createdBy: "admin-user",
+    });
+  });
+
+  it("returns 400 when imageTag is not a SHA-style hex string (e.g. 'latest', 'v1.2.3')", async () => {
+    glmGatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: REPO,
+      imageTag: "oldSha1",
+    };
+    const app = buildApp();
+    for (const bad of ["latest", "v1.2.3", "ABC123def", "abc"]) {
+      const res = await request(app)
+        .post("/api/admin/gateways/gw-test/rollout")
+        .send({ imageTag: bad });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/SHA/);
+    }
+    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
+  });
+
+  it("returns 409 when another op is already pending or running for this gateway", async () => {
+    glmGatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: REPO,
+      imageTag: "oldSha1",
+    };
+    glmOperationsDocs.push({
+      id: "op-running-1",
+      data: {
+        kind: "migrate-customer",
+        status: "running",
+        input: { gatewayId: "gw-test", uid: "u1" },
+      },
+    });
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-test/rollout")
+      .send({ imageTag: "abcdef2" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already pending or running/);
+    expect(res.body.operationId).toBe("op-running-1");
+    expect(res.body.kind).toBe("migrate-customer");
+  });
+
+  it("returns 400 when imageTag is missing", async () => {
+    glmGatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: REPO,
+      imageTag: "oldSha",
+    };
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways/gw-test/rollout").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/imageTag/);
+  });
+
+  it("returns 400 when imageRepository is not the canonical Octogee AR repo", async () => {
+    glmGatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: REPO,
+      imageTag: "oldSha",
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-test/rollout")
+      .send({ imageTag: "abcdef1", imageRepository: "evil.example.com/payload" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/imageRepository/);
+  });
+
+  it("returns 404 when the gateway is not registered", async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-missing/rollout")
+      .send({ imageTag: "abcdef1" });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 409 when the gateway is already on the requested image (no-op)", async () => {
+    glmGatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: REPO,
+      imageTag: "1234567",
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-test/rollout")
+      .send({ imageTag: "1234567" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no-op|already on/i);
+    const op = calls.find((c) => c.collection === "glmOperations");
+    expect(op).toBeUndefined();
+  });
+
+  it("returns 409 when an in-flight restore job is set on the heartbeat", async () => {
+    glmGatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: REPO,
+      imageTag: "oldSha",
+    };
+    gatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      status: "ready",
+      inFlightJobId: "job-restore-9",
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-test/rollout")
+      .send({ imageTag: "abcdef1" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/in-flight restore job/i);
+    expect(res.body.inFlightJobId).toBe("job-restore-9");
   });
 });
 

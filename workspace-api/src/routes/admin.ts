@@ -895,6 +895,107 @@ router.delete("/gateways/:id", async (req: Request, res: Response, next: NextFun
   } catch (e) { next(e); }
 });
 
+const IMAGE_TAG_PATTERN = /^[a-f0-9]{7,40}$/;
+
+router.post(
+  "/gateways/:id/rollout",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = req.params.id;
+      const body = req.body as Partial<{ imageTag: string; imageRepository: string }>;
+      if (!body.imageTag || typeof body.imageTag !== "string") {
+        res.status(400).json({ error: "missing imageTag" });
+        return;
+      }
+      if (!IMAGE_TAG_PATTERN.test(body.imageTag)) {
+        res.status(400).json({
+          error: "imageTag must be a 7–40 char lowercase hex SHA",
+          got: body.imageTag,
+        });
+        return;
+      }
+      if (
+        body.imageRepository != null &&
+        (typeof body.imageRepository !== "string" ||
+          !isValidGatewayImageRepository(body.imageRepository))
+      ) {
+        res.status(400).json({
+          error: "imageRepository must be the canonical Octogee Artifact Registry repo",
+          expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
+          got: body.imageRepository,
+        });
+        return;
+      }
+      const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
+      const snap = await ref.get();
+      if (!snap.exists) {
+        res.status(404).json({ error: "gateway not found", gatewayId: id });
+        return;
+      }
+      const data = snap.data() as
+        | { imageTag?: string; imageRepository?: string }
+        | undefined;
+      const targetRepo = body.imageRepository ?? data?.imageRepository ?? "";
+      if (data?.imageTag === body.imageTag && data.imageRepository === targetRepo) {
+        res.status(409).json({
+          error: "gateway already on requested image — no-op rollout",
+          gatewayId: id,
+          imageTag: body.imageTag,
+          imageRepository: targetRepo,
+        });
+        return;
+      }
+      const heartbeatSnap = await db.collection("gateways").doc(id).get();
+      if (heartbeatSnap.exists) {
+        const hbData = heartbeatSnap.data() as { inFlightJobId?: unknown } | undefined;
+        const inFlightJobId =
+          typeof hbData?.inFlightJobId === "string" && hbData.inFlightJobId.length > 0
+            ? hbData.inFlightJobId
+            : null;
+        if (inFlightJobId) {
+          res.status(409).json({
+            error: "gateway has an in-flight restore job; let it finish before rolling out",
+            gatewayId: id,
+            inFlightJobId,
+          });
+          return;
+        }
+      }
+      const pendingOps = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("status", "in", ["pending", "running"])
+        .get();
+      const conflicting = pendingOps.docs.find((d) => {
+        const data = d.data() as { input?: { gatewayId?: string } } | undefined;
+        return data?.input?.gatewayId === id;
+      });
+      if (conflicting) {
+        res.status(409).json({
+          error: "another operation is already pending or running for this gateway",
+          gatewayId: id,
+          operationId: conflicting.id,
+          kind: (conflicting.data() as { kind?: string } | undefined)?.kind ?? null,
+        });
+        return;
+      }
+      const createdBy = req.uid ?? "unknown";
+      const input: { gatewayId: string; imageTag: string; imageRepository?: string } = {
+        gatewayId: id,
+        imageTag: body.imageTag,
+      };
+      if (body.imageRepository) input.imageRepository = body.imageRepository;
+      const operationId = await createOperation({
+        kind: "rollout",
+        createdBy,
+        input,
+      });
+      res.status(202).json({ gatewayId: id, operationId });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 router.get("/customers/by-slug/:slug", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const slug = req.params.slug;

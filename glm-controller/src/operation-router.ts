@@ -45,18 +45,3 @@ export async function routeOperation(
   }
 }
 
-/**
- * Stub handler — logs the op without running it. Used for handler
- * kinds whose real implementation hasn't landed yet.
- */
-export function stubHandler(label: string, log: (msg: string) => void): OperationHandler {
-  return async (op: Operation): Promise<OperationResult> => {
-    log(
-      `[glm-controller] stub ${label} op=${op.id} input=${JSON.stringify(op.input)} — would execute, returning success`,
-    );
-    return {
-      steps: [{ name: `${label}-stub`, status: "done" }],
-      success: true,
-    };
-  };
-}
