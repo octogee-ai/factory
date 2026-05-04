@@ -606,6 +606,43 @@ export function createServer() {
   return server;
 }
 
+/**
+ * Build a Gitea-backed EditDiffFetcher for Phase 4.5 per-edit thread replies
+ * (spec docs/ACTIVITY-STREAM-SPEC.md §10). Returns `undefined` when the
+ * required env (GITEA_TOKEN, GITEA_URL or K8S_NAMESPACE) is unset — the
+ * bridge falls back to nullEditDiffFetcher and posts placeholder bodies.
+ *
+ * URL convention mirrors workspace-api/src/lib/gitea.ts so the same K8s
+ * Service + Secret can serve both surfaces.
+ */
+async function buildEditDiffFetcher() {
+  const giteaToken = process.env.GITEA_TOKEN;
+  if (!giteaToken || giteaToken.trim().length === 0) {
+    console.warn(
+      '[chat-proxy] GITEA_TOKEN not set — Phase 4.5 edit diffs will render as placeholders. ' +
+      'Mount K8s secret `gitea-token/token` on chat-proxy to enable.',
+    );
+    return undefined;
+  }
+  const ns = process.env.K8S_NAMESPACE || 'octogee';
+  // Derive in-cluster Gitea URL from the namespace only — matches
+  // workspace-api/src/lib/gitea.ts. We deliberately do NOT honor a
+  // GITEA_URL override here: a misconfigured override would be silently
+  // rejected by the SSRF guard (or worse, send the PAT to the wrong
+  // host), and a single derivation point keeps both surfaces in sync.
+  const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
+  const giteaOrg = process.env.GITEA_ORG || 'octogee';
+  const giteaPublicBaseUrl = process.env.GITEA_PUBLIC_BASE_URL || undefined;
+  const { createGiteaEditDiffFetcher } = await import('./openclaw/gitea-edit-diff-fetcher.js');
+  return createGiteaEditDiffFetcher({
+    giteaUrl,
+    giteaToken,
+    giteaOrg,
+    giteaPublicBaseUrl,
+    log: (msg) => console.warn(msg),
+  });
+}
+
 if (process.env.NODE_ENV !== "test") {
   const server = createServer();
   server.listen(PORT, () => {
@@ -657,6 +694,7 @@ if (process.env.NODE_ENV !== "test") {
         mmBaseUrl: MM_PUBLIC_URL,
         metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
         log: (msg) => console.warn(msg),
+        editDiffFetcher: await buildEditDiffFetcher(),
       });
     } catch (err) {
       console.error(
