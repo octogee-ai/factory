@@ -575,4 +575,120 @@ router.post("/customer/:uid/csi-refresh", async (req: Request, res: Response, ne
   } catch (e) { next(e); }
 });
 
+// ── Fleet Controller — Phase 2 (training wheels) ────────────────────────────
+//
+// Lists every `gateways/{id}` doc + aggregates `restoreJobs/*` so the admin
+// Fleet Panel can render status / mounted customers / image SHA / in-flight
+// jobs as a single pane of glass. Read-only; write endpoints land in §Phase 3
+// alongside the unmount handler. See docs/architecture/GATEWAY-PLATFORM-SPEC.md
+// §Gateway Lifecycle Manager → API Surface.
+const JOB_TTL_MS = 10 * 60_000;
+
+router.get("/gateways", async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const [gwSnap, jobsSnap] = await Promise.all([
+      db.collection("gateways").get(),
+      db.collection("restoreJobs").get(),
+    ]);
+
+    const now = Date.now();
+    const toMillis = (v: any): number | null => {
+      if (!v) return null;
+      if (typeof v?.toDate === "function") return v.toDate().getTime();
+      if (v instanceof Date) return v.getTime();
+      if (typeof v === "number") return v;
+      return null;
+    };
+    const toIso = (v: any): string | null => {
+      const ms = toMillis(v);
+      return ms == null ? null : new Date(ms).toISOString();
+    };
+
+    const jobsByGateway = new Map<string, Array<{ id: string; data: any }>>();
+    let mounting = 0;
+    let staleJobs = 0;
+    let pending = 0;
+
+    for (const doc of jobsSnap.docs) {
+      const data = doc.data() as any;
+      const gid = data.gatewayId;
+      const arr = jobsByGateway.get(gid) ?? [];
+      arr.push({ id: doc.id, data });
+      jobsByGateway.set(gid, arr);
+
+      const state = data.state;
+      if (state === "pending") pending++;
+      if (state === "dispatched" || state === "running") {
+        const ageMs = toMillis(data.dispatchedAt) ?? toMillis(data.createdAt);
+        const isStale = ageMs != null && now - ageMs > JOB_TTL_MS;
+        if (isStale) staleJobs++;
+        else mounting++;
+      }
+    }
+
+    const gateways = gwSnap.docs.map((doc) => {
+      const data = doc.data() as any;
+      const lastHeartbeatMs = toMillis(data.lastHeartbeatAt);
+      const heartbeatAgeMs = lastHeartbeatMs == null ? null : now - lastHeartbeatMs;
+      const inFlightJobId: string | null = data.inFlightJobId ?? null;
+      const ownJobs = jobsByGateway.get(doc.id) ?? [];
+      const inFlightRaw = inFlightJobId
+        ? ownJobs.find((j) => j.id === inFlightJobId)
+        : null;
+      const inFlightJob = inFlightRaw
+        ? {
+            jobId: inFlightRaw.id,
+            slug: inFlightRaw.data.slug,
+            state: inFlightRaw.data.state,
+            ageMs: (() => {
+              const dispatchedMs = toMillis(inFlightRaw.data.dispatchedAt) ?? toMillis(inFlightRaw.data.createdAt);
+              return dispatchedMs == null ? 0 : now - dispatchedMs;
+            })(),
+          }
+        : null;
+      const lastError = data.lastError
+        ? {
+            jobId: data.lastError.jobId,
+            slug: data.lastError.slug,
+            message: data.lastError.message,
+            at: toIso(data.lastError.at),
+          }
+        : null;
+      return {
+        gatewayId: data.gatewayId ?? doc.id,
+        status: data.status ?? "unknown",
+        imageTag: data.version ?? null,
+        openclawVersion: data.openclawVersion ?? null,
+        mountedCustomers: Array.isArray(data.mountedCustomers) ? data.mountedCustomers : [],
+        lastHeartbeatAt: toIso(data.lastHeartbeatAt),
+        heartbeatAgeMs,
+        inFlightJobId,
+        inFlightJob,
+        lastError,
+      };
+    });
+
+    let ready = 0;
+    let unreachable = 0;
+    let customersMounted = 0;
+    for (const g of gateways) {
+      if (g.status === "ready") ready++;
+      if (g.status === "unreachable") unreachable++;
+      customersMounted += g.mountedCustomers.length;
+    }
+
+    res.json({
+      gateways,
+      stats: {
+        gateways: { total: gateways.length, ready, unreachable },
+        customersMounted,
+        inFlight: { mounting, unmounting: 0, total: mounting },
+        staleJobs,
+        pendingPlacements: pending,
+      },
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (e) { next(e); }
+});
+
 export default router;
