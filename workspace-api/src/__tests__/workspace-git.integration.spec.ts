@@ -251,6 +251,136 @@ describe("project-target auth-bypass guard (Copilot review on #825)", () => {
   });
 });
 
+describe("POST /api/workspace/git/commit (Phase 6.C.2)", () => {
+  it("commits a real working-tree change with the requesting user as author", async () => {
+    // Modify the seeded repo so there's something to commit.
+    await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "owner change\n");
+    firestoreData[`users/caller-uid`] = {
+      uid: "caller-uid",
+      username: SLUG,
+      workspaceId: SLUG,
+      displayName: "Bob Owner",
+      email: "bob@example.com",
+    };
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ message: "Owner-driven change" });
+    expect(res.status).toBe(200);
+    expect(res.body.empty).toBe(false);
+    expect(res.body.sha).toMatch(/^[0-9a-f]{40}$/);
+
+    // Verify the commit's author email matches the Firestore profile.
+    const last = spawnSync("git", ["log", "-1", "--pretty=format:%ae"], {
+      cwd: path.join(customersRoot, SLUG),
+      encoding: "utf-8",
+    });
+    expect(last.stdout.trim()).toBe("bob@example.com");
+
+    // Restore for subsequent tests.
+    await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "hello\n");
+    spawnSync("git", ["add", "."], { cwd: path.join(customersRoot, SLUG) });
+    spawnSync("git", ["commit", "-m", "restore"], { cwd: path.join(customersRoot, SLUG) });
+  });
+
+  it("returns 200 with empty: true for clean working tree (idempotent — no error)", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ message: "nothing to commit" });
+    expect(res.status).toBe(200);
+    expect(res.body.empty).toBe(true);
+  });
+
+  it("rejects empty message with 400 BAD_MESSAGE", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ message: "   " });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("BAD_MESSAGE");
+  });
+
+  it("rejects 5001-char message with 400 MESSAGE_TOO_LONG", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ message: "x".repeat(5_001) });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("MESSAGE_TOO_LONG");
+  });
+
+  it("returns 403 when caller is not the workspace owner (withFileTarget primary gate)", async () => {
+    firestoreData[`users/caller-uid`] = {
+      uid: "caller-uid",
+      username: "someone-else",
+      workspaceId: "someone-else",
+    };
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ message: "not my workspace" });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects /git/commit with ?project= (PROJECT_TARGET_UNSUPPORTED)", async () => {
+    firestoreData[`workspaces/${SLUG}/projects/myproj`] = {
+      slug: "myproj",
+      ownerUid: "caller-uid",
+    };
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/commit?slug=${SLUG}&project=myproj`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ message: "via project" });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("PROJECT_TARGET_UNSUPPORTED");
+  });
+});
+
+describe("POST /api/workspace/git/push (Phase 6.C.2)", () => {
+  it("returns 403 for non-owner callers (withFileTarget primary gate)", async () => {
+    firestoreData[`users/caller-uid`] = {
+      uid: "caller-uid",
+      username: "someone-else",
+      workspaceId: "someone-else",
+    };
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/push?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects /git/push with ?project= (PROJECT_TARGET_UNSUPPORTED)", async () => {
+    firestoreData[`workspaces/${SLUG}/projects/myproj`] = {
+      slug: "myproj",
+      ownerUid: "caller-uid",
+    };
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/push?slug=${SLUG}&project=myproj`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("PROJECT_TARGET_UNSUPPORTED");
+  });
+
+  it("rejects unsafe branch ref names with 400 BAD_BRANCH", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/push?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ branch: "-deletes-everything" });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("BAD_BRANCH");
+  });
+});
+
 describe("concurrency cap (P1-1)", () => {
   it("returns 429 CONCURRENCY_LIMIT when more than 4 in-flight git ops for the same slug", async () => {
     const app = createApp();

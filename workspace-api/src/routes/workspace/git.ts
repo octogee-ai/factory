@@ -2,10 +2,13 @@ import { Router } from "express";
 import * as path from "node:path";
 import { withFileTarget } from "../../lib/fileTarget";
 import {
+  gitCommit,
   gitDiff,
   gitLog,
+  gitPush,
   gitStatus,
   resolveCustomerDir,
+  type CommitAuthor,
   type WorkspaceGitError,
 } from "../../lib/workspace-git";
 import { logger } from "../../middleware/logging";
@@ -246,5 +249,112 @@ function isSafeRefName(ref: string): boolean {
   if (ref.startsWith("-")) return false;
   return /^[A-Za-z0-9._/-]+$/.test(ref);
 }
+
+// ─── Phase 6.C.2: Commit + Push (workspace-owner-only writes) ──────────
+
+/**
+ * Stricter than `withFileTarget`'s "owner OR project member" check.
+ * Phase 6.C.2 writes ONLY allow the workspace owner — even a project
+ * member with read access to the workspace shouldn't be able to commit
+ * or push on the owner's behalf. Trusts `req.user.username` (set by
+ * requireAuth from Firestore) and rejects mismatch with 403.
+ */
+function ensureWorkspaceOwner(
+  req: import("express").Request,
+  res: import("express").Response,
+  slug: string,
+): boolean {
+  if (req.user?.username !== slug) {
+    res.status(403).json({
+      error: "Workspace owner only",
+      code: "OWNER_ONLY",
+    });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Resolves the commit author (name + email) from the user doc that
+ * `requireAuth` already loaded into `req.user` (no extra Firestore round
+ * trip). Falls back to the slug as the display name and a derived
+ * `<slug>@octogee.local` email if profile fields are missing — the
+ * commit still lands with a sensible-looking author rather than
+ * "unknown".
+ *
+ * Pure / synchronous on purpose: the previous async `db.doc('users/{uid}')`
+ * shape would throw on an empty `uid` (invalid Firestore path) and was
+ * also redundant with `requireAuth`'s already-loaded user doc.
+ */
+function resolveCommitAuthor(
+  user: FirebaseFirestore.DocumentData | undefined,
+  slug: string,
+): CommitAuthor {
+  const data = user as { displayName?: string; email?: string } | undefined;
+  const name = (data?.displayName || "").trim() || slug;
+  const email = (data?.email || "").trim() || `${slug}@octogee.local`;
+  return { name, email };
+}
+
+router.post(
+  "/git/commit",
+  withFileTarget(async (req, res, _next, target) => {
+    if (rejectIfProjectTarget(res, target)) return;
+    if (!ensureWorkspaceOwner(req, res, target.slug)) return;
+    const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+    if (!message) {
+      res.status(400).json({ error: "Missing or empty `message`", code: "BAD_MESSAGE" });
+      return;
+    }
+    if (message.length > 5_000) {
+      res.status(400).json({ error: "Commit message too long (5000 char max)", code: "MESSAGE_TOO_LONG" });
+      return;
+    }
+    const start = Date.now();
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveCustomerDir(customersRoot(), target.slug);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const author = resolveCommitAuthor(req.user, target.slug);
+      const r = await gitCommit(dir, { message, author });
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.json({ sha: r.result.sha, empty: r.result.empty });
+    });
+    logger.info(`git/commit slug=${target.slug} dur=${Date.now() - start}ms status=${res.statusCode}`);
+  }),
+);
+
+router.post(
+  "/git/push",
+  withFileTarget(async (req, res, _next, target) => {
+    if (rejectIfProjectTarget(res, target)) return;
+    if (!ensureWorkspaceOwner(req, res, target.slug)) return;
+    const branch = typeof req.body?.branch === "string" ? req.body.branch : undefined;
+    if (branch && !isSafeRefName(branch)) {
+      res.status(400).json({ error: "Invalid branch", code: "BAD_BRANCH" });
+      return;
+    }
+    const start = Date.now();
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveCustomerDir(customersRoot(), target.slug);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitPush(dir, { branch });
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.json({ ok: true });
+    });
+    logger.info(`git/push slug=${target.slug} dur=${Date.now() - start}ms status=${res.statusCode}`);
+  }),
+);
 
 export default router;

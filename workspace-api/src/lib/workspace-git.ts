@@ -16,6 +16,14 @@ import * as path from "node:path";
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 5_000;
+// Phase 6.C.2 — push and commit can run hooks (we neutralize them via
+// core.hooksPath, but commit also resolves trees that may scan the
+// working set) and push transfers packfiles. First push / large pack
+// can legitimately exceed the 5s read-side default. Bumped here to
+// keep the read routes (status/diff/log) tight while letting writes
+// complete.
+const GIT_PUSH_TIMEOUT_MS = 60_000;
+const GIT_COMMIT_TIMEOUT_MS = 30_000;
 
 const RECORD_SEPARATOR = String.fromCharCode(0x1e);
 const UNIT_SEPARATOR = String.fromCharCode(0x1f);
@@ -107,6 +115,95 @@ export async function gitLog(
   return { ok: true, entries: parseLog(r.stdout) };
 }
 
+/**
+ * Phase 6.C.2 — workspace-owner-driven write operations.
+ *
+ * Author identity comes from the route layer (Firebase profile —
+ * displayName + email of the workspace owner) rather than git config
+ * inside the customer dir, because the customer-dir's existing git
+ * identity belongs to the agent, not the workspace owner. We override
+ * per-command via `-c user.name=` / `-c user.email=` to keep the agent's
+ * config untouched.
+ *
+ * Push uses whatever remote auth the customer dir is already configured
+ * for (SSH key + ssh-agent inside the gateway pod, OR HTTPS with
+ * credential helper). No new auth surface — same path the agent uses.
+ */
+
+export interface CommitAuthor {
+  name: string;
+  email: string;
+}
+
+export interface CommitResult {
+  sha: string;
+  /** True when nothing was staged (clean working tree → no-op commit). */
+  empty: boolean;
+}
+
+export async function gitCommit(
+  customerDir: string,
+  options: { message: string; author: CommitAuthor },
+): Promise<{ ok: true; result: CommitResult } | { ok: false; error: WorkspaceGitError }> {
+  const message = options.message.trim();
+  if (!message || message.length > 5_000) {
+    return { ok: false, error: { code: "INTERNAL", message: "commit message empty or too long" } };
+  }
+  // Stage everything in the working tree first. Mirrors what an agent
+  // does internally (`git add -A`). Untracked + modified + deleted all
+  // captured.
+  const addRes = await runGit(customerDir, ["add", "-A"]);
+  if (!addRes.ok) return addRes;
+
+  // Check if there's anything to commit. `git diff --cached --quiet` exits
+  // 0 if nothing is staged, 1 if something is staged. Emulate via porcelain.
+  const statusRes = await runGit(customerDir, ["status", "--porcelain=v1", "-z"]);
+  if (!statusRes.ok) return statusRes;
+  if (parsePorcelain(statusRes.stdout).length === 0) {
+    return { ok: true, result: { sha: "", empty: true } };
+  }
+
+  // Commit with per-command author override. -c flags BEFORE the
+  // subcommand so they're "transient config" — they don't write to
+  // .git/config. `--no-verify` is defense-in-depth on top of the
+  // module-level `core.hooksPath=/dev/null` pin so a future regression
+  // (or an unforeseen hook discovery path) can't re-arm the
+  // commit-hook RCE vector.
+  const commitRes = await runGit(
+    customerDir,
+    [
+      "-c", `user.name=${options.author.name}`,
+      "-c", `user.email=${options.author.email}`,
+      "commit",
+      "--no-verify",
+      "-m", message,
+    ],
+    { timeoutMs: GIT_COMMIT_TIMEOUT_MS },
+  );
+  if (!commitRes.ok) return commitRes;
+
+  // Resolve the new HEAD sha.
+  const shaRes = await runGit(customerDir, ["rev-parse", "HEAD"]);
+  if (!shaRes.ok) return shaRes;
+  return { ok: true, result: { sha: shaRes.stdout.trim(), empty: false } };
+}
+
+export async function gitPush(
+  customerDir: string,
+  options: { branch?: string } = {},
+): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
+  // No-arg push uses the current branch's upstream. With a branch arg,
+  // push origin/<branch> explicitly. `--end-of-options` after the
+  // subcommand separates flags from positionals (defense against future
+  // callers passing user input as a remote name).
+  const args = options.branch
+    ? ["push", "--end-of-options", "origin", options.branch]
+    : ["push", "--end-of-options"];
+  const r = await runGit(customerDir, args, { timeoutMs: GIT_PUSH_TIMEOUT_MS });
+  if (!r.ok) return r;
+  return { ok: true };
+}
+
 function clampLimit(n: number): number {
   if (!Number.isFinite(n) || n < 1) return 1;
   if (n > 200) return 200;
@@ -120,19 +217,38 @@ interface GitRunOk {
 }
 
 /**
- * Hardening pins (P0-2 of #825 review). The customer dir's `.git/config`
- * is customer-controllable: an agent edit can write keys like
- * `diff.external = /bin/sh -c 'curl ...'` that fire DURING `git diff`.
- * These pins neutralize the attack surface:
- *   -c core.fsmonitor=       disables fsmonitor exec on every command
- *   -c core.pager=cat        defuses pager (already piped, belt+suspenders)
- *   -c gpg.program=/bin/false neutralizes signature-verify exec
- *   -c protocol.allow=never   no fetch/push (read-only routes anyway)
+ * Hardening pins (P0-2 of #825 review, extended in #839 Copilot pass).
+ * The customer dir's `.git/config` is customer-controllable: an agent
+ * edit can write keys like `diff.external = /bin/sh -c 'curl ...'`
+ * that fire DURING `git diff`. These pins neutralize the attack surface:
  *
- * Note: `diff.external` is neutralized at the subcommand level via
- * `--no-ext-diff` (see gitDiff/gitLog). Setting `-c diff.external=`
- * here would NOT disable it — git interprets empty as "run empty
- * command" and errors out, breaking the diff entirely.
+ *   -c core.fsmonitor=         disables fsmonitor exec on every command
+ *   -c core.pager=cat          defuses pager (already piped; belt+suspenders)
+ *   -c core.hooksPath=/dev/null  neutralizes ALL hook exec
+ *                              (pre-commit / post-commit / pre-push / etc.).
+ *                              Customer-controlled `.git/hooks/*` would
+ *                              otherwise execute arbitrary code inside the
+ *                              workspace-api sidecar on every commit/push.
+ *   -c gpg.program=/bin/false  neutralizes signature-verify exec
+ *   -c protocol.file.allow=never  blocks file:// (recursive-submodule RCE
+ *                              vector). Phase 6.C.2 push uses HTTPS/SSH;
+ *                              file:// is never legitimate here.
+ *   -c protocol.ext.allow=never  blocks `ext::` URLs which git turns into
+ *                              shell-out-with-args (`ext::sh -c '<args>'`),
+ *                              defeating the file-only pin above. Default
+ *                              is "user" (gated, but allowed in attended
+ *                              git); `never` makes it unconditional.
+ *
+ * Defense-in-depth on commit: `--no-verify` flag still passed at the
+ * subcommand level so a future `core.hooksPath` regression doesn't
+ * silently re-arm the hook vector.
+ *
+ * NOT pinned (intentional):
+ *   - `protocol.allow=never` — too restrictive: would block HTTPS + SSH
+ *     too, breaking the Phase 6.C.2 push path.
+ *   - `diff.external=` (empty) — git interprets that as "run empty cmd"
+ *     and errors out. `--no-ext-diff` at the subcommand level is the
+ *     correct neutralization (see gitDiff/gitLog).
  *
  * Plus env pins so the helper ignores ~/.gitconfig and /etc/gitconfig
  * and never prompts.
@@ -140,8 +256,10 @@ interface GitRunOk {
 const HARDENING_PINS: ReadonlyArray<string> = [
   "-c", "core.fsmonitor=",
   "-c", "core.pager=cat",
+  "-c", "core.hooksPath=/dev/null",
   "-c", "gpg.program=/bin/false",
-  "-c", "protocol.allow=never",
+  "-c", "protocol.file.allow=never",
+  "-c", "protocol.ext.allow=never",
 ];
 
 const HARDENING_ENV: Readonly<Record<string, string>> = {
@@ -154,7 +272,9 @@ const HARDENING_ENV: Readonly<Record<string, string>> = {
 async function runGit(
   cwd: string,
   args: ReadonlyArray<string>,
+  options: { timeoutMs?: number } = {},
 ): Promise<GitRunOk | { ok: false; error: WorkspaceGitError }> {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   // Layered argv:
   //   1. hardening `-c <key>=<value>` pins (must come BEFORE subcmd)
   //   2. --git-dir / --work-tree pins (defeat parent-dir discovery)
@@ -196,7 +316,7 @@ async function runGit(
     const timer = setTimeout(() => {
       timedOut = true;
       proc.kill("SIGTERM");
-    }, GIT_TIMEOUT_MS);
+    }, timeoutMs);
 
     proc.stdout?.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
