@@ -9,7 +9,7 @@ Docker build runs; local docker builds need it copied manually.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.4.29 the fork carries a single patch:
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.2 the fork carries two patches:
 
 - **Per-account surgical channel reload** — `src/gateway/config-reload-plan.ts`,
   `src/gateway/server-reload-handlers.ts`. Adds a per-account bucket to
@@ -19,6 +19,18 @@ Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patc
   WebSocket connected. Without this, a single customer signup
   disconnects every other coach account at once.
   Log proof at runtime: `[octogee-patch] restarting mattermost account=<slug>-coach`
+
+- **Env-gated `isControlUiVisible` override for sidecar bridges** —
+  `src/infra/agent-events.ts`. When `OPENCLAW_BROADCAST_ALL_AGENT_RUNS=1`,
+  `registerAgentRunContext` forces `isControlUiVisible=true` regardless of
+  the run's channel. Vanilla OC only broadcasts `agent` events for `webchat`
+  channels (the literal string in `src/utils/message-channel-constants.ts`);
+  for MM/Slack/Telegram/Discord runs the global broadcast at
+  `server-chat.ts:678` is suppressed by design. The chat-proxy sidecar is
+  Octogee's intended consumer of those events, so we opt in via env.
+  Default behavior unchanged when the env var is unset.
+  Env var is set in `helm/octogee/charts/gateway/templates/deployment.yaml`.
+  See `docs/ACTIVITY-STREAM-SPEC.md` §15.7 for context + scope-discipline note.
 
 Patches deleted at the v2026.4.29 roll-forward (kept in git history on
 `octogee/gateway-scaling-patches-v2026.4.24` and `-v2026.4.25` if you need
