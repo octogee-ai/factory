@@ -96,6 +96,14 @@ ENV NODE_OPTIONS=--no-deprecation
 ARG BUILD_SHA=unknown
 ENV BUILD_SHA=${BUILD_SHA}
 
+# OpenClaw version + fork SHA — injected by Cloud Build via --build-arg.
+# Surfaced in the boot log line so operators can confirm what's running
+# without exec'ing into the pod to read package.json.
+ARG OPENCLAW_VERSION=unknown
+ENV OPENCLAW_VERSION=${OPENCLAW_VERSION}
+ARG OPENCLAW_FORK_SHA=unknown
+ENV OPENCLAW_FORK_SHA=${OPENCLAW_FORK_SHA}
+
 EXPOSE 9091
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
