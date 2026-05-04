@@ -1,6 +1,6 @@
 image:
-  repository: mattermost/mattermost-enterprise-edition
-  tag: "release-11.5"
+  repository: mattermost/mattermost-team-edition
+  tag: "11.6.1"
 
 db:
   user: mattermost

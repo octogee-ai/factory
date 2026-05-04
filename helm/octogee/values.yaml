@@ -81,7 +81,11 @@ mattermost:
 # ── gitea (upstream chart) ──────────────────────────────────────────────────
 # networkPolicy is managed in the parent chart (templates/gitea-network-policy.yaml)
 # because Gitea is a packaged upstream chart — can't inject templates into .tgz
+# image.tag is pinned explicitly so chart-version bumps don't silently change
+# the Gitea binary; bump in lockstep with Chart.yaml `gitea` dependency.
 gitea:
+  image:
+    tag: "1.25.5"
   networkPolicy:
     enabled: true
   ingress:
