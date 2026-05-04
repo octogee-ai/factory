@@ -5,6 +5,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 
 import {
+  gitBranches,
+  gitCheckout,
   gitCommit,
   gitDiff,
   gitLog,
@@ -148,6 +150,14 @@ describe("resolveCustomerDir", () => {
     expect(await resolveCustomerDir(root, "..")).toBeNull();
     expect(await resolveCustomerDir(root, "alice/..")).toBeNull();
     expect(await resolveCustomerDir(root, "../etc/passwd")).toBeNull();
+  });
+
+  it("rejects bare-dot, empty, leading-dash, oversize slugs (#841 review allowlist)", async () => {
+    expect(await resolveCustomerDir(root, ".")).toBeNull();
+    expect(await resolveCustomerDir(root, "")).toBeNull();
+    expect(await resolveCustomerDir(root, "-evil")).toBeNull();
+    expect(await resolveCustomerDir(root, "a".repeat(64))).toBeNull();
+    expect(await resolveCustomerDir(root, " alice")).toBeNull();
   });
 });
 
@@ -461,5 +471,106 @@ describe("gitCommit hardening (Phase 6.C.2 — #839 Copilot P0)", () => {
       await fs.rm(canary, { force: true });
       await fs.writeFile(path.join(repo, "README.md"), "hello\n");
     }
+  });
+});
+
+describe("gitBranches (Phase 6.C.3)", () => {
+  let repo: string;
+  beforeAll(async () => {
+    repo = await fs.mkdtemp(path.join(os.tmpdir(), "wsbranch-"));
+    git(repo, ["init", "--initial-branch=main"]);
+    git(repo, ["config", "user.email", "t@t.t"]);
+    git(repo, ["config", "user.name", "t"]);
+    await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+    git(repo, ["add", "."]);
+    git(repo, ["commit", "-m", "initial"]);
+    git(repo, ["branch", "feat/work"]);
+    git(repo, ["branch", "fix/bug"]);
+  });
+  afterAll(async () => {
+    await fs.rm(repo, { recursive: true, force: true });
+  });
+
+  it("lists local branches with the current one flagged", async () => {
+    const r = await gitBranches(repo);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const names = r.entries.map((e) => e.name).sort();
+    expect(names).toEqual(["feat/work", "fix/bug", "main"]);
+    const current = r.entries.find((e) => e.current);
+    expect(current?.name).toBe("main");
+  });
+
+  it("returns NOT_A_REPO when called against a non-git dir", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "noregit-branches-"));
+    try {
+      const r = await gitBranches(dir);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe("NOT_A_REPO");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("gitCheckout (Phase 6.C.3)", () => {
+  let repo: string;
+  beforeAll(async () => {
+    repo = await fs.mkdtemp(path.join(os.tmpdir(), "wscheckout-"));
+    git(repo, ["init", "--initial-branch=main"]);
+    git(repo, ["config", "user.email", "t@t.t"]);
+    git(repo, ["config", "user.name", "t"]);
+    await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+    git(repo, ["add", "."]);
+    git(repo, ["commit", "-m", "initial"]);
+    git(repo, ["branch", "feat/work"]);
+  });
+  afterAll(async () => {
+    await fs.rm(repo, { recursive: true, force: true });
+  });
+
+  it("switches to an existing branch", async () => {
+    const r = await gitCheckout(repo, { branch: "feat/work" });
+    expect(r.ok).toBe(true);
+    const branches = await gitBranches(repo);
+    if (!branches.ok) throw new Error("branch list failed");
+    expect(branches.entries.find((e) => e.current)?.name).toBe("feat/work");
+    // Restore for sibling tests.
+    await gitCheckout(repo, { branch: "main" });
+  });
+
+  it("creates and switches to a new branch when create:true", async () => {
+    const r = await gitCheckout(repo, { branch: "feat/new", create: true });
+    expect(r.ok).toBe(true);
+    const branches = await gitBranches(repo);
+    if (!branches.ok) throw new Error("branch list failed");
+    expect(branches.entries.find((e) => e.current)?.name).toBe("feat/new");
+    await gitCheckout(repo, { branch: "main" });
+  });
+
+  it("returns GIT_FAILED when the target branch does not exist (no create)", async () => {
+    const r = await gitCheckout(repo, { branch: "no-such-branch" });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe("GIT_FAILED");
+  });
+
+  it("rejects empty / pathologically-long branch names at the helper layer", async () => {
+    const r1 = await gitCheckout(repo, { branch: "" });
+    expect(r1.ok).toBe(false);
+    const huge = "a".repeat(300);
+    const r2 = await gitCheckout(repo, { branch: huge });
+    expect(r2.ok).toBe(false);
+  });
+
+  it("rejects `-`-prefixed branch names at the helper layer (no flag-injection vector)", async () => {
+    // Belt-and-suspenders: the route's regex already rejects leading
+    // dashes, but the helper rejects too so a future direct caller
+    // can't bypass. `INTERNAL` not GIT_FAILED — never reaches git.
+    const r = await gitCheckout(repo, { branch: "-deletes-everything" });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe("INTERNAL");
   });
 });

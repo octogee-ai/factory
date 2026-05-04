@@ -49,14 +49,49 @@ export interface WorkspaceGitLogEntry {
   subject: string;
 }
 
+/**
+ * Slug allowlist: the same shape MM channel slugs and Gitea repo names
+ * use. Positive allowlist (not a blacklist) so single-dot, all-dots,
+ * leading-dash, empty, oversize, and any path-separator-bearing inputs
+ * are all rejected by construction. Tightened in #841 review pass.
+ */
+const SAFE_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+
+function isSafeSlug(slug: string): boolean {
+  return SAFE_SLUG_RE.test(slug);
+}
+
 export async function resolveCustomerDir(
   customersRoot: string,
   slug: string,
 ): Promise<string | null> {
-  if (slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
-    return null;
-  }
+  if (!isSafeSlug(slug)) return null;
   const dir = path.join(customersRoot, slug);
+  return verifyGitDir(dir);
+}
+
+/**
+ * Phase 6.C.3 — project working trees live at
+ * `{customersRoot}/{slug}/projects/{projectSlug}/`. Per
+ * `docs/specs/PROJECTS-CANVAS-SPEC.md` §D11 / §boot-sync, each project is
+ * its own git repo and the `projects/` folder is .gitignored from the
+ * workspace tree, so the two trees never interfere.
+ *
+ * Both slug components are validated by `isSafeSlug` — positive allowlist
+ * rejects empty, single-dot, double-dot, leading-dash, oversize, and any
+ * input containing a path separator.
+ */
+export async function resolveProjectDir(
+  customersRoot: string,
+  slug: string,
+  projectSlug: string,
+): Promise<string | null> {
+  if (!isSafeSlug(slug) || !isSafeSlug(projectSlug)) return null;
+  const dir = path.join(customersRoot, slug, "projects", projectSlug);
+  return verifyGitDir(dir);
+}
+
+async function verifyGitDir(dir: string): Promise<string | null> {
   try {
     const stat = await fs.stat(dir);
     if (!stat.isDirectory()) return null;
@@ -186,6 +221,59 @@ export async function gitCommit(
   const shaRes = await runGit(customerDir, ["rev-parse", "HEAD"]);
   if (!shaRes.ok) return shaRes;
   return { ok: true, result: { sha: shaRes.stdout.trim(), empty: false } };
+}
+
+export interface WorkspaceGitBranchEntry {
+  name: string;
+  current: boolean;
+}
+
+/**
+ * Lists local branches for the working tree, flagging the current one.
+ * `--list` + `--format` keeps output machine-parseable. `HEAD` filtering
+ * via `%(refname:short)` strips the `refs/heads/` prefix.
+ *
+ * Phase 6.C.3 — feeds the toolbar's branch-switcher dropdown.
+ */
+export async function gitBranches(
+  customerDir: string,
+): Promise<{ ok: true; entries: WorkspaceGitBranchEntry[] } | { ok: false; error: WorkspaceGitError }> {
+  // Format: `<refname>\t<HEAD>` where HEAD is "*" for the current branch.
+  // Tab is impossible in a git ref name (per git-check-ref-format), so
+  // it's a safe field separator.
+  const r = await runGit(customerDir, [
+    "branch",
+    "--list",
+    "--format=%(refname:short)\t%(HEAD)",
+  ]);
+  if (!r.ok) return r;
+  return { ok: true, entries: parseBranchList(r.stdout) };
+}
+
+export async function gitCheckout(
+  customerDir: string,
+  options: { branch: string; create?: boolean },
+): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
+  const branch = options.branch;
+  // Ref name validation at the helper layer — defense in depth on top
+  // of the route's regex. Empty/oversize/leading-dash are local errors
+  // that shouldn't even reach git.
+  if (!branch || branch.length > 250 || branch.startsWith("-")) {
+    return {
+      ok: false,
+      error: { code: "INTERNAL", message: "branch name empty, too long, or leading-dash" },
+    };
+  }
+  // Two argv shapes: `-b` consumes the next arg as the new branch name
+  // and is incompatible with `--end-of-options` placement; the non-
+  // create path uses `--end-of-options` as defense-in-depth against a
+  // future caller bypassing the leading-dash check above.
+  const args: string[] = options.create
+    ? ["checkout", "-b", branch]
+    : ["checkout", "--end-of-options", branch];
+  const r = await runGit(customerDir, args);
+  if (!r.ok) return r;
+  return { ok: true };
 }
 
 export async function gitPush(
@@ -413,6 +501,21 @@ export function parseLog(stdout: string): WorkspaceGitLogEntry[] {
       ts,
       subject: parts[3],
     });
+  }
+  return out;
+}
+
+export function parseBranchList(stdout: string): WorkspaceGitBranchEntry[] {
+  if (!stdout) return [];
+  const out: WorkspaceGitBranchEntry[] = [];
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const tabIdx = trimmed.indexOf("\t");
+    const name = tabIdx >= 0 ? trimmed.slice(0, tabIdx) : trimmed;
+    const headFlag = tabIdx >= 0 ? trimmed.slice(tabIdx + 1) : "";
+    if (!name) continue;
+    out.push({ name, current: headFlag === "*" });
   }
   return out;
 }

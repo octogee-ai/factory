@@ -1,13 +1,16 @@
 import { Router } from "express";
 import * as path from "node:path";
-import { withFileTarget } from "../../lib/fileTarget";
+import { withFileTarget, type FileTarget } from "../../lib/fileTarget";
 import {
+  gitBranches,
+  gitCheckout,
   gitCommit,
   gitDiff,
   gitLog,
   gitPush,
   gitStatus,
   resolveCustomerDir,
+  resolveProjectDir,
   type CommitAuthor,
   type WorkspaceGitError,
 } from "../../lib/workspace-git";
@@ -34,27 +37,54 @@ function customersRoot(): string {
 }
 
 /**
- * Phase 6.B is workspace-tree-only. `withFileTarget` also authorizes
- * project members on project-scoped requests, but those callers have
- * no claim to read the parent workspace repo's git state. Reject any
- * request that resolved to a project target so a project member can't
- * use ?project= to peek at workspace status / diff / log.
+ * Phase 6.C.3 — resolves the on-disk working tree for the route's
+ * target shape. Workspace target → `{customersRoot}/{slug}`. Project
+ * target → `{customersRoot}/{slug}/projects/{projectSlug}` (per
+ * `docs/specs/PROJECTS-CANVAS-SPEC.md` — each project is its own git
+ * repo, `projects/` is .gitignored from the workspace tree).
  *
- * Project working-tree views land in Phase 6.C.2 with their own
- * checkout resolver + auth tier.
+ * Read-side auth is already enforced by `withFileTarget`:
+ *   - workspace target → workspace-owner.
+ *   - project target → project-owner OR project-member.
+ *
+ * Write-side auth is layered on top by `ensureWriteAuth` below.
  */
-function rejectIfProjectTarget(
+async function resolveTargetDir(
+  root: string,
+  target: FileTarget,
+): Promise<string | null> {
+  if (target.projectSlug) {
+    return resolveProjectDir(root, target.slug, target.projectSlug);
+  }
+  return resolveCustomerDir(root, target.slug);
+}
+
+/**
+ * Phase 6.C.3 — write-side auth tiers.
+ *   - Workspace tree: workspace owner ONLY (a project member with
+ *     access to a child project shouldn't be able to commit at the
+ *     workspace level on the owner's behalf).
+ *   - Project tree: ANY caller `withFileTarget` already authorized,
+ *     i.e. project owner OR project member. They joined the project
+ *     to collaborate on it, so writes are part of that contract.
+ */
+function ensureWriteAuth(
+  req: import("express").Request,
   res: import("express").Response,
-  target: { projectSlug: string | null },
+  target: FileTarget,
 ): boolean {
   if (target.projectSlug) {
-    res.status(400).json({
-      error: "Project targets are not supported by this route (Phase 6.B is workspace-only)",
-      code: "PROJECT_TARGET_UNSUPPORTED",
-    });
+    // withFileTarget already verified owner-or-member of this project.
     return true;
   }
-  return false;
+  if (req.user?.username !== target.slug) {
+    res.status(403).json({
+      error: "Workspace owner only",
+      code: "OWNER_ONLY",
+    });
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -103,10 +133,9 @@ async function withSlugLimit<T>(
 router.get(
   "/git/status",
   withFileTarget(async (req, res, _next, target) => {
-    if (rejectIfProjectTarget(res, target)) return;
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveCustomerDir(customersRoot(), target.slug);
+      const dir = await resolveTargetDir(customersRoot(), target);
       if (!dir) {
         respondCustomerDirMissing(res, target.slug);
         return;
@@ -118,14 +147,13 @@ router.get(
       }
       res.json({ entries: r.entries });
     });
-    logger.info(`git/status slug=${target.slug} dur=${Date.now() - start}ms status=${res.statusCode}`);
+    logger.info(`git/status slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
   }),
 );
 
 router.get(
   "/git/diff",
   withFileTarget(async (req, res, _next, target) => {
-    if (rejectIfProjectTarget(res, target)) return;
     const start = Date.now();
     const filePath = typeof req.query.path === "string" ? req.query.path : undefined;
     const ref = typeof req.query.ref === "string" ? req.query.ref : undefined;
@@ -138,7 +166,7 @@ router.get(
       return;
     }
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveCustomerDir(customersRoot(), target.slug);
+      const dir = await resolveTargetDir(customersRoot(), target);
       if (!dir) {
         respondCustomerDirMissing(res, target.slug);
         return;
@@ -150,14 +178,13 @@ router.get(
       }
       res.type("text/plain; charset=utf-8").send(r.diff);
     });
-    logger.info(`git/diff slug=${target.slug} dur=${Date.now() - start}ms status=${res.statusCode}`);
+    logger.info(`git/diff slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
   }),
 );
 
 router.get(
   "/git/log",
   withFileTarget(async (req, res, _next, target) => {
-    if (rejectIfProjectTarget(res, target)) return;
     const start = Date.now();
     const limit = req.query.limit ? Number.parseInt(String(req.query.limit), 10) : undefined;
     const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
@@ -166,7 +193,7 @@ router.get(
       return;
     }
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveCustomerDir(customersRoot(), target.slug);
+      const dir = await resolveTargetDir(customersRoot(), target);
       if (!dir) {
         respondCustomerDirMissing(res, target.slug);
         return;
@@ -178,7 +205,28 @@ router.get(
       }
       res.json({ entries: r.entries });
     });
-    logger.info(`git/log slug=${target.slug} dur=${Date.now() - start}ms status=${res.statusCode}`);
+    logger.info(`git/log slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
+  }),
+);
+
+router.get(
+  "/git/branches",
+  withFileTarget(async (req, res, _next, target) => {
+    const start = Date.now();
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveTargetDir(customersRoot(), target);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitBranches(dir);
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.json({ entries: r.entries });
+    });
+    logger.info(`git/branches slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
   }),
 );
 
@@ -250,29 +298,7 @@ function isSafeRefName(ref: string): boolean {
   return /^[A-Za-z0-9._/-]+$/.test(ref);
 }
 
-// ─── Phase 6.C.2: Commit + Push (workspace-owner-only writes) ──────────
-
-/**
- * Stricter than `withFileTarget`'s "owner OR project member" check.
- * Phase 6.C.2 writes ONLY allow the workspace owner — even a project
- * member with read access to the workspace shouldn't be able to commit
- * or push on the owner's behalf. Trusts `req.user.username` (set by
- * requireAuth from Firestore) and rejects mismatch with 403.
- */
-function ensureWorkspaceOwner(
-  req: import("express").Request,
-  res: import("express").Response,
-  slug: string,
-): boolean {
-  if (req.user?.username !== slug) {
-    res.status(403).json({
-      error: "Workspace owner only",
-      code: "OWNER_ONLY",
-    });
-    return false;
-  }
-  return true;
-}
+// ─── Phase 6.C.2 + 6.C.3: writes ──────────────────────────────────────
 
 /**
  * Resolves the commit author (name + email) from the user doc that
@@ -299,8 +325,7 @@ function resolveCommitAuthor(
 router.post(
   "/git/commit",
   withFileTarget(async (req, res, _next, target) => {
-    if (rejectIfProjectTarget(res, target)) return;
-    if (!ensureWorkspaceOwner(req, res, target.slug)) return;
+    if (!ensureWriteAuth(req, res, target)) return;
     const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
     if (!message) {
       res.status(400).json({ error: "Missing or empty `message`", code: "BAD_MESSAGE" });
@@ -312,7 +337,7 @@ router.post(
     }
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveCustomerDir(customersRoot(), target.slug);
+      const dir = await resolveTargetDir(customersRoot(), target);
       if (!dir) {
         respondCustomerDirMissing(res, target.slug);
         return;
@@ -325,15 +350,14 @@ router.post(
       }
       res.json({ sha: r.result.sha, empty: r.result.empty });
     });
-    logger.info(`git/commit slug=${target.slug} dur=${Date.now() - start}ms status=${res.statusCode}`);
+    logger.info(`git/commit slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
   }),
 );
 
 router.post(
   "/git/push",
   withFileTarget(async (req, res, _next, target) => {
-    if (rejectIfProjectTarget(res, target)) return;
-    if (!ensureWorkspaceOwner(req, res, target.slug)) return;
+    if (!ensureWriteAuth(req, res, target)) return;
     const branch = typeof req.body?.branch === "string" ? req.body.branch : undefined;
     if (branch && !isSafeRefName(branch)) {
       res.status(400).json({ error: "Invalid branch", code: "BAD_BRANCH" });
@@ -341,7 +365,7 @@ router.post(
     }
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveCustomerDir(customersRoot(), target.slug);
+      const dir = await resolveTargetDir(customersRoot(), target);
       if (!dir) {
         respondCustomerDirMissing(res, target.slug);
         return;
@@ -353,7 +377,35 @@ router.post(
       }
       res.json({ ok: true });
     });
-    logger.info(`git/push slug=${target.slug} dur=${Date.now() - start}ms status=${res.statusCode}`);
+    logger.info(`git/push slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
+  }),
+);
+
+router.post(
+  "/git/branch/checkout",
+  withFileTarget(async (req, res, _next, target) => {
+    if (!ensureWriteAuth(req, res, target)) return;
+    const branch = typeof req.body?.branch === "string" ? req.body.branch : "";
+    const create = req.body?.create === true;
+    if (!branch || !isSafeRefName(branch)) {
+      res.status(400).json({ error: "Invalid branch", code: "BAD_BRANCH" });
+      return;
+    }
+    const start = Date.now();
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveTargetDir(customersRoot(), target);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitCheckout(dir, { branch, create });
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.json({ ok: true, branch });
+    });
+    logger.info(`git/branch/checkout slug=${target.slug} project=${target.projectSlug ?? "-"} branch=${branch} create=${create} dur=${Date.now() - start}ms status=${res.statusCode}`);
   }),
 );
 

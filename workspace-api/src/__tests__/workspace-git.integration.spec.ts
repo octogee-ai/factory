@@ -211,43 +211,135 @@ describe("GET /api/workspace/git/log", () => {
   });
 });
 
-describe("project-target auth-bypass guard (Copilot review on #825)", () => {
-  // withFileTarget authorizes project members for project-scoped requests.
-  // Phase 6.B is workspace-only — without an explicit reject, a project
-  // member could pass `?project=…` and read the parent workspace repo's
-  // git state. Regression test pins the reject.
+describe("project working tree (Phase 6.C.3 — ?project=)", () => {
+  // Phase 6.C.3 turns project targets ON. The repo lives at
+  // {customersRoot}/{slug}/projects/{projectSlug} per
+  // PROJECTS-CANVAS-SPEC.md (each project = own git repo).
+  const PROJECT = "myproj";
+  beforeAll(async () => {
+    const projectsParent = path.join(customersRoot, SLUG, "projects");
+    await fs.mkdir(projectsParent, { recursive: true });
+    const projectDir = path.join(projectsParent, PROJECT);
+    await fs.mkdir(projectDir);
+    gitInit(projectDir);
+    await fs.writeFile(path.join(projectDir, "PROJECT.md"), "project init\n");
+    gitAddCommit(projectDir, "project initial");
+  });
   beforeEach(() => {
-    firestoreData[`workspaces/${SLUG}/projects/myproj`] = {
-      slug: "myproj",
+    firestoreData[`workspaces/${SLUG}/projects/${PROJECT}`] = {
+      slug: PROJECT,
       ownerUid: "caller-uid",
     };
   });
 
-  it("rejects /git/status with ?project= (PROJECT_TARGET_UNSUPPORTED)", async () => {
+  it("/git/status returns the project's working tree (no longer rejects ?project=)", async () => {
+    await fs.writeFile(
+      path.join(customersRoot, SLUG, "projects", PROJECT, "PROJECT.md"),
+      "edited from inside project\n",
+    );
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=${SLUG}&project=myproj`)
+      .get(`/api/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken");
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe("PROJECT_TARGET_UNSUPPORTED");
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toEqual([{ path: "PROJECT.md", change: "modified" }]);
+    // Restore for siblings.
+    await fs.writeFile(
+      path.join(customersRoot, SLUG, "projects", PROJECT, "PROJECT.md"),
+      "project init\n",
+    );
   });
 
-  it("rejects /git/diff with ?project=", async () => {
+  it("/git/diff resolves against the project tree, not the workspace tree", async () => {
+    await fs.writeFile(
+      path.join(customersRoot, SLUG, "projects", PROJECT, "PROJECT.md"),
+      "diff me\n",
+    );
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/diff?slug=${SLUG}&project=myproj`)
+      .get(`/api/workspace/git/diff?slug=${SLUG}&project=${PROJECT}&path=PROJECT.md`)
       .set("Authorization", "Bearer caller-idtoken");
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe("PROJECT_TARGET_UNSUPPORTED");
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("--- a/PROJECT.md");
+    expect(res.text).toContain("+diff me");
+    await fs.writeFile(
+      path.join(customersRoot, SLUG, "projects", PROJECT, "PROJECT.md"),
+      "project init\n",
+    );
   });
 
-  it("rejects /git/log with ?project=", async () => {
+  it("/git/log returns the project repo's history (not the parent workspace's)", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/log?slug=${SLUG}&project=myproj`)
+      .get(`/api/workspace/git/log?slug=${SLUG}&project=${PROJECT}&limit=5`)
       .set("Authorization", "Bearer caller-idtoken");
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe("PROJECT_TARGET_UNSUPPORTED");
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toHaveLength(1);
+    expect(res.body.entries[0].subject).toBe("project initial");
+  });
+
+  it("/git/branches lists the project repo's local branches", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get(`/api/workspace/git/branches?slug=${SLUG}&project=${PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status).toBe(200);
+    const names = res.body.entries.map((e: { name: string }) => e.name);
+    expect(names).toContain("main");
+  });
+
+  it("/git/branch/checkout creates and switches a branch on the project tree", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ branch: "feat/proj-work", create: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, branch: "feat/proj-work" });
+    // Restore main for siblings.
+    await request(app)
+      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ branch: "main" });
+  });
+
+  it("project-member who is NOT the workspace owner can read the project tree", async () => {
+    // Re-seed: caller is a project member but NOT the workspace owner.
+    firestoreData[`users/caller-uid`] = {
+      uid: "caller-uid",
+      username: "ghost",
+      workspaceId: "ghost",
+    };
+    firestoreData[`workspaces/${SLUG}/projects/${PROJECT}`] = {
+      slug: PROJECT,
+      ownerUid: "different-uid",
+    };
+    firestoreData[`workspaces/${SLUG}/projects/${PROJECT}/members/caller-uid`] = {
+      uid: "caller-uid",
+    };
+    const app = createApp();
+    const res = await request(app)
+      .get(`/api/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status).toBe(200);
+  });
+
+  it("non-owner / non-member is still 403'd by withFileTarget", async () => {
+    firestoreData[`users/caller-uid`] = {
+      uid: "caller-uid",
+      username: "ghost",
+      workspaceId: "ghost",
+    };
+    firestoreData[`workspaces/${SLUG}/projects/${PROJECT}`] = {
+      slug: PROJECT,
+      ownerUid: "different-uid",
+    };
+    // No member doc seeded.
+    const app = createApp();
+    const res = await request(app)
+      .get(`/api/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status).toBe(403);
   });
 });
 
@@ -328,18 +420,30 @@ describe("POST /api/workspace/git/commit (Phase 6.C.2)", () => {
     expect(res.status).toBe(403);
   });
 
-  it("rejects /git/commit with ?project= (PROJECT_TARGET_UNSUPPORTED)", async () => {
+  it("project member of workspace A cannot write the WORKSPACE tree of A (#840 auth-bypass guard, retained under 6.C.3)", async () => {
+    // The pre-#841 reject of `?project=` defended this implicitly. The
+    // new path-targeted resolver could regress the guarantee silently.
+    // Caller is a project MEMBER (not workspace owner) and submits
+    // workspace-target write — must still 403 via withFileTarget's
+    // workspace-slug-mismatch gate.
+    firestoreData[`users/caller-uid`] = {
+      uid: "caller-uid",
+      username: "ghost",
+      workspaceId: "ghost",
+    };
     firestoreData[`workspaces/${SLUG}/projects/myproj`] = {
       slug: "myproj",
-      ownerUid: "caller-uid",
+      ownerUid: "different-uid",
+    };
+    firestoreData[`workspaces/${SLUG}/projects/myproj/members/caller-uid`] = {
+      uid: "caller-uid",
     };
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}&project=myproj`)
+      .post(`/api/workspace/git/commit?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
-      .send({ message: "via project" });
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe("PROJECT_TARGET_UNSUPPORTED");
+      .send({ message: "trying to write workspace tree as a project member" });
+    expect(res.status).toBe(403);
   });
 });
 
@@ -357,19 +461,6 @@ describe("POST /api/workspace/git/push (Phase 6.C.2)", () => {
     expect(res.status).toBe(403);
   });
 
-  it("rejects /git/push with ?project= (PROJECT_TARGET_UNSUPPORTED)", async () => {
-    firestoreData[`workspaces/${SLUG}/projects/myproj`] = {
-      slug: "myproj",
-      ownerUid: "caller-uid",
-    };
-    const app = createApp();
-    const res = await request(app)
-      .post(`/api/workspace/git/push?slug=${SLUG}&project=myproj`)
-      .set("Authorization", "Bearer caller-idtoken");
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe("PROJECT_TARGET_UNSUPPORTED");
-  });
-
   it("rejects unsafe branch ref names with 400 BAD_BRANCH", async () => {
     const app = createApp();
     const res = await request(app)
@@ -378,6 +469,42 @@ describe("POST /api/workspace/git/push (Phase 6.C.2)", () => {
       .send({ branch: "-deletes-everything" });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("BAD_BRANCH");
+  });
+});
+
+describe("POST /api/workspace/git/branch/checkout (Phase 6.C.3)", () => {
+  it("rejects unsafe branch ref names with 400 BAD_BRANCH", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ branch: "; rm -rf /" });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("BAD_BRANCH");
+  });
+
+  it("rejects empty body with 400 BAD_BRANCH", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("BAD_BRANCH");
+  });
+
+  it("returns 403 for non-owner callers on workspace target", async () => {
+    firestoreData[`users/caller-uid`] = {
+      uid: "caller-uid",
+      username: "someone-else",
+      workspaceId: "someone-else",
+    };
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ branch: "main" });
+    expect(res.status).toBe(403);
   });
 });
 
