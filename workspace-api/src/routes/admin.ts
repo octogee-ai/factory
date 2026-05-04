@@ -833,7 +833,7 @@ router.get("/customers/by-slug/:slug", async (req: Request, res: Response, next:
       .limit(1)
       .get();
     if (slugSnap.size > 0) {
-      res.json({ uid: slugSnap.docs[0].id });
+      res.json(serializeCustomerLookup(slugSnap.docs[0]));
       return;
     }
     const usernameSnap = await db
@@ -842,7 +842,7 @@ router.get("/customers/by-slug/:slug", async (req: Request, res: Response, next:
       .limit(1)
       .get();
     if (usernameSnap.size > 0) {
-      res.json({ uid: usernameSnap.docs[0].id });
+      res.json(serializeCustomerLookup(usernameSnap.docs[0]));
       return;
     }
     res.status(404).json({ error: "customer not found", slug });
@@ -850,6 +850,20 @@ router.get("/customers/by-slug/:slug", async (req: Request, res: Response, next:
     next(e);
   }
 });
+
+interface CustomerLookupDoc {
+  id: string;
+  data: () => { provisioning?: { openclaw?: { gatewayId?: string } } } | undefined;
+}
+
+function serializeCustomerLookup(doc: CustomerLookupDoc): {
+  uid: string;
+  currentGatewayId: string | null;
+} {
+  const data = doc.data();
+  const currentGatewayId = data?.provisioning?.openclaw?.gatewayId ?? null;
+  return { uid: doc.id, currentGatewayId };
+}
 
 router.post("/customers/:uid/migrate", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -870,6 +884,18 @@ router.post("/customers/:uid/migrate", async (req: Request, res: Response, next:
         error: "target gateway not ready",
         gatewayId: body.to,
         status: targetStatus ?? "unknown",
+      });
+      return;
+    }
+    const userSnap = await db.collection("users").doc(uid).get();
+    const currentGatewayId = (userSnap.data() as
+      | { provisioning?: { openclaw?: { gatewayId?: string } } }
+      | undefined)?.provisioning?.openclaw?.gatewayId;
+    if (currentGatewayId === body.to) {
+      res.status(409).json({
+        error: "customer is already mounted on the target gateway",
+        uid,
+        gatewayId: body.to,
       });
       return;
     }

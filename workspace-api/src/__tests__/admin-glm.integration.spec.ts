@@ -77,6 +77,10 @@ vi.mock("../lib/db", () => {
             const data = gatewaysDocs[docId];
             return { exists: data !== undefined, data: () => data };
           }
+          if (name === "users") {
+            const data = usersDocs[docId];
+            return { exists: data !== undefined, data: () => data };
+          }
           return { exists: true, data: () => ({}) };
         },
         set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
@@ -312,6 +316,18 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
       .send({ to: "gw-booting" });
     expect(res.status).toBe(409);
   });
+
+  it("returns 409 when the target equals the customer's current gateway (migrate-to-self)", async () => {
+    usersDocs["uid-alice"] = {
+      provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test-canary" } },
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/customers/uid-alice/migrate")
+      .send({ to: "gw-test-canary" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already/i);
+  });
 });
 
 describe("POST /api/admin/rollouts — composite operation", () => {
@@ -333,14 +349,14 @@ describe("POST /api/admin/rollouts — composite operation", () => {
 });
 
 describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
-  it("returns the uid for a slug stored at provisioning.openclaw.slug", async () => {
+  it("returns uid + currentGatewayId for a slug stored at provisioning.openclaw.slug", async () => {
     usersDocs["uid-alice"] = {
-      provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
+      provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test-canary" } },
     };
     const app = buildApp();
     const res = await request(app).get("/api/admin/customers/by-slug/alice");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ uid: "uid-alice" });
+    expect(res.body).toEqual({ uid: "uid-alice", currentGatewayId: "gw-test-canary" });
   });
 
   it("falls back to username when no provisioning slug matches", async () => {
@@ -348,7 +364,17 @@ describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/customers/by-slug/bob");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ uid: "uid-bob" });
+    expect(res.body).toEqual({ uid: "uid-bob", currentGatewayId: null });
+  });
+
+  it("returns currentGatewayId=null when the user doc has no provisioned gateway yet", async () => {
+    usersDocs["uid-claire"] = {
+      provisioning: { openclaw: { slug: "claire" } },
+    };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/customers/by-slug/claire");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ uid: "uid-claire", currentGatewayId: null });
   });
 
   it("returns 404 when no user has the slug or username", async () => {
