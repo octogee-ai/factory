@@ -1,10 +1,7 @@
 import express from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { Server } from "http";
-import {
-  GATEWAY_HEARTBEAT_INTERVAL_MS,
-  GATEWAYS_COLLECTION,
-} from "../../shared/types/fleet-controller.js";
+import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "../../shared/types/fleet-controller.js";
 import { ActiveRestoreSet, createRestoreCustomerHandler, IdempotencyCache } from "./fleet-http.js";
 import {
   createExportHandler,
@@ -20,7 +17,11 @@ import {
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
+import { removeCustomerFromGateway } from "./customer-lifecycle.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
+import { startDrainLoop } from "./drain-loop.js";
+
+const DRAIN_LOOP_INTERVAL_MS = 15 * 1000;
 
 export interface BuildAdapterOptions {
   db: Firestore;
@@ -204,16 +205,74 @@ export async function startFleetController(
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
 
+  const stopDrainLoop = startDrainLoop({
+    gatewayId: opts.gatewayId,
+    intervalMs: DRAIN_LOOP_INTERVAL_MS,
+    log: opts.log,
+    getMounted: () => runtime.mountedCustomers,
+    readAssignedSlugs: async () => {
+      const snap = await opts.db
+        .collection("users")
+        .where("provisioning.openclaw.gatewayId", "==", opts.gatewayId)
+        .where("provisioning.openclaw.status", "==", "complete")
+        .get();
+      const slugs: string[] = [];
+      for (const doc of snap.docs) {
+        const data = doc.data() as Record<string, unknown> | undefined;
+        const oc = (data?.provisioning as Record<string, unknown> | undefined)?.openclaw as
+          | Record<string, unknown>
+          | undefined;
+        // Match the adapter's `loadUserSnapshot` / `uidForSlug` semantics:
+        // `provisioning.openclaw.slug` is canonical, but legacy / partial
+        // user docs may only have `username`. Reading the same way the
+        // rest of the lifecycle code does means a user doc the drain loop
+        // can't see is one no other code can either.
+        const ocSlug = typeof oc?.slug === "string" ? (oc.slug as string) : null;
+        const fallbackSlug = typeof data?.username === "string" ? (data.username as string) : null;
+        const slug = ocSlug ?? fallbackSlug;
+        if (slug) slugs.push(slug);
+      }
+      return slugs;
+    },
+    unmountSlug: async (slug: string) => {
+      const uid = await wrappedAdapter.uidForSlug(slug);
+      if (uid) {
+        const result = await removeCustomerFromGateway(wrappedAdapter, uid);
+        return result.wasMounted ? "drained" : "noop";
+      }
+      // No user doc — typically the nuke flow deleted users/{uid} but the
+      // gateway's emptyDir still has on-disk state. Clean up directly via
+      // the adapter primitives (config patch + dir delete) so the orphan
+      // doesn't persist forever.
+      const agentId = `octogee-${slug}-coach`;
+      try {
+        await wrappedAdapter.applyRemoveCustomerConfigPatch(slug, agentId);
+        if (wrappedAdapter.hasCustomerDir(slug)) {
+          await wrappedAdapter.deleteCustomerDir(slug);
+        }
+        wrappedAdapter.onUnmounted?.(slug);
+        return "deleted-user";
+      } catch (err) {
+        // Surface as a thrown error so the drain loop logs it as a
+        // failure rather than silently swallowing.
+        throw new Error(
+          `slug-only cleanup failed for ${slug} (no user doc): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+  });
+
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
   });
   opts.log(
-    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}`,
+    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; drain-loop interval=${DRAIN_LOOP_INTERVAL_MS}ms`,
   );
 
   return {
     stop: async () => {
       clearInterval(heartbeatTimer);
+      stopDrainLoop();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

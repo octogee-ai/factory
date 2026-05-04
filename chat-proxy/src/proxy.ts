@@ -9,6 +9,7 @@ import {
   resolveGatewayUrl,
   GatewayResolveError,
 } from "./openclaw/gateway-resolver.js";
+import { watchGatewayIdChange } from "./openclaw/gateway-id-watcher.js";
 import {
   fetchGatewayToken,
   invalidateGatewayToken,
@@ -510,6 +511,27 @@ function handleOpenClawWsUpgrade(
       wss.handleUpgrade(req, socket, head, (clientWs) => {
         ocWsConnectionsActive.inc();
 
+        // Watch for gatewayId migration mid-session. The WS upstream URL
+        // is captured at upgrade time (above); without this watcher, a
+        // customer migrated A→B keeps talking to A until the WS naturally
+        // dies. On change, close the client WS (1001 = going away) so the
+        // browser reconnects and re-resolves to the new gateway.
+        const stopGatewayWatch = watchGatewayIdChange(
+          db,
+          uid,
+          gatewayId,
+          (newGatewayId) => {
+            console.log(
+              `[proxy] OC WS: gatewayId changed for uid=${uid}: ${gatewayId} → ${newGatewayId}; forcing reconnect`,
+            );
+            try {
+              clientWs.close(1001, "gatewayId-changed");
+            } catch {
+              // best-effort
+            }
+          },
+        );
+
         clientWs.on("message", (data, isBinary) => {
           if (upstream.readyState === WebSocket.OPEN) {
             upstream.send(isBinary ? data : data.toString(), { binary: isBinary });
@@ -542,6 +564,7 @@ function handleOpenClawWsUpgrade(
         });
         clientWs.on("close", () => {
           ocWsConnectionsActive.dec();
+          stopGatewayWatch();
           try {
             upstream.close();
           } catch {}

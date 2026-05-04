@@ -18,6 +18,7 @@
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -161,12 +162,15 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "migrate-customer",
-    summary: "Show the migration plan for moving a customer between gateways.",
-    args: "<slug> --to=<gw-id>",
+    summary: "Move a customer between gateways via the four-step migration state machine.",
+    args: "<slug> --to=<gw-id> [--apply]",
     description:
-      "Plan-only. Renders the forward + rollback steps the orchestrator would take to move <slug> from their current gateway to <gw-id>. Useful for ops review before live migration ships.\n\nLive execution requires the gateway-side /quiesce, /export, /import, /unmount RPCs. The state machine lives in scripts/lib/fleet-migration.ts; orchestrator wiring + chat-proxy reroute are the remaining pieces.",
-    examples: ["fleet --env=prod migrate-customer ceckert --to=gw-prod-v2"],
-    writes: false,
+      "Plans (or executes with --apply) the four-step migration: quiesce source → transfer state → cutover Firestore → unmount source. The state machine in scripts/lib/fleet-migration.ts owns the safety boundaries; rollback is automatic on per-step failure (un-quiesce pre-cutover; reverse cutover + unmount target post-cutover).\n\nDry-run by default — pass --apply to execute. Requires FLEET_CONTROLLER_SECRET in env (see error message for the gcloud one-liner).",
+    examples: [
+      "fleet --env=test migrate-customer ceckert --to=gw-test-v2",
+      "fleet --env=test migrate-customer ceckert --to=gw-test-v2 --apply",
+    ],
+    writes: true,
   },
 ];
 
@@ -887,7 +891,11 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   console.log(dim(`  Controller's onUserUpdatedForFleet will fire and pick-next on ${gatewayId}.`));
 }
 
-async function migrateCustomerPlan(slug: string, toGatewayId: string): Promise<void> {
+async function migrateCustomerPlan(
+  slug: string,
+  toGatewayId: string,
+  apply: boolean,
+): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
     console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
@@ -912,7 +920,7 @@ async function migrateCustomerPlan(slug: string, toGatewayId: string): Promise<v
   const target = targetSnap.data() as GatewayDoc;
   if (target.status !== "ready") {
     console.error(red(`${CROSS} Target gateway '${toGatewayId}' is in status '${target.status}'.`));
-    console.error(dim(`  Refusing to plan a migration to a non-ready gateway.`));
+    console.error(dim(`  Refusing to migrate to a non-ready gateway.`));
     process.exit(1);
   }
 
@@ -937,18 +945,85 @@ async function migrateCustomerPlan(slug: string, toGatewayId: string): Promise<v
   console.log("\n" + bold(`ROLLBACK SAFETY NET`) + dim(`  recovery if forward fails at any phase`));
   console.log(dim(`  Pre-cutover (initial / source-quiesced / state-transferred):`));
   console.log(dim(`    Source still owns; un-quiesce + leave target leak for lazy cleanup.`));
-  // Roll back from the worst-case post-cutover point — that's the most
-  // dangerous boundary and the one operators most need to know about.
   const postCutover = rollbackPlan({ ...initial, phase: "cutover-done" });
   console.log(yellow(`  Post-cutover (cutover-done):`));
   postCutover.forEach((step) => {
     console.log(`    ${ARROW} ${describeStep(step)}`);
   });
 
-  console.log("\n" + dim(`--- PLAN ONLY ---`));
-  console.log(dim(`Live execution requires the gateway-side /quiesce, /export, /import, /unmount`));
-  console.log(dim(`RPCs (state machine + handlers shipped; orchestrator wiring + chat-proxy reroute`));
-  console.log(dim(`are the remaining pieces). See scripts/lib/fleet-migration.ts for the contract.`));
+  if (!apply) {
+    console.log("\n" + dim(`--- PLAN ONLY (re-run with --apply to execute) ---`));
+    return;
+  }
+
+  await executeMigration(slug, user.uid, fromGatewayId, toGatewayId);
+}
+
+async function executeMigration(
+  slug: string,
+  uid: string,
+  fromGatewayId: string,
+  toGatewayId: string,
+): Promise<void> {
+  const secret = process.env.FLEET_CONTROLLER_SECRET;
+  if (!secret) {
+    const secretProject = args.env === "prod" ? "octogee" : "octogee-test";
+    console.error("\n" + red(`${CROSS} FLEET_CONTROLLER_SECRET is not set in your environment.`));
+    console.error(dim(`  Load it with:`));
+    console.error(
+      dim(
+        `    export FLEET_CONTROLLER_SECRET=$(gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET --project=${secretProject})`,
+      ),
+    );
+    process.exit(1);
+  }
+
+  const fleetHost = args.env === "prod" ? "https://fleet.octogee.com" : "https://fleet-test.octogee.com";
+  const migrationId = `mig-${Date.now()}-${randomUUID().slice(0, 8)}`;
+
+  const { createMigrationClient } = await import("../lib/fleet-migration-client.js");
+  const { runMigration } = await import("../lib/fleet-migration-runner.js");
+
+  const client = createMigrationClient({
+    secret,
+    resolveGatewayUrl: () => fleetHost,
+    log: (msg) => console.log(dim(`  ${msg}`)),
+  });
+
+  console.log("\n" + bold(`EXECUTING`) + dim(`  migrationId=${migrationId}`));
+
+  const result = await runMigration(
+    { migrationId, uid, slug, fromGatewayId, toGatewayId },
+    {
+      client,
+      cutoverFirestore: async (cutoverUid, target) => {
+        await db
+          .collection("users")
+          .doc(cutoverUid)
+          .update({ "provisioning.openclaw.gatewayId": target });
+      },
+      log: (msg) => console.log(dim(`  ${msg}`)),
+    },
+  );
+
+  if (result.success) {
+    console.log("\n" + green(`${CHECK} migration complete: ${slug} ${fromGatewayId} ${ARROW} ${toGatewayId}`));
+    return;
+  }
+  console.error(
+    "\n" +
+      red(
+        `${CROSS} migration failed at phase=${result.errorAt?.phase}: ${result.errorAt?.error}`,
+      ),
+  );
+  console.error(
+    dim(
+      result.rolledBack
+        ? `  Rollback was attempted. Source should still own the customer; verify with \`fleet --env=${args.env} inspect customer ${slug}\`.`
+        : `  No rollback attempted (or post-unmount). Operator must intervene.`,
+    ),
+  );
+  process.exit(1);
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────
@@ -998,7 +1073,7 @@ async function main(): Promise<void> {
       if (!args.positional[1] || !to) {
         return missingArg("migrate-customer");
       }
-      return migrateCustomerPlan(args.positional[1], to);
+      return migrateCustomerPlan(args.positional[1], to, apply);
     }
   }
 

@@ -1,0 +1,163 @@
+/**
+ * HTTP client for the gateway-side migration RPCs (/quiesce, /export,
+ * /import, /unmount). Mirrors the request shapes documented in
+ * `shared/types/fleet-controller.ts` and signs with the same HMAC
+ * primitive the gateway verifies against.
+ *
+ * The four RPCs together implement the four-step migration state machine
+ * in `fleet-migration.ts`:
+ *
+ *   quiesce-source → transferState (export+import) → cutover-firestore → unmount
+ *
+ * `cutoverFirestore` lives outside this client — it's a Firestore write,
+ * not an HTTP call. Caller composes the four operations.
+ */
+
+import { signFleetRequest } from "./fleet-signature.js";
+import {
+  SIGNATURE_HEADER,
+  MIGRATION_ID_HEADER,
+  MIGRATION_SLUG_HEADER,
+  type ImportResponse,
+  type QuiesceResponse,
+  type UnmountResponse,
+} from "../../shared/types/fleet-controller.js";
+
+export interface MigrationClientDeps {
+  /** Same `FLEET_CONTROLLER_SECRET` the gateway has in its env. */
+  secret: string;
+  /** gatewayId → base URL (e.g. "https://fleet-test.octogee.com"). */
+  resolveGatewayUrl: (gatewayId: string) => string;
+  /** Injectable for tests; defaults to the global fetch. */
+  fetch?: typeof globalThis.fetch;
+  /** Defaults to no-op. */
+  log?: (msg: string) => void;
+}
+
+export interface MigrationClient {
+  quiesce(opts: {
+    migrationId: string;
+    gatewayId: string;
+    slug: string;
+    timeoutMs?: number;
+  }): Promise<QuiesceResponse>;
+
+  transferState(opts: {
+    migrationId: string;
+    fromGatewayId: string;
+    toGatewayId: string;
+    slug: string;
+  }): Promise<ImportResponse>;
+
+  unmount(opts: {
+    migrationId: string;
+    gatewayId: string;
+    slug: string;
+  }): Promise<UnmountResponse>;
+}
+
+export function createMigrationClient(deps: MigrationClientDeps): MigrationClient {
+  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const log = deps.log ?? (() => undefined);
+
+  const postSignedJson = async <Resp>(
+    gatewayId: string,
+    path: string,
+    migrationId: string,
+    body: Record<string, unknown>,
+  ): Promise<Resp> => {
+    const rawBody = JSON.stringify(body);
+    const signature = signFleetRequest(deps.secret, migrationId, rawBody);
+    const url = `${deps.resolveGatewayUrl(gatewayId)}${path}`;
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [SIGNATURE_HEADER]: signature,
+      },
+      body: rawBody,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "<no body>");
+      throw new Error(`${path}: ${res.status} ${text}`);
+    }
+    return (await res.json()) as Resp;
+  };
+
+  return {
+    async quiesce({ migrationId, gatewayId, slug, timeoutMs }) {
+      const res = await postSignedJson<QuiesceResponse>(
+        gatewayId,
+        `/quiesce/${gatewayId}`,
+        migrationId,
+        timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+      );
+      if (!res.drained) {
+        throw new Error(
+          `quiesce did not drain: ${res.runningCount} still running on ${gatewayId} for slug=${slug}`,
+        );
+      }
+      log(`[migration-client] ✅ quiesce ok migrationId=${migrationId} slug=${slug}`);
+      return res;
+    },
+
+    async unmount({ migrationId, gatewayId, slug }) {
+      const res = await postSignedJson<UnmountResponse>(
+        gatewayId,
+        `/unmount/${gatewayId}`,
+        migrationId,
+        { migrationId, slug },
+      );
+      log(
+        `[migration-client] ✅ unmount migrationId=${migrationId} slug=${slug} wasMounted=${res.unmounted}`,
+      );
+      return res;
+    },
+
+    async transferState({ migrationId, fromGatewayId, toGatewayId, slug }) {
+      // /export — body sig matches the standard JSON shape; response is a
+      // tarball stream we forward straight into /import.
+      const exportRawBody = JSON.stringify({ migrationId, slug });
+      const exportSig = signFleetRequest(deps.secret, migrationId, exportRawBody);
+      const exportUrl = `${deps.resolveGatewayUrl(fromGatewayId)}/export/${fromGatewayId}`;
+      const exportRes = await fetchImpl(exportUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [SIGNATURE_HEADER]: exportSig,
+        },
+        body: exportRawBody,
+      });
+      if (!exportRes.ok) {
+        const text = await exportRes.text().catch(() => "<no body>");
+        throw new Error(`export: ${exportRes.status} ${text}`);
+      }
+
+      // /import — sig over `${migrationId}\n${slug}` (header pair, not body).
+      // Body is the tar stream from /export piped through.
+      const importSig = signFleetRequest(deps.secret, migrationId, slug);
+      const importUrl = `${deps.resolveGatewayUrl(toGatewayId)}/import/${toGatewayId}`;
+      const importRes = await fetchImpl(importUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-tar",
+          [SIGNATURE_HEADER]: importSig,
+          [MIGRATION_ID_HEADER]: migrationId,
+          [MIGRATION_SLUG_HEADER]: slug,
+        },
+        body: exportRes.body,
+        // Required for streaming request bodies in Node 18+ fetch.
+        duplex: "half",
+      } as RequestInit & { duplex: "half" });
+      if (!importRes.ok) {
+        const text = await importRes.text().catch(() => "<no body>");
+        throw new Error(`import: ${importRes.status} ${text}`);
+      }
+      const parsed = (await importRes.json()) as ImportResponse;
+      log(
+        `[migration-client] ✅ transferState migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`,
+      );
+      return parsed;
+    },
+  };
+}
