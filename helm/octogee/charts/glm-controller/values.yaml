@@ -1,0 +1,26 @@
+image:
+  repository: us-central1-docker.pkg.dev/octogee/octogee/glm-controller
+  tag: latest
+
+# Workload Identity binding — KSA `glm-controller` impersonates this GSA
+# for Firestore admin access. The GSA needs `roles/datastore.user` on the
+# project. Per-env values.yaml overrides this with the env-suffixed GSA.
+gcpServiceAccount: ""
+
+# Helm release the controller manages. The controller runs `helm upgrade`
+# against `release` using the chart at `chartPath`. Both default to the
+# umbrella chart layout baked into the controller image; overridable for
+# tests / non-standard deploys.
+helm:
+  release: octogee
+  # Path inside the controller image where the chart source is baked at
+  # build time. See glm-controller/Dockerfile.
+  chartPath: /charts/octogee
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"

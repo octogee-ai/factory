@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: glm-controller
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: glm-controller
+  template:
+    metadata:
+      labels:
+        app: glm-controller
+    spec:
+      serviceAccountName: glm-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: glm-controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: HELM_RELEASE
+              value: {{ .Values.helm.release | quote }}
+            - name: HELM_CHART
+              value: {{ .Values.helm.chartPath | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

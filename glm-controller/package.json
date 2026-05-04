@@ -1,0 +1,24 @@
+{
+  "name": "octogee-glm-controller",
+  "version": "1.0.0",
+  "description": "Gateway Lifecycle Manager — runs in-cluster, reconciles Firestore desired-state to Helm + drives migration operations",
+  "private": true,
+  "type": "module",
+  "main": "dist/glm-controller/src/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/glm-controller/src/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.8.0",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.4"
+  }
+}

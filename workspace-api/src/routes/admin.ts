@@ -691,4 +691,208 @@ router.get("/gateways", async (_req: Request, res: Response, next: NextFunction)
   } catch (e) { next(e); }
 });
 
+// ── Gateway Lifecycle Manager — Phase 4 (GLM API) ───────────────────────────
+//
+// Thin wrappers around Firestore writes. workspace-api does NOT touch K8s
+// or shell out to helm; it just records desired state + operation intent.
+// The glm-controller pod (helm/octogee/charts/glm-controller) reads these
+// docs and acts on them. See docs/architecture/GATEWAY-PLATFORM-SPEC.md
+// §Gateway Lifecycle Manager.
+
+const GLM_GATEWAYS_COLLECTION = "glmGateways";
+const GLM_OPERATIONS_COLLECTION = "glmOperations";
+
+interface NewOperationInput {
+  kind: "add-gateway" | "migrate-customer" | "retire-gateway" | "rollout";
+  createdBy: string;
+  input: Record<string, unknown>;
+}
+
+async function createOperation(opts: NewOperationInput): Promise<string> {
+  const ref = await db.collection(GLM_OPERATIONS_COLLECTION).add({
+    kind: opts.kind,
+    status: "pending",
+    createdBy: opts.createdBy,
+    createdAt: Date.now(),
+    startedAt: null,
+    completedAt: null,
+    input: opts.input,
+    steps: [],
+  });
+  return ref.id;
+}
+
+router.post("/gateways", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body as Partial<{
+      gatewayId: string;
+      instanceName: string;
+      imageRepository: string;
+      imageTag: string;
+    }>;
+    if (!body.gatewayId || !body.instanceName || !body.imageRepository || !body.imageTag) {
+      res.status(400).json({
+        error: "missing required fields",
+        required: ["gatewayId", "instanceName", "imageRepository", "imageTag"],
+      });
+      return;
+    }
+    const existing = await db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId).get();
+    if (existing.exists) {
+      res.status(409).json({ error: "gateway already exists", gatewayId: body.gatewayId });
+      return;
+    }
+    const collisionSnap = await db
+      .collection(GLM_GATEWAYS_COLLECTION)
+      .where("instanceName", "==", body.instanceName)
+      .limit(1)
+      .get();
+    if (collisionSnap.size > 0) {
+      const collidingId = collisionSnap.docs[0].id;
+      res.status(409).json({
+        error: "instanceName already in use",
+        instanceName: body.instanceName,
+        ownedBy: collidingId,
+      });
+      return;
+    }
+    const createdBy = req.uid ?? "unknown";
+    await db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId).set({
+      gatewayId: body.gatewayId,
+      instanceName: body.instanceName,
+      imageRepository: body.imageRepository,
+      imageTag: body.imageTag,
+      desiredStatus: "running",
+      createdBy,
+      createdAt: Date.now(),
+    });
+    const operationId = await createOperation({
+      kind: "add-gateway",
+      createdBy,
+      input: {
+        gatewayId: body.gatewayId,
+        instanceName: body.instanceName,
+        imageTag: body.imageTag,
+      },
+    });
+    res.status(202).json({ gatewayId: body.gatewayId, operationId });
+  } catch (e) { next(e); }
+});
+
+router.patch("/gateways/:id", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = req.params.id;
+    const body = req.body as Partial<{
+      imageTag: string;
+      desiredStatus: "running" | "draining" | "retired";
+    }>;
+    const update: Record<string, unknown> = {};
+    if (body.imageTag) update.imageTag = body.imageTag;
+    if (body.desiredStatus) update.desiredStatus = body.desiredStatus;
+    if (Object.keys(update).length === 0) {
+      res.status(400).json({ error: "no updatable fields provided" });
+      return;
+    }
+    const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      res.status(404).json({ error: "gateway not found", gatewayId: id });
+      return;
+    }
+    await ref.update(update);
+    res.status(202).json({ gatewayId: id, updated: Object.keys(update) });
+  } catch (e) { next(e); }
+});
+
+router.delete("/gateways/:id", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = req.params.id;
+    const createdBy = req.uid ?? "unknown";
+    const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      res.status(404).json({ error: "gateway not found", gatewayId: id });
+      return;
+    }
+    await ref.update({ desiredStatus: "retired" });
+    const operationId = await createOperation({
+      kind: "retire-gateway",
+      createdBy,
+      input: { gatewayId: id },
+    });
+    res.status(202).json({ gatewayId: id, operationId });
+  } catch (e) { next(e); }
+});
+
+router.post("/customers/:uid/migrate", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const uid = req.params.uid;
+    const body = req.body as Partial<{ to: string }>;
+    if (!body.to) {
+      res.status(400).json({ error: "missing target gateway", required: ["to"] });
+      return;
+    }
+    const targetSnap = await db.collection("gateways").doc(body.to).get();
+    if (!targetSnap.exists) {
+      res.status(404).json({ error: "target gateway not registered", gatewayId: body.to });
+      return;
+    }
+    const targetStatus = (targetSnap.data() as Record<string, unknown> | undefined)?.status;
+    if (targetStatus !== "ready") {
+      res.status(409).json({
+        error: "target gateway not ready",
+        gatewayId: body.to,
+        status: targetStatus ?? "unknown",
+      });
+      return;
+    }
+    const createdBy = req.uid ?? "unknown";
+    const operationId = await createOperation({
+      kind: "migrate-customer",
+      createdBy,
+      input: { uid, toGatewayId: body.to },
+    });
+    res.status(202).json({ operationId });
+  } catch (e) { next(e); }
+});
+
+router.post("/rollouts", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body as Partial<{ fromGatewayId: string; imageTag: string }>;
+    if (!body.fromGatewayId || !body.imageTag) {
+      res.status(400).json({
+        error: "missing required fields",
+        required: ["fromGatewayId", "imageTag"],
+      });
+      return;
+    }
+    const createdBy = req.uid ?? "unknown";
+    const operationId = await createOperation({
+      kind: "rollout",
+      createdBy,
+      input: { fromGatewayId: body.fromGatewayId, imageTag: body.imageTag },
+    });
+    res.status(202).json({ operationId });
+  } catch (e) { next(e); }
+});
+
+router.get("/operations", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt((req.query.limit as string) ?? "25", 10)),
+    );
+    const snap = await db
+      .collection(GLM_OPERATIONS_COLLECTION)
+      .orderBy("createdAt", "desc")
+      .limit(limit)
+      .get();
+    const operations = snap.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+    res.json({ operations, generatedAt: new Date().toISOString() });
+  } catch (e) { next(e); }
+});
+
 export default router;

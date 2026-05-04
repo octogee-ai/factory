@@ -90,7 +90,15 @@ export async function startFleetController(
     );
   }
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
-  const internalUrl = `http://octogee-gateway.${namespace}.svc.cluster.local:${gatewayPort}`;
+  // GATEWAY_INSTANCE_NAME is set by the Helm chart (instances.{name} key).
+  // The per-instance Service is named `octogee-gateway-{name}`. Pre-refactor
+  // Helm releases didn't set this env; absent → fall back to the legacy
+  // alias Service `octogee-gateway` so an in-place upgrade keeps working
+  // until the chart refactor lands. Once everywhere is on the new chart,
+  // GATEWAY_INSTANCE_NAME is always set and this fallback is dead code.
+  const instanceName = process.env.GATEWAY_INSTANCE_NAME ?? "";
+  const serviceName = instanceName ? `octogee-gateway-${instanceName}` : "octogee-gateway";
+  const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
 
   const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {
     try {

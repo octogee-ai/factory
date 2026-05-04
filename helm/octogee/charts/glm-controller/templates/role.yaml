@@ -1,0 +1,49 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: glm-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: glm-controller
+rules:
+  # Helm-managed gateway resources — controller's job is to upgrade these
+  # via `helm upgrade --install` against the gateway subchart. Full CRUD
+  # on the resource kinds the chart owns; namespace boundary keeps it
+  # narrow. No `resourceNames:` filter because `create` doesn't take one.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Helm release state lives in Secrets named sh.helm.release.v1.{release}.v{n}.
+  # Full CRUD so `helm upgrade` can read + write release history.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read-only debugging — controller logs why a deploy is unhappy.
+  - apiGroups: [""]
+    resources: ["pods", "events", "configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: glm-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: glm-controller
+subjects:
+  - kind: ServiceAccount
+    name: glm-controller
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: glm-controller
+  apiGroup: rbac.authorization.k8s.io
