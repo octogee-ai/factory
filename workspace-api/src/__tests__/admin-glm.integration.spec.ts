@@ -14,6 +14,7 @@ let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = []
 let glmGatewaysDocs: Record<string, Record<string, unknown>> = {};
 let gatewaysDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
+let restoreJobsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
 
 function readNestedField(data: Record<string, unknown>, path: string): unknown {
   let cursor: unknown = data;
@@ -55,6 +56,12 @@ vi.mock("../lib/db", () => {
             .filter(([, data]) => data[filter.field] === filter.value)
             .map(([id, data]) => ({ id, data: () => data }));
           return { docs: matches, size: matches.length };
+        }
+        if (collectionName === "restoreJobs") {
+          return {
+            docs: restoreJobsDocs.map((d) => ({ id: d.id, data: () => d.data })),
+            size: restoreJobsDocs.length,
+          };
         }
         if (collectionName === "users" && filter) {
           const matches = Object.entries(usersDocs)
@@ -185,6 +192,7 @@ beforeEach(() => {
   glmGatewaysDocs = {};
   gatewaysDocs = { "gw-test-canary": { gatewayId: "gw-test-canary", status: "ready" } };
   usersDocs = {};
+  restoreJobsDocs = [];
   provisionerCalls.length = 0;
   provisionerNextError = null;
   process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
@@ -660,6 +668,176 @@ describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/customers/by-slug/ghost");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /api/admin/restore-jobs — provisioner queue", () => {
+  it("returns recent jobs with timestamps serialized to ISO and snapshot fields lifted to top level", async () => {
+    restoreJobsDocs = [
+      {
+        id: "job-newest",
+        data: {
+          jobId: "job-newest",
+          gatewayId: "gw-test",
+          state: "running",
+          attempt: 2,
+          createdAt: { toDate: () => new Date(3_000) },
+          dispatchedAt: { toDate: () => new Date(3_500) },
+          completedAt: null,
+          error: null,
+          snapshot: { uid: "u-1", slug: "alice" },
+        },
+      },
+      {
+        id: "job-older",
+        data: {
+          jobId: "job-older",
+          gatewayId: "gw-test",
+          state: "done",
+          attempt: 1,
+          createdAt: { toDate: () => new Date(1_000) },
+          dispatchedAt: { toDate: () => new Date(1_500) },
+          completedAt: { toDate: () => new Date(2_500) },
+          error: null,
+          snapshot: { uid: "u-2", slug: "bob" },
+        },
+      },
+    ];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/restore-jobs");
+    expect(res.status).toBe(200);
+    expect(res.body.jobs).toHaveLength(2);
+    expect(res.body.jobs[0]).toMatchObject({
+      jobId: "job-newest",
+      gatewayId: "gw-test",
+      state: "running",
+      attempt: 2,
+      uid: "u-1",
+      slug: "alice",
+    });
+    expect(res.body.jobs[0].createdAt).toBe("1970-01-01T00:00:03.000Z");
+    expect(res.body.jobs[0].dispatchedAt).toBe("1970-01-01T00:00:03.500Z");
+    expect(res.body.jobs[0].completedAt).toBeNull();
+    expect(res.body.generatedAt).toBeTruthy();
+  });
+
+  it("respects ?limit and clamps to 200", async () => {
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/restore-jobs?limit=500");
+    expect(res.status).toBe(200);
+    // No fixtures → empty list, but the endpoint succeeds (limit handled internally)
+    expect(res.body.jobs).toEqual([]);
+  });
+
+  it("returns an empty list when there are no jobs", async () => {
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/restore-jobs");
+    expect(res.status).toBe(200);
+    expect(res.body.jobs).toEqual([]);
+  });
+
+  it("falls back to limit=50 when ?limit is non-numeric (parseInt returns NaN)", async () => {
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/restore-jobs?limit=abc");
+    expect(res.status).toBe(200);
+    expect(res.body.jobs).toEqual([]);
+  });
+
+  it("serializes epoch=0 timestamps instead of dropping them as 'falsy'", async () => {
+    restoreJobsDocs = [
+      {
+        id: "job-epoch",
+        data: {
+          jobId: "job-epoch",
+          gatewayId: "gw-test",
+          state: "done",
+          attempt: 1,
+          createdAt: 0,
+          dispatchedAt: { toDate: () => new Date(0) },
+          completedAt: null,
+          error: null,
+          snapshot: { uid: "u-1", slug: "alice" },
+        },
+      },
+    ];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/restore-jobs");
+    expect(res.status).toBe(200);
+    expect(res.body.jobs[0].createdAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(res.body.jobs[0].dispatchedAt).toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  it("guards against NaN attempt values flowing through to the wire", async () => {
+    restoreJobsDocs = [
+      {
+        id: "job-nan",
+        data: {
+          jobId: "job-nan",
+          gatewayId: "gw-test",
+          state: "running",
+          attempt: NaN,
+          createdAt: { toDate: () => new Date(1_000) },
+          dispatchedAt: null,
+          completedAt: null,
+          error: null,
+          snapshot: { uid: "u-2", slug: "bob" },
+        },
+      },
+    ];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/restore-jobs");
+    expect(res.status).toBe(200);
+    expect(res.body.jobs[0].attempt).toBe(1);
+  });
+
+  it("normalizes a malformed state value to 'unknown' instead of silently coercing to pending", async () => {
+    restoreJobsDocs = [
+      {
+        id: "job-malformed",
+        data: {
+          jobId: "job-malformed",
+          gatewayId: "gw-test",
+          state: "weird-state-not-in-union",
+          attempt: 1,
+          createdAt: { toDate: () => new Date(1_000) },
+          dispatchedAt: null,
+          completedAt: null,
+          error: null,
+          snapshot: { uid: "u-x", slug: "x" },
+        },
+      },
+    ];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/restore-jobs");
+    expect(res.status).toBe(200);
+    expect(res.body.jobs[0].state).toBe("unknown");
+  });
+
+  it("preserves the error field on failed jobs", async () => {
+    restoreJobsDocs = [
+      {
+        id: "job-failed",
+        data: {
+          jobId: "job-failed",
+          gatewayId: "gw-test",
+          state: "failed",
+          attempt: 3,
+          createdAt: { toDate: () => new Date(1_000) },
+          dispatchedAt: { toDate: () => new Date(1_500) },
+          completedAt: { toDate: () => new Date(2_500) },
+          error: "boot-sync timed out",
+          snapshot: { uid: "u-3", slug: "charlie" },
+        },
+      },
+    ];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/restore-jobs");
+    expect(res.status).toBe(200);
+    expect(res.body.jobs[0]).toMatchObject({
+      jobId: "job-failed",
+      state: "failed",
+      error: "boot-sync timed out",
+    });
   });
 });
 

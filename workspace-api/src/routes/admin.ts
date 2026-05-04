@@ -1101,6 +1101,66 @@ router.post("/rollouts", async (req: Request, res: Response, next: NextFunction)
   } catch (e) { next(e); }
 });
 
+const RESTORE_JOB_STATES = ["pending", "dispatched", "running", "done", "failed", "unknown"] as const;
+type RestoreJobStateLabel = (typeof RESTORE_JOB_STATES)[number];
+
+// Operators want to see failed/done jobs in the queue list, so this is
+// intentionally unbounded over `state`. The aggregate counters in
+// /api/admin/gateways stay bounded to active states only (see line 592)
+// because that endpoint reads on every poll for every operator and
+// pages over the full history would blow up.
+router.get("/restore-jobs", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsedLimit = parseInt((req.query.limit as string) ?? "50", 10);
+    const limit = Math.min(
+      200,
+      Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 50),
+    );
+    const snap = await db
+      .collection("restoreJobs")
+      .orderBy("createdAt", "desc")
+      .limit(limit)
+      .get();
+    const toIso = (v: unknown): string | null => {
+      if (v == null) return null;
+      const t = v as { toDate?: () => Date };
+      if (typeof t?.toDate === "function") return t.toDate().toISOString();
+      if (v instanceof Date) return v.toISOString();
+      if (typeof v === "number") return new Date(v).toISOString();
+      return null;
+    };
+    const normalizeState = (raw: unknown): RestoreJobStateLabel => {
+      if (typeof raw === "string" && (RESTORE_JOB_STATES as readonly string[]).includes(raw)) {
+        return raw as RestoreJobStateLabel;
+      }
+      logger.warn("restoreJobs row has malformed state — surfacing as 'unknown'", { raw });
+      return "unknown";
+    };
+    const jobs = snap.docs.map((doc) => {
+      const data = doc.data() as Record<string, unknown>;
+      const snapshot = (data.snapshot ?? {}) as { uid?: string; slug?: string };
+      return {
+        jobId: typeof data.jobId === "string" ? data.jobId : doc.id,
+        gatewayId: typeof data.gatewayId === "string" ? data.gatewayId : "",
+        uid: typeof snapshot.uid === "string" ? snapshot.uid : "",
+        slug: typeof snapshot.slug === "string" ? snapshot.slug : "",
+        state: normalizeState(data.state),
+        attempt:
+          typeof data.attempt === "number" && Number.isFinite(data.attempt) && data.attempt >= 1
+            ? data.attempt
+            : 1,
+        createdAt: toIso(data.createdAt),
+        dispatchedAt: toIso(data.dispatchedAt),
+        completedAt: toIso(data.completedAt),
+        error: typeof data.error === "string" ? data.error : null,
+      };
+    });
+    res.json({ jobs, generatedAt: new Date().toISOString() });
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.get("/operations", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const limit = Math.min(
