@@ -1,6 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationKind, OperationStep } from "../../../shared/types/glm";
-import { routeOperation, type OperationHandler } from "../operation-router";
+import {
+  routeOperation,
+  type OperationContext,
+  type OperationHandler,
+} from "../operation-router";
+
+const ctx: OperationContext = {
+  reportStep: async () => undefined,
+};
 
 function mkOp(overrides: Partial<Operation>): Operation {
   return {
@@ -38,7 +46,7 @@ describe("routeOperation", () => {
         return { steps: [], success: true };
       },
     };
-    await routeOperation(mkOp({ kind: "migrate-customer" }), handlers);
+    await routeOperation(mkOp({ kind: "migrate-customer" }), handlers, ctx);
     expect(calls).toEqual(["migrate-customer"]);
   });
 
@@ -53,7 +61,7 @@ describe("routeOperation", () => {
       "retire-gateway": async () => ({ steps: [], success: true }),
       rollout: async () => ({ steps: [], success: true }),
     };
-    const result = await routeOperation(mkOp({ kind: "add-gateway" }), handlers);
+    const result = await routeOperation(mkOp({ kind: "add-gateway" }), handlers, ctx);
     expect(result.success).toBe(true);
     expect(result.steps).toBe(steps);
   });
@@ -67,7 +75,7 @@ describe("routeOperation", () => {
       "retire-gateway": async () => ({ steps: [], success: true }),
       rollout: async () => ({ steps: [], success: true }),
     };
-    const result = await routeOperation(mkOp({ kind: "add-gateway" }), handlers);
+    const result = await routeOperation(mkOp({ kind: "add-gateway" }), handlers, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/helm install timed out/);
   });
@@ -80,8 +88,24 @@ describe("routeOperation", () => {
       rollout: async () => ({ steps: [], success: true }),
     };
     const op = mkOp({ kind: "bogus" as OperationKind });
-    const result = await routeOperation(op, handlers);
+    const result = await routeOperation(op, handlers, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/unknown operation kind/i);
+  });
+
+  it("forwards the context (with reportStep) to the matched handler", async () => {
+    const reportStep = vi.fn(async (_step: OperationStep) => undefined);
+    const liveCtx: OperationContext = { reportStep };
+    const handlers: Record<OperationKind, OperationHandler> = {
+      "add-gateway": async () => ({ steps: [], success: true }),
+      "migrate-customer": async (_op, c) => {
+        await c.reportStep({ name: "in-progress", status: "running" });
+        return { steps: [], success: true };
+      },
+      "retire-gateway": async () => ({ steps: [], success: true }),
+      rollout: async () => ({ steps: [], success: true }),
+    };
+    await routeOperation(mkOp({ kind: "migrate-customer" }), handlers, liveCtx);
+    expect(reportStep).toHaveBeenCalledWith({ name: "in-progress", status: "running" });
   });
 });

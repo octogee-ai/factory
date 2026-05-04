@@ -7,13 +7,27 @@ export interface OperationResult {
   rolledBack?: boolean;
 }
 
-export type OperationHandler = (op: Operation) => Promise<OperationResult>;
+/**
+ * Per-operation handler context. Carries side-effect callbacks the
+ * handler needs to publish progress as it runs — most importantly
+ * `reportStep`, which writes incremental step records to Firestore so
+ * the admin UI can render live progress.
+ */
+export interface OperationContext {
+  reportStep: (step: OperationStep) => Promise<void> | void;
+}
+
+export type OperationHandler = (
+  op: Operation,
+  ctx: OperationContext,
+) => Promise<OperationResult>;
 
 export type OperationHandlers = Record<OperationKind, OperationHandler>;
 
 export async function routeOperation(
   op: Operation,
   handlers: OperationHandlers,
+  ctx: OperationContext,
 ): Promise<OperationResult> {
   const handler = handlers[op.kind as OperationKind];
   if (!handler) {
@@ -24,7 +38,7 @@ export async function routeOperation(
     };
   }
   try {
-    return await handler(op);
+    return await handler(op, ctx);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { steps: [], success: false, error: message };
@@ -32,9 +46,8 @@ export async function routeOperation(
 }
 
 /**
- * Stub handler used in PR 1 — logs the op without running it. PR 2+
- * replace these with real handlers (migration runner from Phase 3,
- * helm-runner for add/retire, etc.).
+ * Stub handler — logs the op without running it. Used for handler
+ * kinds whose real implementation hasn't landed yet.
  */
 export function stubHandler(label: string, log: (msg: string) => void): OperationHandler {
   return async (op: Operation): Promise<OperationResult> => {

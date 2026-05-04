@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import { getFirestore, FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
@@ -5,7 +6,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
   type GatewayDesiredState,
   type Operation,
-} from "../../shared/types/glm";
+} from "../../shared/types/glm.js";
 import { buildInstancesMap, diffInstancesMap } from "./reconcile-plan.js";
 import { createLoggingHelmRunner, type HelmRunner } from "./helm-runner.js";
 import {
@@ -13,6 +14,9 @@ import {
   stubHandler,
   type OperationHandlers,
 } from "./operation-router.js";
+import { createOperationContext } from "./operation-context.js";
+import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
+import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
 
 const log = (msg: string) => console.log(msg);
 
@@ -20,6 +24,7 @@ const RECONCILE_DEBOUNCE_MS = 1_000;
 const HELM_RELEASE = process.env.HELM_RELEASE ?? "octogee";
 const HELM_CHART = process.env.HELM_CHART ?? "/charts/octogee";
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
+const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 
 interface ControllerDeps {
   db: Firestore;
@@ -130,11 +135,19 @@ async function processOperation(
 
   deps.log(`[glm-controller] claim op=${op.id} kind=${op.kind}`);
 
-  const result = await routeOperation(op, deps.handlers);
+  const { ctx, steps } = createOperationContext({
+    persist: async (next) => {
+      await ref.update({ steps: next });
+    },
+    log: deps.log,
+    opId: op.id,
+  });
+
+  const result = await routeOperation(op, deps.handlers, ctx);
   await ref.update({
     status: result.success ? "succeeded" : "failed",
     completedAt: Date.now(),
-    steps: result.steps,
+    steps: steps.length > 0 ? steps : result.steps,
     error: result.error ?? FieldValue.delete(),
     rolledBack: result.rolledBack ?? false,
   });
@@ -148,19 +161,14 @@ async function main(): Promise<void> {
   initializeApp({ credential: applicationDefault() });
   const db = getFirestore();
   const helm = createLoggingHelmRunner(log);
-  const handlers: OperationHandlers = {
-    "add-gateway": stubHandler("add-gateway", log),
-    "migrate-customer": stubHandler("migrate-customer", log),
-    "retire-gateway": stubHandler("retire-gateway", log),
-    rollout: stubHandler("rollout", log),
-  };
+
+  const handlers = await buildHandlers(db, log);
 
   const deps: ControllerDeps = { db, helm, handlers, log };
 
   log(
     `[glm-controller] starting — namespace=${NAMESPACE} release=${HELM_RELEASE} chart=${HELM_CHART}`,
   );
-  log(`[glm-controller] PR 1 scaffolding — helm execution stubbed; handlers logged only`);
 
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
@@ -173,6 +181,68 @@ async function main(): Promise<void> {
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
+}
+
+async function buildHandlers(
+  db: Firestore,
+  logFn: (msg: string) => void,
+): Promise<OperationHandlers> {
+  const secret = process.env.FLEET_CONTROLLER_SECRET;
+  if (!secret) {
+    throw new Error(
+      "FLEET_CONTROLLER_SECRET is not set — required for migrate-customer. Refusing to start with stub handlers.",
+    );
+  }
+
+  const migrateCustomer = createMigrateCustomerHandler({
+    readUser: async (uid) => {
+      const doc = await db.collection("users").doc(uid).get();
+      if (!doc.exists) return null;
+      const data = doc.data() as
+        | { username?: string; provisioning?: { openclaw?: { slug?: string; gatewayId?: string } } }
+        | undefined;
+      const oc = data?.provisioning?.openclaw ?? {};
+      const slug = oc.slug ?? data?.username;
+      const currentGatewayId = oc.gatewayId;
+      if (!slug || !currentGatewayId) return null;
+      return { slug, currentGatewayId };
+    },
+    cutoverFirestore: async (uid, toGatewayId) => {
+      await db
+        .collection("users")
+        .doc(uid)
+        .update({ "provisioning.openclaw.gatewayId": toGatewayId });
+    },
+    resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
+    buildClient: (resolveSync) =>
+      createMigrationClient({ secret, resolveGatewayUrl: resolveSync, log: logFn }),
+    genMigrationId: () => `mig-${Date.now()}-${randomUUID().slice(0, 8)}`,
+    now: () => Date.now(),
+    log: logFn,
+  });
+
+  return {
+    "add-gateway": stubHandler("add-gateway", logFn),
+    "migrate-customer": migrateCustomer,
+    "retire-gateway": stubHandler("retire-gateway", logFn),
+    rollout: stubHandler("rollout", logFn),
+  };
+}
+
+async function resolveGatewayUrlFromFirestore(
+  db: Firestore,
+  gatewayId: string,
+): Promise<string> {
+  const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  if (!doc.exists) {
+    throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
+  }
+  const data = doc.data() as GatewayDesiredState | undefined;
+  const instanceName = data?.instanceName;
+  if (!instanceName) {
+    throw new Error(`glmGateways/${gatewayId} missing instanceName`);
+  }
+  return `http://octogee-gateway-${instanceName}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}`;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

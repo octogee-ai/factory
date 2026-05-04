@@ -824,6 +824,33 @@ router.delete("/gateways/:id", async (req: Request, res: Response, next: NextFun
   } catch (e) { next(e); }
 });
 
+router.get("/customers/by-slug/:slug", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const slug = req.params.slug;
+    const slugSnap = await db
+      .collection("users")
+      .where("provisioning.openclaw.slug", "==", slug)
+      .limit(1)
+      .get();
+    if (slugSnap.size > 0) {
+      res.json({ uid: slugSnap.docs[0].id });
+      return;
+    }
+    const usernameSnap = await db
+      .collection("users")
+      .where("username", "==", slug)
+      .limit(1)
+      .get();
+    if (usernameSnap.size > 0) {
+      res.json({ uid: usernameSnap.docs[0].id });
+      return;
+    }
+    res.status(404).json({ error: "customer not found", slug });
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.post("/customers/:uid/migrate", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.params.uid;

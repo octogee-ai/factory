@@ -21,9 +21,16 @@ function happyClient(): MigrationClient & { calls: string[] } {
   };
 }
 
+interface ReportedStep {
+  name: string;
+  status: "running" | "done" | "failed";
+  error?: string;
+}
+
 function makeDeps(client: MigrationClient & { calls: string[] }) {
   const cutoverCalls: Array<{ uid: string; toGatewayId: string }> = [];
   const logCalls: string[] = [];
+  const reportedSteps: ReportedStep[] = [];
   return {
     client,
     cutoverFirestore: vi.fn(async (uid: string, toGatewayId: string) => {
@@ -31,8 +38,12 @@ function makeDeps(client: MigrationClient & { calls: string[] }) {
       cutoverCalls.push({ uid, toGatewayId });
     }),
     log: (msg: string) => logCalls.push(msg),
+    reportStep: vi.fn(async (step: ReportedStep) => {
+      reportedSteps.push(step);
+    }),
     cutoverCalls,
     logCalls,
+    reportedSteps,
   };
 }
 
@@ -69,6 +80,22 @@ describe("runMigration — happy path", () => {
     expect(deps.logCalls.some((l) => l.includes("cutover") && l.includes("ok"))).toBe(true);
     expect(deps.logCalls.some((l) => l.includes("unmount") && l.includes("ok"))).toBe(true);
   });
+
+  it("emits reportStep running→done for each forward step in order", async () => {
+    const client = happyClient();
+    const deps = makeDeps(client);
+    await runMigration(INPUT, deps);
+    expect(deps.reportedSteps).toEqual([
+      { name: "quiesce-source", status: "running" },
+      { name: "quiesce-source", status: "done" },
+      { name: "transfer-state", status: "running" },
+      { name: "transfer-state", status: "done" },
+      { name: "cutover-firestore", status: "running" },
+      { name: "cutover-firestore", status: "done" },
+      { name: "unmount-source", status: "running" },
+      { name: "unmount-source", status: "done" },
+    ]);
+  });
 });
 
 describe("runMigration — failures", () => {
@@ -104,6 +131,15 @@ describe("runMigration — failures", () => {
     const quiesceCalls = (client.quiesce as unknown as { mock: { calls: unknown[] } }).mock.calls;
     expect(quiesceCalls.length).toBeGreaterThanOrEqual(2);
     expect(deps.cutoverFirestore).not.toHaveBeenCalled();
+
+    // reportStep emits a `failed` event for the transfer + rollback steps prefixed `rollback:`
+    const failed = deps.reportedSteps.find((s) => s.status === "failed");
+    expect(failed?.name).toBe("transfer-state");
+    expect(failed?.error).toMatch(/503/);
+    const rollbackNames = deps.reportedSteps
+      .filter((s) => s.name.startsWith("rollback:"))
+      .map((s) => s.name);
+    expect(rollbackNames).toContain("rollback:quiesce-source");
   });
 
   it("rolls back the Firestore cutover and unmounts the destination when unmount-source fails", async () => {

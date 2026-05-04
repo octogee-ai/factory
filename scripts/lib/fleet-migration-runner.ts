@@ -27,11 +27,24 @@ import {
 } from "./fleet-migration.js";
 import type { MigrationClient } from "./fleet-migration-client.js";
 
+export interface ReportedStep {
+  name: string;
+  status: "running" | "done" | "failed";
+  error?: string;
+}
+
 export interface MigrationRunnerDeps {
   client: MigrationClient;
   /** Writes `users/{uid}.provisioning.openclaw.gatewayId = toGatewayId`. */
   cutoverFirestore: (uid: string, toGatewayId: string) => Promise<void>;
   log: (msg: string) => void;
+  /**
+   * Optional progress callback invoked as each step starts (`running`),
+   * succeeds (`done`), or fails (`failed`). Rollback steps are reported
+   * with `rollback:` prefix on the name. Caller persists these to
+   * Firestore so the UI can render live progress.
+   */
+  reportStep?: (step: ReportedStep) => Promise<void> | void;
 }
 
 export interface MigrationRunnerInput {
@@ -102,14 +115,17 @@ export async function runMigration(
     if (step.action === "complete") break;
 
     const phaseAtStart = state.phase;
+    await report(deps, { name: step.action, status: "running" });
     try {
       await executeStep(step, deps, input.migrationId);
+      await report(deps, { name: step.action, status: "done" });
       deps.log(
         `[migration-runner] ${step.action} ok migrationId=${input.migrationId} slug=${input.slug} (phase ${phaseAtStart} → ${advancePhase(state.phase)})`,
       );
       state = { ...state, phase: advancePhase(state.phase) };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      await report(deps, { name: step.action, status: "failed", error: errMsg });
       deps.log(
         `[migration-runner] ❌ ${step.action} failed at phase=${phaseAtStart}: ${errMsg}`,
       );
@@ -151,14 +167,30 @@ async function tryRollback(
     return false;
   }
   for (const step of plan) {
+    const rbName = `rollback:${step.action}`;
+    await report(deps, { name: rbName, status: "running" });
     try {
       await executeStep(step, deps, migrationId);
+      await report(deps, { name: rbName, status: "done" });
       deps.log(`[migration-runner] rollback ${step.action} ok`);
     } catch (rbErr) {
       const msg = rbErr instanceof Error ? rbErr.message : String(rbErr);
+      await report(deps, { name: rbName, status: "failed", error: msg });
       deps.log(`[migration-runner] ⚠ rollback warn: ${step.action} failed: ${msg}`);
-      // Continue with the rest of the rollback plan — best effort.
     }
   }
   return true;
+}
+
+async function report(
+  deps: MigrationRunnerDeps,
+  step: ReportedStep,
+): Promise<void> {
+  if (!deps.reportStep) return;
+  try {
+    await deps.reportStep(step);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    deps.log(`[migration-runner] ⚠ reportStep threw — ignoring: ${msg}`);
+  }
 }

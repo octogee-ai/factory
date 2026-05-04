@@ -13,6 +13,16 @@ const calls: FirestoreCall[] = [];
 let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
 let glmGatewaysDocs: Record<string, Record<string, unknown>> = {};
 let gatewaysDocs: Record<string, Record<string, unknown>> = {};
+let usersDocs: Record<string, Record<string, unknown>> = {};
+
+function readNestedField(data: Record<string, unknown>, path: string): unknown {
+  let cursor: unknown = data;
+  for (const part of path.split(".")) {
+    if (cursor == null || typeof cursor !== "object") return undefined;
+    cursor = (cursor as Record<string, unknown>)[part];
+  }
+  return cursor;
+}
 
 vi.mock("../lib/db", () => {
   function whereChain(
@@ -34,6 +44,12 @@ vi.mock("../lib/db", () => {
         if (collectionName === "glmGateways" && filter) {
           const matches = Object.entries(glmGatewaysDocs)
             .filter(([, data]) => data[filter.field] === filter.value)
+            .map(([id, data]) => ({ id, data: () => data }));
+          return { docs: matches, size: matches.length };
+        }
+        if (collectionName === "users" && filter) {
+          const matches = Object.entries(usersDocs)
+            .filter(([, data]) => readNestedField(data, filter.field) === filter.value)
             .map(([id, data]) => ({ id, data: () => data }));
           return { docs: matches, size: matches.length };
         }
@@ -137,6 +153,7 @@ beforeEach(() => {
   glmOperationsDocs = [];
   glmGatewaysDocs = {};
   gatewaysDocs = { "gw-test-canary": { gatewayId: "gw-test-canary", status: "ready" } };
+  usersDocs = {};
 });
 
 describe("POST /api/admin/gateways — create desired state + op", () => {
@@ -312,6 +329,32 @@ describe("POST /api/admin/rollouts — composite operation", () => {
       input: { fromGatewayId: "gw-test-default", imageTag: "def5678" },
       createdBy: "admin-user",
     });
+  });
+});
+
+describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
+  it("returns the uid for a slug stored at provisioning.openclaw.slug", async () => {
+    usersDocs["uid-alice"] = {
+      provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
+    };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/customers/by-slug/alice");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ uid: "uid-alice" });
+  });
+
+  it("falls back to username when no provisioning slug matches", async () => {
+    usersDocs["uid-bob"] = { username: "bob" };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/customers/by-slug/bob");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ uid: "uid-bob" });
+  });
+
+  it("returns 404 when no user has the slug or username", async () => {
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/customers/by-slug/ghost");
+    expect(res.status).toBe(404);
   });
 });
 
