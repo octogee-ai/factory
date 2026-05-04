@@ -105,6 +105,10 @@ ingress:
   host: api.octogee.com
   staticIpName: workspace-api-ip
   certName: workspace-api-cert
+  # Per-instance Service the api ingress backs onto. Rendered by the gateway
+  # subchart as `workspace-api-{instance}` per gateway.instances key.
+  # Override if the primary gateway instance is renamed away from `default`.
+  targetService: workspace-api-default
 
 # Cloud Armor WAF (policy created by Terraform, referenced by name)
 cloudArmor:

@@ -33,6 +33,7 @@ import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.
 const log = (msg: string) => console.log(msg);
 
 const RECONCILE_DEBOUNCE_MS = 1_000;
+const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const HELM_RELEASE = process.env.HELM_RELEASE ?? "octogee";
 const HELM_CHART = process.env.HELM_CHART ?? "/charts/octogee";
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
@@ -43,6 +44,8 @@ interface ControllerDeps {
   helm: HelmRunner;
   handlers: OperationHandlers;
   log: (msg: string) => void;
+  /** Retry interval after a failed reconcile tick. Defaults to 30s. */
+  reconcileRetryMs?: number;
 }
 
 async function readMountedByGatewayId(
@@ -61,10 +64,23 @@ async function readMountedByGatewayId(
 }
 
 export function startReconciler(deps: ControllerDeps): () => void {
-  let timer: NodeJS.Timeout | null = null;
+  let debounceTimer: NodeJS.Timeout | null = null;
+  let retryTimer: NodeJS.Timeout | null = null;
+  let inFlight = false;
+  let stopped = false;
+  const retryMs = deps.reconcileRetryMs ?? RECONCILE_RETRY_MS_DEFAULT;
 
   const tick = async () => {
-    timer = null;
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+    if (inFlight) return;
+    inFlight = true;
     try {
       const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
       const desired: GatewayDesiredState[] = snap.docs.map(
@@ -110,21 +126,31 @@ export function startReconciler(deps: ControllerDeps): () => void {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      deps.log(`[glm-controller] ⚠ reconcile tick failed: ${message}`);
+      deps.log(
+        `[glm-controller] ⚠ reconcile tick failed: ${message} — retry in ${retryMs}ms`,
+      );
+      if (!stopped) {
+        retryTimer = setTimeout(() => void tick(), retryMs);
+      }
+    } finally {
+      inFlight = false;
     }
   };
 
   const unsub = deps.db.collection(GLM_GATEWAYS_COLLECTION).onSnapshot(
     () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => void tick(), RECONCILE_DEBOUNCE_MS);
+      if (stopped) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => void tick(), RECONCILE_DEBOUNCE_MS);
     },
     (err) => deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`),
   );
 
   return () => {
+    stopped = true;
     unsub();
-    if (timer) clearTimeout(timer);
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (retryTimer) clearTimeout(retryTimer);
   };
 }
 

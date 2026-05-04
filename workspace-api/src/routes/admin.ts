@@ -589,7 +589,10 @@ router.get("/gateways", async (_req: Request, res: Response, next: NextFunction)
   try {
     const [gwSnap, jobsSnap] = await Promise.all([
       db.collection("gateways").get(),
-      db.collection("restoreJobs").get(),
+      db
+        .collection("restoreJobs")
+        .where("state", "in", ["pending", "dispatched", "running"])
+        .get(),
     ]);
 
     const now = Date.now();

@@ -37,18 +37,19 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
+          {{- $svc := .Values.ingress.targetService | default "workspace-api-default" }}
           - path: /api/*
             pathType: ImplementationSpecific
             backend:
               service:
-                name: workspace-api
+                name: {{ $svc }}
                 port:
-                  number: {{ .Values.port }}
+                  name: http
           - path: /health
             pathType: ImplementationSpecific
             backend:
               service:
-                name: workspace-api
+                name: {{ $svc }}
                 port:
-                  number: {{ .Values.port }}
+                  name: http
 {{- end }}
