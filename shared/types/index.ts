@@ -80,3 +80,19 @@ export {
   RESTORE_JOBS_COLLECTION,
 } from './fleet-controller';
 
+export type {
+  GatewayDesiredStatus,
+  GatewayDesiredState,
+  OperationKind,
+  OperationStatus,
+  StepStatus,
+  OperationStep,
+  Operation,
+  HelmInstanceValue,
+  HelmInstancesMap,
+} from './glm';
+export {
+  GLM_GATEWAYS_COLLECTION,
+  GLM_OPERATIONS_COLLECTION,
+} from './glm';
+
