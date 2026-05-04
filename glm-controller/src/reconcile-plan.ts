@@ -27,17 +27,36 @@ export function buildInstancesMap(
 /**
  * The instances map to pass to `helm upgrade`. Starts from the currently-
  * deployed (`actual`) map so any instance running in helm is preserved by
- * default — the controller never auto-deletes. Non-retired desired-state
- * docs override matching entries; retired docs are left for PR 4's
- * explicit retire flow to handle.
+ * default — the controller never auto-deletes for "drift" reasons.
+ *
+ * Non-retired desired docs override matching entries.
+ *
+ * `retired` docs are removed from the target map only when no customers
+ * are mounted on that gateway. Retired-with-customers stays in the map
+ * (drained: pod up, no new placements) until migration completes; only
+ * when `mountedByGatewayId.get(gatewayId)` is empty does helm uninstall
+ * the deployment.
  */
 export function buildHelmTargetMap(
   desired: GatewayDesiredState[],
   actual: HelmInstancesMap,
+  mountedByGatewayId: Map<string, readonly string[]> = new Map(),
 ): HelmInstancesMap {
   const out: HelmInstancesMap = { ...actual };
   for (const d of desired) {
-    if (d.desiredStatus === "retired") continue;
+    if (d.desiredStatus === "retired") {
+      const mounted = mountedByGatewayId.get(d.gatewayId);
+      // No heartbeat doc → gateway never published, no customers exist,
+      // safe to remove (this is the stranded-crash-loop canary case).
+      // Heartbeat exists with zero customers → safe to remove.
+      // Heartbeat exists with customers → preserve (drain wait); the
+      // retire-gateway operation handler refuses this case before we
+      // ever get here, so reaching it would be operator-set drift.
+      if (mounted === undefined || mounted.length === 0) {
+        delete out[d.instanceName];
+      }
+      continue;
+    }
     out[d.instanceName] = {
       enabled: true,
       image: { repository: d.imageRepository, tag: d.imageTag },

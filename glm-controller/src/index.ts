@@ -27,6 +27,7 @@ import { createOperationContext } from "./operation-context.js";
 import { computeBootstrapWrites } from "./bootstrap.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
+import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
 
 const log = (msg: string) => console.log(msg);
@@ -44,6 +45,21 @@ interface ControllerDeps {
   log: (msg: string) => void;
 }
 
+async function readMountedByGatewayId(
+  db: Firestore,
+): Promise<Map<string, readonly string[]>> {
+  const snap = await db.collection("gateways").get();
+  const out = new Map<string, readonly string[]>();
+  for (const doc of snap.docs) {
+    const data = doc.data() as { mountedCustomers?: unknown };
+    const mounted = Array.isArray(data.mountedCustomers)
+      ? (data.mountedCustomers.filter((s): s is string => typeof s === "string"))
+      : [];
+    out.set(doc.id, mounted);
+  }
+  return out;
+}
+
 export function startReconciler(deps: ControllerDeps): () => void {
   let timer: NodeJS.Timeout | null = null;
 
@@ -58,26 +74,34 @@ export function startReconciler(deps: ControllerDeps): () => void {
         release: HELM_RELEASE,
         namespace: NAMESPACE,
       });
+      const mountedByGatewayId = await readMountedByGatewayId(deps.db);
       const desiredMap = buildInstancesMap(desired);
       const changes = diffInstancesMap(actualMap, desiredMap);
-      const actionable = changes.filter((c) => c.kind !== "drift");
-      const drift = changes.filter((c) => c.kind === "drift");
-      if (drift.length > 0) {
+      const targetMap = buildHelmTargetMap(desired, actualMap, mountedByGatewayId);
+      const preservedDrift = changes.filter(
+        (c) =>
+          c.kind === "drift" &&
+          Object.prototype.hasOwnProperty.call(targetMap, c.instanceName),
+      );
+      if (preservedDrift.length > 0) {
         deps.log(
-          `[glm-controller] drift detected (preserved, not removed): ${drift.map((d) => d.instanceName).join(", ")}`,
+          `[glm-controller] drift detected (preserved, not removed): ${preservedDrift.map((d) => d.instanceName).join(", ")}`,
         );
       }
-      if (actionable.length === 0) {
+      const targetVsActual = diffInstancesMap(actualMap, targetMap);
+      const upgradeNeeded = targetVsActual.length > 0;
+      if (!upgradeNeeded) {
         deps.log(
           `[glm-controller] reconcile tick: no changes (${desired.length} desired, ${Object.keys(actualMap).length} actual)`,
         );
         return;
       }
-      const summary = actionable.map((c) => `${c.kind}:${c.instanceName}`).join(", ");
+      const summary = targetVsActual
+        .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.instanceName}`)
+        .join(", ");
       deps.log(
-        `[glm-controller] reconcile tick: ${actionable.length} change(s) — ${summary}`,
+        `[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`,
       );
-      const targetMap = buildHelmTargetMap(desired, actualMap);
       await deps.helm.upgrade({
         release: HELM_RELEASE,
         chart: HELM_CHART,
@@ -313,10 +337,49 @@ async function buildHandlers(
     log: logFn,
   });
 
+  const retireGateway = createRetireGatewayHandler({
+    helm,
+    readGatewayLiveState: async (gatewayId) => {
+      const doc = await db.collection("gateways").doc(gatewayId).get();
+      if (!doc.exists) return null;
+      const data = doc.data() as
+        | { mountedCustomers?: unknown; inFlightJobId?: unknown }
+        | undefined;
+      const mounted = Array.isArray(data?.mountedCustomers)
+        ? (data!.mountedCustomers as unknown[]).filter((s): s is string => typeof s === "string")
+        : [];
+      const inFlightJobId =
+        typeof data?.inFlightJobId === "string" && data.inFlightJobId.length > 0
+          ? data.inFlightJobId
+          : null;
+      return { mountedCustomers: mounted, inFlightJobId };
+    },
+    readGlmGatewayInstanceName: async (gatewayId) => {
+      const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+      if (!doc.exists) return null;
+      const data = doc.data() as GatewayDesiredState | undefined;
+      return data?.instanceName ?? null;
+    },
+    deleteGlmGateway: async (gatewayId) => {
+      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).delete();
+    },
+    deleteGatewayHeartbeat: async (gatewayId) => {
+      await db.collection("gateways").doc(gatewayId).delete();
+    },
+    // archiveAuthTokenSecret intentionally omitted — leaves the SM
+    // secret in place so re-creating the gateway with the same id is
+    // idempotent. Auth tokens rotate per pod boot anyway.
+    helmUninstallTimeoutMs: 90_000,
+    pollIntervalMs: 5_000,
+    now: () => Date.now(),
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    log: logFn,
+  });
+
   return {
     "add-gateway": addGateway,
     "migrate-customer": migrateCustomer,
-    "retire-gateway": stubHandler("retire-gateway", logFn),
+    "retire-gateway": retireGateway,
     rollout: stubHandler("rollout", logFn),
   };
 }

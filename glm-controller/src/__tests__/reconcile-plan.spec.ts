@@ -178,15 +178,57 @@ describe("buildHelmTargetMap", () => {
     expect(target.canary.gatewayId).toBe("gw-test-canary");
   });
 
-  it("does NOT remove instances from actual on retire (PR 4 owns the retire flow)", () => {
+  it("removes a retired instance from target when no customers are mounted (helm uninstalls)", () => {
     const actual: HelmInstancesMap = {
       default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
+      canary: { enabled: true, image: { repository: REPO_PATH, tag: "def" }, gatewayId: "gw-test-canary" },
     };
+    const mounted = new Map<string, readonly string[]>([
+      ["gw-test", ["alice", "bob"]],
+      ["gw-test-canary", []],
+    ]);
     const target = buildHelmTargetMap(
-      [desired({ instanceName: "default", desiredStatus: "retired" })],
+      [
+        desired({ instanceName: "canary", gatewayId: "gw-test-canary", desiredStatus: "retired" }),
+      ],
       actual,
+      mounted,
     );
-    expect(target.default).toEqual(actual.default);
+    expect(Object.keys(target).sort()).toEqual(["default"]);
+  });
+
+  it("preserves a retired instance from target while customers are still mounted (drain wait)", () => {
+    const actual: HelmInstancesMap = {
+      default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
+      canary: { enabled: true, image: { repository: REPO_PATH, tag: "def" }, gatewayId: "gw-test-canary" },
+    };
+    const mounted = new Map<string, readonly string[]>([
+      ["gw-test-canary", ["alice"]],
+    ]);
+    const target = buildHelmTargetMap(
+      [
+        desired({ instanceName: "canary", gatewayId: "gw-test-canary", desiredStatus: "retired" }),
+      ],
+      actual,
+      mounted,
+    );
+    expect(target.canary).toEqual(actual.canary);
+  });
+
+  it("removes a retired instance whose heartbeat doc never existed (stranded crash-looping canary case)", () => {
+    const actual: HelmInstancesMap = {
+      default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
+      crashloop: { enabled: true, image: { repository: REPO_PATH, tag: "bad" }, gatewayId: "gw-test-crashloop" },
+    };
+    const mounted = new Map<string, readonly string[]>([["gw-test", []]]);
+    const target = buildHelmTargetMap(
+      [
+        desired({ instanceName: "crashloop", gatewayId: "gw-test-crashloop", desiredStatus: "retired" }),
+      ],
+      actual,
+      mounted,
+    );
+    expect(Object.keys(target).sort()).toEqual(["default"]);
   });
 
   it("returns the unchanged actual map when no desired-state docs exist (drift-only state)", () => {

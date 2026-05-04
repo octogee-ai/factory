@@ -334,8 +334,9 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
 });
 
 describe("DELETE /api/admin/gateways/:id — retire", () => {
-  it("sets desiredStatus=retired and creates a retire-gateway op", async () => {
+  it("sets desiredStatus=retired and creates a retire-gateway op when no customers are mounted", async () => {
     glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    gatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", status: "ready", mountedCustomers: [] };
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
     expect(res.status).toBe(202);
@@ -351,6 +352,56 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/gw-missing");
     expect(res.status).toBe(404);
+  });
+
+  it("returns 409 with the customer list when the gateway still has mounted customers", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    gatewaysDocs["gw-test-canary"] = {
+      gatewayId: "gw-test-canary",
+      status: "ready",
+      mountedCustomers: ["alice", "bob"],
+    };
+    const app = buildApp();
+    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/still has mounted customers/i);
+    expect(res.body.mountedCustomers).toEqual(["alice", "bob"]);
+    const update = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    expect(update).toBeUndefined();
+  });
+
+  it("proceeds with retire when the gateway has no heartbeat doc (stranded crash-loop case)", async () => {
+    glmGatewaysDocs["gw-test-orphan"] = { gatewayId: "gw-test-orphan" };
+    const app = buildApp();
+    const res = await request(app).delete("/api/admin/gateways/gw-test-orphan");
+    expect(res.status).toBe(202);
+    const update = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    expect(update?.data).toMatchObject({ desiredStatus: "retired" });
+    const op = calls.find((c) => c.collection === "glmOperations");
+    expect(op?.data).toMatchObject({ kind: "retire-gateway", createdBy: "admin-user" });
+  });
+
+  it("returns 409 when an in-flight restore job is set on the heartbeat (mid-mount)", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    gatewaysDocs["gw-test-canary"] = {
+      gatewayId: "gw-test-canary",
+      status: "ready",
+      mountedCustomers: [],
+      inFlightJobId: "job-restore-7",
+    };
+    const app = buildApp();
+    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/in-flight restore job/i);
+    expect(res.body.inFlightJobId).toBe("job-restore-7");
+    const update = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    expect(update).toBeUndefined();
   });
 });
 

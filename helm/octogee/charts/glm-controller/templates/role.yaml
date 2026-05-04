@@ -15,7 +15,7 @@ rules:
   # / configmaps was tried and reverted in TEST when helm patched all
   # three on a routine reconcile and the controller couldn't proceed.
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
+    resources: ["deployments", "statefulsets", "replicasets", "controllerrevisions"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]

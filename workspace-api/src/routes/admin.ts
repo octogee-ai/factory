@@ -851,6 +851,37 @@ router.delete("/gateways/:id", async (req: Request, res: Response, next: NextFun
       res.status(404).json({ error: "gateway not found", gatewayId: id });
       return;
     }
+    const heartbeatSnap = await db.collection("gateways").doc(id).get();
+    if (heartbeatSnap.exists) {
+      const hbData = heartbeatSnap.data() as
+        | { mountedCustomers?: unknown; inFlightJobId?: unknown }
+        | undefined;
+      const mounted = Array.isArray(hbData?.mountedCustomers)
+        ? (hbData!.mountedCustomers as unknown[]).filter((s): s is string => typeof s === "string")
+        : [];
+      if (mounted.length > 0) {
+        res.status(409).json({
+          error: "gateway still has mounted customers; migrate them off before retiring",
+          gatewayId: id,
+          mountedCustomers: mounted,
+        });
+        return;
+      }
+      const inFlightJobId =
+        typeof hbData?.inFlightJobId === "string" && hbData.inFlightJobId.length > 0
+          ? hbData.inFlightJobId
+          : null;
+      if (inFlightJobId) {
+        res.status(409).json({
+          error: "gateway has an in-flight restore job; let it finish (or fail) before retiring",
+          gatewayId: id,
+          inFlightJobId,
+        });
+        return;
+      }
+    }
+    // No heartbeat doc → gateway never started or has been cleaned up; nothing
+    // to mount, nothing to drain, retire is safe.
     await ref.update({ desiredStatus: "retired" });
     const operationId = await createOperation({
       kind: "retire-gateway",
