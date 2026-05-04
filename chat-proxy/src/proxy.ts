@@ -3,14 +3,6 @@ import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from "prom-client";
 import { startMetricsBaseline } from "./openclaw/metrics-baseline.js";
-import {
-  startActivityBridge,
-  type ActivityBridgeHandle,
-  type AgentEventPayload,
-} from "./openclaw/activity-bridge.js";
-import { createApprovalCallbackHandler } from "./openclaw/approval-callback.js";
-import { signApprovalContext } from "./openclaw/approval-callback.js";
-import { createMmClientFactory } from "./openclaw/mm-client.js";
 import { generateIdentity, type DeviceIdentity } from "./openclaw/device-identity.js";
 import { openUpstream, UpstreamError } from "./openclaw/upstream.js";
 import {
@@ -22,6 +14,8 @@ import {
   invalidateGatewayToken,
   GatewayTokenError,
 } from "./openclaw/gateway-token.js";
+import { resolveBridgeGatewayId } from "./openclaw/bridge-gateway-id.js";
+import { startBridgeUpstreamReconnectLoop } from "./openclaw/bridge-reconnect.js";
 import {
   shouldForwardFrame,
   deriveExpectedAgentId,
@@ -649,115 +643,139 @@ if (process.env.NODE_ENV !== "test") {
     }
     approvalCallbackHandler = wired.approvalCallbackHandler;
 
-    try {
-      const gatewayId = 'sidecar';
-      const tokenResolved = await fetchGatewayToken({ gatewayId });
-      const ws = await openUpstream({
-        url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
-        token: tokenResolved,
-        identity: getOpenClawIdentity(),
-      });
-      await connectBridgeUpstream(wired, {
-        ws,
-        log: (msg) => console.warn(msg),
-        metrics: bridgeMetrics,
-      });
-      console.log('[chat-proxy] activity bridge upstream WS connected');
-
-      const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
-      const { startMmEventListener } = await import('./openclaw/mm-event-listener.js');
-      const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
-      const { resolveChannelOwnerUid } = await import('./openclaw/owner-resolution.js');
-      const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
-        const wiredAny = wired as unknown as {
-          __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
-        };
-        return wiredAny.__getRpcClient?.() ?? null;
-      };
-      startMmEventListener({
-        mmWsUrl,
-        mmAdminPat,
-        log: (msg) => console.warn(msg),
-        openWebSocket: () => new WebSocket(mmWsUrl),
-        isTrackedChannel: (channelId) =>
-          wired.handle.isTrackedActivityChannel?.(channelId) ?? false,
-        resolveRunForRootPost: (postId) =>
-          wired.handle.getRunStateByRootPostId?.(postId) ?? null,
-        onReply: async (reply) => {
-          const rpc = getRpcClient();
-          if (!rpc) {
-            console.warn(
-              `[mm-event-listener] reply-as-steer skipped — no upstream RPC client for session ${reply.sessionKey}`,
-            );
-            return;
-          }
-          try {
-            await rpc.call('chat.send', {
-              sessionKey: reply.sessionKey,
-              message: reply.message,
-              deliver: false,
-              idempotencyKey: reply.replyPostId,
-            });
-          } catch (err) {
-            console.warn(
-              `[mm-event-listener] chat.send (reply-as-steer) failed for session ${reply.sessionKey}: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        },
-        onReaction: async (reaction) => {
-          await handleReactionAdded(reaction, {
-            resolveRunForRootPost: (postId) =>
-              wired.handle.getRunStateByRootPostId?.(postId) ?? null,
-            resolveChannelOwnerUid: (channelId) =>
-              resolveChannelOwnerUid(channelId, {
-                db: db as never,
-                log: (msg) => console.warn(msg),
-              }),
-            resolveOctogeeUidByMmUser: async (mmUserId) => {
-              try {
-                const snap = await db
-                  .collectionGroup('users' as never)
-                  .where('mattermost.userId' as never, '==' as never, mmUserId as never)
-                  .get();
-                const docs = (snap as unknown as { docs: Array<{ id: string }> }).docs;
-                return docs[0]?.id ?? null;
-              } catch (err) {
-                console.warn(
-                  `[reaction-handler] resolveOctogeeUidByMmUser failed: ${err instanceof Error ? err.message : String(err)}`,
-                );
-                return null;
-              }
-            },
-            effects: {
-              dispatchAbort: async (sessionKey) => {
-                const rpc = getRpcClient();
-                if (!rpc) {
-                  console.warn(
-                    `[reaction-handler] abort dispatch skipped — no upstream RPC client for session ${sessionKey}`,
-                  );
-                  return;
-                }
-                await rpc.call('chat.abort', { sessionKey });
-              },
-            },
-            log: (msg) => console.warn(msg),
-            metrics: {
-              reactionDispatchMs: bridgeMetrics.reactionDispatchMs,
-              reactionDropped: new Counter({
-                name: 'octogee_bridge_reaction_dropped_total',
-                help: 'Reaction-handler drops with reason',
-                labelNames: ['reason'] as const,
-                registers: [metricsRegistry],
-              }),
-            },
-          });
-        },
-      });
-      console.log('[chat-proxy] MM event listener started (reactions + reply-as-steer)');
-    } catch (err) {
+    const gatewayIdResult = resolveBridgeGatewayId(process.env);
+    if (!gatewayIdResult.ok) {
       console.error(
-        `[chat-proxy] activity bridge upstream connect failed: ${err instanceof Error ? err.message : String(err)} — bridge will not receive agent events until restart`,
+        `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
+        'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
+        'See docs/ACTIVITY-STREAM-SPEC.md §15.1.',
       );
+      return;
     }
+    const gatewayId = gatewayIdResult.gatewayId;
+
+    const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
+    const { startMmEventListener } = await import('./openclaw/mm-event-listener.js');
+    const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
+    const { resolveChannelOwnerUid } = await import('./openclaw/owner-resolution.js');
+    const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
+      const wiredAny = wired as unknown as {
+        __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
+      };
+      return wiredAny.__getRpcClient?.() ?? null;
+    };
+    startMmEventListener({
+      mmWsUrl,
+      mmAdminPat,
+      log: (msg) => console.warn(msg),
+      openWebSocket: () => new WebSocket(mmWsUrl),
+      isTrackedChannel: (channelId) =>
+        wired.handle.isTrackedActivityChannel?.(channelId) ?? false,
+      resolveRunForRootPost: (postId) =>
+        wired.handle.getRunStateByRootPostId?.(postId) ?? null,
+      onReply: async (reply) => {
+        const rpc = getRpcClient();
+        if (!rpc) {
+          console.warn(
+            `[mm-event-listener] reply-as-steer skipped — no upstream RPC client for session ${reply.sessionKey}`,
+          );
+          return;
+        }
+        try {
+          await rpc.call('chat.send', {
+            sessionKey: reply.sessionKey,
+            message: reply.message,
+            deliver: false,
+            idempotencyKey: reply.replyPostId,
+          });
+        } catch (err) {
+          console.warn(
+            `[mm-event-listener] chat.send (reply-as-steer) failed for session ${reply.sessionKey}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      onReaction: async (reaction) => {
+        await handleReactionAdded(reaction, {
+          resolveRunForRootPost: (postId) =>
+            wired.handle.getRunStateByRootPostId?.(postId) ?? null,
+          resolveChannelOwnerUid: (channelId) =>
+            resolveChannelOwnerUid(channelId, {
+              db: db as never,
+              log: (msg) => console.warn(msg),
+            }),
+          resolveOctogeeUidByMmUser: async (mmUserId) => {
+            try {
+              const snap = await db
+                .collection('users' as never)
+                .where('mattermost.userId' as never, '==' as never, mmUserId as never)
+                .get();
+              const docs = (snap as unknown as { docs: Array<{ id: string }> }).docs;
+              return docs[0]?.id ?? null;
+            } catch (err) {
+              console.warn(
+                `[reaction-handler] resolveOctogeeUidByMmUser failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              return null;
+            }
+          },
+          effects: {
+            dispatchAbort: async (sessionKey) => {
+              const rpc = getRpcClient();
+              if (!rpc) {
+                console.warn(
+                  `[reaction-handler] abort dispatch skipped — no upstream RPC client for session ${sessionKey}`,
+                );
+                return;
+              }
+              await rpc.call('chat.abort', { sessionKey });
+            },
+          },
+          log: (msg) => console.warn(msg),
+          metrics: {
+            reactionDispatchMs: bridgeMetrics.reactionDispatchMs,
+            reactionDropped: new Counter({
+              name: 'octogee_bridge_reaction_dropped_total',
+              help: 'Reaction-handler drops with reason',
+              labelNames: ['reason'] as const,
+              registers: [metricsRegistry],
+            }),
+          },
+        });
+      },
+    });
+    console.log('[chat-proxy] MM event listener started (reactions + reply-as-steer)');
+
+    startBridgeUpstreamReconnectLoop({
+      openOnce: async () => {
+        const tokenResolved = await fetchGatewayToken({ gatewayId });
+        const ws = await openUpstream({
+          url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+          token: tokenResolved,
+          identity: getOpenClawIdentity(),
+        });
+        let closed = false;
+        let registered: (() => void) | null = null;
+        ws.on('close', () => {
+          closed = true;
+          registered?.();
+        });
+        await connectBridgeUpstream(wired, {
+          ws,
+          log: (msg) => console.warn(msg),
+          metrics: bridgeMetrics,
+        });
+        return {
+          onClose: (handler) => {
+            if (closed) {
+              handler();
+            } else {
+              registered = handler;
+            }
+          },
+        };
+      },
+      log: (msg) => console.warn(msg),
+      onConnected: () => console.log('[chat-proxy] activity bridge upstream WS connected'),
+    });
   })();
 }
