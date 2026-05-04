@@ -24,6 +24,8 @@ import {
   type OperationHandlers,
 } from "./operation-router.js";
 import { createOperationContext } from "./operation-context.js";
+import { computeBootstrapWrites } from "./bootstrap.js";
+import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
 
@@ -183,13 +185,15 @@ async function main(): Promise<void> {
       ? createLoggingHelmRunner(log)
       : createHelmSubprocessRunner({ runHelm: spawnHelm, log });
 
-  const handlers = await buildHandlers(db, log);
+  const handlers = await buildHandlers(db, log, helm);
 
   const deps: ControllerDeps = { db, helm, handlers, log };
 
   log(
     `[glm-controller] starting — namespace=${NAMESPACE} release=${HELM_RELEASE} chart=${HELM_CHART}`,
   );
+
+  await bootstrapGlmGateways(deps);
 
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
@@ -204,9 +208,50 @@ async function main(): Promise<void> {
   process.on("SIGINT", shutdown);
 }
 
+export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> {
+  let actualMap;
+  try {
+    actualMap = await deps.helm.readDeployedInstances({
+      release: HELM_RELEASE,
+      namespace: NAMESPACE,
+    });
+  } catch (err) {
+    deps.log(
+      `[glm-controller] ⚠ bootstrap skipped — failed to read helm state: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
+  const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
+  const known = new Set(snap.docs.map((d) => d.id));
+  const writes = computeBootstrapWrites(actualMap, known);
+  if (writes.length === 0) {
+    deps.log(
+      `[glm-controller] bootstrap: ${Object.keys(actualMap).length} helm instance(s) already registered, no writes`,
+    );
+    return;
+  }
+  for (const w of writes) {
+    try {
+      await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(w.gatewayId).create(w.doc);
+      deps.log(
+        `[glm-controller] bootstrap: registering existing instance ${w.doc.instanceName} as glmGateways/${w.gatewayId}`,
+      );
+    } catch (err) {
+      if ((err as { code?: number })?.code === 6) {
+        deps.log(
+          `[glm-controller] bootstrap: skip ${w.gatewayId} — operator wrote a doc between snapshot and create`,
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function buildHandlers(
   db: Firestore,
   logFn: (msg: string) => void,
+  helm: HelmRunner,
 ): Promise<OperationHandlers> {
   const secret = process.env.FLEET_CONTROLLER_SECRET;
   if (!secret) {
@@ -214,6 +259,32 @@ async function buildHandlers(
       "FLEET_CONTROLLER_SECRET is not set — required for migrate-customer. Refusing to start with stub handlers.",
     );
   }
+
+  const addGateway = createAddGatewayHandler({
+    helm,
+    readGatewayHeartbeat: async (gatewayId) => {
+      const doc = await db.collection("gateways").doc(gatewayId).get();
+      if (!doc.exists) return null;
+      const data = doc.data() as
+        | { lastHeartbeatAt?: { toMillis?: () => number } | number | Date }
+        | undefined;
+      const raw = data?.lastHeartbeatAt;
+      if (raw == null) return null;
+      let ms: number | null = null;
+      if (typeof raw === "number") ms = raw;
+      else if (raw instanceof Date) ms = raw.getTime();
+      else if (typeof (raw as { toMillis?: () => number }).toMillis === "function") {
+        ms = (raw as { toMillis: () => number }).toMillis();
+      }
+      return ms == null ? null : { lastHeartbeatAt: ms };
+    },
+    helmRenderTimeoutMs: 60_000,
+    heartbeatTimeoutMs: 240_000,
+    pollIntervalMs: 5_000,
+    now: () => Date.now(),
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    log: logFn,
+  });
 
   const migrateCustomer = createMigrateCustomerHandler({
     readUser: async (uid) => {
@@ -243,7 +314,7 @@ async function buildHandlers(
   });
 
   return {
-    "add-gateway": stubHandler("add-gateway", logFn),
+    "add-gateway": addGateway,
     "migrate-customer": migrateCustomer,
     "retire-gateway": stubHandler("retire-gateway", logFn),
     rollout: stubHandler("rollout", logFn),

@@ -7,6 +7,7 @@ import type { CSIDocument } from "../csi/types";
 import { updateCSIForUser } from "../csi/updater";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
 import { workspaceSlugsForUser } from "../lib/workspace-slugs";
+import { provisionGatewayAuthSecret } from "../lib/secret-manager";
 import {
   buildCustomerSummary,
   buildFunnelRollup,
@@ -728,6 +729,7 @@ function isValidGatewayImageRepository(repo: string): boolean {
   return repo.startsWith(GATEWAY_IMAGE_REPO_PREFIX);
 }
 
+
 router.post("/gateways", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = req.body as Partial<{
@@ -767,6 +769,27 @@ router.post("/gateways", async (req: Request, res: Response, next: NextFunction)
         error: "instanceName already in use",
         instanceName: body.instanceName,
         ownedBy: collidingId,
+      });
+      return;
+    }
+    const gatewayServiceAccount = process.env.GATEWAY_SERVICE_ACCOUNT;
+    if (!gatewayServiceAccount) {
+      res.status(500).json({
+        error: "GATEWAY_SERVICE_ACCOUNT not configured — admin cannot provision gateway auth-token secret",
+      });
+      return;
+    }
+    try {
+      await provisionGatewayAuthSecret({
+        gatewayId: body.gatewayId,
+        gatewayServiceAccount,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({
+        error: "failed to provision gateway auth-token secret",
+        gatewayId: body.gatewayId,
+        detail: message,
       });
       return;
     }

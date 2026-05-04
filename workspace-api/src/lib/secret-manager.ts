@@ -80,6 +80,70 @@ export async function archiveSecret(name: string): Promise<{ disabledCount: numb
   }
 }
 
+const GATEWAY_AUTH_TOKEN_SECRET_ROLES = [
+  "roles/secretmanager.secretAccessor",
+  "roles/secretmanager.secretVersionAdder",
+  "roles/secretmanager.secretVersionManager",
+];
+
+/**
+ * Provisions the per-gateway auth-token Secret Manager secret +
+ * IAM grants required for a new gateway pod to publish its token.
+ * Idempotent: re-creating an existing secret is a no-op; re-applying
+ * the same IAM bindings doesn't fail.
+ *
+ * `gatewayId` matches the suffix used by entrypoint.sh in the gateway
+ * pod (`gateway-auth-token-${GATEWAY_ID}`). The gateway GSA needs all
+ * three roles: read its own token (accessor), publish a new version
+ * (versionAdder), and manage version state on rotation
+ * (versionManager).
+ */
+export async function provisionGatewayAuthSecret(params: {
+  gatewayId: string;
+  gatewayServiceAccount: string;
+}): Promise<{ secretName: string; created: boolean }> {
+  const secretId = `gateway-auth-token-${params.gatewayId}`;
+  const parent = `projects/${projectId()}`;
+  const secretName = fqSecretName(secretId);
+
+  let created = true;
+  try {
+    await client().createSecret({
+      parent,
+      secretId,
+      secret: { replication: { automatic: {} } },
+    });
+  } catch (err: unknown) {
+    if ((err as { code?: number })?.code !== 6) throw err;
+    created = false;
+  }
+
+  const member = `serviceAccount:${params.gatewayServiceAccount}`;
+  const [policy] = await client().getIamPolicy({ resource: secretName });
+  const bindings = policy.bindings ?? [];
+  let mutated = false;
+  for (const role of GATEWAY_AUTH_TOKEN_SECRET_ROLES) {
+    let binding = bindings.find((b) => b.role === role);
+    if (!binding) {
+      binding = { role, members: [] };
+      bindings.push(binding);
+      mutated = true;
+    }
+    if (!binding.members?.includes(member)) {
+      binding.members = [...(binding.members ?? []), member];
+      mutated = true;
+    }
+  }
+  if (mutated) {
+    await client().setIamPolicy({
+      resource: secretName,
+      policy: { ...policy, bindings },
+    });
+  }
+
+  return { secretName, created };
+}
+
 async function accessLatest(name: string): Promise<string | null> {
   try {
     const [response] = await client().accessSecretVersion({

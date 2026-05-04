@@ -6,13 +6,22 @@ metadata:
   labels:
     app: glm-controller
 rules:
-  # CRUD on resource kinds the gateway subchart emits — `helm upgrade`
-  # against the umbrella renders these and reconciles to live state.
+  # CRUD on every namespace-scoped kind the umbrella emits — even
+  # resources the controller never *intends* to change. `helm upgrade`
+  # patches every managed resource on every revision (release-revision
+  # annotation), so any kind reachable from the umbrella that lacks
+  # `patch` here will fail the upgrade with a 403. The PR #820 attempt
+  # to keep this least-privilege via read-only on cronjobs / serviceaccounts
+  # / configmaps was tried and reverted in TEST when helm patched all
+  # three on a routine reconcile and the controller couldn't proceed.
   - apiGroups: ["apps"]
-    resources: ["deployments"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["services"]
+    resources: ["services", "configmaps", "serviceaccounts", "secrets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
@@ -26,30 +35,27 @@ rules:
   - apiGroups: ["cloud.google.com"]
     resources: ["backendconfigs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Helm release state lives in Secrets named sh.helm.release.v1.{release}.v{n}.
-  # Full CRUD so `helm upgrade` can read + write release history.
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Read-only on resources emitted by non-gateway subcharts (mattermost,
-  # gitea, workspace-api, chat-proxy) plus the controller's own SA. Helm
-  # needs to GET these to compute the diff; CRUD stays out of reach so
-  # the controller can't accidentally touch the Mattermost/Gitea PVCs
-  # (pets per docs/operations/RUNBOOK.md) or escalate via SA/RBAC churn.
-  - apiGroups: ["apps"]
-    resources: ["statefulsets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["batch"]
-    resources: ["cronjobs"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims", "pods", "events", "configmaps", "serviceaccounts"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["roles", "rolebindings"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The controller's own Role + RoleBinding live in the umbrella, so
+  # helm patches them on every reconcile. Without CRUD here the upgrade
+  # fails when the chart's RBAC template renders even slightly differently
+  # (e.g. helm metadata annotation drift).
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read-only on PVCs — Mattermost / Gitea pets must never be touched by
+  # the controller, even though `helm upgrade` only patches the manifest
+  # annotations on them. PVC patch on a PVC that's expanding storage is
+  # a one-way ticket to data loss; keeping read-only here means a chart
+  # change that touches PVC spec falls back to the CI deploy path (which
+  # runs as a different SA with a wider role).
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "events"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

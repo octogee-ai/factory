@@ -125,6 +125,24 @@ vi.mock("../lib/db", () => {
   };
 });
 
+const provisionerCalls: Array<{ gatewayId: string; gatewayServiceAccount: string }> = [];
+let provisionerNextError: Error | null = null;
+
+vi.mock("../lib/secret-manager", () => ({
+  provisionGatewayAuthSecret: async (params: {
+    gatewayId: string;
+    gatewayServiceAccount: string;
+  }) => {
+    if (provisionerNextError) {
+      const e = provisionerNextError;
+      provisionerNextError = null;
+      throw e;
+    }
+    provisionerCalls.push(params);
+    return { secretName: `projects/octogee-test/secrets/gateway-auth-token-${params.gatewayId}`, created: true };
+  },
+}));
+
 vi.mock("../middleware/auth", () => ({
   // Mirrors the real middleware: requireAdmin populates `req.uid`
   // (canonical) and `req.user` (Firestore user doc — does NOT carry uid
@@ -158,6 +176,9 @@ beforeEach(() => {
   glmGatewaysDocs = {};
   gatewaysDocs = { "gw-test-canary": { gatewayId: "gw-test-canary", status: "ready" } };
   usersDocs = {};
+  provisionerCalls.length = 0;
+  provisionerNextError = null;
+  process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
 });
 
 describe("POST /api/admin/gateways — create desired state + op", () => {
@@ -198,6 +219,51 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({ gatewayId: "x" });
     expect(res.status).toBe(400);
+  });
+
+  it("provisions the gateway-auth-token Secret Manager shell (+ IAM) before writing the glmGateways doc", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-canary",
+      instanceName: "canary",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+    });
+    expect(res.status).toBe(202);
+    expect(provisionerCalls).toEqual([
+      {
+        gatewayId: "gw-test-canary",
+        gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
+      },
+    ]);
+  });
+
+  it("does NOT write the glmGateways doc if SM provisioning fails — operator gets 502 with detail", async () => {
+    provisionerNextError = new Error("PERMISSION_DENIED on secretmanager.secrets.create");
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-canary",
+      instanceName: "canary",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+    });
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/auth-token/);
+    const gwWrite = calls.find((c) => c.collection === "glmGateways" && c.op === "doc.set");
+    expect(gwWrite).toBeUndefined();
+  });
+
+  it("returns 500 if GATEWAY_SERVICE_ACCOUNT is not configured (cluster misconfigured)", async () => {
+    delete process.env.GATEWAY_SERVICE_ACCOUNT;
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-canary",
+      instanceName: "canary",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+    });
+    expect(res.status).toBe(500);
+    expect(provisionerCalls).toEqual([]);
   });
 
   it("rejects 400 when imageRepository is not the canonical Artifact Registry repo", async () => {
