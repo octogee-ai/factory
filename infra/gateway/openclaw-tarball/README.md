@@ -9,7 +9,9 @@ Docker build runs; local docker builds need it copied manually.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.2 the fork carries two patches:
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.4 the fork carries five patches — three essential, two diagnostic-only.
+
+**Essential:**
 
 - **Per-account surgical channel reload** — `src/gateway/config-reload-plan.ts`,
   `src/gateway/server-reload-handlers.ts`. Adds a per-account bucket to
@@ -31,6 +33,25 @@ Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patc
   Default behavior unchanged when the env var is unset.
   Env var is set in `helm/octogee/charts/gateway/templates/deployment.yaml`.
   See `docs/ACTIVITY-STREAM-SPEC.md` §15.7 for context + scope-discipline note.
+
+- **`config.patch` returns post-write hash** —
+  `src/gateway/server-methods/config.ts`. Includes the merged-config hash
+  in the `config.patch` response payload so the local-provisioner can
+  cache by hash and skip redundant patches when nothing actually changed.
+  Without this, every provisioner reconcile round-trips a patch even on a
+  no-op, multiplying control-plane traffic per tenant on busy clusters.
+
+**Diagnostic (carried forward to confirm no regressions; reassess each cycle):**
+
+- **Per-phase `config.patch` timing instrumentation** —
+  `src/gateway/server-methods/config.ts`. Logs duration of parse / merge /
+  apply / persist phases inside `config.patch` so we can spot regression
+  points when a roll-forward suddenly slows down control-plane writes.
+
+- **WS-upgrade timing instrumentation** —
+  `src/gateway/server-http.ts`. Logs how long the gateway WebSocket upgrade
+  callback takes per connection. Helps identify boot-time saturation
+  windows where new sidecar/MM connections queue behind reload work.
 
 Patches deleted at the v2026.4.29 roll-forward (kept in git history on
 `octogee/gateway-scaling-patches-v2026.4.24` and `-v2026.4.25` if you need
