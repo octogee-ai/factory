@@ -182,6 +182,23 @@ vi.mock("../lib/secret-manager", () => ({
   },
 }));
 
+type BuildResult = { tag: string; pushedAt: string; digest: string };
+const builderCalls: Array<{ service: string; limit?: number }> = [];
+let nextBuildsResult: BuildResult[] = [];
+let nextBuildsError: Error | null = null;
+
+vi.mock("../lib/artifact-registry", () => ({
+  listGatewayBuilds: async (opts: { service: string; limit?: number }) => {
+    builderCalls.push({ service: opts.service, limit: opts.limit });
+    if (nextBuildsError) {
+      const e = nextBuildsError;
+      nextBuildsError = null;
+      throw e;
+    }
+    return nextBuildsResult;
+  },
+}));
+
 vi.mock("../middleware/auth", () => ({
   // Mirrors the real middleware: requireAdmin populates `req.uid`
   // (canonical) and `req.user` (Firestore user doc — does NOT carry uid
@@ -218,6 +235,9 @@ beforeEach(() => {
   restoreJobsDocs = [];
   provisionerCalls.length = 0;
   provisionerNextError = null;
+  builderCalls.length = 0;
+  nextBuildsResult = [];
+  nextBuildsError = null;
   process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
 });
 
@@ -252,6 +272,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       kind: "add-gateway",
       status: "pending",
       createdBy: "admin-user",
+      gatewayId: "gw-test-canary",
     });
   });
 
@@ -1057,6 +1078,221 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
       state: "failed",
       error: "boot-sync timed out",
     });
+  });
+});
+
+describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
+  it("returns mounted-customer details + recent ops for the gateway", async () => {
+    glmGatewaysDocs = {
+      "gw-test": { gatewayId: "gw-test", imageTag: "abc1234" },
+    };
+    gatewaysDocs = {
+      "gw-test": {
+        gatewayId: "gw-test",
+        status: "ready",
+        mountedCustomers: ["alice", "bob"],
+      },
+    };
+    usersDocs = {
+      "uid-alice": {
+        approved: true,
+        username: "alice",
+        email: "alice@octogee.com",
+        throttleLevel: 0,
+        lastActive: "2026-05-04T09:00:00Z",
+        provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
+      },
+      "uid-bob": {
+        approved: true,
+        username: "bob",
+        email: "bob@octogee.com",
+        throttleLevel: 2,
+        lastActive: "2026-05-04T08:30:00Z",
+        provisioning: { openclaw: { slug: "bob", gatewayId: "gw-test" } },
+      },
+      "uid-carol": {
+        approved: true,
+        username: "carol",
+        email: "carol@octogee.com",
+        provisioning: { openclaw: { slug: "carol", gatewayId: "gw-other" } },
+      },
+    };
+    glmOperationsDocs = [
+      {
+        id: "op-this-gw",
+        data: {
+          kind: "rollout",
+          status: "succeeded",
+          createdAt: 5_000,
+          gatewayId: "gw-test",
+          input: { gatewayId: "gw-test", imageTag: "abc1234" },
+          steps: [],
+        },
+      },
+      {
+        id: "op-other-gw",
+        data: {
+          kind: "rollout",
+          status: "succeeded",
+          createdAt: 4_000,
+          gatewayId: "gw-other",
+          input: { gatewayId: "gw-other" },
+          steps: [],
+        },
+      },
+    ];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways/gw-test/details");
+    expect(res.status).toBe(200);
+    expect(res.body.mountedCustomers).toHaveLength(2);
+    const slugs = res.body.mountedCustomers.map((m: { slug: string }) => m.slug).sort();
+    expect(slugs).toEqual(["alice", "bob"]);
+    const alice = res.body.mountedCustomers.find(
+      (m: { slug: string }) => m.slug === "alice",
+    );
+    expect(alice).toMatchObject({
+      uid: "uid-alice",
+      username: "alice",
+      email: "alice@octogee.com",
+      throttleLevel: 0,
+    });
+    expect(res.body.recentOperations).toHaveLength(1);
+    expect(res.body.recentOperations[0].id).toBe("op-this-gw");
+    expect(res.body.generatedAt).toBeTruthy();
+  });
+
+  it("returns empty mountedCustomers when the gateway heartbeat doc has no mounts", async () => {
+    glmGatewaysDocs = { "gw-empty": { gatewayId: "gw-empty" } };
+    gatewaysDocs = {
+      "gw-empty": { gatewayId: "gw-empty", status: "ready", mountedCustomers: [] },
+    };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways/gw-empty/details");
+    expect(res.status).toBe(200);
+    expect(res.body.mountedCustomers).toEqual([]);
+  });
+
+  it("404s for an unknown gateway", async () => {
+    glmGatewaysDocs = {};
+    gatewaysDocs = {};
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways/gw-missing/details");
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+  });
+
+  it("survives a missing heartbeat doc when the desired-state record exists", async () => {
+    glmGatewaysDocs = { "gw-booting": { gatewayId: "gw-booting" } };
+    gatewaysDocs = {};
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways/gw-booting/details");
+    expect(res.status).toBe(200);
+    expect(res.body.mountedCustomers).toEqual([]);
+  });
+
+  it("only returns operations whose input.gatewayId matches the path id", async () => {
+    glmGatewaysDocs = { "gw-test": { gatewayId: "gw-test" } };
+    gatewaysDocs = {
+      "gw-test": { gatewayId: "gw-test", status: "ready", mountedCustomers: [] },
+    };
+    glmOperationsDocs = [
+      {
+        id: "op-a",
+        data: {
+          kind: "rollout",
+          status: "succeeded",
+          createdAt: 5_000,
+          gatewayId: "gw-test",
+          input: { gatewayId: "gw-test" },
+          steps: [],
+        },
+      },
+      {
+        id: "op-b",
+        data: {
+          kind: "migrate-customer",
+          status: "succeeded",
+          createdAt: 4_000,
+          input: { uid: "uid-alice" },
+          steps: [],
+        },
+      },
+      {
+        id: "op-c",
+        data: {
+          kind: "add-gateway",
+          status: "succeeded",
+          createdAt: 3_000,
+          gatewayId: "gw-other",
+          input: { gatewayId: "gw-other" },
+          steps: [],
+        },
+      },
+    ];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways/gw-test/details");
+    expect(res.status).toBe(200);
+    expect(res.body.recentOperations.map((o: { id: string }) => o.id)).toEqual(["op-a"]);
+  });
+});
+
+describe("GET /api/admin/builds — Artifact Registry SHA picker", () => {
+  it("returns the recent SHA-tagged builds for the requested service", async () => {
+    nextBuildsResult = [
+      { tag: "abc1234", pushedAt: "2026-05-04T10:00:00Z", digest: "sha256:aaa" },
+      { tag: "def5678", pushedAt: "2026-05-03T08:00:00Z", digest: "sha256:bbb" },
+    ];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/builds?service=octogee-gateway");
+    expect(res.status).toBe(200);
+    expect(res.body.builds).toHaveLength(2);
+    expect(res.body.builds[0].tag).toBe("abc1234");
+    expect(res.body.service).toBe("octogee-gateway");
+    expect(res.body.generatedAt).toBeTruthy();
+    expect(builderCalls[0].service).toBe("octogee-gateway");
+  });
+
+  it("defaults to octogee-gateway when no service is provided", async () => {
+    nextBuildsResult = [];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/builds");
+    expect(res.status).toBe(200);
+    expect(res.body.service).toBe("octogee-gateway");
+    expect(builderCalls[0].service).toBe("octogee-gateway");
+  });
+
+  it("rejects services outside the allowlist", async () => {
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/builds?service=evil-image");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/service/i);
+    expect(builderCalls).toHaveLength(0);
+  });
+
+  it("accepts the chat-proxy and workspace-api services", async () => {
+    nextBuildsResult = [];
+    const app = buildApp();
+    const a = await request(app).get("/api/admin/builds?service=octogee-chat-proxy");
+    const b = await request(app).get("/api/admin/builds?service=workspace-api");
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(builderCalls.map((c) => c.service)).toEqual(["octogee-chat-proxy", "workspace-api"]);
+  });
+
+  it("clamps limit to a sane maximum", async () => {
+    nextBuildsResult = [];
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/builds?limit=500");
+    expect(res.status).toBe(200);
+    expect(builderCalls[0].limit).toBeLessThanOrEqual(100);
+  });
+
+  it("propagates Artifact Registry failures as 502", async () => {
+    nextBuildsError = new Error("artifact-registry list failed: 403 Forbidden");
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/builds");
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/artifact-registry/i);
   });
 });
 

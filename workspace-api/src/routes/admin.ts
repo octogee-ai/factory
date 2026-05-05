@@ -8,6 +8,7 @@ import { updateCSIForUser } from "../csi/updater";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
 import { workspaceSlugsForUser } from "../lib/workspace-slugs";
 import { provisionGatewayAuthSecret } from "../lib/secret-manager";
+import { listGatewayBuilds } from "../lib/artifact-registry";
 import {
   buildCustomerSummary,
   buildFunnelRollup,
@@ -823,6 +824,148 @@ router.get(
   },
 );
 
+interface DrawerMountedCustomer {
+  uid: string;
+  slug: string;
+  username: string;
+  email: string;
+  throttleLevel: number;
+  lastActive: string | null;
+}
+
+const ERR_GATEWAY_NOT_FOUND = "gateway not found";
+
+function readMountedSlugs(hbData: Record<string, unknown> | undefined): Set<string> {
+  if (!Array.isArray(hbData?.mountedCustomers)) return new Set();
+  return new Set(
+    (hbData.mountedCustomers as unknown[]).filter(
+      (s): s is string => typeof s === "string",
+    ),
+  );
+}
+
+function buildMountedCustomer(
+  uid: string,
+  data: Record<string, unknown>,
+  slug: string,
+): DrawerMountedCustomer {
+  return {
+    uid,
+    slug,
+    username: typeof data.username === "string" ? data.username : "",
+    email: typeof data.email === "string" ? data.email : "",
+    throttleLevel: typeof data.throttleLevel === "number" ? data.throttleLevel : 0,
+    lastActive: toISODate(data.lastActive),
+  };
+}
+
+function userSlug(data: Record<string, unknown>): string {
+  const provisioning = (data.provisioning as Record<string, unknown> | undefined) ?? {};
+  const openclaw = (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
+  return typeof openclaw.slug === "string" ? openclaw.slug : "";
+}
+
+const OP_KINDS = new Set([
+  "add-gateway",
+  "migrate-customer",
+  "retire-gateway",
+  "rollout",
+]);
+const OP_STATUSES = new Set([
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "rolled-back",
+]);
+
+interface DrawerOperation {
+  id: string;
+  kind: string;
+  status: string;
+  createdBy: string;
+  createdAt: number | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  input: Record<string, unknown>;
+  steps: unknown[];
+  error?: string;
+  rolledBack?: boolean;
+}
+
+function coerceNumberOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function shapeDrawerOperation(id: string, data: Record<string, unknown>): DrawerOperation {
+  const kind = typeof data.kind === "string" && OP_KINDS.has(data.kind) ? data.kind : "unknown";
+  const status =
+    typeof data.status === "string" && OP_STATUSES.has(data.status) ? data.status : "unknown";
+  const out: DrawerOperation = {
+    id,
+    kind,
+    status,
+    createdBy: typeof data.createdBy === "string" ? data.createdBy : "unknown",
+    createdAt: coerceNumberOrNull(data.createdAt),
+    startedAt: coerceNumberOrNull(data.startedAt),
+    completedAt: coerceNumberOrNull(data.completedAt),
+    input: typeof data.input === "object" && data.input !== null
+      ? (data.input as Record<string, unknown>)
+      : {},
+    steps: Array.isArray(data.steps) ? data.steps : [],
+  };
+  if (typeof data.error === "string") out.error = data.error;
+  if (typeof data.rolledBack === "boolean") out.rolledBack = data.rolledBack;
+  return out;
+}
+
+router.get(
+  "/gateways/:id/details",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = req.params.id;
+      const [glmSnap, hbSnap, usersSnap, opsSnap] = await Promise.all([
+        db.collection("glmGateways").doc(id).get(),
+        db.collection("gateways").doc(id).get(),
+        db.collection("users").where("approved", "==", true).get(),
+        // Single-field equality + limit needs no composite index. We sort
+        // client-side by createdAt; ops written before the top-level
+        // gatewayId field landed are picked up via the input.gatewayId
+        // fallback below.
+        db.collection("glmOperations").where("gatewayId", "==", id).limit(50).get(),
+      ]);
+      if (!glmSnap.exists && !hbSnap.exists) {
+        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+        return;
+      }
+      const hbData = hbSnap.exists ? (hbSnap.data() as Record<string, unknown>) : undefined;
+      const mountedSlugs = readMountedSlugs(hbData);
+
+      const mountedCustomers: DrawerMountedCustomer[] = [];
+      for (const doc of usersSnap.docs) {
+        const data = doc.data() as Record<string, unknown>;
+        const slug = userSlug(data);
+        if (!slug || !mountedSlugs.has(slug)) continue;
+        mountedCustomers.push(buildMountedCustomer(doc.id, data, slug));
+      }
+      mountedCustomers.sort((a, b) => a.slug.localeCompare(b.slug));
+
+      const recentOperations = opsSnap.docs
+        .map((d) => shapeDrawerOperation(d.id, d.data() as Record<string, unknown>))
+        .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+        .slice(0, 20);
+
+      res.json({
+        mountedCustomers,
+        recentOperations,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 router.post(
   "/customers/:uid/assign",
   async (req: Request, res: Response, next: NextFunction) => {
@@ -847,7 +990,7 @@ router.post(
       }
       const heartbeatSnap = await db.collection("gateways").doc(body.gatewayId).get();
       if (!heartbeatSnap.exists) {
-        res.status(404).json({ error: "gateway not found", gatewayId: body.gatewayId });
+        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: body.gatewayId });
         return;
       }
       const hb = heartbeatSnap.data() as { status?: string } | undefined;
@@ -897,6 +1040,8 @@ interface NewOperationInput {
 }
 
 async function createOperation(opts: NewOperationInput): Promise<string> {
+  const gatewayId =
+    typeof opts.input.gatewayId === "string" ? opts.input.gatewayId : null;
   const ref = await db.collection(GLM_OPERATIONS_COLLECTION).add({
     kind: opts.kind,
     status: "pending",
@@ -906,6 +1051,7 @@ async function createOperation(opts: NewOperationInput): Promise<string> {
     completedAt: null,
     input: opts.input,
     steps: [],
+    ...(gatewayId !== null ? { gatewayId } : {}),
   });
   return ref.id;
 }
@@ -1020,7 +1166,7 @@ router.patch("/gateways/:id", async (req: Request, res: Response, next: NextFunc
     const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
     const snap = await ref.get();
     if (!snap.exists) {
-      res.status(404).json({ error: "gateway not found", gatewayId: id });
+      res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
       return;
     }
     await ref.update(update);
@@ -1035,7 +1181,7 @@ router.delete("/gateways/:id", async (req: Request, res: Response, next: NextFun
     const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
     const snap = await ref.get();
     if (!snap.exists) {
-      res.status(404).json({ error: "gateway not found", gatewayId: id });
+      res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
       return;
     }
     const heartbeatSnap = await db.collection("gateways").doc(id).get();
@@ -1113,7 +1259,7 @@ router.post(
       const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
       const snap = await ref.get();
       if (!snap.exists) {
-        res.status(404).json({ error: "gateway not found", gatewayId: id });
+        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
         return;
       }
       const data = snap.data() as
@@ -1343,6 +1489,44 @@ router.get("/restore-jobs", async (req: Request, res: Response, next: NextFuncti
   } catch (e) {
     next(e);
   }
+});
+
+const BUILDS_SERVICE_ALLOWLIST = new Set([
+  "octogee-gateway",
+  "octogee-chat-proxy",
+  "workspace-api",
+]);
+
+router.get("/builds", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const service = (req.query.service as string) || "octogee-gateway";
+    if (!BUILDS_SERVICE_ALLOWLIST.has(service)) {
+      res.status(400).json({
+        error: "service must be one of the canonical Octogee gateway-pod images",
+        allowed: [...BUILDS_SERVICE_ALLOWLIST],
+        got: service,
+      });
+      return;
+    }
+    const parsedLimit = parseInt((req.query.limit as string) ?? "30", 10);
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 30),
+    );
+    try {
+      const builds = await listGatewayBuilds({ service, limit });
+      res.json({ service, builds, generatedAt: new Date().toISOString() });
+    } catch (e) {
+      logger.warn("artifact-registry list failed", {
+        service,
+        error: (e as Error)?.message,
+      });
+      res.status(502).json({
+        error: (e as Error)?.message ?? "artifact-registry list failed",
+        service,
+      });
+    }
+  } catch (e) { next(e); }
 });
 
 router.get("/operations", async (req: Request, res: Response, next: NextFunction) => {
