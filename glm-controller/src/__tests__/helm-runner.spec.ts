@@ -147,6 +147,39 @@ describe("createHelmSubprocessRunner — upgrade", () => {
     expect(args.some((a) => a.startsWith("--timeout="))).toBe(true);
   });
 
+  it("passes --set gateway.imageTag=<tag> when fleetImageTag is provided so sidecars roll with the gateway container", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.upgrade({
+      release: "octogee",
+      chart: "/charts/octogee",
+      namespace: "octogee-test",
+      instances: desired,
+      fleetImageTag: "abc1234",
+    });
+
+    const args = calls[0];
+    const setIdx = args.indexOf("--set");
+    expect(setIdx).toBeGreaterThan(-1);
+    expect(args[setIdx + 1]).toBe("gateway.imageTag=abc1234");
+  });
+
+  it("omits the fleet imageTag --set when fleetImageTag is undefined (lets values.yaml default win)", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.upgrade({
+      release: "octogee",
+      chart: "/charts/octogee",
+      namespace: "octogee-test",
+      instances: desired,
+    });
+
+    const args = calls[0];
+    expect(args.some((a) => a.startsWith("gateway.imageTag="))).toBe(false);
+  });
+
   it("propagates helm failures with stdout + stderr in the error message (visible in controller logs)", async () => {
     const { runHelm } = mockSubprocess([
       { code: 1, stdout: "started", stderr: "Error: timed out waiting for condition" },

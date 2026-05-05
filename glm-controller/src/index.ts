@@ -10,6 +10,7 @@ import {
 import {
   buildHelmTargetMap,
   buildInstancesMap,
+  deriveFleetImageTag,
   diffInstancesMap,
 } from "./reconcile-plan.js";
 import {
@@ -123,6 +124,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
         chart: HELM_CHART,
         namespace: NAMESPACE,
         instances: targetMap,
+        fleetImageTag: deriveFleetImageTag(desired),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

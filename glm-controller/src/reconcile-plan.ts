@@ -9,6 +9,25 @@ export type ReconcileChange =
   | { kind: "update"; instanceName: string; from: HelmInstanceValue; to: HelmInstanceValue }
   | { kind: "drift"; instanceName: string; current: HelmInstanceValue };
 
+/**
+ * The fleet-wide gateway image tag — drives sidecars (chat-proxy,
+ * workspace-api) so the whole gateway pod rolls together per #846.
+ *
+ * Picks the `default` instance's imageTag if present (the canonical primary).
+ * Falls back to the first non-retired instance's imageTag for canary-only or
+ * smoke-only fleets. Returns undefined when nothing is running — the chart
+ * default (`gateway.imageTag: latest` from values.yaml) then takes over,
+ * which is the fresh-cluster bootstrap path.
+ */
+export function deriveFleetImageTag(
+  desired: GatewayDesiredState[],
+): string | undefined {
+  const live = desired.filter((d) => d.desiredStatus !== "retired");
+  if (live.length === 0) return undefined;
+  const primary = live.find((d) => d.instanceName === "default") ?? live[0];
+  return primary.imageTag;
+}
+
 export function buildInstancesMap(
   desired: GatewayDesiredState[],
 ): HelmInstancesMap {

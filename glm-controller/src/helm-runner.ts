@@ -7,6 +7,14 @@ export interface HelmRunner {
     chart: string;
     namespace: string;
     instances: HelmInstancesMap;
+    /**
+     * Fleet-wide gateway image tag — written as `--set gateway.imageTag=<tag>`.
+     * Drives sidecar containers (chat-proxy, workspace-api) so they roll
+     * together with the gateway container per #846 single-image-pin. When
+     * undefined, the chart default from values.yaml wins (typically `latest`
+     * for fresh-cluster bootstrap).
+     */
+    fleetImageTag?: string;
   }): Promise<void>;
 
   /**
@@ -70,7 +78,7 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       return parsed.gateway?.instances ?? {};
     },
 
-    async upgrade({ release, chart, namespace, instances }) {
+    async upgrade({ release, chart, namespace, instances, fleetImageTag }) {
       const args = [
         "upgrade",
         "--install",
@@ -81,9 +89,11 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
         "--reuse-values",
         "--set-json",
         `gateway.instances=${JSON.stringify(instances)}`,
-        "--wait",
-        `--timeout=${timeout}`,
       ];
+      if (fleetImageTag) {
+        args.push("--set", `gateway.imageTag=${fleetImageTag}`);
+      }
+      args.push("--wait", `--timeout=${timeout}`);
       const result = await deps.runHelm(args);
       if (result.code !== 0) {
         throw new Error(
@@ -126,10 +136,11 @@ export function spawnHelm(args: string[]): Promise<HelmSubprocessResult> {
 /** Logs every call but does not actually shell out to `helm`. */
 export function createLoggingHelmRunner(log: (msg: string) => void): HelmRunner {
   return {
-    upgrade: async ({ release, chart, namespace, instances }) => {
+    upgrade: async ({ release, chart, namespace, instances, fleetImageTag }) => {
       const names = Object.keys(instances).sort();
+      const fleetSuffix = fleetImageTag ? ` fleetImageTag=${fleetImageTag}` : "";
       log(
-        `[helm-runner:stub] upgrade release=${release} chart=${chart} ns=${namespace} instances=[${names.join(", ")}] — no exec`,
+        `[helm-runner:stub] upgrade release=${release} chart=${chart} ns=${namespace} instances=[${names.join(", ")}]${fleetSuffix} — no exec`,
       );
     },
     readDeployedInstances: async ({ release, namespace }) => {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildHelmTargetMap,
   buildInstancesMap,
+  deriveFleetImageTag,
   diffInstancesMap,
   type ReconcileChange,
 } from "../reconcile-plan";
@@ -62,6 +63,43 @@ describe("buildInstancesMap", () => {
   it("returns an empty map when no desired state exists", () => {
     const map = buildInstancesMap([]);
     expect(map).toEqual({});
+  });
+});
+
+describe("deriveFleetImageTag — what sidecars should run", () => {
+  it("uses the `default` instance's imageTag when present", () => {
+    const tag = deriveFleetImageTag([
+      mkDesired({ instanceName: "default", imageTag: "abc1234" }),
+      mkDesired({ instanceName: "canary", imageTag: "canary999" }),
+    ]);
+    expect(tag).toBe("abc1234");
+  });
+
+  it("falls back to the first non-retired instance's imageTag when there's no `default`", () => {
+    const tag = deriveFleetImageTag([
+      mkDesired({ instanceName: "smoke", imageTag: "smoke111" }),
+      mkDesired({ instanceName: "canary", imageTag: "canary222" }),
+    ]);
+    expect(tag).toBe("smoke111");
+  });
+
+  it("ignores retired instances when picking the fleet imageTag", () => {
+    const tag = deriveFleetImageTag([
+      mkDesired({ instanceName: "default", desiredStatus: "retired", imageTag: "old" }),
+      mkDesired({ instanceName: "canary", imageTag: "fresh" }),
+    ]);
+    expect(tag).toBe("fresh");
+  });
+
+  it("returns undefined when no non-retired instances exist (chart default applies)", () => {
+    const tag = deriveFleetImageTag([
+      mkDesired({ instanceName: "default", desiredStatus: "retired", imageTag: "old" }),
+    ]);
+    expect(tag).toBeUndefined();
+  });
+
+  it("returns undefined for an empty desired list (fresh-cluster bootstrap)", () => {
+    expect(deriveFleetImageTag([])).toBeUndefined();
   });
 });
 
