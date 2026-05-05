@@ -695,6 +695,190 @@ router.get("/gateways", async (_req: Request, res: Response, next: NextFunction)
   } catch (e) { next(e); }
 });
 
+// ── Customer distribution + placement ───────────────────────────────────────
+//
+// Operator view of "where is every customer right now": total approved,
+// who's assigned to which gateway, who's mounted, who's pending placement
+// (no gatewayId), who's pending mount (gatewayId set but not yet in
+// gateways/{id}.mountedCustomers). One Firestore round-trip on
+// gateways + users; cheaper than two endpoints.
+
+router.get(
+  "/customer-distribution",
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const [gwSnap, usersSnap] = await Promise.all([
+        db.collection("gateways").get(),
+        db.collection("users").where("approved", "==", true).get(),
+      ]);
+
+      const gateways = new Map<
+        string,
+        { status: string; mountedCustomers: Set<string>; mountedCount: number }
+      >();
+      for (const doc of gwSnap.docs) {
+        const data = doc.data() as
+          | { status?: string; mountedCustomers?: unknown }
+          | undefined;
+        const mounted = Array.isArray(data?.mountedCustomers)
+          ? (data!.mountedCustomers as unknown[]).filter(
+              (s): s is string => typeof s === "string",
+            )
+          : [];
+        gateways.set(doc.id, {
+          status: typeof data?.status === "string" ? data.status : "unknown",
+          mountedCustomers: new Set(mounted),
+          mountedCount: mounted.length,
+        });
+      }
+
+      const assignedByGateway = new Map<string, number>();
+      const mountedByGateway = new Map<string, number>();
+      const pendingPlacements: Array<{
+        uid: string;
+        username: string;
+        email: string;
+        currentGatewayId: string | null;
+        reason: "never-assigned" | "gateway-gone";
+        approvedAt: string | null;
+      }> = [];
+      let totalApproved = 0;
+      let assigned = 0;
+      let unassigned = 0;
+      let mounted = 0;
+
+      for (const doc of usersSnap.docs) {
+        totalApproved++;
+        const data = doc.data() as Record<string, unknown>;
+        const provisioning = (data.provisioning as Record<string, unknown> | undefined) ?? {};
+        const openclaw = (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
+        const slug = typeof openclaw.slug === "string" ? openclaw.slug : null;
+        const gid = typeof openclaw.gatewayId === "string" ? openclaw.gatewayId : null;
+        const username = typeof data.username === "string" ? data.username : "";
+        const email = typeof data.email === "string" ? data.email : "";
+        const approvedAt = toISODate(data.approvedAt);
+
+        if (!gid) {
+          unassigned++;
+          pendingPlacements.push({
+            uid: doc.id,
+            username,
+            email,
+            currentGatewayId: null,
+            reason: "never-assigned",
+            approvedAt,
+          });
+          continue;
+        }
+
+        const gw = gateways.get(gid);
+        if (!gw) {
+          // Gateway is gone — orphaned assignment. NOT counted as `assigned`
+          // (operator-action-needed bucket). Otherwise assignedNotMounted
+          // would include orphans, double-counting them across the two cards.
+          pendingPlacements.push({
+            uid: doc.id,
+            username,
+            email,
+            currentGatewayId: gid,
+            reason: "gateway-gone",
+            approvedAt,
+          });
+          continue;
+        }
+        assigned++;
+        assignedByGateway.set(gid, (assignedByGateway.get(gid) ?? 0) + 1);
+        if (slug && gw.mountedCustomers.has(slug)) {
+          mounted++;
+          mountedByGateway.set(gid, (mountedByGateway.get(gid) ?? 0) + 1);
+        }
+      }
+
+      // Per-gateway mountedCount derives from APPROVED users only (not the
+      // raw heartbeat slug list). A heartbeat with stale slugs (deleted
+      // user, revoked approval) would otherwise push the bar past 100% of
+      // assignedCount.
+      const perGateway = Array.from(gateways.entries()).map(([gatewayId, gw]) => ({
+        gatewayId,
+        status: gw.status,
+        assignedCount: assignedByGateway.get(gatewayId) ?? 0,
+        mountedCount: mountedByGateway.get(gatewayId) ?? 0,
+      }));
+
+      res.json({
+        stats: {
+          totalApproved,
+          assigned,
+          unassigned,
+          mounted,
+          assignedNotMounted: assigned - mounted,
+        },
+        perGateway,
+        pendingPlacements,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.post(
+  "/customers/:uid/assign",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = req.params.uid;
+      const body = req.body as Partial<{ gatewayId: string }>;
+      if (!body.gatewayId || typeof body.gatewayId !== "string") {
+        res.status(400).json({ error: "missing gatewayId in body" });
+        return;
+      }
+      const userSnap = await db.collection("users").doc(uid).get();
+      if (!userSnap.exists) {
+        res.status(404).json({ error: "user not found", uid });
+        return;
+      }
+      const userData = userSnap.data() as
+        | { approved?: boolean; provisioning?: { openclaw?: { gatewayId?: string } } }
+        | undefined;
+      if (!userData?.approved) {
+        res.status(409).json({ error: "user is not approved", uid });
+        return;
+      }
+      const heartbeatSnap = await db.collection("gateways").doc(body.gatewayId).get();
+      if (!heartbeatSnap.exists) {
+        res.status(404).json({ error: "gateway not found", gatewayId: body.gatewayId });
+        return;
+      }
+      const hb = heartbeatSnap.data() as { status?: string } | undefined;
+      if (hb?.status !== "ready") {
+        res.status(409).json({
+          error: "target gateway not ready",
+          gatewayId: body.gatewayId,
+          status: hb?.status ?? "unknown",
+        });
+        return;
+      }
+      const currentGid = userData.provisioning?.openclaw?.gatewayId;
+      if (currentGid === body.gatewayId) {
+        res.status(409).json({
+          error: "user already assigned to that gateway — no-op",
+          uid,
+          gatewayId: body.gatewayId,
+        });
+        return;
+      }
+      await db
+        .collection("users")
+        .doc(uid)
+        .update({ "provisioning.openclaw.gatewayId": body.gatewayId });
+      res.status(202).json({ uid, gatewayId: body.gatewayId });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 // ── Gateway Lifecycle Manager — Phase 4 (GLM API) ───────────────────────────
 //
 // Thin wrappers around Firestore writes. workspace-api does NOT touch K8s
