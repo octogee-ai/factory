@@ -22,6 +22,11 @@ import {
   deriveExpectedAgentId,
   ExpectedAgentIdError,
 } from "./openclaw/frame-filter.js";
+import {
+  createGateState,
+  evaluateInboundFrame,
+  observeOutboundForState,
+} from "./openclaw/inbound-gate.js";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL;
@@ -65,6 +70,13 @@ const ocWsRotationRecoveredTotal = new Counter({
 const ocWsFrameFilterTotal = new Counter({
   name: 'chat_proxy_openclaw_ws_frame_filter_total',
   help: 'Per-user frame-filter decisions on inbound gateway events',
+  labelNames: ['decision', 'reason'] as const,
+  registers: [metricsRegistry],
+});
+
+const ocWsInboundGateTotal = new Counter({
+  name: 'chat_proxy_openclaw_ws_inbound_gate_total',
+  help: 'Browser-to-gateway frame allowlist decisions',
   labelNames: ['decision', 'reason'] as const,
   registers: [metricsRegistry],
 });
@@ -163,6 +175,14 @@ let approvalCallbackHandler:
 
 const FRAME_DROP_LOG_WINDOW_MS = 60_000;
 const lastFrameDropLogByUid = new Map<string, number>();
+const lastInboundDropLogByUid = new Map<string, number>();
+
+function normalizeWsData(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data as Buffer[]);
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  return Buffer.from(String(data));
+}
 
 let openclawIdentity: DeviceIdentity | null = null;
 function getOpenClawIdentity(): DeviceIdentity {
@@ -508,6 +528,8 @@ function handleOpenClawWsUpgrade(
         return;
       }
 
+      const gateState = createGateState(expectedAgentId);
+
       wss.handleUpgrade(req, socket, head, (clientWs) => {
         ocWsConnectionsActive.inc();
 
@@ -533,9 +555,25 @@ function handleOpenClawWsUpgrade(
         );
 
         clientWs.on("message", (data, isBinary) => {
-          if (upstream.readyState === WebSocket.OPEN) {
-            upstream.send(isBinary ? data : data.toString(), { binary: isBinary });
+          if (upstream.readyState !== WebSocket.OPEN) return;
+          const buf = normalizeWsData(data);
+          const decision = evaluateInboundFrame(buf, isBinary, gateState);
+          ocWsInboundGateTotal.inc({
+            decision: decision.accept ? "accept" : "drop",
+            reason: decision.reason,
+          });
+          if (!decision.accept) {
+            const now = Date.now();
+            const last = lastInboundDropLogByUid.get(uid) ?? 0;
+            if (now - last >= FRAME_DROP_LOG_WINDOW_MS) {
+              lastInboundDropLogByUid.set(uid, now);
+              console.warn(
+                `[proxy] OC WS: dropped inbound frame uid=${uid} reason=${decision.reason}`,
+              );
+            }
+            return;
           }
+          upstream.send(isBinary ? buf : buf.toString("utf8"), { binary: isBinary });
         });
         upstream.on("message", (data, isBinary) => {
           if (clientWs.readyState !== WebSocket.OPEN) return;
@@ -550,6 +588,7 @@ function handleOpenClawWsUpgrade(
             reason: decision.reason,
           });
           if (decision.forward) {
+            observeOutboundForState(text, gateState);
             clientWs.send(text);
           } else {
             const now = Date.now();

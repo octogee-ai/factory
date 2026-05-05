@@ -65,11 +65,8 @@ export function requireInternalServiceAuth(req: Request, res: Response, next: Ne
   const configuredSecret = process.env.INTERNAL_SERVICE_KEY;
 
   if (!configuredSecret) {
-    logger.warn(
-      "INTERNAL_SERVICE_KEY is not set — internal auth is DISABLED. " +
-      "This must not happen in production."
-    );
-    next();
+    logger.error("INTERNAL_SERVICE_KEY is not set — refusing internal request");
+    res.status(503).json({ error: "Internal auth unavailable" });
     return;
   }
 

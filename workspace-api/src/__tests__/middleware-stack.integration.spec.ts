@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../lib/db', () => ({
   auth: { verifyIdToken: vi.fn() },
@@ -36,6 +36,10 @@ describe('workspace-api middleware stack', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.NODE_ENV = 'test';
+  });
+
+  afterEach(() => {
+    delete process.env.INTERNAL_SERVICE_KEY;
   });
 
   it('sets CORS headers for allowed localhost origin', async () => {
@@ -89,10 +93,11 @@ describe('workspace-api middleware stack', () => {
   });
 
   it('parses JSON bodies on internal routes', async () => {
-    delete process.env.INTERNAL_SERVICE_KEY;
+    process.env.INTERNAL_SERVICE_KEY = 'parses-json-test-key';
     const app = createApp();
     const res = await request(app)
       .post('/internal/billing/check-limit')
+      .set('X-Internal-Service-Key', 'parses-json-test-key')
       .send({});
 
     expect(res.status).toBe(400);

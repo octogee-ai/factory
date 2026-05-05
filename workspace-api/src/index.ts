@@ -130,9 +130,10 @@ if (process.env.NODE_ENV !== "test") {
   const isProd = env !== "development" && env !== "local" && env !== "test";
   if (isProd && !process.env.INTERNAL_SERVICE_KEY) {
     logger.error(
-      "FATAL: INTERNAL_SERVICE_KEY is not set in a non-development environment. " +
-      "All /internal/* routes are unprotected. Set this secret via K8s Secret and restart."
+      "FATAL: INTERNAL_SERVICE_KEY is required in non-development environments. " +
+      "Set it via K8s Secret and restart."
     );
+    process.exit(1);
   }
 
   app.listen(PORT, () => {

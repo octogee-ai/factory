@@ -17,7 +17,7 @@ export interface FilterContext {
   expectedAgentId: string;
 }
 
-const PER_USER_EVENTS = new Set<string>([
+export const PER_USER_EVENTS = new Set<string>([
   "agent",
   "chat",
   "chat.side_result",
