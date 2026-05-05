@@ -18,37 +18,12 @@ import { logger } from "../../middleware/logging";
 
 const router = Router();
 
-/**
- * Phase 6.B (docs/ACTIVITY-STREAM-SPEC.md §10) — workspace working-tree
- * routes. Currently read-only: status / diff / log. Commit / push /
- * branch land in Phase 6.C with their own validation + audit path.
- *
- * Customer dir lookup uses CUSTOMERS_DIR env (defaults to the path the
- * gateway pod uses: `/home/node/.openclaw/customers`). When the volume
- * isn't mounted (workspace-api still standalone — pre-collocation), the
- * resolver returns null and the routes respond 503 with a clear reason.
- */
-
 function customersRoot(): string {
-  // Read per-request rather than caching at module load — keeps tests
-  // simple (env can be set in beforeAll) and lets operators rotate the
-  // mount path without a pod restart.
+  // Read per-request — tests set this in beforeAll, and operators can
+  // rotate the mount path without a pod restart.
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 }
 
-/**
- * Phase 6.C.3 — resolves the on-disk working tree for the route's
- * target shape. Workspace target → `{customersRoot}/{slug}`. Project
- * target → `{customersRoot}/{slug}/projects/{projectSlug}` (per
- * `docs/specs/PROJECTS-CANVAS-SPEC.md` — each project is its own git
- * repo, `projects/` is .gitignored from the workspace tree).
- *
- * Read-side auth is already enforced by `withFileTarget`:
- *   - workspace target → workspace-owner.
- *   - project target → project-owner OR project-member.
- *
- * Write-side auth is layered on top by `ensureWriteAuth` below.
- */
 async function resolveTargetDir(
   root: string,
   target: FileTarget,
@@ -59,24 +34,15 @@ async function resolveTargetDir(
   return resolveCustomerDir(root, target.slug);
 }
 
-/**
- * Phase 6.C.3 — write-side auth tiers.
- *   - Workspace tree: workspace owner ONLY (a project member with
- *     access to a child project shouldn't be able to commit at the
- *     workspace level on the owner's behalf).
- *   - Project tree: ANY caller `withFileTarget` already authorized,
- *     i.e. project owner OR project member. They joined the project
- *     to collaborate on it, so writes are part of that contract.
- */
+// Workspace writes: workspace-owner only (a project member shouldn't
+// commit at the workspace level on the owner's behalf). Project
+// writes: trust withFileTarget's owner-or-member check upstream.
 function ensureWriteAuth(
   req: import("express").Request,
   res: import("express").Response,
   target: FileTarget,
 ): boolean {
-  if (target.projectSlug) {
-    // withFileTarget already verified owner-or-member of this project.
-    return true;
-  }
+  if (target.projectSlug) return true;
   if (req.user?.username !== target.slug) {
     res.status(403).json({
       error: "Workspace owner only",
@@ -87,13 +53,8 @@ function ensureWriteAuth(
   return true;
 }
 
-/**
- * Per-slug concurrency cap (P1-1 of #825 review). One authenticated
- * owner could otherwise fork-bomb the sidecar by firing N parallel
- * /git/diff requests — each spawns a process up to 5s × 4MB. Cap is
- * intentionally low; the Working Tree pane only ever runs 1 status +
- * 1 diff at a time per workspace.
- */
+// Cap parallel git ops per slug — one authenticated owner could
+// otherwise fork-bomb the sidecar (each op = process + up to 5s × 4MB).
 const MAX_CONCURRENT_PER_SLUG = 4;
 const concurrencyBySlug = new Map<string, number>();
 
@@ -231,10 +192,8 @@ router.get(
 );
 
 function respondCustomerDirMissing(res: import("express").Response, slug: string): void {
-  // 503 (not 404) because the workspace exists in Firestore — the only
-  // reason the dir is missing is operational. Operator-facing detail
-  // (volume mount status, sidecar collocation, etc.) goes server-side
-  // via the request-completion log line, not in the user response.
+  // 503 not 404 — the workspace exists; the dir is missing for
+  // operational reasons (volume mount). Detail goes to the log only.
   logger.warn(`git: working tree not accessible for slug=${slug} — verify sidecar volume mount`);
   res.status(503).json({
     error: "Working tree temporarily unavailable; retry in a few seconds.",
@@ -266,11 +225,6 @@ function respondGitError(res: import("express").Response, err: WorkspaceGitError
   }
 }
 
-/**
- * Allow only paths that don't traverse out of the workspace dir. Reject
- * leading slash, parent-dir segments, and null bytes. Same posture as
- * `lib/path-validation.ts` but tighter for shell-out context.
- */
 function isSafeRelativePath(p: string): boolean {
   if (!p || p.length > 1024) return false;
   if (p.startsWith("/")) return false;
@@ -279,39 +233,21 @@ function isSafeRelativePath(p: string): boolean {
   for (const seg of segments) {
     if (seg === "..") return false;
   }
-  // Block paths that resolve outside the cwd via path.resolve sanity check.
   const resolved = path.resolve("/cwd", p);
   if (!resolved.startsWith("/cwd/") && resolved !== "/cwd") return false;
   return true;
 }
 
-/**
- * Allow ref / branch names that pass git's basic validity rules — no
- * spaces, no shell metacharacters, no leading dash (which would be
- * interpreted as a flag). Allowlist is intentionally tight; users will
- * pass branch names like `main`, `feat/foo`, `v1.2.3`, not arbitrary
- * git revision specs.
- */
+// Tight allowlist — leading `-` is a flag injection vector; users pass
+// `main` / `feat/foo` / `v1.2.3`, not arbitrary git revspecs.
 function isSafeRefName(ref: string): boolean {
   if (!ref || ref.length > 250) return false;
   if (ref.startsWith("-")) return false;
   return /^[A-Za-z0-9._/-]+$/.test(ref);
 }
 
-// ─── Phase 6.C.2 + 6.C.3: writes ──────────────────────────────────────
-
-/**
- * Resolves the commit author (name + email) from the user doc that
- * `requireAuth` already loaded into `req.user` (no extra Firestore round
- * trip). Falls back to the slug as the display name and a derived
- * `<slug>@octogee.local` email if profile fields are missing — the
- * commit still lands with a sensible-looking author rather than
- * "unknown".
- *
- * Pure / synchronous on purpose: the previous async `db.doc('users/{uid}')`
- * shape would throw on an empty `uid` (invalid Firestore path) and was
- * also redundant with `requireAuth`'s already-loaded user doc.
- */
+// Reads from the `req.user` doc that `requireAuth` already loaded.
+// Falls back to the slug if profile fields are missing.
 function resolveCommitAuthor(
   user: FirebaseFirestore.DocumentData | undefined,
   slug: string,

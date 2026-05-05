@@ -1,27 +1,10 @@
-/**
- * workspace-git.ts — Phase 6.B (docs/ACTIVITY-STREAM-SPEC.md §10).
- *
- * Pure helpers that shell out to `git` against a workspace's local
- * filesystem checkout (the customer dir maintained by the gateway). Used
- * by `routes/workspace/git.ts` to expose `git status / diff / log` over
- * HTTP for the PWA Working Tree pane.
- *
- * Phase 6.B is read-only. Commit / push / branch operations defer to
- * Phase 6.C (toolbar PR) and add their own validation + signing path.
- */
-
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 5_000;
-// Phase 6.C.2 — push and commit can run hooks (we neutralize them via
-// core.hooksPath, but commit also resolves trees that may scan the
-// working set) and push transfers packfiles. First push / large pack
-// can legitimately exceed the 5s read-side default. Bumped here to
-// keep the read routes (status/diff/log) tight while letting writes
-// complete.
+// First push / large packfiles legitimately exceed the read-side cap.
 const GIT_PUSH_TIMEOUT_MS = 60_000;
 const GIT_COMMIT_TIMEOUT_MS = 30_000;
 
@@ -49,12 +32,9 @@ export interface WorkspaceGitLogEntry {
   subject: string;
 }
 
-/**
- * Slug allowlist: the same shape MM channel slugs and Gitea repo names
- * use. Positive allowlist (not a blacklist) so single-dot, all-dots,
- * leading-dash, empty, oversize, and any path-separator-bearing inputs
- * are all rejected by construction. Tightened in #841 review pass.
- */
+// Same shape as MM channel slugs / Gitea repo names. Positive
+// allowlist rejects empty, single-dot, leading-dash, oversize, and
+// path-separator-bearing inputs by construction.
 const SAFE_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 
 function isSafeSlug(slug: string): boolean {
@@ -70,17 +50,9 @@ export async function resolveCustomerDir(
   return verifyGitDir(dir);
 }
 
-/**
- * Phase 6.C.3 — project working trees live at
- * `{customersRoot}/{slug}/projects/{projectSlug}/`. Per
- * `docs/specs/PROJECTS-CANVAS-SPEC.md` §D11 / §boot-sync, each project is
- * its own git repo and the `projects/` folder is .gitignored from the
- * workspace tree, so the two trees never interfere.
- *
- * Both slug components are validated by `isSafeSlug` — positive allowlist
- * rejects empty, single-dot, double-dot, leading-dash, oversize, and any
- * input containing a path separator.
- */
+// Project trees live at `{customersRoot}/{slug}/projects/{projectSlug}/`
+// per docs/specs/PROJECTS-CANVAS-SPEC.md (each project = own git repo;
+// `projects/` is .gitignored from the workspace tree).
 export async function resolveProjectDir(
   customersRoot: string,
   slug: string,
@@ -120,12 +92,8 @@ export async function gitDiff(
   customerDir: string,
   options: { path?: string; ref?: string } = {},
 ): Promise<{ ok: true; diff: string } | { ok: false; error: WorkspaceGitError }> {
-  // `--no-ext-diff` neutralizes `diff.external` from the customer's
-  //   .git/config (P0-2 — live RCE vector otherwise).
-  // `--end-of-options` separates flags from positionals. Defense
-  //   against a future caller (or a regex regression) letting a
-  //   `-`-prefixed ref through.
-  // Path goes after `--` per existing convention.
+  // --no-ext-diff: neutralize customer-controlled `diff.external` (RCE).
+  // --end-of-options: defense if a `-`-prefixed ref slips past validation.
   const args = ["diff", "--no-color", "--no-ext-diff", "--end-of-options", options.ref ?? "HEAD"];
   if (options.path) {
     args.push("--", options.path);
@@ -140,8 +108,7 @@ export async function gitLog(
   options: { limit?: number; branch?: string } = {},
 ): Promise<{ ok: true; entries: WorkspaceGitLogEntry[] } | { ok: false; error: WorkspaceGitError }> {
   const limit = clampLimit(options.limit ?? 20);
-  // %aN respects mailmap (Octogee Builders set display names independent
-  // of git identity); fall through to %an if no mailmap entry.
+  // %aN respects mailmap (Builders pick display names independent of git identity).
   const FMT = `%H${UNIT_SEPARATOR}%aN${UNIT_SEPARATOR}%ct${UNIT_SEPARATOR}%s${RECORD_SEPARATOR}`;
   const args = ["log", "--no-ext-diff", `-n${limit}`, `--pretty=format:${FMT}`, "--end-of-options"];
   if (options.branch) args.push(options.branch);
@@ -150,20 +117,9 @@ export async function gitLog(
   return { ok: true, entries: parseLog(r.stdout) };
 }
 
-/**
- * Phase 6.C.2 — workspace-owner-driven write operations.
- *
- * Author identity comes from the route layer (Firebase profile —
- * displayName + email of the workspace owner) rather than git config
- * inside the customer dir, because the customer-dir's existing git
- * identity belongs to the agent, not the workspace owner. We override
- * per-command via `-c user.name=` / `-c user.email=` to keep the agent's
- * config untouched.
- *
- * Push uses whatever remote auth the customer dir is already configured
- * for (SSH key + ssh-agent inside the gateway pod, OR HTTPS with
- * credential helper). No new auth surface — same path the agent uses.
- */
+// Author identity comes from the Firebase profile of the requester,
+// passed through transient `-c user.name=` / `-c user.email=` so the
+// customer-dir's persistent git identity (the agent's) stays intact.
 
 export interface CommitAuthor {
   name: string;
@@ -198,12 +154,8 @@ export async function gitCommit(
     return { ok: true, result: { sha: "", empty: true } };
   }
 
-  // Commit with per-command author override. -c flags BEFORE the
-  // subcommand so they're "transient config" — they don't write to
-  // .git/config. `--no-verify` is defense-in-depth on top of the
-  // module-level `core.hooksPath=/dev/null` pin so a future regression
-  // (or an unforeseen hook discovery path) can't re-arm the
-  // commit-hook RCE vector.
+  // -c flags before the subcommand → transient (don't write .git/config).
+  // --no-verify is belt-and-suspenders on top of the core.hooksPath pin.
   const commitRes = await runGit(
     customerDir,
     [
@@ -217,7 +169,6 @@ export async function gitCommit(
   );
   if (!commitRes.ok) return commitRes;
 
-  // Resolve the new HEAD sha.
   const shaRes = await runGit(customerDir, ["rev-parse", "HEAD"]);
   if (!shaRes.ok) return shaRes;
   return { ok: true, result: { sha: shaRes.stdout.trim(), empty: false } };
@@ -228,19 +179,11 @@ export interface WorkspaceGitBranchEntry {
   current: boolean;
 }
 
-/**
- * Lists local branches for the working tree, flagging the current one.
- * `--list` + `--format` keeps output machine-parseable. `HEAD` filtering
- * via `%(refname:short)` strips the `refs/heads/` prefix.
- *
- * Phase 6.C.3 — feeds the toolbar's branch-switcher dropdown.
- */
+// Tab is impossible in a git ref name (git-check-ref-format), so it's
+// a safe field separator. HEAD column is "*" for the current branch.
 export async function gitBranches(
   customerDir: string,
 ): Promise<{ ok: true; entries: WorkspaceGitBranchEntry[] } | { ok: false; error: WorkspaceGitError }> {
-  // Format: `<refname>\t<HEAD>` where HEAD is "*" for the current branch.
-  // Tab is impossible in a git ref name (per git-check-ref-format), so
-  // it's a safe field separator.
   const r = await runGit(customerDir, [
     "branch",
     "--list",
@@ -255,19 +198,14 @@ export async function gitCheckout(
   options: { branch: string; create?: boolean },
 ): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
   const branch = options.branch;
-  // Ref name validation at the helper layer — defense in depth on top
-  // of the route's regex. Empty/oversize/leading-dash are local errors
-  // that shouldn't even reach git.
   if (!branch || branch.length > 250 || branch.startsWith("-")) {
     return {
       ok: false,
       error: { code: "INTERNAL", message: "branch name empty, too long, or leading-dash" },
     };
   }
-  // Two argv shapes: `-b` consumes the next arg as the new branch name
-  // and is incompatible with `--end-of-options` placement; the non-
-  // create path uses `--end-of-options` as defense-in-depth against a
-  // future caller bypassing the leading-dash check above.
+  // `-b` consumes its arg directly and can't compose with --end-of-options;
+  // the non-create path uses --end-of-options as defense in depth.
   const args: string[] = options.create
     ? ["checkout", "-b", branch]
     : ["checkout", "--end-of-options", branch];
@@ -280,10 +218,6 @@ export async function gitPush(
   customerDir: string,
   options: { branch?: string } = {},
 ): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
-  // No-arg push uses the current branch's upstream. With a branch arg,
-  // push origin/<branch> explicitly. `--end-of-options` after the
-  // subcommand separates flags from positionals (defense against future
-  // callers passing user input as a remote name).
   const args = options.branch
     ? ["push", "--end-of-options", "origin", options.branch]
     : ["push", "--end-of-options"];
@@ -304,43 +238,18 @@ interface GitRunOk {
   stderr: string;
 }
 
-/**
- * Hardening pins (P0-2 of #825 review, extended in #839 Copilot pass).
- * The customer dir's `.git/config` is customer-controllable: an agent
- * edit can write keys like `diff.external = /bin/sh -c 'curl ...'`
- * that fire DURING `git diff`. These pins neutralize the attack surface:
- *
- *   -c core.fsmonitor=         disables fsmonitor exec on every command
- *   -c core.pager=cat          defuses pager (already piped; belt+suspenders)
- *   -c core.hooksPath=/dev/null  neutralizes ALL hook exec
- *                              (pre-commit / post-commit / pre-push / etc.).
- *                              Customer-controlled `.git/hooks/*` would
- *                              otherwise execute arbitrary code inside the
- *                              workspace-api sidecar on every commit/push.
- *   -c gpg.program=/bin/false  neutralizes signature-verify exec
- *   -c protocol.file.allow=never  blocks file:// (recursive-submodule RCE
- *                              vector). Phase 6.C.2 push uses HTTPS/SSH;
- *                              file:// is never legitimate here.
- *   -c protocol.ext.allow=never  blocks `ext::` URLs which git turns into
- *                              shell-out-with-args (`ext::sh -c '<args>'`),
- *                              defeating the file-only pin above. Default
- *                              is "user" (gated, but allowed in attended
- *                              git); `never` makes it unconditional.
- *
- * Defense-in-depth on commit: `--no-verify` flag still passed at the
- * subcommand level so a future `core.hooksPath` regression doesn't
- * silently re-arm the hook vector.
- *
- * NOT pinned (intentional):
- *   - `protocol.allow=never` — too restrictive: would block HTTPS + SSH
- *     too, breaking the Phase 6.C.2 push path.
- *   - `diff.external=` (empty) — git interprets that as "run empty cmd"
- *     and errors out. `--no-ext-diff` at the subcommand level is the
- *     correct neutralization (see gitDiff/gitLog).
- *
- * Plus env pins so the helper ignores ~/.gitconfig and /etc/gitconfig
- * and never prompts.
- */
+// Customer .git/config is attacker-controlled. Each pin closes one
+// path that turns a routine `git` call into RCE:
+//   core.fsmonitor=           — disables fsmonitor exec
+//   core.pager=cat            — defuses pager (already piped)
+//   core.hooksPath=/dev/null  — neutralizes pre-commit / pre-push / etc.
+//   gpg.program=/bin/false    — neutralizes signature-verify exec
+//   protocol.file.allow=never — blocks file:// recursive-submodule RCE
+//   protocol.ext.allow=never  — blocks ext::sh -c '…' shell-out URLs
+// `--no-verify` on commit is belt-and-suspenders on top of hooksPath.
+// `protocol.allow=never` is intentionally NOT pinned — would block
+// HTTPS/SSH push too. `diff.external=` is neutralized at subcommand
+// level via `--no-ext-diff` (empty `-c` arg makes git error out).
 const HARDENING_PINS: ReadonlyArray<string> = [
   "-c", "core.fsmonitor=",
   "-c", "core.pager=cat",
@@ -363,10 +272,8 @@ async function runGit(
   options: { timeoutMs?: number } = {},
 ): Promise<GitRunOk | { ok: false; error: WorkspaceGitError }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  // Layered argv:
-  //   1. hardening `-c <key>=<value>` pins (must come BEFORE subcmd)
-  //   2. --git-dir / --work-tree pins (defeat parent-dir discovery)
-  //   3. caller args (already validated by the route layer)
+  // Order: hardening `-c` pins must come BEFORE the subcmd; --git-dir /
+  // --work-tree defeat parent-dir repository discovery.
   const fullArgs = [
     ...HARDENING_PINS,
     "--git-dir",
@@ -386,8 +293,7 @@ async function runGit(
 
     let proc: ReturnType<typeof spawn>;
     try {
-      // PATH is fixed by the image build (sidecar in the gateway pod);
-      // sonarjs/no-os-command-from-path's threat model doesn't apply.
+      // PATH fixed by the image build; sonarjs threat model doesn't apply.
       // eslint-disable-next-line sonarjs/no-os-command-from-path
       proc = spawn("git", fullArgs, {
         cwd,
