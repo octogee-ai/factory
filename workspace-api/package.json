@@ -18,11 +18,11 @@
     "node": "22"
   },
   "dependencies": {
-    "@google-cloud/secret-manager": "^6.1.1",
+    "@google-cloud/secret-manager": "^6.1.2",
     "busboy": "^1.6.0",
     "cors": "^2.8.5",
     "express": "^4.21.0",
-    "express-rate-limit": "^8.3.2",
+    "express-rate-limit": "^8.5.0",
     "firebase-admin": "^12.0.0",
     "google-auth-library": "^10.6.2",
     "helmet": "^8.1.0",
