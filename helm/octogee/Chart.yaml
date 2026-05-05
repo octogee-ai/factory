@@ -27,9 +27,11 @@ dependencies:
     version: "0.1.0"
     repository: "file://charts/workspace-api"
 
-  - name: gateway
-    version: "0.1.0"
-    repository: "file://charts/gateway"
+  # NOTE: the `gateway` sub-chart was removed in the Cowboy-ownership
+  # refactor. Per-instance gateway pods are now managed by glm-controller
+  # via per-instance helm releases off helm/octogee-gateway/. Spanning
+  # gateway-fleet resources (alias Service, NetworkPolicy, fleet-control
+  # Ingress, preview Ingress) live in templates/gateway-fleet.yaml.
 
   - name: glm-controller
     version: "0.1.0"

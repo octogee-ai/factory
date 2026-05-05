@@ -37,7 +37,15 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
-          {{- $svc := .Values.ingress.targetService | default "workspace-api-default" }}
+          {{- /* Default to the alias Service `workspace-api` (rendered
+              by this sub-chart, selects every gateway pod via
+              app=octogee-gateway). The alias survives fresh clusters
+              and any moment between per-instance releases — the
+              per-instance `workspace-api-<instance>` Services from
+              helm/octogee-gateway/ aren't always present. Override to
+              a per-instance Service when an env wants to pin the
+              data plane to a specific pod. */}}
+          {{- $svc := .Values.ingress.targetService | default "workspace-api" }}
           {{- $glm := .Values.ingress.glmService | default "glm-controller" }}
           # Cowboy HTTP — fleet routes served from glm-controller so the
           # admin Gateways tab keeps responding when no gateway pods are

@@ -1,0 +1,338 @@
+{{- include "octogee-gateway.requireIdentity" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octogee-gateway-{{ .Values.instanceName }}
+  labels:
+    app: octogee-gateway
+    {{- include "octogee-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: octogee-gateway
+      gateway-instance: {{ .Values.instanceName }}
+  template:
+    metadata:
+      labels:
+        app: octogee-gateway
+        gateway-instance: {{ .Values.instanceName }}
+      annotations:
+        cloud.google.com/compute-class: octogee-cost-optimized
+    spec:
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fix-perms
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 1000:1000 /home/node/.openclaw || true
+              mkdir -p /home/node/.openclaw/.npm-cache && chown -R 1000:1000 /home/node/.openclaw/.npm-cache || true
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.openclaw
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
+          ports:
+            - containerPort: 18789
+            - containerPort: 9091
+              name: metrics
+            - containerPort: 9080
+              name: preview
+            - containerPort: {{ .Values.env.fleetControllerPort | default "3003" }}
+              name: fleet-http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: HOME
+              value: "/home/node"
+            - name: NPM_CONFIG_CACHE
+              value: "/home/node/.openclaw/.npm-cache"
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GCLOUD_PROJECT
+              value: {{ .Values.env.gcloudProject | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.env.gcloudProject | quote }}
+            - name: FIREBASE_PROJECT_ID
+              value: {{ .Values.env.firebaseProjectId | quote }}
+            - name: AGENT_PREFIX
+              value: {{ .Values.env.agentPrefix | quote }}
+            - name: GATEWAY_ID
+              value: {{ .Values.gatewayId | quote }}
+            - name: GATEWAY_INSTANCE_NAME
+              value: {{ .Values.instanceName | quote }}
+            - name: OPENCLAW_BROADCAST_ALL_AGENT_RUNS
+              value: "1"
+            - name: MM_BOT_USERNAME
+              value: "mac-{{ .Values.gatewayId }}"
+            - name: GITHUB_ORG
+              value: {{ .Values.env.githubOrg | quote }}
+            - name: MM_URL
+              value: {{ .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
+            - name: MM_SITE_URL
+              value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
+            - name: MM_INTERACTIONS_CALLBACK_BASE_URL
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.instanceName .Release.Namespace) | quote }}
+            - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
+              value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
+            - name: GIT_API_URL
+              value: {{ .Values.env.gitApiUrl | default (printf "http://octogee-gitea-http.%s.svc.cluster.local:3000/api/v1" .Release.Namespace) | quote }}
+            - name: GIT_SSH_HOST
+              value: {{ .Values.env.gitSshHost | default (printf "octogee-gitea-ssh.%s.svc.cluster.local" .Release.Namespace) | quote }}
+            - name: CHAT_PROXY_URL
+              value: {{ .Values.env.chatProxyUrl | quote }}
+            - name: OCTOGEE_ROUTER_ENABLED
+              value: {{ .Values.env.octogeeRouterEnabled | quote }}
+            - name: OPENCLAW_LOG_LEVEL
+              value: {{ .Values.env.openclawLogLevel | default "info" | quote }}
+            - name: FLEET_CONTROLLER_PORT
+              value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
+            - name: SITE_BUILD_API_PORT
+              value: {{ .Values.env.siteBuildApiPort | default "3004" | quote }}
+            - name: FLEET_CONTROLLER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-fleet-controller
+                  key: secret
+                  optional: true
+            {{- if .Values.preview.host }}
+            # Public-facing host the gateway's preview-proxy returns in
+            # URLs to the app. Must match the umbrella's
+            # gatewayFleet.previewIngress.host for this env. Empty
+            # value falls back to scripts/preview-proxy.ts's hardcoded
+            # `preview.octogee.com` — fine for prod, wrong for test.
+            - name: PREVIEW_HOST
+              value: {{ .Values.preview.host | quote }}
+            {{- end }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-anthropic
+                  key: api_key
+            - name: GIT_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-token
+                  key: token
+                  optional: true
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-github
+                  key: token
+                  optional: true
+            - name: BRAVE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-brave
+                  key: key
+                  optional: true
+            - name: MM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: bot_token
+            - name: MM_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: admin_user
+            - name: MM_ADMIN_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: admin_pass
+            - name: MM_COMMUNITY_TEAM_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: team_id
+            - name: MM_BOT_USER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: bot_user_id
+            - name: MM_ADMIN_USER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: admin_user_id
+            - name: DISCORD_OPS_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: discord-ops-webhook
+                  key: url
+                  optional: true
+            - name: INTERNAL_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: internal-service-key
+                  key: key
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.openclaw
+          startupProbe:
+            tcpSocket:
+              port: 18789
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          livenessProbe:
+            tcpSocket:
+              port: 18789
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          readinessProbe:
+            tcpSocket:
+              port: 18789
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+        {{- if .Values.chatProxy.enabled }}
+        - name: chat-proxy
+          image: "{{ .Values.chatProxy.image.repository }}:{{ .Values.chatProxy.image.tag | default .Values.imageTag }}"
+          ports:
+            - containerPort: {{ .Values.chatProxy.port }}
+              name: chat-proxy
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: PORT
+              value: "{{ .Values.chatProxy.port }}"
+            - name: MM_PUBLIC_URL
+              value: {{ required "env.mmSiteUrl is required (public-facing MM URL — chat-proxy returns this from /api/auth/mattermost)" .Values.env.mmSiteUrl | quote }}
+            - name: FIREBASE_PROJECT
+              value: {{ .Values.env.firebaseProjectId | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.env.gcloudProject | quote }}
+            - name: OPENCLAW_GATEWAY_URL
+              value: "http://127.0.0.1:18789"
+            - name: GATEWAY_ID
+              value: {{ .Values.gatewayId | quote }}
+            - name: MM_ADMIN_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: admin_token
+                  optional: true
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GITEA_ORG
+              value: {{ .Values.env.githubOrg | default "octogee" | quote }}
+            {{- if .Values.env.giteaPublicBaseUrl }}
+            - name: GITEA_PUBLIC_BASE_URL
+              value: {{ .Values.env.giteaPublicBaseUrl | quote }}
+            {{- end }}
+            - name: GITEA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-token
+                  key: token
+                  optional: true
+          resources:
+            {{- toYaml .Values.chatProxy.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.chatProxy.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.chatProxy.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+        {{- end }}
+
+        {{- if .Values.workspaceApi.enabled }}
+        - name: workspace-api
+          image: "{{ .Values.workspaceApi.image.repository }}:{{ .Values.workspaceApi.image.tag | default .Values.imageTag }}"
+          ports:
+            - containerPort: {{ .Values.workspaceApi.port }}
+              name: workspace-api
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: PORT
+              value: "{{ .Values.workspaceApi.port }}"
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPENCLAW_GATEWAY_URL
+              value: "http://127.0.0.1:18789"
+            - name: GATEWAY_API_URL
+              value: "http://127.0.0.1:18789"
+            - name: GATEWAY_ID
+              value: {{ .Values.gatewayId | quote }}
+            {{- range $key, $val := .Values.workspaceApi.env }}
+            {{- if $val }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- end }}
+            {{- range .Values.workspaceApi.secrets }}
+            - name: {{ .envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+                  optional: {{ .optional | default false }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.workspaceApi.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.openclaw
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.workspaceApi.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.workspaceApi.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+        {{- end }}
+      volumes:
+        - name: data
+          emptyDir: {}

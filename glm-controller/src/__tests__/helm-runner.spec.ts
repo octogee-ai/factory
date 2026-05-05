@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from "vitest";
-import type { HelmInstancesMap } from "../../../shared/types/glm";
 import {
   createHelmSubprocessRunner,
   spawnHelm,
@@ -27,187 +26,238 @@ function mockSubprocess(
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 
 describe("createHelmSubprocessRunner — readDeployedInstances", () => {
-  it("calls `helm get values <release> -n <ns> -o json` and parses gateway.instances", async () => {
+  it("filters helm list to octogee-gw-* releases and pulls each release's values", async () => {
     const { runHelm, calls } = mockSubprocess([
+      // helm list
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-default", namespace: "octogee-test", status: "deployed" },
+          { name: "octogee-gw-canary",  namespace: "octogee-test", status: "deployed" },
+        ]),
+      },
+      // helm get values octogee-gw-default
       {
         stdout: JSON.stringify({
-          gateway: {
-            instances: {
-              default: {
-                enabled: true,
-                image: { repository: REPO, tag: "abc1234" },
-                gatewayId: "gw-test",
-              },
-              canary: {
-                enabled: true,
-                image: { repository: REPO, tag: "def5678" },
-                gatewayId: "gw-test-canary",
-              },
-            },
-          },
+          gatewayId: "gw-test",
+          instanceName: "default",
+          imageTag: "abc1234",
+          image: { repository: REPO },
+        }),
+      },
+      // helm get values octogee-gw-canary
+      {
+        stdout: JSON.stringify({
+          gatewayId: "gw-test-canary",
+          instanceName: "canary",
+          imageTag: "def5678",
+          image: { repository: REPO },
         }),
       },
     ]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
 
-    const map = await runner.readDeployedInstances({
-      release: "octogee",
-      namespace: "octogee-test",
-    });
+    const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
 
     expect(calls[0]).toEqual([
-      "get",
-      "values",
-      "octogee",
+      "list",
       "-n",
       "octogee-test",
+      "--filter",
+      "^octogee-gw-",
       "-o",
       "json",
     ]);
-    expect(map.default.image.tag).toBe("abc1234");
-    expect(map.canary.image.tag).toBe("def5678");
+    expect(calls[1].slice(0, 4)).toEqual(["get", "values", "octogee-gw-default", "-n"]);
+    expect(map.default).toEqual({
+      enabled: true,
+      image: { repository: REPO, tag: "abc1234" },
+      gatewayId: "gw-test",
+    });
+    expect(map.canary).toEqual({
+      enabled: true,
+      image: { repository: REPO, tag: "def5678" },
+      gatewayId: "gw-test-canary",
+    });
   });
 
-  it("returns an empty map when the release has no gateway.instances yet (first install)", async () => {
-    const { runHelm } = mockSubprocess([{ stdout: "{}" }]);
+  it("returns an empty map when no octogee-gw-* releases exist (fresh cluster)", async () => {
+    const { runHelm } = mockSubprocess([{ stdout: "[]" }]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
-    const map = await runner.readDeployedInstances({
-      release: "octogee",
-      namespace: "octogee-test",
-    });
+    const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
     expect(map).toEqual({});
   });
 
-  it("returns an empty map when the release does not exist (helm exits 1 with 'not found')", async () => {
+  it("skips releases whose values are missing gatewayId/imageTag/image.repository (incomplete adoption)", async () => {
     const { runHelm } = mockSubprocess([
-      { code: 1, stderr: "Error: release: not found" },
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-broken", namespace: "octogee-test", status: "deployed" },
+        ]),
+      },
+      // values missing required identity fields
+      { stdout: JSON.stringify({ instanceName: "broken" }) },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
-    const map = await runner.readDeployedInstances({
-      release: "octogee",
-      namespace: "octogee-test",
-    });
+    const log = vi.fn();
+    const runner = createHelmSubprocessRunner({ runHelm, log });
+    const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
     expect(map).toEqual({});
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("missing gatewayId/imageTag/imageRepository"),
+    );
   });
 
-  it("throws when helm exits non-zero for any other reason", async () => {
+  it("throws when helm list fails for a non-not-found reason", async () => {
     const { runHelm } = mockSubprocess([
       { code: 1, stderr: "Error: connection refused" },
     ]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
     await expect(
-      runner.readDeployedInstances({ release: "octogee", namespace: "octogee-test" }),
+      runner.readDeployedInstances({ namespace: "octogee-test" }),
     ).rejects.toThrow(/connection refused/);
   });
 });
 
-describe("createHelmSubprocessRunner — upgrade", () => {
-  const desired: HelmInstancesMap = {
-    default: {
-      enabled: true,
-      image: { repository: REPO, tag: "abc1234" },
-      gatewayId: "gw-test",
-    },
-    canary: {
-      enabled: true,
-      image: { repository: REPO, tag: "def5678" },
-      gatewayId: "gw-test-canary",
-    },
-  };
-
-  it("runs `helm upgrade --install <release> <chart> -n <ns> --reuse-values --set-json gateway.instances=<json> --wait --timeout=10m`", async () => {
-    const { runHelm, calls } = mockSubprocess([{ stdout: "Release \"octogee\" has been upgraded." }]);
+describe("createHelmSubprocessRunner — upsertInstance", () => {
+  it("runs `helm upgrade --install octogee-gw-<name> <chart> -n <ns> --set ... --wait`", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
 
-    await runner.upgrade({
-      release: "octogee",
-      chart: "/charts/octogee",
+    await runner.upsertInstance({
       namespace: "octogee-test",
-      instances: desired,
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
     });
 
     expect(calls).toHaveLength(1);
     const args = calls[0];
     expect(args[0]).toBe("upgrade");
     expect(args).toContain("--install");
-    expect(args).toContain("octogee");
-    expect(args).toContain("/charts/octogee");
+    expect(args).toContain("octogee-gw-default");
+    expect(args).toContain("/charts/octogee-gateway");
     expect(args).toContain("-n");
     expect(args).toContain("octogee-test");
-    expect(args).toContain("--reuse-values");
-
-    const setJsonIdx = args.indexOf("--set-json");
-    expect(setJsonIdx).toBeGreaterThan(-1);
-    const setJsonValue = args[setJsonIdx + 1];
-    expect(setJsonValue.startsWith("gateway.instances=")).toBe(true);
-    const json = JSON.parse(setJsonValue.slice("gateway.instances=".length));
-    expect(json).toEqual(desired);
-
+    expect(args).toContain("--set");
+    expect(args).toContain("instanceName=default");
+    expect(args).toContain("gatewayId=gw-test");
+    expect(args).toContain("imageTag=abc1234");
+    expect(args).toContain(`image.repository=${REPO}`);
     expect(args).toContain("--wait");
     expect(args.some((a) => a.startsWith("--timeout="))).toBe(true);
   });
 
-  it("passes --set gateway.imageTag=<tag> when fleetImageTag is provided so sidecars roll with the gateway container", async () => {
+  it("passes --take-ownership when set (cutover from umbrella-managed pods)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
 
-    await runner.upgrade({
-      release: "octogee",
-      chart: "/charts/octogee",
+    await runner.upsertInstance({
       namespace: "octogee-test",
-      instances: desired,
-      fleetImageTag: "abc1234",
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+      takeOwnership: true,
     });
 
-    const args = calls[0];
-    const setIdx = args.indexOf("--set");
-    expect(setIdx).toBeGreaterThan(-1);
-    expect(args[setIdx + 1]).toBe("gateway.imageTag=abc1234");
+    expect(calls[0]).toContain("--take-ownership");
   });
 
-  it("omits the fleet imageTag --set when fleetImageTag is undefined (lets values.yaml default win)", async () => {
+  it("omits --take-ownership by default (steady-state ops)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
 
-    await runner.upgrade({
-      release: "octogee",
-      chart: "/charts/octogee",
+    await runner.upsertInstance({
       namespace: "octogee-test",
-      instances: desired,
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(calls[0]).not.toContain("--take-ownership");
+  });
+
+  it("threads -f <valuesFile> when provided so per-namespace defaults follow", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test",
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+      valuesFile: "/charts/octogee-gateway/values.test.yaml",
     });
 
     const args = calls[0];
-    expect(args.some((a) => a.startsWith("gateway.imageTag="))).toBe(false);
+    const fIdx = args.indexOf("-f");
+    expect(fIdx).toBeGreaterThan(-1);
+    expect(args[fIdx + 1]).toBe("/charts/octogee-gateway/values.test.yaml");
   });
 
-  it("propagates helm failures with stdout + stderr in the error message (visible in controller logs)", async () => {
+  it("propagates helm failures with stderr in the error message", async () => {
     const { runHelm } = mockSubprocess([
-      { code: 1, stdout: "started", stderr: "Error: timed out waiting for condition" },
+      { code: 1, stderr: "Error: timed out" },
     ]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
 
     await expect(
-      runner.upgrade({
-        release: "octogee",
-        chart: "/charts/octogee",
+      runner.upsertInstance({
         namespace: "octogee-test",
-        instances: desired,
+        instanceName: "default",
+        gatewayId: "gw-test",
+        imageRepository: REPO,
+        imageTag: "abc1234",
+        chartPath: "/charts/octogee-gateway",
       }),
-    ).rejects.toThrow(/timed out waiting for condition/);
+    ).rejects.toThrow(/timed out/);
+  });
+});
+
+describe("createHelmSubprocessRunner — removeInstance", () => {
+  it("runs `helm uninstall octogee-gw-<name> -n <ns> --wait`", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "release \"octogee-gw-default\" uninstalled" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.removeInstance({
+      namespace: "octogee-test",
+      instanceName: "default",
+    });
+
+    const args = calls[0];
+    expect(args[0]).toBe("uninstall");
+    expect(args).toContain("octogee-gw-default");
+    expect(args).toContain("-n");
+    expect(args).toContain("octogee-test");
+    expect(args).toContain("--wait");
   });
 
-  it("logs a one-line summary on success", async () => {
-    const log = vi.fn();
-    const { runHelm } = mockSubprocess([{ stdout: "" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log });
-    await runner.upgrade({
-      release: "octogee",
-      chart: "/charts/octogee",
-      namespace: "octogee-test",
-      instances: desired,
-    });
-    const messages = log.mock.calls.map((c) => c[0] as string);
-    expect(messages.some((m) => m.includes("upgrade") && m.includes("octogee"))).toBe(true);
+  it("treats 'release not found' as a successful no-op (idempotent retire)", async () => {
+    const { runHelm } = mockSubprocess([
+      { code: 1, stderr: "Error: uninstall: Release not loaded: release: not found" },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee-test", instanceName: "ghost" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("throws on other non-zero exits (operator notices real failures)", async () => {
+    const { runHelm } = mockSubprocess([
+      { code: 1, stderr: "Error: pre-delete hook failed" },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee-test", instanceName: "broken" }),
+    ).rejects.toThrow(/pre-delete hook failed/);
   });
 });
 

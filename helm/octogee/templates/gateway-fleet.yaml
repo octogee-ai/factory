@@ -1,0 +1,261 @@
+# Spanning gateway-fleet resources. The per-instance gateway pod (and
+# its Services + PDB) lives in the helm/octogee-gateway/ chart, owned
+# by Cowboy via per-instance helm releases. The umbrella keeps the
+# resources that make sense at the fleet/cluster level:
+#
+#   - octogee-gateway alias Service (round-robins all instances; legacy
+#     callers like chat-proxy fallback resolver rely on it)
+#   - gateway-egress NetworkPolicy (one policy covers every gateway pod
+#     via the `app: octogee-gateway` selector)
+#   - fleet-control Ingress + cert + BackendConfig (path rules per
+#     instance from `Values.gatewayFleet.instances`)
+#   - preview Ingress + cert + BackendConfig (points at alias Service)
+#
+# Operator process: when a new gateway instance lands in Firestore
+# (Cowboy add-gateway), also add it to `gatewayFleet.instances` in
+# values.{env}.yaml so the fleet-control Ingress routes its
+# /restore-customer/{gatewayId} etc. paths. Until that's done, RPC to
+# the new instance flows via in-cluster Service DNS — the external
+# fleet-control Ingress is a Cloud-Tasks-only path.
+
+{{- if .Values.gatewayFleet.aliasService.enabled }}
+---
+# Legacy alias Service — selects every gateway pod, round-robins.
+# Remaining callers: chat-proxy gateway-resolver fallback, mattermost
+# allowedInternalConnections. Both fleet-control (this file) and
+# api[-test].octogee.com (workspace-api chart) use per-instance
+# Services and bypass this alias.
+apiVersion: v1
+kind: Service
+metadata:
+  name: octogee-gateway
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+  annotations:
+    cloud.google.com/backend-config: |
+      {"ports":{"9080":"preview-backend","{{ .Values.gatewayFleet.fleetControllerPort | default "3003" }}":"octogee-gateway-fleet-control"}}
+spec:
+  selector:
+    app: octogee-gateway
+  ports:
+    - name: http
+      port: 18789
+      targetPort: 18789
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+    - name: preview
+      port: 9080
+      targetPort: 9080
+    - name: fleet-http
+      port: {{ .Values.gatewayFleet.fleetControllerPort | default "3003" }}
+      targetPort: {{ .Values.gatewayFleet.fleetControllerPort | default "3003" }}
+  type: ClusterIP
+{{- end }}
+
+{{- if .Values.gatewayFleet.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-egress
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mattermost
+      ports:
+        - protocol: TCP
+          port: 8065
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gitea
+      ports:
+        - protocol: TCP
+          port: 3000
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gitea
+      ports:
+        - protocol: TCP
+          port: 2222
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}
+
+{{- if .Values.gatewayFleet.fleetControlIngress.enabled }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.gatewayFleet.fleetControlIngress.certName }}
+spec:
+  domains:
+    - {{ .Values.gatewayFleet.fleetControlIngress.host }}
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: octogee-gateway-fleet-control
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /health
+    port: {{ .Values.gatewayFleet.fleetControllerPort | default "3003" }}
+  timeoutSec: 30
+  {{- if .Values.gatewayFleet.fleetControlIngress.cloudArmor.enabled }}
+  securityPolicy:
+    name: {{ .Values.gatewayFleet.fleetControlIngress.cloudArmor.policyName }}
+  {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: octogee-gateway-fleet-control-ingress
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: {{ .Values.gatewayFleet.fleetControlIngress.certName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.gatewayFleet.fleetControlIngress.staticIpName }}
+spec:
+  ingressClassName: gce
+  rules:
+    - host: {{ .Values.gatewayFleet.fleetControlIngress.host }}
+      http:
+        paths:
+          {{- $port := .Values.gatewayFleet.fleetControllerPort | default "3003" }}
+          {{- range .Values.gatewayFleet.instances }}
+          {{- $svc := printf "octogee-gateway-%s" .instanceName }}
+          {{- $gid := .gatewayId }}
+          - path: /restore-customer/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $port }}
+          - path: /quiesce/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $port }}
+          - path: /export/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $port }}
+          - path: /import/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $port }}
+          - path: /unmount/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $port }}
+          {{- end }}
+          - path: /health
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: octogee-gateway
+                port:
+                  number: {{ $port }}
+{{- end }}
+
+{{- if .Values.gatewayFleet.previewIngress.enabled }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.gatewayFleet.previewIngress.certName }}
+spec:
+  domains:
+    - {{ .Values.gatewayFleet.previewIngress.host }}
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: preview-backend
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /health
+    port: 9080
+  timeoutSec: 3600
+  {{- if .Values.gatewayFleet.previewIngress.cloudArmor.enabled }}
+  securityPolicy:
+    name: {{ .Values.gatewayFleet.previewIngress.cloudArmor.policyName }}
+  {{- end }}
+  connectionDraining:
+    drainingTimeoutSec: 300
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: preview-ingress
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: {{ .Values.gatewayFleet.previewIngress.certName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.gatewayFleet.previewIngress.staticIpName }}
+spec:
+  ingressClassName: gce
+  rules:
+    - host: {{ .Values.gatewayFleet.previewIngress.host }}
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: octogee-gateway
+                port:
+                  number: 9080
+{{- end }}

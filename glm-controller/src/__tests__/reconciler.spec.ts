@@ -35,11 +35,13 @@ function makeFakeDb(args: {
 
 function makeFakeHelm(behavior: {
   read?: () => Promise<HelmInstancesMap>;
-  upgrade?: () => Promise<void>;
+  upsertInstance?: () => Promise<void>;
+  removeInstance?: () => Promise<void>;
 }) {
   return {
     readDeployedInstances: vi.fn(behavior.read ?? (async () => ({}))),
-    upgrade: vi.fn(behavior.upgrade ?? (async () => undefined)),
+    upsertInstance: vi.fn(behavior.upsertInstance ?? (async () => undefined)),
+    removeInstance: vi.fn(behavior.removeInstance ?? (async () => undefined)),
   } as unknown as Parameters<typeof startReconciler>[0]["helm"];
 }
 
@@ -62,8 +64,8 @@ describe("startReconciler — periodic retry after failed tick", () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const helm = makeFakeHelm({
-      // First upgrade rejects, second resolves.
-      upgrade: vi
+      // First upsert rejects, second resolves.
+      upsertInstance: vi
         .fn()
         .mockRejectedValueOnce(new Error("another operation in progress"))
         .mockResolvedValue(undefined) as unknown as () => Promise<void>,
@@ -96,18 +98,18 @@ describe("startReconciler — periodic retry after failed tick", () => {
     await flush();
     await flush();
 
-    expect(helm.upgrade).toHaveBeenCalledTimes(1);
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
     const failureLog = log.mock.calls.find(
       ([msg]: [string]) => typeof msg === "string" && msg.includes("retry in 5000ms"),
     );
     expect(failureLog).toBeDefined();
 
-    // Advance the retry interval; the retry tick should run helm.upgrade again
+    // Advance the retry interval; the retry tick should run helm.upsertInstance again
     await vi.advanceTimersByTimeAsync(5_000);
     await flush();
     await flush();
 
-    expect(helm.upgrade).toHaveBeenCalledTimes(2);
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(2);
     stop();
   });
 
@@ -115,7 +117,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const helm = makeFakeHelm({
-      upgrade: async () => undefined,
+      upsertInstance: async () => undefined,
     });
     const db = makeFakeDb({
       glmGateways: [
@@ -144,13 +146,13 @@ describe("startReconciler — periodic retry after failed tick", () => {
     await flush();
     await flush();
 
-    expect(helm.upgrade).toHaveBeenCalledTimes(1);
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
 
     // No retry should fire even after well past retryMs
     await vi.advanceTimersByTimeAsync(20_000);
     await flush();
 
-    expect(helm.upgrade).toHaveBeenCalledTimes(1);
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
     stop();
   });
 
@@ -159,7 +161,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
     const log = vi.fn();
     let resolveUpgrade: (v: unknown) => void = () => {};
     const helm = makeFakeHelm({
-      upgrade: () =>
+      upsertInstance: () =>
         new Promise<void>((_, reject) => {
           resolveUpgrade = (() => reject(new Error("boom"))) as typeof resolveUpgrade;
         }),
@@ -190,7 +192,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await flush();
 
-    // Stop the reconciler while the helm.upgrade is still in-flight
+    // Stop the reconciler while the helm.upsertInstance is still in-flight
     stop();
     // Now resolve the in-flight helm call with a rejection — the catch must
     // see `stopped` and skip scheduling a retry.
@@ -201,7 +203,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await flush();
     // Only the original failed call ran; no retry after stop()
-    expect(helm.upgrade).toHaveBeenCalledTimes(1);
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
   });
 
   it("a fresh snapshot during a pending retry cancels the retry and runs a debounced tick", async () => {
@@ -210,7 +212,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
     const upgradeCalls: number[] = [];
     let upgradeCounter = 0;
     const helm = makeFakeHelm({
-      upgrade: vi
+      upsertInstance: vi
         .fn()
         .mockImplementationOnce(async () => {
           upgradeCounter++;
@@ -248,19 +250,19 @@ describe("startReconciler — periodic retry after failed tick", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await flush();
     await flush();
-    expect(helm.upgrade).toHaveBeenCalledTimes(1); // failed first tick
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1); // failed first tick
 
     // New snapshot fires — debounced tick should run before retry would
     snapCbs[0]();
     await vi.advanceTimersByTimeAsync(1_000);
     await flush();
     await flush();
-    expect(helm.upgrade).toHaveBeenCalledTimes(2); // snapshot-triggered tick
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(2); // snapshot-triggered tick
 
     // Long after the original retryMs, no extra retry should have fired
     await vi.advanceTimersByTimeAsync(120_000);
     await flush();
-    expect(helm.upgrade).toHaveBeenCalledTimes(2);
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(2);
     stop();
   });
 });

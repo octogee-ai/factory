@@ -31,7 +31,6 @@ interface PollResult {
   errorMsg?: string;
 }
 
-const HELM_RELEASE = process.env.HELM_RELEASE ?? "octogee";
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
 export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler {
@@ -49,10 +48,7 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
       ctx,
       deps,
       check: async () => {
-        const map = await deps.helm.readDeployedInstances({
-          release: HELM_RELEASE,
-          namespace: NAMESPACE,
-        });
+        const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
         return Object.prototype.hasOwnProperty.call(map, instanceName);
       },
       timeoutMessage: `helm did not render instance "${instanceName}" within ${deps.helmRenderTimeoutMs}ms`,

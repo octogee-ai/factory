@@ -35,10 +35,15 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: HELM_RELEASE
-              value: {{ .Values.helm.release | quote }}
-            - name: HELM_CHART
-              value: {{ .Values.helm.chartPath | quote }}
+            # GATEWAY_CHART tells the controller where the standalone
+            # per-instance chart is baked in the image (Dockerfile copies
+            # helm/octogee-gateway/ → /charts/octogee-gateway). The
+            # reconciler installs `octogee-gw-<instanceName>` releases
+            # off this chart. The umbrella `octogee` release is now
+            # written by CI, not by the controller, so HELM_RELEASE +
+            # HELM_CHART are no longer needed.
+            - name: GATEWAY_CHART
+              value: {{ .Values.gatewayChart | default "/charts/octogee-gateway" | quote }}
             - name: GOOGLE_CLOUD_PROJECT
               valueFrom:
                 fieldRef:

@@ -45,7 +45,6 @@ interface PollResult {
   errorMsg?: string;
 }
 
-const HELM_RELEASE = process.env.HELM_RELEASE ?? "octogee";
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
 export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHandler {
@@ -89,10 +88,7 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
       ctx,
       deps,
       check: async () => {
-        const map = await deps.helm.readDeployedInstances({
-          release: HELM_RELEASE,
-          namespace: NAMESPACE,
-        });
+        const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
         return !Object.prototype.hasOwnProperty.call(map, instanceName);
       },
       timeoutMessage: `helm did not uninstall instance "${instanceName}" within ${deps.helmUninstallTimeoutMs}ms`,

@@ -9,7 +9,7 @@ metadata:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
-  serviceAccountName: {{ .Values.gateway.serviceAccountName | default "default" }}
+  serviceAccountName: octogee-gateway
   restartPolicy: Never
   containers:
     - name: test-mm-token

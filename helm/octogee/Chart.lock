@@ -14,8 +14,8 @@ dependencies:
 - name: workspace-api
   repository: file://charts/workspace-api
   version: 0.1.0
-- name: gateway
-  repository: file://charts/gateway
+- name: glm-controller
+  repository: file://charts/glm-controller
   version: 0.1.0
-digest: sha256:93eae4e645464339c1c5a9ffd4f8ad3f4c69a42059266bb4673ff73575526490
-generated: "2026-05-02T19:15:41.625469-07:00"
+digest: sha256:26a857f43831d58e156d971cd0d797cebf8a936ce0a040e33a0eace2ec11e7fb
+generated: "2026-05-05T14:42:15.266166-07:00"

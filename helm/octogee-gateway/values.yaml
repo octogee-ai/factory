@@ -1,0 +1,196 @@
+# helm/octogee-gateway/values.yaml — defaults for ONE gateway instance.
+#
+# Cowboy (glm-controller) installs this chart once per gateway instance
+# under release name `octogee-gw-<instanceName>`. The umbrella `octogee`
+# release no longer manages gateway pods.
+
+# Logical, stable, Cowboy-set gateway identity. Written to Firestore
+# `gateways/{gatewayId}` heartbeats and matched against customer
+# `provisioning.openclaw.gatewayId`. Must match `[a-z0-9-]+`.
+gatewayId: ""
+
+# Helm release / DNS-friendly suffix. Forms the per-instance Service
+# name (`octogee-gateway-<instanceName>`, `workspace-api-<instanceName>`)
+# that the umbrella's fleet-control Ingress routes to.
+instanceName: ""
+
+# Bundle SHA. All three sidecars (gateway, workspace-api, chat-proxy)
+# default to this tag for atomic rolls. Per-image overrides below take
+# precedence when set, but the operator workflow is single-SHA.
+imageTag: "latest"
+
+image:
+  repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway
+  # Inherits from .Values.imageTag when empty. Override only for an
+  # emergency hotfix.
+  tag: ""
+
+serviceAccountName: octogee-gateway
+
+env:
+  gcloudProject: "octogee"
+  firebaseProjectId: "octogee"
+  agentPrefix: "octogee-"
+  githubOrg: "octogee"
+  mmUrl: ""  # auto-computed from release namespace if empty
+  mmSiteUrl: ""
+  mmInteractionsCallbackBaseUrl: ""  # auto-computed per-instance if empty
+  mmInteractionsAllowedSourceIps: "10.117.0.0/17"  # GKE pod CIDR
+  chatProxyUrl: "https://chat.octogee.com"
+  discordOpsWebhookUrl: ""
+  gitApiUrl: ""
+  gitSshHost: ""
+  octogeeRouterEnabled: "true"
+  openclawLogLevel: "info"
+  fleetControllerPort: "3003"
+
+# Preview host the gateway's preview-proxy advertises in URLs it returns
+# to the app. Must match the umbrella's gatewayFleet.previewIngress.host
+# for the env so users land on the right cert. Empty disables the env
+# var and lets preview-proxy.ts fall back to its hardcoded default
+# (preview.octogee.com) — fine for prod, wrong for test.
+preview:
+  host: "preview.octogee.com"
+
+# Gateway storage is always emptyDir. Pod-local state is disposable;
+# customers/<slug>/ rehydrates from Gitea post-boot. See gateway sub-
+# chart history for the full rationale (was helm/octogee/charts/gateway).
+resources:
+  requests:
+    cpu: "1000m"
+    memory: "2560Mi"
+    ephemeral-storage: "5Gi"
+  limits:
+    cpu: "4000m"
+    memory: "4Gi"
+    ephemeral-storage: "5Gi"
+
+probes:
+  startup:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    failureThreshold: 30
+    timeoutSeconds: 5
+  liveness:
+    initialDelaySeconds: 0
+    periodSeconds: 60
+    failureThreshold: 5
+    timeoutSeconds: 10
+  readiness:
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    failureThreshold: 6
+    timeoutSeconds: 5
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# ── chat-proxy sidecar ──────────────────────────────────────────────────────
+chatProxy:
+  enabled: true
+  image:
+    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-chat-proxy
+    tag: ""  # inherits from imageTag
+  port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ── workspace-api sidecar ──────────────────────────────────────────────────
+workspaceApi:
+  enabled: true
+  image:
+    repository: us-central1-docker.pkg.dev/octogee/octogee/workspace-api
+    tag: ""  # inherits from imageTag
+  port: 3001
+  env:
+    GITEA_URL: ""  # auto-computed from K8S_NAMESPACE
+    GITEA_ORG: "octogee"
+    MM_URL: ""  # auto-computed from K8S_NAMESPACE
+    FIREBASE_PROJECT_ID: "octogee"
+    GCLOUD_PROJECT: "octogee"
+    GCP_PROJECT_ID: "octogee"
+    APP_URL: "https://octogee.com"
+    CHAT_PROXY_URL: "https://chat.octogee.com"
+    SITE_URL: "https://octogee.com"
+  secrets:
+    - envName: STRIPE_SECRET_KEY
+      secretName: stripe-secrets
+      secretKey: secret_key
+      optional: true
+    - envName: STRIPE_WEBHOOK_SECRET
+      secretName: stripe-secrets
+      secretKey: webhook_secret
+      optional: true
+    - envName: GITEA_TOKEN
+      secretName: gitea-token
+      secretKey: token
+      optional: true
+    - envName: MM_ADMIN_TOKEN
+      secretName: mattermost-gateway
+      secretKey: admin_token
+      optional: true
+    - envName: GITHUB_TOKEN
+      secretName: octogee-github
+      secretKey: token
+      optional: true
+    - envName: GOOGLE_CLIENT_ID
+      secretName: google-oauth
+      secretKey: client_id
+      optional: true
+    - envName: GOOGLE_CLIENT_SECRET
+      secretName: google-oauth
+      secretKey: client_secret
+      optional: true
+    - envName: MICROSOFT_CLIENT_ID
+      secretName: microsoft-oauth
+      secretKey: client_id
+      optional: true
+    - envName: MICROSOFT_CLIENT_SECRET
+      secretName: microsoft-oauth
+      secretKey: client_secret
+      optional: true
+    - envName: DISCORD_CLIENT_SECRET
+      secretName: discord-secrets
+      secretKey: client_secret
+      optional: true
+    - envName: DISCORD_COACH_TOKEN
+      secretName: discord-secrets
+      secretKey: coach_token
+      optional: true
+    - envName: DISCORD_MAC_TOKEN
+      secretName: discord-secrets
+      secretKey: mac_token
+      optional: true
+    - envName: OCTOGEE_GUILD_ID
+      secretName: discord-secrets
+      secretKey: guild_id
+      optional: true
+    - envName: INTERNAL_SERVICE_KEY
+      secretName: internal-service-key
+      secretKey: key
+      optional: false
+    - envName: RESEND_API_KEY
+      secretName: resend-secrets
+      secretKey: api_key
+      optional: true
+    - envName: RESEND_FROM_EMAIL
+      secretName: resend-secrets
+      secretKey: from_email
+      optional: true
+    - envName: RESEND_FROM_NAME
+      secretName: resend-secrets
+      secretKey: from_name
+      optional: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

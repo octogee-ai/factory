@@ -48,11 +48,17 @@ RUN npm ci --prefix /app/scripts --ignore-scripts
 RUN npx tsc \
   && npm prune --omit=dev
 
-# Bake the umbrella chart into the image at the path the controller's
-# values.yaml points at by default (helm.chartPath = /charts/octogee).
-# The chart pin moves with the controller's image SHA — no runtime
-# git clone, no chart drift.
-COPY helm/octogee /charts/octogee
+# Bake both helm charts into the image:
+#   - /charts/octogee         — umbrella (mattermost, gitea, glm-controller,
+#                               ingresses, gateway-fleet spanning resources)
+#   - /charts/octogee-gateway — standalone single-instance gateway pod chart
+#                               (one helm release per gateway instance,
+#                               installed by Cowboy at runtime)
+# Chart pins move with the controller's image SHA — no runtime git
+# clone, no drift between desired-state writes and the chart shape
+# Cowboy renders against.
+COPY helm/octogee         /charts/octogee
+COPY helm/octogee-gateway /charts/octogee-gateway
 
 USER 1000:1000
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/glm-controller/src/index.js"]

@@ -1,31 +1,51 @@
 import { spawn } from "node:child_process";
 import type { HelmInstancesMap } from "../../shared/types/glm.js";
 
+/**
+ * Per-release helm interface for the gateway-pod fleet.
+ *
+ * Each gateway instance is its own helm release named
+ * `octogee-gw-<instanceName>`, installed off the helm/octogee-gateway/
+ * chart. The umbrella `octogee` release no longer owns gateway pods —
+ * see helm/octogee/Chart.yaml + the Cowboy-ownership refactor.
+ *
+ * Cowboy is the only thing that calls these methods. CI never does.
+ */
 export interface HelmRunner {
-  upgrade(opts: {
-    release: string;
-    chart: string;
-    namespace: string;
-    instances: HelmInstancesMap;
-    /**
-     * Fleet-wide gateway image tag — written as `--set gateway.imageTag=<tag>`.
-     * Drives sidecar containers (chat-proxy, workspace-api) so they roll
-     * together with the gateway container per #846 single-image-pin. When
-     * undefined, the chart default from values.yaml wins (typically `latest`
-     * for fresh-cluster bootstrap).
-     */
-    fleetImageTag?: string;
-  }): Promise<void>;
+  /**
+   * Lists every currently-deployed gateway instance by enumerating helm
+   * releases prefixed `octogee-gw-` in the namespace, then reading each
+   * release's values to populate the `HelmInstancesMap`. Empty map means
+   * no gateway pods are deployed yet (fresh cluster).
+   */
+  readDeployedInstances(opts: { namespace: string }): Promise<HelmInstancesMap>;
 
   /**
-   * Return the currently-deployed instances map by reading the helm release's
-   * values. Empty map if the release doesn't exist (first-time install) or
-   * if no gateway.instances are configured yet.
+   * Install or upgrade ONE gateway instance's helm release. Idempotent:
+   * `--install` flag means it works whether the release exists or not.
+   *
+   * `takeOwnership` (helm 3.16+) lets a fresh release adopt resources
+   * that already exist in the cluster — used during the cutover from
+   * the umbrella-managed gateway sub-chart to per-instance releases so
+   * the existing Deployment + Service + PDB transfer to the new release
+   * without restarting the pod.
    */
-  readDeployedInstances(opts: {
-    release: string;
+  upsertInstance(opts: {
     namespace: string;
-  }): Promise<HelmInstancesMap>;
+    instanceName: string;
+    gatewayId: string;
+    imageRepository: string;
+    imageTag: string;
+    chartPath: string;
+    valuesFile?: string;
+    takeOwnership?: boolean;
+  }): Promise<void>;
+
+  /** Uninstall ONE gateway instance's helm release. */
+  removeInstance(opts: {
+    namespace: string;
+    instanceName: string;
+  }): Promise<void>;
 }
 
 export interface HelmSubprocessResult {
@@ -39,70 +59,173 @@ export type HelmSubprocess = (args: string[]) => Promise<HelmSubprocessResult>;
 export interface HelmSubprocessRunnerDeps {
   runHelm: HelmSubprocess;
   log: (msg: string) => void;
-  /** Wait timeout for upgrade. Defaults to "10m". */
+  /** Wait timeout for upgrade/install. Defaults to "10m". */
   upgradeTimeout?: string;
+  /** Wait timeout for uninstall. Defaults to "5m". */
+  uninstallTimeout?: string;
 }
+
+const RELEASE_PREFIX = "octogee-gw-";
 
 const NOT_FOUND_PATTERNS = [
   /release:\s*not found/i,
   /no release named/i,
+  /no deployed releases/i,
 ];
 
 function isReleaseNotFound(stderr: string): boolean {
   return NOT_FOUND_PATTERNS.some((p) => p.test(stderr));
 }
 
+function releaseNameForInstance(instanceName: string): string {
+  return `${RELEASE_PREFIX}${instanceName}`;
+}
+
+function instanceNameFromRelease(releaseName: string): string | null {
+  if (!releaseName.startsWith(RELEASE_PREFIX)) return null;
+  return releaseName.slice(RELEASE_PREFIX.length);
+}
+
+interface HelmListItem {
+  name: string;
+  namespace: string;
+  status: string;
+}
+
+interface PerReleaseValues {
+  gatewayId?: unknown;
+  instanceName?: unknown;
+  imageTag?: unknown;
+  image?: { repository?: unknown; tag?: unknown };
+}
+
 export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): HelmRunner {
-  const timeout = deps.upgradeTimeout ?? "10m";
+  const upgradeTimeout = deps.upgradeTimeout ?? "10m";
+  const uninstallTimeout = deps.uninstallTimeout ?? "5m";
 
   return {
-    async readDeployedInstances({ release, namespace }) {
-      const result = await deps.runHelm([
-        "get",
-        "values",
-        release,
+    async readDeployedInstances({ namespace }) {
+      const list = await deps.runHelm([
+        "list",
         "-n",
         namespace,
+        "--filter",
+        `^${RELEASE_PREFIX}`,
         "-o",
         "json",
       ]);
-      if (result.code !== 0) {
-        if (isReleaseNotFound(result.stderr)) return {};
+      if (list.code !== 0) {
         throw new Error(
-          `helm get values failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+          `helm list failed (code=${list.code}): ${list.stderr.trim() || list.stdout.trim()}`,
         );
       }
-      const parsed = JSON.parse(result.stdout || "{}") as {
-        gateway?: { instances?: HelmInstancesMap };
-      };
-      return parsed.gateway?.instances ?? {};
+      const items = (JSON.parse(list.stdout || "[]") as HelmListItem[]) ?? [];
+      const map: HelmInstancesMap = {};
+      for (const item of items) {
+        const instanceName = instanceNameFromRelease(item.name);
+        if (!instanceName) continue;
+        const valuesResult = await deps.runHelm([
+          "get",
+          "values",
+          item.name,
+          "-n",
+          namespace,
+          "-o",
+          "json",
+        ]);
+        if (valuesResult.code !== 0) {
+          if (isReleaseNotFound(valuesResult.stderr)) continue;
+          throw new Error(
+            `helm get values ${item.name} failed (code=${valuesResult.code}): ${valuesResult.stderr.trim() || valuesResult.stdout.trim()}`,
+          );
+        }
+        const v = JSON.parse(valuesResult.stdout || "{}") as PerReleaseValues;
+        const gatewayId = typeof v.gatewayId === "string" ? v.gatewayId : null;
+        const imageTag = typeof v.imageTag === "string" ? v.imageTag : null;
+        const imageRepo =
+          typeof v.image?.repository === "string" ? v.image.repository : null;
+        if (!gatewayId || !imageTag || !imageRepo) {
+          // Release exists but values are missing the identity Cowboy
+          // requires — skip it from the deployed map. Fresh re-upsert
+          // will overwrite cleanly.
+          deps.log(
+            `[helm-runner] release ${item.name} missing gatewayId/imageTag/imageRepository — skipping`,
+          );
+          continue;
+        }
+        map[instanceName] = {
+          enabled: true,
+          image: { repository: imageRepo, tag: imageTag },
+          gatewayId,
+        };
+      }
+      return map;
     },
 
-    async upgrade({ release, chart, namespace, instances, fleetImageTag }) {
+    async upsertInstance({
+      namespace,
+      instanceName,
+      gatewayId,
+      imageRepository,
+      imageTag,
+      chartPath,
+      valuesFile,
+      takeOwnership,
+    }) {
+      const release = releaseNameForInstance(instanceName);
       const args = [
         "upgrade",
         "--install",
         release,
-        chart,
+        chartPath,
         "-n",
         namespace,
-        "--reuse-values",
-        "--set-json",
-        `gateway.instances=${JSON.stringify(instances)}`,
+        "--set",
+        `instanceName=${instanceName}`,
+        "--set",
+        `gatewayId=${gatewayId}`,
+        "--set",
+        `imageTag=${imageTag}`,
+        "--set",
+        `image.repository=${imageRepository}`,
       ];
-      if (fleetImageTag) {
-        args.push("--set", `gateway.imageTag=${fleetImageTag}`);
-      }
-      args.push("--wait", `--timeout=${timeout}`);
+      if (valuesFile) args.push("-f", valuesFile);
+      if (takeOwnership) args.push("--take-ownership");
+      args.push("--wait", `--timeout=${upgradeTimeout}`);
       const result = await deps.runHelm(args);
       if (result.code !== 0) {
         throw new Error(
-          `helm upgrade failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+          `helm upgrade --install ${release} failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
         );
       }
-      const names = Object.keys(instances).sort();
       deps.log(
-        `[helm-runner] upgrade ok release=${release} ns=${namespace} instances=[${names.join(", ")}]`,
+        `[helm-runner] upserted release=${release} ns=${namespace} gatewayId=${gatewayId} imageTag=${imageTag}${takeOwnership ? " (took ownership)" : ""}`,
+      );
+    },
+
+    async removeInstance({ namespace, instanceName }) {
+      const release = releaseNameForInstance(instanceName);
+      const result = await deps.runHelm([
+        "uninstall",
+        release,
+        "-n",
+        namespace,
+        "--wait",
+        `--timeout=${uninstallTimeout}`,
+      ]);
+      if (result.code !== 0) {
+        if (isReleaseNotFound(result.stderr)) {
+          deps.log(
+            `[helm-runner] uninstall release=${release} ns=${namespace} — already gone, no-op`,
+          );
+          return;
+        }
+        throw new Error(
+          `helm uninstall ${release} failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+        );
+      }
+      deps.log(
+        `[helm-runner] uninstalled release=${release} ns=${namespace}`,
       );
     },
   };
@@ -136,18 +259,19 @@ export function spawnHelm(args: string[]): Promise<HelmSubprocessResult> {
 /** Logs every call but does not actually shell out to `helm`. */
 export function createLoggingHelmRunner(log: (msg: string) => void): HelmRunner {
   return {
-    upgrade: async ({ release, chart, namespace, instances, fleetImageTag }) => {
-      const names = Object.keys(instances).sort();
-      const fleetSuffix = fleetImageTag ? ` fleetImageTag=${fleetImageTag}` : "";
+    readDeployedInstances: async ({ namespace }) => {
+      log(`[helm-runner:stub] readDeployedInstances ns=${namespace} — returning empty`);
+      return {};
+    },
+    upsertInstance: async (opts) => {
       log(
-        `[helm-runner:stub] upgrade release=${release} chart=${chart} ns=${namespace} instances=[${names.join(", ")}]${fleetSuffix} — no exec`,
+        `[helm-runner:stub] upsertInstance ns=${opts.namespace} instanceName=${opts.instanceName} gatewayId=${opts.gatewayId} imageTag=${opts.imageTag} — no exec`,
       );
     },
-    readDeployedInstances: async ({ release, namespace }) => {
+    removeInstance: async (opts) => {
       log(
-        `[helm-runner:stub] readDeployedInstances release=${release} ns=${namespace} — returning empty (PR 1 stub)`,
+        `[helm-runner:stub] removeInstance ns=${opts.namespace} instanceName=${opts.instanceName} — no exec`,
       );
-      return {};
     },
   };
 }

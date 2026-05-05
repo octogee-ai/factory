@@ -10,8 +10,8 @@ import {
 import {
   buildHelmTargetMap,
   buildInstancesMap,
-  deriveFleetImageTag,
   diffInstancesMap,
+  type ReconcileChange,
 } from "./reconcile-plan.js";
 import {
   createHelmSubprocessRunner,
@@ -48,8 +48,22 @@ const log = (msg: string) => console.log(msg);
 
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
-const HELM_RELEASE = process.env.HELM_RELEASE ?? "octogee";
-const HELM_CHART = process.env.HELM_CHART ?? "/charts/octogee";
+// Path to the standalone gateway chart baked into the controller image
+// (see glm-controller/Dockerfile). Each gateway instance becomes its
+// own helm release off this chart, named `octogee-gw-<instanceName>`.
+const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
+// Optional per-namespace values overlay (`values.test.yaml` /
+// `values.prod.yaml`). The controller picks the right file based on
+// K8S_NAMESPACE so per-pod env (firebaseProjectId, mmSiteUrl, etc.)
+// follows the cluster.
+const GATEWAY_VALUES_FILE = (function () {
+  const explicit = process.env.GATEWAY_VALUES_FILE;
+  if (explicit) return explicit;
+  const ns = process.env.K8S_NAMESPACE ?? "octogee";
+  return ns === "octogee"
+    ? `${GATEWAY_CHART}/values.prod.yaml`
+    : `${GATEWAY_CHART}/values.test.yaml`;
+})();
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
@@ -61,6 +75,35 @@ interface ControllerDeps {
   log: (msg: string) => void;
   /** Retry interval after a failed reconcile tick. Defaults to 30s. */
   reconcileRetryMs?: number;
+}
+
+async function applyChanges(
+  changes: ReconcileChange[],
+  deps: ControllerDeps,
+): Promise<void> {
+  for (const change of changes) {
+    if (change.kind === "drift") {
+      // Drift = a release exists in helm that's not in the target map.
+      // The reconcile-plan upstream of us only adds drift to the target-
+      // vs-actual diff when the release is genuinely surplus (retired
+      // with no mounted customers). Safe to uninstall.
+      await deps.helm.removeInstance({
+        namespace: NAMESPACE,
+        instanceName: change.instanceName,
+      });
+      continue;
+    }
+    // Both create and update carry the new desired state in `to`.
+    await deps.helm.upsertInstance({
+      namespace: NAMESPACE,
+      instanceName: change.instanceName,
+      gatewayId: change.to.gatewayId,
+      imageRepository: change.to.image.repository,
+      imageTag: change.to.image.tag,
+      chartPath: GATEWAY_CHART,
+      valuesFile: GATEWAY_VALUES_FILE,
+    });
+  }
 }
 
 async function readMountedByGatewayId(
@@ -102,7 +145,6 @@ export function startReconciler(deps: ControllerDeps): () => void {
         (d) => d.data() as GatewayDesiredState,
       );
       const actualMap = await deps.helm.readDeployedInstances({
-        release: HELM_RELEASE,
         namespace: NAMESPACE,
       });
       const mountedByGatewayId = await readMountedByGatewayId(deps.db);
@@ -120,8 +162,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
         );
       }
       const targetVsActual = diffInstancesMap(actualMap, targetMap);
-      const upgradeNeeded = targetVsActual.length > 0;
-      if (!upgradeNeeded) {
+      if (targetVsActual.length === 0) {
         deps.log(
           `[glm-controller] reconcile tick: no changes (${desired.length} desired, ${Object.keys(actualMap).length} actual)`,
         );
@@ -133,13 +174,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
       deps.log(
         `[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`,
       );
-      await deps.helm.upgrade({
-        release: HELM_RELEASE,
-        chart: HELM_CHART,
-        namespace: NAMESPACE,
-        instances: targetMap,
-        fleetImageTag: deriveFleetImageTag(desired),
-      });
+      await applyChanges(targetVsActual, deps);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       deps.log(
@@ -256,7 +291,7 @@ async function main(): Promise<void> {
   const deps: ControllerDeps = { db, helm, handlers, log };
 
   log(
-    `[glm-controller] starting — namespace=${NAMESPACE} release=${HELM_RELEASE} chart=${HELM_CHART}`,
+    `[glm-controller] starting — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} valuesFile=${GATEWAY_VALUES_FILE}`,
   );
 
   await bootstrapGlmGateways(deps);
@@ -292,7 +327,6 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
   let actualMap;
   try {
     actualMap = await deps.helm.readDeployedInstances({
-      release: HELM_RELEASE,
       namespace: NAMESPACE,
     });
   } catch (err) {

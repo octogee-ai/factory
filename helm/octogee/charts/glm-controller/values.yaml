@@ -7,15 +7,12 @@ image:
 # project. Per-env values.yaml overrides this with the env-suffixed GSA.
 gcpServiceAccount: ""
 
-# Helm release the controller manages. The controller runs `helm upgrade`
-# against `release` using the chart at `chartPath`. Both default to the
-# umbrella chart layout baked into the controller image; overridable for
-# tests / non-standard deploys.
-helm:
-  release: octogee
-  # Path inside the controller image where the chart source is baked at
-  # build time. See glm-controller/Dockerfile.
-  chartPath: /charts/octogee
+# Path inside the controller image where the standalone per-instance
+# gateway chart is baked at build time (see glm-controller/Dockerfile,
+# which COPYs helm/octogee-gateway → /charts/octogee-gateway). The
+# reconciler installs `octogee-gw-<instanceName>` releases off this
+# chart. Override only for tests / non-standard image layouts.
+gatewayChart: /charts/octogee-gateway
 
 # Customer-cleanup target endpoints (Gitea + Mattermost). Defaults
 # resolve to in-cluster ClusterIP Services for the same Helm release;

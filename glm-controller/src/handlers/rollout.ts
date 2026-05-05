@@ -46,7 +46,6 @@ interface PollResult {
   errorMsg?: string;
 }
 
-const HELM_RELEASE = process.env.HELM_RELEASE ?? "octogee";
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
 export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
@@ -111,10 +110,7 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
       ctx,
       deps,
       check: async () => {
-        const map = await deps.helm.readDeployedInstances({
-          release: HELM_RELEASE,
-          namespace: NAMESPACE,
-        });
+        const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
         const entry = map[current.instanceName];
         return entry?.image.tag === imageTag && entry.image.repository === newRepository;
       },
