@@ -68,5 +68,22 @@ spec:
                 secretKeyRef:
                   name: mattermost-gateway
                   key: admin_token
+            - name: HTTP_PORT
+              value: {{ .Values.http.port | quote }}
+          ports:
+            - containerPort: {{ .Values.http.port }}
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

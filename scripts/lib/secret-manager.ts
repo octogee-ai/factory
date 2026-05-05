@@ -40,8 +40,8 @@ export async function writeSecret(params: {
         labels: params.labels,
       },
     });
-  } catch (err: any) {
-    if (err?.code !== 6) throw err;
+  } catch (err) {
+    if ((err as { code?: number } | null)?.code !== 6) throw err;
   }
 
   if (params.labels) {
@@ -74,8 +74,10 @@ export async function archiveSecret(name: string): Promise<{ disabledCount: numb
       }
     }
     return { disabledCount: disabled };
-  } catch (err: any) {
-    if (err?.code === 5) return { disabledCount: 0 };
+  } catch (err) {
+    if ((err as { code?: number } | null)?.code === 5) {
+      return { disabledCount: 0 };
+    }
     throw err;
   }
 }
@@ -142,18 +144,4 @@ export async function provisionGatewayAuthSecret(params: {
   }
 
   return { secretName, created };
-}
-
-async function accessLatest(name: string): Promise<string | null> {
-  try {
-    const [response] = await client().accessSecretVersion({
-      name: `${fqSecretName(name)}/versions/latest`,
-    });
-    const payload = response.payload?.data;
-    if (!payload) return null;
-    return Buffer.isBuffer(payload) ? payload.toString("utf8") : String(payload);
-  } catch (err: any) {
-    if (err?.code === 5) return null;
-    throw err;
-  }
 }

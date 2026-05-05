@@ -167,7 +167,7 @@ vi.mock("../lib/db", () => {
 const provisionerCalls: Array<{ gatewayId: string; gatewayServiceAccount: string }> = [];
 let provisionerNextError: Error | null = null;
 
-vi.mock("../lib/secret-manager", () => ({
+vi.mock("../../../scripts/lib/secret-manager", () => ({
   provisionGatewayAuthSecret: async (params: {
     gatewayId: string;
     gatewayServiceAccount: string;
@@ -187,7 +187,7 @@ const builderCalls: Array<{ service: string; limit?: number }> = [];
 let nextBuildsResult: BuildResult[] = [];
 let nextBuildsError: Error | null = null;
 
-vi.mock("../lib/artifact-registry", () => ({
+vi.mock("../../../scripts/lib/artifact-registry", () => ({
   listGatewayBuilds: async (opts: { service: string; limit?: number }) => {
     builderCalls.push({ service: opts.service, limit: opts.limit });
     if (nextBuildsError) {
@@ -391,6 +391,55 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
       .patch("/api/admin/gateways/gw-missing")
       .send({ imageTag: "x" });
     expect(res.status).toBe(404);
+  });
+
+  it("rejects unknown desiredStatus enum values with 400 (does not write garbage to Firestore)", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    const app = buildApp();
+    const res = await request(app)
+      .patch("/api/admin/gateways/gw-test-canary")
+      .send({ desiredStatus: "burning" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/desiredStatus/);
+    const update = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    expect(update).toBeUndefined();
+  });
+});
+
+describe("POST /api/admin/gateways — body type guards", () => {
+  it("rejects non-string gatewayId with 400", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: 12345,
+      instanceName: "canary",
+      imageRepository:
+        "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/required/i);
+  });
+});
+
+describe("POST /api/admin/customers/:uid/migrate — body type guards", () => {
+  it("rejects non-string `to` field with 400", async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/customers/uid-bob/migrate")
+      .send({ to: 42 });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/admin/rollouts — body type guards", () => {
+  it("rejects non-string imageTag with 400", async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/rollouts")
+      .send({ fromGatewayId: "gw-test", imageTag: 9999 });
+    expect(res.status).toBe(400);
   });
 });
 

@@ -8,12 +8,13 @@ import {
   type Provider,
 } from "../../billing/provider-key-format";
 import { probeProviderKey } from "../../billing/provider-probe";
-import { writeSecret, archiveSecret } from "../../lib/secret-manager";
-import { primaryWorkspaceSlug } from "../../lib/workspace-slugs";
+import { writeSecret, archiveSecret } from "../../../../scripts/lib/secret-manager";
+import { primaryWorkspaceSlug } from "../../../../scripts/lib/workspace-slugs";
 import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers";
 
 const router = Router();
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- BYOT-key submission flow: validates provider, dedupes against existing, probes the upstream, persists secret + Firestore state in one atomic-feeling sequence. Splitting it would scatter the flow across files.
 router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;

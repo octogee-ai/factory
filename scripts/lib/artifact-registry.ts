@@ -98,6 +98,18 @@ async function fetchDockerImagesPage(
   return (await resp.json()) as DockerImagesPage;
 }
 
+function mergeNewerBuilds(
+  accumulated: Map<string, GatewayBuild>,
+  pageMap: Map<string, GatewayBuild>,
+): void {
+  for (const [tag, build] of pageMap) {
+    const existing = accumulated.get(tag);
+    if (!existing || existing.pushedAt < build.pushedAt) {
+      accumulated.set(tag, build);
+    }
+  }
+}
+
 export async function listGatewayBuilds(opts: ListOpts): Promise<GatewayBuild[]> {
   const project = opts.project ?? process.env.GCP_PROJECT ?? "octogee";
   const location = opts.location ?? process.env.GAR_LOCATION ?? "us-central1";
@@ -118,13 +130,10 @@ export async function listGatewayBuilds(opts: ListOpts): Promise<GatewayBuild[]>
       token,
       pageToken,
     );
-    const pageMap = extractBuildsForService(result.dockerImages ?? [], opts.service);
-    for (const [tag, build] of pageMap) {
-      const existing = accumulated.get(tag);
-      if (!existing || existing.pushedAt < build.pushedAt) {
-        accumulated.set(tag, build);
-      }
-    }
+    mergeNewerBuilds(
+      accumulated,
+      extractBuildsForService(result.dockerImages ?? [], opts.service),
+    );
     pageToken = result.nextPageToken ?? null;
     if (!pageToken) break;
     if (accumulated.size >= enoughDeduped) break;

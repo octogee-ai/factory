@@ -38,6 +38,11 @@ import { SIGNATURE_HEADER } from "../../shared/types/fleet-controller.js";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
 import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
+import { provisionGatewayAuthSecret } from "../../scripts/lib/secret-manager.js";
+import { listGatewayBuilds } from "../../scripts/lib/artifact-registry.js";
+import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
+import { deleteAuthUserTolerantOfMissing } from "../../scripts/lib/firebase-auth-helpers.js";
+import { startHttpServer } from "./http-server.js";
 
 const log = (msg: string) => console.log(msg);
 
@@ -47,6 +52,7 @@ const HELM_RELEASE = process.env.HELM_RELEASE ?? "octogee";
 const HELM_CHART = process.env.HELM_CHART ?? "/charts/octogee";
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
+const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 
 interface ControllerDeps {
   db: Firestore;
@@ -257,11 +263,25 @@ async function main(): Promise<void> {
 
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
+  const stopHttp = startHttpServer({
+    db,
+    log,
+    port: HTTP_PORT,
+    verifyIdToken: async (token) => {
+      const decoded = await getAuth().verifyIdToken(token);
+      return { uid: decoded.uid };
+    },
+    workspaceSlugsForUser,
+    provisionGatewayAuthSecret,
+    listGatewayBuilds,
+    deleteAuthUserTolerantOfMissing: (uid) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
+  });
 
   const shutdown = () => {
     log("[glm-controller] shutdown signal — stopping subscribers");
     stopReconciler();
     stopWorker();
+    stopHttp();
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);

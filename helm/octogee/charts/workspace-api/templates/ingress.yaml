@@ -38,6 +38,62 @@ spec:
       http:
         paths:
           {{- $svc := .Values.ingress.targetService | default "workspace-api-default" }}
+          {{- $glm := .Values.ingress.glmService | default "glm-controller" }}
+          # Cowboy HTTP — fleet routes served from glm-controller so the
+          # admin Gateways tab keeps responding when no gateway pods are
+          # booted. GCE URL maps prefer most-specific path; these rules
+          # take precedence over the /api/* catch-all below. The
+          # /api/admin/gateways/* prefix on GCE matches the bare
+          # /api/admin/gateways path too — no separate rule needed.
+          - path: /api/admin/gateways/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/operations
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/restore-jobs
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/builds
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/rollouts
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/customer-distribution
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/customers/by-slug/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
           - path: /api/*
             pathType: ImplementationSpecific
             backend:

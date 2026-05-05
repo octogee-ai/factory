@@ -7,6 +7,7 @@
   "scripts": {
     "provision": "tsx local-provisioner.ts",
     "fleet": "tsx ops/fleet.ts",
+    "bump-gateway-imagetag": "tsx bump-gateway-imagetag.ts",
     "test": "npx vitest run __tests__"
   },
   "dependencies": {

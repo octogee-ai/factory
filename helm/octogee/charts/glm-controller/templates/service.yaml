@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: glm-controller
+spec:
+  selector:
+    app: glm-controller
+  ports:
+    - port: {{ .Values.http.port }}
+      targetPort: {{ .Values.http.port }}
+      name: http
+  type: ClusterIP

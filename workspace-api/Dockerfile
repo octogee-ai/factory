@@ -1,6 +1,8 @@
 # Build context: repo root (see workspace-api/cloudbuild.yaml).
-# workspace-api and shared/ are both copied in so tsc can compile
-# @shared/types/identity along with src/.
+# workspace-api, shared/, and scripts/lib/ are all copied in so tsc can
+# compile @shared/types/identity AND the shared admin-fleet-router
+# factory (mounted by both workspace-api and glm-controller) along
+# with src/.
 #
 # WORKDIR must be /workspace-api (not /app) so that tsc's emit paths —
 # which mirror each source file's location relative to rootDir (the
@@ -11,9 +13,23 @@ FROM node:22-slim AS builder
 WORKDIR /workspace-api
 COPY workspace-api/package.json workspace-api/package-lock.json* ./
 RUN npm ci --ignore-scripts
+
+# scripts/lib/admin-fleet-router.ts (et al.) live in workspace-api's tsc
+# include but are physically at /scripts/lib/. Node module resolution
+# walks UP from each file's directory, so `import "express"` inside
+# /scripts/lib/admin-fleet-router.ts resolves through /scripts/node_modules
+# — not /workspace-api/node_modules. Install scripts/'s deps so the
+# compile resolves cleanly. Builder stage only — runtime image still
+# only copies /workspace-api/dist (where the layout reverses: dist is
+# inside /workspace-api so its imports do resolve through
+# /workspace-api/node_modules).
+COPY scripts/package.json scripts/package-lock.json* /scripts/
+RUN npm ci --prefix /scripts --ignore-scripts
+
 COPY workspace-api/tsconfig.json ./
 COPY workspace-api/src/ ./src/
 COPY shared/ /shared/
+COPY scripts/lib/ /scripts/lib/
 # `npm run build` = tsc → tsc-alias → verify:no-alias-leakage. The
 # alias rewriter and post-build grep guard together prevent the
 # MODULE_NOT_FOUND @shared/* runtime failure. See README "Shared code".

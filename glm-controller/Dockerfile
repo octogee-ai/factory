@@ -31,13 +31,19 @@ RUN npm ci
 COPY glm-controller/tsconfig.json ./
 COPY glm-controller/src ./src
 COPY shared /app/shared
-# glm-controller's migrate-customer handler imports from scripts/lib
-# (fleet-migration-{client,runner,signature}, fleet-migration). The
-# tsconfig's `rootDir: ".."` lets `import "../../../scripts/lib/foo.js"`
-# resolve, but the compiler still needs the .ts files on disk. They are
-# self-contained (no other scripts/ deps; only `crypto` + relative
-# siblings + shared/types), so copying just scripts/lib is enough.
+# glm-controller imports several scripts/lib files via tsconfig rootDir: ".."
+# — fleet-migration-{client,runner,signature} (used by migrate-customer)
+# AND admin-fleet-router + secret-manager + artifact-registry +
+# workspace-slugs + firebase-auth-helpers (used by the http-server lift).
+# admin-fleet-router and friends import express, firebase-admin/firestore,
+# google-auth-library, @google-cloud/secret-manager. Node module resolution
+# walks UP from each .ts file's directory, so /app/scripts/lib/foo.ts
+# resolving "express" looks in /app/scripts/node_modules — NOT
+# /app/glm-controller/node_modules. Install scripts/'s deps so tsc
+# resolves cleanly. Builder stage only.
 COPY scripts/lib /app/scripts/lib
+COPY scripts/package.json scripts/package-lock.json* /app/scripts/
+RUN npm ci --prefix /app/scripts --ignore-scripts
 
 RUN npx tsc \
   && npm prune --omit=dev

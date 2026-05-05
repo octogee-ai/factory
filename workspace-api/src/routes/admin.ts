@@ -1,3 +1,7 @@
+/* eslint-disable security/detect-object-injection -- admin routes index
+   pre-validated keys (OPS_FIELD_MAP, dottedRead path components against a
+   known field, model-name keys derived from admin-controlled Firestore
+   data); the rule's broad-stroke detection is noisy here. */
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAdmin } from "../middleware/auth";
 import { logger } from "../middleware/logging";
@@ -6,9 +10,11 @@ import { getTierConfig, type TierName } from "../billing/tiers";
 import type { CSIDocument } from "../csi/types";
 import { updateCSIForUser } from "../csi/updater";
 import { getWorkspaceMmContext } from "../lib/mattermost-context";
-import { workspaceSlugsForUser } from "../lib/workspace-slugs";
-import { provisionGatewayAuthSecret } from "../lib/secret-manager";
-import { listGatewayBuilds } from "../lib/artifact-registry";
+import { workspaceSlugsForUser } from "../../../scripts/lib/workspace-slugs";
+import { provisionGatewayAuthSecret } from "../../../scripts/lib/secret-manager";
+import { listGatewayBuilds } from "../../../scripts/lib/artifact-registry";
+import { addAdminFleetRoutes } from "../../../scripts/lib/admin-fleet-router";
+import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "../../../scripts/lib/firebase-auth-helpers";
 import {
   buildCustomerSummary,
   buildFunnelRollup,
@@ -33,6 +39,66 @@ router.use(requireAdmin);
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
 
+interface CustomerListFilters {
+  search: string;
+  trialStatus: string;
+  funnelStage: string;
+  throttleFilter: string;
+  byotFilter: string;
+}
+
+const THROTTLE_LEVEL_BY_NAME: Record<string, number> = {
+  normal: 0,
+  warning: 1,
+  advisor: 2,
+  blocked: 3,
+};
+
+function matchesTrialStatus(c: CustomerSummary, status: string): boolean {
+  if (status === "trialing") return c.subscriptionStatus === "trialing";
+  if (status === "converted") return c.trial?.funnelStage === "converted";
+  if (status === "expired") return c.trial?.funnelStage === "expired";
+  if (status === "paid")
+    return (
+      isActiveStatus(c.subscriptionStatus) &&
+      c.tier !== "trial" &&
+      c.tier !== "free"
+    );
+  return true;
+}
+
+function applyCustomerFilters(
+  items: CustomerSummary[],
+  f: CustomerListFilters,
+): CustomerSummary[] {
+  let result = items;
+  if (f.search) {
+    const q = f.search;
+    result = result.filter(
+      (c) =>
+        c.displayName.toLowerCase().includes(q) ||
+        c.email.toLowerCase().includes(q) ||
+        c.username.toLowerCase().includes(q),
+    );
+  }
+  if (f.trialStatus !== "all") {
+    result = result.filter((c) => matchesTrialStatus(c, f.trialStatus));
+  }
+  if (f.funnelStage !== "all") {
+    result = result.filter((c) => c.trial?.funnelStage === f.funnelStage);
+  }
+  if (f.throttleFilter !== "all") {
+    const lvl = THROTTLE_LEVEL_BY_NAME[f.throttleFilter];
+    if (lvl !== undefined) {
+      result = result.filter((c) => c.throttleLevel === lvl);
+    }
+  }
+  if (f.byotFilter !== "all") {
+    result = result.filter((c) => c.byotActive === (f.byotFilter === "on"));
+  }
+  return result;
+}
+
 async function readCSIByUids(uids: string[]): Promise<Map<string, CSIDocument>> {
   if (uids.length === 0) return new Map();
   const refs = uids.map((uid) => db.doc(`users/${uid}/csi/latest`));
@@ -46,6 +112,7 @@ async function readCSIByUids(uids: string[]): Promise<Map<string, CSIDocument>> 
   return out;
 }
 
+// eslint-disable-next-line complexity -- linear: parse query, paginate, fetch CSI, filter (extracted), respond. Each branch is a simple field assignment with default.
 router.get("/customers", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const pageSize = Math.min(
@@ -84,39 +151,18 @@ router.get("/customers", async (req: Request, res: Response, next: NextFunction)
     const uids = pageDocs.map((d) => d.id);
     const csiByUid = await readCSIByUids(uids);
 
-    let items: CustomerSummary[] = pageDocs.map((doc) =>
-      buildCustomerSummary(doc.id, doc.data() as Record<string, any>, csiByUid.get(doc.id) ?? null),
+    const items = applyCustomerFilters(
+      pageDocs.map((doc) =>
+        buildCustomerSummary(
+          doc.id,
+          doc.data() as Record<string, unknown>,
+          csiByUid.get(doc.id) ?? null,
+        ),
+      ),
+      // In-memory filtering. Fine at F&F scale; revisit with normalized
+      // lowercase fields + Firestore where-chains at 1k+ customers (§7.4).
+      { search, trialStatus, funnelStage, throttleFilter, byotFilter },
     );
-
-    // In-memory filtering. Fine at F&F scale; revisit with normalized
-    // lowercase fields + Firestore where-chains at 1k+ customers (§7.4).
-    if (search) {
-      items = items.filter((c) =>
-        c.displayName.toLowerCase().includes(search) ||
-        c.email.toLowerCase().includes(search) ||
-        c.username.toLowerCase().includes(search),
-      );
-    }
-    if (trialStatus !== "all") {
-      items = items.filter((c) => {
-        if (trialStatus === "trialing") return c.subscriptionStatus === "trialing";
-        if (trialStatus === "converted") return c.trial?.funnelStage === "converted";
-        if (trialStatus === "expired") return c.trial?.funnelStage === "expired";
-        if (trialStatus === "paid") return isActiveStatus(c.subscriptionStatus) && c.tier !== "trial" && c.tier !== "free";
-        return true;
-      });
-    }
-    if (funnelStage !== "all") {
-      items = items.filter((c) => c.trial?.funnelStage === funnelStage);
-    }
-    if (throttleFilter !== "all") {
-      const map: Record<string, number> = { normal: 0, warning: 1, advisor: 2, blocked: 3 };
-      const lvl = map[throttleFilter];
-      if (lvl !== undefined) items = items.filter((c) => c.throttleLevel === lvl);
-    }
-    if (byotFilter !== "all") {
-      items = items.filter((c) => c.byotActive === (byotFilter === "on"));
-    }
 
     // Approximate total — single-doc read.
     const statsSnap = await db.doc("system/stats").get();
@@ -154,7 +200,7 @@ router.get("/customers/stats", async (_req: Request, res: Response, next: NextFu
     for (const doc of usersSnap.docs) {
       const summary = buildCustomerSummary(
         doc.id,
-        doc.data() as Record<string, any>,
+        doc.data() as Record<string, unknown>,
         csiByUid.get(doc.id) ?? null,
       );
       totalCustomers++;
@@ -195,7 +241,7 @@ router.get("/funnel", async (req: Request, res: Response, next: NextFunction) =>
 
     const inputs = usersSnap.docs.map((d) => ({
       uid: d.id,
-      user: d.data() as Record<string, any>,
+      user: d.data() as Record<string, unknown>,
       csi: csiByUid.get(d.id) ?? null,
     }));
 
@@ -204,6 +250,7 @@ router.get("/funnel", async (req: Request, res: Response, next: NextFunction) =>
   } catch (e) { next(e); }
 });
 
+// eslint-disable-next-line complexity -- response-shape builder; cyclomatic count tracks the customer schema's optional-field depth, not branching logic. Splitting into sub-builders would scatter the response contract.
 router.get("/customer/:uid", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.params.uid;
@@ -435,12 +482,20 @@ router.get("/customer/:uid/usage", async (req: Request, res: Response, next: Nex
 
     // Surface diagnostic state so the frontend can show the right message
     // (§10): no slug vs. slug-but-no-data are different problems.
-    const diagnostic =
-      slugs.length === 0
-        ? { kind: "no-slug" as const, message: "User has no workspace slug. Check users/{uid}.username." }
-        : workspaces.every((w) => w.summary.totalTokens === 0 && w.sessions.length === 0)
-          ? { kind: "no-data" as const, message: "Workspace exists but no sessions logged yet." }
-          : { kind: "ok" as const, message: null };
+    const noSessions = workspaces.every(
+      (w) => w.summary.totalTokens === 0 && w.sessions.length === 0,
+    );
+    let diagnostic:
+      | { kind: "no-slug"; message: string }
+      | { kind: "no-data"; message: string }
+      | { kind: "ok"; message: null };
+    if (slugs.length === 0) {
+      diagnostic = { kind: "no-slug", message: "User has no workspace slug. Check users/{uid}.username." };
+    } else if (noSessions) {
+      diagnostic = { kind: "no-data", message: "Workspace exists but no sessions logged yet." };
+    } else {
+      diagnostic = { kind: "ok", message: null };
+    }
 
     res.json({ uid, workspaces, diagnostic, generatedAt: new Date().toISOString() });
   } catch (e) { next(e); }
@@ -533,7 +588,7 @@ router.post("/customer/:uid/ops", async (req: Request, res: Response, next: Next
     if (!userSnap.exists) { res.status(404).json({ error: "User not found" }); return; }
     const userData = userSnap.data() ?? {};
 
-    const dottedRead = (path: string, src: Record<string, any>): unknown => {
+    const dottedRead = (path: string, src: Record<string, unknown>): unknown => {
       return path.split(".").reduce<unknown>((acc, key) => {
         if (acc && typeof acc === "object" && key in (acc as Record<string, unknown>)) {
           return (acc as Record<string, unknown>)[key];
@@ -577,1119 +632,22 @@ router.post("/customer/:uid/csi-refresh", async (req: Request, res: Response, ne
   } catch (e) { next(e); }
 });
 
-interface StripeRefs {
-  customerId: string | null;
-  subscriptionId: string | null;
-  subscriptionStatus: string | null;
-}
-
-function asStringOrNull(v: unknown): string | null {
-  return typeof v === "string" && v.length > 0 ? v : null;
-}
-
-// Inline delete for raw-signup customers (no slug ever assigned).
-// Auth errors with code "auth/user-not-found" are tolerated; everything
-// else surfaces. Matches nukeStep8 behavior.
-async function deleteAuthUserTolerantOfMissing(uid: string): Promise<void> {
-  try {
+// ── Fleet / customer-lifecycle endpoints ────────────────────────────────
+//
+// Mounted from a shared factory so glm-controller can serve the same
+// surface when no gateway pods are booted (#PR Cowboy HTTP). The factory
+// owns route definitions; this wiring layer just injects workspace-api's
+// db / logger / Google Cloud SDK adapters.
+addAdminFleetRoutes(router, {
+  db,
+  logger,
+  workspaceSlugsForUser,
+  provisionGatewayAuthSecret,
+  listGatewayBuilds,
+  deleteAuthUserTolerantOfMissing: async (uid: string) => {
     const { getAuth } = await import("firebase-admin/auth");
-    await getAuth().deleteUser(uid);
-  } catch (err) {
-    const code = (err as { code?: string } | null | undefined)?.code;
-    if (code !== "auth/user-not-found") throw err;
-  }
-}
-
-// Resolves a customer's primary workspace slug. `provisioning.openclaw.slug`
-// is canonical (matches /customers/by-slug + customer-lifecycle); username
-// fallback covers raw signups + legacy docs. (Copilot review)
-function resolveCustomerSlug(userData: Record<string, unknown>): string | null {
-  const provisioning =
-    (userData.provisioning as Record<string, unknown> | undefined) ?? {};
-  const openclaw =
-    (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
-  const openclawSlug = asStringOrNull(openclaw.slug);
-  return openclawSlug ?? workspaceSlugsForUser(userData)[0] ?? null;
-}
-
-// Pulls the stripe identifiers out of a user doc. Some legacy docs put
-// them at the top level (`stripeCustomerId`); newer flow puts them under
-// `subscription.*` / `billing.*`. Either way — we just need the IDs to
-// log them, since the operator owns Stripe cancellation manually for
-// now (out of scope per spec line 211).
-function resolveStripeRefs(userData: Record<string, unknown>): StripeRefs {
-  const subscription = (userData.subscription as Record<string, unknown> | undefined) ?? {};
-  const billing = (userData.billing as Record<string, unknown> | undefined) ?? {};
-  return {
-    customerId:
-      asStringOrNull(userData.stripeCustomerId) ?? asStringOrNull(billing.stripeCustomerId),
-    subscriptionId:
-      asStringOrNull(subscription.id) ?? asStringOrNull(billing.subscriptionId),
-    subscriptionStatus:
-      asStringOrNull(subscription.status) ?? asStringOrNull(billing.subscriptionStatus),
-  };
-}
-
-// ── Admin delete customer ──────────────────────────────────────────────────
-//
-// Spec: docs/specs/ADMIN-DELETE-CUSTOMER-SPEC.md.
-//
-// Three branches:
-//   1. No slug (raw signup) → inline lite-delete (Auth + user doc).
-//   2. Has slug → enqueue glmOperations `deprovision-customer`. The
-//      glm-controller handler unmounts from the gateway (if any) and
-//      runs cloud-side cleanup. Single path for assigned + orphan.
-//   3. (No third branch — Cowboy is canonical for both assigned and
-//      orphan customers post-#PR. cleanupJobs is no longer used here.)
-//
-// Stripe stub: log uid + email + stripe IDs at WARN when present so the
-// operator sees what they'll have to cancel manually. No auto-cancel
-// until Stripe wiring is built (out of scope per spec line 211).
-router.post("/customer/:uid/delete", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const uid = req.params.uid;
-    const userRef = db.collection("users").doc(uid);
-    const userSnap = await userRef.get();
-    if (!userSnap.exists) {
-      res.status(404).json({ error: "User not found", uid });
-      return;
-    }
-    const userData = userSnap.data() ?? {};
-
-    // Stripe stub — log loud and clear; does not block deletion.
-    const stripe = resolveStripeRefs(userData);
-    if (stripe.customerId || stripe.subscriptionId) {
-      logger.warn(
-        `[admin-delete] ⚠️  STRIPE NOT CANCELLED — manual cancellation required. ` +
-          `uid=${uid} email=${userData.email ?? "?"} stripeCustomerId=${stripe.customerId ?? "?"} ` +
-          `subscriptionId=${stripe.subscriptionId ?? "?"} status=${stripe.subscriptionStatus ?? "?"}`,
-      );
-    }
-
-    const slug = resolveCustomerSlug(userData);
-
-    if (!slug) {
-      // Branch 1: raw signup, no slug → inline lite-delete.
-      await deleteAuthUserTolerantOfMissing(uid);
-      await userRef.delete();
-      logger.info(`[admin-delete] inline lite-delete uid=${uid}`);
-      res.json({ status: "deleted-inline", uid });
-      return;
-    }
-
-    // 409 if a deprovision-customer op is already pending or running.
-    // Indexed on `inputUid` (lifted by createOperation) so this is an
-    // O(1)-ish query instead of an unbounded scan of all in-flight ops.
-    const inFlight = await db
-      .collection(GLM_OPERATIONS_COLLECTION)
-      .where("kind", "==", "deprovision-customer")
-      .where("inputUid", "==", uid)
-      .where("status", "in", ["pending", "running"])
-      .get();
-    const conflict = inFlight.docs[0] ?? null;
-    if (conflict) {
-      res.status(409).json({
-        error: "Cleanup already in progress",
-        operationId: conflict.id,
-      });
-      return;
-    }
-
-    // Branch 2: has slug → enqueue glmOperations deprovision-customer.
-    const operationId = await createOperation({
-      kind: "deprovision-customer",
-      createdBy: req.uid ?? "unknown",
-      input: { uid, slug },
-    });
-    logger.info(`[admin-delete] queued deprovision-customer op=${operationId} uid=${uid} slug=${slug}`);
-    res.status(202).json({ status: "queued", operationId, slug });
-  } catch (e) {
-    next(e);
-  }
-});
-
-// ── Fleet Controller — Phase 2 (training wheels) ────────────────────────────
-//
-// Lists every `gateways/{id}` doc + aggregates `restoreJobs/*` so the admin
-// Fleet Panel can render status / mounted customers / image SHA / in-flight
-// jobs as a single pane of glass. Read-only; write endpoints land in §Phase 3
-// alongside the unmount handler. See docs/architecture/GATEWAY-PLATFORM-SPEC.md
-// §Gateway Lifecycle Manager → API Surface.
-const JOB_TTL_MS = 10 * 60_000;
-
-router.get("/gateways", async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const [gwSnap, jobsSnap] = await Promise.all([
-      db.collection("gateways").get(),
-      db
-        .collection("restoreJobs")
-        .where("state", "in", ["pending", "dispatched", "running"])
-        .get(),
-    ]);
-
-    const now = Date.now();
-    const toMillis = (v: any): number | null => {
-      if (!v) return null;
-      if (typeof v?.toDate === "function") return v.toDate().getTime();
-      if (v instanceof Date) return v.getTime();
-      if (typeof v === "number") return v;
-      return null;
-    };
-    const toIso = (v: any): string | null => {
-      const ms = toMillis(v);
-      return ms == null ? null : new Date(ms).toISOString();
-    };
-
-    const jobsByGateway = new Map<string, Array<{ id: string; data: any }>>();
-    let mounting = 0;
-    let staleJobs = 0;
-    let pending = 0;
-
-    for (const doc of jobsSnap.docs) {
-      const data = doc.data() as any;
-      const gid = data.gatewayId;
-      const arr = jobsByGateway.get(gid) ?? [];
-      arr.push({ id: doc.id, data });
-      jobsByGateway.set(gid, arr);
-
-      const state = data.state;
-      if (state === "pending") pending++;
-      if (state === "dispatched" || state === "running") {
-        const ageMs = toMillis(data.dispatchedAt) ?? toMillis(data.createdAt);
-        const isStale = ageMs != null && now - ageMs > JOB_TTL_MS;
-        if (isStale) staleJobs++;
-        else mounting++;
-      }
-    }
-
-    const gateways = gwSnap.docs.map((doc) => {
-      const data = doc.data() as any;
-      const lastHeartbeatMs = toMillis(data.lastHeartbeatAt);
-      const heartbeatAgeMs = lastHeartbeatMs == null ? null : now - lastHeartbeatMs;
-      const inFlightJobId: string | null = data.inFlightJobId ?? null;
-      const ownJobs = jobsByGateway.get(doc.id) ?? [];
-      const inFlightRaw = inFlightJobId
-        ? ownJobs.find((j) => j.id === inFlightJobId)
-        : null;
-      const inFlightJob = inFlightRaw
-        ? {
-            jobId: inFlightRaw.id,
-            slug: inFlightRaw.data.slug,
-            state: inFlightRaw.data.state,
-            ageMs: (() => {
-              const dispatchedMs = toMillis(inFlightRaw.data.dispatchedAt) ?? toMillis(inFlightRaw.data.createdAt);
-              return dispatchedMs == null ? 0 : now - dispatchedMs;
-            })(),
-          }
-        : null;
-      const lastError = data.lastError
-        ? {
-            jobId: data.lastError.jobId,
-            slug: data.lastError.slug,
-            message: data.lastError.message,
-            at: toIso(data.lastError.at),
-          }
-        : null;
-      return {
-        gatewayId: data.gatewayId ?? doc.id,
-        status: data.status ?? "unknown",
-        imageTag: data.version ?? null,
-        openclawVersion: data.openclawVersion ?? null,
-        mountedCustomers: Array.isArray(data.mountedCustomers) ? data.mountedCustomers : [],
-        lastHeartbeatAt: toIso(data.lastHeartbeatAt),
-        heartbeatAgeMs,
-        inFlightJobId,
-        inFlightJob,
-        lastError,
-      };
-    });
-
-    let ready = 0;
-    let unreachable = 0;
-    let customersMounted = 0;
-    for (const g of gateways) {
-      if (g.status === "ready") ready++;
-      if (g.status === "unreachable") unreachable++;
-      customersMounted += g.mountedCustomers.length;
-    }
-
-    res.json({
-      gateways,
-      stats: {
-        gateways: { total: gateways.length, ready, unreachable },
-        customersMounted,
-        inFlight: { mounting, unmounting: 0, total: mounting },
-        staleJobs,
-        pendingPlacements: pending,
-      },
-      generatedAt: new Date().toISOString(),
-    });
-  } catch (e) { next(e); }
-});
-
-// ── Customer distribution + placement ───────────────────────────────────────
-//
-// Operator view of "where is every customer right now": total approved,
-// who's assigned to which gateway, who's mounted, who's pending placement
-// (no gatewayId), who's pending mount (gatewayId set but not yet in
-// gateways/{id}.mountedCustomers). One Firestore round-trip on
-// gateways + users; cheaper than two endpoints.
-
-router.get(
-  "/customer-distribution",
-  async (_req: Request, res: Response, next: NextFunction) => {
-    try {
-      const [gwSnap, usersSnap] = await Promise.all([
-        db.collection("gateways").get(),
-        db.collection("users").where("approved", "==", true).get(),
-      ]);
-
-      const gateways = new Map<
-        string,
-        { status: string; mountedCustomers: Set<string>; mountedCount: number }
-      >();
-      for (const doc of gwSnap.docs) {
-        const data = doc.data() as
-          | { status?: string; mountedCustomers?: unknown }
-          | undefined;
-        const mounted = Array.isArray(data?.mountedCustomers)
-          ? (data!.mountedCustomers as unknown[]).filter(
-              (s): s is string => typeof s === "string",
-            )
-          : [];
-        gateways.set(doc.id, {
-          status: typeof data?.status === "string" ? data.status : "unknown",
-          mountedCustomers: new Set(mounted),
-          mountedCount: mounted.length,
-        });
-      }
-
-      const assignedByGateway = new Map<string, number>();
-      const mountedByGateway = new Map<string, number>();
-      const pendingPlacements: Array<{
-        uid: string;
-        username: string;
-        email: string;
-        currentGatewayId: string | null;
-        reason: "never-assigned" | "gateway-gone";
-        approvedAt: string | null;
-      }> = [];
-      let totalApproved = 0;
-      let assigned = 0;
-      let unassigned = 0;
-      let mounted = 0;
-
-      for (const doc of usersSnap.docs) {
-        totalApproved++;
-        const data = doc.data() as Record<string, unknown>;
-        const provisioning = (data.provisioning as Record<string, unknown> | undefined) ?? {};
-        const openclaw = (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
-        const slug = typeof openclaw.slug === "string" ? openclaw.slug : null;
-        const gid = typeof openclaw.gatewayId === "string" ? openclaw.gatewayId : null;
-        const username = typeof data.username === "string" ? data.username : "";
-        const email = typeof data.email === "string" ? data.email : "";
-        const approvedAt = toISODate(data.approvedAt);
-
-        if (!gid) {
-          unassigned++;
-          pendingPlacements.push({
-            uid: doc.id,
-            username,
-            email,
-            currentGatewayId: null,
-            reason: "never-assigned",
-            approvedAt,
-          });
-          continue;
-        }
-
-        const gw = gateways.get(gid);
-        if (!gw) {
-          // Gateway is gone — orphaned assignment. NOT counted as `assigned`
-          // (operator-action-needed bucket). Otherwise assignedNotMounted
-          // would include orphans, double-counting them across the two cards.
-          pendingPlacements.push({
-            uid: doc.id,
-            username,
-            email,
-            currentGatewayId: gid,
-            reason: "gateway-gone",
-            approvedAt,
-          });
-          continue;
-        }
-        assigned++;
-        assignedByGateway.set(gid, (assignedByGateway.get(gid) ?? 0) + 1);
-        if (slug && gw.mountedCustomers.has(slug)) {
-          mounted++;
-          mountedByGateway.set(gid, (mountedByGateway.get(gid) ?? 0) + 1);
-        }
-      }
-
-      // Per-gateway mountedCount derives from APPROVED users only (not the
-      // raw heartbeat slug list). A heartbeat with stale slugs (deleted
-      // user, revoked approval) would otherwise push the bar past 100% of
-      // assignedCount.
-      const perGateway = Array.from(gateways.entries()).map(([gatewayId, gw]) => ({
-        gatewayId,
-        status: gw.status,
-        assignedCount: assignedByGateway.get(gatewayId) ?? 0,
-        mountedCount: mountedByGateway.get(gatewayId) ?? 0,
-      }));
-
-      res.json({
-        stats: {
-          totalApproved,
-          assigned,
-          unassigned,
-          mounted,
-          assignedNotMounted: assigned - mounted,
-        },
-        perGateway,
-        pendingPlacements,
-        generatedAt: new Date().toISOString(),
-      });
-    } catch (e) {
-      next(e);
-    }
+    await deleteAuthUserLib(uid, getAuth());
   },
-);
-
-interface DrawerMountedCustomer {
-  uid: string;
-  slug: string;
-  username: string;
-  email: string;
-  throttleLevel: number;
-  lastActive: string | null;
-}
-
-const ERR_GATEWAY_NOT_FOUND = "gateway not found";
-
-function readMountedSlugs(hbData: Record<string, unknown> | undefined): Set<string> {
-  if (!Array.isArray(hbData?.mountedCustomers)) return new Set();
-  return new Set(
-    (hbData.mountedCustomers as unknown[]).filter(
-      (s): s is string => typeof s === "string",
-    ),
-  );
-}
-
-function buildMountedCustomer(
-  uid: string,
-  data: Record<string, unknown>,
-  slug: string,
-): DrawerMountedCustomer {
-  return {
-    uid,
-    slug,
-    username: typeof data.username === "string" ? data.username : "",
-    email: typeof data.email === "string" ? data.email : "",
-    throttleLevel: typeof data.throttleLevel === "number" ? data.throttleLevel : 0,
-    lastActive: toISODate(data.lastActive),
-  };
-}
-
-function userSlug(data: Record<string, unknown>): string {
-  const provisioning = (data.provisioning as Record<string, unknown> | undefined) ?? {};
-  const openclaw = (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
-  return typeof openclaw.slug === "string" ? openclaw.slug : "";
-}
-
-const OP_KINDS = new Set([
-  "add-gateway",
-  "migrate-customer",
-  "retire-gateway",
-  "rollout",
-  "deprovision-customer",
-]);
-const OP_STATUSES = new Set([
-  "pending",
-  "running",
-  "succeeded",
-  "failed",
-  "rolled-back",
-]);
-
-interface DrawerOperation {
-  id: string;
-  kind: string;
-  status: string;
-  createdBy: string;
-  createdAt: number | null;
-  startedAt: number | null;
-  completedAt: number | null;
-  input: Record<string, unknown>;
-  steps: unknown[];
-  error?: string;
-  rolledBack?: boolean;
-}
-
-function coerceNumberOrNull(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
-
-function shapeDrawerOperation(id: string, data: Record<string, unknown>): DrawerOperation {
-  const kind = typeof data.kind === "string" && OP_KINDS.has(data.kind) ? data.kind : "unknown";
-  const status =
-    typeof data.status === "string" && OP_STATUSES.has(data.status) ? data.status : "unknown";
-  const out: DrawerOperation = {
-    id,
-    kind,
-    status,
-    createdBy: typeof data.createdBy === "string" ? data.createdBy : "unknown",
-    createdAt: coerceNumberOrNull(data.createdAt),
-    startedAt: coerceNumberOrNull(data.startedAt),
-    completedAt: coerceNumberOrNull(data.completedAt),
-    input: typeof data.input === "object" && data.input !== null
-      ? (data.input as Record<string, unknown>)
-      : {},
-    steps: Array.isArray(data.steps) ? data.steps : [],
-  };
-  if (typeof data.error === "string") out.error = data.error;
-  if (typeof data.rolledBack === "boolean") out.rolledBack = data.rolledBack;
-  return out;
-}
-
-router.get(
-  "/gateways/:id/details",
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = req.params.id;
-      const [glmSnap, hbSnap, usersSnap, opsSnap] = await Promise.all([
-        db.collection("glmGateways").doc(id).get(),
-        db.collection("gateways").doc(id).get(),
-        db.collection("users").where("approved", "==", true).get(),
-        // Single-field equality + limit needs no composite index. We sort
-        // client-side by createdAt; ops written before the top-level
-        // gatewayId field landed are picked up via the input.gatewayId
-        // fallback below.
-        db.collection("glmOperations").where("gatewayId", "==", id).limit(50).get(),
-      ]);
-      if (!glmSnap.exists && !hbSnap.exists) {
-        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
-        return;
-      }
-      const hbData = hbSnap.exists ? (hbSnap.data() as Record<string, unknown>) : undefined;
-      const mountedSlugs = readMountedSlugs(hbData);
-
-      const mountedCustomers: DrawerMountedCustomer[] = [];
-      for (const doc of usersSnap.docs) {
-        const data = doc.data() as Record<string, unknown>;
-        const slug = userSlug(data);
-        if (!slug || !mountedSlugs.has(slug)) continue;
-        mountedCustomers.push(buildMountedCustomer(doc.id, data, slug));
-      }
-      mountedCustomers.sort((a, b) => a.slug.localeCompare(b.slug));
-
-      const recentOperations = opsSnap.docs
-        .map((d) => shapeDrawerOperation(d.id, d.data() as Record<string, unknown>))
-        .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
-        .slice(0, 20);
-
-      res.json({
-        mountedCustomers,
-        recentOperations,
-        generatedAt: new Date().toISOString(),
-      });
-    } catch (e) {
-      next(e);
-    }
-  },
-);
-
-router.post(
-  "/customers/:uid/assign",
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const uid = req.params.uid;
-      const body = req.body as Partial<{ gatewayId: string }>;
-      if (!body.gatewayId || typeof body.gatewayId !== "string") {
-        res.status(400).json({ error: "missing gatewayId in body" });
-        return;
-      }
-      const userSnap = await db.collection("users").doc(uid).get();
-      if (!userSnap.exists) {
-        res.status(404).json({ error: "user not found", uid });
-        return;
-      }
-      const userData = userSnap.data() as
-        | { approved?: boolean; provisioning?: { openclaw?: { gatewayId?: string } } }
-        | undefined;
-      if (!userData?.approved) {
-        res.status(409).json({ error: "user is not approved", uid });
-        return;
-      }
-      const heartbeatSnap = await db.collection("gateways").doc(body.gatewayId).get();
-      if (!heartbeatSnap.exists) {
-        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: body.gatewayId });
-        return;
-      }
-      const hb = heartbeatSnap.data() as { status?: string } | undefined;
-      if (hb?.status !== "ready") {
-        res.status(409).json({
-          error: "target gateway not ready",
-          gatewayId: body.gatewayId,
-          status: hb?.status ?? "unknown",
-        });
-        return;
-      }
-      const currentGid = userData.provisioning?.openclaw?.gatewayId;
-      if (currentGid === body.gatewayId) {
-        res.status(409).json({
-          error: "user already assigned to that gateway — no-op",
-          uid,
-          gatewayId: body.gatewayId,
-        });
-        return;
-      }
-      await db
-        .collection("users")
-        .doc(uid)
-        .update({ "provisioning.openclaw.gatewayId": body.gatewayId });
-      res.status(202).json({ uid, gatewayId: body.gatewayId });
-    } catch (e) {
-      next(e);
-    }
-  },
-);
-
-// ── Gateway Lifecycle Manager — Phase 4 (GLM API) ───────────────────────────
-//
-// Thin wrappers around Firestore writes. workspace-api does NOT touch K8s
-// or shell out to helm; it just records desired state + operation intent.
-// The glm-controller pod (helm/octogee/charts/glm-controller) reads these
-// docs and acts on them. See docs/architecture/GATEWAY-PLATFORM-SPEC.md
-// §Gateway Lifecycle Manager.
-
-const GLM_GATEWAYS_COLLECTION = "glmGateways";
-const GLM_OPERATIONS_COLLECTION = "glmOperations";
-
-interface NewOperationInput {
-  kind:
-    | "add-gateway"
-    | "migrate-customer"
-    | "retire-gateway"
-    | "rollout"
-    | "deprovision-customer";
-  createdBy: string;
-  input: Record<string, unknown>;
-}
-
-async function createOperation(opts: NewOperationInput): Promise<string> {
-  const gatewayId =
-    typeof opts.input.gatewayId === "string" ? opts.input.gatewayId : null;
-  // Lift `uid` to a top-level field so the 409 in-flight check on
-  // /customer/:uid/delete is a single-field equality query instead of
-  // a full collection scan + client-side filter on `input.uid`. Same
-  // pattern as the existing top-level `gatewayId` field. (Copilot review)
-  const inputUid =
-    typeof opts.input.uid === "string" ? opts.input.uid : null;
-  const ref = await db.collection(GLM_OPERATIONS_COLLECTION).add({
-    kind: opts.kind,
-    status: "pending",
-    createdBy: opts.createdBy,
-    createdAt: Date.now(),
-    startedAt: null,
-    completedAt: null,
-    input: opts.input,
-    steps: [],
-    ...(gatewayId !== null ? { gatewayId } : {}),
-    ...(inputUid !== null ? { inputUid } : {}),
-  });
-  return ref.id;
-}
-
-const GATEWAY_IMAGE_REPO_PREFIX = "us-central1-docker.pkg.dev/octogee/octogee/";
-
-function isValidGatewayImageRepository(repo: string): boolean {
-  return repo.startsWith(GATEWAY_IMAGE_REPO_PREFIX);
-}
-
-
-router.post("/gateways", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const body = req.body as Partial<{
-      gatewayId: string;
-      instanceName: string;
-      imageRepository: string;
-      imageTag: string;
-    }>;
-    if (!body.gatewayId || !body.instanceName || !body.imageRepository || !body.imageTag) {
-      res.status(400).json({
-        error: "missing required fields",
-        required: ["gatewayId", "instanceName", "imageRepository", "imageTag"],
-      });
-      return;
-    }
-    if (!isValidGatewayImageRepository(body.imageRepository)) {
-      res.status(400).json({
-        error: "imageRepository must be the canonical Octogee Artifact Registry repo",
-        expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
-        got: body.imageRepository,
-      });
-      return;
-    }
-    const existing = await db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId).get();
-    if (existing.exists) {
-      res.status(409).json({ error: "gateway already exists", gatewayId: body.gatewayId });
-      return;
-    }
-    const collisionSnap = await db
-      .collection(GLM_GATEWAYS_COLLECTION)
-      .where("instanceName", "==", body.instanceName)
-      .limit(1)
-      .get();
-    if (collisionSnap.size > 0) {
-      const collidingId = collisionSnap.docs[0].id;
-      res.status(409).json({
-        error: "instanceName already in use",
-        instanceName: body.instanceName,
-        ownedBy: collidingId,
-      });
-      return;
-    }
-    const gatewayServiceAccount = process.env.GATEWAY_SERVICE_ACCOUNT;
-    if (!gatewayServiceAccount) {
-      res.status(500).json({
-        error: "GATEWAY_SERVICE_ACCOUNT not configured — admin cannot provision gateway auth-token secret",
-      });
-      return;
-    }
-    try {
-      await provisionGatewayAuthSecret({
-        gatewayId: body.gatewayId,
-        gatewayServiceAccount,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(502).json({
-        error: "failed to provision gateway auth-token secret",
-        gatewayId: body.gatewayId,
-        detail: message,
-      });
-      return;
-    }
-    const createdBy = req.uid ?? "unknown";
-    await db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId).set({
-      gatewayId: body.gatewayId,
-      instanceName: body.instanceName,
-      imageRepository: body.imageRepository,
-      imageTag: body.imageTag,
-      desiredStatus: "running",
-      createdBy,
-      createdAt: Date.now(),
-    });
-    const operationId = await createOperation({
-      kind: "add-gateway",
-      createdBy,
-      input: {
-        gatewayId: body.gatewayId,
-        instanceName: body.instanceName,
-        imageTag: body.imageTag,
-      },
-    });
-    res.status(202).json({ gatewayId: body.gatewayId, operationId });
-  } catch (e) { next(e); }
-});
-
-router.patch("/gateways/:id", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = req.params.id;
-    const body = req.body as Partial<{
-      imageTag: string;
-      desiredStatus: "running" | "draining" | "retired";
-    }>;
-    const update: Record<string, unknown> = {};
-    if (body.imageTag) update.imageTag = body.imageTag;
-    if (body.desiredStatus) update.desiredStatus = body.desiredStatus;
-    if (Object.keys(update).length === 0) {
-      res.status(400).json({ error: "no updatable fields provided" });
-      return;
-    }
-    const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
-    const snap = await ref.get();
-    if (!snap.exists) {
-      res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
-      return;
-    }
-    await ref.update(update);
-    res.status(202).json({ gatewayId: id, updated: Object.keys(update) });
-  } catch (e) { next(e); }
-});
-
-router.delete("/gateways/:id", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = req.params.id;
-    const createdBy = req.uid ?? "unknown";
-    const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
-    const snap = await ref.get();
-    if (!snap.exists) {
-      res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
-      return;
-    }
-    const heartbeatSnap = await db.collection("gateways").doc(id).get();
-    if (heartbeatSnap.exists) {
-      const hbData = heartbeatSnap.data() as
-        | { mountedCustomers?: unknown; inFlightJobId?: unknown }
-        | undefined;
-      const mounted = Array.isArray(hbData?.mountedCustomers)
-        ? (hbData!.mountedCustomers as unknown[]).filter((s): s is string => typeof s === "string")
-        : [];
-      if (mounted.length > 0) {
-        res.status(409).json({
-          error: "gateway still has mounted customers; migrate them off before retiring",
-          gatewayId: id,
-          mountedCustomers: mounted,
-        });
-        return;
-      }
-      const inFlightJobId =
-        typeof hbData?.inFlightJobId === "string" && hbData.inFlightJobId.length > 0
-          ? hbData.inFlightJobId
-          : null;
-      if (inFlightJobId) {
-        res.status(409).json({
-          error: "gateway has an in-flight restore job; let it finish (or fail) before retiring",
-          gatewayId: id,
-          inFlightJobId,
-        });
-        return;
-      }
-    }
-    // No heartbeat doc → gateway never started or has been cleaned up; nothing
-    // to mount, nothing to drain, retire is safe.
-    await ref.update({ desiredStatus: "retired" });
-    const operationId = await createOperation({
-      kind: "retire-gateway",
-      createdBy,
-      input: { gatewayId: id },
-    });
-    res.status(202).json({ gatewayId: id, operationId });
-  } catch (e) { next(e); }
-});
-
-const IMAGE_TAG_PATTERN = /^[a-f0-9]{7,40}$/;
-
-router.post(
-  "/gateways/:id/rollout",
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = req.params.id;
-      const body = req.body as Partial<{ imageTag: string; imageRepository: string }>;
-      if (!body.imageTag || typeof body.imageTag !== "string") {
-        res.status(400).json({ error: "missing imageTag" });
-        return;
-      }
-      if (!IMAGE_TAG_PATTERN.test(body.imageTag)) {
-        res.status(400).json({
-          error: "imageTag must be a 7–40 char lowercase hex SHA",
-          got: body.imageTag,
-        });
-        return;
-      }
-      if (
-        body.imageRepository != null &&
-        (typeof body.imageRepository !== "string" ||
-          !isValidGatewayImageRepository(body.imageRepository))
-      ) {
-        res.status(400).json({
-          error: "imageRepository must be the canonical Octogee Artifact Registry repo",
-          expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
-          got: body.imageRepository,
-        });
-        return;
-      }
-      const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
-      const snap = await ref.get();
-      if (!snap.exists) {
-        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
-        return;
-      }
-      const data = snap.data() as
-        | { imageTag?: string; imageRepository?: string }
-        | undefined;
-      const targetRepo = body.imageRepository ?? data?.imageRepository ?? "";
-      if (data?.imageTag === body.imageTag && data.imageRepository === targetRepo) {
-        res.status(409).json({
-          error: "gateway already on requested image — no-op rollout",
-          gatewayId: id,
-          imageTag: body.imageTag,
-          imageRepository: targetRepo,
-        });
-        return;
-      }
-      const heartbeatSnap = await db.collection("gateways").doc(id).get();
-      if (heartbeatSnap.exists) {
-        const hbData = heartbeatSnap.data() as { inFlightJobId?: unknown } | undefined;
-        const inFlightJobId =
-          typeof hbData?.inFlightJobId === "string" && hbData.inFlightJobId.length > 0
-            ? hbData.inFlightJobId
-            : null;
-        if (inFlightJobId) {
-          res.status(409).json({
-            error: "gateway has an in-flight restore job; let it finish before rolling out",
-            gatewayId: id,
-            inFlightJobId,
-          });
-          return;
-        }
-      }
-      const pendingOps = await db
-        .collection(GLM_OPERATIONS_COLLECTION)
-        .where("status", "in", ["pending", "running"])
-        .get();
-      const conflicting = pendingOps.docs.find((d) => {
-        const data = d.data() as { input?: { gatewayId?: string } } | undefined;
-        return data?.input?.gatewayId === id;
-      });
-      if (conflicting) {
-        res.status(409).json({
-          error: "another operation is already pending or running for this gateway",
-          gatewayId: id,
-          operationId: conflicting.id,
-          kind: (conflicting.data() as { kind?: string } | undefined)?.kind ?? null,
-        });
-        return;
-      }
-      const createdBy = req.uid ?? "unknown";
-      const input: { gatewayId: string; imageTag: string; imageRepository?: string } = {
-        gatewayId: id,
-        imageTag: body.imageTag,
-      };
-      if (body.imageRepository) input.imageRepository = body.imageRepository;
-      const operationId = await createOperation({
-        kind: "rollout",
-        createdBy,
-        input,
-      });
-      res.status(202).json({ gatewayId: id, operationId });
-    } catch (e) {
-      next(e);
-    }
-  },
-);
-
-router.get("/customers/by-slug/:slug", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const slug = req.params.slug;
-    const slugSnap = await db
-      .collection("users")
-      .where("provisioning.openclaw.slug", "==", slug)
-      .limit(1)
-      .get();
-    if (slugSnap.size > 0) {
-      res.json(serializeCustomerLookup(slugSnap.docs[0]));
-      return;
-    }
-    const usernameSnap = await db
-      .collection("users")
-      .where("username", "==", slug)
-      .limit(1)
-      .get();
-    if (usernameSnap.size > 0) {
-      res.json(serializeCustomerLookup(usernameSnap.docs[0]));
-      return;
-    }
-    res.status(404).json({ error: "customer not found", slug });
-  } catch (e) {
-    next(e);
-  }
-});
-
-interface CustomerLookupDoc {
-  id: string;
-  data: () => { provisioning?: { openclaw?: { gatewayId?: string } } } | undefined;
-}
-
-function serializeCustomerLookup(doc: CustomerLookupDoc): {
-  uid: string;
-  currentGatewayId: string | null;
-} {
-  const data = doc.data();
-  const currentGatewayId = data?.provisioning?.openclaw?.gatewayId ?? null;
-  return { uid: doc.id, currentGatewayId };
-}
-
-router.post("/customers/:uid/migrate", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const uid = req.params.uid;
-    const body = req.body as Partial<{ to: string }>;
-    if (!body.to) {
-      res.status(400).json({ error: "missing target gateway", required: ["to"] });
-      return;
-    }
-    const targetSnap = await db.collection("gateways").doc(body.to).get();
-    if (!targetSnap.exists) {
-      res.status(404).json({ error: "target gateway not registered", gatewayId: body.to });
-      return;
-    }
-    const targetStatus = (targetSnap.data() as Record<string, unknown> | undefined)?.status;
-    if (targetStatus !== "ready") {
-      res.status(409).json({
-        error: "target gateway not ready",
-        gatewayId: body.to,
-        status: targetStatus ?? "unknown",
-      });
-      return;
-    }
-    const userSnap = await db.collection("users").doc(uid).get();
-    const currentGatewayId = (userSnap.data() as
-      | { provisioning?: { openclaw?: { gatewayId?: string } } }
-      | undefined)?.provisioning?.openclaw?.gatewayId;
-    if (currentGatewayId === body.to) {
-      res.status(409).json({
-        error: "customer is already mounted on the target gateway",
-        uid,
-        gatewayId: body.to,
-      });
-      return;
-    }
-    const createdBy = req.uid ?? "unknown";
-    const operationId = await createOperation({
-      kind: "migrate-customer",
-      createdBy,
-      input: { uid, toGatewayId: body.to },
-    });
-    res.status(202).json({ operationId });
-  } catch (e) { next(e); }
-});
-
-router.post("/rollouts", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const body = req.body as Partial<{ fromGatewayId: string; imageTag: string }>;
-    if (!body.fromGatewayId || !body.imageTag) {
-      res.status(400).json({
-        error: "missing required fields",
-        required: ["fromGatewayId", "imageTag"],
-      });
-      return;
-    }
-    const createdBy = req.uid ?? "unknown";
-    const operationId = await createOperation({
-      kind: "rollout",
-      createdBy,
-      input: { fromGatewayId: body.fromGatewayId, imageTag: body.imageTag },
-    });
-    res.status(202).json({ operationId });
-  } catch (e) { next(e); }
-});
-
-const RESTORE_JOB_STATES = ["pending", "dispatched", "running", "done", "failed", "unknown"] as const;
-type RestoreJobStateLabel = (typeof RESTORE_JOB_STATES)[number];
-
-// Operators want to see failed/done jobs in the queue list, so this is
-// intentionally unbounded over `state`. The aggregate counters in
-// /api/admin/gateways stay bounded to active states only (see line 592)
-// because that endpoint reads on every poll for every operator and
-// pages over the full history would blow up.
-router.get("/restore-jobs", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const parsedLimit = parseInt((req.query.limit as string) ?? "50", 10);
-    const limit = Math.min(
-      200,
-      Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 50),
-    );
-    const snap = await db
-      .collection("restoreJobs")
-      .orderBy("createdAt", "desc")
-      .limit(limit)
-      .get();
-    const toIso = (v: unknown): string | null => {
-      if (v == null) return null;
-      const t = v as { toDate?: () => Date };
-      if (typeof t?.toDate === "function") return t.toDate().toISOString();
-      if (v instanceof Date) return v.toISOString();
-      if (typeof v === "number") return new Date(v).toISOString();
-      return null;
-    };
-    const normalizeState = (raw: unknown): RestoreJobStateLabel => {
-      if (typeof raw === "string" && (RESTORE_JOB_STATES as readonly string[]).includes(raw)) {
-        return raw as RestoreJobStateLabel;
-      }
-      logger.warn("restoreJobs row has malformed state — surfacing as 'unknown'", { raw });
-      return "unknown";
-    };
-    const jobs = snap.docs.map((doc) => {
-      const data = doc.data() as Record<string, unknown>;
-      const snapshot = (data.snapshot ?? {}) as { uid?: string; slug?: string };
-      return {
-        jobId: typeof data.jobId === "string" ? data.jobId : doc.id,
-        gatewayId: typeof data.gatewayId === "string" ? data.gatewayId : "",
-        uid: typeof snapshot.uid === "string" ? snapshot.uid : "",
-        slug: typeof snapshot.slug === "string" ? snapshot.slug : "",
-        state: normalizeState(data.state),
-        attempt:
-          typeof data.attempt === "number" && Number.isFinite(data.attempt) && data.attempt >= 1
-            ? data.attempt
-            : 1,
-        createdAt: toIso(data.createdAt),
-        dispatchedAt: toIso(data.dispatchedAt),
-        completedAt: toIso(data.completedAt),
-        error: typeof data.error === "string" ? data.error : null,
-      };
-    });
-    res.json({ jobs, generatedAt: new Date().toISOString() });
-  } catch (e) {
-    next(e);
-  }
-});
-
-const BUILDS_SERVICE_ALLOWLIST = new Set([
-  "octogee-gateway",
-  "octogee-chat-proxy",
-  "workspace-api",
-]);
-
-router.get("/builds", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const service = (req.query.service as string) || "octogee-gateway";
-    if (!BUILDS_SERVICE_ALLOWLIST.has(service)) {
-      res.status(400).json({
-        error: "service must be one of the canonical Octogee gateway-pod images",
-        allowed: [...BUILDS_SERVICE_ALLOWLIST],
-        got: service,
-      });
-      return;
-    }
-    const parsedLimit = parseInt((req.query.limit as string) ?? "30", 10);
-    const limit = Math.min(
-      100,
-      Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 30),
-    );
-    try {
-      const builds = await listGatewayBuilds({ service, limit });
-      res.json({ service, builds, generatedAt: new Date().toISOString() });
-    } catch (e) {
-      logger.warn("artifact-registry list failed", {
-        service,
-        error: (e as Error)?.message,
-      });
-      res.status(502).json({
-        error: (e as Error)?.message ?? "artifact-registry list failed",
-        service,
-      });
-    }
-  } catch (e) { next(e); }
-});
-
-router.get("/operations", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const limit = Math.min(
-      100,
-      Math.max(1, parseInt((req.query.limit as string) ?? "25", 10)),
-    );
-    const snap = await db
-      .collection(GLM_OPERATIONS_COLLECTION)
-      .orderBy("createdAt", "desc")
-      .limit(limit)
-      .get();
-    const operations = snap.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
-    res.json({ operations, generatedAt: new Date().toISOString() });
-  } catch (e) { next(e); }
 });
 
 export default router;
