@@ -21,8 +21,13 @@ RUN npm run build
 
 FROM node:22-slim
 WORKDIR /workspace-api
+# git + openssh-client are required for the Phase 6 working-tree
+# routes (`workspace-api/src/lib/workspace-git.ts`). Without them
+# `spawn('git', …)` ENOENTs and `git push` over SSH has no transport.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips-dev \
+    git \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 COPY workspace-api/package.json workspace-api/package-lock.json* ./
 RUN npm ci --omit=dev
