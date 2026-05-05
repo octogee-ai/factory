@@ -7,16 +7,24 @@
 #     callers like chat-proxy fallback resolver rely on it)
 #   - gateway-egress NetworkPolicy (one policy covers every gateway pod
 #     via the `app: octogee-gateway` selector)
-#   - fleet-control Ingress + cert + BackendConfig (path rules per
-#     instance from `Values.gatewayFleet.instances`)
+#   - fleet-control Ingress + cert + BackendConfig (Helm renders the
+#     shell with only the static /health rule; Cowboy writes the
+#     per-instance RPC paths via server-side apply at runtime)
 #   - preview Ingress + cert + BackendConfig (points at alias Service)
 #
-# Operator process: when a new gateway instance lands in Firestore
-# (Cowboy add-gateway), also add it to `gatewayFleet.instances` in
-# values.{env}.yaml so the fleet-control Ingress routes its
-# /restore-customer/{gatewayId} etc. paths. Until that's done, RPC to
-# the new instance flows via in-cluster Service DNS — the external
-# fleet-control Ingress is a Cloud-Tasks-only path.
+# Per-instance RPC paths (/restore-customer/<gid>, /quiesce/<gid>,
+# /export/<gid>, /import/<gid>, /unmount/<gid>) are owned by Cowboy
+# (glm-controller). On every reconcile tick — and on every
+# add-gateway / retire-gateway operation — the controller server-side-
+# applies the live Ingress with field manager `cowboy-fleet-controller`
+# (and the kubectl `--force-conflicts` flag, separate from the
+# field-manager value). A subsequent `helm upgrade octogee` may
+# temporarily clobber the paths array, since Helm 3 uses client-side
+# apply (not SSA, so SSA conflict checks don't gate Helm's writes);
+# Cowboy reconciles them back on the next tick (~1s debounce, max
+# ~30s on retry). Operators no longer maintain
+# `Values.gatewayFleet.instances` per-env: it stays empty in test/prod
+# values.
 
 {{- if .Values.gatewayFleet.aliasService.enabled }}
 ---
@@ -33,7 +41,7 @@ metadata:
     {{- include "octogee.labels" . | nindent 4 }}
   annotations:
     cloud.google.com/backend-config: |
-      {"ports":{"9080":"preview-backend","{{ .Values.gatewayFleet.fleetControllerPort | default "3003" }}":"octogee-gateway-fleet-control"}}
+      {"ports":{"9080":"preview-backend","{{ .Values.global.fleetControllerPort | default "3003" }}":"octogee-gateway-fleet-control"}}
 spec:
   selector:
     app: octogee-gateway
@@ -48,8 +56,8 @@ spec:
       port: 9080
       targetPort: 9080
     - name: fleet-http
-      port: {{ .Values.gatewayFleet.fleetControllerPort | default "3003" }}
-      targetPort: {{ .Values.gatewayFleet.fleetControllerPort | default "3003" }}
+      port: {{ .Values.global.fleetControllerPort | default "3003" }}
+      targetPort: {{ .Values.global.fleetControllerPort | default "3003" }}
   type: ClusterIP
 {{- end }}
 
@@ -140,7 +148,7 @@ spec:
   healthCheck:
     type: HTTP
     requestPath: /health
-    port: {{ .Values.gatewayFleet.fleetControllerPort | default "3003" }}
+    port: {{ .Values.global.fleetControllerPort | default "3003" }}
   timeoutSec: 30
   {{- if .Values.gatewayFleet.fleetControlIngress.cloudArmor.enabled }}
   securityPolicy:
@@ -161,7 +169,7 @@ spec:
     - host: {{ .Values.gatewayFleet.fleetControlIngress.host }}
       http:
         paths:
-          {{- $port := .Values.gatewayFleet.fleetControllerPort | default "3003" }}
+          {{- $port := .Values.global.fleetControllerPort | default "3003" }}
           {{- range .Values.gatewayFleet.instances }}
           {{- $svc := printf "octogee-gateway-%s" .instanceName }}
           {{- $gid := .gatewayId }}

@@ -29,6 +29,13 @@ export interface RetireGatewayDeps {
   archiveAuthTokenSecret?: (gatewayId: string) => Promise<void>;
   /** Reads glmGateways/{id} so we can map gatewayId → instanceName for the helm-uninstall poll. */
   readGlmGatewayInstanceName: (gatewayId: string) => Promise<string | null>;
+  /**
+   * Reconciles the fleet-control Ingress paths with the post-retire
+   * desired-state. Called after helm-uninstall + cleanup so the
+   * external Cloud-Tasks RPC paths for the retired gateway disappear
+   * immediately, without waiting for the next reconciler tick.
+   */
+  syncFleetIngress: () => Promise<void>;
   helmUninstallTimeoutMs: number;
   pollIntervalMs: number;
   now: () => number;
@@ -129,6 +136,36 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
         success: false,
         error: `cleanup failed after helm uninstall: ${msg}`,
       };
+    }
+
+    const ingressStartedAt = deps.now();
+    await reportStep(ctx, { name: "fleet-ingress", status: "running", startedAt: ingressStartedAt });
+    try {
+      await deps.syncFleetIngress();
+      await reportStep(ctx, {
+        name: "fleet-ingress",
+        status: "done",
+        startedAt: ingressStartedAt,
+        completedAt: deps.now(),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await reportStep(ctx, {
+        name: "fleet-ingress",
+        status: "failed",
+        startedAt: ingressStartedAt,
+        completedAt: deps.now(),
+        error: msg,
+      });
+      // Cleanup already committed (helm uninstalled + glmGateways
+      // deleted + heartbeat deleted). The reconciler tick will re-sync
+      // the Ingress within ~30s once whatever broke kubectl recovers.
+      // Operator doesn't need to take action — log loudly so on-call
+      // doesn't think the LB is permanently broken.
+      deps.log(
+        `[retire-gateway] cleanup committed but fleet-ingress sync failed; reconciler will heal within 30s — ${msg}`,
+      );
+      return { steps: [], success: false, error: msg };
     }
 
     return { steps: [], success: true };

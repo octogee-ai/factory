@@ -57,6 +57,7 @@ function makeDeps(
       const ts = state.heartbeats.get(gatewayId);
       return ts == null ? null : { lastHeartbeatAt: ts };
     }),
+    syncFleetIngress: vi.fn(async () => {}),
     helmRenderTimeoutMs: 60_000,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 1_000,
@@ -87,7 +88,22 @@ describe("createAddGatewayHandler — happy path", () => {
       "helm-render:done",
       "gateway-heartbeat:running",
       "gateway-heartbeat:done",
+      "fleet-ingress:running",
+      "fleet-ingress:done",
     ]);
+  });
+
+  it("calls syncFleetIngress exactly once after the heartbeat step succeeds", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary"]),
+      heartbeats: new Map([["gw-test-canary", 1]]),
+    };
+    const sync = vi.fn(async () => {});
+    const deps = makeDeps(state, { syncFleetIngress: sync });
+    const handler = createAddGatewayHandler(deps);
+    const result = await handler(mkOp({}), makeCtx());
+    expect(result.success).toBe(true);
+    expect(sync).toHaveBeenCalledTimes(1);
   });
 
   it("waits through pre-render polls and succeeds once helm picks up the new instance", async () => {
@@ -166,5 +182,24 @@ describe("createAddGatewayHandler — failures", () => {
     const result = await handler(mkOp({ input: { gatewayId: "gw-test-canary", imageTag: "abc" } }), ctx);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/instanceName/i);
+  });
+
+  it("fails the operation when fleet-ingress sync throws — surfaces the error and reports a failed step", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary"]),
+      heartbeats: new Map([["gw-test-canary", 1]]),
+    };
+    const deps = makeDeps(state, {
+      syncFleetIngress: vi.fn(async () => {
+        throw new Error("kubectl apply denied");
+      }),
+    });
+    const handler = createAddGatewayHandler(deps);
+    const ctx = makeCtx();
+    const result = await handler(mkOp({}), ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/kubectl apply denied/);
+    const failedStep = ctx.reported.find((s) => s.status === "failed");
+    expect(failedStep?.name).toBe("fleet-ingress");
   });
 });

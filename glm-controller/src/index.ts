@@ -20,6 +20,12 @@ import {
   type HelmRunner,
 } from "./helm-runner.js";
 import {
+  spawnKubectl,
+  syncFleetIngressPaths,
+  type FleetGateway,
+  type KubectlSubprocess,
+} from "./fleet-ingress.js";
+import {
   routeOperation,
   type OperationHandlers,
 } from "./operation-router.js";
@@ -67,12 +73,29 @@ const GATEWAY_VALUES_FILE = (function () {
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
+// Cowboy-owned Ingress for /restore-customer/<gid>, /quiesce/<gid>,
+// /export/<gid>, /import/<gid>, /unmount/<gid> per gateway plus the
+// static /health rule. The umbrella renders the shell (cert,
+// BackendConfig, IP); this controller writes the per-instance paths.
+const FLEET_INGRESS_NAME = process.env.FLEET_INGRESS_NAME ?? "octogee-gateway-fleet-control-ingress";
+const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway";
 
 interface ControllerDeps {
   db: Firestore;
   helm: HelmRunner;
   handlers: OperationHandlers;
   log: (msg: string) => void;
+  /**
+   * Reconciles the umbrella's fleet-control Ingress paths with the
+   * desired-state gateway list. Called every tick (after applyChanges)
+   * so Helm clobbers from the umbrella's `helm upgrade` self-heal
+   * within one debounce cycle. Optional — when omitted (e.g. unit
+   * tests that don't care), the tick still runs; only the Ingress
+   * sync is skipped.
+   */
+  syncFleetIngress?: (
+    gateways: ReadonlyArray<{ gatewayId: string; instanceName: string }>,
+  ) => Promise<void>;
   /** Retry interval after a failed reconcile tick. Defaults to 30s. */
   reconcileRetryMs?: number;
 }
@@ -166,19 +189,34 @@ export function startReconciler(deps: ControllerDeps): () => void {
         deps.log(
           `[glm-controller] reconcile tick: no changes (${desired.length} desired, ${Object.keys(actualMap).length} actual)`,
         );
-        return;
+      } else {
+        const summary = targetVsActual
+          .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.instanceName}`)
+          .join(", ");
+        deps.log(
+          `[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`,
+        );
+        await applyChanges(targetVsActual, deps);
       }
-      const summary = targetVsActual
-        .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.instanceName}`)
-        .join(", ");
-      deps.log(
-        `[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`,
-      );
-      await applyChanges(targetVsActual, deps);
+      if (deps.syncFleetIngress) {
+        const fleetGateways = desired
+          .filter((g) => typeof g.gatewayId === "string" && typeof g.instanceName === "string")
+          .map((g) => ({ gatewayId: g.gatewayId, instanceName: g.instanceName }));
+        try {
+          await deps.syncFleetIngress(fleetGateways);
+        } catch (err) {
+          // Re-throw with source tagged so the failure log distinguishes
+          // helm errors from kubectl errors. On-call sees `(source=fleet-ingress)`
+          // and goes straight to the kubectl/SSA path instead of helm releases.
+          const message = err instanceof Error ? err.message : String(err);
+          throw new Error(`(source=fleet-ingress) ${message}`);
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const source = message.startsWith("(source=") ? "" : "(source=helm) ";
       deps.log(
-        `[glm-controller] ⚠ reconcile tick failed: ${message} — retry in ${retryMs}ms`,
+        `[glm-controller] ⚠ reconcile tick failed: ${source}${message} — retry in ${retryMs}ms`,
       );
       if (!stopped) {
         retryTimer = setTimeout(() => void tick(), retryMs);
@@ -285,13 +323,43 @@ async function main(): Promise<void> {
     process.env.HELM_RUNNER_MODE === "stub"
       ? createLoggingHelmRunner(log)
       : createHelmSubprocessRunner({ runHelm: spawnHelm, log });
+  const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
+  const syncFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
+    syncFleetIngressPaths({
+      runKubectl,
+      ingressName: FLEET_INGRESS_NAME,
+      namespace: NAMESPACE,
+      desiredGateways: gateways,
+      fleetControllerPort: parseInt(FLEET_CONTROLLER_PORT, 10),
+      aliasServiceName: FLEET_ALIAS_SERVICE,
+      log,
+    }).then(() => undefined);
+  // Handler-side closure: re-reads desired gateways from Firestore so
+  // it always reflects the post-write state (add-gateway has already
+  // written the new doc; retire-gateway has already deleted it).
+  const handlerSyncFleetIngress = async () => {
+    const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
+    const gateways: FleetGateway[] = snap.docs
+      .map((d) => d.data() as { gatewayId?: unknown; instanceName?: unknown })
+      .filter(
+        (g): g is FleetGateway =>
+          typeof g.gatewayId === "string" && typeof g.instanceName === "string",
+      );
+    await syncFleetIngressForGateways(gateways);
+  };
 
-  const handlers = await buildHandlers(db, log, helm);
+  const handlers = await buildHandlers(db, log, helm, handlerSyncFleetIngress);
 
-  const deps: ControllerDeps = { db, helm, handlers, log };
+  const deps: ControllerDeps = {
+    db,
+    helm,
+    handlers,
+    log,
+    syncFleetIngress: syncFleetIngressForGateways,
+  };
 
   log(
-    `[glm-controller] starting — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} valuesFile=${GATEWAY_VALUES_FILE}`,
+    `[glm-controller] starting — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} valuesFile=${GATEWAY_VALUES_FILE} fleetIngress=${FLEET_INGRESS_NAME}`,
   );
 
   await bootstrapGlmGateways(deps);
@@ -366,6 +434,7 @@ async function buildHandlers(
   db: Firestore,
   logFn: (msg: string) => void,
   helm: HelmRunner,
+  syncFleetIngress: () => Promise<void>,
 ): Promise<OperationHandlers> {
   const secret = process.env.FLEET_CONTROLLER_SECRET;
   if (!secret) {
@@ -392,6 +461,7 @@ async function buildHandlers(
       }
       return ms == null ? null : { lastHeartbeatAt: ms };
     },
+    syncFleetIngress,
     helmRenderTimeoutMs: 60_000,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 5_000,
@@ -459,6 +529,7 @@ async function buildHandlers(
     // archiveAuthTokenSecret intentionally omitted — leaves the SM
     // secret in place so re-creating the gateway with the same id is
     // idempotent. Auth tokens rotate per pod boot anyway.
+    syncFleetIngress,
     helmUninstallTimeoutMs: 90_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),

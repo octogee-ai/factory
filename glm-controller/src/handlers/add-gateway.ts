@@ -10,6 +10,14 @@ export interface AddGatewayDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
   /** Reads the heartbeat doc the gateway pod publishes once it boots; null if no doc yet. */
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeat | null>;
+  /**
+   * Reconciles the fleet-control Ingress paths with the current
+   * desired-state set in glmGateways. Called after helm-render +
+   * heartbeat succeed so external callers (Cloud Tasks) can hit the
+   * new gateway's RPC paths immediately, without waiting for the next
+   * reconciler tick.
+   */
+  syncFleetIngress: () => Promise<void>;
   /** Max time to wait for helm to render the new instance into its values map. */
   helmRenderTimeoutMs: number;
   /** Max time to wait for the gateway pod's first heartbeat after helm renders. */
@@ -70,6 +78,28 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
     });
     if (!heartbeatResult.ok) {
       return { steps: [], success: false, error: heartbeatResult.errorMsg };
+    }
+
+    const ingressStartedAt = deps.now();
+    await reportStep(ctx, { name: "fleet-ingress", status: "running", startedAt: ingressStartedAt });
+    try {
+      await deps.syncFleetIngress();
+      await reportStep(ctx, {
+        name: "fleet-ingress",
+        status: "done",
+        startedAt: ingressStartedAt,
+        completedAt: deps.now(),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await reportStep(ctx, {
+        name: "fleet-ingress",
+        status: "failed",
+        startedAt: ingressStartedAt,
+        completedAt: deps.now(),
+        error: msg,
+      });
+      return { steps: [], success: false, error: msg };
     }
 
     return { steps: [], success: true };

@@ -72,6 +72,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     archiveAuthTokenSecret: vi.fn(async (gatewayId: string) => {
       state.archivedSecret.add(gatewayId);
     }),
+    syncFleetIngress: vi.fn(async () => {}),
     helmUninstallTimeoutMs: 60_000,
     pollIntervalMs: 1_000,
     now: () => virtualClock,
@@ -108,7 +109,50 @@ describe("createRetireGatewayHandler — happy path", () => {
       "helm-uninstall:done",
       "cleanup:running",
       "cleanup:done",
+      "fleet-ingress:running",
+      "fleet-ingress:done",
     ]);
+  });
+
+  it("calls syncFleetIngress exactly once after cleanup succeeds", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(),
+      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
+      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      deletedGlm: new Set(),
+      deletedHeartbeat: new Set(),
+      archivedSecret: new Set(),
+    };
+    const sync = vi.fn(async () => {});
+    const deps = makeDeps(state, { syncFleetIngress: sync });
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+    expect(result.success).toBe(true);
+    expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails the operation when fleet-ingress sync throws — reports a failed step but cleanup is already done", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(),
+      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
+      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      deletedGlm: new Set(),
+      deletedHeartbeat: new Set(),
+      archivedSecret: new Set(),
+    };
+    const deps = makeDeps(state, {
+      syncFleetIngress: vi.fn(async () => {
+        throw new Error("kubectl apply denied");
+      }),
+    });
+    const ctx = makeCtx();
+    const result = await createRetireGatewayHandler(deps)(mkOp(), ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/kubectl apply denied/);
+    // Cleanup must have already succeeded — failure here doesn't roll back the deletes
+    expect(state.deletedGlm.has("gw-test-canary")).toBe(true);
+    expect(state.deletedHeartbeat.has("gw-test-canary")).toBe(true);
+    const failedStep = ctx.reported.find((s) => s.status === "failed");
+    expect(failedStep?.name).toBe("fleet-ingress");
   });
 
   it("skips SM secret archive when no archiveAuthTokenSecret is provided", async () => {

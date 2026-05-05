@@ -206,6 +206,154 @@ describe("startReconciler — periodic retry after failed tick", () => {
     expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
   });
 
+  it("calls syncFleetIngress after applyChanges with the gatewayId+instanceName of every desired gateway", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      upsertInstance: async () => undefined,
+    });
+    const syncFleetIngress = vi.fn(async () => {});
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-test",
+          instanceName: "default",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+        {
+          gatewayId: "gw-test-canary",
+          instanceName: "canary",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      syncFleetIngress,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(syncFleetIngress).toHaveBeenCalledTimes(1);
+    const arg = (syncFleetIngress.mock.calls[0] ?? [])[0] as
+      | ReadonlyArray<{ gatewayId: string; instanceName: string }>
+      | undefined;
+    expect(arg).toBeDefined();
+    expect(arg!.map((g) => g.gatewayId).sort()).toEqual(["gw-test", "gw-test-canary"]);
+    expect(arg!.find((g) => g.gatewayId === "gw-test")?.instanceName).toBe("default");
+    expect(arg!.find((g) => g.gatewayId === "gw-test-canary")?.instanceName).toBe("canary");
+    stop();
+  });
+
+  it("calls syncFleetIngress even when there are no helm changes — keeps the Ingress in sync after Helm clobbers", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const desired = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: "repo",
+      imageTag: "abc",
+      desiredStatus: "running",
+      createdBy: "ci",
+    };
+    const helm = makeFakeHelm({
+      // already in sync — read returns the desired instance, so diffInstancesMap returns empty
+      read: async () => ({
+        default: {
+          enabled: true,
+          image: { repository: "repo", tag: "abc" },
+          gatewayId: "gw-test",
+        },
+      }),
+    });
+    const syncFleetIngress = vi.fn(async () => {});
+    const db = makeFakeDb({
+      glmGateways: [desired],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      syncFleetIngress,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).not.toHaveBeenCalled();
+    expect(syncFleetIngress).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("schedules a retry when syncFleetIngress throws", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({});
+    const syncFleetIngress = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("kubectl exec failed"))
+      .mockResolvedValue(undefined);
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-test",
+          instanceName: "default",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      syncFleetIngress,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+    expect(syncFleetIngress).toHaveBeenCalledTimes(1);
+    const failureLog = log.mock.calls.find(
+      ([msg]: [string]) => typeof msg === "string" && msg.includes("retry in 5000ms"),
+    );
+    expect(failureLog).toBeDefined();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flush();
+    await flush();
+    expect(syncFleetIngress).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
   it("a fresh snapshot during a pending retry cancels the retry and runs a debounced tick", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();

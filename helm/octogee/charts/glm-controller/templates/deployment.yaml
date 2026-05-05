@@ -75,6 +75,16 @@ spec:
                   key: admin_token
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
+            # Single source of truth: parent `.Values.global.fleetControllerPort`.
+            # The umbrella's gateway-fleet.yaml renders Service +
+            # BackendConfig + Ingress paths off the same value, so a
+            # change updates both consumers atomically (no drift between
+            # what the LB targets and what Cowboy writes). Parentheses
+            # around `.Values.global` guard against nil when this
+            # subchart is rendered standalone (helm-glm-controller test
+            # cases don't merge umbrella values).
+            - name: FLEET_CONTROLLER_PORT
+              value: {{ (.Values.global).fleetControllerPort | default "3003" | quote }}
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http

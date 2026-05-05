@@ -15,6 +15,13 @@ global:
     adminSecret:
       name: mattermost-gateway
       tokenKey: admin_token
+  # Fleet-controller HTTP port. Single source of truth referenced by
+  #   - templates/gateway-fleet.yaml (alias Service port + BackendConfig
+  #     healthCheck port + per-instance Ingress backend ports)
+  #   - charts/glm-controller/templates/deployment.yaml (FLEET_CONTROLLER_PORT
+  #     env, used to render Ingress paths at runtime)
+  # If you change this value, both consumers update together — no drift.
+  fleetControllerPort: "3003"
 
 # ── cloud-sql-proxy ─────────────────────────────────────────────────────────
 cloud-sql-proxy:
@@ -176,7 +183,10 @@ workspace-api:
 # fleet-control Ingress, preview Ingress. Defaults below are overridden
 # per env in values.{test,prod}.yaml.
 gatewayFleet:
-  fleetControllerPort: "3003"
+  # NOTE: the fleet-controller HTTP port now lives at
+  # `.Values.global.fleetControllerPort`. Both the templates here and
+  # the glm-controller subchart's Deployment env read from there so a
+  # change updates both atomically.
   aliasService:
     enabled: true
   networkPolicy:
@@ -197,11 +207,17 @@ gatewayFleet:
     cloudArmor:
       enabled: false
       policyName: ""
-  # List of `{gatewayId, instanceName}` pairs the operator wants
-  # routable by the fleet-control Ingress. Maintained in sync with
-  # Firestore desired-state docs (`glmGateways/{id}`) — Cowboy creates
-  # the pod, the operator adds the routing entry here. Empty list →
-  # fleet-control Ingress renders only the catch-all /health rule.
+  # Bootstrap-only seed of `{gatewayId, instanceName}` pairs for the
+  # fleet-control Ingress's per-instance RPC paths. Cowboy
+  # (glm-controller) is the sole writer in steady state: on every
+  # reconcile tick it server-side-applies the live Ingress with field
+  # manager `cowboy-fleet-controller` (and the kubectl
+  # `--force-conflicts` flag — separate from the field-manager value).
+  # Helm 3 uses client-side apply, so a `helm upgrade octogee` can
+  # still temporarily overwrite the paths; Cowboy reconciles them
+  # back on the next tick (~1s debounce, max ~30s on retry). Leave
+  # this empty in real envs (test/prod); use it only for first-time
+  # bootstrap before glm-controller is healthy.
   instances: []
 
 # ── Service Account ──────────────────────────────────────────────────────────

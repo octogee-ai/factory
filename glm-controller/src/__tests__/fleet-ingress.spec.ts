@@ -1,0 +1,377 @@
+import { describe, it, expect, vi } from "vitest";
+import {
+  computeDesiredFleetPaths,
+  extractIngressPaths,
+  pathsEqual,
+  syncFleetIngressPaths,
+  type FleetGateway,
+  type IngressPathRule,
+  type KubectlSubprocess,
+} from "../fleet-ingress";
+
+const FLEET_PORT = 3003;
+const ALIAS = "octogee-gateway";
+
+describe("computeDesiredFleetPaths", () => {
+  it("emits the static /health rule pointing at the alias Service when no gateways exist", () => {
+    const paths = computeDesiredFleetPaths({
+      gateways: [],
+      fleetControllerPort: FLEET_PORT,
+      aliasServiceName: ALIAS,
+    });
+    expect(paths).toEqual([
+      { path: "/health", pathType: "ImplementationSpecific", serviceName: ALIAS, servicePort: FLEET_PORT },
+    ]);
+  });
+
+  it("emits 5 RPC paths per gateway routed to the per-instance Service plus /health at the end", () => {
+    const gateways: FleetGateway[] = [
+      { gatewayId: "gw-test", instanceName: "default" },
+    ];
+    const paths = computeDesiredFleetPaths({
+      gateways,
+      fleetControllerPort: FLEET_PORT,
+      aliasServiceName: ALIAS,
+    });
+    expect(paths.map((p) => p.path)).toEqual([
+      "/restore-customer/gw-test",
+      "/quiesce/gw-test",
+      "/export/gw-test",
+      "/import/gw-test",
+      "/unmount/gw-test",
+      "/health",
+    ]);
+    expect(paths[0]).toMatchObject({
+      pathType: "ImplementationSpecific",
+      serviceName: "octogee-gateway-default",
+      servicePort: FLEET_PORT,
+    });
+    expect(paths.at(-1)).toMatchObject({
+      path: "/health",
+      serviceName: ALIAS,
+    });
+  });
+
+  it("orders gateways by gatewayId for deterministic output", () => {
+    const gateways: FleetGateway[] = [
+      { gatewayId: "gw-zebra", instanceName: "z" },
+      { gatewayId: "gw-alpha", instanceName: "a" },
+      { gatewayId: "gw-mike", instanceName: "m" },
+    ];
+    const paths = computeDesiredFleetPaths({
+      gateways,
+      fleetControllerPort: FLEET_PORT,
+      aliasServiceName: ALIAS,
+    });
+    const restorePaths = paths.filter((p) => p.path.startsWith("/restore-customer/"));
+    expect(restorePaths.map((p) => p.path)).toEqual([
+      "/restore-customer/gw-alpha",
+      "/restore-customer/gw-mike",
+      "/restore-customer/gw-zebra",
+    ]);
+  });
+});
+
+describe("pathsEqual", () => {
+  const a: IngressPathRule = { path: "/health", pathType: "ImplementationSpecific", serviceName: ALIAS, servicePort: FLEET_PORT };
+  it("returns true for identical lists", () => {
+    expect(pathsEqual([a], [a])).toBe(true);
+  });
+  it("returns false when length differs", () => {
+    expect(pathsEqual([a], [a, a])).toBe(false);
+  });
+  it("returns false when any field differs", () => {
+    const b: IngressPathRule = { ...a, serviceName: "other" };
+    expect(pathsEqual([a], [b])).toBe(false);
+  });
+  it("treats different orderings as not equal (paths order matters for GCE URL maps)", () => {
+    const x: IngressPathRule = { path: "/a", pathType: "ImplementationSpecific", serviceName: ALIAS, servicePort: FLEET_PORT };
+    const y: IngressPathRule = { path: "/b", pathType: "ImplementationSpecific", serviceName: ALIAS, servicePort: FLEET_PORT };
+    expect(pathsEqual([x, y], [y, x])).toBe(false);
+  });
+});
+
+describe("extractIngressPaths", () => {
+  it("pulls path/pathType/service-name/service-port out of a kubectl get ingress -o json payload", () => {
+    const json = {
+      spec: {
+        rules: [
+          {
+            host: "fleet.octogee.com",
+            http: {
+              paths: [
+                {
+                  path: "/restore-customer/gw-x",
+                  pathType: "ImplementationSpecific",
+                  backend: { service: { name: "octogee-gateway-default", port: { number: 3003 } } },
+                },
+                {
+                  path: "/health",
+                  pathType: "ImplementationSpecific",
+                  backend: { service: { name: "octogee-gateway", port: { number: 3003 } } },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    expect(extractIngressPaths(json)).toEqual([
+      { path: "/restore-customer/gw-x", pathType: "ImplementationSpecific", serviceName: "octogee-gateway-default", servicePort: 3003 },
+      { path: "/health", pathType: "ImplementationSpecific", serviceName: "octogee-gateway", servicePort: 3003 },
+    ]);
+  });
+
+  it("returns empty when the ingress has no rules", () => {
+    expect(extractIngressPaths({ spec: { rules: [] } })).toEqual([]);
+  });
+
+  it("returns empty when the rules block is missing entirely", () => {
+    expect(extractIngressPaths({ spec: {} })).toEqual([]);
+  });
+
+  it("ignores paths with named ports — fleet ingress always uses numbered ports", () => {
+    const json = {
+      spec: {
+        rules: [
+          {
+            http: {
+              paths: [
+                {
+                  path: "/health",
+                  pathType: "ImplementationSpecific",
+                  backend: { service: { name: "x", port: { name: "http" } } },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    expect(extractIngressPaths(json)).toEqual([]);
+  });
+});
+
+function mockKubectl(
+  responses: Array<{ stdout?: string; stderr?: string; code?: number }>,
+): { runKubectl: KubectlSubprocess; calls: Array<{ args: string[]; stdin?: string }> } {
+  const calls: Array<{ args: string[]; stdin?: string }> = [];
+  let i = 0;
+  const runKubectl: KubectlSubprocess = vi.fn(async (args: string[], opts?: { stdin?: string }) => {
+    calls.push({ args, stdin: opts?.stdin });
+    const r = responses[Math.min(i, responses.length - 1)];
+    i++;
+    return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? 0 };
+  });
+  return { runKubectl, calls };
+}
+
+describe("syncFleetIngressPaths", () => {
+  const ingressName = "octogee-gateway-fleet-control-ingress";
+  const namespace = "octogee-test";
+
+  it("no-ops when live paths already match desired", async () => {
+    const live = {
+      kind: "Ingress",
+      metadata: { name: ingressName, namespace },
+      spec: {
+        rules: [
+          {
+            host: "fleet.example.com",
+            http: {
+              paths: [
+                {
+                  path: "/health",
+                  pathType: "ImplementationSpecific",
+                  backend: { service: { name: ALIAS, port: { number: FLEET_PORT } } },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const { runKubectl, calls } = mockKubectl([{ stdout: JSON.stringify(live) }]);
+
+    const result = await syncFleetIngressPaths({
+      runKubectl,
+      ingressName,
+      namespace,
+      desiredGateways: [],
+      fleetControllerPort: FLEET_PORT,
+      aliasServiceName: ALIAS,
+      log: vi.fn(),
+    });
+
+    expect(result.changed).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args[0]).toBe("get");
+  });
+
+  it("applies a new manifest when desired paths differ from live", async () => {
+    const live = {
+      kind: "Ingress",
+      apiVersion: "networking.k8s.io/v1",
+      metadata: {
+        name: ingressName,
+        namespace,
+        annotations: { "kubernetes.io/ingress.class": "gce" },
+      },
+      spec: {
+        ingressClassName: "gce",
+        rules: [
+          {
+            host: "fleet.example.com",
+            http: {
+              paths: [
+                {
+                  path: "/health",
+                  pathType: "ImplementationSpecific",
+                  backend: { service: { name: ALIAS, port: { number: FLEET_PORT } } },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const { runKubectl, calls } = mockKubectl([
+      { stdout: JSON.stringify(live) },
+      { stdout: "ingress.networking.k8s.io/octogee-gateway-fleet-control-ingress configured" },
+    ]);
+
+    const result = await syncFleetIngressPaths({
+      runKubectl,
+      ingressName,
+      namespace,
+      desiredGateways: [{ gatewayId: "gw-test", instanceName: "default" }],
+      fleetControllerPort: FLEET_PORT,
+      aliasServiceName: ALIAS,
+      log: vi.fn(),
+    });
+
+    expect(result.changed).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].args).toContain("apply");
+    expect(calls[1].args).toContain("-f");
+    expect(calls[1].args).toContain("-");
+    expect(calls[1].stdin).toBeDefined();
+    const applied = JSON.parse(calls[1].stdin as string);
+    const appliedPaths = applied.spec.rules[0].http.paths;
+    expect(appliedPaths.map((p: { path: string }) => p.path)).toEqual([
+      "/restore-customer/gw-test",
+      "/quiesce/gw-test",
+      "/export/gw-test",
+      "/import/gw-test",
+      "/unmount/gw-test",
+      "/health",
+    ]);
+    // host + class must round-trip so apply doesn't drop anything else
+    expect(applied.spec.rules[0].host).toBe("fleet.example.com");
+    // Cowboy owns ONLY paths (and the host wrapping them, since SSA
+    // can't own paths without the rule). Helm continues to own
+    // ingressClassName, annotations, tls, etc — leave them out of the
+    // apply payload so we don't claim their field ownership.
+    expect(applied.spec.ingressClassName).toBeUndefined();
+    expect(applied.metadata.annotations).toBeUndefined();
+    expect(applied.metadata.labels).toBeUndefined();
+    expect(applied.spec.tls).toBeUndefined();
+  });
+
+  it("preserves the existing managedFields by re-using kubectl apply (not replace)", async () => {
+    const live = {
+      kind: "Ingress",
+      apiVersion: "networking.k8s.io/v1",
+      metadata: {
+        name: ingressName,
+        namespace,
+        managedFields: [{ manager: "Helm" }],
+      },
+      spec: {
+        rules: [
+          {
+            http: { paths: [] },
+          },
+        ],
+      },
+    };
+    const { runKubectl, calls } = mockKubectl([
+      { stdout: JSON.stringify(live) },
+      { stdout: "configured" },
+    ]);
+
+    await syncFleetIngressPaths({
+      runKubectl,
+      ingressName,
+      namespace,
+      desiredGateways: [{ gatewayId: "gw-test", instanceName: "default" }],
+      fleetControllerPort: FLEET_PORT,
+      aliasServiceName: ALIAS,
+      log: vi.fn(),
+    });
+
+    expect(calls[1].args).toContain("apply");
+    expect(calls[1].args).toContain("--server-side");
+    expect(calls[1].args).toContain("--field-manager=cowboy-fleet-controller");
+    // force-conflicts so Cowboy can take ownership of paths from Helm
+    expect(calls[1].args).toContain("--force-conflicts");
+  });
+
+  it("returns changed=false (not a throw) when the umbrella hasn't deployed the Ingress shell yet — bootstrap state", async () => {
+    const log = vi.fn();
+    const { runKubectl, calls } = mockKubectl([
+      { code: 1, stderr: 'Error from server (NotFound): ingresses.networking.k8s.io "octogee-gateway-fleet-control-ingress" not found' },
+    ]);
+    const result = await syncFleetIngressPaths({
+      runKubectl,
+      ingressName,
+      namespace,
+      desiredGateways: [{ gatewayId: "gw-test", instanceName: "default" }],
+      fleetControllerPort: FLEET_PORT,
+      aliasServiceName: ALIAS,
+      log,
+    });
+    expect(result.changed).toBe(false);
+    expect(calls).toHaveLength(1); // never tries to apply if the Ingress doesn't exist
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/not yet present.*deferring/));
+  });
+
+  it("propagates errors from the read step with context (non-NotFound)", async () => {
+    const { runKubectl } = mockKubectl([{ code: 1, stderr: "connection refused" }]);
+    await expect(
+      syncFleetIngressPaths({
+        runKubectl,
+        ingressName,
+        namespace,
+        desiredGateways: [],
+        fleetControllerPort: FLEET_PORT,
+        aliasServiceName: ALIAS,
+        log: vi.fn(),
+      }),
+    ).rejects.toThrow(/kubectl get ingress.*connection refused/);
+  });
+
+  it("propagates errors from the apply step with context", async () => {
+    const live = {
+      kind: "Ingress",
+      apiVersion: "networking.k8s.io/v1",
+      metadata: { name: ingressName, namespace },
+      spec: { rules: [{ http: { paths: [] } }] },
+    };
+    const { runKubectl } = mockKubectl([
+      { stdout: JSON.stringify(live) },
+      { code: 1, stderr: "denied" },
+    ]);
+    await expect(
+      syncFleetIngressPaths({
+        runKubectl,
+        ingressName,
+        namespace,
+        desiredGateways: [{ gatewayId: "gw-test", instanceName: "default" }],
+        fleetControllerPort: FLEET_PORT,
+        aliasServiceName: ALIAS,
+        log: vi.fn(),
+      }),
+    ).rejects.toThrow(/kubectl apply.*denied/);
+  });
+});
