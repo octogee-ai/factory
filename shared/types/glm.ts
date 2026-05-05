@@ -26,7 +26,8 @@ export type OperationKind =
   | "add-gateway"
   | "migrate-customer"
   | "retire-gateway"
-  | "rollout";
+  | "rollout"
+  | "deprovision-customer";
 
 export type OperationStatus =
   | "pending"

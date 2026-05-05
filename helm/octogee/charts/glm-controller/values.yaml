@@ -17,6 +17,14 @@ helm:
   # build time. See glm-controller/Dockerfile.
   chartPath: /charts/octogee
 
+# Customer-cleanup target endpoints (Gitea + Mattermost). Defaults
+# resolve to in-cluster ClusterIP Services for the same Helm release;
+# operator can override per-env if cluster topology changes.
+env:
+  gitApiUrl: ""
+  gitOrg: ""
+  mmUrl: ""
+
 resources:
   requests:
     cpu: "100m"

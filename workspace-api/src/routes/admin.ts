@@ -577,6 +577,137 @@ router.post("/customer/:uid/csi-refresh", async (req: Request, res: Response, ne
   } catch (e) { next(e); }
 });
 
+interface StripeRefs {
+  customerId: string | null;
+  subscriptionId: string | null;
+  subscriptionStatus: string | null;
+}
+
+function asStringOrNull(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+// Inline delete for raw-signup customers (no slug ever assigned).
+// Auth errors with code "auth/user-not-found" are tolerated; everything
+// else surfaces. Matches nukeStep8 behavior.
+async function deleteAuthUserTolerantOfMissing(uid: string): Promise<void> {
+  try {
+    const { getAuth } = await import("firebase-admin/auth");
+    await getAuth().deleteUser(uid);
+  } catch (err) {
+    const code = (err as { code?: string } | null | undefined)?.code;
+    if (code !== "auth/user-not-found") throw err;
+  }
+}
+
+// Resolves a customer's primary workspace slug. `provisioning.openclaw.slug`
+// is canonical (matches /customers/by-slug + customer-lifecycle); username
+// fallback covers raw signups + legacy docs. (Copilot review)
+function resolveCustomerSlug(userData: Record<string, unknown>): string | null {
+  const provisioning =
+    (userData.provisioning as Record<string, unknown> | undefined) ?? {};
+  const openclaw =
+    (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
+  const openclawSlug = asStringOrNull(openclaw.slug);
+  return openclawSlug ?? workspaceSlugsForUser(userData)[0] ?? null;
+}
+
+// Pulls the stripe identifiers out of a user doc. Some legacy docs put
+// them at the top level (`stripeCustomerId`); newer flow puts them under
+// `subscription.*` / `billing.*`. Either way — we just need the IDs to
+// log them, since the operator owns Stripe cancellation manually for
+// now (out of scope per spec line 211).
+function resolveStripeRefs(userData: Record<string, unknown>): StripeRefs {
+  const subscription = (userData.subscription as Record<string, unknown> | undefined) ?? {};
+  const billing = (userData.billing as Record<string, unknown> | undefined) ?? {};
+  return {
+    customerId:
+      asStringOrNull(userData.stripeCustomerId) ?? asStringOrNull(billing.stripeCustomerId),
+    subscriptionId:
+      asStringOrNull(subscription.id) ?? asStringOrNull(billing.subscriptionId),
+    subscriptionStatus:
+      asStringOrNull(subscription.status) ?? asStringOrNull(billing.subscriptionStatus),
+  };
+}
+
+// ── Admin delete customer ──────────────────────────────────────────────────
+//
+// Spec: docs/specs/ADMIN-DELETE-CUSTOMER-SPEC.md.
+//
+// Three branches:
+//   1. No slug (raw signup) → inline lite-delete (Auth + user doc).
+//   2. Has slug → enqueue glmOperations `deprovision-customer`. The
+//      glm-controller handler unmounts from the gateway (if any) and
+//      runs cloud-side cleanup. Single path for assigned + orphan.
+//   3. (No third branch — Cowboy is canonical for both assigned and
+//      orphan customers post-#PR. cleanupJobs is no longer used here.)
+//
+// Stripe stub: log uid + email + stripe IDs at WARN when present so the
+// operator sees what they'll have to cancel manually. No auto-cancel
+// until Stripe wiring is built (out of scope per spec line 211).
+router.post("/customer/:uid/delete", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const uid = req.params.uid;
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      res.status(404).json({ error: "User not found", uid });
+      return;
+    }
+    const userData = userSnap.data() ?? {};
+
+    // Stripe stub — log loud and clear; does not block deletion.
+    const stripe = resolveStripeRefs(userData);
+    if (stripe.customerId || stripe.subscriptionId) {
+      logger.warn(
+        `[admin-delete] ⚠️  STRIPE NOT CANCELLED — manual cancellation required. ` +
+          `uid=${uid} email=${userData.email ?? "?"} stripeCustomerId=${stripe.customerId ?? "?"} ` +
+          `subscriptionId=${stripe.subscriptionId ?? "?"} status=${stripe.subscriptionStatus ?? "?"}`,
+      );
+    }
+
+    const slug = resolveCustomerSlug(userData);
+
+    if (!slug) {
+      // Branch 1: raw signup, no slug → inline lite-delete.
+      await deleteAuthUserTolerantOfMissing(uid);
+      await userRef.delete();
+      logger.info(`[admin-delete] inline lite-delete uid=${uid}`);
+      res.json({ status: "deleted-inline", uid });
+      return;
+    }
+
+    // 409 if a deprovision-customer op is already pending or running.
+    // Indexed on `inputUid` (lifted by createOperation) so this is an
+    // O(1)-ish query instead of an unbounded scan of all in-flight ops.
+    const inFlight = await db
+      .collection(GLM_OPERATIONS_COLLECTION)
+      .where("kind", "==", "deprovision-customer")
+      .where("inputUid", "==", uid)
+      .where("status", "in", ["pending", "running"])
+      .get();
+    const conflict = inFlight.docs[0] ?? null;
+    if (conflict) {
+      res.status(409).json({
+        error: "Cleanup already in progress",
+        operationId: conflict.id,
+      });
+      return;
+    }
+
+    // Branch 2: has slug → enqueue glmOperations deprovision-customer.
+    const operationId = await createOperation({
+      kind: "deprovision-customer",
+      createdBy: req.uid ?? "unknown",
+      input: { uid, slug },
+    });
+    logger.info(`[admin-delete] queued deprovision-customer op=${operationId} uid=${uid} slug=${slug}`);
+    res.status(202).json({ status: "queued", operationId, slug });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── Fleet Controller — Phase 2 (training wheels) ────────────────────────────
 //
 // Lists every `gateways/{id}` doc + aggregates `restoreJobs/*` so the admin
@@ -870,6 +1001,7 @@ const OP_KINDS = new Set([
   "migrate-customer",
   "retire-gateway",
   "rollout",
+  "deprovision-customer",
 ]);
 const OP_STATUSES = new Set([
   "pending",
@@ -1034,7 +1166,12 @@ const GLM_GATEWAYS_COLLECTION = "glmGateways";
 const GLM_OPERATIONS_COLLECTION = "glmOperations";
 
 interface NewOperationInput {
-  kind: "add-gateway" | "migrate-customer" | "retire-gateway" | "rollout";
+  kind:
+    | "add-gateway"
+    | "migrate-customer"
+    | "retire-gateway"
+    | "rollout"
+    | "deprovision-customer";
   createdBy: string;
   input: Record<string, unknown>;
 }
@@ -1042,6 +1179,12 @@ interface NewOperationInput {
 async function createOperation(opts: NewOperationInput): Promise<string> {
   const gatewayId =
     typeof opts.input.gatewayId === "string" ? opts.input.gatewayId : null;
+  // Lift `uid` to a top-level field so the 409 in-flight check on
+  // /customer/:uid/delete is a single-field equality query instead of
+  // a full collection scan + client-side filter on `input.uid`. Same
+  // pattern as the existing top-level `gatewayId` field. (Copilot review)
+  const inputUid =
+    typeof opts.input.uid === "string" ? opts.input.uid : null;
   const ref = await db.collection(GLM_OPERATIONS_COLLECTION).add({
     kind: opts.kind,
     status: "pending",
@@ -1052,6 +1195,7 @@ async function createOperation(opts: NewOperationInput): Promise<string> {
     input: opts.input,
     steps: [],
     ...(gatewayId !== null ? { gatewayId } : {}),
+    ...(inputUid !== null ? { inputUid } : {}),
   });
   return ref.id;
 }

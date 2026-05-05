@@ -29,6 +29,14 @@ import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
+import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
+import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
+import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
+import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
+import { signFleetRequest } from "../../scripts/lib/fleet-signature.js";
+import { SIGNATURE_HEADER } from "../../shared/types/fleet-controller.js";
+import { getStorage } from "firebase-admin/storage";
+import { getAuth } from "firebase-admin/auth";
 import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
 
 const log = (msg: string) => console.log(msg);
@@ -447,12 +455,122 @@ async function buildHandlers(
     log: logFn,
   });
 
+  const deprovisionCustomer = buildDeprovisionCustomerHandler(db, secret, logFn);
+
   return {
     "add-gateway": addGateway,
     "migrate-customer": migrateCustomer,
     "retire-gateway": retireGateway,
     rollout,
+    "deprovision-customer": deprovisionCustomer,
   };
+}
+
+function buildDeprovisionCustomerHandler(
+  db: Firestore,
+  secret: string,
+  logFn: (msg: string) => void,
+) {
+  const giteaApiUrl =
+    // eslint-disable-next-line sonarjs/no-clear-text-protocols -- in-cluster ClusterIP service, not internet-facing
+    process.env.GIT_API_URL ?? "http://gitea-http.octogee.svc.cluster.local:3000/api/v1";
+  const giteaToken = process.env.GIT_API_TOKEN ?? "";
+  const giteaOrg = process.env.GIT_ORG ?? "octogee";
+  const mmBaseUrl = process.env.MM_URL ?? "";
+  const mmAdminToken = process.env.MM_ADMIN_TOKEN ?? "";
+
+  const gitea = createGiteaCleanupClient({
+    apiUrl: giteaApiUrl,
+    token: giteaToken,
+    log: logFn,
+  });
+  const mattermost = createMmCleanupClient({
+    baseUrl: mmBaseUrl,
+    adminToken: mmAdminToken,
+    log: logFn,
+  });
+
+  return createDeprovisionCustomerHandler({
+    loadCleanupContext: (uid) => loadCustomerCleanupContext({ db, giteaOrg }, uid),
+    unmountFromGateway: (gatewayId, slug) =>
+      callUnmountRpc(db, secret, gatewayId, slug, logFn),
+    cloudCleanup: {
+      gitea,
+      mattermost,
+      nukeUserFirestore: async (uid) => {
+        const userRef = db.collection("users").doc(uid);
+        await db.recursiveDelete(userRef.collection("secrets"));
+        await db.recursiveDelete(userRef.collection("settings"));
+        await db.recursiveDelete(userRef.collection("deploys"));
+        await db.recursiveDelete(userRef.collection("customers"));
+        await db.recursiveDelete(userRef.collection("workspaces"));
+        await userRef.delete();
+        await db.recursiveDelete(db.collection("customerStats").doc(uid));
+      },
+      nukeWsTickets: async (uid) => {
+        // Firestore batches max out at 500 writes; chunk so a customer
+        // with thousands of historical wsTickets doesn't fail the
+        // firestore step. (Copilot review)
+        const FIRESTORE_BATCH_LIMIT = 500;
+        const snap = await db.collection("wsTickets").where("uid", "==", uid).get();
+        for (let i = 0; i < snap.docs.length; i += FIRESTORE_BATCH_LIMIT) {
+          const batch = db.batch();
+          for (const doc of snap.docs.slice(i, i + FIRESTORE_BATCH_LIMIT)) {
+            batch.delete(doc.ref);
+          }
+          await batch.commit();
+        }
+        return { deleted: snap.size };
+      },
+      deleteAvatar: async (uid) => {
+        const file = getStorage().bucket().file(`avatars/${uid}`);
+        const [exists] = await file.exists();
+        if (exists) await file.delete();
+      },
+      deleteAuthUser: async (uid) => {
+        try {
+          await getAuth().deleteUser(uid);
+        } catch (err) {
+          // Match on Firebase's structured `.code` rather than message
+          // substring — avoids swallowing unrelated errors. (Review-agent)
+          const code = (err as { code?: string } | null | undefined)?.code;
+          if (code === "auth/user-not-found") return;
+          throw err;
+        }
+      },
+      log: logFn,
+    },
+    now: () => Date.now(),
+    log: logFn,
+  });
+}
+
+// loadCustomerCleanupContext moved to lib/customer-ops/cleanup-context.ts
+// for direct testability. Wiring layer here just adapts the call shape.
+
+async function callUnmountRpc(
+  db: Firestore,
+  secret: string,
+  gatewayId: string,
+  slug: string,
+  log: (msg: string) => void,
+): Promise<void> {
+  // Resolve gateway URL by reading the same Firestore desired-state doc
+  // the migrate-customer handler uses.
+  const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+  const migrationId = `deprov-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const body = JSON.stringify({ migrationId, slug });
+  const signature = signFleetRequest(secret, migrationId, body);
+  const resp = await fetch(`${url}/unmount/${gatewayId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", [SIGNATURE_HEADER]: signature },
+    body,
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "<no body>");
+    throw new Error(`unmount failed: ${resp.status} ${text.slice(0, 200)}`);
+  }
+  log(`[deprovision] unmount RPC ok gatewayId=${gatewayId} slug=${slug}`);
 }
 
 async function resolveGatewayUrlFromFirestore(
