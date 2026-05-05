@@ -10,8 +10,8 @@
     "test": "npx vitest run __tests__"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.91.1",
-    "@google-cloud/secret-manager": "^6.1.1",
+    "@anthropic-ai/sdk": "^0.93.0",
+    "@google-cloud/secret-manager": "^6.1.2",
     "@types/http-proxy": "^1.17.17",
     "express": "^4.21.0",
     "express-rate-limit": "^8.3.2",
