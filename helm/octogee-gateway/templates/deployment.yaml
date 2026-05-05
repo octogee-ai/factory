@@ -246,6 +246,13 @@ spec:
                   name: mattermost-gateway
                   key: admin_token
                   optional: true
+            - name: OCTOGEE_APPROVAL_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: approval-signing
+                  key: secret
+            - name: OCTOGEE_ALLOWED_WS_ORIGINS
+              value: {{ .Values.env.allowedWsOrigins | default "" | quote }}
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:

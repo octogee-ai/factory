@@ -75,6 +75,7 @@ REQUIRED_SECRETS=(
   "mattermost-gateway"      # chat-proxy + workspace-api: MM_ADMIN_TOKEN (no longer optional)
   "stripe-secrets"          # workspace-api: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
   "gitea-token"             # workspace-api: GITEA_TOKEN (not optional in deployment template)
+  "approval-signing"        # chat-proxy: OCTOGEE_APPROVAL_SIGNING_SECRET (HMAC for approval buttons)
 )
 
 # ── Critical keys within secrets ────────────────────────────────────────────
@@ -94,6 +95,7 @@ REQUIRED_KEYS=(
   "mattermost-gateway:admin_user_id:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   "internal-service-key:key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-anthropic:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
 )
 
 echo ""

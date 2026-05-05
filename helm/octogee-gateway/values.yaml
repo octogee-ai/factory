@@ -37,6 +37,10 @@ env:
   mmInteractionsCallbackBaseUrl: ""  # auto-computed per-instance if empty
   mmInteractionsAllowedSourceIps: "10.117.0.0/17"  # GKE pod CIDR
   chatProxyUrl: "https://chat.octogee.com"
+  # Comma-separated list of allowed Origin headers on the chat-proxy
+  # browser→OpenClaw WebSocket upgrade. Empty = chat-proxy falls back to
+  # localhost-only (dev mode). Populate per-env in values.{prod,test}.yaml.
+  allowedWsOrigins: ""
   discordOpsWebhookUrl: ""
   gitApiUrl: ""
   gitSshHost: ""

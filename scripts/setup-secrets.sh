@@ -206,6 +206,31 @@ if [[ -z "$MM_BOT_TOKEN" || -z "$MM_TEAM_ID" || -z "$MM_BOT_USER_ID" || -z "$MM_
   warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV before trusting this environment."
 fi
 
+# ── 2b. OpenClaw approval signing secret ─────────────────────────────────
+# HMAC secret for approval-button context binding. Must NOT rotate during
+# the lifetime of any pending approval (5min TTL) — rotating mid-flight
+# invalidates the buttons users haven't clicked yet. First install:
+# generate. Re-run: reuse what's already in Secret Manager.
+info "approval-signing"
+APPROVAL_SIGNING_SM_KEY="approval-signing-${ENV}"
+[[ "$ENV" == "custom" ]] && APPROVAL_SIGNING_SM_KEY="approval-signing-custom-${CUSTOM_NS}"
+APPROVAL_SIGNING_SECRET=$(sm_get "$APPROVAL_SIGNING_SM_KEY" octogee 2>/dev/null || echo "")
+if [[ -z "$APPROVAL_SIGNING_SECRET" ]]; then
+  APPROVAL_SIGNING_SECRET=$(openssl rand -hex 32)
+  info "  Generated new approval-signing secret — saving to Secret Manager..."
+  if echo -n "$APPROVAL_SIGNING_SECRET" | gcloud secrets create "$APPROVAL_SIGNING_SM_KEY" \
+       --data-file=- --project=octogee \
+       --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
+    :
+  else
+    # Already exists — add a new version so we can read it back next run.
+    echo -n "$APPROVAL_SIGNING_SECRET" | gcloud secrets versions add "$APPROVAL_SIGNING_SM_KEY" \
+      --data-file=- --project=octogee \
+      || fail "Could not persist approval-signing secret to Secret Manager (key=${APPROVAL_SIGNING_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
+  fi
+fi
+ksecret approval-signing --from-literal=secret="$APPROVAL_SIGNING_SECRET"
+
 # ── 3. Gitea admin ────────────────────────────────────────────────────────
 info "gitea-admin"
 GITEA_ADMIN_PASS=$(sm_get "gitea-admin-password-${ENV}" octogee 2>/dev/null || echo "")

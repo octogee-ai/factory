@@ -27,6 +27,7 @@ import {
   evaluateInboundFrame,
   observeOutboundForState,
 } from "./openclaw/inbound-gate.js";
+import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL;
@@ -384,6 +385,15 @@ function handleOpenClawWsUpgrade(
   socket: any,
   head: Buffer,
 ): void {
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+  if (!isAllowedWsOrigin(origin)) {
+    ocWsHandshakeTotal.inc({ outcome: "fail:origin-rejected" });
+    console.warn(`[proxy] OC WS: rejected origin=${origin ?? "(none)"}`);
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
   const urlPath = (req.url || "").split("?")[0];
   const pathMatch = urlPath.match(/\/api\/openclaw\/ws\/([a-f0-9-]{36})$/);
   const ticket = pathMatch?.[1] || null;
@@ -683,6 +693,7 @@ async function buildEditDiffFetcher() {
 }
 
 if (process.env.NODE_ENV !== "test") {
+  warnIfWsOriginsMisconfigured(console.warn);
   const server = createServer();
   server.listen(PORT, () => {
     console.log(`[chat-proxy] listening on :${PORT}`);
@@ -736,10 +747,9 @@ if (process.env.NODE_ENV !== "test") {
         editDiffFetcher: await buildEditDiffFetcher(),
       });
     } catch (err) {
-      console.error(
-        `[chat-proxy] activity bridge wire failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[chat-proxy] FATAL: activity bridge wire failed: ${msg}`);
+      process.exit(1);
     }
     approvalCallbackHandler = wired.approvalCallbackHandler;
 
