@@ -10,8 +10,8 @@ import {
   getCustomerGiteaToken,
   getExtension,
   getMimeType,
-  HIDDEN,
   IMAGE_EXTENSIONS,
+  pathHasReservedOrHiddenSegment,
 } from "./helpers";
 
 const router = Router();
@@ -30,8 +30,7 @@ router.post("/upload", withFileTarget(async (req, res, _next, target) => {
     const pathError = validateFilePath(filePath);
     if (pathError) { results.push({ name: filePath, status: `blocked: ${pathError}` }); continue; }
 
-    const parts = filePath.split("/");
-    if (parts.some((p) => HIDDEN.has(p) || p.startsWith("."))) {
+    if (pathHasReservedOrHiddenSegment(filePath)) {
       results.push({ name: filePath, status: "blocked" });
       continue;
     }

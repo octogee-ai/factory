@@ -8,6 +8,7 @@ import {
   getExtension,
   getMimeType,
   isTextFile,
+  validateWorkspacePath,
 } from "./helpers";
 
 const router = Router();
@@ -32,6 +33,11 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
       return;
     }
     const destDir = targetDir || `builds/${repo}/src`;
+    const destDirError = validateWorkspacePath(destDir);
+    if (destDirError) {
+      res.status(400).json({ error: `Invalid targetDir: ${destDirError}` });
+      return;
+    }
     const workspaceRepo = `${slug}-workspace`;
     const ghToken = process.env.GITHUB_TOKEN;
 
@@ -72,6 +78,7 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
       if (typeof blob.sha !== "string" || !/^[0-9a-f]{40}$/.test(blob.sha)) continue;
 
       const targetPath = `${destDir}/${blob.path}`;
+      if (validateWorkspacePath(targetPath)) continue;
       const ext = getExtension(blob.path);
 
       const blobResp = await fetch(

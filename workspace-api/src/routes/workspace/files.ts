@@ -3,7 +3,7 @@ import { storage } from "../../lib/db";
 import { validateFilePath } from "../../lib/path-validation";
 import { withFileTarget } from "../../lib/fileTarget";
 import { getManifest } from "../../lib/manifest";
-import { customerGiteaApi, getCustomerGiteaToken, HIDDEN } from "./helpers";
+import { customerGiteaApi, getCustomerGiteaToken, HIDDEN, pathHasReservedOrHiddenSegment } from "./helpers";
 
 const router = Router();
 
@@ -14,6 +14,10 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
   if (path) {
     const pathError = validateFilePath(path);
     if (pathError) { res.status(400).json({ error: pathError }); return; }
+    if (pathHasReservedOrHiddenSegment(path)) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
   }
 
   const { repoName } = target;
@@ -88,8 +92,7 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
   const pathError = validateFilePath(path);
   if (pathError) { res.status(400).json({ error: pathError }); return; }
 
-  const parts = path.split("/");
-  if (parts.some((p) => HIDDEN.has(p) || p.startsWith("."))) {
+  if (pathHasReservedOrHiddenSegment(path)) {
     res.status(403).json({ error: "Access denied" });
     return;
   }

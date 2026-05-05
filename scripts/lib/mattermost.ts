@@ -23,6 +23,12 @@ export {
   mintAndPersistCoachToken,
 } from "./mattermost/coach-pat.js";
 
+export type { BuilderPatRotateDeps, BuilderPatRotateResult } from "./mattermost/builder-pat.js";
+export {
+  BUILDER_PAT_DESCRIPTION,
+  revokeAndMintBuilderPat,
+} from "./mattermost/builder-pat.js";
+
 export { mmUploadAvatar } from "./mattermost/avatars.js";
 
 export { provisionMattermostUser } from "./mattermost/provision.js";

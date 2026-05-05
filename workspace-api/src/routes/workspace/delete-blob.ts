@@ -1,9 +1,8 @@
 import { Router } from "express";
 import { storage } from "../../lib/db";
-import { validateFilePath } from "../../lib/path-validation";
 import { withFileTarget } from "../../lib/fileTarget";
 import { removeFromManifest } from "../../lib/manifest";
-import { getCustomerGiteaToken } from "./helpers";
+import { getCustomerGiteaToken, validateWorkspacePath } from "./helpers";
 
 const router = Router();
 
@@ -11,7 +10,7 @@ router.post("/delete-blob", withFileTarget(async (req, res, _next, target) => {
   const { path: filePath } = req.body as { path?: string };
   if (!filePath) { res.status(400).json({ error: "Missing path" }); return; }
 
-  const pathError = validateFilePath(filePath);
+  const pathError = validateWorkspacePath(filePath);
   if (pathError) { res.status(400).json({ error: pathError }); return; }
 
   const bucket = storage.bucket();

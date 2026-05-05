@@ -10,6 +10,7 @@ import {
   getExtension,
   getMimeType,
   isTextFile,
+  validateWorkspacePath,
 } from "./helpers";
 
 const router = Router();
@@ -21,6 +22,9 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
 
     const { zipPath } = req.body as { zipPath: string };
     if (!zipPath) { res.status(400).json({ error: "Missing zipPath" }); return; }
+
+    const zipPathError = validateWorkspacePath(zipPath);
+    if (zipPathError) { res.status(400).json({ error: `Invalid zipPath: ${zipPathError}` }); return; }
 
     const bucket = storage.bucket();
     const gcsZipPath = `customers/${slug}/${zipPath}`;
@@ -54,13 +58,31 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
       return;
     }
 
+    const safeEntries: Array<[string, typeof fileEntries[number][1]]> = [];
     for (const [relativePath, zipEntry] of fileEntries) {
       if (relativePath.startsWith("__MACOSX/") || relativePath.includes("/.DS_Store")) continue;
+      const targetPath = `${baseDir}/${relativePath}`;
+      const targetPathError = validateWorkspacePath(targetPath);
+      if (targetPathError) {
+        res.status(400).json({ error: `Blocked entry "${relativePath}": ${targetPathError}` });
+        return;
+      }
+      safeEntries.push([relativePath, zipEntry]);
+    }
 
+    let totalDecompressedBytes = 0;
+    const MAX_DECOMPRESSED_BYTES = 500 * 1024 * 1024;
+
+    for (const [relativePath, zipEntry] of safeEntries) {
       const targetPath = `${baseDir}/${relativePath}`;
       const fileBuffer = await zipEntry.async("nodebuffer");
       if (fileBuffer.length > MAX_ENTRY_BYTES) {
         res.status(413).json({ error: `Entry "${relativePath}" exceeds ${MAX_ENTRY_BYTES} bytes` });
+        return;
+      }
+      totalDecompressedBytes += fileBuffer.length;
+      if (totalDecompressedBytes > MAX_DECOMPRESSED_BYTES) {
+        res.status(413).json({ error: `Total decompressed size exceeds ${MAX_DECOMPRESSED_BYTES} bytes` });
         return;
       }
       const ext = getExtension(relativePath);

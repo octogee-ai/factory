@@ -47,6 +47,7 @@
   },
   "overrides": {
     "@tootallnate/once": "^3.0.1",
+    "ip-address": "^10.1.1",
     "uuid": "^14.0.0"
   }
 }

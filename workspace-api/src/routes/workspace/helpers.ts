@@ -1,17 +1,10 @@
 import type { Request, Response } from "express";
 import { giteaApiAs } from "../../lib/gitea";
-import { logger } from "../../middleware/logging";
+import { validateFilePath } from "../../lib/path-validation";
 
 export function getCustomerGiteaToken(req: Request): string {
   if (req.giteaToken) return req.giteaToken;
-  const globalToken = process.env.GITEA_TOKEN;
-  if (globalToken) {
-    logger.warn("Using global GITEA_TOKEN — customer has no per-customer token", {
-      uid: req.uid,
-    });
-    return globalToken;
-  }
-  throw new Error("Gitea access not configured");
+  throw new Error("Gitea access not configured for this user");
 }
 
 export async function customerGiteaApi(
@@ -29,6 +22,22 @@ export const HIDDEN = new Set([
   "brain", ".git", ".system", "preview", "node_modules",
   "crew-webhooks.json",
 ]);
+
+export function pathHasReservedOrHiddenSegment(filePath: string): string | null {
+  const parts = filePath.split("/");
+  for (const p of parts) {
+    if (p.length === 0) return "Path contains empty segment (trailing or leading slash)";
+    if (HIDDEN.has(p)) return `Path contains reserved name: ${p}`;
+    if (p.startsWith(".")) return `Path contains hidden segment: ${p}`;
+  }
+  return null;
+}
+
+export function validateWorkspacePath(filePath: string): string | null {
+  const pathError = validateFilePath(filePath);
+  if (pathError) return pathError;
+  return pathHasReservedOrHiddenSegment(filePath);
+}
 
 export const EDITABLE_EXTENSIONS = new Set([
   ".md", ".mdx", ".txt", ".json", ".ts", ".tsx", ".js", ".jsx",
