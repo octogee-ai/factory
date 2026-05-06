@@ -94,6 +94,13 @@ export interface CustomerSummary {
   tokensLimit:         number;
   csi:                 CSISummary | null;
   trial:               TrialSummary | null;
+  /**
+   * Lifecycle status of the per-customer provisioning pipeline. Distinct
+   * from subscriptionStatus (billing). `complete` is steady; anything
+   * else surfaces a Provisioning badge in the admin UI so stuck/failed
+   * customers can't hide.
+   */
+  provisioningStatus:  string | null;
 }
 
 /** Map a single user doc + (optional) CSI doc to a CustomerSummary. */
@@ -178,6 +185,13 @@ export function buildCustomerSummary(
     tokensLimit: windowSize,
     csi: csiSummary,
     trial,
+    // Prefer the openclaw sub-status (provisioner pipeline state); fall
+    // back to the root status (older docs may not have nested it). Null
+    // when neither is set.
+    provisioningStatus:
+      d.provisioning?.openclaw?.status ??
+      d.provisioning?.status ??
+      null,
   };
 }
 
