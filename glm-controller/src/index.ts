@@ -724,8 +724,13 @@ function buildDeprovisionCustomerHandler(
       },
       // PR #3: Firebase Hosting site deletion. Sites are
       // `octogee-<slug>-<projectSlug>` per scripts/lib/projects/create.ts.
-      // Requires `roles/firebasehosting.admin` on the controller's GSA
-      // (Terraform grant — call out as deploy prereq in the PR body).
+      // The controller pod runs under the gateway GSA via Workload
+      // Identity (helm/octogee/values.yaml:225/236), which already
+      // holds `roles/firebase.admin` in
+      // terraform/modules/iam/main.tf:46-50 — a Firebase-wide role
+      // that covers Hosting site management. No extra IAM grant
+      // required to ship this; least-privilege tightening to
+      // `roles/firebasehosting.admin` is a follow-up.
       deleteHostingSites: async (slug, projectSlugs) => {
         const auth = new GoogleAuth({
           // Narrowest scope that covers Hosting site management per
