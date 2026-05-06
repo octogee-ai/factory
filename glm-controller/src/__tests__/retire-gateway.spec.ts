@@ -37,6 +37,13 @@ interface FakeState {
   deletedGlm: Set<string>;
   deletedHeartbeat: Set<string>;
   archivedSecret: Set<string>;
+  /**
+   * Test seam for the P2 quiesce step: gatewayIds whose heartbeat doc
+   * "comes back" after the cleanup delete (simulating a pod's last
+   * heartbeat write landing post-delete). The handler is expected to
+   * detect this on its re-check and delete again.
+   */
+  heartbeatPresentAfterDelete?: Set<string>;
 }
 
 function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}): RetireGatewayDeps {
@@ -68,6 +75,9 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     }),
     deleteGatewayHeartbeat: vi.fn(async (gatewayId: string) => {
       state.deletedHeartbeat.add(gatewayId);
+    }),
+    readGatewayHeartbeatExists: vi.fn(async (gatewayId: string) => {
+      return state.heartbeatPresentAfterDelete?.has(gatewayId) ?? false;
     }),
     archiveAuthTokenSecret: vi.fn(async (gatewayId: string) => {
       state.archivedSecret.add(gatewayId);
@@ -109,6 +119,8 @@ describe("createRetireGatewayHandler — happy path", () => {
       "helm-uninstall:done",
       "cleanup:running",
       "cleanup:done",
+      "heartbeat-quiesce:running",
+      "heartbeat-quiesce:done",
       "fleet-ingress:running",
       "fleet-ingress:done",
     ]);
@@ -299,5 +311,53 @@ describe("createRetireGatewayHandler — failures", () => {
     const failed = ctx.reported.find((s) => s.status === "failed");
     expect(failed?.name).toBe("helm-uninstall");
     expect(state.deletedGlm.size).toBe(0);
+  });
+});
+
+describe("createRetireGatewayHandler — P2 heartbeat-quiesce", () => {
+  it("re-deletes the heartbeat doc when a pod's late write resurrected it after cleanup", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(),
+      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
+      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      deletedGlm: new Set(),
+      deletedHeartbeat: new Set(),
+      archivedSecret: new Set(),
+      // Pod sent a final heartbeat in its SIGTERM handler that landed
+      // AFTER the cleanup delete — Firestore re-created the doc. The
+      // handler should re-delete on the post-cleanup verification pass.
+      heartbeatPresentAfterDelete: new Set(["gw-test-canary"]),
+    };
+    const deps = makeDeps(state);
+    const ctx = makeCtx();
+    const result = await createRetireGatewayHandler(deps)(mkOp(), ctx);
+    expect(result.success).toBe(true);
+    // Two delete calls: cleanup's initial + heartbeat-quiesce's re-delete.
+    expect(deps.deleteGatewayHeartbeat).toHaveBeenCalledTimes(2);
+    const quiesceFinal = ctx.reported
+      .filter((s) => s.name === "heartbeat-quiesce")
+      .at(-1);
+    expect(quiesceFinal?.status).toBe("done");
+  });
+
+  it("skips the re-delete when heartbeat stays gone after cleanup (happy path, no zombie)", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(),
+      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
+      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      deletedGlm: new Set(),
+      deletedHeartbeat: new Set(),
+      archivedSecret: new Set(),
+      // No resurrection — readGatewayHeartbeatExists returns false on re-check.
+    };
+    const deps = makeDeps(state);
+    const ctx = makeCtx();
+    const result = await createRetireGatewayHandler(deps)(mkOp(), ctx);
+    expect(result.success).toBe(true);
+    expect(deps.deleteGatewayHeartbeat).toHaveBeenCalledTimes(1);
+    const quiesceFinal = ctx.reported
+      .filter((s) => s.name === "heartbeat-quiesce")
+      .at(-1);
+    expect(quiesceFinal?.status).toBe("done");
   });
 });

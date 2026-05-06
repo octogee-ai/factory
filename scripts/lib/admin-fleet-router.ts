@@ -1071,12 +1071,26 @@ export function addAdminFleetRoutes(
             return;
           }
         }
-        await ref.update({ desiredStatus: "retired" });
-        const operationId = await createOperation(db, {
+        // Atomic: bind `desiredStatus=retired` and the retire-gateway
+        // operation creation into one batch so a partial failure can't
+        // leave the gateway in "draining-with-no-op" purgatory. Either
+        // both writes land or neither does.
+        const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+        const operationId = opRef.id;
+        const batch = db.batch();
+        batch.update(ref, { desiredStatus: "retired" });
+        batch.set(opRef, {
           kind: "retire-gateway",
+          status: "pending",
           createdBy,
+          createdAt: Date.now(),
+          startedAt: null,
+          completedAt: null,
           input: { gatewayId: id },
+          steps: [],
+          gatewayId: id,
         });
+        await batch.commit();
         res.status(202).json({ gatewayId: id, operationId });
       } catch (e) {
         next(e);

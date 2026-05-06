@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 interface FirestoreCall {
   collection: string;
-  op: "add" | "doc.set" | "doc.update";
+  op: "add" | "doc.set" | "doc.update" | "batch.commit";
   docId?: string;
   data?: Record<string, unknown>;
   options?: Record<string, unknown>;
 }
+
+let batchCommitFailures = 0;
 
 const calls: FirestoreCall[] = [];
 let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
@@ -81,6 +83,39 @@ vi.mock("../lib/db", () => {
     };
   }
 
+  function makeDocRef(name: string, docId: string): any {
+    return {
+      id: docId,
+      _collection: name,
+      get: async () => {
+        if (name === "glmGateways") {
+          const data = glmGatewaysDocs[docId];
+          return { exists: data !== undefined, data: () => data };
+        }
+        if (name === "gateways") {
+          const data = gatewaysDocs[docId];
+          return { exists: data !== undefined, data: () => data };
+        }
+        if (name === "users") {
+          const data = usersDocs[docId];
+          return { exists: data !== undefined, data: () => data };
+        }
+        return { exists: true, data: () => ({}) };
+      },
+      set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
+        calls.push({ collection: name, op: "doc.set", docId, data, options });
+        if (name === "glmGateways") glmGatewaysDocs[docId] = data;
+        if (name === "glmOperations") glmOperationsDocs.unshift({ id: docId, data });
+      },
+      update: async (data: Record<string, unknown>) => {
+        calls.push({ collection: name, op: "doc.update", docId, data });
+        if (name === "glmGateways" && glmGatewaysDocs[docId]) {
+          glmGatewaysDocs[docId] = { ...glmGatewaysDocs[docId], ...data };
+        }
+      },
+    };
+  }
+
   function collection(name: string): any {
     return {
       add: async (data: Record<string, unknown>) => {
@@ -89,34 +124,12 @@ vi.mock("../lib/db", () => {
         if (name === "glmOperations") glmOperationsDocs.unshift({ id, data });
         return { id };
       },
-      doc: (docId: string) => ({
-        id: docId,
-        get: async () => {
-          if (name === "glmGateways") {
-            const data = glmGatewaysDocs[docId];
-            return { exists: data !== undefined, data: () => data };
-          }
-          if (name === "gateways") {
-            const data = gatewaysDocs[docId];
-            return { exists: data !== undefined, data: () => data };
-          }
-          if (name === "users") {
-            const data = usersDocs[docId];
-            return { exists: data !== undefined, data: () => data };
-          }
-          return { exists: true, data: () => ({}) };
-        },
-        set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
-          calls.push({ collection: name, op: "doc.set", docId, data, options });
-          if (name === "glmGateways") glmGatewaysDocs[docId] = data;
-        },
-        update: async (data: Record<string, unknown>) => {
-          calls.push({ collection: name, op: "doc.update", docId, data });
-          if (name === "glmGateways" && glmGatewaysDocs[docId]) {
-            glmGatewaysDocs[docId] = { ...glmGatewaysDocs[docId], ...data };
-          }
-        },
-      }),
+      // Both `doc()` (auto-ID) and `doc(id)` (explicit) shapes are supported.
+      // Auto-ID is needed for the retire-gateway batched op create path.
+      doc: (docId?: string) => {
+        const id = docId ?? `auto-${calls.length}-${name}`;
+        return makeDocRef(name, id);
+      },
       orderBy: () => whereChain(name),
       where: (field: string, _op: string, value: unknown) =>
         whereChain(name, { field, value }),
@@ -141,9 +154,38 @@ vi.mock("../lib/db", () => {
     };
   }
 
+  // db.batch() — pending operations recorded in a closure, applied on
+  // commit() or discarded if commit throws (simulates Firestore atomicity).
+  function makeBatch() {
+    const pending: Array<() => Promise<void>> = [];
+    return {
+      update(docRef: any, data: Record<string, unknown>) {
+        pending.push(() => docRef.update(data));
+        return this;
+      },
+      set(docRef: any, data: Record<string, unknown>, options?: Record<string, unknown>) {
+        pending.push(() => docRef.set(data, options));
+        return this;
+      },
+      delete(docRef: any) {
+        pending.push(() => docRef.delete?.());
+        return this;
+      },
+      commit: async () => {
+        if (batchCommitFailures > 0) {
+          batchCommitFailures -= 1;
+          throw new Error("simulated batch commit failure");
+        }
+        for (const fn of pending) await fn();
+        calls.push({ collection: "<batch>", op: "batch.commit" });
+      },
+    };
+  }
+
   return {
     db: {
       collection,
+      batch: () => makeBatch(),
       doc: (path: string) => {
         const [coll, id] = path.split("/");
         return {
@@ -238,6 +280,7 @@ beforeEach(() => {
   builderCalls.length = 0;
   nextBuildsResult = [];
   nextBuildsError = null;
+  batchCommitFailures = 0;
   process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
 });
 
@@ -493,6 +536,37 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(update?.data).toMatchObject({ desiredStatus: "retired" });
     const op = calls.find((c) => c.collection === "glmOperations");
     expect(op?.data).toMatchObject({ kind: "retire-gateway", createdBy: "admin-user" });
+  });
+
+  it("commits desiredStatus + op create as one atomic batch (P3 audit follow-up)", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    gatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", status: "ready", mountedCustomers: [] };
+    const app = buildApp();
+    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    expect(res.status).toBe(202);
+    // Both writes plus the batch commit are recorded; importantly the
+    // commit appears AFTER both writes (proving the batch wrapped them).
+    const updateIdx = calls.findIndex(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    const opIdx = calls.findIndex((c) => c.collection === "glmOperations");
+    const commitIdx = calls.findIndex((c) => c.op === "batch.commit");
+    expect(updateIdx).toBeGreaterThanOrEqual(0);
+    expect(opIdx).toBeGreaterThanOrEqual(0);
+    expect(commitIdx).toBeGreaterThan(updateIdx);
+    expect(commitIdx).toBeGreaterThan(opIdx);
+  });
+
+  it("rolls back BOTH writes if the batch commit fails (atomicity)", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", desiredStatus: "running" };
+    gatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", status: "ready", mountedCustomers: [] };
+    batchCommitFailures = 1;
+    const app = buildApp();
+    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    expect(res.status).toBe(500);
+    // Neither pending write should have applied to the in-memory store.
+    expect(glmGatewaysDocs["gw-test-canary"]).toMatchObject({ desiredStatus: "running" });
+    expect(glmOperationsDocs.find((d) => d.data.kind === "retire-gateway")).toBeUndefined();
   });
 
   it("returns 409 when an in-flight restore job is set on the heartbeat (mid-mount)", async () => {

@@ -579,6 +579,10 @@ async function buildHandlers(
     deleteGatewayHeartbeat: async (gatewayId) => {
       await db.collection("gateways").doc(gatewayId).delete();
     },
+    readGatewayHeartbeatExists: async (gatewayId) => {
+      const doc = await db.collection("gateways").doc(gatewayId).get();
+      return doc.exists;
+    },
     // archiveAuthTokenSecret intentionally omitted — leaves the SM
     // secret in place so re-creating the gateway with the same id is
     // idempotent. Auth tokens rotate per pod boot anyway.

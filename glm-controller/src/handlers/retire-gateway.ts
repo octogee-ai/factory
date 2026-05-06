@@ -20,6 +20,13 @@ export interface RetireGatewayDeps {
   /** Removes the heartbeat doc gateways/{id}. */
   deleteGatewayHeartbeat: (gatewayId: string) => Promise<void>;
   /**
+   * Reads `gateways/{id}.exists`. Used by the post-cleanup quiesce step
+   * to detect a pod's late heartbeat write resurrecting the doc seconds
+   * after `deleteGatewayHeartbeat` cleared it. When optional and not
+   * provided, the quiesce step is a no-op (back-compat for older tests).
+   */
+  readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
+  /**
    * Optional: disables versions on the per-gateway SM auth-token. Skip
    * to leave the secret resource in place — re-creating the gateway with
    * the same id will re-use it (idempotent on Add Gateway). The auth
@@ -136,6 +143,46 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
         success: false,
         error: `cleanup failed after helm uninstall: ${msg}`,
       };
+    }
+
+    // P2 audit follow-up: helm uninstall --wait guarantees the pod is
+    // terminated by the time the helm-uninstall poll exits, but a final
+    // heartbeat write fired in the pod's SIGTERM handler can land in
+    // Firestore AFTER the cleanup step deleted the doc — resurrecting
+    // it. One re-check + re-delete pass catches in-flight writes; the
+    // orphan-heartbeat reaper handles anything that slips through (60s
+    // window). Skipped silently when readGatewayHeartbeatExists isn't
+    // wired (back-compat for older tests/callers).
+    if (deps.readGatewayHeartbeatExists) {
+      const quiesceStartedAt = deps.now();
+      await reportStep(ctx, { name: "heartbeat-quiesce", status: "running", startedAt: quiesceStartedAt });
+      try {
+        await deps.wait(deps.pollIntervalMs);
+        const resurrected = await deps.readGatewayHeartbeatExists(gatewayId);
+        if (resurrected) {
+          await deps.deleteGatewayHeartbeat(gatewayId);
+        }
+        await reportStep(ctx, {
+          name: "heartbeat-quiesce",
+          status: "done",
+          startedAt: quiesceStartedAt,
+          completedAt: deps.now(),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await reportStep(ctx, {
+          name: "heartbeat-quiesce",
+          status: "failed",
+          startedAt: quiesceStartedAt,
+          completedAt: deps.now(),
+          error: msg,
+        });
+        // Non-fatal: reaper will catch any zombie within 60s. Log loudly
+        // so on-call sees the soft failure but the retire still succeeds.
+        deps.log(
+          `[retire-gateway] heartbeat-quiesce failed for ${gatewayId} (reaper will heal within 60s): ${msg}`,
+        );
+      }
     }
 
     const ingressStartedAt = deps.now();
