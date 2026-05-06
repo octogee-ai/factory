@@ -146,16 +146,22 @@ describe("createLogger", () => {
 });
 
 describe("color rendering", () => {
+  // ANSI escape (ESC = U+001B) is a control character; ESLint's
+  // `no-control-regex` flags it inside `/\x1b…/` regexes. Plain
+  // strings are exempt, so `toContain("\x1b[…")` is the equivalent
+  // check without the lint noise.
+  const ESC_BRACKET = "\x1b[";
+
   it("emits ANSI codes when color enabled", () => {
     const out = formatLine("warn", "drift", undefined, { color: true });
     // Yellow color code for warn level glyph.
-    expect(out).toMatch(/\x1b\[33m/);
-    expect(out).toMatch(/\x1b\[0m/);
+    expect(out).toContain(`${ESC_BRACKET}33m`);
+    expect(out).toContain(`${ESC_BRACKET}0m`);
   });
 
   it("emits NO ANSI codes when color disabled", () => {
     const out = formatLine("warn", "drift", undefined, { color: false });
-    expect(out).not.toMatch(/\x1b\[/);
+    expect(out).not.toContain(ESC_BRACKET);
   });
 });
 

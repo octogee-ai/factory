@@ -30,33 +30,41 @@ export interface FormatOptions {
 
 export const COWBOY = "🤠 cowboy";
 
-const ANSI = {
-  reset: "\x1b[0m",
-  dim: "\x1b[2m",
-  red: "\x1b[31m",
-  yellow: "\x1b[33m",
-  cyan: "\x1b[36m",
-  magenta: "\x1b[35m",
-  gray: "\x1b[90m",
-};
+// `Map`s instead of plain objects — keyed lookups via `.get()` aren't
+// flagged by `security/detect-object-injection` the way `obj[key]` is.
+// Both shapes are equally type-safe at the call site (the keys are
+// from a closed union); the Map shape is just lint-quiet.
+type AnsiColor = "reset" | "dim" | "red" | "yellow" | "cyan" | "magenta" | "gray";
 
-const LEVEL_GLYPH: Record<Level, string> = {
-  info: "ℹ",
-  warn: "⚠",
-  error: "✗",
-  debug: "·",
-};
+const ANSI = new Map<AnsiColor, string>([
+  ["reset", "\x1b[0m"],
+  ["dim", "\x1b[2m"],
+  ["red", "\x1b[31m"],
+  ["yellow", "\x1b[33m"],
+  ["cyan", "\x1b[36m"],
+  ["magenta", "\x1b[35m"],
+  ["gray", "\x1b[90m"],
+]);
 
-const LEVEL_COLOR: Record<Level, keyof typeof ANSI> = {
-  info: "cyan",
-  warn: "yellow",
-  error: "red",
-  debug: "gray",
-};
+const LEVEL_GLYPH = new Map<Level, string>([
+  ["info", "ℹ"],
+  ["warn", "⚠"],
+  ["error", "✗"],
+  ["debug", "·"],
+]);
 
-function paint(text: string, color: keyof typeof ANSI, enabled: boolean): string {
+const LEVEL_COLOR = new Map<Level, AnsiColor>([
+  ["info", "cyan"],
+  ["warn", "yellow"],
+  ["error", "red"],
+  ["debug", "gray"],
+]);
+
+function paint(text: string, color: AnsiColor, enabled: boolean): string {
   if (!enabled) return text;
-  return `${ANSI[color]}${text}${ANSI.reset}`;
+  // Bang-asserts are safe — color is typed to AnsiColor and ANSI is
+  // populated with every variant of the union at module init.
+  return `${ANSI.get(color)!}${text}${ANSI.get("reset")!}`;
 }
 
 export function formatLine(
@@ -68,7 +76,7 @@ export function formatLine(
   const color = opts.color !== false;
   const now = (opts.now ?? (() => new Date()))();
   const ts = paint(now.toISOString(), "gray", color);
-  const glyph = paint(LEVEL_GLYPH[level], LEVEL_COLOR[level], color);
+  const glyph = paint(LEVEL_GLYPH.get(level)!, LEVEL_COLOR.get(level)!, color);
   const cowboy = paint(COWBOY, "magenta", color);
   const parts: string[] = [ts, glyph, cowboy];
   if (meta?.scope) {
@@ -100,11 +108,16 @@ export interface CreateLoggerOptions extends FormatOptions {
 }
 
 const LEGACY_PREFIX = /^\[glm-controller\]\s*/;
-// Warn marker can appear either at the start of the (post-strip) message
-// — `⚠ <body>` — or right after a sub-system tag — `[reaper] ⚠ <body>`.
-// In the latter case we keep the tag in the body for context and only
-// consume the `⚠` glyph + trailing whitespace.
-const LEGACY_WARN_MARKER = /(^|\[[^\]]+\]\s*)⚠\s*/;
+// Warn marker — split into two anchored patterns instead of one
+// alternation regex. The previous combined pattern triggered a
+// `sonarjs/slow-regex` warning over its alternation + nested
+// quantifiers; two simple anchored regexes are both clearer and
+// linear-time.
+//   - bare:     `⚠ <body>`     — strips the glyph, body becomes the line
+//   - prefixed: `[reaper] ⚠ x` — strips just the glyph + space, keeping
+//                                the sub-system tag for context
+const LEGACY_WARN_BARE = /^⚠\s*/;
+const LEGACY_WARN_PREFIXED = /^(\[[^\]]+\]\s*)⚠\s*/;
 
 export function createLogger(opts: CreateLoggerOptions = {}): Logger {
   const debugEnabled = opts.debug ?? false;
@@ -140,13 +153,18 @@ function makeLogger(
     },
     legacy(message) {
       const stripped = message.replace(LEGACY_PREFIX, "");
-      const warnMatch = LEGACY_WARN_MARKER.exec(stripped);
-      if (warnMatch && warnMatch.index === 0) {
-        // Replace exactly the matched chunk (`⚠ ` or `[tag] ⚠ `) with the
-        // sub-system tag (group 1) so a `[reaper] ⚠ x` line keeps `[reaper]`
-        // visible. A bare `⚠ x` line collapses to just `x`.
-        const tag = warnMatch[1] ?? "";
-        const body = tag + stripped.slice(warnMatch[0].length);
+      // Try prefixed first (`[reaper] ⚠ x`) so the sub-system tag is
+      // preserved in the body; fall through to the bare form (`⚠ x`).
+      const prefixedMatch = LEGACY_WARN_PREFIXED.exec(stripped);
+      if (prefixedMatch) {
+        const tag = prefixedMatch[1] ?? "";
+        const body = tag + stripped.slice(prefixedMatch[0].length);
+        console.warn(formatLine("warn", body, defaultMeta, fmtOpts));
+        return;
+      }
+      const bareMatch = LEGACY_WARN_BARE.exec(stripped);
+      if (bareMatch) {
+        const body = stripped.slice(bareMatch[0].length);
         console.warn(formatLine("warn", body, defaultMeta, fmtOpts));
         return;
       }

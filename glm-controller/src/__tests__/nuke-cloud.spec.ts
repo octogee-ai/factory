@@ -7,7 +7,8 @@ function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
     slug: "alice",
     email: "alice@example.com",
     giteaOrg: "octogee",
-    repoNames: ["alice-workspace", "alice-blog"],
+    repoNames: ["alice-workspace", "alice-proj-blog"],
+    projectSlugs: ["blog"],
     workspaceTeamId: "team-1",
     mmUserId: "mm-u-1",
     mmCoachUserId: "mm-coach-1",
@@ -58,7 +59,7 @@ describe("nukeUserCloudSide — happy path", () => {
     await nukeUserCloudSide(mkCtx(), deps);
     expect(deps.gitea.deleteRepo).toHaveBeenCalledTimes(2);
     expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("octogee", "alice-workspace");
-    expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("octogee", "alice-blog");
+    expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("octogee", "alice-proj-blog");
     expect(deps.gitea.deleteGiteaUser).toHaveBeenCalledWith("alice");
   });
 
@@ -133,6 +134,58 @@ describe("nukeUserCloudSide — skip flags", () => {
     const deps = mkDeps();
     const results = await nukeUserCloudSide(mkCtx({ skipHosting: true }), deps);
     expect(results.find((r) => r.key === "hosting")).toMatchObject({ ok: true, skipped: true });
+  });
+});
+
+describe("nukeUserCloudSide — hosting step (PR #3)", () => {
+  it("calls deleteHostingSites with ctx.slug + ctx.projectSlugs (no regex extraction)", async () => {
+    const deleteHostingSites = vi.fn(async () => ({ deleted: 2 }));
+    const deps = mkDeps({ deleteHostingSites });
+    await nukeUserCloudSide(
+      mkCtx({ projectSlugs: ["blog", "shop"] }),
+      deps,
+    );
+    expect(deleteHostingSites).toHaveBeenCalledTimes(1);
+    expect(deleteHostingSites).toHaveBeenCalledWith("alice", ["blog", "shop"]);
+  });
+
+  it("hosting step is reported as ok when deleteHostingSites resolves", async () => {
+    const deleteHostingSites = vi.fn(async () => ({ deleted: 0 }));
+    const deps = mkDeps({ deleteHostingSites });
+    const results = await nukeUserCloudSide(mkCtx({ projectSlugs: [] }), deps);
+    expect(results.find((r) => r.key === "hosting")).toMatchObject({ ok: true });
+  });
+
+  it("hosting step is reported as failed when deleteHostingSites throws", async () => {
+    const deleteHostingSites = vi.fn(async () => {
+      throw new Error("hosting boom");
+    });
+    const deps = mkDeps({ deleteHostingSites });
+    const results = await nukeUserCloudSide(
+      mkCtx({ projectSlugs: ["one"] }),
+      deps,
+    );
+    expect(results.find((r) => r.key === "hosting")).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("hosting boom"),
+    });
+  });
+
+  it("does NOT extract projectSlugs from repoNames anymore (regression: the old slice produced 'proj-<slug>' instead of '<slug>')", async () => {
+    const deleteHostingSites = vi.fn(async () => ({ deleted: 1 }));
+    const deps = mkDeps({ deleteHostingSites });
+    // repoNames carries the new `proj-` infix; if the old code path
+    // were still active it'd pass `["proj-blog"]` to the helper.
+    await nukeUserCloudSide(
+      mkCtx({
+        repoNames: ["alice-workspace", "alice-proj-blog"],
+        projectSlugs: ["blog"],
+      }),
+      deps,
+    );
+    expect(deleteHostingSites).toHaveBeenCalledWith("alice", ["blog"]);
+    const args = deleteHostingSites.mock.calls[0]![1] as string[];
+    expect(args).not.toContain("proj-blog");
   });
 });
 

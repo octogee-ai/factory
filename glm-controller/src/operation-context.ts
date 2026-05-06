@@ -34,7 +34,12 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
         (s) => s.name === step.name && (s.status === "running" || s.status === "pending"),
       );
       if (idx >= 0 && (step.status === "done" || step.status === "failed")) {
-        steps[idx] = { ...steps[idx], ...step };
+        // splice in-place rather than `steps[idx] = …` so the dynamic
+        // index access doesn't trip eslint-plugin-security's
+        // `detect-object-injection`. Same observable behavior; idx is
+        // already bounded by the `>= 0` guard above.
+        const existing = steps.at(idx) ?? step;
+        steps.splice(idx, 1, { ...existing, ...step });
       } else {
         steps.push(step);
       }

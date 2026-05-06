@@ -71,6 +71,20 @@ export async function giteaApiAsAllowNotFound(token: string, path: string, metho
   return giteaFetch(token, path, method, body, true);
 }
 
+/**
+ * Delete a Gitea repo. Idempotent — 404 (already gone) is treated as
+ * success. Used by the per-project DELETE endpoint and by any future
+ * one-off cleanup; the customer-level deprovision flow uses
+ * `glm-controller`'s GiteaCleanupClient instead.
+ *
+ * IMPORTANT: `giteaFetch` already prefixes `${GITEA_URL}/api/v1/repos/${GITEA_ORG}/`
+ * — pass the bare repo name (or `<repo>/<sub>`), NOT a leading `/repos/<org>/`.
+ * Earlier draft of this helper double-prefixed and silently 404'd.
+ */
+export async function giteaDeleteRepo(repo: string): Promise<void> {
+  await giteaApiAllowNotFound(encodeURIComponent(repo), "DELETE");
+}
+
 async function giteaAdminFetch(
   method: string,
   url: string,

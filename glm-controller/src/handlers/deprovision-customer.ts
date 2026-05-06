@@ -22,8 +22,16 @@ export interface CustomerCleanupContext {
   slug: string;
   email: string | null;
   giteaOrg: string;
-  /** Repo names to delete: <slug>-workspace + <slug>-<projectSlug>... */
+  /** Repo names to delete: <slug>-workspace + <slug>-proj-<projectSlug>... */
   repoNames: string[];
+  /**
+   * Project slugs (NOT repo names). Drives Firebase Hosting site
+   * deletion: each `octogee-<slug>-<projectSlug>` site lines up with
+   * the project slug here. Sourced directly from
+   * `workspaces/{slug}/projects/*` Firestore docs — never reverse-
+   * engineered from repo names (which would yield `proj-<slug>`).
+   */
+  projectSlugs: string[];
   workspaceTeamId: string | null;
   mmUserId: string | null;
   mmCoachUserId: string | null;
@@ -117,6 +125,7 @@ export function createDeprovisionCustomerHandler(
       email: cleanup.email,
       giteaOrg: cleanup.giteaOrg,
       repoNames: cleanup.repoNames,
+      projectSlugs: cleanup.projectSlugs,
       workspaceTeamId: cleanup.workspaceTeamId,
       mmUserId: cleanup.mmUserId,
       mmCoachUserId: cleanup.mmCoachUserId,

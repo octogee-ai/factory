@@ -174,6 +174,50 @@ describe("loadCustomerCleanupContext", () => {
     expect(ctx?.repoNames).toEqual(["alice-workspace", "alice-proj-legacy-doc-id"]);
   });
 
+  it("surfaces projectSlugs[] directly from project docs (PR #3 — drives Firebase Hosting deletes)", async () => {
+    // Spec PR3-DEPROVISION-WITH-HOSTING: projectSlugs is the source of
+    // truth for hosting site IDs (`octogee-<slug>-<projectSlug>`).
+    // Reverse-engineering from repo names yields "proj-<slug>" not
+    // "<slug>" — see the slice-bug call-out in the spec.
+    const db = buildDb({
+      "users/uid-alice": {
+        username: "alice",
+        provisioning: { openclaw: { slug: "alice" } },
+      },
+      "workspaces/alice/projects/p1": { slug: "blog" },
+      "workspaces/alice/projects/p2": { projectSlug: "shop" },
+      "workspaces/alice/projects/legacy-id": {},
+    });
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      "uid-alice",
+    );
+    // Sorted for determinism — operator-facing logs read alphabetical.
+    expect(ctx?.projectSlugs).toEqual(["blog", "legacy-id", "shop"]);
+  });
+
+  it("returns projectSlugs: [] when the customer has no projects", async () => {
+    const db = buildDb({
+      "users/uid-bob": { username: "bob", provisioning: { openclaw: { slug: "bob" } } },
+    });
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      "uid-bob",
+    );
+    expect(ctx?.projectSlugs).toEqual([]);
+  });
+
+  it("returns projectSlugs: [] when the customer has no slug (no workspace path to scan)", async () => {
+    const db = buildDb({
+      "users/uid-bare": { email: "bare@example.com" },
+    });
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      "uid-bare",
+    );
+    expect(ctx?.projectSlugs).toEqual([]);
+  });
+
   it("resolves Mattermost IDs from user, workspace, agents, and admin channel docs", async () => {
     const db = buildDb({
       "users/uid-alice": {

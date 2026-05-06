@@ -95,6 +95,27 @@ async function resolveRepoNames(db: Firestore, slug: string): Promise<string[]> 
   return out;
 }
 
+/**
+ * Resolve the canonical project slugs for a customer. Single source of
+ * truth: the Firestore project doc (`projData.slug`, falling back to
+ * `projectSlug`, falling back to `doc.id`). Independent of repo names
+ * to avoid the slice-bug that yields `proj-<slug>` instead of `<slug>`.
+ *
+ * Returned sorted alphabetically for deterministic operator-facing logs.
+ */
+async function resolveProjectSlugs(db: Firestore, slug: string): Promise<string[]> {
+  if (!slug) return [];
+  const projectsSnap = await db.collection(`workspaces/${slug}/projects`).get();
+  const slugs: string[] = [];
+  for (const projDoc of projectsSnap.docs) {
+    const projData = (projDoc.data() ?? {}) as Record<string, unknown>;
+    const projSlug =
+      asString(projData.slug) ?? asString(projData.projectSlug) ?? projDoc.id;
+    slugs.push(projSlug);
+  }
+  return slugs.sort();
+}
+
 export async function loadCustomerCleanupContext(
   deps: ContextDeps,
   uid: string,
@@ -105,12 +126,14 @@ export async function loadCustomerCleanupContext(
   const slug = resolveSlug(userData);
   const gatewayId = resolveGatewayId(userData);
 
-  const [workspaceTeamId, mmCoachUserId, adminChannelId, repoNames] = await Promise.all([
-    resolveWorkspaceTeamId(deps.db, slug),
-    resolveCoachMmUserId(deps.db, uid),
-    resolveAdminChannelId(deps.db, slug),
-    resolveRepoNames(deps.db, slug),
-  ]);
+  const [workspaceTeamId, mmCoachUserId, adminChannelId, repoNames, projectSlugs] =
+    await Promise.all([
+      resolveWorkspaceTeamId(deps.db, slug),
+      resolveCoachMmUserId(deps.db, uid),
+      resolveAdminChannelId(deps.db, slug),
+      resolveRepoNames(deps.db, slug),
+      resolveProjectSlugs(deps.db, slug),
+    ]);
 
   return {
     uid,
@@ -118,6 +141,7 @@ export async function loadCustomerCleanupContext(
     email: asString(userData.email),
     giteaOrg: deps.giteaOrg,
     repoNames,
+    projectSlugs,
     workspaceTeamId,
     mmUserId: readMmUserId(userData),
     mmCoachUserId,

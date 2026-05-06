@@ -48,6 +48,8 @@ import { provisionGatewayAuthSecret } from "../../scripts/lib/secret-manager.js"
 import { listGatewayBuilds } from "../../scripts/lib/artifact-registry.js";
 import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
 import { deleteAuthUserTolerantOfMissing } from "../../scripts/lib/firebase-auth-helpers.js";
+import { deleteHostingSitesForCustomer } from "../../scripts/lib/firebase-hosting.js";
+import { GoogleAuth } from "google-auth-library";
 import { startHttpServer } from "./http-server.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
@@ -719,6 +721,35 @@ function buildDeprovisionCustomerHandler(
           if (code === "auth/user-not-found") return;
           throw err;
         }
+      },
+      // PR #3: Firebase Hosting site deletion. Sites are
+      // `octogee-<slug>-<projectSlug>` per scripts/lib/projects/create.ts.
+      // Requires `roles/firebasehosting.admin` on the controller's GSA
+      // (Terraform grant — call out as deploy prereq in the PR body).
+      deleteHostingSites: async (slug, projectSlugs) => {
+        const auth = new GoogleAuth({
+          // Narrowest scope that covers Hosting site management per
+          // spec §Permissions (P1 review feedback on PR #869 — was
+          // the broader `auth/firebase` before).
+          scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
+        });
+        const projectId = process.env.GOOGLE_CLOUD_PROJECT ?? "octogee";
+        const result = await deleteHostingSitesForCustomer(
+          {
+            projectId,
+            getAccessToken: async () => {
+              const token = await auth.getAccessToken();
+              if (!token) {
+                throw new Error("firebase-hosting: no access token from ADC");
+              }
+              return token;
+            },
+            log: logFn,
+          },
+          slug,
+          projectSlugs,
+        );
+        return { deleted: result.deleted };
       },
       log: logFn,
     },

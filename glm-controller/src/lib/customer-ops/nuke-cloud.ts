@@ -15,8 +15,14 @@ export interface NukeCloudCtx {
   slug: string;
   email: string | null;
   giteaOrg: string;
-  /** workspace + per-project repo names: <slug>-workspace, <slug>-<projectSlug>... */
+  /** workspace + per-project repo names: <slug>-workspace, <slug>-proj-<projectSlug>... */
   repoNames: string[];
+  /**
+   * Project slugs (NOT repo names). Drives Firebase Hosting site
+   * deletion via deleteHostingSites — site IDs are
+   * `octogee-<slug>-<projectSlug>` per scripts/lib/projects/create.ts.
+   */
+  projectSlugs: string[];
   /** workspace MM team — null when team-per-workspace doesn't apply (legacy fallback). */
   workspaceTeamId: string | null;
   /** Builder MM userId — null when never had one (raw signup with slug but no MM bootstrap). */
@@ -127,15 +133,15 @@ export async function nukeUserCloudSide(
   );
 
   // Step 7: Firebase Hosting (optional / skippable)
+  // PR #3: drives off ctx.projectSlugs directly — replaces the old
+  // reverse-engineering-from-repo-names slice that yielded
+  // `proj-<slug>` instead of `<slug>` (real bug).
   if (ctx.skipHosting || !deps.deleteHostingSites) {
     results.push({ key: "hosting", ok: true, skipped: true });
   } else {
     results.push(
       await runStep("hosting", log, async () => {
-        const projectSlugs = ctx.repoNames
-          .filter((n) => n.startsWith(`${ctx.slug}-`) && n !== `${ctx.slug}-workspace`)
-          .map((n) => n.slice(ctx.slug.length + 1));
-        await deps.deleteHostingSites!(ctx.slug, projectSlugs);
+        await deps.deleteHostingSites!(ctx.slug, ctx.projectSlugs);
       }),
     );
   }
