@@ -6,6 +6,6 @@
   "main": "types/index.ts",
   "types": "types/index.ts",
   "peerDependencies": {
-    "firebase": "^11.0.0"
+    "firebase": "^12.0.0"
   }
 }

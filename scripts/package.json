@@ -1,5 +1,5 @@
 {
-  "name": "octogee-scripts",
+  "name": "@octogee/scripts",
   "version": "1.0.0",
   "description": "Octogee local tooling scripts",
   "private": true,
