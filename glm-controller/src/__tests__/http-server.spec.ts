@@ -77,6 +77,36 @@ function makeQuery(
 
 function buildDb(store: FakeStore) {
   return {
+    // Bare-bones transaction stub: real Firestore replays on contention,
+    // here we just route txn.get/update to the underlying ref methods.
+    // Sufficient for verifying the read-before-write order + the
+    // intended writes; doesn't exercise contention/retry semantics.
+    runTransaction: async <T,>(
+      fn: (txn: {
+        get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
+        update: (
+          ref: { update: (patch: Record<string, unknown>) => Promise<void> },
+          patch: Record<string, unknown>,
+        ) => void;
+      }) => Promise<T>,
+    ): Promise<T> => {
+      const queued: Array<() => Promise<void>> = [];
+      const txn = {
+        get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+        update: (
+          ref: { update: (patch: Record<string, unknown>) => Promise<void> },
+          patch: Record<string, unknown>,
+        ) => {
+          // Buffer writes till the callback completes — mirrors real
+          // Firestore semantics where writes commit atomically at the
+          // end of the txn callback.
+          queued.push(() => ref.update(patch));
+        },
+      };
+      const result = await fn(txn);
+      for (const w of queued) await w();
+      return result;
+    },
     collection: (name: string): unknown => ({
       doc: (id: string) => ({
         id,
@@ -429,13 +459,16 @@ describe("createHttpServer — admin gateway routes", () => {
         .post("/api/admin/restore-jobs/job-stuck/kick")
         .set("Authorization", "Bearer admin-token");
       expect(res.status).toBe(409);
-      expect(res.body.error).toMatch(/terminal state|already complete|already done/i);
+      // Error message uses the new allowlist phrasing — `done` isn't in
+      // {pending, dispatched, running} so it's not kickable.
+      expect(res.body.error).toMatch(/not kickable|allowed/i);
+      expect(res.body.state).toBe("done");
     });
 
-    it("clears inFlightJobId even if it pointed at a different job (best-effort recovery)", async () => {
+    it("preserves inFlightJobId when it points at a different (newer) job — only clears when it matches the kicked job", async () => {
       // Operator hits kick on jobA, but the gateway doc still has jobB.
-      // We should still mark jobA failed; we leave the gateway's lock untouched
-      // unless it matches jobA — to avoid stomping on a fresh job.
+      // We mark jobA failed for the audit trail; we MUST NOT clear the
+      // gateway's lock since that would stomp the fresh assignment.
       seedStuckJob();
       store.gateways["gw-test"].inFlightJobId = "different-job";
       const app = createHttpServer(buildDeps(store));
@@ -447,6 +480,21 @@ describe("createHttpServer — admin gateway routes", () => {
       expect(job?.data.state).toBe("failed");
       // Lock NOT cleared — it points at a different (presumably newer) job.
       expect(store.gateways["gw-test"].inFlightJobId).toBe("different-job");
+    });
+
+    it("rejects (409) when the job state isn't in the kickable allowlist (defense against unknown future states)", async () => {
+      seedStuckJob();
+      // Hypothetical future state we don't explicitly permit.
+      const job = store.restoreJobs.find((j) => j.id === "job-stuck")!;
+      job.data.state = "migrating";
+      const app = createHttpServer(buildDeps(store));
+      const res = await request(app)
+        .post("/api/admin/restore-jobs/job-stuck/kick")
+        .set("Authorization", "Bearer admin-token");
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/not kickable|allowed/i);
+      // State should be unchanged — we refused to write.
+      expect(job.data.state).toBe("migrating");
     });
   });
 });

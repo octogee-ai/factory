@@ -1328,63 +1328,112 @@ export function addAdminFleetRoutes(
   // Marks the job as failed with `operator-kicked` and clears the
   // gateway's inFlightJobId so the controller's next reconcile tick
   // can claim a fresh job for the same customer.
+  //
+  // Transactional read-check-update: a concurrent gateway ack or
+  // controller reconcile could flip the job to `done` or replace
+  // `inFlightJobId` between our read and write; without a txn we'd
+  // either overwrite a terminal state or stomp a fresh assignment.
+  // Allowlist (not denylist) on state: any future state we don't
+  // explicitly permit is rejected, so we never silently kick a job
+  // we don't understand (e.g. "migrating", "quiescing").
+  const KICKABLE_STATES = new Set(["pending", "dispatched", "running"]);
   router.post(
     "/restore-jobs/:jobId/kick",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const jobId = req.params.jobId;
         const jobRef = db.collection("restoreJobs").doc(jobId);
-        const jobSnap = await jobRef.get();
-        if (!jobSnap.exists) {
-          res.status(404).json({ error: "restore job not found", jobId });
-          return;
-        }
-        const data = jobSnap.data() as Record<string, unknown>;
-        const state = typeof data.state === "string" ? data.state : "unknown";
-        if (state === "done" || state === "failed") {
-          res.status(409).json({
-            error: `restore job is already in terminal state (state=${state}); no action taken`,
-            jobId,
-            state,
-          });
-          return;
-        }
-        const gatewayId =
-          typeof data.gatewayId === "string" ? data.gatewayId : "";
-        const snapshot = (data.snapshot ?? {}) as { slug?: unknown };
-        const slug =
-          typeof snapshot.slug === "string" ? snapshot.slug : "";
         const actor = req as ActorRequest;
         const kickedBy = actor.uid ?? "unknown";
-        const error = `operator-kicked (uid=${kickedBy} at ${new Date().toISOString()})`;
+        const errorMsg = `operator-kicked (uid=${kickedBy} at ${new Date().toISOString()})`;
 
-        await jobRef.update({
-          state: "failed",
-          completedAt: FieldValue.serverTimestamp(),
-          error,
-        });
+        type Outcome =
+          | { ok: false; status: number; body: Record<string, unknown> }
+          | {
+              ok: true;
+              status: 200;
+              body: {
+                jobId: string;
+                gatewayId: string;
+                slug: string;
+                kickedBy: string;
+                kickedAt: string;
+              };
+            };
 
-        // Only clear the gateway's lock if it still points at this job.
-        // Otherwise the gateway has already moved on to a new job and
-        // we'd be stomping the fresh assignment.
-        if (gatewayId) {
-          const gwRef = db.collection("gateways").doc(gatewayId);
-          const gwSnap = await gwRef.get();
-          if (gwSnap.exists) {
-            const gwData = gwSnap.data() as Record<string, unknown> | undefined;
-            if (gwData?.inFlightJobId === jobId) {
-              await gwRef.update({ inFlightJobId: null });
+        const outcome = await db.runTransaction(async (txn) => {
+          // ── READS (must precede all writes per Firestore rules) ──
+          const jobSnap = await txn.get(jobRef);
+          if (!jobSnap.exists) {
+            return {
+              ok: false,
+              status: 404,
+              body: { error: "restore job not found", jobId },
+            } satisfies Outcome;
+          }
+          const data = jobSnap.data() as Record<string, unknown>;
+          const state = typeof data.state === "string" ? data.state : null;
+          if (!state || !KICKABLE_STATES.has(state)) {
+            return {
+              ok: false,
+              status: 409,
+              body: {
+                error: `restore job state=${state ?? "missing"} is not kickable; allowed=[${[...KICKABLE_STATES].join(", ")}]`,
+                jobId,
+                state,
+              },
+            } satisfies Outcome;
+          }
+          const gatewayId =
+            typeof data.gatewayId === "string" ? data.gatewayId : "";
+          const snapshot = (data.snapshot ?? {}) as { slug?: unknown };
+          const slug =
+            typeof snapshot.slug === "string" ? snapshot.slug : "";
+
+          // Read the gateway lock (if any) so we can decide-before-write
+          // whether to clear it. Still inside the same txn, so a
+          // concurrent reconcile can't sneak a fresh inFlightJobId
+          // between our read and our write.
+          let shouldClearGwLock = false;
+          const gwRef = gatewayId
+            ? db.collection("gateways").doc(gatewayId)
+            : null;
+          if (gwRef) {
+            const gwSnap = await txn.get(gwRef);
+            if (gwSnap.exists) {
+              const gwData = gwSnap.data() as
+                | { inFlightJobId?: unknown }
+                | undefined;
+              if (gwData?.inFlightJobId === jobId) {
+                shouldClearGwLock = true;
+              }
             }
           }
-        }
 
-        res.json({
-          jobId,
-          gatewayId,
-          slug,
-          kickedBy,
-          kickedAt: new Date().toISOString(),
+          // ── WRITES ──
+          txn.update(jobRef, {
+            state: "failed",
+            completedAt: FieldValue.serverTimestamp(),
+            error: errorMsg,
+          });
+          if (gwRef && shouldClearGwLock) {
+            txn.update(gwRef, { inFlightJobId: null });
+          }
+
+          return {
+            ok: true,
+            status: 200,
+            body: {
+              jobId,
+              gatewayId,
+              slug,
+              kickedBy,
+              kickedAt: new Date().toISOString(),
+            },
+          } satisfies Outcome;
         });
+
+        res.status(outcome.status).json(outcome.body);
       } catch (e) {
         next(e);
       }
