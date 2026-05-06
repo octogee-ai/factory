@@ -30,10 +30,29 @@ Two triggers:
 
 Either way, the ritual is the same — you produce a new tarball, upload it
 to GCS, bump the pin in two cloudbuild files, build the base image, then
-let CI ship the gateway image to TEST.
+let CI build the gateway bundle (3 sidecar images). **Cowboy is the sole
+deployer** — the new image sits in Artifact Registry until the operator
+triggers a rollout from the admin Gateways tab. PROD and TEST follow the
+same operator-driven path.
 
 End-to-end this takes ~25 minutes of clock time, ~5 minutes of attention.
 Most of the wait is two Cloud Builds + one Release CI run.
+
+---
+
+## Architectural rule for this flow
+
+> **`gateway-build.yml` produces artifacts. Cowboy deploys ALL gateway
+> builds.** CI does not write Firestore, does not call helm, does not roll
+> pods. Every gateway rollout — TEST and PROD — happens because an operator
+> (or Cowboy reconciling an existing desired-state) requested it. This
+> ritual ends at "the new SHA is in Artifact Registry"; the operator picks
+> it up from the admin Gateways tab when they're ready.
+
+Keep this in mind reading the steps below: any temptation to add a
+"deploy step" or "auto-rollout step" to CI is wrong. The race conditions
+that arise from CI competing with Cowboy for the helm lock are not worth
+the convenience.
 
 ---
 
@@ -45,11 +64,14 @@ Before you start, verify:
   - `origin` → `openclaw/openclaw` (upstream, read-only — used for `git fetch --tags`)
   - `ceckert` → `ceckert/openclaw` (Chris's mirror — where the `octogee/*`
     integration branches are pushed for record-keeping)
-- **Working tree clean** in both `~/workspace/openclaw/openclaw` and
-  `~/workspace/octogee-ai/octogee` (`git status` shows nothing pending).
-- **Octogee monorepo on `main`** with no uncommitted edits — the cloudbuild
-  bumps go straight to main, and a wrong-branch commit is the #1 paper cut
-  in this flow.
+- **Working tree clean** in `~/workspace/openclaw/openclaw` (`git status`
+  shows nothing pending).
+- **A clean main worktree** for the octogee monorepo. The primary checkout
+  at `~/workspace/octogee-ai/octogee` is often on a feature branch, and
+  the `.claude/worktrees/*` paths get reassigned by other sessions. The
+  reliable move is to **create a fresh worktree on `main`** at Step 14
+  (`git worktree add /tmp/octogee-oc-bumps main`) and commit there. See
+  the [wrong-worktree gotcha](#wrong-worktree-or-feature-branch).
 - **`gcloud` authed** with `octogee` project default (`gcloud config get project`
   → `octogee`).
 - **`kubectl` context** available: `gke_octogee_us-central1_octogee-gateway`.
@@ -88,12 +110,16 @@ PREV_TAG=v2026.5.3-1            # ← previous integration branch's base tag
 
 ### Step 3 — Cut the integration branch
 
+Branch convention: **keep the `v` prefix** in the branch name (matches
+every existing `octogee/gateway-scaling-patches-v*` branch on `ceckert/openclaw`).
+
 ▸
 ```bash
-git checkout -b octogee/gateway-scaling-patches-${NEW_TAG#v} ${NEW_TAG}
+git checkout -b octogee/gateway-scaling-patches-${NEW_TAG} ${NEW_TAG}
 ```
 
-✓ You're on the new branch, working tree clean, head at the upstream tag.
+✓ You're on the new branch (e.g. `octogee/gateway-scaling-patches-v2026.5.5`),
+working tree clean, head at the upstream tag.
 
 ### Step 4 — Cherry-pick the prior fork stack
 
@@ -101,7 +127,7 @@ Oldest-first preserves history order in `git log`.
 
 ▸
 ```bash
-git cherry-pick $(git log --format=%H ${PREV_TAG}..octogee/gateway-scaling-patches-${PREV_TAG#v} | tac)
+git cherry-pick $(git log --format=%H ${PREV_TAG}..octogee/gateway-scaling-patches-${PREV_TAG} | tac)
 ```
 
 ✓ Each patch lands cleanly. Auto-merges in already-modified files are fine
@@ -111,19 +137,44 @@ upstream changed something underneath the patch; resolve, `git add`,
 
 ### Step 5 — Audit upstream relevance
 
-For each patched file, check whether upstream changed it between
-`${PREV_TAG}` and `${NEW_TAG}`:
+You need to know two things per patch: did upstream touch the same file,
+and if so, did upstream make our patch redundant.
 
-▸
+▸ List **only the files our cherry-picked patches touch** (NOT all upstream
+files in the range — that would be ~500 commits' worth):
+
 ```bash
-# List the files our patches touch, then diff them upstream:
-git log v${PREV_TAG#v}..HEAD --name-only --pretty=format: | sort -u | grep -v '^$'
-git diff ${PREV_TAG}..${NEW_TAG} -- <each-of-those-files>
+# Files our patches touch — compare against the upstream tag we branched from:
+git log ${NEW_TAG}..HEAD --name-only --pretty=format: | sort -u | grep -v '^$'
+```
+
+▸ For each of those files, diff between the previous and new upstream tags:
+
+```bash
+git diff --stat ${PREV_TAG}..${NEW_TAG} -- <each-of-those-files>
+```
+
+▸ For files where upstream did change something, look at what:
+
+```bash
+git log ${PREV_TAG}..${NEW_TAG} --oneline -- <file>
+```
+
+▸ Keyword sweep the upstream commit log for behaviors our patches own — if
+upstream landed any of these, the corresponding patch is redundant:
+
+```bash
+for kw in "isControlUiVisible" "broadcast.*agent" "surgical" \
+          "per-account.*reload" "config.*patch.*hash" \
+          "ws.*upgrade.*timing" "config.patch.*timing"; do
+  hits=$(git log ${PREV_TAG}..${NEW_TAG} --oneline --grep="$kw" 2>/dev/null | wc -l | tr -d ' ')
+  echo "  $kw: $hits hits"
+done
 ```
 
 ✓ For each patch, decide one of:
 - **Keep** — no upstream diff in the file, or the upstream diff is unrelated
-  to what the patch does.
+  to what the patch does (auto-merge that landed cleanly is usually this case).
 - **Drop** — upstream landed equivalent behavior, the patch is redundant.
 - **Drop diagnostic** — see [Diagnostic-patch policy](#diagnostic-patch-policy).
 
@@ -180,7 +231,7 @@ gcloud storage ls -L gs://octogee-openclaw-fork/openclaw-fork-${SHA}.tgz \
 
 ▸
 ```bash
-git push ceckert octogee/gateway-scaling-patches-${NEW_TAG#v}
+git push ceckert octogee/gateway-scaling-patches-${NEW_TAG}
 ```
 
 ✓ Branch pushed to `ceckert/openclaw` for record-keeping. Future audits
@@ -237,18 +288,41 @@ until s=$(gcloud builds describe $BUILD_ID --project=octogee --format='value(sta
 
 ✓ Final status: `SUCCESS`. Takes ~5-7 min.
 
-### Step 14 — Confirm you're on `main`
+### Step 14 — Stage the cloudbuild bumps on a clean main worktree
 
-▸
+Most other steps don't care which checkout you're in, but this one does:
+the bumps need to land on `main` in a worktree that has nothing else
+staged. Two reasons that's tricky in practice:
+
+1. The primary checkout (`~/workspace/octogee-ai/octogee`) is often on a
+   feature branch and you'd have to disturb it.
+2. Existing `.claude/worktrees/*` paths get reassigned by other sessions —
+   a worktree that was on main an hour ago might not be now.
+
+The reliable path: **create a fresh main worktree just for this commit.**
+
+▸ If you've already edited cloudbuild files in a different (wrong) checkout,
+save the diff first and restore the original files there:
+
 ```bash
-cd ~/workspace/octogee-ai/octogee
-git status
+# from wherever you accidentally edited:
+git diff cloudbuild-base.yaml cloudbuild.yaml > /tmp/oc-bumps.patch
+git checkout -- cloudbuild-base.yaml cloudbuild.yaml
 ```
 
-✓ On `main`, no untracked files staged accidentally, only the two cloudbuild
-files modified. ⚠ If you're not on main, **stash the bumps**, switch, pull
-fast-forward, pop the stash. Don't commit cloudbuild bumps to a feature
-branch — they need to ride main to trigger Release CI.
+▸ Create + use a clean main worktree:
+
+```bash
+cd ~/workspace/octogee-ai/octogee
+git worktree add /tmp/octogee-oc-bumps main
+cd /tmp/octogee-oc-bumps
+git pull --ff-only origin main
+git apply /tmp/oc-bumps.patch          # if you saved one above
+# (otherwise edit cloudbuild-base.yaml + cloudbuild.yaml here directly per Steps 11-12)
+```
+
+✓ `git status` shows only `cloudbuild-base.yaml` + `cloudbuild.yaml` modified
+on `main` (no untracked feature-branch detritus).
 
 ### Step 15 — Commit + push the cloudbuild bumps
 
@@ -270,24 +344,32 @@ git push origin main
 
 ### Step 16 — Watch Release CI
 
+`release.yml` orchestrates `gateway-build.yml`, which builds the 3 sidecar
+images (gateway, workspace-api, chat-proxy) on the same SHA via matrix.
+There's no deploy step — that's intentional, [see the architectural rule](#architectural-rule-for-this-flow).
+
 ▸
 ```bash
 gh run list --branch main --limit 3 --json databaseId,name,status,headSha
 gh run watch <release-run-id> --exit-status
 ```
 
-✓ All steps green. The deploy step ends with `Deploy to GKE via Helm`
-and `TEST auto-rollout — bump glmGateways/gw-test.imageTag`. Helm-test
-warning about MM admin token is pre-existing and unrelated.
+✓ All steps green. The CI run ends after the matrix builds finish; the
+new SHA is now in Artifact Registry as
+`octogee-gateway:<short-sha>`, `octogee-chat-proxy:<short-sha>`,
+`workspace-api:<short-sha>`.
 
-⚠ If the deploy step fails on `Break stale Helm pending-upgrade locks`
-with `context deadline exceeded`, see [Common gotchas](#common-gotchas)
-→ "Helm pending-rollback / pending-upgrade".
+The release does not roll any pods. Nothing in TEST has moved yet.
 
-### Step 17 — Verify the boot banner
+### Step 17 — Operator triggers TEST rollout via admin Gateways tab
 
-After CI succeeds, the **default** gateway pod should have rolled to the
-new image. The boot banner is the truth source.
+Open `app-octogee-test.web.app/admin/gateways` (or the prod equivalent
+for PROD). Find the `gw-test` row, click Rollout, pick the new SHA.
+Cowboy reads the desired-state write from Firestore, runs
+`helm upgrade --install octogee-gw-default --set gateway.imageTag=<sha> ...`,
+and rolls the gateway pod's three containers on the new SHA.
+
+The new pod boots with the build-baked banner:
 
 ▸
 ```bash
@@ -298,9 +380,9 @@ kubectl --context gke_octogee_us-central1_octogee-gateway -n octogee-test \
 
 ✓ Banner reads `gateway-image=<new-short-sha> openclaw=${NEW_TAG#v} fork=${SHA}`.
 
-⚠ If the banner still shows the old SHA after CI succeeds, you've hit the
-[Cowboy/glm-controller listener race](#cowboy--glm-controller-bootstrap-vs-listener-race)
-— see gotchas below.
+⚠ If Cowboy logs `another operation (install/upgrade/rollback) is in
+progress — retry in 30000ms` repeatedly, see
+[Helm pending-upgrade lock on octogee-gw-default](#helm-pending-upgrade-lock-on-octogee-gw-default).
 
 ### Step 18 — Smoke + tools sanity (TEST)
 
@@ -314,17 +396,28 @@ mattermost-tools tool dispatch), now's when you confirm.
 
 Edit the [Current patches](#current-patches) section of this file with
 any added/dropped/diagnostic-policy-flipped patches from this cycle.
-Commit the doc update direct to main.
+Commit the doc update direct to main (same flow as Step 15).
 
-✓ This file matches `git log v${NEW_TAG#v}..octogee/gateway-scaling-patches-${NEW_TAG#v}`.
+✓ This file matches `git log ${NEW_TAG}..octogee/gateway-scaling-patches-${NEW_TAG}`.
 
-### Step 20 — PROD promote (separate decision)
+### Step 20 — PROD promote (separate decision, same path)
 
-PROD doesn't auto-roll — it's gated on `workflow_dispatch` of the
-Release workflow. The same gateway image SHA is already in Artifact
-Registry from Step 16's build. When you (the operator) decide PROD is
-ready, dispatch the Release workflow with `env=prod`. Out of scope for
-this ritual.
+The PROD rollout is identical to Step 17: open `app.octogee.com/admin/gateways`,
+pick the SHA, click Rollout. The same gateway image SHA from Step 16 is
+already in Artifact Registry; PROD just hasn't been told to use it yet.
+
+There's no special "release to prod" CI flow — the build already happened.
+Out of scope for this ritual otherwise.
+
+### Step 21 — Cleanup the temporary worktree
+
+▸
+```bash
+cd ~/workspace/octogee-ai/octogee
+git worktree remove /tmp/octogee-oc-bumps
+```
+
+✓ Worktree gone, `git worktree list` no longer shows the tmp path.
 
 ---
 
@@ -345,72 +438,77 @@ build pulls the old base.
 values. The boot banner from Step 17 catches this within seconds of the
 deploy completing.
 
-### Wrong-branch commit
+### Wrong worktree or feature branch
 
-**Symptom:** You committed cloudbuild bumps to a feature branch. Push to
-main doesn't include them. Release CI rebuilds the same old SHA.
+**Symptom:** You committed cloudbuild bumps to a feature branch (or to a
+claude-worktree that got reassigned out from under you). Push doesn't
+land on main. Release CI rebuilds the same old SHA, or worse, you mix
+the bumps with unrelated feature work.
 
-**Cause:** You forgot to `git checkout main` before `git add`/`git commit`.
+**Cause:** The primary checkout at `~/workspace/octogee-ai/octogee` is
+often on a feature branch. The `.claude/worktrees/*` paths get reassigned
+by other sessions — a worktree that was on main when you started might
+be on a feature branch by the time you're ready to commit.
 
-**Fix:**
+**Fix:** Save your diff, restore the misplaced files, create a fresh main
+worktree just for the commit (covered in Step 14 — that's the canonical
+recovery, do it preventatively instead of reactively):
+
 ```bash
-git stash push -m "openclaw bumps" cloudbuild-base.yaml cloudbuild.yaml
-git checkout main && git pull --ff-only origin main
-git stash pop
-# now commit + push
+# wherever the cloudbuild edits ended up:
+git diff cloudbuild-base.yaml cloudbuild.yaml > /tmp/oc-bumps.patch
+git checkout -- cloudbuild-base.yaml cloudbuild.yaml
+
+cd ~/workspace/octogee-ai/octogee
+git worktree add /tmp/octogee-oc-bumps main
+cd /tmp/octogee-oc-bumps
+git pull --ff-only origin main
+git apply /tmp/oc-bumps.patch
+git add cloudbuild-base.yaml cloudbuild.yaml
+git commit -m "..."
+git push origin main
+
+# then:
+cd ~/workspace/octogee-ai/octogee
+git worktree remove /tmp/octogee-oc-bumps
 ```
 
-### Cowboy / glm-controller bootstrap-vs-listener race
+### Helm pending-upgrade lock on `octogee-gw-default`
 
-**Symptom:** TEST helm rev advances, Release CI green, but the boot
-banner still shows the old gateway image SHA.
-
-**Cause:** PR #852 added a post-deploy step that writes the new SHA to
-`glmGateways/gw-test.imageTag` in Firestore. glm-controller has an
-`onSnapshot` listener supposed to fire a follow-up reconcile when that
-field changes. But the helm upgrade in the same Release run may
-**restart glm-controller**, and its bootstrap-tick can land **before**
-the Firestore write — at which point the listener-fire from the post-deploy
-step is missed (we've seen exactly one reconcile in the controller log
-after a release where two were expected).
-
-**Fix:**
-```bash
-kubectl --context gke_octogee_us-central1_octogee-gateway -n octogee-test \
-  rollout restart deployment/glm-controller
-kubectl --context gke_octogee_us-central1_octogee-gateway -n octogee-test \
-  rollout status deployment/glm-controller --timeout=120s
+**Symptom:** Cowboy reconciles every 30s with the same error:
 ```
+🤠 cowboy  reconcile tick failed: (source=helm) helm upgrade --install
+octogee-gw-default failed (code=1): Error: UPGRADE FAILED: another
+operation (install/upgrade/rollback) is in progress — retry in 30000ms
+```
+TEST stays on the old SHA indefinitely. The `helm history octogee-gw-default`
+shows the most recent revision in `pending-upgrade` or `pending-rollback`.
 
-The fresh glm-controller bootstraps from current Firestore (which now
-has the new SHA), reconciles, runs `helm upgrade --set
-gateway.instances.default.image.tag=<new-sha>`, and rolls the pod. Boot
-banner from Step 17 should now be correct within 60s.
+**Cause:** A previous Cowboy reconcile started a `helm upgrade` that didn't
+complete — the helm release secret is still marked in-flight. Cowboy has
+no lock-recovery logic; it just retries forever, and each retry hits the
+same lock. (Historical note: this used to be triggered by a CI auto-rollout
+step that competed with Cowboy for the lock. That step was removed in
+2026-05-06; if you see this again, the trigger is something else — maybe
+an admin Gateways tab click that timed out, or a network partition mid-helm.)
 
-This is a known follow-up; not yet fixed in glm-controller.
+**Fix:** Find the last `deployed` revision and rollback to it manually.
 
-### Helm pending-rollback / pending-upgrade
-
-**Symptom:** Deploy step fails on `Break stale Helm pending-upgrade
-locks` with `context deadline exceeded`, OR `helm status octogee` shows
-`pending-rollback` or `pending-upgrade` for several minutes.
-
-**Cause:** A previous deploy got stuck (helm hooks timed out, network
-hiccup, etc.). CI tries to roll back to the last `deployed` revision but
-that rollback itself can time out under load.
-
-**Fix:** Wait ~3 minutes — frequently the rollback completes
-asynchronously and the next CI run succeeds. If it doesn't:
 ```bash
 helm --kube-context gke_octogee_us-central1_octogee-gateway -n octogee-test \
-  history octogee --max 10
-# Find the most recent "deployed" revision; let's say it's 122:
+  history octogee-gw-default --max 10
+# Find the most recent "deployed" status. Let's say it's revision 2:
 helm --kube-context gke_octogee_us-central1_octogee-gateway -n octogee-test \
-  rollback octogee 122 --wait --timeout 5m
+  rollback octogee-gw-default 2 --wait --timeout 5m
 ```
 
-Then re-run Release CI via `workflow_dispatch` (no commit needed if
-cloudbuild bumps are already on main).
+✓ A new revision lands with status `deployed (Rollback to 2)`. On Cowboy's
+next tick it succeeds: `[helm-runner] upserted release=octogee-gw-default`.
+The new SHA from Firestore desired-state lands; the gateway pod rolls.
+Boot banner shows the new SHA within ~60-90s of the rollback.
+
+For PROD, swap `octogee-test` for `octogee` and use `octogee-gw-default`
+release in that namespace.
 
 ### `pnpm pack` hangs at 100% CPU
 
@@ -482,7 +580,14 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.4 the fork carries five patches — three essential, two diagnostic-only.
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.5 the fork carries five patches — three essential, two diagnostic-only.
+
+Short SHAs at v2026.5.5 (top of branch is `b1bf3b66`):
+- `b1bf3b66` — env-gated isControlUiVisible override
+- `f19c8305` — diagnostic per-phase config.patch trace
+- `e6232bfb` — config.patch returns post-write hash
+- `c0f79f1b` — diagnostic ws-upgrade trace
+- `29579aa2` — per-account surgical channel reload
 
 **Essential:**
 
