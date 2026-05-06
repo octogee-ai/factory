@@ -49,8 +49,19 @@ import { listGatewayBuilds } from "../../scripts/lib/artifact-registry.js";
 import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
 import { deleteAuthUserTolerantOfMissing } from "../../scripts/lib/firebase-auth-helpers.js";
 import { startHttpServer } from "./http-server.js";
+import { createLogger } from "./lib/logger.js";
 
-const log = (msg: string) => console.log(msg);
+// Cowboy's logger writes color + emoji + timestamp to stdout/stderr.
+// `legacy(msg)` is the drop-in shape for the existing handler libs that
+// already produce pre-formatted strings (e.g. `[deprovision] step done ✅`,
+// `[glm-controller] ⚠ reconcile tick failed: ...`). It auto-detects the
+// `⚠` warn marker, strips the redundant `[glm-controller]` prefix, and
+// re-routes through info/warn so every line gets the same shell.
+const logger = createLogger({
+  color: process.env.NO_COLOR == null,
+  debug: process.env.DEBUG != null,
+});
+const log = (msg: string) => logger.legacy(msg);
 
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
