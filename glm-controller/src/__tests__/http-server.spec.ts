@@ -265,4 +265,32 @@ describe("createHttpServer — admin gateway routes", () => {
       status: "succeeded",
     });
   });
+
+  // Customer-detail factory mount (PR #865 lift). The compute-heavy
+  // CSI pipeline lives in workspace-api so glm-controller's stub
+  // returns 503 with a friendly reason instead of pretending to
+  // refresh. The customer-list / customer-detail GETs are exercised
+  // by the workspace-api integration suite (admin-csi.integration);
+  // we just verify the route is mounted here so a missing factory
+  // wire-up shows up as a deterministic test failure.
+
+  it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .get("/api/admin/customer/does-not-exist")
+      .set("Authorization", "Bearer admin-token");
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "User not found" });
+  });
+
+  it("/api/admin/customer/:uid/csi-refresh returns 503 with friendly unavailable reason", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .post("/api/admin/customer/admin-uid/csi-refresh")
+      .set("Authorization", "Bearer admin-token");
+    expect(res.status).toBe(503);
+    expect(res.body.unavailable).toBe(true);
+    expect(res.body.success).toBe(false);
+    expect(res.body.reason).toMatch(/csi.*workspace-api|gateway pod/i);
+  });
 });

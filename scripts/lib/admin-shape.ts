@@ -2,12 +2,12 @@ import {
   getTierConfig,
   calculateAvailableTokens,
   type TierName,
-} from "../billing/tiers";
+} from "./billing-tiers";
 import type {
   CSIDocument,
   TrialState,
   TrialFunnelStage,
-} from "../csi/types";
+} from "./csi-types";
 
 export function toISODate(val: unknown): string | null {
   if (!val) return null;
