@@ -63,6 +63,27 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).not.toBeNull();
   });
 
+  it("every doc starts with `apiVersion:` (regression: requireIdentity helper used to leak its values onto the first line)", () => {
+    // The `octogee-gateway.requireIdentity` helper used to call
+    // `required ...` directly, which returns the validated value;
+    // because the helper was included with `{{- ... -}}` trims, that
+    // value got concatenated onto the next line of the rendered doc,
+    // producing things like `gw-blueblueapiVersion: apps/v1` and the
+    // helm validation error `apiVersion not set`. Cowboy's
+    // `helm upgrade --install` then crash-looped on first add-gateway
+    // exercise. Fix in _helpers.tpl: discard the return via `$_ :=`.
+    const out = helmTemplate();
+    const docs = out.split(/^---\s*$/m).map((d) => d.trim()).filter(Boolean);
+    for (const doc of docs) {
+      // Skip helm comment-only sections.
+      const firstNonComment = doc
+        .split("\n")
+        .find((line) => line.trim() && !line.trim().startsWith("#"));
+      if (!firstNonComment) continue;
+      expect(firstNonComment).toMatch(/^apiVersion:/);
+    }
+  });
+
   it("renders the per-instance Service octogee-gateway-<instanceName>", () => {
     const out = helmTemplate();
     const svc = findDoc(out, "Service", "octogee-gateway-default");
