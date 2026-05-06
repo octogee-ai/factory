@@ -14,7 +14,7 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import type { Firestore } from "firebase-admin/firestore";
+import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -1315,6 +1315,76 @@ export function addAdminFleetRoutes(
           },
         });
         res.status(202).json({ operationId });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  // ── Kick a stuck restore job ──────────────────────────────────────────
+  // Operator escape hatch for the rare case a customer sits in
+  // "Dispatched" / "running" forever (e.g. gateway crashed mid-restore,
+  // or — pre-PR #870 — Cloud Task delivered before app.listen()).
+  // Marks the job as failed with `operator-kicked` and clears the
+  // gateway's inFlightJobId so the controller's next reconcile tick
+  // can claim a fresh job for the same customer.
+  router.post(
+    "/restore-jobs/:jobId/kick",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const jobId = req.params.jobId;
+        const jobRef = db.collection("restoreJobs").doc(jobId);
+        const jobSnap = await jobRef.get();
+        if (!jobSnap.exists) {
+          res.status(404).json({ error: "restore job not found", jobId });
+          return;
+        }
+        const data = jobSnap.data() as Record<string, unknown>;
+        const state = typeof data.state === "string" ? data.state : "unknown";
+        if (state === "done" || state === "failed") {
+          res.status(409).json({
+            error: `restore job is already in terminal state (state=${state}); no action taken`,
+            jobId,
+            state,
+          });
+          return;
+        }
+        const gatewayId =
+          typeof data.gatewayId === "string" ? data.gatewayId : "";
+        const snapshot = (data.snapshot ?? {}) as { slug?: unknown };
+        const slug =
+          typeof snapshot.slug === "string" ? snapshot.slug : "";
+        const actor = req as ActorRequest;
+        const kickedBy = actor.uid ?? "unknown";
+        const error = `operator-kicked (uid=${kickedBy} at ${new Date().toISOString()})`;
+
+        await jobRef.update({
+          state: "failed",
+          completedAt: FieldValue.serverTimestamp(),
+          error,
+        });
+
+        // Only clear the gateway's lock if it still points at this job.
+        // Otherwise the gateway has already moved on to a new job and
+        // we'd be stomping the fresh assignment.
+        if (gatewayId) {
+          const gwRef = db.collection("gateways").doc(gatewayId);
+          const gwSnap = await gwRef.get();
+          if (gwSnap.exists) {
+            const gwData = gwSnap.data() as Record<string, unknown> | undefined;
+            if (gwData?.inFlightJobId === jobId) {
+              await gwRef.update({ inFlightJobId: null });
+            }
+          }
+        }
+
+        res.json({
+          jobId,
+          gatewayId,
+          slug,
+          kickedBy,
+          kickedAt: new Date().toISOString(),
+        });
       } catch (e) {
         next(e);
       }

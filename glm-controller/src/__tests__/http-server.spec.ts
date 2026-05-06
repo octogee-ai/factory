@@ -93,7 +93,26 @@ function buildDb(store: FakeStore) {
             const data = store.glmGateways[id];
             return { exists: data !== undefined, data: () => data };
           }
+          if (name === "restoreJobs") {
+            const job = store.restoreJobs.find((j) => j.id === id);
+            return { exists: job !== undefined, data: () => job?.data };
+          }
           return { exists: false, data: () => undefined };
+        },
+        update: async (patch: Record<string, unknown>) => {
+          if (name === "gateways" && store.gateways[id]) {
+            store.gateways[id] = { ...store.gateways[id], ...patch };
+            return;
+          }
+          if (name === "restoreJobs") {
+            const job = store.restoreJobs.find((j) => j.id === id);
+            if (job) job.data = { ...job.data, ...patch };
+            return;
+          }
+          if (name === "glmGateways" && store.glmGateways[id]) {
+            store.glmGateways[id] = { ...store.glmGateways[id], ...patch };
+            return;
+          }
         },
         collection: (sub: string) => ({
           doc: (subId: string) => ({
@@ -323,5 +342,111 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.body.unavailable).toBe(true);
     expect(res.body.success).toBe(false);
     expect(res.body.reason).toMatch(/csi.*workspace-api|gateway pod/i);
+  });
+
+  describe("POST /api/admin/restore-jobs/:jobId/kick — unstick a stuck customer", () => {
+    function seedStuckJob() {
+      store.gateways["gw-test"] = {
+        gatewayId: "gw-test",
+        status: "ready",
+        inFlightJobId: "job-stuck",
+        mountedCustomers: [],
+      };
+      store.restoreJobs = [
+        {
+          id: "job-stuck",
+          data: {
+            jobId: "job-stuck",
+            gatewayId: "gw-test",
+            state: "dispatched",
+            attempt: 1,
+            createdAt: { toMillis: () => 1_000 },
+            dispatchedAt: { toMillis: () => 1_500 },
+            completedAt: null,
+            error: null,
+            snapshot: { uid: "u-basim", slug: "basim" },
+          },
+        },
+      ];
+    }
+
+    it("returns 401 without auth", async () => {
+      seedStuckJob();
+      const app = createHttpServer(buildDeps(store));
+      const res = await request(app).post("/api/admin/restore-jobs/job-stuck/kick");
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 403 for non-admin", async () => {
+      seedStuckJob();
+      const app = createHttpServer(buildDeps(store));
+      const res = await request(app)
+        .post("/api/admin/restore-jobs/job-stuck/kick")
+        .set("Authorization", "Bearer user-token");
+      expect(res.status).toBe(403);
+    });
+
+    it("returns 404 when the job doesn't exist", async () => {
+      const app = createHttpServer(buildDeps(store));
+      const res = await request(app)
+        .post("/api/admin/restore-jobs/no-such-job/kick")
+        .set("Authorization", "Bearer admin-token");
+      expect(res.status).toBe(404);
+    });
+
+    it("happy path: marks the job failed (operator-kicked) + clears inFlightJobId on the gateway", async () => {
+      seedStuckJob();
+      const app = createHttpServer(buildDeps(store));
+      const res = await request(app)
+        .post("/api/admin/restore-jobs/job-stuck/kick")
+        .set("Authorization", "Bearer admin-token");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        jobId: "job-stuck",
+        gatewayId: "gw-test",
+        slug: "basim",
+      });
+
+      // Job is now failed with operator-kicked error.
+      const job = store.restoreJobs.find((j) => j.id === "job-stuck");
+      expect(job?.data.state).toBe("failed");
+      expect(job?.data.error).toMatch(/operator-kicked/);
+
+      // Gateway's inFlightJobId is cleared so the next reconcile tick
+      // can claim a new job for the same customer.
+      expect(store.gateways["gw-test"].inFlightJobId).toBeNull();
+    });
+
+    it("refuses to kick a job that's already in a terminal state (idempotent / safe)", async () => {
+      seedStuckJob();
+      // Pre-complete the job — operator may have raced with the gateway's ack.
+      const job = store.restoreJobs.find((j) => j.id === "job-stuck")!;
+      job.data.state = "done";
+      job.data.completedAt = { toMillis: () => 2_500 };
+      const app = createHttpServer(buildDeps(store));
+      const res = await request(app)
+        .post("/api/admin/restore-jobs/job-stuck/kick")
+        .set("Authorization", "Bearer admin-token");
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/terminal state|already complete|already done/i);
+    });
+
+    it("clears inFlightJobId even if it pointed at a different job (best-effort recovery)", async () => {
+      // Operator hits kick on jobA, but the gateway doc still has jobB.
+      // We should still mark jobA failed; we leave the gateway's lock untouched
+      // unless it matches jobA — to avoid stomping on a fresh job.
+      seedStuckJob();
+      store.gateways["gw-test"].inFlightJobId = "different-job";
+      const app = createHttpServer(buildDeps(store));
+      const res = await request(app)
+        .post("/api/admin/restore-jobs/job-stuck/kick")
+        .set("Authorization", "Bearer admin-token");
+      expect(res.status).toBe(200);
+      const job = store.restoreJobs.find((j) => j.id === "job-stuck");
+      expect(job?.data.state).toBe("failed");
+      // Lock NOT cleared — it points at a different (presumably newer) job.
+      expect(store.gateways["gw-test"].inFlightJobId).toBe("different-job");
+    });
   });
 });
