@@ -85,6 +85,18 @@ spec:
             # cases don't merge umbrella values).
             - name: FLEET_CONTROLLER_PORT
               value: {{ (.Values.global).fleetControllerPort | default "3003" | quote }}
+            # Per-gateway auth-token Secret Manager rotation: when an
+            # admin clicks "Add Gateway", the handler calls
+            # provisionGatewayAuthSecret({gatewayServiceAccount}) and
+            # binds the generated SM secret to this GCP service account.
+            # Without this env, the request 500s with "GATEWAY_SERVICE_
+            # ACCOUNT not configured — admin cannot provision gateway
+            # auth-token secret". Reuses the same gateway-pod GSA the
+            # subchart already runs under (Workload Identity binding
+            # via serviceAccountName at the top of this template +
+            # `gcpServiceAccount` annotation on the KSA).
+            - name: GATEWAY_SERVICE_ACCOUNT
+              value: {{ .Values.gcpServiceAccount | quote }}
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http
