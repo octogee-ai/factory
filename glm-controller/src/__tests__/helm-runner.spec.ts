@@ -106,6 +106,71 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     );
   });
 
+  it("accepts numeric imageTag values (helm --set parses unquoted numerics as YAML numbers)", async () => {
+    // Real-world reproducer: a Firestore desired-state doc with
+    // `imageTag: 9778420` (no quotes — Firestore stored as number) flows
+    // through `helm upgrade --set imageTag=9778420` and lands in
+    // user-supplied values as a JSON number, NOT a string. Earlier the
+    // strict `typeof === "string"` check rejected it, the runner logged
+    // a false "missing fields — skipping" warning, and crucially the
+    // retire-gateway handler's poll (which waits for the instance to
+    // disappear from this map) returned true immediately — so the
+    // glmGateways doc got deleted but the helm release lingered as an
+    // invisible orphan.
+    const { runHelm } = mockSubprocess([
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-smoke", namespace: "octogee-test", status: "deployed" },
+        ]),
+      },
+      // imageTag is the JSON number 9778420 (no quotes)
+      {
+        stdout: JSON.stringify({
+          gatewayId: "gw-smoke",
+          instanceName: "smoke",
+          imageTag: 9778420,
+          image: { repository: REPO },
+        }),
+      },
+    ]);
+    const log = vi.fn();
+    const runner = createHelmSubprocessRunner({ runHelm, log });
+    const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
+    expect(map.smoke).toEqual({
+      enabled: true,
+      image: { repository: REPO, tag: "9778420" },
+      gatewayId: "gw-smoke",
+    });
+    expect(log).not.toHaveBeenCalledWith(
+      expect.stringContaining("missing"),
+    );
+  });
+
+  it("coerces numeric gatewayId to string too (consistent narrowing)", async () => {
+    const { runHelm } = mockSubprocess([
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-numeric", namespace: "octogee-test", status: "deployed" },
+        ]),
+      },
+      {
+        stdout: JSON.stringify({
+          gatewayId: 12345,
+          instanceName: "numeric",
+          imageTag: "abc1234",
+          image: { repository: REPO },
+        }),
+      },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
+    expect(map.numeric).toEqual({
+      enabled: true,
+      image: { repository: REPO, tag: "abc1234" },
+      gatewayId: "12345",
+    });
+  });
+
   it("throws when helm list fails for a non-not-found reason", async () => {
     const { runHelm } = mockSubprocess([
       { code: 1, stderr: "Error: connection refused" },

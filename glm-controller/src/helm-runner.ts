@@ -99,6 +99,25 @@ interface PerReleaseValues {
   image?: { repository?: unknown; tag?: unknown };
 }
 
+/**
+ * Helm `--set` parses unquoted numeric arguments as YAML numbers, so a
+ * Firestore-stored `imageTag: 9778420` (a clean integer build number)
+ * lands in `helm get values -o json` as `9778420` not `"9778420"`. The
+ * chart still renders fine — Go templates stringify numbers — but a
+ * strict `typeof === "string"` check would reject the value and skip
+ * the release from the deployed map. retire-gateway's poll then sees
+ * the instance "disappear" instantly and prematurely deletes the
+ * glmGateways doc while the helm release lingers as an orphan.
+ *
+ * Coerce both string and number to string here so the parser matches
+ * what helm actually rendered into the cluster.
+ */
+function coerceIdentityField(v: unknown): string | null {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return null;
+}
+
 export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): HelmRunner {
   const upgradeTimeout = deps.upgradeTimeout ?? "10m";
   const uninstallTimeout = deps.uninstallTimeout ?? "5m";
@@ -140,10 +159,9 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
           );
         }
         const v = JSON.parse(valuesResult.stdout || "{}") as PerReleaseValues;
-        const gatewayId = typeof v.gatewayId === "string" ? v.gatewayId : null;
-        const imageTag = typeof v.imageTag === "string" ? v.imageTag : null;
-        const imageRepo =
-          typeof v.image?.repository === "string" ? v.image.repository : null;
+        const gatewayId = coerceIdentityField(v.gatewayId);
+        const imageTag = coerceIdentityField(v.imageTag);
+        const imageRepo = coerceIdentityField(v.image?.repository);
         if (!gatewayId || !imageTag || !imageRepo) {
           // Release exists but values are missing the identity Cowboy
           // requires — skip it from the deployed map. Fresh re-upsert
