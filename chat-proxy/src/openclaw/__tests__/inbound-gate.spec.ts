@@ -164,6 +164,32 @@ describe('evaluateInboundFrame — approval.resolve', () => {
     expect(res.accept).toBe(false);
     expect(res.reason).toBe('missing-required-param');
   });
+
+  it('rejects the legacy browser id field instead of approvalId', () => {
+    const state = makeState({ approvalIds: ['appr-1'] });
+    const res = evaluateInboundFrame(
+      frame('exec.approval.resolve', { id: 'appr-1', decision: 'approved' }),
+      false,
+      state,
+    );
+    expect(res.accept).toBe(false);
+    expect(res.reason).toBe('missing-required-param');
+  });
+
+  it('rejects approval resolution when sessionKey targets a different agent', () => {
+    const state = makeState({ approvalIds: ['appr-1'] });
+    const res = evaluateInboundFrame(
+      frame('plugin.approval.resolve', {
+        approvalId: 'appr-1',
+        decision: 'approved',
+        sessionKey: 'agent:octogee-other-coach:s1',
+      }),
+      false,
+      state,
+    );
+    expect(res.accept).toBe(false);
+    expect(res.reason).toBe('session-key-mismatch');
+  });
 });
 
 describe('observeOutboundForState — populates observed sets', () => {
@@ -232,5 +258,112 @@ describe('observeOutboundForState — populates observed sets', () => {
     expect(state.observedRunIds.size).toBe(500);
     expect(state.observedRunIds.has('run-0')).toBe(false);
     expect(state.observedRunIds.has('run-599')).toBe(true);
+  });
+});
+
+describe('browser WebSocket authorization boundary', () => {
+  it('does not allow arbitrary full-scope upstream methods', () => {
+    const state = makeState({ runIds: ['run-X'], approvalIds: ['appr-X'] });
+    for (const method of [
+      'config.get',
+      'config.patch',
+      'admin.users.list',
+      'operator.secrets.read',
+      'device.pair.request',
+    ]) {
+      expect(evaluateInboundFrame(frame(method, {}), false, state)).toEqual({
+        accept: false,
+        reason: 'method-not-allowlisted',
+      });
+    }
+  });
+
+  it('requires chat.abort runId to be observed from this agent before accepting', () => {
+    const state = makeState();
+    const outbound = JSON.stringify({
+      type: 'event',
+      event: 'chat',
+      payload: { sessionKey: `agent:${EXPECTED_AGENT}:s1`, runId: 'run-X' },
+    });
+
+    expect(evaluateInboundFrame(frame('chat.abort', { runId: 'run-X' }), false, state)).toEqual({
+      accept: false,
+      reason: 'run-id-not-observed',
+    });
+
+    observeOutboundForState(outbound, state);
+
+    expect(evaluateInboundFrame(frame('chat.abort', { runId: 'run-X' }), false, state)).toEqual({
+      accept: true,
+      reason: 'allowed',
+    });
+  });
+
+  it('requires approvalId to be observed from this agent before accepting', () => {
+    const state = makeState();
+    const outbound = JSON.stringify({
+      type: 'event',
+      event: 'exec.approval.requested',
+      payload: {
+        sessionKey: `agent:${EXPECTED_AGENT}:s1`,
+        approvalId: 'appr-X',
+        runId: 'run-X',
+      },
+    });
+
+    expect(
+      evaluateInboundFrame(
+        frame('exec.approval.resolve', { approvalId: 'appr-X', decision: 'approved' }),
+        false,
+        state,
+      ),
+    ).toEqual({
+      accept: false,
+      reason: 'approval-id-not-observed',
+    });
+
+    observeOutboundForState(outbound, state);
+
+    expect(
+      evaluateInboundFrame(
+        frame('exec.approval.resolve', { approvalId: 'appr-X', decision: 'approved' }),
+        false,
+        state,
+      ),
+    ).toEqual({
+      accept: true,
+      reason: 'allowed',
+    });
+  });
+
+  it('does not learn run or approval IDs from another agent outbound stream', () => {
+    const state = makeState();
+    observeOutboundForState(
+      JSON.stringify({
+        type: 'event',
+        event: 'exec.approval.requested',
+        payload: {
+          sessionKey: 'agent:octogee-other-coach:s1',
+          approvalId: 'appr-leak',
+          runId: 'run-leak',
+        },
+      }),
+      state,
+    );
+
+    expect(evaluateInboundFrame(frame('chat.abort', { runId: 'run-leak' }), false, state)).toEqual({
+      accept: false,
+      reason: 'run-id-not-observed',
+    });
+    expect(
+      evaluateInboundFrame(
+        frame('exec.approval.resolve', { approvalId: 'appr-leak', decision: 'approved' }),
+        false,
+        state,
+      ),
+    ).toEqual({
+      accept: false,
+      reason: 'approval-id-not-observed',
+    });
   });
 });
