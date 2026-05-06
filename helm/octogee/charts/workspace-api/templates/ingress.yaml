@@ -50,10 +50,21 @@ spec:
           # Cowboy HTTP — fleet routes served from glm-controller so the
           # admin Gateways tab keeps responding when no gateway pods are
           # booted. GCE URL maps prefer most-specific path; these rules
-          # take precedence over the /api/* catch-all below. The
-          # /api/admin/gateways/* prefix on GCE matches the bare
-          # /api/admin/gateways path too — no separate rule needed.
+          # take precedence over the /api/* catch-all below. GCE
+          # `/foo/*` is "starts with /foo/", so the bare path `/foo`
+          # (no trailing slash) does NOT match — it needs its own rule.
+          # The original PR #855 comment claimed /* covered the bare
+          # path; turns out it doesn't, and bare /api/admin/gateways
+          # was 502-ing through to workspace-api on no-gateway-pod
+          # clusters until both rules were present.
           - path: /api/admin/gateways/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/gateways
             pathType: ImplementationSpecific
             backend:
               service:
