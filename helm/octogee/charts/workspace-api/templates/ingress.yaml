@@ -78,6 +78,22 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
+          # restore-jobs needs both the bare path (GET list) AND `/*`
+          # (sub-paths like `<jobId>/kick`). GCE `/foo/*` is "starts with
+          # /foo/", so it does NOT match the bare path — and `/foo` does
+          # NOT match sub-paths. Hit this same pattern previously on
+          # `/api/admin/gateways` (PR #855 → 8dd0f709). Without the `/*`
+          # rule, the operator's Kick button POSTs to
+          # `/api/admin/restore-jobs/<jobId>/kick` and falls through the
+          # catch-all `/api/*` to workspace-api, which 404s if it's
+          # running an older image without the kick endpoint.
+          - path: /api/admin/restore-jobs/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
           - path: /api/admin/restore-jobs
             pathType: ImplementationSpecific
             backend:
