@@ -414,3 +414,139 @@ describe("startReconciler — periodic retry after failed tick", () => {
     stop();
   });
 });
+
+describe("startReconciler — orphan vs drainee drift classification", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function flush() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("logs a 🧟 warn line when a helm release has no matching glmGateways doc (orphan)", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      // helm reports octogee-gw-orphan deployed (e.g. retire-gateway short-
+      // circuited; doc deleted but uninstall never ran). buildInstancesMap
+      // would not include it (no doc). preserve-drift semantic keeps it in
+      // target — but Cowboy should LOUDLY flag it as orphan, not silent.
+      read: async () => ({
+        orphan: {
+          enabled: true,
+          image: { repository: "repo", tag: "abc1234" },
+          gatewayId: "gw-orphan",
+        },
+      }),
+    });
+    const db = makeFakeDb({
+      glmGateways: [], // intentionally empty — no doc matches gw-orphan
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    const orphanWarn = log.mock.calls.find(
+      ([msg]: [string]) =>
+        typeof msg === "string" && msg.includes("⚠") && msg.includes("🧟"),
+    );
+    expect(orphanWarn).toBeDefined();
+    expect(orphanWarn?.[0]).toContain("orphan");
+    expect(orphanWarn?.[0]).toContain("gw-orphan");
+    stop();
+  });
+
+  it("does NOT use the orphan glyph for retired-with-customers drainees (legitimate preserve-drift)", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      read: async () => ({
+        draining: {
+          enabled: true,
+          image: { repository: "repo", tag: "abc1234" },
+          gatewayId: "gw-draining",
+        },
+      }),
+    });
+    // makeFakeDb's "gateways" mock returns []. To simulate mountedCustomers
+    // without rewriting the helper, swap in a richer db that records customers.
+    const db = {
+      collection: (name: string) => {
+        if (name === "glmGateways") {
+          return {
+            get: async () => ({
+              docs: [
+                {
+                  data: () => ({
+                    gatewayId: "gw-draining",
+                    instanceName: "draining",
+                    imageRepository: "repo",
+                    imageTag: "abc1234",
+                    desiredStatus: "retired",
+                    createdBy: "ci",
+                  }),
+                },
+              ],
+            }),
+            onSnapshot: (cb: () => void) => {
+              snapCbs.push(cb);
+              return () => {};
+            },
+          };
+        }
+        if (name === "gateways") {
+          return {
+            get: async () => ({
+              docs: [
+                {
+                  id: "gw-draining",
+                  data: () => ({ mountedCustomers: ["cust-1", "cust-2"] }),
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`unexpected: ${name}`);
+      },
+    } as unknown as Parameters<typeof startReconciler>[0]["db"];
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    const orphanWarn = log.mock.calls.find(
+      ([msg]: [string]) =>
+        typeof msg === "string" && msg.includes("🧟"),
+    );
+    expect(orphanWarn).toBeUndefined();
+    const drainNote = log.mock.calls.find(
+      ([msg]: [string]) =>
+        typeof msg === "string" && msg.includes("draining") && msg.includes("preserved"),
+    );
+    expect(drainNote).toBeDefined();
+    stop();
+  });
+});

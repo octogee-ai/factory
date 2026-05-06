@@ -50,6 +50,7 @@ import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
 import { deleteAuthUserTolerantOfMissing } from "../../scripts/lib/firebase-auth-helpers.js";
 import { startHttpServer } from "./http-server.js";
 import { createLogger } from "./lib/logger.js";
+import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 
 // Cowboy's logger writes color + emoji + timestamp to stdout/stderr.
 // `legacy(msg)` is the drop-in shape for the existing handler libs that
@@ -190,9 +191,36 @@ export function startReconciler(deps: ControllerDeps): () => void {
           c.kind === "drift" &&
           Object.prototype.hasOwnProperty.call(targetMap, c.instanceName),
       );
-      if (preservedDrift.length > 0) {
+      // Split preserve-drift into two distinct categories so the operator
+      // can tell the difference at a glance:
+      //   - drainee: glmGateways doc exists with desiredStatus=retired but
+      //     mountedCustomers > 0 — pod intentionally kept up while
+      //     migration drains. Healthy, expected, info-level.
+      //   - orphan: helm release exists but NO matching glmGateways doc.
+      //     Almost always means a retire-gateway op short-circuited
+      //     (deleted the doc but never actually uninstalled), leaving
+      //     a 🧟 zombie that needs operator attention.
+      const desiredGatewayIds = new Set(desired.map((d) => d.gatewayId));
+      const orphanDrift = preservedDrift.filter(
+        (c) => c.kind === "drift" && !desiredGatewayIds.has(c.current.gatewayId),
+      );
+      const draineeDrift = preservedDrift.filter(
+        (c) => c.kind === "drift" && desiredGatewayIds.has(c.current.gatewayId),
+      );
+      if (orphanDrift.length > 0) {
+        const formatted = orphanDrift
+          .filter((d) => d.kind === "drift")
+          .map((d) =>
+            d.kind === "drift" ? `${d.instanceName} (gatewayId=${d.current.gatewayId})` : "",
+          )
+          .join(", ");
         deps.log(
-          `[glm-controller] drift detected (preserved, not removed): ${preservedDrift.map((d) => d.instanceName).join(", ")}`,
+          `[glm-controller] ⚠ 🧟 orphan helm release(s) — no matching glmGateways doc: ${formatted} (manual \`helm uninstall octogee-gw-<instanceName>\` required to remove)`,
+        );
+      }
+      if (draineeDrift.length > 0) {
+        deps.log(
+          `[glm-controller] drift detected (preserved, not removed): ${draineeDrift.map((d) => d.instanceName).join(", ")}`,
         );
       }
       const targetVsActual = diffInstancesMap(actualMap, targetMap);
@@ -377,6 +405,19 @@ async function main(): Promise<void> {
 
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
+  // Orphan heartbeat reaper: fires every 60s, deletes `gateways/{id}`
+  // docs that have outlived their `glmGateways/{id}` desired-state and
+  // haven't heartbeated for 5+ min. Without this, a one-off retire
+  // short-circuit (or any cleanup gap) leaves zombie entries in the
+  // Fleet UI forever — e.g. the smoke incident that exposed the helm-
+  // runner type-narrow bug fixed in eb019984.
+  const stopReaper = startOrphanHeartbeatReaper({
+    db,
+    log,
+    intervalMs: 60_000,
+    stalenessMs: 5 * 60 * 1000,
+    now: () => Date.now(),
+  });
   const stopHttp = startHttpServer({
     db,
     log,
@@ -395,6 +436,7 @@ async function main(): Promise<void> {
     log("[glm-controller] shutdown signal — stopping subscribers");
     stopReconciler();
     stopWorker();
+    stopReaper();
     stopHttp();
     process.exit(0);
   };

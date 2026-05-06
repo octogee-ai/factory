@@ -100,7 +100,11 @@ export interface CreateLoggerOptions extends FormatOptions {
 }
 
 const LEGACY_PREFIX = /^\[glm-controller\]\s*/;
-const LEGACY_WARN_MARKER = /^⚠\s*/;
+// Warn marker can appear either at the start of the (post-strip) message
+// — `⚠ <body>` — or right after a sub-system tag — `[reaper] ⚠ <body>`.
+// In the latter case we keep the tag in the body for context and only
+// consume the `⚠` glyph + trailing whitespace.
+const LEGACY_WARN_MARKER = /(^|\[[^\]]+\]\s*)⚠\s*/;
 
 export function createLogger(opts: CreateLoggerOptions = {}): Logger {
   const debugEnabled = opts.debug ?? false;
@@ -136,8 +140,13 @@ function makeLogger(
     },
     legacy(message) {
       const stripped = message.replace(LEGACY_PREFIX, "");
-      if (LEGACY_WARN_MARKER.test(stripped)) {
-        const body = stripped.replace(LEGACY_WARN_MARKER, "");
+      const warnMatch = LEGACY_WARN_MARKER.exec(stripped);
+      if (warnMatch && warnMatch.index === 0) {
+        // Replace exactly the matched chunk (`⚠ ` or `[tag] ⚠ `) with the
+        // sub-system tag (group 1) so a `[reaper] ⚠ x` line keeps `[reaper]`
+        // visible. A bare `⚠ x` line collapses to just `x`.
+        const tag = warnMatch[1] ?? "";
+        const body = tag + stripped.slice(warnMatch[0].length);
         console.warn(formatLine("warn", body, defaultMeta, fmtOpts));
         return;
       }

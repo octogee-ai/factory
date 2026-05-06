@@ -122,6 +122,27 @@ describe("createLogger", () => {
     const out = logSpy.mock.calls[0]?.[0] as string;
     expect(out).toContain("[deprovision] step done ✅");
   });
+
+  it("legacy() routes [subsystem] ⚠ msg to warn while preserving the [subsystem] tag", () => {
+    // Sub-systems like the reaper, helm-runner, deprovision use their
+    // own prefix tag. The warn glyph appears AFTER the tag, not at the
+    // start. Without this case, those messages would silently route
+    // to info — losing the visual color cue and console.warn routing.
+    const log = createLogger({ color: false });
+    log.legacy("[reaper] ⚠ orphan heartbeat gw-zombie — deleting");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).not.toHaveBeenCalled();
+    const out = warnSpy.mock.calls[0]?.[0] as string;
+    expect(out).toContain(" ⚠  🤠 cowboy");
+    // [reaper] tag should still be in the body so operators can still
+    // tell which sub-system emitted the line.
+    expect(out).toContain("[reaper]");
+    expect(out).toContain("orphan heartbeat gw-zombie");
+    // The warn glyph itself should not appear twice (once is via the
+    // level badge, the legacy ⚠ marker should have been consumed).
+    const warnGlyphCount = (out.match(/⚠/g) ?? []).length;
+    expect(warnGlyphCount).toBe(1);
+  });
 });
 
 describe("color rendering", () => {
