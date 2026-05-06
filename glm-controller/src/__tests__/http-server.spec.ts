@@ -186,6 +186,37 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.body).toEqual({ ok: true, service: "glm-controller" });
   });
 
+  it("sets CORS headers for allowed origins (admin UI fetches from app[-test].web.app)", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .get("/healthz")
+      .set("Origin", "https://app-octogee-test.web.app");
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBe("https://app-octogee-test.web.app");
+    expect(res.headers["access-control-allow-credentials"]).toBe("true");
+    expect(res.headers["vary"]).toContain("Origin");
+  });
+
+  it("answers OPTIONS preflight with 204 + CORS headers (no auth needed)", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .options("/api/admin/customers")
+      .set("Origin", "https://app-octogee-test.web.app")
+      .set("Access-Control-Request-Method", "GET");
+    expect(res.status).toBe(204);
+    expect(res.headers["access-control-allow-origin"]).toBe("https://app-octogee-test.web.app");
+    expect(res.headers["access-control-allow-methods"]).toContain("GET");
+  });
+
+  it("does not set CORS headers for disallowed origins", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .get("/healthz")
+      .set("Origin", "https://evil.example.com");
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
   it("rejects unauthenticated requests with 401", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app).get("/api/admin/gateways");

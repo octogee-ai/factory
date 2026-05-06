@@ -5,7 +5,7 @@
  * gateway pods are booted. See
  * docs/architecture/GATEWAY-PLATFORM-SPEC.md §Gateway Lifecycle Manager.
  */
-import express, { Router, type Express } from "express";
+import express, { Router, type Express, type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
@@ -21,6 +21,52 @@ import {
   createRequireAdmin,
   type RequireAdminDeps,
 } from "./middleware/auth.js";
+
+// Mirrors workspace-api/src/middleware/cors.ts. PR #865 lifted the
+// admin Customers tab to glm-controller; without this CORS handler
+// the admin UI's fetches from app[-octogee][-test].web.app get blocked
+// by the browser ("No 'Access-Control-Allow-Origin' header"). Hand-
+// rolled instead of pulling in the `cors` npm dep — fewer deps in
+// the glm-controller image and the logic is small enough to inline.
+const ALLOWED_ORIGINS = new Set([
+  "https://octogee.web.app",
+  "https://octogee-test.web.app",
+  "https://app-octogee.web.app",
+  "https://app-octogee-test.web.app",
+  "https://octogee.firebaseapp.com",
+  "https://octogee-test.firebaseapp.com",
+  "https://app-octogee.firebaseapp.com",
+  "https://app-octogee-test.firebaseapp.com",
+  "https://octogee.com",
+  "https://www.octogee.com",
+  "https://app.octogee.com",
+]);
+
+function isAllowedOrigin(origin: string): boolean {
+  return ALLOWED_ORIGINS.has(origin) || /^http:\/\/localhost:\d+$/.test(origin);
+}
+
+function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const origin = req.headers.origin;
+  if (typeof origin === "string" && isAllowedOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, OPTIONS",
+    );
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Agent-Key, X-Internal-Service-Key",
+    );
+  }
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+}
 
 export interface HttpServerDeps {
   db: Firestore;
@@ -53,6 +99,7 @@ function adaptLogger(log: (msg: string) => void): FleetLogger {
 
 export function createHttpServer(deps: HttpServerDeps): Express {
   const app = express();
+  app.use(corsMiddleware);
   app.use(express.json());
 
   app.get("/healthz", (_req, res) => {
