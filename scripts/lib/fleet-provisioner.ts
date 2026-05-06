@@ -119,6 +119,13 @@ export async function startFleetController(
 
   await emitHeartbeat("booting");
 
+  // Define the readiness poller but DON'T fire it yet. Invariant:
+  // `void waitForGatewayReady()` must only run AFTER the express server
+  // is listening (the call site lower in this function fires it once
+  // `app.listen` resolves). `status=ready` must mean BOTH OpenClaw RPC
+  // is up AND our own Express server is accepting connections —
+  // otherwise the fleet-controller can dispatch a Cloud Task into a
+  // still-bootstrapping pod.
   const waitForGatewayReady = async (): Promise<void> => {
     while (runtime.status !== "ready") {
       try {
@@ -137,7 +144,6 @@ export async function startFleetController(
       await new Promise<void>((r) => setTimeout(r, 1_000));
     }
   };
-  void waitForGatewayReady();
 
   const heartbeatTimer = setInterval(() => {
     void emitHeartbeat(runtime.status);
@@ -276,6 +282,18 @@ export async function startFleetController(
   opts.log(
     `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; drain-loop interval=${DRAIN_LOOP_INTERVAL_MS}ms`,
   );
+
+  // NOW poll for OpenClaw readiness. Sequencing matters: by waiting
+  // until the Express server is listening, `status=ready` becomes an
+  // accurate signal that the pod can serve `/restore-customer`,
+  // `/quiesce`, and `/unmount` traffic from the fleet-control Ingress.
+  // Earlier the readiness poller fired on `void waitForGatewayReady()`
+  // immediately after the booting heartbeat, which could flip
+  // `status=ready` before `app.listen()` ever ran — letting Cloud
+  // Tasks dispatch into a pod whose Express server wasn't accepting
+  // connections yet, hitting a 3+ minute timeout/retry loop on
+  // first-customer-after-add.
+  void waitForGatewayReady();
 
   return {
     stop: async () => {
