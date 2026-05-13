@@ -492,13 +492,14 @@ for t in json.load(sys.stdin):
 else
   info "Fresh Mattermost — bootstrapping admin via mmctl --local..."
 
-  kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
+  MMCTL_ERR=$(kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
     /mattermost/bin/mmctl --local user create \
       --username "$MM_ADMIN_USER" \
       --password "$MM_ADMIN_PASS" \
       --email "admin@octogee.com" \
-      --system_admin >/dev/null 2>&1 \
-    || fail "mmctl --local user create failed for $MM_ADMIN_USER"
+      --system-admin \
+      --email-verified 2>&1) \
+    || fail "mmctl --local user create failed for $MM_ADMIN_USER: $MMCTL_ERR"
   ok "Admin user created via mmctl --local"
 
   # Login
