@@ -22,12 +22,6 @@ export function isActiveStatus(status: string): boolean {
   return status === "active" || status === "trialing";
 }
 
-const PAID_TIERS = new Set<string>(["hobby", "pro", "max"]);
-
-// isPaidTier helper intentionally not exported — `PAID_TIERS` is a
-// closure-private set used by buildCustomerSummary's tier classification.
-// If a caller needs paid-tier checks, prefer importing from `tiers.ts`.
-
 // ── Customer Summary (list view) ────────────────────────────────────────────
 
 export interface TrialSummary {
@@ -329,7 +323,6 @@ export function buildFunnelRollup(
     .filter((h): h is number => h !== null && h >= 0);
 
   const activatedCount = reached.get("activated") ?? 0;
-  const convertedCount = reached.get("converted") ?? 0;
   const activeInTrial = trials.filter((t) =>
     !t.expired && t.funnelStage !== "converted",
   ).length;
@@ -342,13 +335,6 @@ export function buildFunnelRollup(
     medianDaysToConvert: median(convertTimes),
     activeInTrial,
   };
-
-  // convertedCount intentionally unused — the metrics block reports the
-  // converted total via byot/paid breakdown, not this aggregated count.
-  // Reading the variable as a no-op assignment keeps eslint quiet without
-  // the void-operator pattern sonarjs flags.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _convertedCount = convertedCount;
 
   return {
     windowDays,

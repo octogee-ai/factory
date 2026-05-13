@@ -128,7 +128,7 @@ vi.mock("../lib/db", () => {
   return {
     db: {
       collection,
-      doc: (path: string) => ({
+      doc: (_path: string) => ({
         get: async () => ({ exists: false, data: () => undefined }),
       }),
       getAll: async () => [],

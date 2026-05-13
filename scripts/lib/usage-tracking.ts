@@ -174,19 +174,16 @@ export async function reportUsage(
         (now.getTime() - windowStartedAt.getTime()) >= REFILL_MS;
 
       let newWindowCostUsd: number;
-      let newWindowTokensUsed: number;
       const windowUpdates: Record<string, any> = {};
 
       if (windowExpired) {
         newWindowCostUsd    = usage.costUsd;
-        newWindowTokensUsed = usage.totalTokens;
         windowUpdates["usage.windowCostUsd"]    = usage.costUsd;
         windowUpdates["usage.windowTokensUsed"] = usage.totalTokens;
         windowUpdates["usage.windowStartedAt"]  = now;
         windowUpdates["usage.windowBudgetUsd"]  = windowBudgetUsd;
       } else {
         newWindowCostUsd    = (usageData.windowCostUsd ?? 0) + usage.costUsd;
-        newWindowTokensUsed = (usageData.windowTokensUsed ?? 0) + usage.totalTokens;
         windowUpdates["usage.windowCostUsd"]    = FieldValue.increment(usage.costUsd);
         windowUpdates["usage.windowTokensUsed"] = FieldValue.increment(usage.totalTokens);
         // Refresh budget every turn so day-N tapering takes effect

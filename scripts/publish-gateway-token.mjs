@@ -36,7 +36,6 @@
  */
 
 // Exit codes referenced by entrypoint.sh.
-const EXIT_OK = 0;
 const EXIT_TRANSIENT = 1;
 const EXIT_SETUP_INCOMPLETE = 2;
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";

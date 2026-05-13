@@ -23,7 +23,6 @@ export async function provisionMattermostUser(
   vibe?: string | null, lastName?: string, photoURL?: string,
 ): Promise<Record<string, any>> {
   const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
-  const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL || process.env.MM_URL;
   const MM_COMMUNITY_TEAM_ID = process.env.MM_COMMUNITY_TEAM_ID;
 
   if (!process.env.MM_URL || !process.env.MM_BOT_TOKEN) {

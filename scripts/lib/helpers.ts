@@ -3,7 +3,6 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { uniqueNamesGenerator, adjectives, animals } from "unique-names-generator";
-import { DATA_API_URL } from "./config.js";
 import { db } from "./firebase.js";
 
 export function slugify(name: string): string {
