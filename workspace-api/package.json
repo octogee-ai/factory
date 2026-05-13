@@ -15,7 +15,7 @@
     "verify:no-alias-leakage": "! grep -rq --include='*.js' '@shared' dist/ || (echo '\u274c Found un-rewritten @shared/* alias in compiled JS. Fix: ensure tsc-alias is installed and the build script runs `tsc && tsc-alias -p tsconfig.json` (path alias rewriting must run after emit, or Node will fail at runtime with MODULE_NOT_FOUND).' && exit 1)"
   },
   "engines": {
-    "node": "22"
+    "node": "26"
   },
   "dependencies": {
     "@google-cloud/secret-manager": "^6.1.2",
