@@ -14,7 +14,7 @@
 #
 # Per-instance RPC paths (/restore-customer/<gid>, /quiesce/<gid>, etc.)
 # are SSA-owned by Cowboy with field manager `cowboy-fleet-controller`.
-# Install the umbrella with `helm upgrade --server-side --force-conflicts`
+# Install the umbrella with `helm upgrade --server-side=true --force-conflicts`
 # so Helm can take ownership back during an upgrade; Cowboy reclaims and
 # re-applies the per-instance paths on its next reconcile tick. Leave
 # `Values.gatewayFleet.instances` empty in test/prod — Cowboy is the

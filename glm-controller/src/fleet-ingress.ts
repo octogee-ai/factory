@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
  * only the static /health path. Cowboy uses server-side apply with
  * field manager `cowboy-fleet-controller` and `--force-conflicts` to
  * own `.spec.rules`. The canonical umbrella install also runs with
- * `--server-side --force-conflicts`, so a `helm upgrade` can hand
+ * `--server-side=true --force-conflicts`, so a `helm upgrade` can hand
  * ownership back to Helm transiently; Cowboy reclaims and re-applies
  * the desired path list on its next reconcile tick (~1s debounce).
  *

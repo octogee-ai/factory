@@ -257,7 +257,7 @@ if ! kubectl get deployment mattermost -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
   echo "  Next step: deploy Helm first, then re-run this script"
   echo ""
   echo "  helm upgrade --install octogee helm/octogee \\"
-  echo "    --server-side --force-conflicts \\"
+  echo "    --server-side=true --force-conflicts \\"
   echo "    -f helm/octogee/values.${ENV}.yaml \\"
   echo "    -n $K8S_NAMESPACE --create-namespace \\"
   echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"

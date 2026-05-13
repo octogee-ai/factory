@@ -388,7 +388,7 @@ step "Phase 2d: Materializing K8s secrets"
 step "Phase 2e: Helm install"
 GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project="$CLOUDSQL_PROJECT")
 helm upgrade --install octogee "$REPO_DIR/helm/octogee" \
-  --server-side --force-conflicts \
+  --server-side=true --force-conflicts \
   -f "$VALUES_OUT" \
   -n "$NAMESPACE" \
   --set "gitea.gitea.config.database.PASSWD=$GITEA_DB_PASS" \
