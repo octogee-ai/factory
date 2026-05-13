@@ -20,7 +20,8 @@ interface DockerImageItem {
   uploadTime?: string;
 }
 
-const SHA_TAG_PATTERN = /^[a-f0-9]{7,40}$/;
+const SHA_TAG_PATTERN =
+  /^[a-f0-9]{7,40}(-oc[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?)?$/;
 const DEFAULT_LIMIT = 30;
 const PAGE_SIZE = 200;
 

@@ -62,4 +62,22 @@ describe("validateRolloutBody", () => {
       expect(r.ok).toEqual({ imageTag: tag, imageRepository: repo });
     }
   });
+
+  it("accepts a pinned-bundle tag like <sha>-oc<version>", () => {
+    const r = validateRolloutBody({ imageTag: "a9d7600-oc2026.5.2" });
+    expect("ok" in r).toBe(true);
+    if ("ok" in r) {
+      expect(r.ok.imageTag).toBe("a9d7600-oc2026.5.2");
+    }
+  });
+
+  it("accepts a pinned-bundle tag with a hotfix suffix", () => {
+    const r = validateRolloutBody({ imageTag: "a9d7600-oc2026.5.3-1" });
+    expect("ok" in r).toBe(true);
+  });
+
+  it("rejects an oc-suffix with no major.minor.patch", () => {
+    const r = validateRolloutBody({ imageTag: "a9d7600-oc5.2" });
+    expect("error" in r).toBe(true);
+  });
 });

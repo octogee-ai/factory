@@ -51,7 +51,8 @@ const JOB_TTL_MS = 10 * 60_000;
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const GATEWAY_IMAGE_REPO_PREFIX =
   "us-central1-docker.pkg.dev/octogee/octogee/";
-const IMAGE_TAG_PATTERN = /^[a-f0-9]{7,40}$/;
+const IMAGE_TAG_PATTERN =
+  /^[a-f0-9]{7,40}(-oc[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?)?$/;
 const RESTORE_JOB_STATES = [
   "pending",
   "dispatched",
@@ -176,7 +177,8 @@ export function validateRolloutBody(
       error: {
         status: 400,
         body: {
-          error: "imageTag must be a 7–40 char lowercase hex SHA",
+          error:
+            "imageTag must be a lowercase hex SHA (7–40 chars) or pinned bundle (e.g. abc1234-oc2026.5.2)",
           got: body.imageTag,
         },
       },
