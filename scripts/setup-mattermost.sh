@@ -140,16 +140,28 @@ ksecret_key() {
     -o jsonpath="{.data.$2}" 2>/dev/null | base64 -d 2>/dev/null || echo ""
 }
 
-# Test an MM PAT by calling /api/v4/users/me and checking the returned user
-# ID matches the expected one. Returns 0 on match, 1 otherwise.
+mm_field() {
+  local response="$1" field="$2"
+  echo "$response" | python3 -c '
+import sys, json
+field = sys.argv[1]
+try:
+    r = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if isinstance(r, dict) and isinstance(r.get("status_code"), int) and r["status_code"] >= 400:
+    sys.exit(1)
+print(r.get(field, "") if isinstance(r, dict) else "")
+' "$field" 2>/dev/null
+}
+
 mm_pat_is_valid() {
   local pat="$1" expected_uid="$2"
   [[ -z "$pat" || -z "$expected_uid" ]] && return 1
-  local actual_uid
-  actual_uid=$(\
-    curl -s "http://localhost:8065/api/v4/users/me" \
-    -H "Authorization: Bearer $pat" 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+  local me_resp actual_uid
+  me_resp=$(curl -s "http://localhost:8065/api/v4/users/me" \
+    -H "Authorization: Bearer $pat" 2>/dev/null)
+  actual_uid=$(mm_field "$me_resp" id) || return 1
   [[ "$actual_uid" == "$expected_uid" ]]
 }
 
@@ -326,11 +338,11 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
   [[ -n "$MM_ADMIN_TOKEN" ]] && save_env "MM_ADMIN_TOKEN" "$MM_ADMIN_TOKEN" && ok "Admin session token refreshed"
 
   # Get real admin user ID from /me (stored IDs can drift after DB rebuilds)
-  MM_ADMIN_USER_ID=$(\
-    curl -s "http://localhost:8065/api/v4/users/me" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || echo "")
-  [[ -n "$MM_ADMIN_USER_ID" ]] && save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID" && ok "Admin user ID: $MM_ADMIN_USER_ID"
+  ME_RESP=$(curl -s "http://localhost:8065/api/v4/users/me" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
+  MM_ADMIN_USER_ID=$(mm_field "$ME_RESP" id) && [[ -n "$MM_ADMIN_USER_ID" ]] \
+    && save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID" \
+    && ok "Admin user ID: $MM_ADMIN_USER_ID"
 
   # ── Admin PAT: test cached value first, only rotate if it's broken ──────
   CACHED_ADMIN_PAT=$(ksecret_key mattermost-gateway admin_token)
@@ -367,7 +379,7 @@ for t in tokens:
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
       -H "Content-Type: application/json" \
       -d '{"description":"workspace-api admin token"}' 2>/dev/null)
-    MM_ADMIN_PAT=$(echo "$PAT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+    MM_ADMIN_PAT=$(mm_field "$PAT_RESP" token || true)
     if [[ -n "$MM_ADMIN_PAT" ]]; then
       save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
       ok "Admin PAT created"
@@ -379,10 +391,9 @@ for t in tokens:
 
   # ── Discover existing team + bot (may be missing from env/secret) ────────
   info "Discovering team + bot state..."
-  TEAM_ID_FROM_API=$(\
-    curl -s "http://localhost:8065/api/v4/teams/name/octogee" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+  TEAM_RESP=$(curl -s "http://localhost:8065/api/v4/teams/name/octogee" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
+  TEAM_ID_FROM_API=$(mm_field "$TEAM_RESP" id || true)
   if [[ -n "$TEAM_ID_FROM_API" ]]; then
     MM_TEAM_ID="$TEAM_ID_FROM_API"
     save_env "MM_TEAM_ID" "$MM_TEAM_ID"
@@ -439,7 +450,7 @@ for t in json.load(sys.stdin):
         -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
         -d '{"description":"Gateway token"}' 2>/dev/null)
-      MM_BOT_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+      MM_BOT_TOKEN=$(mm_field "$TOKEN_RESP" token || true)
       if [[ -n "$MM_BOT_TOKEN" ]]; then
         save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
         ok "Bot token created"
@@ -454,8 +465,8 @@ for t in json.load(sys.stdin):
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
       -H "Content-Type: application/json" \
       -d "{\"username\":\"$MM_BOT_USERNAME\",\"display_name\":\"$MM_BOT_DISPLAY_NAME\",\"description\":\"$MM_BOT_DESCRIPTION\"}" 2>/dev/null)
-    MM_BOT_USER_ID=$(echo "$BOT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user_id',''))" 2>/dev/null || echo "")
-    [[ -n "$MM_BOT_USER_ID" ]] || fail "Failed to create bot @$MM_BOT_USERNAME: $BOT_RESP"
+    MM_BOT_USER_ID=$(mm_field "$BOT_RESP" user_id) && [[ -n "$MM_BOT_USER_ID" ]] \
+      || fail "Failed to create bot @$MM_BOT_USERNAME: $BOT_RESP"
     save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
     ok "Bot created: $MM_BOT_USER_ID (@$MM_BOT_USERNAME)"
 
@@ -473,23 +484,22 @@ for t in json.load(sys.stdin):
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
       -H "Content-Type: application/json" \
       -d '{"description":"Gateway token"}' 2>/dev/null)
-    MM_BOT_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
-    [[ -n "$MM_BOT_TOKEN" ]] || fail "Failed to create bot token: $TOKEN_RESP"
+    MM_BOT_TOKEN=$(mm_field "$TOKEN_RESP" token) && [[ -n "$MM_BOT_TOKEN" ]] \
+      || fail "Failed to create bot token: $TOKEN_RESP"
     save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
     ok "Bot token created"
   fi
 else
-  info "Fresh Mattermost — bootstrapping admin, team, bot..."
+  info "Fresh Mattermost — bootstrapping admin via mmctl --local..."
 
-  # Admin user
-  ADMIN_RESP=$(\
-    curl -s -X POST "http://localhost:8065/api/v4/users" \
-    -H "Content-Type: application/json" \
-    -d "{\"email\":\"admin@octogee.com\",\"username\":\"$MM_ADMIN_USER\",\"password\":\"$MM_ADMIN_PASS\",\"first_name\":\"Octogee\",\"last_name\":\"Admin\",\"nickname\":\"Octogee Admin\"}" 2>/dev/null)
-  MM_ADMIN_USER_ID=$(echo "$ADMIN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-  [[ -n "$MM_ADMIN_USER_ID" ]] || fail "Failed to create admin user: $ADMIN_RESP"
-  save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID"
-  ok "Admin created: $MM_ADMIN_USER_ID"
+  kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
+    /mattermost/bin/mmctl --local user create \
+      --username "$MM_ADMIN_USER" \
+      --password "$MM_ADMIN_PASS" \
+      --email "admin@octogee.com" \
+      --system_admin >/dev/null 2>&1 \
+    || fail "mmctl --local user create failed for $MM_ADMIN_USER"
+  ok "Admin user created via mmctl --local"
 
   # Login
   LOGIN_RAW=$(\
@@ -497,9 +507,16 @@ else
     -H "Content-Type: application/json" \
     -d "{\"login_id\":\"$MM_ADMIN_USER\",\"password\":\"$MM_ADMIN_PASS\"}" 2>/dev/null)
   MM_ADMIN_TOKEN=$(echo "$LOGIN_RAW" | grep -i "^token:" | awk '{print $2}' | tr -d '\r')
-  [[ -n "$MM_ADMIN_TOKEN" ]] || fail "Failed to get admin token"
+  [[ -n "$MM_ADMIN_TOKEN" ]] || fail "Failed to get admin token after mmctl create"
   save_env "MM_ADMIN_TOKEN" "$MM_ADMIN_TOKEN"
   ok "Admin login OK"
+
+  ME_RESP=$(curl -s "http://localhost:8065/api/v4/users/me" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
+  MM_ADMIN_USER_ID=$(mm_field "$ME_RESP" id) && [[ -n "$MM_ADMIN_USER_ID" ]] \
+    || fail "Failed to fetch admin user ID: $ME_RESP"
+  save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID"
+  ok "Admin ID: $MM_ADMIN_USER_ID"
 
   # Team
   TEAM_RESP=$(\
@@ -507,8 +524,8 @@ else
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"name":"octogee","display_name":"Octogee","type":"I"}' 2>/dev/null)
-  MM_TEAM_ID=$(echo "$TEAM_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-  [[ -n "$MM_TEAM_ID" ]] || fail "Failed to create team: $TEAM_RESP"
+  MM_TEAM_ID=$(mm_field "$TEAM_RESP" id) && [[ -n "$MM_TEAM_ID" ]] \
+    || fail "Failed to create team: $TEAM_RESP"
   save_env "MM_TEAM_ID" "$MM_TEAM_ID"
   ok "Team created: $MM_TEAM_ID"
 
@@ -536,7 +553,7 @@ else
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"description":"workspace-api admin token"}' 2>/dev/null)
-  MM_ADMIN_PAT=$(echo "$PAT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+  MM_ADMIN_PAT=$(mm_field "$PAT_RESP" token || true)
   if [[ -n "$MM_ADMIN_PAT" ]]; then
     save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
     ok "Admin PAT created"
@@ -550,8 +567,8 @@ else
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"username\":\"$MM_BOT_USERNAME\",\"display_name\":\"$MM_BOT_DISPLAY_NAME\",\"description\":\"$MM_BOT_DESCRIPTION\"}" 2>/dev/null)
-  MM_BOT_USER_ID=$(echo "$BOT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user_id',''))" 2>/dev/null || echo "")
-  [[ -n "$MM_BOT_USER_ID" ]] || fail "Failed to create bot: $BOT_RESP"
+  MM_BOT_USER_ID=$(mm_field "$BOT_RESP" user_id) && [[ -n "$MM_BOT_USER_ID" ]] \
+    || fail "Failed to create bot: $BOT_RESP"
   save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
   ok "Bot created: $MM_BOT_USER_ID"
 
@@ -569,8 +586,8 @@ else
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"description":"Gateway token"}' 2>/dev/null)
-  MM_BOT_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
-  [[ -n "$MM_BOT_TOKEN" ]] || fail "Failed to create bot token: $TOKEN_RESP"
+  MM_BOT_TOKEN=$(mm_field "$TOKEN_RESP" token) && [[ -n "$MM_BOT_TOKEN" ]] \
+    || fail "Failed to create bot token: $TOKEN_RESP"
   save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
   ok "Bot token created"
 
