@@ -11,17 +11,17 @@
     "test": "npx vitest run __tests__"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.93.0",
+    "@anthropic-ai/sdk": "^0.96.0",
     "@google-cloud/secret-manager": "^6.1.2",
     "@types/http-proxy": "^1.17.17",
     "express": "^4.21.0",
-    "express-rate-limit": "^8.3.2",
-    "firebase-admin": "^13.8.0",
+    "express-rate-limit": "^8.5.1",
+    "firebase-admin": "^13.9.0",
     "google-auth-library": "^10.6.2",
     "http-proxy": "^1.18.1",
     "tsx": "^4.19.0",
     "unique-names-generator": "^4.7.1",
-    "ws": "^8.18.0"
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.0",
