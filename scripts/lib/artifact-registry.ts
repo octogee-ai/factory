@@ -21,7 +21,7 @@ interface DockerImageItem {
 }
 
 const SHA_TAG_PATTERN =
-  /^[a-f0-9]{7,40}(-oc[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?)?$/;
+  /^[a-f0-9]{7,40}(-oc\d{4}\.\d+\.\d+(-\d+)?)?$/;
 const DEFAULT_LIMIT = 30;
 const PAGE_SIZE = 200;
 
