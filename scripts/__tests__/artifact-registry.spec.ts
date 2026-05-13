@@ -140,6 +140,17 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
     );
   });
 
+  it("requests update_time desc so newest builds dominate the first page", async () => {
+    // Without orderBy, AR returns images in digest-hash order. With 100+
+    // historical SHAs in a busy repo, the accumulator filled with older
+    // builds before today's builds were paged, and newer builds vanished
+    // from the picker.
+    fetchMock.mockResolvedValueOnce(makeArResponse([]));
+    await listGatewayBuilds({ service: "octogee-gateway" });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("orderBy=update_time+desc");
+  });
+
   it("paginates until enough service-matching builds are found", async () => {
     // Page 1: only non-matching services (workspace-api), forcing pagination
     fetchMock.mockResolvedValueOnce({

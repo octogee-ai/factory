@@ -79,7 +79,10 @@ async function fetchDockerImagesPage(
   token: string,
   pageToken: string | null,
 ): Promise<DockerImagesPage> {
-  const params = new URLSearchParams({ pageSize: String(PAGE_SIZE) });
+  const params = new URLSearchParams({
+    pageSize: String(PAGE_SIZE),
+    orderBy: "update_time desc",
+  });
   if (pageToken) params.set("pageToken", pageToken);
   const url =
     `https://artifactregistry.googleapis.com/v1` +
