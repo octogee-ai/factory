@@ -140,6 +140,13 @@ else
   HELM_VALUES_FILE="helm/octogee/values.$ENV.yaml"
 fi
 
+# Per-instance gateway deployment name (post-#858 — Cowboy installs
+# octogee-gateway-<instanceName>; default instanceName is "default").
+# Resolve via label selector so we don't hardcode the instance name.
+# Empty when no gateway is deployed yet (Cowboy hasn't reconciled).
+GW_DEPLOYMENT=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
+  -l app=octogee-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+
 # ── Header ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${ENV_COLOR}════════════════════════════════════════════════════════════${NC}"
@@ -257,11 +264,15 @@ if [[ "${GITEA_READY:-0}" -ge 1 ]]; then
     pass "API token secret present"
 
     set_section bootstrap
-    GITEA_SVC=$(kubectl get svc -n "$NAMESPACE" -o name 2>/dev/null | grep gitea-http | head -1 | sed 's|service/||' || echo "octogee-gitea-http")
-    GITEA_ORG_CHECK=$(kubectl exec deployment/octogee-gateway -n "$NAMESPACE" -c gateway -- \
-      node -e "const h=require('http');const t=process.env.GIT_API_TOKEN||'';const o={hostname:'$GITEA_SVC.$NAMESPACE.svc.cluster.local',port:3000,path:'/api/v1/orgs/octogee',headers:{Authorization:'token '+t}};h.get(o,r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
-      >/dev/null 2>&1 && echo ok || echo "")
-    status "Gitea org/API trust check passed from gateway pod" "Gitea org/API trust check failed from gateway pod" "$GITEA_ORG_CHECK"
+    if [[ -n "$GW_DEPLOYMENT" ]]; then
+      GITEA_SVC=$(kubectl get svc -n "$NAMESPACE" -o name 2>/dev/null | grep gitea-http | head -1 | sed 's|service/||' || echo "octogee-gitea-http")
+      GITEA_ORG_CHECK=$(kubectl exec "deployment/$GW_DEPLOYMENT" -n "$NAMESPACE" -c gateway -- \
+        node -e "const h=require('http');const t=process.env.GIT_API_TOKEN||'';const o={hostname:'$GITEA_SVC.$NAMESPACE.svc.cluster.local',port:3000,path:'/api/v1/orgs/octogee',headers:{Authorization:'token '+t}};h.get(o,r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
+        >/dev/null 2>&1 && echo ok || echo "")
+      status "Gitea org/API trust check passed from gateway pod" "Gitea org/API trust check failed from gateway pod" "$GITEA_ORG_CHECK"
+    else
+      info "Skipping Gitea-from-gateway trust check — no gateway deployment yet"
+    fi
     set_section infra
   else
     warn "gitea-token secret missing — provisioner cannot create repos"
@@ -279,66 +290,66 @@ fi
 # ── 5. Gateway ────────────────────────────────────────────────────────────────
 set_section infra
 header "5. Gateway"
-GW_DESIRED=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
-  -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
-GW_READY=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
-  -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-GW_IMAGE=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
-  -o jsonpath='{.spec.template.spec.containers[?(@.name=="gateway")].image}' 2>/dev/null || echo "unknown")
 
-# Extract git SHA from image tag if present
-GW_SHA=$(echo "$GW_IMAGE" | grep -o ':[a-f0-9]*$' | tr -d ':' || echo "")
-LATEST_SHA=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-
-if [[ "${GW_DESIRED:-0}" -eq 0 ]]; then
-  fail "Gateway scaled to 0 replicas — not deployed"
+if [[ -z "$GW_DEPLOYMENT" ]]; then
+  fail "No gateway deployment found (label app=octogee-gateway). Cowboy hasn't installed a per-instance release yet."
   if $FIX; then
-    if [[ "$ENV" == "custom" ]]; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/provision-namespace.sh $CUSTOM_NS --yes"
-    else
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
-    fi
-  fi
-elif [[ "${GW_READY:-0}" -ge 1 ]]; then
-  pass "Running ($GW_READY/$GW_DESIRED replicas)"
-  info "Image: $GW_IMAGE"
-  if [[ -n "$GW_SHA" && "$GW_SHA" == "$LATEST_SHA" ]]; then
-    pass "Build: $GW_SHA (matches HEAD ✓)"
-  elif [[ -n "$GW_SHA" ]]; then
-    warn "Build: $GW_SHA (HEAD is $LATEST_SHA — image may be stale)"
-  fi
-  # Check for crash loop
-  GW_RESTARTS=$(kubectl get pods -n "$NAMESPACE" -l app=octogee-gateway \
-    -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="gateway")].restartCount}' \
-    2>/dev/null || echo "0")
-  if [[ "${GW_RESTARTS:-0}" -gt 5 ]]; then
-    warn "Gateway has restarted ${GW_RESTARTS} times — possible crash loop"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/octogee-gateway -n $NAMESPACE -c gateway --tail=50"
-    fi
-  else
-    pass "Restarts: ${GW_RESTARTS:-0}"
-  fi
-  # Check openclaw config valid
-  CONFIG_ERROR=$(kubectl logs deployment/octogee-gateway -n "$NAMESPACE" -c gateway \
-    --tail=30 2>/dev/null | grep -i "config invalid\|additionalProperties\|openclaw.json" | \
-    grep -v "onnxruntime\|pthread\|affinity" | head -1 || echo "")
-  if [[ -n "$CONFIG_ERROR" ]]; then
-    warn "Config issue detected in logs: $CONFIG_ERROR"
-  else
-    pass "Config: no errors in recent logs"
+    echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/glm-controller -n $NAMESPACE --tail=50    # check Cowboy reconciler"
+    echo -e "  ${YELLOW}FIX:${NC} kubectl get glmgateways or read config/orchestrator.defaultGatewayId in Firestore"
   fi
 else
-  fail "Gateway not ready (readyReplicas=${GW_READY:-0}, desired=${GW_DESIRED:-0})"
-  GW_POD_STATUS=$(kubectl get pods -n "$NAMESPACE" -l app=octogee-gateway \
-    -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "unknown")
-  info "Pod status: $GW_POD_STATUS"
-  if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/octogee-gateway -n $NAMESPACE -c gateway --tail=50"
-    if [[ "$ENV" == "custom" ]]; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/provision-namespace.sh $CUSTOM_NS --yes"
+  info "Gateway deployment: $GW_DEPLOYMENT"
+  GW_DESIRED=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
+  GW_READY=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
+    -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+  GW_IMAGE=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="gateway")].image}' 2>/dev/null || echo "unknown")
+
+  # Extract git SHA from image tag if present
+  GW_SHA=$(echo "$GW_IMAGE" | grep -o ':[a-f0-9]*$' | tr -d ':' || echo "")
+  LATEST_SHA=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+  if [[ "${GW_DESIRED:-0}" -eq 0 ]]; then
+    fail "Gateway scaled to 0 replicas — Cowboy's glmGateways doc may have desiredStatus=retired"
+  elif [[ "${GW_READY:-0}" -ge 1 ]]; then
+    pass "Running ($GW_READY/$GW_DESIRED replicas)"
+    info "Image: $GW_IMAGE"
+    if [[ "$GW_IMAGE" == *":latest" ]]; then
+      pass "Build: :latest (Cowboy auto-bootstrap default)"
+    elif [[ -n "$GW_SHA" && "$GW_SHA" == "$LATEST_SHA" ]]; then
+      pass "Build: $GW_SHA (matches HEAD ✓)"
+    elif [[ -n "$GW_SHA" ]]; then
+      warn "Build: $GW_SHA (HEAD is $LATEST_SHA — image may be stale)"
+    fi
+    # Check for crash loop
+    GW_RESTARTS=$(kubectl get pods -n "$NAMESPACE" -l app=octogee-gateway \
+      -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="gateway")].restartCount}' \
+      2>/dev/null || echo "0")
+    if [[ "${GW_RESTARTS:-0}" -gt 5 ]]; then
+      warn "Gateway has restarted ${GW_RESTARTS} times — possible crash loop"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/$GW_DEPLOYMENT -n $NAMESPACE -c gateway --tail=50"
+      fi
     else
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gateway.sh --env=$ENV $(if [[ "$ENV" == "test" ]]; then echo "--yes"; fi)"
+      pass "Restarts: ${GW_RESTARTS:-0}"
+    fi
+    # Check openclaw config valid
+    CONFIG_ERROR=$(kubectl logs "deployment/$GW_DEPLOYMENT" -n "$NAMESPACE" -c gateway \
+      --tail=30 2>/dev/null | grep -i "config invalid\|additionalProperties\|openclaw.json" | \
+      grep -v "onnxruntime\|pthread\|affinity" | head -1 || echo "")
+    if [[ -n "$CONFIG_ERROR" ]]; then
+      warn "Config issue detected in logs: $CONFIG_ERROR"
+    else
+      pass "Config: no errors in recent logs"
+    fi
+  else
+    fail "Gateway not ready (readyReplicas=${GW_READY:-0}, desired=${GW_DESIRED:-0})"
+    GW_POD_STATUS=$(kubectl get pods -n "$NAMESPACE" -l app=octogee-gateway \
+      -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "unknown")
+    info "Pod status: $GW_POD_STATUS"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/$GW_DEPLOYMENT -n $NAMESPACE -c gateway --tail=50"
     fi
   fi
 fi
@@ -352,17 +363,21 @@ fi
 set_section infra
 header "5e. Gateway Storage Mode"
 
-GW_VOLUME_JSON=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
-  -o jsonpath='{.spec.template.spec.volumes[?(@.name=="data")]}' 2>/dev/null || echo "")
-
-if [[ -z "$GW_VOLUME_JSON" ]]; then
-  fail "octogee-gateway has no 'data' volume (chart broken or deployment missing)"
-elif echo "$GW_VOLUME_JSON" | grep -q '"emptyDir"'; then
-  pass "Storage mode: emptyDir (cattle, expected)"
+if [[ -z "$GW_DEPLOYMENT" ]]; then
+  info "Skipping storage-mode check — no gateway deployment yet"
 else
-  fail "Storage mode mismatch: expected emptyDir, got $GW_VOLUME_JSON"
-  if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade with the chart defaults — gateway is always emptyDir"
+  GW_VOLUME_JSON=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.volumes[?(@.name=="data")]}' 2>/dev/null || echo "")
+
+  if [[ -z "$GW_VOLUME_JSON" ]]; then
+    fail "$GW_DEPLOYMENT has no 'data' volume (chart broken)"
+  elif echo "$GW_VOLUME_JSON" | grep -q '"emptyDir"'; then
+    pass "Storage mode: emptyDir (cattle, expected)"
+  else
+    fail "Storage mode mismatch: expected emptyDir, got $GW_VOLUME_JSON"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} helm upgrade with the chart defaults — gateway is always emptyDir"
+    fi
   fi
 fi
 
@@ -647,8 +662,12 @@ for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress mattermost-ingress 
       HEALTH_PATH="/api/v4/system/ping"
       ;;
     chat-proxy-ingress)
-      HEALTH_PATH=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
-        -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
+      if [[ -n "$GW_DEPLOYMENT" ]]; then
+        HEALTH_PATH=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
+          -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
+      else
+        HEALTH_PATH="/healthz"
+      fi
       ;;
     *)
       DEPLOY_NAME="${INGRESS_NAME%-ingress}"
@@ -684,7 +703,7 @@ if [[ -n "$CHAT_PROXY_HOST" ]]; then
   elif [[ "$MINT_CODE" == "404" ]]; then
     fail "$MINT_URL → 404 — chat-proxy is running an OLD build (pre-Option-C) or route not deployed"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} kubectl rollout restart deployment/octogee-gateway -n $NAMESPACE"
+      echo -e "  ${YELLOW}FIX:${NC} kubectl rollout restart deployment/${GW_DEPLOYMENT:-octogee-gateway-default} -n $NAMESPACE"
     fi
   elif [[ "$MINT_CODE" == "000" ]]; then
     warn "$MINT_URL → unreachable (TLS or DNS issue)"
@@ -732,38 +751,36 @@ fi
 # WS bridge. The browser talks to MM directly at mm[-test].octogee.com.
 set_section infra
 header "8. chat-proxy (Option C: mint + OpenClaw bridge only)"
-GATEWAY_READY=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-CHAT_IMAGE=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].image}' 2>/dev/null || echo "unknown")
-CHAT_ENDPOINTS=$(kubectl get endpoints chat-proxy -n "$NAMESPACE" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || echo "")
-
-if [[ "${GATEWAY_READY:-0}" -ge 1 && -n "$CHAT_IMAGE" && "$CHAT_IMAGE" != "unknown" ]]; then
-  pass "chat-proxy sidecar ready in octogee-gateway pod (image: $CHAT_IMAGE)"
-  status "chat-proxy service has endpoints" "chat-proxy service has no ready endpoints" "$CHAT_ENDPOINTS"
-elif [[ -z "$CHAT_IMAGE" || "$CHAT_IMAGE" == "unknown" ]]; then
-  fail "chat-proxy sidecar not found in octogee-gateway deployment"
-  if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
-  fi
+if [[ -z "$GW_DEPLOYMENT" ]]; then
+  fail "chat-proxy check skipped — no gateway deployment (chat-proxy is a sidecar of $GW_DEPLOYMENT)"
 else
-  fail "octogee-gateway deployment not ready (readyReplicas=${GATEWAY_READY:-0}) — chat-proxy sidecar unavailable"
-  if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
-  fi
-fi
+  GATEWAY_READY=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+  CHAT_IMAGE=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].image}' 2>/dev/null || echo "unknown")
+  CHAT_ENDPOINTS=$(kubectl get endpoints chat-proxy -n "$NAMESPACE" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || echo "")
 
-# Derive chat-proxy health URL from Ingress host + sidecar readinessProbe path
-CHAT_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
-CHAT_HEALTH_PATH=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" \
-  -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
-if [[ -n "$CHAT_HOST" ]]; then
-  CHAT_HEALTH_URL="https://${CHAT_HOST}${CHAT_HEALTH_PATH}"
-  CHAT_HEALTH_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$CHAT_HEALTH_URL" 2>/dev/null || echo "000")
-  if [[ "$CHAT_HEALTH_CODE" == "200" ]]; then
-    pass "$CHAT_HEALTH_URL → $CHAT_HEALTH_CODE"
+  if [[ "${GATEWAY_READY:-0}" -ge 1 && -n "$CHAT_IMAGE" && "$CHAT_IMAGE" != "unknown" ]]; then
+    pass "chat-proxy sidecar ready in $GW_DEPLOYMENT pod (image: $CHAT_IMAGE)"
+    status "chat-proxy service has endpoints" "chat-proxy service has no ready endpoints" "$CHAT_ENDPOINTS"
+  elif [[ -z "$CHAT_IMAGE" || "$CHAT_IMAGE" == "unknown" ]]; then
+    fail "chat-proxy sidecar not found in $GW_DEPLOYMENT deployment (per-instance gateway chart is missing the sidecar)"
   else
-    warn "$CHAT_HEALTH_URL → HTTP $CHAT_HEALTH_CODE"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/octogee-gateway -c chat-proxy --since=30m | tail -100"
+    fail "$GW_DEPLOYMENT not ready (readyReplicas=${GATEWAY_READY:-0}) — chat-proxy sidecar unavailable"
+  fi
+
+  # Derive chat-proxy health URL from Ingress host + sidecar readinessProbe path
+  CHAT_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+  CHAT_HEALTH_PATH=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
+  if [[ -n "$CHAT_HOST" ]]; then
+    CHAT_HEALTH_URL="https://${CHAT_HOST}${CHAT_HEALTH_PATH}"
+    CHAT_HEALTH_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$CHAT_HEALTH_URL" 2>/dev/null || echo "000")
+    if [[ "$CHAT_HEALTH_CODE" == "200" ]]; then
+      pass "$CHAT_HEALTH_URL → $CHAT_HEALTH_CODE"
+    else
+      warn "$CHAT_HEALTH_URL → HTTP $CHAT_HEALTH_CODE"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/$GW_DEPLOYMENT -c chat-proxy --since=30m | tail -100"
+      fi
     fi
   fi
 fi
@@ -815,10 +832,18 @@ set_section bootstrap
 # the credential mint), NOT the legacy MM_INTERNAL_URL. If the old env
 # var is still on the pod, the chart hasn't been re-rendered against
 # the post-Option-C values.{env}.yaml.
-CHAT_MM_PUBLIC_URL=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_PUBLIC_URL")].value}' 2>/dev/null || echo "")
-CHAT_MM_INTERNAL_URL=$(kubectl get deployment octogee-gateway -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_INTERNAL_URL")].value}' 2>/dev/null || echo "")
+if [[ -z "$GW_DEPLOYMENT" ]]; then
+  info "Skipping chat-proxy MM_PUBLIC_URL check — no gateway deployment"
+  CHAT_MM_PUBLIC_URL=""
+  CHAT_MM_INTERNAL_URL=""
+else
+  CHAT_MM_PUBLIC_URL=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_PUBLIC_URL")].value}' 2>/dev/null || echo "")
+  CHAT_MM_INTERNAL_URL=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_INTERNAL_URL")].value}' 2>/dev/null || echo "")
+fi
 if [[ -n "$CHAT_MM_PUBLIC_URL" ]]; then
   pass "chat-proxy MM_PUBLIC_URL=$CHAT_MM_PUBLIC_URL (Option C)"
+elif [[ -z "$GW_DEPLOYMENT" ]]; then
+  : # already informed above
 else
   fail "chat-proxy missing MM_PUBLIC_URL — credential mint will boot-fail. Re-render helm with values.${ENV}.yaml."
   if $FIX; then
