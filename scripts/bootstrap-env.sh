@@ -193,6 +193,7 @@ if (cd "$SCRIPT_DIR" && npx tsx ops/seed-orchestrator-config.ts --env="$ENV"); t
   echo ""
   echo "  Next steps:"
   echo "    helm upgrade --install octogee helm/octogee \\"
+  echo "      --server-side --force-conflicts \\"
   echo "      -f helm/octogee/values.${ENV}.yaml \\"
   echo "      -n <namespace> --create-namespace"
   echo ""

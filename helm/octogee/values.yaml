@@ -208,15 +208,9 @@ gatewayFleet:
       enabled: false
       policyName: ""
   # Bootstrap-only seed of `{gatewayId, instanceName}` pairs for the
-  # fleet-control Ingress's per-instance RPC paths. Cowboy
-  # (glm-controller) is the sole writer in steady state: on every
-  # reconcile tick it server-side-applies the live Ingress with field
-  # manager `cowboy-fleet-controller` (and the kubectl
-  # `--force-conflicts` flag — separate from the field-manager value).
-  # Helm 3 uses client-side apply, so a `helm upgrade octogee` can
-  # still temporarily overwrite the paths; Cowboy reconciles them
-  # back on the next tick (~1s debounce, max ~30s on retry). Leave
-  # this empty in real envs (test/prod); use it only for first-time
+  # fleet-control Ingress's per-instance RPC paths. Leave empty in real
+  # envs — Cowboy (glm-controller) owns `.spec.rules` via SSA with field
+  # manager `cowboy-fleet-controller`. Use this only for first-time
   # bootstrap before glm-controller is healthy.
   instances: []
 

@@ -9,13 +9,11 @@ import { spawn } from "node:child_process";
  *
  * The umbrella's gateway-fleet.yaml renders the Ingress shell with
  * only the static /health path. Cowboy uses server-side apply with
- * field manager `cowboy-fleet-controller` (and the kubectl
- * `--force-conflicts` flag, separate from the field-manager value) to
- * write the per-instance paths. A subsequent client-side `helm
- * upgrade octogee` may temporarily clobber the paths array — Helm 3
- * uses CSA, not SSA, so SSA ownership doesn't gate Helm's writes.
- * The reconciler tick re-applies on every snapshot debounce (~1s) so
- * any clobber self-heals quickly.
+ * field manager `cowboy-fleet-controller` and `--force-conflicts` to
+ * own `.spec.rules`. The canonical umbrella install also runs with
+ * `--server-side --force-conflicts`, so a `helm upgrade` can hand
+ * ownership back to Helm transiently; Cowboy reclaims and re-applies
+ * the desired path list on its next reconcile tick (~1s debounce).
  *
  * To minimize what Cowboy claims ownership of, the apply payload
  * carries ONLY `spec.rules[].http.paths` (and the `host` that wraps

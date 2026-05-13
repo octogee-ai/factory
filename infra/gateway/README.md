@@ -37,11 +37,13 @@ Deployed as part of the Helm umbrella chart:
 ```bash
 # Test
 helm upgrade --install octogee helm/octogee \
+  --server-side --force-conflicts \
   -f helm/octogee/values.test.yaml \
   -n octogee-test --create-namespace
 
 # Prod
 helm upgrade --install octogee helm/octogee \
+  --server-side --force-conflicts \
   -f helm/octogee/values.prod.yaml \
   -n octogee
 ```

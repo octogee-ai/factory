@@ -12,19 +12,13 @@
 #     per-instance RPC paths via server-side apply at runtime)
 #   - preview Ingress + cert + BackendConfig (points at alias Service)
 #
-# Per-instance RPC paths (/restore-customer/<gid>, /quiesce/<gid>,
-# /export/<gid>, /import/<gid>, /unmount/<gid>) are owned by Cowboy
-# (glm-controller). On every reconcile tick — and on every
-# add-gateway / retire-gateway operation — the controller server-side-
-# applies the live Ingress with field manager `cowboy-fleet-controller`
-# (and the kubectl `--force-conflicts` flag, separate from the
-# field-manager value). A subsequent `helm upgrade octogee` may
-# temporarily clobber the paths array, since Helm 3 uses client-side
-# apply (not SSA, so SSA conflict checks don't gate Helm's writes);
-# Cowboy reconciles them back on the next tick (~1s debounce, max
-# ~30s on retry). Operators no longer maintain
-# `Values.gatewayFleet.instances` per-env: it stays empty in test/prod
-# values.
+# Per-instance RPC paths (/restore-customer/<gid>, /quiesce/<gid>, etc.)
+# are SSA-owned by Cowboy with field manager `cowboy-fleet-controller`.
+# Install the umbrella with `helm upgrade --server-side --force-conflicts`
+# so Helm can take ownership back during an upgrade; Cowboy reclaims and
+# re-applies the per-instance paths on its next reconcile tick. Leave
+# `Values.gatewayFleet.instances` empty in test/prod — Cowboy is the
+# sole writer in steady state.
 
 {{- if .Values.gatewayFleet.aliasService.enabled }}
 ---

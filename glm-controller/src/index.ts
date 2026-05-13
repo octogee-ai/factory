@@ -102,10 +102,10 @@ interface ControllerDeps {
   /**
    * Reconciles the umbrella's fleet-control Ingress paths with the
    * desired-state gateway list. Called every tick (after applyChanges)
-   * so Helm clobbers from the umbrella's `helm upgrade` self-heal
-   * within one debounce cycle. Optional — when omitted (e.g. unit
-   * tests that don't care), the tick still runs; only the Ingress
-   * sync is skipped.
+   * so an SSA ownership flip from `helm upgrade --server-side
+   * --force-conflicts` self-heals within one debounce cycle. Optional
+   * — when omitted (e.g. unit tests that don't care), the tick still
+   * runs; only the Ingress sync is skipped.
    */
   syncFleetIngress?: (
     gateways: ReadonlyArray<{ gatewayId: string; instanceName: string }>,

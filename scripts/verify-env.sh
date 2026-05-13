@@ -181,7 +181,7 @@ if [[ "${PROXY_READY:-0}" -ge 1 ]]; then
 else
   fail "cloud-sql-proxy not ready (readyReplicas=${PROXY_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 
@@ -436,7 +436,7 @@ else
       fail "$CERT_NAME ($CERT_DOMAIN): $CERT_STATUS"
       if $FIX; then
         echo -e "  ${YELLOW}FIX:${NC} Delete and recreate: kubectl delete managedcertificate $CERT_NAME -n $NAMESPACE"
-        echo -e "  ${YELLOW}     ${NC} Then: helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n $NAMESPACE"
+        echo -e "  ${YELLOW}     ${NC} Then: helm upgrade --install octogee helm/octogee --server-side --force-conflicts -f ${HELM_VALUES_FILE} -n $NAMESPACE"
       fi
     fi
   done
@@ -604,7 +604,7 @@ else
   else
     fail "BackendConfig octogee-gateway-fleet-control missing — Ingress backend will fall back to defaults"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+      echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
     fi
   fi
 
@@ -742,12 +742,12 @@ if [[ "${GATEWAY_READY:-0}" -ge 1 && -n "$CHAT_IMAGE" && "$CHAT_IMAGE" != "unkno
 elif [[ -z "$CHAT_IMAGE" || "$CHAT_IMAGE" == "unknown" ]]; then
   fail "chat-proxy sidecar not found in octogee-gateway deployment"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 else
   fail "octogee-gateway deployment not ready (readyReplicas=${GATEWAY_READY:-0}) — chat-proxy sidecar unavailable"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 
@@ -822,7 +822,7 @@ if [[ -n "$CHAT_MM_PUBLIC_URL" ]]; then
 else
   fail "chat-proxy missing MM_PUBLIC_URL — credential mint will boot-fail. Re-render helm with values.${ENV}.yaml."
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 if [[ -n "$CHAT_MM_INTERNAL_URL" ]]; then
