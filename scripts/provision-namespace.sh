@@ -121,7 +121,7 @@ case "$NAMESPACE" in
     echo -e "  ${RED}PVCs, secrets, MM DB, Gitea DB, everything.${NC}"
     echo ""
     echo -e "  ${RED}Do NOT use this script for production.${NC}"
-    echo -e "  ${RED}Use scripts/teardown-gateway.sh for routine prod work.${NC}"
+    echo -e "  ${RED}Use scripts/teardown-env.sh for routine prod work.${NC}"
     echo ""
     if ! $YES; then
       echo -ne "  ${RED}${BOLD}Type 'DESTROY PROD NAMESPACE' to confirm (case-sensitive):${NC} "
@@ -139,7 +139,7 @@ case "$NAMESPACE" in
     echo -e "${YELLOW}${BOLD}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     echo "  This script is for ISOLATED custom namespaces. To rebuild the"
-    echo "  shared test env, use scripts/teardown-gateway.sh --env=test --full"
+    echo "  shared test env, use scripts/teardown-env.sh --env=test --full"
     echo "  followed by the rebuild steps in RUNBOOK.md."
     echo ""
     exit 1

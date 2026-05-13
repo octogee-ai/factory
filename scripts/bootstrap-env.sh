@@ -5,7 +5,7 @@ set -euo pipefail
 # ⚠️  DEPRECATED — DO NOT USE
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# The canonical install sequence is the one printed by `teardown-gateway.sh`.
+# The canonical install sequence is the one printed by `teardown-env.sh`.
 # It runs the 9 steps directly: setup-secrets → helm → setup-mattermost →
 # setup-gitea → setup-secrets → kubectl rollout → firebase deploy → seed
 # orchestrator config → verify-env. That sequence is what we actually use
@@ -14,7 +14,7 @@ set -euo pipefail
 # This wrapper is left in place only so any cron / CI / human muscle memory
 # pointing at it gets a loud redirect. It exits non-zero immediately.
 #
-# Repeat the full canonical sequence: ./scripts/teardown-gateway.sh --env=$ENV
+# Repeat the full canonical sequence: ./scripts/teardown-env.sh --env=$ENV
 # (without --full) prints it without actually tearing anything down.
 # ═══════════════════════════════════════════════════════════════════════════
 

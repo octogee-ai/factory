@@ -282,7 +282,7 @@ echo ""
 if [[ -n "$GIT_API_TOKEN" ]]; then
   ok "Gitea bootstrap state looks healthy"
   echo ""
-  echo "  Next (canonical sequence — see teardown-gateway.sh --env=$ENV for the full 9 steps):"
+  echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV for the full 9 steps):"
   echo "    5. ./scripts/setup-secrets.sh --env=$ENV   # Phase 2 — re-materialize gitea-token + mattermost-gateway"
   echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE"
   echo "    7. firebase deploy --project $GCP_PROJECT"

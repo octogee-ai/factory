@@ -22,7 +22,7 @@ set -euo pipefail
 #
 # Reads from: .env.test / .env + Secret Manager (octogee project).
 #
-# Canonical sequence printed by ./scripts/teardown-gateway.sh.
+# Canonical sequence printed by ./scripts/teardown-env.sh.
 #
 # Usage:
 #   ./scripts/setup-secrets.sh --env=test [--yes]
@@ -697,7 +697,7 @@ echo -e "${GREEN}═════════════════════
 echo ""
 VALUES_FILE="values.${ENV}.yaml"
 [[ "$ENV" == "custom" ]] && VALUES_FILE="values.$CUSTOM_NS.yaml (rendered from template)"
-echo "  Canonical sequence (run teardown-gateway.sh --env=$ENV to see all 9 steps)."
+echo "  Canonical sequence (run teardown-env.sh --env=$ENV to see all 9 steps)."
 echo ""
 echo "  Next (Phase 1 → Helm):"
 echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee)"

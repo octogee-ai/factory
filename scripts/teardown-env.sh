@@ -5,6 +5,11 @@ set -euo pipefail
 # Octogee Environment Teardown
 # ═══════════════════════════════════════════════════════════════════════════
 #
+# Uninstalls the umbrella helm release AND every per-instance gateway
+# helm release (octogee-gw-*) Cowboy provisioned. Leaving the per-instance
+# releases behind made Cowboy re-register them on the next install via
+# bootstrapGlmGateways with whatever stale image tag was last deployed.
+#
 # Design intent: teardown never touches PVCs. The gateway runs on
 # emptyDir (cattle); Mattermost and Gitea are install-once pets backed by
 # PVCs that persist across teardown/setup cycles. If you ever need to wipe
@@ -27,10 +32,10 @@ set -euo pipefail
 # To rotate a secret, use scripts/rotate-secret.sh.
 #
 # Usage:
-#   ./scripts/teardown-gateway.sh --env=test           # Helm uninstall only
-#   ./scripts/teardown-gateway.sh --env=test --yes     # Non-interactive (test only)
-#   ./scripts/teardown-gateway.sh --env=test --full    # Full clean slate (DB wipe)
-#   ./scripts/teardown-gateway.sh --env=prod           # Prod (interactive, requires "DESTROY PROD")
+#   ./scripts/teardown-env.sh --env=test           # Helm uninstall only
+#   ./scripts/teardown-env.sh --env=test --yes     # Non-interactive (test only)
+#   ./scripts/teardown-env.sh --env=test --full    # Full clean slate (DB wipe)
+#   ./scripts/teardown-env.sh --env=prod           # Prod (interactive, requires "DESTROY PROD")
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -216,12 +221,34 @@ if $FULL; then
   done
 fi
 
+uninstall_per_instance_gateways() {
+  local timeout_flag="$1"
+  local hook_flag="${2:-}"
+  local releases
+  releases=$(helm list -n "$K8S_NAMESPACE" --kube-context "$K8S_CONTEXT" -q 2>/dev/null \
+    | grep "^octogee-gw-" || true)
+  if [[ -z "$releases" ]]; then
+    info "No per-instance gateway releases (octogee-gw-*) to uninstall"
+    return
+  fi
+  while IFS= read -r rel; do
+    [[ -z "$rel" ]] && continue
+    info "Uninstalling per-instance gateway release: $rel"
+    # shellcheck disable=SC2086
+    helm uninstall "$rel" -n "$K8S_NAMESPACE" --kube-context "$K8S_CONTEXT" \
+      $hook_flag --wait --timeout="$timeout_flag" 2>&1 \
+      && ok "Uninstalled $rel" \
+      || warn "Failed to uninstall $rel — continuing"
+  done <<<"$releases"
+}
+
 # ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
 echo ""
 if $FORCE && [[ "$ENV" == "test" ]]; then
   # Fast path for test --yes: force-delete gateway/app resources only.
   # PVCs and namespace are preserved.
   info "Fast teardown (test + --yes)..."
+  uninstall_per_instance_gateways 1m --no-hooks
   helm uninstall octogee -n "$K8S_NAMESPACE" \
     --kube-context "$K8S_CONTEXT" --no-hooks --timeout=1m 2>/dev/null || true
   kubectl delete deploy,statefulset,job --all -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
@@ -229,6 +256,7 @@ if $FORCE && [[ "$ENV" == "test" ]]; then
   ok "Fast teardown complete (all PVCs preserved)"
   FAST_DONE=true
 else
+  uninstall_per_instance_gateways 2m
   info "Uninstalling Helm release 'octogee'..."
   if helm status octogee -n "$K8S_NAMESPACE" \
       --kube-context "$K8S_CONTEXT" >/dev/null 2>&1; then
@@ -531,5 +559,5 @@ echo "        --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" --kub
 echo ""
 echo "    Gitea setup-gitea.sh returns 403?"
 echo "      → Fresh install: must_change_password flag. Script handles this automatically."
-echo "      → DB mismatch: ./scripts/teardown-gateway.sh --env=$ENV --full (resets DBs)"
+echo "      → DB mismatch: ./scripts/teardown-env.sh --env=$ENV --full (resets DBs)"
 echo ""
