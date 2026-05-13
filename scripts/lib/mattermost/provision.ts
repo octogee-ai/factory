@@ -137,6 +137,7 @@ export async function provisionMattermostUser(
       first_name: firstName,
       last_name: lastName || "",
       nickname: firstName || slug,
+      roles: "system_user",
     });
 
     if (!mmUser) {
