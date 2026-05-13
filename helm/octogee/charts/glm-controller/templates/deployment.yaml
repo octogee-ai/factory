@@ -97,6 +97,14 @@ spec:
             # `gcpServiceAccount` annotation on the KSA).
             - name: GATEWAY_SERVICE_ACCOUNT
               value: {{ .Values.gcpServiceAccount | quote }}
+            - name: BOOTSTRAP_DEFAULT_GATEWAY
+              value: {{ (.Values.bootstrapDefaultGateway).enabled | default false | quote }}
+            - name: BOOTSTRAP_INSTANCE_NAME
+              value: {{ (.Values.bootstrapDefaultGateway).instanceName | default "default" | quote }}
+            - name: BOOTSTRAP_IMAGE_REPOSITORY
+              value: {{ (.Values.bootstrapDefaultGateway).imageRepository | default "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway" | quote }}
+            - name: BOOTSTRAP_IMAGE_TAG
+              value: {{ (.Values.bootstrapDefaultGateway).imageTag | default "latest" | quote }}
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http

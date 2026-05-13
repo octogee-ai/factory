@@ -31,6 +31,7 @@ import {
 } from "./operation-router.js";
 import { createOperationContext } from "./operation-context.js";
 import { computeBootstrapWrites } from "./bootstrap.js";
+import { computeDefaultGatewayBootstrap } from "./bootstrap-default-gateway.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
@@ -404,6 +405,7 @@ async function main(): Promise<void> {
   );
 
   await bootstrapGlmGateways(deps);
+  await bootstrapDefaultGateway(deps);
 
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
@@ -482,6 +484,53 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
       }
       throw err;
     }
+  }
+}
+
+export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<void> {
+  if (process.env.BOOTSTRAP_DEFAULT_GATEWAY !== "true") {
+    return;
+  }
+  let actualMap;
+  try {
+    actualMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
+  } catch (err) {
+    deps.log(
+      `[glm-controller] ⚠ default-gateway bootstrap skipped — failed to read helm state: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
+  const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
+  const existingGatewayIds = new Set(snap.docs.map((d) => d.id));
+  const orchSnap = await deps.db.doc("config/orchestrator").get();
+  const defaultGatewayId = (orchSnap.data() as { defaultGatewayId?: unknown } | undefined)?.defaultGatewayId;
+  const decision = computeDefaultGatewayBootstrap({
+    actualMap,
+    existingGatewayIds,
+    defaultGatewayId: typeof defaultGatewayId === "string" ? defaultGatewayId : null,
+    instanceName: process.env.BOOTSTRAP_INSTANCE_NAME ?? "default",
+    imageRepository:
+      process.env.BOOTSTRAP_IMAGE_REPOSITORY ??
+      "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    imageTag: process.env.BOOTSTRAP_IMAGE_TAG ?? "latest",
+  });
+  if (decision.kind === "skip") {
+    deps.log(`[glm-controller] default-gateway bootstrap: skip — ${decision.reason}`);
+    return;
+  }
+  try {
+    await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(decision.gatewayId).create(decision.doc);
+    deps.log(
+      `[glm-controller] default-gateway bootstrap: created glmGateways/${decision.gatewayId} (instanceName=${decision.doc.instanceName}, imageTag=${decision.doc.imageTag})`,
+    );
+  } catch (err) {
+    if ((err as { code?: number })?.code === 6) {
+      deps.log(
+        `[glm-controller] default-gateway bootstrap: ${decision.gatewayId} doc created concurrently — skipping`,
+      );
+      return;
+    }
+    throw err;
   }
 }
 
