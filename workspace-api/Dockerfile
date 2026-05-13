@@ -9,7 +9,7 @@
 # container root /) — produce dist/workspace-api/src/index.js, matching
 # package.json main + CMD. Changing WORKDIR to /app made tsc emit
 # dist/app/src/index.js and broke the runtime module resolution.
-FROM node:22-slim AS builder
+FROM node:26-slim AS builder
 WORKDIR /workspace-api
 COPY workspace-api/package.json workspace-api/package-lock.json* ./
 RUN npm ci --ignore-scripts
@@ -35,7 +35,7 @@ COPY scripts/lib/ /scripts/lib/
 # MODULE_NOT_FOUND @shared/* runtime failure. See README "Shared code".
 RUN npm run build
 
-FROM node:22-slim
+FROM node:26-slim
 WORKDIR /workspace-api
 # git + openssh-client are required for the Phase 6 working-tree
 # routes (`workspace-api/src/lib/workspace-git.ts`). Without them
