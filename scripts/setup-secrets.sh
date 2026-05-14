@@ -302,15 +302,13 @@ else
   ksecret octogee-brave --from-literal=key=""
 fi
 
-# ── 8. GitHub token ───────────────────────────────────────────────────────
-info "octogee-github"
-GITHUB_TOKEN=$(sm_get GITHUB_TOKEN octogee 2>/dev/null || echo "")
-if [[ -n "$GITHUB_TOKEN" ]]; then
-  ksecret octogee-github --from-literal=token="$GITHUB_TOKEN"
-else
-  warn "GITHUB_TOKEN not found — creating empty secret (optional)"
-  ksecret octogee-github --from-literal=token=""
-fi
+# ── 8. (removed) GitHub token ─────────────────────────────────────────────
+# GitHub integration retired 2026-05-14: Gitea is the canonical git host
+# for customer workspaces, and scripts/lib/collaboration.ts (GitHub org
+# add/remove) was the only deployed consumer — dead in current surfaces.
+# Matching removals: helm/octogee-gateway/values.yaml + deployment.yaml,
+# helm/octogee/charts/workspace-api/values.yaml, and this script's
+# Firebase-function pre-create list.
 
 # ── 9. Internal service key (workspace-api ↔ gateway ↔ CronJob) ─────────
 # Used by requireInternalServiceAuth() on /internal/billing/* routes.
@@ -629,7 +627,6 @@ fi
 # Firebase prompts interactively if these secrets don't exist in Secret Manager.
 # Pre-create them with placeholder values — the real values are set at runtime:
 #   MM_ADMIN_TOKEN: overwritten by provisioner on every gateway startup
-#   GITHUB_TOKEN:   optional, set manually if GitHub org integration is needed
 info "Pre-creating Firebase function secrets in Secret Manager (suppress deploy prompts)..."
 SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octogee-test for test, octogee for prod)
 
@@ -637,7 +634,6 @@ SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octo
 for sm_secret in \
   MM_ADMIN_TOKEN \
   GITEA_TOKEN \
-  GITHUB_TOKEN \
   STRIPE_SECRET_KEY \
   STRIPE_WEBHOOK_SECRET \
   DISCORD_OPS_WEBHOOK_URL \

@@ -140,12 +140,6 @@ spec:
                   name: gitea-token
                   key: token
                   optional: true
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: octogee-github
-                  key: token
-                  optional: true
             - name: BRAVE_API_KEY
               valueFrom:
                 secretKeyRef:

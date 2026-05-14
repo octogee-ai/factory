@@ -55,7 +55,8 @@ set -euo pipefail
 # SAFETY GATES:
 #   - `octogee` requires typed 'DESTROY PROD NAMESPACE' confirmation,
 #     refuses --yes outright.
-#   - `octogee-test` is rejected entirely (use setup-gateway.sh instead).
+#   - `octogee-test` is rejected entirely (use the canonical install sequence
+#     printed by ./scripts/teardown-env.sh).
 #   - Reserved K8s namespaces (kube-*, default, gke-*) are rejected.
 #   - Any other existing namespace IS DELETED. There is no "merge" path.
 # ═══════════════════════════════════════════════════════════════════════════

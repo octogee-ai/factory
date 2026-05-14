@@ -147,6 +147,7 @@ if $FULL; then
   echo -e "  ${RED}  + Firestore collections (all)${NC}"
   echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
   echo -e "  ${RED}  + Firebase Auth users (all)${NC}"
+  echo -e "  ${RED}  + Secret Manager: byok-* (per-customer BYOK keys orphaned by Firestore wipe)${NC}"
 fi
 echo ""
 echo "  Will preserve:"
@@ -155,7 +156,7 @@ if ! $FULL; then
   echo "    • All PVCs (mattermost-data, gitea-shared-storage)"
 fi
 echo "    • Namespace: $K8S_NAMESPACE"
-echo "    • Secret Manager (every entry — never touched, even with --full)"
+echo "    • Secret Manager: infra entries (DB passwords, API keys, tokens) — wipe via gcloud manually if needed"
 echo "    • Cloud SQL instance (octogee-pg)"
 echo "    • GCP projects, GKE cluster, AR repo"
 echo "    • Firebase project, IAM, Service Accounts"
@@ -384,11 +385,41 @@ if $FULL; then
   fi
 fi
 
-# ── 6. Secret Manager preserved ───────────────────────────────────────────
-# Even --full never deletes Secret Manager entries. SM is the source of truth
-# for ANTHROPIC_API_KEY, INTERNAL_SERVICE_KEY, STRIPE_*, RESEND_*, Firebase
-# web config, and DB passwords. Rotating those is a deliberate operation —
-# use scripts/rotate-secret.sh, not teardown.
+# ── 6. Secret Manager: preserve infra secrets, wipe per-customer byok-* ──
+# Infra secrets (ANTHROPIC_API_KEY, INTERNAL_SERVICE_KEY, STRIPE_*, RESEND_*,
+# Firebase web config, DB passwords) are preserved across teardown — they're
+# the source of truth, rotating them is a deliberate operation, use
+# scripts/rotate-secret.sh, not teardown.
+#
+# Per-customer `byok-{slug}-{provider}` secrets (set by customers via the
+# admin UI for bring-your-own-key) are env-coupled through the customer's
+# slug: --full wipes Firestore + Auth, which deletes the customer record
+# that owned the byok. The corresponding Secret Manager entry becomes an
+# orphan with no Firestore pointer. Wipe under --full to keep SM clean.
+#
+# Pre-launch caveat: slugs aren't env-prefixed (`byok-ceckert-anthropic`,
+# not `byok-test-ceckert-anthropic`). With only one customer (the operator)
+# that's harmless. Re-evaluate if TEST and PROD ever have customers with
+# colliding slugs.
+if $FULL; then
+  echo ""
+  byok_count=$(gcloud secrets list --project=octogee --filter="name~^byok-" --format="value(name)" 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$byok_count" -gt 0 ]]; then
+    if confirm "Delete $byok_count byok-* secret(s) in Secret Manager (customer BYOK keys)?"; then
+      gcloud secrets list --project=octogee --filter="name~^byok-" --format="value(name)" 2>/dev/null \
+        | while read -r sm; do
+            [[ -z "$sm" ]] && continue
+            gcloud secrets delete "$sm" --project=octogee --quiet >/dev/null 2>&1 \
+              && ok "Deleted byok secret: $sm" \
+              || warn "Could not delete $sm — continuing"
+          done
+    else
+      info "Keeping byok-* secrets"
+    fi
+  else
+    info "No byok-* secrets to wipe"
+  fi
+fi
 
 # ── 7. Full: Firestore ────────────────────────────────────────────────────
 if $FULL; then

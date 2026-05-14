@@ -170,10 +170,6 @@ workspaceApi:
       secretName: mattermost-gateway
       secretKey: admin_token
       optional: true
-    - envName: GITHUB_TOKEN
-      secretName: octogee-github
-      secretKey: token
-      optional: true
     - envName: GOOGLE_CLIENT_ID
       secretName: google-oauth
       secretKey: client_id
