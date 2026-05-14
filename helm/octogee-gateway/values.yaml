@@ -166,6 +166,10 @@ workspaceApi:
       secretName: gitea-token
       secretKey: token
       optional: true
+    - envName: GITHUB_TOKEN
+      secretName: octogee-github
+      secretKey: token
+      optional: true
     - envName: MM_ADMIN_TOKEN
       secretName: mattermost-gateway
       secretKey: admin_token
