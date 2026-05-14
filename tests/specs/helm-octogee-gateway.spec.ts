@@ -14,7 +14,13 @@ beforeAll(() => {
   if (!fs.existsSync(CHART_PATH)) {
     throw new Error(`octogee-gateway chart not found at ${CHART_PATH}`);
   }
-});
+  // Warm helm's CRD cache + binary load before the first `it` runs. On CI's
+  // cold runner the first `helm template` invocation has taken ~11s, which
+  // blew past Vitest's 5s default test timeout. Subsequent calls in the
+  // same process complete in <100ms, so a single warm-up here removes the
+  // flake without raising every test's timeout budget.
+  spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "instanceName=warmup", "--set", "imageTag=warmup", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example", "--set", "env.chatProxyPublicUrl=https://example.com"], { encoding: "utf-8" });
+}, 60_000);
 
 const REQUIRED_VALUES: Record<string, string> = {
   gatewayId: "gw-test",
