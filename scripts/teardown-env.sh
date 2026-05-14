@@ -442,7 +442,14 @@ if $FULL; then
     FN_LIST=$(gcloud run services list \
       --project="$FIREBASE_PROJECT" --region="$REGION" \
       --format="value(name)" 2>/dev/null | grep -v "octogee-chat-proxy" || true)
-    FN_COUNT=$(echo "$FN_LIST" | grep -c . 2>/dev/null || echo 0)
+    # `grep -c .` returns non-zero on zero matches, which under `|| echo 0`
+    # concatenated a trailing "0\n0" and tripped [[ -gt ]] arithmetic.
+    # Empty-string check is unambiguous and avoids the chained-pipe surprise.
+    if [[ -z "$FN_LIST" ]]; then
+      FN_COUNT=0
+    else
+      FN_COUNT=$(printf '%s\n' "$FN_LIST" | wc -l | tr -d ' ')
+    fi
     if [[ "$FN_COUNT" -gt 0 ]]; then
       info "Deleting $FN_COUNT Cloud Run services (preserving chat proxy)..."
       echo "$FN_LIST" | while read -r fn; do

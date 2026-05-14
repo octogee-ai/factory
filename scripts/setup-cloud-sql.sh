@@ -106,30 +106,58 @@ store_secret() {
   fi
 }
 
-# Secret name per user: the rest of the codebase (setup-secrets.sh,
-# setup-mattermost.sh, helm chart env var, RUNBOOK) reads `MM_DB_PASSWORD`
-# for MM (uppercase, underscores) but `gitea-db-password` for Gitea
-# (lowercase, hyphens). Match those conventions exactly — drift here breaks
-# pod startup because setup-secrets.sh wires the K8s `mattermost-cloud-sql`
-# secret value from `MM_DB_PASSWORD`. An earlier version of this script
-# wrote `mattermost-db-password` (lowercase) and that secret diverged from
-# the canonical `MM_DB_PASSWORD` MM actually mounts.
-declare -A SECRET_NAME_FOR
-SECRET_NAME_FOR[mattermost]="MM_DB_PASSWORD"
-SECRET_NAME_FOR[gitea]="gitea-db-password"
+# Secret name per user. The rest of the codebase has historical drift:
+# MM uses uppercase-underscore (MM_DB_PASSWORD) in setup-secrets.sh, the
+# helm chart env var, setup-mattermost.sh, and the RUNBOOK; gitea uses
+# lowercase-hyphen (gitea-db-password) consistently. Match what's already
+# load-bearing — drift here means setup-secrets.sh wires the wrong value
+# into the K8s `mattermost-cloud-sql` secret and MM auth-fails on boot.
+#
+# Implementation: `case` rather than `declare -A` so the script works
+# under bash 3.2 (the system shell on macOS).
+secret_name_for() {
+  case "$1" in
+    mattermost) echo "MM_DB_PASSWORD" ;;
+    gitea)      echo "gitea-db-password" ;;
+    *)          echo ""; return 1 ;;
+  esac
+}
 
+# Two paths per user:
+#   - Fresh env (no SM secret + no SQL user): generate random password,
+#     create the SQL user, write to SM. Both sides aligned by construction.
+#   - Re-run (user exists OR SM secret exists): regenerate password so a
+#     stale half-pair (one side missing) doesn't leave the env wedged.
+#     `set-password` works whether or not the user existed previously;
+#     `store_secret` adds a version to the SM entry or creates it.
 for USER in mattermost gitea; do
-  SECRET_NAME="${SECRET_NAME_FOR[$USER]}"
-  if gcloud sql users list --instance="$INSTANCE" --project="$PROJECT" | grep -q "^$USER "; then
-    ok "User '$USER' already exists — preserving DB password + Secret Manager value (no rotation)"
+  SECRET_NAME=$(secret_name_for "$USER")
+  USER_EXISTS=false
+  SECRET_EXISTS=false
+  if gcloud sql users list --instance="$INSTANCE" --project="$PROJECT" 2>/dev/null \
+      | awk 'NR>1 {print $1}' | grep -qx "$USER"; then
+    USER_EXISTS=true
+  fi
+  if gcloud secrets describe "$SECRET_NAME" --project="$PROJECT" &>/dev/null; then
+    SECRET_EXISTS=true
+  fi
+  if $USER_EXISTS && $SECRET_EXISTS; then
+    ok "User '$USER' + secret '$SECRET_NAME' both present — preserving (no rotation)"
     continue
   fi
+
   PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
-  gcloud sql users create "$USER" \
-    --instance="$INSTANCE" \
-    --project="$PROJECT" \
-    --password="$PASS"
-  ok "Created user: $USER"
+  if $USER_EXISTS; then
+    log "User '$USER' exists but secret '$SECRET_NAME' missing — rotating password to realign"
+    gcloud sql users set-password "$USER" \
+      --instance="$INSTANCE" --project="$PROJECT" --password="$PASS"
+    ok "Rotated password for user: $USER"
+  else
+    log "Creating SQL user '$USER'..."
+    gcloud sql users create "$USER" \
+      --instance="$INSTANCE" --project="$PROJECT" --password="$PASS"
+    ok "Created user: $USER"
+  fi
   store_secret "$SECRET_NAME" "$PASS"
 done
 
