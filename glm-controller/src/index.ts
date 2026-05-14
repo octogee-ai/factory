@@ -31,7 +31,10 @@ import {
 } from "./operation-router.js";
 import { createOperationContext } from "./operation-context.js";
 import { computeBootstrapWrites } from "./bootstrap.js";
-import { computeDefaultGatewayBootstrap } from "./bootstrap-default-gateway.js";
+import {
+  computeDefaultGatewayBootstrap,
+  deriveDefaultGatewayIdFromNamespace,
+} from "./bootstrap-default-gateway.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
@@ -536,7 +539,35 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
   const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
   const existingGatewayIds = new Set(snap.docs.map((d) => d.id));
   const orchSnap = await deps.db.doc("config/orchestrator").get();
-  const defaultGatewayId = (orchSnap.data() as { defaultGatewayId?: unknown } | undefined)?.defaultGatewayId;
+  let defaultGatewayId = (orchSnap.data() as { defaultGatewayId?: unknown } | undefined)?.defaultGatewayId;
+
+  // Self-seed config/orchestrator when missing. The seed-orchestrator-config.ts
+  // script normally writes this in step 1b of the canonical install sequence,
+  // but it's the easiest step to forget — and forgetting it leaves
+  // bootstrapDefaultGateway with no input and no gateway pod ever installed.
+  // For the recognized prod + test namespaces we can safely derive the
+  // gatewayId from K8S_NAMESPACE and write the doc; custom envs still
+  // require explicit seeding.
+  if (typeof defaultGatewayId !== "string") {
+    const derived = deriveDefaultGatewayIdFromNamespace(NAMESPACE);
+    if (derived !== null) {
+      try {
+        await deps.db.doc("config/orchestrator").set(
+          { defaultGatewayId: derived },
+          { merge: true },
+        );
+        defaultGatewayId = derived;
+        deps.log(
+          `[glm-controller] default-gateway bootstrap: self-seeded config/orchestrator.defaultGatewayId=${derived} (derived from namespace=${NAMESPACE})`,
+        );
+      } catch (err) {
+        deps.log(
+          `[glm-controller] ⚠ default-gateway bootstrap: self-seed failed (namespace=${NAMESPACE}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
   const decision = computeDefaultGatewayBootstrap({
     actualMap,
     existingGatewayIds,
