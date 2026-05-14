@@ -49,37 +49,55 @@ export function extractRole(agentId: string): string {
 // Paths flow from internal agent directories (constructed under the agents/
 // root by the gateway provisioner), never from user input — the rule's
 // path-traversal concern doesn't apply at this boundary.
-type ReadResult<T> = { kind: "ok"; value: T } | { kind: "missing" } | { kind: "corrupt" };
+type ReadResult<T> =
+  | { kind: "ok"; value: T }
+  | { kind: "missing" }       // ENOENT — file does not exist
+  | { kind: "unreadable" }    // EACCES / EISDIR / other read error
+  | { kind: "corrupt" };       // present + readable but not a JSON object
+                              // (parse error, OR valid JSON of the wrong shape:
+                              // null, scalar, array, etc.)
 
 function readJson<T>(filePath: string): ReadResult<T> {
   let raw: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- internal agent dir, see file header
     raw = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return { kind: "missing" };
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT"
+      ? { kind: "missing" }
+      : { kind: "unreadable" };
   }
+  let parsed: unknown;
   try {
-    return { kind: "ok", value: JSON.parse(raw) as T };
+    parsed = JSON.parse(raw);
   } catch {
     return { kind: "corrupt" };
   }
+  if (parsed === null || typeof parsed !== "object") {
+    return { kind: "corrupt" };
+  }
+  return { kind: "ok", value: parsed as T };
 }
 
 /**
  * Read the workspace slug (workspace ID) from customer-config.json in an agent dir.
  * Returns null if the file cannot be read. Direct file takes precedence — a
- * corrupt or empty direct file does NOT fall through to the shared/ sibling.
+ * corrupt, empty, OR unreadable direct file (permission-denied, is-a-directory)
+ * does NOT fall through to the shared/ sibling; only an ENOENT (missing) direct
+ * file allows the shared/ fallback.
  */
 export function readWorkspaceId(agentDir: string): string | null {
-  const direct = readJson<{ slug?: string }>(path.join(agentDir, "customer-config.json"));
-  if (direct.kind === "ok") return direct.value.slug || null;
-  if (direct.kind === "corrupt") return null;
+  const direct = readJson<{ slug?: unknown }>(path.join(agentDir, "customer-config.json"));
+  if (direct.kind === "ok") {
+    return typeof direct.value.slug === "string" && direct.value.slug ? direct.value.slug : null;
+  }
+  if (direct.kind === "corrupt" || direct.kind === "unreadable") return null;
 
-  const shared = readJson<{ slug?: string }>(
+  const shared = readJson<{ slug?: unknown }>(
     path.join(path.dirname(agentDir), "shared", "customer-config.json"),
   );
-  return shared.kind === "ok" ? (shared.value.slug || null) : null;
+  if (shared.kind !== "ok") return null;
+  return typeof shared.value.slug === "string" && shared.value.slug ? shared.value.slug : null;
 }
 
 function parseLineForUsage(line: string): UsageData | null {

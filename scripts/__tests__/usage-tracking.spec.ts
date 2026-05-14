@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -377,12 +377,23 @@ describe("reportUsage — v3.1 workspace paths", () => {
 });
 
 describe("readWorkspaceId", () => {
+  const created: string[] = [];
+
   function makeRoleDir(): { roleDir: string; agentRoot: string } {
     const agentRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rwid-"));
+    created.push(agentRoot);
     const roleDir = path.join(agentRoot, "coach");
     fs.mkdirSync(roleDir);
     return { roleDir, agentRoot };
   }
+
+  afterEach(() => {
+    while (created.length) {
+      const dir = created.pop()!;
+      try { fs.chmodSync(dir, 0o700); } catch { /* may not exist or already writable */ }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it("returns slug from direct customer-config.json", () => {
     const { roleDir } = makeRoleDir();
@@ -390,7 +401,7 @@ describe("readWorkspaceId", () => {
     expect(readWorkspaceId(roleDir)).toBe("acme");
   });
 
-  it("falls back to shared/customer-config.json when direct is missing", () => {
+  it("falls back to shared/customer-config.json when direct is missing (ENOENT)", () => {
     const { roleDir, agentRoot } = makeRoleDir();
     fs.mkdirSync(path.join(agentRoot, "shared"));
     fs.writeFileSync(
@@ -411,6 +422,32 @@ describe("readWorkspaceId", () => {
     expect(readWorkspaceId(roleDir)).toBeNull();
   });
 
+  it("returns null when direct customer-config.json is JSON null (does not crash on .slug access)", () => {
+    const { roleDir, agentRoot } = makeRoleDir();
+    fs.writeFileSync(path.join(roleDir, "customer-config.json"), "null");
+    fs.mkdirSync(path.join(agentRoot, "shared"));
+    fs.writeFileSync(
+      path.join(agentRoot, "shared", "customer-config.json"),
+      JSON.stringify({ slug: "shared-acme" }),
+    );
+    // JSON null is treated as corrupt (not a usable config) — direct precedence
+    // applies, so we return null without falling through.
+    expect(readWorkspaceId(roleDir)).toBeNull();
+  });
+
+  it("returns null when direct is unreadable (EISDIR: path is a directory, not a file)", () => {
+    const { roleDir, agentRoot } = makeRoleDir();
+    // customer-config.json exists at the direct location but as a directory —
+    // readFileSync rejects with EISDIR. Must NOT fall through to shared.
+    fs.mkdirSync(path.join(roleDir, "customer-config.json"));
+    fs.mkdirSync(path.join(agentRoot, "shared"));
+    fs.writeFileSync(
+      path.join(agentRoot, "shared", "customer-config.json"),
+      JSON.stringify({ slug: "shared-acme" }),
+    );
+    expect(readWorkspaceId(roleDir)).toBeNull();
+  });
+
   it("returns null when direct file has empty slug", () => {
     const { roleDir } = makeRoleDir();
     fs.writeFileSync(path.join(roleDir, "customer-config.json"), JSON.stringify({}));
@@ -419,6 +456,12 @@ describe("readWorkspaceId", () => {
 
   it("returns null when neither direct nor shared exists", () => {
     const { roleDir } = makeRoleDir();
+    expect(readWorkspaceId(roleDir)).toBeNull();
+  });
+
+  it("returns null when slug is non-string (e.g. number)", () => {
+    const { roleDir } = makeRoleDir();
+    fs.writeFileSync(path.join(roleDir, "customer-config.json"), JSON.stringify({ slug: 42 }));
     expect(readWorkspaceId(roleDir)).toBeNull();
   });
 });
