@@ -14,18 +14,15 @@ PROJECT="octogee"
 INSTANCE="octogee-pg"
 REGION="us-central1"
 
-# Cloud SQL Postgres has a per-vCPU memory floor that's stricter than the
-# generic 0.9-6.5 GiB/vCPU custom-tier ratio — with 1 vCPU the minimum is
-# 3840 MiB. We can't go smaller without dropping to shared-core tiers
-# (db-f1-micro / db-g1-small), which are deprecated for new Postgres
-# instances. So db-custom-1-3840 IS the floor for 1 vCPU. Cost levers are
-# PITR (toggled below) and the operator's nightly stop/start, not RAM.
-# Confirmed empirically: a 1792 MiB patch attempt returned
-# "The total memory (1792MiB) must be at least 3840MiB."
-DESIRED_TIER="db-custom-1-3840"
 # PITR adds WAL archive storage cost (~few $/mo for MM activity). Pre-customer
-# we don't need point-in-time restore — the 7 daily backups already cover
-# the rollback envelope.
+# we don't need point-in-time restore — the 7 daily backups already cover the
+# rollback envelope. Sized in 2026-05-14 right-sizing pass.
+#
+# Tier-drift detection was considered but dropped: Cloud SQL Postgres has a
+# 3840 MiB minimum per vCPU, and shared-core tiers are deprecated for new
+# Postgres instances. The current db-custom-1-3840 IS the floor for 1 vCPU,
+# so there's no smaller-tier knob to enforce. Re-introduce a tier check if
+# we ever scale vCPUs up and want a guard against accidental over-provision.
 DESIRED_PITR="false"
 
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -46,39 +43,28 @@ while true; do
   sleep 15
 done
 
-# ── Enforce instance right-sizing (idempotent) ────────────────────────────────
-log "Checking instance tier + PITR settings..."
-CURRENT_TIER=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
-  --format="value(settings.tier)" 2>/dev/null || echo "")
+# ── Enforce PITR off (idempotent) ────────────────────────────────────────────
+log "Checking PITR setting..."
 CURRENT_PITR=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
   --format="value(settings.backupConfiguration.pointInTimeRecoveryEnabled)" 2>/dev/null || echo "")
 # gcloud renders the bool as "True"/"False" — normalize.
 CURRENT_PITR_NORM=$(echo "$CURRENT_PITR" | tr '[:upper:]' '[:lower:]')
 
-PATCH_FLAGS=()
-if [[ "$CURRENT_TIER" != "$DESIRED_TIER" ]]; then
-  log "Tier drift: $CURRENT_TIER → $DESIRED_TIER"
-  PATCH_FLAGS+=("--tier=$DESIRED_TIER")
-fi
-if [[ "$CURRENT_PITR_NORM" != "$DESIRED_PITR" ]]; then
+if [[ "$CURRENT_PITR_NORM" == "$DESIRED_PITR" ]]; then
+  ok "PITR already matches: $DESIRED_PITR"
+else
   log "PITR drift: $CURRENT_PITR_NORM → $DESIRED_PITR"
+  warn "Patching PITR — may briefly restart Postgres."
   if [[ "$DESIRED_PITR" == "false" ]]; then
-    PATCH_FLAGS+=("--no-enable-point-in-time-recovery")
+    gcloud sql instances patch "$INSTANCE" --project="$PROJECT" --no-enable-point-in-time-recovery --quiet
   else
-    PATCH_FLAGS+=("--enable-point-in-time-recovery")
+    gcloud sql instances patch "$INSTANCE" --project="$PROJECT" --enable-point-in-time-recovery --quiet
   fi
-fi
-
-if [[ ${#PATCH_FLAGS[@]} -gt 0 ]]; then
-  warn "Patching instance settings — this may briefly restart Postgres."
-  gcloud sql instances patch "$INSTANCE" --project="$PROJECT" "${PATCH_FLAGS[@]}" --quiet
   log "Waiting for instance to settle..."
   while [[ "$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" --format='value(state)')" != "RUNNABLE" ]]; do
     sleep 5
   done
-  ok "Instance settings patched: tier=$DESIRED_TIER, PITR=$DESIRED_PITR"
-else
-  ok "Instance settings already match: tier=$DESIRED_TIER, PITR=$DESIRED_PITR"
+  ok "PITR set to $DESIRED_PITR"
 fi
 
 # ── Create databases ──────────────────────────────────────────────────────────
