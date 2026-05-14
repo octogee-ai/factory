@@ -49,27 +49,37 @@ export function extractRole(agentId: string): string {
 // Paths flow from internal agent directories (constructed under the agents/
 // root by the gateway provisioner), never from user input — the rule's
 // path-traversal concern doesn't apply at this boundary.
-function readJsonOrNull(filePath: string): { slug?: string } | null {
+type ReadResult<T> = { kind: "ok"; value: T } | { kind: "missing" } | { kind: "corrupt" };
+
+function readJson<T>(filePath: string): ReadResult<T> {
+  let raw: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- internal agent dir, see file header
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    raw = fs.readFileSync(filePath, "utf-8");
   } catch {
-    return null;
+    return { kind: "missing" };
+  }
+  try {
+    return { kind: "ok", value: JSON.parse(raw) as T };
+  } catch {
+    return { kind: "corrupt" };
   }
 }
 
 /**
  * Read the workspace slug (workspace ID) from customer-config.json in an agent dir.
- * Returns null if the file cannot be read.
+ * Returns null if the file cannot be read. Direct file takes precedence — a
+ * corrupt or empty direct file does NOT fall through to the shared/ sibling.
  */
 export function readWorkspaceId(agentDir: string): string | null {
-  const direct = readJsonOrNull(path.join(agentDir, "customer-config.json"));
-  if (direct) return direct.slug || null;
+  const direct = readJson<{ slug?: string }>(path.join(agentDir, "customer-config.json"));
+  if (direct.kind === "ok") return direct.value.slug || null;
+  if (direct.kind === "corrupt") return null;
 
-  const shared = readJsonOrNull(
+  const shared = readJson<{ slug?: string }>(
     path.join(path.dirname(agentDir), "shared", "customer-config.json"),
   );
-  return shared?.slug || null;
+  return shared.kind === "ok" ? (shared.value.slug || null) : null;
 }
 
 function parseLineForUsage(line: string): UsageData | null {

@@ -15,7 +15,7 @@ vi.mock("firebase-admin/firestore", async () => {
   };
 });
 
-import { reportUsage } from "../lib/usage-tracking";
+import { reportUsage, readWorkspaceId } from "../lib/usage-tracking";
 
 type WriteOp = { op: "set" | "update"; path: string; data: any; opts?: any };
 
@@ -373,5 +373,52 @@ describe("reportUsage — v3.1 workspace paths", () => {
 
     const legacyWrites = writes.filter((w) => w.path.startsWith("users/"));
     expect(legacyWrites.length).toBeGreaterThan(0);
+  });
+});
+
+describe("readWorkspaceId", () => {
+  function makeRoleDir(): { roleDir: string; agentRoot: string } {
+    const agentRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rwid-"));
+    const roleDir = path.join(agentRoot, "coach");
+    fs.mkdirSync(roleDir);
+    return { roleDir, agentRoot };
+  }
+
+  it("returns slug from direct customer-config.json", () => {
+    const { roleDir } = makeRoleDir();
+    fs.writeFileSync(path.join(roleDir, "customer-config.json"), JSON.stringify({ slug: "acme" }));
+    expect(readWorkspaceId(roleDir)).toBe("acme");
+  });
+
+  it("falls back to shared/customer-config.json when direct is missing", () => {
+    const { roleDir, agentRoot } = makeRoleDir();
+    fs.mkdirSync(path.join(agentRoot, "shared"));
+    fs.writeFileSync(
+      path.join(agentRoot, "shared", "customer-config.json"),
+      JSON.stringify({ slug: "shared-acme" }),
+    );
+    expect(readWorkspaceId(roleDir)).toBe("shared-acme");
+  });
+
+  it("returns null when corrupt direct file exists — does NOT fall through to shared/", () => {
+    const { roleDir, agentRoot } = makeRoleDir();
+    fs.writeFileSync(path.join(roleDir, "customer-config.json"), "{not json");
+    fs.mkdirSync(path.join(agentRoot, "shared"));
+    fs.writeFileSync(
+      path.join(agentRoot, "shared", "customer-config.json"),
+      JSON.stringify({ slug: "shared-acme" }),
+    );
+    expect(readWorkspaceId(roleDir)).toBeNull();
+  });
+
+  it("returns null when direct file has empty slug", () => {
+    const { roleDir } = makeRoleDir();
+    fs.writeFileSync(path.join(roleDir, "customer-config.json"), JSON.stringify({}));
+    expect(readWorkspaceId(roleDir)).toBeNull();
+  });
+
+  it("returns null when neither direct nor shared exists", () => {
+    const { roleDir } = makeRoleDir();
+    expect(readWorkspaceId(roleDir)).toBeNull();
   });
 });
