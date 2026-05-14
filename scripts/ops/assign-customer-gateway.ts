@@ -162,7 +162,6 @@ async function main(): Promise<void> {
       .limit(1)
       .get();
     if (q.empty) {
-       
       console.error(`No user with slug=${opts.slug}`);
       process.exit(1);
     }
@@ -189,17 +188,14 @@ async function main(): Promise<void> {
     const result = await assignOne(db, uid, { dryRun: opts.dryRun });
     switch (result.kind) {
       case "assigned":
-         
         console.log(
           `✅${mode} ${result.slug} (${result.uid}): ${result.previous ?? "(unassigned)"} → ${result.gatewayId}`,
         );
         break;
       case "already-assigned":
-         
         console.log(`•  ${result.slug} (${result.uid}): already on ${result.gatewayId}`);
         break;
       case "not-ready":
-         
         console.log(`⚠️  ${result.slug} (${result.uid}): not-ready — ${result.reason}`);
         break;
     }
