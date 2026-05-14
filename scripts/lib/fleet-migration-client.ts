@@ -18,10 +18,19 @@ import {
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
   MIGRATION_SLUG_HEADER,
+  MIGRATION_QUIESCE_TIMEOUT_MS,
+  MIGRATION_TRANSFER_TIMEOUT_MS,
+  MIGRATION_UNMOUNT_TIMEOUT_MS,
   type ImportResponse,
   type QuiesceResponse,
   type UnmountResponse,
 } from "../../shared/types/fleet-controller.js";
+
+export interface MigrationClientTimeouts {
+  quiesceMs?: number;
+  transferMs?: number;
+  unmountMs?: number;
+}
 
 export interface MigrationClientDeps {
   /** Same `FLEET_CONTROLLER_SECRET` the gateway has in its env. */
@@ -32,6 +41,8 @@ export interface MigrationClientDeps {
   fetch?: typeof globalThis.fetch;
   /** Defaults to no-op. */
   log?: (msg: string) => void;
+  /** Per-RPC AbortSignal budgets; defaults come from shared/types. */
+  timeouts?: MigrationClientTimeouts;
 }
 
 export interface MigrationClient {
@@ -59,24 +70,57 @@ export interface MigrationClient {
 export function createMigrationClient(deps: MigrationClientDeps): MigrationClient {
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const log = deps.log ?? (() => undefined);
+  const quiesceMs = deps.timeouts?.quiesceMs ?? MIGRATION_QUIESCE_TIMEOUT_MS;
+  const transferMs = deps.timeouts?.transferMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
+  const unmountMs = deps.timeouts?.unmountMs ?? MIGRATION_UNMOUNT_TIMEOUT_MS;
+
+  const fetchWithTimeout = async (
+    label: string,
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+  ): Promise<Response> => {
+    const controller = new AbortController();
+    let didTimeout = false;
+    const timer = setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, timeoutMs);
+    try {
+      return await fetchImpl(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      if (didTimeout) {
+        throw new Error(`${label} timed out after ${timeoutMs}ms (${url})`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   const postSignedJson = async <Resp>(
     gatewayId: string,
     path: string,
     migrationId: string,
     body: Record<string, unknown>,
+    timeoutMs: number,
   ): Promise<Resp> => {
     const rawBody = JSON.stringify(body);
     const signature = signFleetRequest(deps.secret, migrationId, rawBody);
     const url = `${deps.resolveGatewayUrl(gatewayId)}${path}`;
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        [SIGNATURE_HEADER]: signature,
+    const res = await fetchWithTimeout(
+      path,
+      url,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [SIGNATURE_HEADER]: signature,
+        },
+        body: rawBody,
       },
-      body: rawBody,
-    });
+      timeoutMs,
+    );
     if (!res.ok) {
       const text = await res.text().catch(() => "<no body>");
       throw new Error(`${path}: ${res.status} ${text}`);
@@ -91,6 +135,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         `/quiesce/${gatewayId}`,
         migrationId,
         timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+        quiesceMs,
       );
       if (!res.drained) {
         throw new Error(
@@ -107,6 +152,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         `/unmount/${gatewayId}`,
         migrationId,
         { migrationId, slug },
+        unmountMs,
       );
       log(
         `[migration-client] ✅ unmount migrationId=${migrationId} slug=${slug} wasMounted=${res.unmounted}`,
@@ -120,14 +166,19 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       const exportRawBody = JSON.stringify({ migrationId, slug });
       const exportSig = signFleetRequest(deps.secret, migrationId, exportRawBody);
       const exportUrl = `${deps.resolveGatewayUrl(fromGatewayId)}/export/${fromGatewayId}`;
-      const exportRes = await fetchImpl(exportUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          [SIGNATURE_HEADER]: exportSig,
+      const exportRes = await fetchWithTimeout(
+        "export",
+        exportUrl,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            [SIGNATURE_HEADER]: exportSig,
+          },
+          body: exportRawBody,
         },
-        body: exportRawBody,
-      });
+        transferMs,
+      );
       if (!exportRes.ok) {
         const text = await exportRes.text().catch(() => "<no body>");
         throw new Error(`export: ${exportRes.status} ${text}`);
@@ -137,18 +188,22 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       // Body is the tar stream from /export piped through.
       const importSig = signFleetRequest(deps.secret, migrationId, slug);
       const importUrl = `${deps.resolveGatewayUrl(toGatewayId)}/import/${toGatewayId}`;
-      const importRes = await fetchImpl(importUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-tar",
-          [SIGNATURE_HEADER]: importSig,
-          [MIGRATION_ID_HEADER]: migrationId,
-          [MIGRATION_SLUG_HEADER]: slug,
-        },
-        body: exportRes.body,
-        // Required for streaming request bodies in Node 18+ fetch.
-        duplex: "half",
-      } as RequestInit & { duplex: "half" });
+      const importRes = await fetchWithTimeout(
+        "import",
+        importUrl,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-tar",
+            [SIGNATURE_HEADER]: importSig,
+            [MIGRATION_ID_HEADER]: migrationId,
+            [MIGRATION_SLUG_HEADER]: slug,
+          },
+          body: exportRes.body,
+          duplex: "half",
+        } as RequestInit & { duplex: "half" },
+        transferMs,
+      );
       if (!importRes.ok) {
         const text = await importRes.text().catch(() => "<no body>");
         throw new Error(`import: ${importRes.status} ${text}`);

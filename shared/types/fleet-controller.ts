@@ -159,6 +159,50 @@ export const JOB_TTL_MS = 10 * 60_000;
 export const VERIFY_ACCOUNT_TIMEOUT_MS = 120_000;
 
 /**
+ * Hard ceiling on cumulative time `applyConfigPatch` will spend retrying a
+ * single patch. OpenClaw's `config.patch` RPC rate-limits to ~1 patch per
+ * 60s and returns `retry after Ns` hints. 90s covers one full rate-limit
+ * window plus a buffer for retry-after delays. Past this, fail loud rather
+ * than silently extend the mount duration into the multi-minute range that
+ * triggered the 2026-05-13 batch-migration incident.
+ */
+export const CONFIG_PATCH_DEADLINE_MS = 90_000;
+
+/**
+ * Hard ceiling on the entire `addCustomerToGateway` flow per customer. Sum
+ * of: SSH key + Gitea (~3s) + clone (~5s) + blob-sync (~10s) + project
+ * clone (~5s) + MM provision (~10s) + config patch (≤CONFIG_PATCH_DEADLINE_MS)
+ * + verify-channel-ready (≤VERIFY_ACCOUNT_TIMEOUT_MS) + greeting cron (~5s).
+ * Hits ~260s in the worst case; we pad to 300s. If we exceed this, a
+ * downstream step is genuinely hung and the in-flight lock must be
+ * released so retries can run on a clean state.
+ */
+export const ADD_CUSTOMER_DEADLINE_MS = 300_000;
+
+/**
+ * Per-RPC client-side timeouts for the migration HTTP client. Applied to
+ * each fetch leg independently (not cumulatively across legs). These are
+ * `AbortSignal` budgets passed into fetch so a hung server-side step
+ * surfaces as a clear "X timed out after Nms" rather than undici's default
+ * 300s headersTimeout firing as opaque `fetch failed`.
+ *
+ * Picked to be slightly longer than the matching server-side budgets so
+ * an in-budget server response can still come back:
+ * - quiesce: server drains in-flight runs to disk; usually <5s but bounded
+ *   by the longest agent turn.
+ * - transfer: applied to BOTH the /export leg and the /import leg in
+ *   `transferState`, so worst-case wall clock is 2 × TRANSFER_TIMEOUT_MS.
+ *   Each leg sized for /import's `addCustomerToGateway` (≤ADD_CUSTOMER_DEADLINE_MS)
+ *   plus 30s slack; /export is typically much faster but reuses the
+ *   budget rather than introducing a separate constant.
+ * - unmount: single config.patch + dir delete (≤CONFIG_PATCH_DEADLINE_MS)
+ *   plus 30s slack.
+ */
+export const MIGRATION_QUIESCE_TIMEOUT_MS = 60_000;
+export const MIGRATION_TRANSFER_TIMEOUT_MS = ADD_CUSTOMER_DEADLINE_MS + 30_000;
+export const MIGRATION_UNMOUNT_TIMEOUT_MS = CONFIG_PATCH_DEADLINE_MS + 30_000;
+
+/**
  * Cloud Tasks header name the controller uses to set an idempotency key.
  * Gateway rejects duplicate jobIds within the last hour.
  */

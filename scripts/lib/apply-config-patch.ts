@@ -29,8 +29,82 @@ export interface ApplyConfigPatchOptions {
   retryBackoffInitialMs?: number;
   retryBackoffMaxMs?: number;
   maxRetries?: number;
+  /**
+   * Hard ceiling on total time across all retries (in ms). Defaults to
+   * `Number.POSITIVE_INFINITY` for back-compat with callers that want
+   * pure `maxRetries`-based behavior. When set, exceeding it throws with
+   * a message that includes `totalDeadlineMs`.
+   */
+  totalDeadlineMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Injectable clock for deadline math; defaults to `Date.now`. */
+  now?: () => number;
   cache?: ConfigCache;
+}
+
+const RETRY_AFTER_PATTERN = /\brate limit exceeded\b.*?\bretry after (\d+)s\b/i;
+
+function parseRetryAfterMs(message: string): number | null {
+  const match = RETRY_AFTER_PATTERN.exec(message);
+  if (!match) return null;
+  const seconds = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return seconds * 1000;
+}
+
+function seedCacheFromFetch(cache: ConfigCache | undefined, config: unknown, hash: string): void {
+  if (!cache) return;
+  cache.current = config;
+  cache.hash = hash;
+}
+
+function updateCacheAfterPatch(
+  cache: ConfigCache | undefined,
+  patchResult: { hash?: unknown; config?: unknown },
+): void {
+  if (!cache) return;
+  if (typeof patchResult.hash === "string" && patchResult.hash.length > 0) {
+    cache.hash = patchResult.hash;
+    cache.current = patchResult.config ?? cache.current;
+    return;
+  }
+  cache.hash = "";
+}
+
+function invalidateCacheForHashMismatch(cache: ConfigCache | undefined): void {
+  if (!cache) return;
+  cache.hash = "";
+  cache.current = undefined;
+}
+
+function handleHashMismatch(
+  err: GatewayRpcError,
+  ctx: {
+    attempts: number;
+    maxRetries: number;
+    remainingMs: () => number;
+    totalDeadlineMs: number;
+    elapsed: number;
+    cache: ConfigCache | undefined;
+    log: (msg: string) => void;
+    prefix: string;
+  },
+): void {
+  if (ctx.attempts >= ctx.maxRetries) {
+    ctx.log(
+      `⚠ ${ctx.prefix}config.patch hash-mismatch exhausted after attempts=${ctx.attempts} — bubbling`,
+    );
+    throw err;
+  }
+  if (ctx.remainingMs() <= 0) {
+    throw new Error(
+      `${ctx.prefix}config.patch totalDeadlineMs=${ctx.totalDeadlineMs}ms exceeded after attempts=${ctx.attempts} (last error: hash-mismatch)`,
+    );
+  }
+  invalidateCacheForHashMismatch(ctx.cache);
+  ctx.log(
+    `${ctx.prefix}config.patch attempt=${ctx.attempts} hash-mismatch after ${ctx.elapsed}ms — re-fetching hash and retrying immediately`,
+  );
 }
 
 export interface ApplyConfigPatchResult {
@@ -47,22 +121,26 @@ export async function applyConfigPatch(
   const initialBackoff = opts.retryBackoffInitialMs ?? 2_000;
   const maxBackoff = opts.retryBackoffMaxMs ?? 30_000;
   const maxRetries = opts.maxRetries ?? Number.POSITIVE_INFINITY;
+  const totalDeadlineMs = opts.totalDeadlineMs ?? Number.POSITIVE_INFINITY;
+  const now = opts.now ?? Date.now;
   const sleep =
     opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   const rpc = opts.rpc ?? createGatewayRpc();
   const ownsRpc = !opts.rpc;
 
-  const startedAt = Date.now();
+  const startedAt = now();
   let attempts = 0;
   let currentBackoff = initialBackoff;
+
+  const remainingMs = (): number => totalDeadlineMs - (now() - startedAt);
 
   const cache = opts.cache;
 
   try {
     while (true) {
       attempts++;
-      const attemptStartedAt = Date.now();
+      const attemptStartedAt = now();
       try {
         let config: unknown;
         let hash: string;
@@ -71,36 +149,24 @@ export async function applyConfigPatch(
           config = cache.current;
           hash = cache.hash;
         } else {
-          const getStart = Date.now();
+          const getStart = now();
           const fetched = await rpc.configGet();
-          getMs = Date.now() - getStart;
+          getMs = now() - getStart;
           config = fetched.config;
           hash = fetched.hash;
-          if (cache) {
-            cache.current = config;
-            cache.hash = hash;
-          }
+          seedCacheFromFetch(cache, config, hash);
         }
 
         const patch = args.buildPatch(config);
 
-        const patchStart = Date.now();
+        const patchStart = now();
         const patchResult = await rpc.configPatch(patch, hash);
-        const patchMs = Date.now() - patchStart;
+        const patchMs = now() - patchStart;
 
-        if (cache) {
-          if (typeof patchResult.hash === "string" && patchResult.hash.length > 0) {
-            cache.hash = patchResult.hash;
-            cache.current = patchResult.config ?? cache.current;
-          } else {
-            // Stock-OC or pre-fork-patch server. Mark stale so next call
-            // pays a fresh configGet rather than reusing a now-bogus hash.
-            cache.hash = "";
-          }
-        }
+        updateCacheAfterPatch(cache, patchResult);
 
         log(
-          `${prefix}config.patch OK attempt=${attempts} configGet=${getMs}ms configPatch=${patchMs}ms totalMs=${Date.now() - startedAt}`,
+          `${prefix}config.patch OK attempt=${attempts} configGet=${getMs}ms configPatch=${patchMs}ms totalMs=${now() - startedAt}`,
         );
         return { mode: "rpc", attempts };
       } catch (err) {
@@ -108,7 +174,7 @@ export async function applyConfigPatch(
           throw err;
         }
 
-        const elapsed = Date.now() - attemptStartedAt;
+        const elapsed = now() - attemptStartedAt;
 
         if (
           err.code === "auth-failed" ||
@@ -122,34 +188,51 @@ export async function applyConfigPatch(
         }
 
         if (err.code === "hash-mismatch") {
-          if (attempts >= maxRetries) {
-            log(
-              `⚠ ${prefix}config.patch hash-mismatch exhausted after attempts=${attempts} — bubbling`,
-            );
-            throw err;
-          }
-          // Invalidate cache so the retry re-fetches via config.get rather
-          // than re-trying the same stale hash in a loop.
-          if (cache) {
-            cache.hash = "";
-            cache.current = undefined;
-          }
-          log(
-            `${prefix}config.patch attempt=${attempts} hash-mismatch after ${elapsed}ms — re-fetching hash and retrying immediately`,
-          );
+          handleHashMismatch(err, {
+            attempts,
+            maxRetries,
+            remainingMs,
+            totalDeadlineMs,
+            elapsed,
+            cache,
+            log,
+            prefix,
+          });
           continue;
         }
 
         if (attempts >= maxRetries) {
           log(
-            `⚠ ${prefix}config.patch retry exhausted (${err.code} x${attempts}: ${err.message}) totalMs=${Date.now() - startedAt} — bubbling`,
+            `⚠ ${prefix}config.patch retry exhausted (${err.code} x${attempts}: ${err.message}) totalMs=${now() - startedAt} — bubbling`,
           );
           throw err;
         }
+        if (remainingMs() <= 0) {
+          throw new Error(
+            `${prefix}config.patch totalDeadlineMs=${totalDeadlineMs}ms exceeded after attempts=${attempts} (last error: ${err.code}: ${err.message})`,
+          );
+        }
+        const serverHintMs = parseRetryAfterMs(err.message);
+        if (err.code === "rpc-error" && serverHintMs == null && /retry/i.test(err.message)) {
+          log(
+            `⚠ ${prefix}config.patch rpc-error mentions "retry" but no parsed hint — server wording may have drifted (msg: ${err.message})`,
+          );
+        }
+        const candidateBackoff = serverHintMs ?? currentBackoff;
+        const clamped = Math.min(candidateBackoff, Math.max(0, remainingMs()));
+        if (clamped <= 0) {
+          throw new Error(
+            `${prefix}config.patch totalDeadlineMs=${totalDeadlineMs}ms exceeded — no time left for backoff after attempts=${attempts} (last error: ${err.code}: ${err.message})`,
+          );
+        }
+        const source = serverHintMs != null ? "server retry-after" : "exp backoff";
         log(
-          `${prefix}config.patch attempt=${attempts} failed (${err.code}: ${err.message}) after ${elapsed}ms — retrying in ${currentBackoff}ms`,
+          `${prefix}config.patch attempt=${attempts} failed (${err.code}: ${err.message}) after ${elapsed}ms — retrying in ${clamped}ms (${source})`,
         );
-        await sleep(currentBackoff);
+        await sleep(clamped);
+        // Always advance the exp-backoff curve so the fallback doesn't reset
+        // to retryBackoffInitialMs if the server stops sending retry-after
+        // hints on subsequent failures.
         currentBackoff = Math.min(currentBackoff * 2, maxBackoff);
       }
     }

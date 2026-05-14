@@ -4,6 +4,9 @@ import {
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
   MIGRATION_SLUG_HEADER,
+  MIGRATION_QUIESCE_TIMEOUT_MS,
+  MIGRATION_TRANSFER_TIMEOUT_MS,
+  MIGRATION_UNMOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller";
 import { createMigrationClient } from "../lib/fleet-migration-client";
 
@@ -220,5 +223,104 @@ describe("MigrationClient.transferState", () => {
       }),
     ).rejects.toThrow(/export.*503/i);
     expect(importCalls).toBe(0);
+  });
+});
+
+// ── Per-RPC timeouts ────────────────────────────────────────────────────────
+//
+// Production incident 2026-05-13: undici's default 300s headersTimeout
+// fired silently on slow /import calls and surfaced as opaque `fetch
+// failed`. Each migration RPC now passes an explicit AbortSignal so a
+// hung server-side step throws "import timed out after Ns" with the URL,
+// not raw transport noise.
+
+describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
+  function captureSignal(): {
+    fakeFetch: typeof fetch;
+    seenSignal: () => AbortSignal | undefined;
+  } {
+    let lastSignal: AbortSignal | undefined;
+    const fakeFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      lastSignal = init?.signal ?? undefined;
+      return new Response(JSON.stringify({ drained: true, runningCount: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    return { fakeFetch, seenSignal: () => lastSignal };
+  }
+
+  it("passes an AbortSignal on quiesce derived from MIGRATION_QUIESCE_TIMEOUT_MS", async () => {
+    const { fakeFetch, seenSignal } = captureSignal();
+    const client = createMigrationClient({
+      secret: SECRET,
+      resolveGatewayUrl: () => "https://fleet.example.com",
+      fetch: fakeFetch,
+    });
+    await client.quiesce({ migrationId: "m1", gatewayId: "gw", slug: "alice" });
+    expect(seenSignal()).toBeInstanceOf(AbortSignal);
+    expect(MIGRATION_QUIESCE_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
+  it("aborts and reports a path-tagged timeout when the server stalls past the deadline", async () => {
+    const fakeFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal) {
+          signal.addEventListener(
+            "abort",
+            () => reject((signal as AbortSignal).reason ?? new Error("aborted")),
+            { once: true },
+          );
+        }
+      });
+    }) as typeof fetch;
+
+    const client = createMigrationClient({
+      secret: SECRET,
+      resolveGatewayUrl: () => "https://fleet.example.com",
+      fetch: fakeFetch,
+      timeouts: {
+        quiesceMs: 25,
+        transferMs: 25,
+        unmountMs: 25,
+      },
+    });
+
+    await expect(
+      client.unmount({ migrationId: "m1", gatewayId: "gw", slug: "alice" }),
+    ).rejects.toThrow(/unmount.*timed out.*25ms/i);
+  });
+
+  it("passes the AbortSignal on both /export and /import inside transferState", async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal ?? undefined);
+      const url = String(input);
+      if (url.includes("/export/")) {
+        return new Response("tarbytes", { status: 200 });
+      }
+      return new Response(JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const client = createMigrationClient({
+      secret: SECRET,
+      resolveGatewayUrl: () => "https://fleet.example.com",
+      fetch: fakeFetch,
+    });
+    await client.transferState({
+      migrationId: "m1",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+    });
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[1]).toBeInstanceOf(AbortSignal);
+    expect(MIGRATION_TRANSFER_TIMEOUT_MS).toBeGreaterThan(MIGRATION_UNMOUNT_TIMEOUT_MS);
   });
 });

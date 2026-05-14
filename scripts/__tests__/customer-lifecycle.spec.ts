@@ -3,6 +3,7 @@ import {
   addCustomerToGateway,
   ConcurrentMountError,
   _resetInFlightUidsForTests,
+  _inFlightUidsHasForTests,
   pubKeysMatch,
   removeCustomerFromGateway,
   type CustomerLifecycleAdapter,
@@ -1010,6 +1011,25 @@ describe("addCustomerToGateway — same-uid in-flight dedup", () => {
     const state2 = makeState(snap({ status: "complete", agentIds: ["octogee-test-coach"], repoUrl: "http://gitea/octogee/test-workspace", mattermostUserId: "mm-x", greetingPosted: true }), { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true, repoHasCommits: true });
     const result = await addCustomerToGateway(makeAdapter(state2), "uid-test");
     expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("throws a deadline error and releases the in-flight uid when a step hangs past mountDeadlineMs", async () => {
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    const realAdapter = makeAdapter(state);
+    const hangingAdapter: CustomerLifecycleAdapter = {
+      ...realAdapter,
+      loadUserSnapshot: () => new Promise(() => {}),
+    };
+
+    await expect(
+      addCustomerToGateway(hangingAdapter, "uid-test", { mountDeadlineMs: 25 }),
+    ).rejects.toThrow(/mountDeadlineMs.*25ms.*exceeded/i);
+
+    expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
+
+    const state2 = makeState(snap({ status: "" }), emptyDisk());
+    const retry = await addCustomerToGateway(makeAdapter(state2), "uid-test");
+    expect(retry.steps).toContain("verify-channel-ready");
   });
 
   it("clears the in-flight uid on failure so the fleet can retry", async () => {

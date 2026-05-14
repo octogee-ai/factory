@@ -328,6 +328,153 @@ describe("applyConfigPatch — timing instrumentation", () => {
   });
 });
 
+// ── Deadline + retry-after parsing ──────────────────────────────────────────
+//
+// Production incident 2026-05-13: 4 concurrent migrations hammered OpenClaw's
+// config.patch RPC. Server returned `rate limit exceeded for config.patch;
+// retry after 44s` but the client ignored that hint and used local exponential
+// backoff (2s→4s→8s…30s, indefinitely). With Infinity maxRetries (the prod
+// default), christopher's patch took 605s across 13 attempts. The deadline
+// caps total time and the retry-after parser uses the server's hint when given.
+
+describe("applyConfigPatch — totalDeadlineMs", () => {
+  it("throws once cumulative time exceeds totalDeadlineMs", async () => {
+    let now = 0;
+    const advance = (ms: number) => {
+      now += ms;
+    };
+    const sleep = vi.fn(async (ms: number) => advance(ms));
+    const clock = () => now;
+
+    const configGet = vi.fn(async () => {
+      advance(5);
+      throw new GatewayRpcError("connect-failed", "WS open timed out after 5ms");
+    });
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        {
+          ...baseOpts({
+            sleep,
+            now: clock,
+            totalDeadlineMs: 100,
+            retryBackoffInitialMs: 50,
+            retryBackoffMaxMs: 1000,
+            maxRetries: Number.POSITIVE_INFINITY,
+          }),
+          rpc: makeFakeRpc({ configGet }),
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("totalDeadlineMs"),
+    });
+  });
+
+  it("caps the next backoff so it doesn't sleep past the deadline", async () => {
+    let now = 0;
+    const sleep = vi.fn(async (ms: number) => {
+      now += ms;
+    });
+    const clock = () => now;
+    const configGet = vi
+      .fn()
+      .mockRejectedValueOnce(new GatewayRpcError("rpc-error", "transient"))
+      .mockResolvedValueOnce({ config: {}, hash: "h" });
+
+    await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      {
+        ...baseOpts({
+          sleep,
+          now: clock,
+          totalDeadlineMs: 30,
+          retryBackoffInitialMs: 100,
+        }),
+        rpc: makeFakeRpc({ configGet }),
+      },
+    );
+
+    expect(sleep.mock.calls[0][0]).toBeLessThanOrEqual(30);
+  });
+});
+
+describe("applyConfigPatch — server retry-after hint", () => {
+  it("honors `retry after Ns` from rpc-error messages instead of local backoff", async () => {
+    const sleep = vi.fn(async () => {});
+    const configPatch = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayRpcError(
+          "rpc-error",
+          "rate limit exceeded for config.patch; retry after 44s",
+        ),
+      )
+      .mockResolvedValueOnce({ ok: true as const });
+
+    await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      {
+        ...baseOpts({ sleep, retryBackoffInitialMs: 2000 }),
+        rpc: makeFakeRpc({ configPatch }),
+      },
+    );
+
+    expect(sleep).toHaveBeenCalledWith(44_000);
+  });
+
+  it("falls through to exponential backoff when the message has no retry-after hint", async () => {
+    const sleep = vi.fn(async () => {});
+    const configGet = vi
+      .fn()
+      .mockRejectedValueOnce(new GatewayRpcError("connect-failed", "ECONNRESET"))
+      .mockResolvedValueOnce({ config: {}, hash: "h" });
+
+    await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      {
+        ...baseOpts({ sleep, retryBackoffInitialMs: 200 }),
+        rpc: makeFakeRpc({ configGet }),
+      },
+    );
+
+    expect(sleep).toHaveBeenCalledWith(200);
+  });
+
+  it("clamps the server retry-after hint by remaining deadline", async () => {
+    let now = 0;
+    const sleep = vi.fn(async (ms: number) => {
+      now += ms;
+    });
+    const configPatch = vi.fn(async () => {
+      now += 10;
+      throw new GatewayRpcError(
+        "rpc-error",
+        "rate limit exceeded for config.patch; retry after 60s",
+      );
+    });
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        {
+          ...baseOpts({
+            sleep,
+            now: () => now,
+            totalDeadlineMs: 500,
+            maxRetries: Number.POSITIVE_INFINITY,
+          }),
+          rpc: makeFakeRpc({ configPatch }),
+        },
+      ),
+    ).rejects.toMatchObject({ message: expect.stringContaining("totalDeadlineMs") });
+
+    for (const call of sleep.mock.calls) {
+      expect(call[0]).toBeLessThanOrEqual(500);
+    }
+  });
+});
+
 // ── Config cache (skip configGet between successive patches) ────────────────
 //
 // Each customer-add costs ~5-6s in configGet round-trip even when the
