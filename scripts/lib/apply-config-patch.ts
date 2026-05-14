@@ -261,7 +261,7 @@ export async function applyConfigPatch(
         }
         const source = serverHintMs != null ? "server retry-after" : "exp backoff";
         log(
-          `${prefix}config.patch attempt=${attempts} failed (${err.code}: ${err.message}) after ${elapsed}ms — retrying in ${clamped}ms (${source})`,
+          `🟡 ${prefix}config.patch attempt=${attempts} failed (${err.code}: ${err.message}) after ${elapsed}ms — retrying in ${clamped}ms (${source})`,
         );
         await sleep(clamped);
         throwIfAborted();

@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 process.env.NODE_ENV = 'test';
 process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
+process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
+process.env.CHAT_PROXY_PUBLIC_URL = 'https://chat-test.octogee.com';
 
 const verifyIdToken = vi.fn(async (token: string) => {
   if (token === 'good-token') return { uid: 'user-1' };

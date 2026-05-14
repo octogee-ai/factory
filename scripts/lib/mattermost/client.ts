@@ -1,5 +1,9 @@
 import { log } from "../config.js";
 
+const IDEMPOTENT_MM_ERROR_IDS = new Set<string>([
+  "store.sql_channel.save_channel.exists.app_error",
+]);
+
 let _mmAdminToken: string | null = null;
 
 export async function getMmAdminToken(): Promise<string | null> {
@@ -30,8 +34,9 @@ export async function getMmAdminToken(): Promise<string | null> {
       }
       const text = await resp.text().catch(() => "");
       log(`⚠ [mattermost] Admin login failed (${resp.status}): ${text.slice(0, 200)}`);
-    } catch (e: any) {
-      log(`⚠ [mattermost] Admin login error: ${e.message}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`⚠ [mattermost] Admin login error: ${msg}`);
     }
   }
 
@@ -44,7 +49,8 @@ export async function getMmAdminToken(): Promise<string | null> {
   return null;
 }
 
-export async function mmApiCall(method: string, endpoint: string, body?: any): Promise<any | null> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- broad MM API shape; callers do their own narrowing
+export async function mmApiCall(method: string, endpoint: string, body?: unknown): Promise<any | null> {
   const MM_URL = process.env.MM_URL;
   const token = await getMmAdminToken();
   if (!MM_URL || !token) return null;
@@ -56,8 +62,19 @@ export async function mmApiCall(method: string, endpoint: string, body?: any): P
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    log(`⚠ [mattermost] API ${resp.status}: ${text.slice(0, 200)}`);
+    if (isIdempotentMmError(text)) {
+      log(`[mattermost] API ${resp.status} (idempotent): ${text.slice(0, 200)}`);
+    } else {
+      log(`⚠ [mattermost] API ${resp.status}: ${text.slice(0, 200)}`);
+    }
     return null;
   }
   return resp.json();
+}
+
+function isIdempotentMmError(body: string): boolean {
+  for (const id of IDEMPOTENT_MM_ERROR_IDS) {
+    if (body.includes(`"id":"${id}"`)) return true;
+  }
+  return false;
 }

@@ -4,6 +4,8 @@ import type { AddressInfo } from 'node:net';
 
 process.env.NODE_ENV = 'test';
 process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
+process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
+process.env.CHAT_PROXY_PUBLIC_URL = 'https://chat-test.octogee.com';
 
 const verifyIdToken = vi.fn(async (token: string) => {
   if (token === 'regular-token') return { uid: 'regular-uid' };
@@ -181,7 +183,7 @@ describe('POST /api/auth/mattermost — credential mint', () => {
     }
   });
 
-  it('with valid token and provisioning → 200 with mmUrl, mmToken, mmUserId', async () => {
+  it('with valid token and provisioning → 200 with mmUrl (chat-proxy public URL), mmToken, mmUserId', async () => {
     const res = await request('/api/auth/mattermost', {
       method: 'POST',
       headers: { Authorization: 'Bearer regular-token' },
@@ -189,7 +191,7 @@ describe('POST /api/auth/mattermost — credential mint', () => {
     expect(res.status).toBe(200);
     const body = JSON.parse(res.body);
     expect(body).toEqual({
-      mmUrl: 'https://mm.test.octogee.com',
+      mmUrl: 'https://chat-test.octogee.com',
       mmToken: 'regular-mm-token',
       mmUserId: 'mm-user-1',
     });
@@ -232,15 +234,16 @@ describe('POST /api/auth/mattermost — credential mint', () => {
   });
 });
 
-describe('Mattermost proxying is removed', () => {
-  it('GET /api/v4/users/me/teams → 404 (no longer proxied)', async () => {
+describe('Mattermost proxying via chat-proxy', () => {
+  it('GET /api/v4/users/me/teams → forwarded to MM_INTERNAL_URL (502 when MM unreachable in test)', { timeout: 15_000 }, async () => {
     const res = await request('/api/v4/users/me/teams', {
       headers: { Authorization: 'Bearer regular-token' },
     });
-    expect(res.status).toBe(404);
+    expect(res.status).not.toBe(404);
+    expect([502, 500, 504]).toContain(res.status);
   });
 
-  it('POST /api/v4/posts → 404 (no longer proxied)', async () => {
+  it('POST /api/v4/posts → forwarded to MM_INTERNAL_URL (502 when MM unreachable in test)', { timeout: 15_000 }, async () => {
     const res = await request('/api/v4/posts', {
       method: 'POST',
       headers: {
@@ -249,10 +252,11 @@ describe('Mattermost proxying is removed', () => {
       },
       body: JSON.stringify({ channel_id: 'abc', message: 'hi' }),
     });
-    expect(res.status).toBe(404);
+    expect(res.status).not.toBe(404);
+    expect([502, 500, 504]).toContain(res.status);
   });
 
-  it('keep-alive survives a POST-with-body to a 404 path (server drains body)', async () => {
+  it('keep-alive survives a POST-with-body to /api/v4/posts (proxy consumes body)', { timeout: 15_000 }, async () => {
     const result: { first: number; second: number } = await new Promise(
       (resolve, reject) => {
         const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
@@ -284,7 +288,7 @@ describe('Mattermost proxying is removed', () => {
         first.end();
       },
     );
-    expect(result.first).toBe(404);
+    expect([502, 500, 504]).toContain(result.first);
     expect(result.second).toBe(200);
   });
 

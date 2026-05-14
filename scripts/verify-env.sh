@@ -827,44 +827,50 @@ else
 fi
 
 set_section bootstrap
-# ── Option C env contract ──────────────────────────────────────────────
-# chat-proxy must read MM_PUBLIC_URL (the public mm.* host returned by
-# the credential mint), NOT the legacy MM_INTERNAL_URL. If the old env
-# var is still on the pod, the chart hasn't been re-rendered against
-# the post-Option-C values.{env}.yaml.
+# ── Post-Option-C env contract (2026-05-14 rollback) ──────────────────
+# chat-proxy MUST have:
+#   - MM_INTERNAL_URL (in-cluster MM Service DNS, used for the data path
+#     of /api/v4/* + /api/v4/websocket proxying and the activity-bridge
+#     admin client)
+#   - CHAT_PROXY_PUBLIC_URL (the browser-facing chat-proxy hostname
+#     returned to the app as `mmUrl` from /api/auth/mattermost)
+# The pre-rollback `MM_PUBLIC_URL` value is now a legacy alias for
+# MM_INTERNAL_URL and is kept around for compat with mm-event-listener
+# imports; not browser-visible.
 if [[ -z "$GW_DEPLOYMENT" ]]; then
-  info "Skipping chat-proxy MM_PUBLIC_URL check — no gateway deployment"
-  CHAT_MM_PUBLIC_URL=""
+  info "Skipping chat-proxy env check — no gateway deployment"
   CHAT_MM_INTERNAL_URL=""
+  CHAT_PROXY_PUBLIC_URL_VALUE=""
 else
-  CHAT_MM_PUBLIC_URL=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_PUBLIC_URL")].value}' 2>/dev/null || echo "")
   CHAT_MM_INTERNAL_URL=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_INTERNAL_URL")].value}' 2>/dev/null || echo "")
+  CHAT_PROXY_PUBLIC_URL_VALUE=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="CHAT_PROXY_PUBLIC_URL")].value}' 2>/dev/null || echo "")
 fi
-if [[ -n "$CHAT_MM_PUBLIC_URL" ]]; then
-  pass "chat-proxy MM_PUBLIC_URL=$CHAT_MM_PUBLIC_URL (Option C)"
+if [[ -n "$CHAT_MM_INTERNAL_URL" ]]; then
+  pass "chat-proxy MM_INTERNAL_URL=$CHAT_MM_INTERNAL_URL (post-Option-C rollback)"
 elif [[ -z "$GW_DEPLOYMENT" ]]; then
   : # already informed above
 else
-  fail "chat-proxy missing MM_PUBLIC_URL — credential mint will boot-fail. Re-render helm with values.${ENV}.yaml."
+  fail "chat-proxy missing MM_INTERNAL_URL — MM REST + WS proxy data path will boot-fail. Re-render helm with values.${ENV}.yaml."
   if $FIX; then
     echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
-if [[ -n "$CHAT_MM_INTERNAL_URL" ]]; then
-  warn "chat-proxy still carries legacy MM_INTERNAL_URL env — remove it (Option C uses MM_PUBLIC_URL)."
+if [[ -n "$CHAT_PROXY_PUBLIC_URL_VALUE" ]]; then
+  pass "chat-proxy CHAT_PROXY_PUBLIC_URL=$CHAT_PROXY_PUBLIC_URL_VALUE (returned to browser as mmUrl)"
+elif [[ -z "$GW_DEPLOYMENT" ]]; then
+  : # already informed above
+else
+  fail "chat-proxy missing CHAT_PROXY_PUBLIC_URL — credential mint can't tell the browser where to send MM REST + WS. Re-render helm."
 fi
 
-# Mattermost must have ALLOWCORSFROM populated for the browser-direct
-# path. Empty = MM rejects every preflight from app.octogee.com.
-MM_CORS=$(kubectl get deployment mattermost -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MM_SERVICESETTINGS_ALLOWCORSFROM")].value}' 2>/dev/null || echo "")
-if [[ -n "$MM_CORS" ]]; then
-  pass "Mattermost MM_SERVICESETTINGS_ALLOWCORSFROM populated"
-else
-  fail "Mattermost ALLOWCORSFROM empty — browser-direct fetches/WS will fail with CORS"
-  if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} ensure mattermost.allowedCorsOrigins is set in values.${ENV}.yaml, then helm upgrade"
-  fi
-fi
+# 2026-05-14: ALLOWCORSFROM check removed. After the Option-C rollback
+# the browser talks to chat-proxy (`/api/v4/*`, `/api/v4/websocket`)
+# not Mattermost directly — chat-proxy serves its own CORS headers
+# (chat-proxy/src/proxy.ts `setCors`) for the app-origin allowlist.
+# MM `ServiceSettings.AllowCorsFrom` is only consulted on direct
+# browser→MM requests, which no longer happen. The chat-proxy
+# `CHAT_PROXY_PUBLIC_URL` check above is the new browser-facing
+# preflight contract.
 set_section infra
 
 # ── Summary ───────────────────────────────────────────────────────────────────

@@ -103,11 +103,13 @@ for (const arg of argv) {
   else if (arg === "--all") opts.all = true;
   else if (arg === "--dry-run") opts.dryRun = true;
   else if (arg === "--help" || arg === "-h") {
+     
     console.log(
       `Usage: tsx scripts/ops/assign-customer-gateway.ts --env=test|prod (--uid=UID | --slug=SLUG | --all) [--dry-run]`,
     );
     process.exit(0);
   } else {
+     
     console.error(`Unknown arg: ${arg}`);
     process.exit(1);
   }
@@ -118,14 +120,17 @@ const USAGE =
 // --env is required — no default. PROD and TEST write to different Firestore
 // databases; a default would silently target the wrong env on a typo.
 if (!opts.env) {
+   
   console.error(`--env is required (test or prod)\n${USAGE}`);
   process.exit(1);
 }
 if (opts.env !== "test" && opts.env !== "prod") {
+   
   console.error(`--env must be 'test' or 'prod' (got: '${opts.env}')\n${USAGE}`);
   process.exit(1);
 }
 if (!opts.uid && !opts.slug && !opts.all) {
+   
   console.error(`one of --uid=UID, --slug=SLUG, or --all is required\n${USAGE}`);
   process.exit(1);
 }
@@ -136,6 +141,7 @@ const saPath = path.join(
   `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
 );
 if (!fs.existsSync(saPath)) {
+   
   console.error(`SA key not found at ${saPath}`);
   process.exit(1);
 }
@@ -156,7 +162,8 @@ async function main(): Promise<void> {
       .limit(1)
       .get();
     if (q.empty) {
-        console.error(`No user with slug=${opts.slug}`);
+       
+      console.error(`No user with slug=${opts.slug}`);
       process.exit(1);
     }
     uids.push(q.docs[0].id);
@@ -173,6 +180,7 @@ async function main(): Promise<void> {
         uids.push(d.id);
       }
     }
+     
     console.log(`Found ${uids.length} unassigned-complete user(s)`);
   }
 
@@ -181,15 +189,18 @@ async function main(): Promise<void> {
     const result = await assignOne(db, uid, { dryRun: opts.dryRun });
     switch (result.kind) {
       case "assigned":
-            console.log(
+         
+        console.log(
           `✅${mode} ${result.slug} (${result.uid}): ${result.previous ?? "(unassigned)"} → ${result.gatewayId}`,
         );
         break;
       case "already-assigned":
-            console.log(`•  ${result.slug} (${result.uid}): already on ${result.gatewayId}`);
+         
+        console.log(`•  ${result.slug} (${result.uid}): already on ${result.gatewayId}`);
         break;
       case "not-ready":
-            console.log(`⚠️  ${result.slug} (${result.uid}): not-ready — ${result.reason}`);
+         
+        console.log(`⚠️  ${result.slug} (${result.uid}): not-ready — ${result.reason}`);
         break;
     }
   }
@@ -198,6 +209,7 @@ async function main(): Promise<void> {
 main()
   .then(() => process.exit(0))
   .catch((err) => {
+     
     console.error(err);
     process.exit(1);
   });

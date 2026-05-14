@@ -15,7 +15,7 @@ import { mmApiCall } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
 import { mintAndPersistCoachToken } from "./coach-pat.js";
 import { createOrRestoreChannel } from "./channels.js";
-import { communityChannelIds, communityActivityChannelIds } from "./community.js";
+import { communityChannelIds } from "./community.js";
 import { mmUploadAvatar } from "./avatars.js";
 
 export async function provisionMattermostUser(
@@ -246,19 +246,17 @@ export async function provisionMattermostUser(
       if (ok) log(`[mattermost] avatar uploaded from Gravatar`);
     }
 
-    // Auto-join community channels (legacy — for workspaces using shared team)
-    // including their activity-stream siblings (spec OI5) so the bridge's
-    // posts are visible to every member of the primary social channel.
-    const joinIds = [...communityChannelIds, ...communityActivityChannelIds];
-    for (const chId of joinIds) {
+    // Auto-join community channels (legacy — for workspaces using shared
+    // team). Community channels are chat-only — they do NOT get
+    // activity-stream siblings (2026-05-14: only workspace/project
+    // #general + #coach get activity pairs).
+    for (const chId of communityChannelIds) {
       await mmApiCall("POST", `/channels/${chId}/members`, {
         user_id: mmUser.id,
       });
     }
-    if (joinIds.length > 0) {
-      log(
-        `[mattermost] joined ${communityChannelIds.length} community + ${communityActivityChannelIds.length} activity siblings`,
-      );
+    if (communityChannelIds.length > 0) {
+      log(`[mattermost] joined ${communityChannelIds.length} community chat channels`);
     }
 
     // Octo coach channel — MM type "P" (private) so octogee-admin can

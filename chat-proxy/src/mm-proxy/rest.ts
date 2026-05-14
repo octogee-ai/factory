@@ -1,0 +1,87 @@
+import http from "node:http";
+import https from "node:https";
+import { URL } from "node:url";
+
+export interface MmRestProxyDeps {
+  mmInternalUrl: string;
+  log: (msg: string) => void;
+}
+
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailers",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+]);
+
+export function forwardMmRest(
+  deps: MmRestProxyDeps,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): void {
+  const target = new URL(req.url ?? "/", deps.mmInternalUrl);
+  const isHttps = target.protocol === "https:";
+  const transport = isHttps ? https : http;
+
+  // Header keys come from Node's parsed HTTP request — already
+  // lowercased + validated as RFC 7230 tokens by Node itself; safe
+  // to assign through. The hop-by-hop check above is the only
+  // filtering we need here.
+  const forwardedHeaders: http.OutgoingHttpHeaders = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
+    // eslint-disable-next-line security/detect-object-injection
+    if (value !== undefined) forwardedHeaders[key] = value;
+  }
+  forwardedHeaders["host"] = target.host;
+
+  const upstream = transport.request(
+    {
+      protocol: target.protocol,
+      hostname: target.hostname,
+      port: target.port || (isHttps ? 443 : 80),
+      path: target.pathname + target.search,
+      method: req.method,
+      headers: forwardedHeaders,
+      timeout: 30_000,
+    },
+    (upstreamRes) => {
+      const responseHeaders: http.OutgoingHttpHeaders = {};
+      for (const [key, value] of Object.entries(upstreamRes.headers)) {
+        if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
+        // eslint-disable-next-line security/detect-object-injection
+        if (value !== undefined) responseHeaders[key] = value;
+      }
+      res.writeHead(upstreamRes.statusCode ?? 502, responseHeaders);
+      upstreamRes.pipe(res);
+    },
+  );
+
+  upstream.on("error", (err) => {
+    deps.log(`[mm-proxy/rest] upstream error: ${err.message} for ${req.method} ${req.url}`);
+    // Unpipe + resume runs UNCONDITIONALLY before the headersSent branch:
+    // for a chunked POST whose upstream errored mid-body, the inbound
+    // request stream must be drained so the keep-alive socket isn't left
+    // in an inconsistent state. The headersSent branch only changes how
+    // the response is closed.
+    req.unpipe(upstream);
+    req.resume();
+    if (!res.headersSent) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Mattermost upstream unavailable" }));
+    } else {
+      res.end();
+    }
+  });
+
+  upstream.on("timeout", () => {
+    upstream.destroy(new Error("upstream timeout"));
+  });
+
+  req.pipe(upstream);
+}

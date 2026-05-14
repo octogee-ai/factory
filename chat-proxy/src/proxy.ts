@@ -28,15 +28,95 @@ import {
   observeOutboundForState,
 } from "./openclaw/inbound-gate.js";
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
+import { forwardMmRest } from "./mm-proxy/rest.js";
+import { attachMmWsBridge } from "./mm-proxy/ws.js";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
-const MM_PUBLIC_URL = process.env.MM_PUBLIC_URL;
+const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL;
+const CHAT_PROXY_PUBLIC_URL = process.env.CHAT_PROXY_PUBLIC_URL;
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
-if (!MM_PUBLIC_URL) {
-  console.error("FATAL: MM_PUBLIC_URL is required");
+if (!MM_INTERNAL_URL) {
+  console.error("FATAL: MM_INTERNAL_URL is required (in-cluster Mattermost URL, e.g. http://mattermost.<ns>.svc.cluster.local:8065)");
   process.exit(1);
+}
+
+if (!CHAT_PROXY_PUBLIC_URL) {
+  console.error("FATAL: CHAT_PROXY_PUBLIC_URL is required (browser-facing chat-proxy URL returned by the credential mint endpoint, e.g. https://chat.octogee.com)");
+  process.exit(1);
+}
+
+const MM_PUBLIC_URL = MM_INTERNAL_URL;
+
+const MM_INTERNAL_WS_URL = MM_INTERNAL_URL.replace(/^http/, "ws") + "/api/v4/websocket";
+
+const mmUserIdCache = new Map<string, { userId: string; cachedAt: number }>();
+const MM_USER_ID_CACHE_TTL_MS = 5 * 60 * 1000;
+const MM_USER_ID_CACHE_MAX_ENTRIES = 1_000;
+
+async function resolveMmUserId(mmToken: string): Promise<string | null> {
+  const cached = mmUserIdCache.get(mmToken);
+  const nowMs = Date.now();
+  if (cached && nowMs - cached.cachedAt < MM_USER_ID_CACHE_TTL_MS) {
+    mmUserIdCache.delete(mmToken);
+    mmUserIdCache.set(mmToken, cached);
+    return cached.userId;
+  }
+  if (cached) {
+    mmUserIdCache.delete(mmToken);
+  }
+  try {
+    const resp = await fetch(`${MM_INTERNAL_URL}/api/v4/users/me`, {
+      headers: { Authorization: `Bearer ${mmToken}` },
+    });
+    if (!resp.ok) return null;
+    const body = (await resp.json()) as { id?: unknown };
+    if (typeof body.id !== "string" || body.id.length === 0) return null;
+    mmUserIdCache.set(mmToken, { userId: body.id, cachedAt: nowMs });
+    evictMmUserIdCacheIfNeeded();
+    return body.id;
+  } catch (err) {
+    console.warn(`[mm-proxy] resolveMmUserId failed: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Parse an HTTP `Retry-After` header into milliseconds. Per RFC 7231 the
+ * value is either delta-seconds (e.g. `"120"`) or an HTTP-date. Anything
+ * else (null, garbage, NaN) returns `undefined` so the caller falls back
+ * to its default interval — guards the bridge-reconnect probe loop
+ * against `NaN * 1000` sleeps that would wedge it.
+ */
+function parseRetryAfterMs(raw: string | null): number | undefined {
+  if (raw == null) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  const asSeconds = Number(trimmed);
+  if (Number.isFinite(asSeconds) && asSeconds >= 0) {
+    return Math.floor(asSeconds * 1000);
+  }
+  const asDateMs = Date.parse(trimmed);
+  if (Number.isFinite(asDateMs)) {
+    const delta = asDateMs - Date.now();
+    return delta > 0 ? delta : 0;
+  }
+  return undefined;
+}
+
+function evictMmUserIdCacheIfNeeded(): void {
+  const nowMs = Date.now();
+  for (const [token, entry] of mmUserIdCache) {
+    if (nowMs - entry.cachedAt >= MM_USER_ID_CACHE_TTL_MS) {
+      mmUserIdCache.delete(token);
+    }
+  }
+  while (mmUserIdCache.size > MM_USER_ID_CACHE_MAX_ENTRIES) {
+    const oldestKey = mmUserIdCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    mmUserIdCache.delete(oldestKey);
+  }
 }
 
 const metricsRegistry = new Registry();
@@ -176,6 +256,27 @@ let approvalCallbackHandler:
 
 const FRAME_DROP_LOG_WINDOW_MS = 60_000;
 const lastFrameDropLogByUid = new Map<string, number>();
+const filteredFrameCountByUid = new Map<string, Map<string, number>>();
+
+function bumpFilteredFrameCount(uid: string, reason: string): void {
+  let perReason = filteredFrameCountByUid.get(uid);
+  if (!perReason) {
+    perReason = new Map<string, number>();
+    filteredFrameCountByUid.set(uid, perReason);
+  }
+  perReason.set(reason, (perReason.get(reason) ?? 0) + 1);
+}
+
+function drainFilteredFrameCounts(uid: string): string {
+  const perReason = filteredFrameCountByUid.get(uid);
+  if (!perReason || perReason.size === 0) return "";
+  const parts: string[] = [];
+  for (const [reason, count] of perReason) {
+    parts.push(`${reason}=${count}`);
+  }
+  filteredFrameCountByUid.delete(uid);
+  return parts.join(",");
+}
 const lastInboundDropLogByUid = new Map<string, number>();
 
 function normalizeWsData(data: unknown): Buffer {
@@ -339,6 +440,14 @@ async function handleRequest(
     return approvalCallbackHandler(req, res);
   }
 
+  if (urlPath.startsWith("/api/v4/")) {
+    return forwardMmRest(
+      { mmInternalUrl: MM_INTERNAL_URL!, log: (msg) => console.warn(msg) },
+      req,
+      res,
+    );
+  }
+
   req.resume();
   res.writeHead(404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ error: "Not found" }));
@@ -373,7 +482,7 @@ async function handleMattermostMint(
   mintRequestsTotal.inc({ outcome: 'ok' });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
-    mmUrl: MM_PUBLIC_URL,
+    mmUrl: CHAT_PROXY_PUBLIC_URL,
     mmToken: result.mmToken,
     mmUserId: result.mmUserId,
   }));
@@ -601,12 +710,16 @@ function handleOpenClawWsUpgrade(
             observeOutboundForState(text, gateState);
             clientWs.send(text);
           } else {
+            bumpFilteredFrameCount(uid, decision.reason);
             const now = Date.now();
-            const last = lastFrameDropLogByUid.get(uid) ?? 0;
-            if (now - last >= FRAME_DROP_LOG_WINDOW_MS) {
+            const last = lastFrameDropLogByUid.get(uid);
+            if (last === undefined) {
               lastFrameDropLogByUid.set(uid, now);
-              console.warn(
-                `[proxy] OC WS: dropped frame uid=${uid} reason=${decision.reason}`,
+            } else if (now - last >= FRAME_DROP_LOG_WINDOW_MS) {
+              lastFrameDropLogByUid.set(uid, now);
+              const counts = drainFilteredFrameCounts(uid);
+              console.info(
+                `[proxy] OC WS fan-out filtered frames uid=${uid} window=${FRAME_DROP_LOG_WINDOW_MS}ms counts=${counts} (correct per-user routing, not lost messages)`,
               );
             }
           }
@@ -642,10 +755,31 @@ export function createServer() {
   const server = http.createServer(handleRequest);
   const wss = new WebSocketServer({ noServer: true });
 
+  const mmWss = new WebSocketServer({ noServer: true });
+
   server.on("upgrade", (req, socket, head) => {
     const urlPath = (req.url || "").split("?")[0];
     if (urlPath.startsWith("/api/openclaw/ws/")) {
       handleOpenClawWsUpgrade(wss, req, socket, head);
+    } else if (urlPath === "/api/v4/websocket") {
+      const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+      if (!isAllowedWsOrigin(origin)) {
+        console.warn(`[mm-proxy/ws] rejected origin=${origin ?? "(none)"}`);
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      mmWss.handleUpgrade(req, socket, head, (browserWs) => {
+        attachMmWsBridge(
+          {
+            mmInternalWsUrl: MM_INTERNAL_WS_URL,
+            log: (msg) => console.warn(msg),
+            resolveMmUserId,
+            openUpstream: (url) => new WebSocket(url),
+          },
+          browserWs,
+        );
+      });
     } else {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
       socket.destroy();
@@ -697,7 +831,8 @@ if (process.env.NODE_ENV !== "test") {
   const server = createServer();
   server.listen(PORT, () => {
     console.log(`[chat-proxy] listening on :${PORT}`);
-    console.log(`[chat-proxy] MM public URL: ${MM_PUBLIC_URL}`);
+    console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
+    console.log(`[chat-proxy] chat-proxy public URL (browser-facing, returned by mint): ${CHAT_PROXY_PUBLIC_URL}`);
     console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
   });
 
@@ -855,7 +990,28 @@ if (process.env.NODE_ENV !== "test") {
     });
     console.log('[chat-proxy] MM event listener started (reactions + reply-as-steer)');
 
+    // Canonical openclaw health path per docs/architecture/AGENT-ARCHITECTURE.md:64.
+    // K8s probes use `tcpSocket` because `/__openclaw__/health` can block
+    // for tens of seconds under per-account MM probe load (see
+    // docs/specs/MM-MULTI-ACCOUNT-FOLLOWUP-SPEC.md). The fetch timeout
+    // here caps each probe at 2s; the bridge-reconnect loop's
+    // `probeMaxConsecutiveNotReady` (default 30 ≈ 15s) caps the total
+    // probe budget before falling through to the legacy WS attempt, so
+    // a wedged `/health` can't wedge the bridge.
+    const gatewayHealthUrl = `${process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789'}/__openclaw__/health`;
     startBridgeUpstreamReconnectLoop({
+      probeReady: async () => {
+        try {
+          const resp = await fetch(gatewayHealthUrl, { signal: AbortSignal.timeout(2_000) });
+          if (resp.ok) return { ready: true };
+          const retryAfter = resp.headers.get('retry-after');
+          const retryAfterMs = parseRetryAfterMs(retryAfter);
+          return { ready: false, retryAfterMs };
+        } catch {
+          return { ready: false };
+        }
+      },
+      probeIntervalMs: 500,
       openOnce: async () => {
         const tokenResolved = await fetchGatewayToken({ gatewayId });
         const ws = await openUpstream({

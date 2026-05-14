@@ -233,8 +233,12 @@ spec:
           env:
             - name: PORT
               value: "{{ .Values.chatProxy.port }}"
+            - name: MM_INTERNAL_URL
+              value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — chat-proxy forwards REST + WS data path here)" .Values.env.mmInternalUrl | quote }}
+            - name: CHAT_PROXY_PUBLIC_URL
+              value: {{ required "env.chatProxyPublicUrl is required (browser-facing chat-proxy URL returned by /api/auth/mattermost mint)" .Values.env.chatProxyPublicUrl | quote }}
             - name: MM_PUBLIC_URL
-              value: {{ required "env.mmSiteUrl is required (public-facing MM URL — chat-proxy returns this from /api/auth/mattermost)" .Values.env.mmSiteUrl | quote }}
+              value: {{ .Values.env.mmInternalUrl | quote }}
             - name: FIREBASE_PROJECT
               value: {{ .Values.env.firebaseProjectId | quote }}
             - name: GCP_PROJECT_ID

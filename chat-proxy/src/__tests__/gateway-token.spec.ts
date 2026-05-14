@@ -7,6 +7,7 @@ import {
 } from "../openclaw/gateway-token";
 import { GATEWAY_TOKEN_PLACEHOLDER } from "../openclaw/gateway-token-constants";
 
+ 
 function makeClient(result: unknown, throws?: Error): any {
   const accessSecretVersion = vi.fn(async () => {
     if (throws) throw throws;
