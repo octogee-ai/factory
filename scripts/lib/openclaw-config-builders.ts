@@ -39,7 +39,7 @@ export function buildCustomerAgent(
     agentDir: c.agentDir,
     model: c.coach.model,
     identity: { name: c.coach.name, emoji: c.coach.emoji },
-    heartbeat: { every: "45s", target: "last", lightContext: true },
+    heartbeat: { every: "60m", target: "last", lightContext: true },
     tools: { fs: { workspaceOnly: true } },
   };
 }

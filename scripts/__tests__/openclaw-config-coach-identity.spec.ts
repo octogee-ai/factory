@@ -78,7 +78,7 @@ describe("buildCustomerAgent", () => {
       workspace: "/home/node/.openclaw/customers/chris-builds-a3f2",
       agentDir: "/home/node/.openclaw/agents/octogee-chris-builds-a3f2-coach/agent",
       model: "anthropic/claude-sonnet-4-6",
-      heartbeat: { every: "45s", target: "last", lightContext: true },
+      heartbeat: { every: "60m", target: "last", lightContext: true },
       tools: { fs: { workspaceOnly: true } },
     });
   });

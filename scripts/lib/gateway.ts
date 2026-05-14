@@ -80,13 +80,14 @@ export function ensureGatewayDefaults(): void {
         log(`Model: ${agent.id} → ${faceModel} (was ${oldModel})`);
       }
 
-      agent.heartbeat ??= { every: "45s" };
-      if (agent.heartbeat.target !== "last" || !agent.heartbeat.lightContext || agent.heartbeat.every !== "45s") {
-        agent.heartbeat.every = "45s";
-        agent.heartbeat.target = "last";
-        agent.heartbeat.lightContext = true;
+      // Default heartbeat — applied only when the agent has no heartbeat
+      // config at all. Face/Brain (or future subagent work) may set a
+      // specific heartbeat schedule for a specific purpose; reconcile must
+      // not clobber it.
+      if (agent.heartbeat == null) {
+        agent.heartbeat = { every: "60m", target: "last", lightContext: true };
         agentChanged = true;
-        log(`${agent.id} → heartbeat target=last, lightContext=true`);
+        log(`${agent.id} → heartbeat default (every=60m, target=last, lightContext=true)`);
       }
 
       if (agentChanged) {
