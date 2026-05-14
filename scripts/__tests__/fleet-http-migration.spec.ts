@@ -530,7 +530,10 @@ describe("createImportHandler", () => {
       imported: true,
     });
     expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
+      "chris",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
 
     // Both spawn invocations were tar with the right verbs.
     expect(spawnMock.mock.calls.length).toBe(2);
@@ -560,6 +563,75 @@ describe("createImportHandler", () => {
     expect((getBody() as { message?: string }).message).toContain("absolute path");
     expect(spawnMock.mock.calls.length).toBe(1); // only the list pass
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 alreadyMounted=true (noop) when the slug is in the gateway's mounted set", async () => {
+    const adapter = mkAdapter();
+    const handler = createImportHandler(
+      mkDeps({ adapter, getMountedCustomers: () => ["chris"] }),
+    );
+    const sig = signFleetRequest(SECRET, "mig-1", "chris");
+    const req = mkImportRequest({
+      migrationId: "mig-1",
+      slug: "chris",
+      signature: sig,
+    });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({
+      migrationId: "mig-1",
+      slug: "chris",
+      imported: true,
+      alreadyMounted: true,
+    });
+    expect(adapter.prepareImportDir).not.toHaveBeenCalled();
+    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(spawnMock.mock.calls.length).toBe(0);
+  });
+
+  it("aborts activate + responds 499 when the client disconnects mid-import", async () => {
+    const adapter = mkAdapter();
+    let signalSeenByActivate: AbortSignal | undefined;
+    let resolveActivateStarted: () => void = () => {};
+    const activateStarted = new Promise<void>((r) => {
+      resolveActivateStarted = r;
+    });
+    adapter.activateImportedCustomer = vi.fn(async (_slug: string, opts?: { signal?: AbortSignal }) => {
+      signalSeenByActivate = opts?.signal;
+      resolveActivateStarted();
+      return new Promise<void>((_resolve, reject) => {
+        const reject_ = () => reject(new Error("aborted"));
+        if (opts?.signal?.aborted) {
+          reject_();
+          return;
+        }
+        opts?.signal?.addEventListener("abort", reject_);
+      });
+    });
+    const fakeListChild = mkFakeChild({
+      stdout: ["agents/octogee-chris-coach/sessions/sessions.json\n"],
+      exitCode: 0,
+    });
+    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+
+    const handler = createImportHandler(mkDeps({ adapter }));
+    const sig = signFleetRequest(SECRET, "mig-1", "chris");
+    const req = mkImportRequest({ migrationId: "mig-1", slug: "chris", signature: sig });
+    const { res, getStatus } = mkResponse();
+
+    const handlerPromise = handler(req, res, vi.fn());
+
+    // Wait for the handler to reach activate before simulating disconnect —
+    // deterministic gate, not a wall-clock guess.
+    await activateStarted;
+    (res as unknown as { emit: (e: string) => void }).emit("close");
+
+    await handlerPromise;
+    expect(signalSeenByActivate).toBeInstanceOf(AbortSignal);
+    expect(signalSeenByActivate?.aborted).toBe(true);
+    expect(getStatus()).toBe(499);
   });
 
   it("returns 500 when tar exits non-zero before activation runs", async () => {

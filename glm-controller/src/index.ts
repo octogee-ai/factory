@@ -54,6 +54,7 @@ import { GoogleAuth } from "google-auth-library";
 import { startHttpServer } from "./http-server.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
+import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
 
 // Cowboy's logger writes color + emoji + timestamp to stdout/stderr.
@@ -441,6 +442,18 @@ async function main(): Promise<void> {
     stalenessMs: 5 * 60 * 1000,
     now: () => Date.now(),
   });
+  // Stuck-op reaper: fires every 60s, flips `running` glmOperations docs
+  // older than 15 min to `failed`. Without this a controller crash
+  // mid-operation leaves a phantom `running` op forever — incident
+  // 2026-05-13 saw a stuck tester2 → canary op that blocked retries
+  // because the admin UI showed it as still in-progress.
+  const stopStuckOpReaper = startStuckOpReaper({
+    db,
+    log,
+    intervalMs: 60_000,
+    stalenessMs: 15 * 60 * 1000,
+    now: () => Date.now(),
+  });
   const stopHttp = startHttpServer({
     db,
     log,
@@ -460,6 +473,7 @@ async function main(): Promise<void> {
     stopReconciler();
     stopWorker();
     stopReaper();
+    stopStuckOpReaper();
     stopHttp();
     process.exit(0);
   };

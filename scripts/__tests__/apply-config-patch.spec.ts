@@ -475,6 +475,77 @@ describe("applyConfigPatch — server retry-after hint", () => {
   });
 });
 
+// ── AbortSignal cancellation ───────────────────────────────────────────────
+//
+// Production hang scenario: addCustomerToGateway's outer deadline trips,
+// aborts a signal it passes into applyConfigPatch. The retry loop should
+// stop before the next attempt rather than running for 90s of CONFIG_PATCH_
+// DEADLINE_MS while the caller has already given up.
+
+describe("applyConfigPatch — abort signal", () => {
+  it("throws immediately if the signal is already aborted", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort(new Error("cancelled by caller"));
+    const configGet = vi.fn(async () => ({ config: {}, hash: "h" }));
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        { ...baseOpts(), rpc: makeFakeRpc({ configGet }), signal: ctrl.signal },
+      ),
+    ).rejects.toThrow(/cancelled by caller|aborted/i);
+    expect(configGet).not.toHaveBeenCalled();
+  });
+
+  it("aborts the sleep between retries and stops the loop", async () => {
+    const ctrl = new AbortController();
+    const configGet = vi.fn(async () => {
+      throw new GatewayRpcError("connect-failed", "transient");
+    });
+    const sleep = vi.fn(async () => {
+      ctrl.abort(new Error("cancelled mid-backoff"));
+    });
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        {
+          ...baseOpts({ sleep, retryBackoffInitialMs: 1000, maxRetries: Number.POSITIVE_INFINITY }),
+          rpc: makeFakeRpc({ configGet }),
+          signal: ctrl.signal,
+        },
+      ),
+    ).rejects.toThrow(/cancelled mid-backoff|aborted/i);
+    expect(configGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("default sleep wakes early when the signal fires mid-wait (no caller-supplied sleep)", async () => {
+    // Don't override `sleep` so the production default runs. Set a 5s
+    // backoff, abort after 30ms, and assert the whole call settles in
+    // well under 5s.
+    const ctrl = new AbortController();
+    const configGet = vi.fn(async () => {
+      throw new GatewayRpcError("connect-failed", "ECONNRESET");
+    });
+    setTimeout(() => ctrl.abort(new Error("test-cancelled")), 30);
+    const startedAt = Date.now();
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        {
+          log: () => {},
+          maxRetries: Number.POSITIVE_INFINITY,
+          retryBackoffInitialMs: 5_000,
+          rpc: makeFakeRpc({ configGet }),
+          signal: ctrl.signal,
+        },
+      ),
+    ).rejects.toThrow(/test-cancelled|aborted/i);
+    const elapsed = Date.now() - startedAt;
+    expect(elapsed).toBeLessThan(1_000);
+  });
+});
+
 // ── Config cache (skip configGet between successive patches) ────────────────
 //
 // Each customer-add costs ~5-6s in configGet round-trip even when the

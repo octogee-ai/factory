@@ -40,6 +40,12 @@ export interface ApplyConfigPatchOptions {
   /** Injectable clock for deadline math; defaults to `Date.now`. */
   now?: () => number;
   cache?: ConfigCache;
+  /**
+   * External abort: if signaled, the retry loop stops at the next iteration
+   * boundary and the sleep wakes early. Mid-RPC calls aren't cancelled
+   * because the gateway-rpc layer doesn't accept a signal yet.
+   */
+  signal?: AbortSignal;
 }
 
 const RETRY_AFTER_PATTERN = /\brate limit exceeded\b.*?\bretry after (\d+)s\b/i;
@@ -123,8 +129,26 @@ export async function applyConfigPatch(
   const maxRetries = opts.maxRetries ?? Number.POSITIVE_INFINITY;
   const totalDeadlineMs = opts.totalDeadlineMs ?? Number.POSITIVE_INFINITY;
   const now = opts.now ?? Date.now;
+  // Abort-aware default sleep: if the signal fires mid-wait, wake
+  // immediately so the next `throwIfAborted()` trips this iteration
+  // rather than after the full backoff. Callers who supply their own
+  // `sleep` are expected to be abort-aware themselves (tests pass a
+  // no-op or instrumented version).
+  const signalRef = opts.signal;
   const sleep =
-    opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    opts.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, ms);
+        signalRef?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(t);
+            resolve();
+          },
+          { once: true },
+        );
+      }));
 
   const rpc = opts.rpc ?? createGatewayRpc();
   const ownsRpc = !opts.rpc;
@@ -136,8 +160,18 @@ export async function applyConfigPatch(
   const remainingMs = (): number => totalDeadlineMs - (now() - startedAt);
 
   const cache = opts.cache;
+  const signal = opts.signal;
+  const throwIfAborted = () => {
+    if (signal?.aborted) {
+      const reason = signal.reason;
+      throw reason instanceof Error
+        ? reason
+        : new Error(`${prefix}config.patch aborted: ${String(reason ?? "signal aborted")}`);
+    }
+  };
 
   try {
+    throwIfAborted();
     while (true) {
       attempts++;
       const attemptStartedAt = now();
@@ -230,6 +264,7 @@ export async function applyConfigPatch(
           `${prefix}config.patch attempt=${attempts} failed (${err.code}: ${err.message}) after ${elapsed}ms — retrying in ${clamped}ms (${source})`,
         );
         await sleep(clamped);
+        throwIfAborted();
         // Always advance the exp-backoff curve so the fallback doesn't reset
         // to retryBackoffInitialMs if the server stops sending retry-after
         // hints on subsequent failures.

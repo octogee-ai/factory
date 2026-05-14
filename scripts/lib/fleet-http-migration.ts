@@ -58,6 +58,13 @@ export interface MigrationHandlerDeps {
   adapter: CustomerLifecycleAdapter;
   /** Default `console.log`; tests inject a spy. */
   log?: (msg: string) => void;
+  /**
+   * In-memory `mountedCustomers` accessor for the /import idempotency
+   * check. When supplied, /import returns 200 with `alreadyMounted: true`
+   * if the slug is already in this gateway's mounted set, skipping
+   * `prepareImportDir` (which would otherwise wipe a live customer's dir).
+   */
+  getMountedCustomers?: () => readonly string[];
 }
 
 /** Slug-shape guard. Reuses the canonical username validator
@@ -238,29 +245,134 @@ export function createExportHandler(deps: MigrationHandlerDeps): RequestHandler 
 
 // ── /import ─────────────────────────────────────────────────────────────────
 
+function attachImportDisconnectHandlers(
+  res: Response,
+  migrationId: string,
+  slug: string,
+  log: (msg: string) => void,
+): { controller: AbortController; detach: () => void } {
+  // Listen on `res` rather than `req`: the underlying socket close
+  // triggers both, and `req.aborted` was deprecated in Node 17 (replaced
+  // by `close` + `!req.complete`). `res.writableEnded` is the canonical
+  // "did we finish responding" check, so a `res.on("close")` that fires
+  // before writableEnded is the only signal we need for both mid-body
+  // and post-body client disconnects.
+  const controller = new AbortController();
+  const onResClose = () => {
+    if (res.writableEnded || controller.signal.aborted) return;
+    log(
+      `[migration-http] client closed connection before response sent migrationId=${migrationId} slug=${slug} — aborting`,
+    );
+    controller.abort(new Error(`client disconnected mid-import`));
+  };
+  res.on("close", onResClose);
+  return {
+    controller,
+    detach: () => {
+      res.removeListener("close", onResClose);
+    },
+  };
+}
+
+/**
+ * Returns true (and short-circuits the handler) if the slug is already in
+ * this gateway's `mountedCustomers` set.
+ *
+ * Residual race: this is a synchronous snapshot, not an atomic check. If a
+ * concurrent caller is mid-mount and `onMounted` fires *between* this
+ * check and `prepareImportDir` (~ms apart), the dir-wipe still happens
+ * on a live customer. The check narrows the window from the multi-minute
+ * orchestrator-retry-during-stuck-mount case to a sub-ms one; the per-
+ * gateway concurrency cap added in #931 closes the upstream side so two
+ * orchestrator calls can't reach this point at the same time today. If
+ * the cap is ever moved to a higher level (Firestore lock for multi-replica),
+ * revisit by making this check + `prepareImportDir` an atomic transition
+ * under a per-slug mutex.
+ */
+function maybeRespondAlreadyMounted(
+  deps: MigrationHandlerDeps,
+  res: Response,
+  migrationId: string,
+  slug: string,
+  log: (msg: string) => void,
+): boolean {
+  if (!deps.getMountedCustomers?.().includes(slug)) return false;
+  log(
+    `[migration-http] import migrationId=${migrationId} slug=${slug} already mounted — noop (skipping prepareImportDir, no tar read)`,
+  );
+  const response: ImportResponse = {
+    migrationId,
+    slug,
+    imported: true,
+    alreadyMounted: true,
+  };
+  res.status(200).json(response);
+  return true;
+}
+
+function validateImportRequest(
+  deps: MigrationHandlerDeps,
+  req: Request,
+  res: Response,
+  log: (msg: string) => void,
+): { migrationId: string; slug: string } | null {
+  const migrationId = req.header(MIGRATION_ID_HEADER);
+  const slug = req.header(MIGRATION_SLUG_HEADER);
+  if (!migrationId || !slug) {
+    res.status(400).json({
+      error: "missing migration headers",
+      required: [MIGRATION_ID_HEADER, MIGRATION_SLUG_HEADER],
+    });
+    return null;
+  }
+  if (rejectInvalidSlug(slug, res)) return null;
+  const sigHeader = req.header(SIGNATURE_HEADER);
+  if (!verifyHeaderSignature(migrationId, slug, sigHeader, deps.secret)) {
+    log(`[migration-http] ⚠ bad signature on import migrationId=${migrationId} slug=${slug}`);
+    res.status(401).json({ error: "invalid signature" });
+    return null;
+  }
+  if (maybeRespondAlreadyMounted(deps, res, migrationId, slug, log)) return null;
+  return { migrationId, slug };
+}
+
+function respondImportFailure(
+  res: Response,
+  controllerSignal: AbortSignal,
+  err: unknown,
+): void {
+  if (res.writableEnded) return;
+  const message = err instanceof Error ? err.message : String(err);
+  if (controllerSignal.aborted && !res.headersSent) {
+    // Nginx convention: 499 Client Closed Request — distinguishes a
+    // caller-side abort from a genuine server error in dashboards.
+    res.status(499).json({ error: "client disconnected", message });
+    return;
+  }
+  if (!res.headersSent) {
+    res.status(500).json({ error: "import failed", message });
+    return;
+  }
+  res.destroy(err instanceof Error ? err : new Error(message));
+}
+
 export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const migrationId = req.header(MIGRATION_ID_HEADER);
-    const slug = req.header(MIGRATION_SLUG_HEADER);
-    if (!migrationId || !slug) {
-      res.status(400).json({
-        error: "missing migration headers",
-        required: [MIGRATION_ID_HEADER, MIGRATION_SLUG_HEADER],
-      });
-      return;
-    }
-    if (rejectInvalidSlug(slug, res)) return;
+    const validated = validateImportRequest(deps, req, res, log);
+    if (!validated) return;
+    const { migrationId, slug } = validated;
 
-    const sigHeader = req.header(SIGNATURE_HEADER);
-    if (!verifyHeaderSignature(migrationId, slug, sigHeader, deps.secret)) {
-      log(`[migration-http] ⚠ bad signature on import migrationId=${migrationId} slug=${slug}`);
-      res.status(401).json({ error: "invalid signature" });
-      return;
-    }
+    const { controller, detach } = attachImportDisconnectHandlers(
+      res,
+      migrationId,
+      slug,
+      log,
+    );
 
     let tmpDir: string | null = null;
     try {
+      if (controller.signal.aborted) throw controller.signal.reason ?? new Error("aborted");
       const importDir = await deps.adapter.prepareImportDir(slug);
       log(
         `[migration-http] import migrationId=${migrationId} slug=${slug} unpacking → ${importDir}`,
@@ -299,8 +411,10 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
 
       // 4. Hand off to the adapter for agent register + activation
       // (config patch + verify-channel-ready, the regular addCustomer
-      // path tail-end).
-      await deps.adapter.activateImportedCustomer(slug);
+      // path tail-end). The signal propagates client disconnects so a
+      // bailed-out caller doesn't leave activate running for ~5 minutes
+      // after they gave up.
+      await deps.adapter.activateImportedCustomer(slug, { signal: controller.signal });
 
       const response: ImportResponse = { migrationId, slug, imported: true };
       log(`[migration-http] ✅ import migrationId=${migrationId} slug=${slug} done`);
@@ -308,12 +422,9 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ import migrationId=${migrationId} slug=${slug}: ${message}`);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "import failed", message });
-      } else {
-        res.destroy(err instanceof Error ? err : new Error(message));
-      }
+      respondImportFailure(res, controller.signal, err);
     } finally {
+      detach();
       // Always clean up the temp tarball — it's the customer's full state
       // and we should never leave it on disk past the request.
       if (tmpDir) {

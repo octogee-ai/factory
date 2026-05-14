@@ -285,6 +285,11 @@ export interface ImportResponse {
   /** True when the import succeeded — tarball unpacked + agent registered
    *  in OpenClaw. */
   imported: boolean;
+  /** True when the slug was already in this gateway's mounted set and the
+   *  request was treated as a noop (no tarball read, no dir wipe). Lets
+   *  callers distinguish "fresh import" from "already there" without
+   *  inspecting log lines. */
+  alreadyMounted?: boolean;
 }
 
 export interface UnmountRequestBody extends MigrationRequestBody {}

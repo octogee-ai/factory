@@ -1032,6 +1032,51 @@ describe("addCustomerToGateway — same-uid in-flight dedup", () => {
     expect(retry.steps).toContain("verify-channel-ready");
   });
 
+  it("stops the inner pipeline at the next checkpoint after mountDeadlineMs trips", async () => {
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    const realAdapter = makeAdapter(state);
+    let blobSyncCalled = false;
+    const slowAdapter: CustomerLifecycleAdapter = {
+      ...realAdapter,
+      loadUserSnapshot: async (uid: string) => {
+        await new Promise<void>((r) => setTimeout(r, 80));
+        return realAdapter.loadUserSnapshot(uid);
+      },
+      blobSyncForSlug: async (slug: string) => {
+        blobSyncCalled = true;
+        return realAdapter.blobSyncForSlug(slug);
+      },
+    };
+
+    await expect(
+      addCustomerToGateway(slowAdapter, "uid-test", { mountDeadlineMs: 25 }),
+    ).rejects.toThrow(/mountDeadlineMs.*25ms.*exceeded/i);
+
+    await new Promise<void>((r) => setTimeout(r, 120));
+    expect(blobSyncCalled).toBe(false);
+  });
+
+  it("aborts an external AbortSignal observer so callers can react to the deadline trip", async () => {
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    const realAdapter = makeAdapter(state);
+    const slowAdapter: CustomerLifecycleAdapter = {
+      ...realAdapter,
+      loadUserSnapshot: async () => new Promise(() => {}),
+    };
+
+    let externalSignalAborted = false;
+    const aborter = await addCustomerToGateway(slowAdapter, "uid-test", {
+      mountDeadlineMs: 25,
+      onSignalCreated: (signal) => {
+        signal.addEventListener("abort", () => {
+          externalSignalAborted = true;
+        });
+      },
+    }).catch((e) => e);
+    expect(String(aborter)).toMatch(/mountDeadlineMs/);
+    expect(externalSignalAborted).toBe(true);
+  });
+
   it("clears the in-flight uid on failure so the fleet can retry", async () => {
     const state = makeState(snap({ status: "" }), emptyDisk());
     state.healthy = false;

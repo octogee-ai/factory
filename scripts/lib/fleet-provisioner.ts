@@ -213,6 +213,7 @@ export async function startFleetController(
     gatewayId: opts.gatewayId,
     adapter: wrappedAdapter,
     log: opts.log,
+    getMountedCustomers: () => runtime.mountedCustomers,
   };
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
