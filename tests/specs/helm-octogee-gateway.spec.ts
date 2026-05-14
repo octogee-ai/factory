@@ -188,7 +188,8 @@ describe("helm/octogee-gateway/ — workspace-api sidecar (Phase 6.B collocation
     expect(wsBlock).toMatch(/STRIPE_SECRET_KEY/);
     expect(wsBlock).toMatch(/MM_ADMIN_TOKEN/);
     expect(wsBlock).toMatch(/GITEA_TOKEN/);
-    expect(wsBlock).toMatch(/GITHUB_TOKEN/);
+    // GITHUB_TOKEN intentionally NOT in the platform chart — it comes
+    // from per-customer client secrets, not from a shared K8s secret.
   });
 });
 
