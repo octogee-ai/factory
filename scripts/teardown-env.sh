@@ -253,7 +253,11 @@ if $FORCE && [[ "$ENV" == "test" ]]; then
     --kube-context "$K8S_CONTEXT" --no-hooks --timeout=1m 2>/dev/null || true
   kubectl delete deploy,statefulset,job --all -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
   kubectl delete pod --all -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
-  ok "Fast teardown complete (all PVCs preserved)"
+  if $FULL; then
+    ok "Fast teardown complete (PVCs deleted via step 1a; finalizers complete now that holders are gone)"
+  else
+    ok "Fast teardown complete (PVCs preserved)"
+  fi
   FAST_DONE=true
 else
   uninstall_per_instance_gateways 2m
@@ -418,7 +422,9 @@ if $FULL; then
     SA_KEY="${SA_KEY_PATH:-$SA_KEY_DEFAULT}"
     if [[ -f "$SA_KEY" ]]; then
       cd "$REPO_DIR/functions"
-      npx tsx -e "
+      # `-y` so a fresh shell doesn't hang on npx's "Ok to proceed? (y)"
+      # tsx-install prompt when running non-interactively.
+      npx -y tsx -e "
 import * as admin from 'firebase-admin';
 import * as fs from 'fs';
 const sa = JSON.parse(fs.readFileSync('$SA_KEY', 'utf8'));
