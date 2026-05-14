@@ -283,6 +283,25 @@ wait_for_gateway_exit() {
   done
 ) &
 
+# ── OpenClaw file-log mirror to container stdout ────────────────────────────
+# `openclaw logs` reads from a richer file log (/tmp/openclaw-1000/openclaw-
+# YYYY-MM-DD.log) via RPC; that channel is wider than what OpenClaw itself
+# writes to stdout under OPENCLAW_LOG_LEVEL=info. Mirror the file log so
+# kubectl/stern see the same content as `openclaw logs`.
+#
+# `tail -F` (capital F) follows by name, so the daily-rotated date-stamped
+# files keep streaming after midnight UTC without supervisor intervention.
+# The `[openclaw-file]` prefix distinguishes mirrored lines from OpenClaw's
+# direct stdout and from the entrypoint's own `log` lines.
+(
+  while true; do
+    until ls /tmp/openclaw-1000/openclaw-*.log >/dev/null 2>&1; do sleep 2; done
+    tail -F /tmp/openclaw-1000/openclaw-*.log 2>&1 \
+      | sed -u 's/^/[openclaw-file] /' || true
+    sleep 2
+  done
+) &
+
 # ── Signal forwarding ──────────────────────────────────────────────────────
 # Kubernetes sends SIGTERM → PID 1 (this sh) → our trap → SIGTERM every
 # direct child → exit cleanly within the pod's terminationGracePeriodSeconds
