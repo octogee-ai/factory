@@ -304,11 +304,11 @@ if $FULL; then
   echo ""
   info "Resetting Cloud SQL databases ($MM_DB_NAME, $GITEA_DB_NAME)..."
 
-  # Secret names match what setup-cloud-sql.sh writes — `mattermost-db-password`
-  # (lowercase hyphens) is the canonical name. The previous `MM_DB_PASSWORD`
-  # (uppercase underscores) referred to a secret that doesn't exist; psql
-  # then auth-failed with an empty password.
-  MM_DB_PASS=$(gcloud secrets versions access latest --secret=mattermost-db-password --project=octogee 2>/dev/null || echo "")
+  # Canonical secret names: MM uses `MM_DB_PASSWORD` (uppercase) everywhere
+  # (setup-secrets.sh, setup-mattermost.sh, helm chart env var, RUNBOOK).
+  # Gitea uses `gitea-db-password` (lowercase-hyphen). Two different
+  # historical conventions; both are load-bearing.
+  MM_DB_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project=octogee 2>/dev/null || echo "")
   GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee 2>/dev/null || echo "")
 
   PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || \
@@ -330,7 +330,7 @@ if $FULL; then
     die "cloud-sql-proxy not found and --full requested. Install it (brew install cloud-sql-proxy) or run DB drops manually and rerun without --full."
   fi
   if [[ -z "$MM_DB_PASS" ]]; then
-    die "Could not read mattermost-db-password from Secret Manager. Check gcloud auth + grant, or run DB drop manually."
+    die "Could not read MM_DB_PASSWORD from Secret Manager. Check gcloud auth + grant, or run DB drop manually."
   fi
   if [[ -z "$GITEA_DB_PASS" ]]; then
     die "Could not read gitea-db-password from Secret Manager. Check gcloud auth + grant, or run DB drop manually."

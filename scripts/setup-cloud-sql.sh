@@ -106,8 +106,20 @@ store_secret() {
   fi
 }
 
+# Secret name per user: the rest of the codebase (setup-secrets.sh,
+# setup-mattermost.sh, helm chart env var, RUNBOOK) reads `MM_DB_PASSWORD`
+# for MM (uppercase, underscores) but `gitea-db-password` for Gitea
+# (lowercase, hyphens). Match those conventions exactly — drift here breaks
+# pod startup because setup-secrets.sh wires the K8s `mattermost-cloud-sql`
+# secret value from `MM_DB_PASSWORD`. An earlier version of this script
+# wrote `mattermost-db-password` (lowercase) and that secret diverged from
+# the canonical `MM_DB_PASSWORD` MM actually mounts.
+declare -A SECRET_NAME_FOR
+SECRET_NAME_FOR[mattermost]="MM_DB_PASSWORD"
+SECRET_NAME_FOR[gitea]="gitea-db-password"
+
 for USER in mattermost gitea; do
-  SECRET_NAME="${USER}-db-password"
+  SECRET_NAME="${SECRET_NAME_FOR[$USER]}"
   if gcloud sql users list --instance="$INSTANCE" --project="$PROJECT" | grep -q "^$USER "; then
     ok "User '$USER' already exists — preserving DB password + Secret Manager value (no rotation)"
     continue
