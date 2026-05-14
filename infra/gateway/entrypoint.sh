@@ -153,7 +153,7 @@ if [ -d /octogee/extensions ]; then
     mkdir -p "$target"
     # Copy source files only (no node_modules)
     rsync -a --exclude node_modules "$ext_dir" "$target/" 2>/dev/null || \
-      cp -rn "$ext_dir"*.ts "$ext_dir"*.json "$target/" 2>/dev/null || true
+      cp -rn "$ext_dir"*.ts "$ext_dir"*.mjs "$ext_dir"*.json "$target/" 2>/dev/null || true
     # Symlink node_modules:
     # 1. Prefer /opt/<ext-name>-deps (pre-built in base image — fast path)
     # 2. Fall back to staged /octogee/extensions/<ext>/node_modules

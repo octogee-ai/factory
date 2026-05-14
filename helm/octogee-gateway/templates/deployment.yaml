@@ -20,7 +20,7 @@ spec:
         app: octogee-gateway
         gateway-instance: {{ .Values.instanceName }}
       annotations:
-        cloud.google.com/compute-class: octogee-cost-optimized
+        cloud.google.com/compute-class: {{ .Values.computeClass | default "octogee-cost-optimized" | quote }}
     spec:
       serviceAccountName: {{ .Values.serviceAccountName }}
       securityContext:

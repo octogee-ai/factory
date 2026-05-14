@@ -27,6 +27,16 @@ image:
 
 serviceAccountName: octogee-gateway
 
+# GKE Autopilot compute class. Custom class names map through the
+# ComputeClass CRD; built-in classes (Balanced, Performance, Scale-Out)
+# select Google's stock pools.
+#
+# Default `octogee-cost-optimized` lands pods on E-family cheap cores —
+# good for idle gateways but starves the V8 main thread during model
+# warmup (~25-30s event-loop block measured 2026-05-13). Override per-env
+# to a compute-optimized class for faster cores during launch.
+computeClass: "octogee-cost-optimized"
+
 env:
   gcloudProject: "octogee"
   firebaseProjectId: "octogee"
