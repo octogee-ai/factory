@@ -65,6 +65,18 @@ export interface HelmInstanceValue {
   enabled: boolean;
   image: { repository: string; tag: string };
   gatewayId: string;
+  /**
+   * Hash of the on-disk gateway chart at the moment Cowboy rendered the
+   * release. Cowboy compares its current chart's fingerprint against
+   * the value last stored in the helm release; when they differ (chart
+   * template change shipped via glm-controller image rebuild), the
+   * diff detects an "update" and helm re-applies.
+   *
+   * Optional so older releases that predate this field load without
+   * fingerprint info — they'll trigger one update on the first reconcile
+   * after upgrade to set the field.
+   */
+  chartFingerprint?: string;
 }
 
 export type HelmInstancesMap = Record<string, HelmInstanceValue>;

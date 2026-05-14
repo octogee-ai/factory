@@ -43,6 +43,21 @@ computeClass: "Performance"
 # Sapphire Rapids, slightly higher absolute perf), "c3d" (AMD Genoa).
 machineFamily: "c2d"
 
+# Chart fingerprint — Cowboy passes its SHA-256 of the chart bytes via
+# `--set chartFingerprint=...` so subsequent reconciles can detect chart
+# template drift even when image-tag is unchanged. Stored on the helm
+# release; never authored by humans. The release default is empty
+# because manual `helm upgrade` from operator machines should be
+# allowed even when no fingerprint is computed.
+#
+# Metadata-only: no template renders this value. It exists solely as a
+# stored helm value that `helm get values -o json` can read back during
+# reconcile. The fingerprint covers the whole chart dir including
+# values.test.yaml AND values.prod.yaml, so editing the test values
+# triggers a one-tick re-apply in PROD even though PROD's render is
+# unchanged — free no-op rolls, not a correctness issue.
+chartFingerprint: ""
+
 env:
   gcloudProject: "octogee"
   firebaseProjectId: "octogee"

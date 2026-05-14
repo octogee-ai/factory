@@ -54,6 +54,7 @@ import { GoogleAuth } from "google-auth-library";
 import { startHttpServer } from "./http-server.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
+import { computeChartFingerprint } from "./chart-fingerprint.js";
 
 // Cowboy's logger writes color + emoji + timestamp to stdout/stderr.
 // `legacy(msg)` is the drop-in shape for the existing handler libs that
@@ -113,6 +114,15 @@ interface ControllerDeps {
   ) => Promise<void>;
   /** Retry interval after a failed reconcile tick. Defaults to 30s. */
   reconcileRetryMs?: number;
+  /**
+   * SHA-256 of the on-disk gateway chart, threaded into every helm
+   * upsert. Cowboy detects template drift by comparing this against
+   * the value last stored in each release's helm values — a mismatch
+   * triggers re-apply even when image-tag is unchanged. Computed once
+   * at process startup since the chart is baked into the Cowboy image
+   * and only changes via a new glm-controller deployment.
+   */
+  chartFingerprint?: string;
 }
 
 async function applyChanges(
@@ -140,6 +150,7 @@ async function applyChanges(
       imageTag: change.to.image.tag,
       chartPath: GATEWAY_CHART,
       valuesFile: GATEWAY_VALUES_FILE,
+      chartFingerprint: deps.chartFingerprint,
     });
   }
 }
@@ -186,9 +197,14 @@ export function startReconciler(deps: ControllerDeps): () => void {
         namespace: NAMESPACE,
       });
       const mountedByGatewayId = await readMountedByGatewayId(deps.db);
-      const desiredMap = buildInstancesMap(desired);
+      const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
       const changes = diffInstancesMap(actualMap, desiredMap);
-      const targetMap = buildHelmTargetMap(desired, actualMap, mountedByGatewayId);
+      const targetMap = buildHelmTargetMap(
+        desired,
+        actualMap,
+        mountedByGatewayId,
+        deps.chartFingerprint,
+      );
       const preservedDrift = changes.filter(
         (c) =>
           c.kind === "drift" &&
@@ -392,16 +408,19 @@ async function main(): Promise<void> {
 
   const handlers = await buildHandlers(db, log, helm, handlerSyncFleetIngress);
 
+  const chartFingerprint = computeChartFingerprint(GATEWAY_CHART);
+
   const deps: ControllerDeps = {
     db,
     helm,
     handlers,
     log,
     syncFleetIngress: syncFleetIngressForGateways,
+    chartFingerprint,
   };
 
   log(
-    `[glm-controller] starting — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} valuesFile=${GATEWAY_VALUES_FILE} fleetIngress=${FLEET_INGRESS_NAME}`,
+    `[glm-controller] starting — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} valuesFile=${GATEWAY_VALUES_FILE} fleetIngress=${FLEET_INGRESS_NAME}`,
   );
 
   await bootstrapGlmGateways(deps);

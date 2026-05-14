@@ -277,3 +277,59 @@ describe("buildHelmTargetMap", () => {
     expect(target).toEqual(actual);
   });
 });
+
+describe("chart-template drift detection", () => {
+  const baseInstance = (tag: string) => ({
+    enabled: true,
+    image: { repository: REPO, tag },
+    gatewayId: "gw-test",
+  });
+
+  const desired = (overrides: Partial<GatewayDesiredState>): GatewayDesiredState => ({
+    gatewayId: "gw-test",
+    instanceName: "default",
+    imageRepository: REPO,
+    imageTag: "abc",
+    desiredStatus: "running",
+    createdBy: "ci:abc",
+    ...overrides,
+  });
+
+  it("buildInstancesMap stamps the chartFingerprint onto every live entry when provided", () => {
+    const map = buildInstancesMap([desired({})], "fp-aaa");
+    expect(map.default.chartFingerprint).toBe("fp-aaa");
+  });
+
+  it("buildInstancesMap omits chartFingerprint when not provided (boot/legacy callers)", () => {
+    const map = buildInstancesMap([desired({})]);
+    expect(map.default.chartFingerprint).toBeUndefined();
+  });
+
+  it("buildHelmTargetMap stamps the desired fingerprint onto live entries (overrides actual)", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), chartFingerprint: "fp-old" } };
+    const target = buildHelmTargetMap([desired({})], actual, new Map(), "fp-new");
+    expect(target.default.chartFingerprint).toBe("fp-new");
+  });
+
+  it("diffInstancesMap returns `update` when actual has no fingerprint and desired has one (transition case)", () => {
+    const actual: HelmInstancesMap = { default: baseInstance("abc") };
+    const desiredMap: HelmInstancesMap = { default: { ...baseInstance("abc"), chartFingerprint: "fp-new" } };
+    const changes = diffInstancesMap(actual, desiredMap);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ kind: "update", instanceName: "default" });
+  });
+
+  it("diffInstancesMap returns no changes when both sides carry the same fingerprint", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), chartFingerprint: "fp-same" } };
+    const desiredMap: HelmInstancesMap = { default: { ...baseInstance("abc"), chartFingerprint: "fp-same" } };
+    expect(diffInstancesMap(actual, desiredMap)).toEqual([]);
+  });
+
+  it("diffInstancesMap returns `update` when fingerprints differ but image tag is identical (chart-only drift)", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), chartFingerprint: "fp-old" } };
+    const desiredMap: HelmInstancesMap = { default: { ...baseInstance("abc"), chartFingerprint: "fp-new" } };
+    const changes = diffInstancesMap(actual, desiredMap);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].kind).toBe("update");
+  });
+});

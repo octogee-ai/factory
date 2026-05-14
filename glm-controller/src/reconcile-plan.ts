@@ -30,6 +30,7 @@ export function deriveFleetImageTag(
 
 export function buildInstancesMap(
   desired: GatewayDesiredState[],
+  chartFingerprint?: string,
 ): HelmInstancesMap {
   const out: HelmInstancesMap = {};
   for (const d of desired) {
@@ -38,6 +39,7 @@ export function buildInstancesMap(
       enabled: true,
       image: { repository: d.imageRepository, tag: d.imageTag },
       gatewayId: d.gatewayId,
+      ...(chartFingerprint ? { chartFingerprint } : {}),
     };
   }
   return out;
@@ -60,6 +62,7 @@ export function buildHelmTargetMap(
   desired: GatewayDesiredState[],
   actual: HelmInstancesMap,
   mountedByGatewayId: Map<string, readonly string[]> = new Map(),
+  chartFingerprint?: string,
 ): HelmInstancesMap {
   const out: HelmInstancesMap = { ...actual };
   for (const d of desired) {
@@ -80,6 +83,7 @@ export function buildHelmTargetMap(
       enabled: true,
       image: { repository: d.imageRepository, tag: d.imageTag },
       gatewayId: d.gatewayId,
+      ...(chartFingerprint ? { chartFingerprint } : {}),
     };
   }
   return out;
@@ -111,10 +115,16 @@ export function diffInstancesMap(
 }
 
 function instanceEqual(a: HelmInstanceValue, b: HelmInstanceValue): boolean {
+  // Strict chartFingerprint match. The post-upgrade transition case —
+  // deployed releases that predate this field (chartFingerprint=undefined)
+  // mismatch against the desired (chartFingerprint=<hex>) and trigger one
+  // re-apply per instance. After that pass, the field is set and future
+  // ticks compare strictly. This is the whole point: chart drift detected.
   return (
     a.enabled === b.enabled &&
     a.image.repository === b.image.repository &&
     a.image.tag === b.image.tag &&
-    a.gatewayId === b.gatewayId
+    a.gatewayId === b.gatewayId &&
+    a.chartFingerprint === b.chartFingerprint
   );
 }

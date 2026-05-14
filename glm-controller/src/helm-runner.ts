@@ -39,6 +39,13 @@ export interface HelmRunner {
     chartPath: string;
     valuesFile?: string;
     takeOwnership?: boolean;
+    /**
+     * Fingerprint of the chart bytes being applied. Passed as a helm
+     * `--set` value so subsequent reconciles can compare desired vs
+     * deployed and detect chart-template drift even when image-tag is
+     * unchanged.
+     */
+    chartFingerprint?: string;
   }): Promise<void>;
 
   /** Uninstall ONE gateway instance's helm release. */
@@ -97,6 +104,7 @@ interface PerReleaseValues {
   instanceName?: unknown;
   imageTag?: unknown;
   image?: { repository?: unknown; tag?: unknown };
+  chartFingerprint?: unknown;
 }
 
 /**
@@ -118,66 +126,84 @@ function coerceIdentityField(v: unknown): string | null {
   return null;
 }
 
+async function listGatewayReleases(
+  deps: HelmSubprocessRunnerDeps,
+  namespace: string,
+): Promise<HelmListItem[]> {
+  const list = await deps.runHelm([
+    "list",
+    "-n",
+    namespace,
+    "--filter",
+    `^${RELEASE_PREFIX}`,
+    "-o",
+    "json",
+  ]);
+  if (list.code !== 0) {
+    throw new Error(
+      `helm list failed (code=${list.code}): ${list.stderr.trim() || list.stdout.trim()}`,
+    );
+  }
+  return (JSON.parse(list.stdout || "[]") as HelmListItem[]) ?? [];
+}
+
+async function readInstanceValue(
+  deps: HelmSubprocessRunnerDeps,
+  namespace: string,
+  releaseName: string,
+): Promise<HelmInstancesMap[string] | null> {
+  const valuesResult = await deps.runHelm([
+    "get",
+    "values",
+    releaseName,
+    "-n",
+    namespace,
+    "-o",
+    "json",
+  ]);
+  if (valuesResult.code !== 0) {
+    if (isReleaseNotFound(valuesResult.stderr)) return null;
+    throw new Error(
+      `helm get values ${releaseName} failed (code=${valuesResult.code}): ${valuesResult.stderr.trim() || valuesResult.stdout.trim()}`,
+    );
+  }
+  const v = JSON.parse(valuesResult.stdout || "{}") as PerReleaseValues;
+  const gatewayId = coerceIdentityField(v.gatewayId);
+  const imageTag = coerceIdentityField(v.imageTag);
+  const imageRepo = coerceIdentityField(v.image?.repository);
+  if (!gatewayId || !imageTag || !imageRepo) {
+    deps.log(
+      `[helm-runner] release ${releaseName} missing gatewayId/imageTag/imageRepository — skipping`,
+    );
+    return null;
+  }
+  const chartFingerprint =
+    typeof v.chartFingerprint === "string" && v.chartFingerprint.length > 0
+      ? v.chartFingerprint
+      : undefined;
+  return {
+    enabled: true,
+    image: { repository: imageRepo, tag: imageTag },
+    gatewayId,
+    ...(chartFingerprint ? { chartFingerprint } : {}),
+  };
+}
+
 export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): HelmRunner {
   const upgradeTimeout = deps.upgradeTimeout ?? "10m";
   const uninstallTimeout = deps.uninstallTimeout ?? "5m";
 
   return {
     async readDeployedInstances({ namespace }) {
-      const list = await deps.runHelm([
-        "list",
-        "-n",
-        namespace,
-        "--filter",
-        `^${RELEASE_PREFIX}`,
-        "-o",
-        "json",
-      ]);
-      if (list.code !== 0) {
-        throw new Error(
-          `helm list failed (code=${list.code}): ${list.stderr.trim() || list.stdout.trim()}`,
-        );
-      }
-      const items = (JSON.parse(list.stdout || "[]") as HelmListItem[]) ?? [];
-      const map: HelmInstancesMap = {};
+      const items = await listGatewayReleases(deps, namespace);
+      const entries: [string, HelmInstancesMap[string]][] = [];
       for (const item of items) {
         const instanceName = instanceNameFromRelease(item.name);
         if (!instanceName) continue;
-        const valuesResult = await deps.runHelm([
-          "get",
-          "values",
-          item.name,
-          "-n",
-          namespace,
-          "-o",
-          "json",
-        ]);
-        if (valuesResult.code !== 0) {
-          if (isReleaseNotFound(valuesResult.stderr)) continue;
-          throw new Error(
-            `helm get values ${item.name} failed (code=${valuesResult.code}): ${valuesResult.stderr.trim() || valuesResult.stdout.trim()}`,
-          );
-        }
-        const v = JSON.parse(valuesResult.stdout || "{}") as PerReleaseValues;
-        const gatewayId = coerceIdentityField(v.gatewayId);
-        const imageTag = coerceIdentityField(v.imageTag);
-        const imageRepo = coerceIdentityField(v.image?.repository);
-        if (!gatewayId || !imageTag || !imageRepo) {
-          // Release exists but values are missing the identity Cowboy
-          // requires — skip it from the deployed map. Fresh re-upsert
-          // will overwrite cleanly.
-          deps.log(
-            `[helm-runner] release ${item.name} missing gatewayId/imageTag/imageRepository — skipping`,
-          );
-          continue;
-        }
-        map[instanceName] = {
-          enabled: true,
-          image: { repository: imageRepo, tag: imageTag },
-          gatewayId,
-        };
+        const value = await readInstanceValue(deps, namespace, item.name);
+        if (value) entries.push([instanceName, value]);
       }
-      return map;
+      return Object.fromEntries(entries);
     },
 
     async upsertInstance({
@@ -189,6 +215,7 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       chartPath,
       valuesFile,
       takeOwnership,
+      chartFingerprint,
     }) {
       const release = releaseNameForInstance(instanceName);
       const args = [
@@ -207,6 +234,9 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
         "--set",
         `image.repository=${imageRepository}`,
       ];
+      if (chartFingerprint) {
+        args.push("--set", `chartFingerprint=${chartFingerprint}`);
+      }
       if (valuesFile) args.push("-f", valuesFile);
       if (takeOwnership) args.push("--take-ownership");
       args.push("--wait", `--timeout=${upgradeTimeout}`);
@@ -216,8 +246,10 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
           `helm upgrade --install ${release} failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
         );
       }
+      const fpTag = chartFingerprint ? ` chartFingerprint=${chartFingerprint.slice(0, 12)}` : "";
+      const ownershipTag = takeOwnership ? " (took ownership)" : "";
       deps.log(
-        `[helm-runner] upserted release=${release} ns=${namespace} gatewayId=${gatewayId} imageTag=${imageTag}${takeOwnership ? " (took ownership)" : ""}`,
+        `[helm-runner] upserted release=${release} ns=${namespace} gatewayId=${gatewayId} imageTag=${imageTag}${fpTag}${ownershipTag}`,
       );
     },
 

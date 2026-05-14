@@ -80,6 +80,50 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     });
   });
 
+  it("round-trips chartFingerprint from `helm get values` into the deployed map", async () => {
+    const fp = "a".repeat(64);
+    const { runHelm } = mockSubprocess([
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-default", namespace: "octogee-test", status: "deployed" },
+        ]),
+      },
+      {
+        stdout: JSON.stringify({
+          gatewayId: "gw-test",
+          instanceName: "default",
+          imageTag: "abc1234",
+          image: { repository: REPO },
+          chartFingerprint: fp,
+        }),
+      },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
+    expect(map.default.chartFingerprint).toBe(fp);
+  });
+
+  it("leaves chartFingerprint undefined when the helm release predates the field (transition case)", async () => {
+    const { runHelm } = mockSubprocess([
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-default", namespace: "octogee-test", status: "deployed" },
+        ]),
+      },
+      {
+        stdout: JSON.stringify({
+          gatewayId: "gw-test",
+          instanceName: "default",
+          imageTag: "abc1234",
+          image: { repository: REPO },
+        }),
+      },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
+    expect(map.default.chartFingerprint).toBeUndefined();
+  });
+
   it("returns an empty map when no octogee-gw-* releases exist (fresh cluster)", async () => {
     const { runHelm } = mockSubprocess([{ stdout: "[]" }]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
@@ -264,6 +308,39 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     const fIdx = args.indexOf("-f");
     expect(fIdx).toBeGreaterThan(-1);
     expect(args[fIdx + 1]).toBe("/charts/octogee-gateway/values.test.yaml");
+  });
+
+  it("passes --set chartFingerprint=<hex> when chartFingerprint is provided", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test",
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "f".repeat(64),
+    });
+
+    expect(calls[0]).toContain(`chartFingerprint=${"f".repeat(64)}`);
+  });
+
+  it("omits chartFingerprint --set when not provided (operator-driven helm calls)", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test",
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(calls[0].some((a) => a.startsWith("chartFingerprint="))).toBe(false);
   });
 
   it("propagates helm failures with stderr in the error message", async () => {
