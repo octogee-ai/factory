@@ -15,10 +15,11 @@ INSTANCE="octogee-pg"
 REGION="us-central1"
 
 # Right-sized for pre-customer workload: 1 vCPU (Cloud SQL Enterprise floor)
-# + 1.7 GB RAM. Bump via gcloud `instances patch --tier=db-custom-N-MEMmb`
-# when MM/Gitea actually need more — Postgres OOMs are loud, so this is a
-# safer floor than the previous db-custom-1-3840 default.
-DESIRED_TIER="db-custom-1-1740"
+# + 1.75 GiB RAM (1792 MiB = 256 × 7; memory must be a multiple of 256 MiB
+# in Cloud SQL custom tiers). Bump via gcloud `instances patch --tier=
+# db-custom-N-MEMmb` when MM/Gitea actually need more — Postgres OOMs are
+# loud, so this is a safer floor than the previous db-custom-1-3840 default.
+DESIRED_TIER="db-custom-1-1792"
 # PITR adds WAL archive storage cost (~few $/mo for MM activity). Pre-customer
 # we don't need point-in-time restore — the 7 daily backups already cover
 # the rollback envelope.
