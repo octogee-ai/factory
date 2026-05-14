@@ -79,38 +79,25 @@ for DB in mattermost_prod mattermost_test gitea_prod gitea_test; do
   fi
 done
 
-# ── Create users ──────────────────────────────────────────────────────────────
-log "Creating database users..."
-
-# Generate random passwords
-MM_PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
-GITEA_PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
-
-for USER_DB in "mattermost:mattermost_prod" "gitea:gitea_prod"; do
-  USER="${USER_DB%%:*}"
-  DB="${USER_DB##*:}"
-  PASS="${USER}_${USER}_pass"  # placeholder — overridden below
-  [[ "$USER" == "mattermost" ]] && PASS="$MM_PASS"
-  [[ "$USER" == "gitea" ]] && PASS="$GITEA_PASS"
-
-  if gcloud sql users list --instance="$INSTANCE" --project="$PROJECT" | grep -q "^$USER "; then
-    ok "User '$USER' already exists"
-  else
-    gcloud sql users create "$USER" \
-      --instance="$INSTANCE" \
-      --project="$PROJECT" \
-      --password="$PASS"
-    ok "Created user: $USER"
-  fi
-done
-
-# ── Store credentials in Secret Manager ──────────────────────────────────────
-log "Storing credentials in Secret Manager..."
+# ── Create users + store credentials (idempotent) ────────────────────────────
+# Critical invariant: the DB user's password MUST equal the Secret Manager
+# secret's latest version, since MM and Gitea pods mount the SM value to
+# authenticate.
+#
+# First-time path: generate a random password, create the DB user with it,
+# write the SAME value to Secret Manager. Atomic per user.
+#
+# Re-run path: do nothing. The DB user already has whatever password
+# matches the existing SM value (assuming a prior first-time run did its
+# job). Generating a fresh password and re-writing only SM — what an
+# earlier version of this script did — leaves DB and SM diverged and
+# kills MM/Gitea on the next pod restart.
+log "Ensuring database users + Secret Manager passwords..."
 
 store_secret() {
   local name="$1" value="$2"
   if gcloud secrets describe "$name" --project="$PROJECT" &>/dev/null; then
-    echo -n "$value" | gcloud secrets versions add "$name" --data-file=- --project="$PROJECT"
+    echo -n "$value" | gcloud secrets versions add "$name" --data-file=- --project="$PROJECT" >/dev/null
     ok "Updated secret: $name"
   else
     echo -n "$value" | gcloud secrets create "$name" --data-file=- --project="$PROJECT" \
@@ -119,12 +106,26 @@ store_secret() {
   fi
 }
 
-# Cloud SQL instance connection name
+for USER in mattermost gitea; do
+  SECRET_NAME="${USER}-db-password"
+  if gcloud sql users list --instance="$INSTANCE" --project="$PROJECT" | grep -q "^$USER "; then
+    ok "User '$USER' already exists — preserving DB password + Secret Manager value (no rotation)"
+    continue
+  fi
+  PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
+  gcloud sql users create "$USER" \
+    --instance="$INSTANCE" \
+    --project="$PROJECT" \
+    --password="$PASS"
+  ok "Created user: $USER"
+  store_secret "$SECRET_NAME" "$PASS"
+done
+
+# Connection name is derived from the instance; safe to refresh on every run.
+log "Storing Cloud SQL connection name in Secret Manager..."
 CONN_NAME=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
   --format="value(connectionName)")
 store_secret "cloud-sql-connection-name" "$CONN_NAME"
-store_secret "mattermost-db-password" "$MM_PASS"
-store_secret "gitea-db-password" "$GITEA_PASS"
 
 # ── Grant Cloud SQL Client role to GKE Workload Identity SA ──────────────────
 log "Granting Cloud SQL Client role to Workload Identity service accounts..."
