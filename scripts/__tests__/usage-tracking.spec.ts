@@ -87,12 +87,12 @@ describe("reportUsage — v3.1 workspace paths", () => {
     });
     const agentDir = makeAgentDir("eckert");
 
-    await reportUsage(
-      db as any,
-      "octogee-eckert-coach",
-      "coach",
+    await reportUsage({
+      db: db as any,
+      agentId: "octogee-eckert-coach",
+      role: "coach",
       agentDir,
-      {
+      usage: {
         input: 100,
         output: 50,
         cacheRead: 0,
@@ -102,10 +102,10 @@ describe("reportUsage — v3.1 workspace paths", () => {
         model: "anthropic/claude-haiku-4-5",
         costBreakdown: { input: 0.001, output: 0.001, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map([["octogee-eckert-coach", "eckert-uid"]]),
-      () => {},
-      "gw-test",
-    );
+      agentToUid: new Map([["octogee-eckert-coach", "eckert-uid"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
 
     const today = new Date().toISOString().slice(0, 10);
 
@@ -128,20 +128,20 @@ describe("reportUsage — v3.1 workspace paths", () => {
     });
     const agentDir = makeAgentDir("christopher");
 
-    await reportUsage(
-      db as any,
-      "octogee-christopher-coach",
-      "brain",
+    await reportUsage({
+      db: db as any,
+      agentId: "octogee-christopher-coach",
+      role: "brain",
       agentDir,
-      {
+      usage: {
         input: 10, output: 20, cacheRead: 5, cacheWrite: 0,
         totalTokens: 35, costUsd: 0.01, model: "anthropic/claude-sonnet-4-6",
         costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map([["octogee-christopher-coach", "chris-uid"]]),
-      () => {},
-      "gw-test",
-    );
+      agentToUid: new Map([["octogee-christopher-coach", "chris-uid"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
 
     const today = new Date().toISOString().slice(0, 10);
     const sessionWrite = writes.find((w) => w.path === `workspaces/christopher/usage_sessions/${today}`);
@@ -192,20 +192,20 @@ describe("reportUsage — v3.1 workspace paths", () => {
     });
     const agentDir = makeAgentDir("eckert");
 
-    await reportUsage(
-      db as any,
-      "octogee-eckert-coach",
-      "coach",
+    await reportUsage({
+      db: db as any,
+      agentId: "octogee-eckert-coach",
+      role: "coach",
       agentDir,
-      {
+      usage: {
         input: 1, output: 1, cacheRead: 0, cacheWrite: 0,
         totalTokens: 2, costUsd: 0.0001, model: "anthropic/claude-haiku-4-5",
         costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map([["octogee-eckert-coach", "eckert-uid"]]),
-      () => {},
-      "gw-test",
-    );
+      agentToUid: new Map([["octogee-eckert-coach", "eckert-uid"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
 
     const today = new Date().toISOString().slice(0, 10);
     const userUpdate = writes.find((w) => w.path === "users/eckert-uid" && w.op === "update");
@@ -225,20 +225,20 @@ describe("reportUsage — v3.1 workspace paths", () => {
     const { db, writes } = makeStubDb({});
     const agentDir = makeAgentDir("eckert");
 
-    await reportUsage(
-      db as any,
-      "octogee-unknown-coach",
-      "coach",
+    await reportUsage({
+      db: db as any,
+      agentId: "octogee-unknown-coach",
+      role: "coach",
       agentDir,
-      {
+      usage: {
         input: 1, output: 1, cacheRead: 0, cacheWrite: 0,
         totalTokens: 2, costUsd: 0.0001, model: "anthropic/claude-haiku-4-5",
         costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map(),
-      () => {},
-      "gw-test",
-    );
+      agentToUid: new Map(),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
 
     expect(writes).toEqual([]);
   });
@@ -255,21 +255,21 @@ describe("reportUsage — v3.1 workspace paths", () => {
     });
     const agentDir = makeAgentDir("free-customer");
 
-    await reportUsage(
-      db as any,
-      "octogee-free-customer-coach",
-      "coach",
+    await reportUsage({
+      db: db as any,
+      agentId: "octogee-free-customer-coach",
+      role: "coach",
       agentDir,
-      {
+      usage: {
         input: 100, output: 50, cacheRead: 0, cacheWrite: 0,
         totalTokens: 150, costUsd: 0.001,
         model: "anthropic/claude-haiku-4-5",
         costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map([["octogee-free-customer-coach", "free-uid"]]),
-      () => {},
-      "gw-test",
-    );
+      agentToUid: new Map([["octogee-free-customer-coach", "free-uid"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
 
     const userUpdate = writes.find((w) => w.path === "users/free-uid" && w.op === "update");
     expect(userUpdate).toBeDefined();
@@ -289,21 +289,21 @@ describe("reportUsage — v3.1 workspace paths", () => {
     });
     const agentDir = makeAgentDir("byot-customer");
 
-    await reportUsage(
-      db as any,
-      "octogee-byot-customer-coach",
-      "coach",
+    await reportUsage({
+      db: db as any,
+      agentId: "octogee-byot-customer-coach",
+      role: "coach",
       agentDir,
-      {
+      usage: {
         input: 1000, output: 500, cacheRead: 0, cacheWrite: 0,
         totalTokens: 1500, costUsd: 50.0,
         model: "anthropic/claude-sonnet-4-6",
         costBreakdown: { input: 25, output: 25, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map([["octogee-byot-customer-coach", "byot-uid"]]),
-      () => {},
-      "gw-test",
-    );
+      agentToUid: new Map([["octogee-byot-customer-coach", "byot-uid"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
 
     const userUpdate = writes.find((w) => w.path === "users/byot-uid" && w.op === "update");
     expect(userUpdate).toBeDefined();
@@ -323,21 +323,21 @@ describe("reportUsage — v3.1 workspace paths", () => {
     });
     const agentDir = makeAgentDir("paid-customer");
 
-    await reportUsage(
-      db as any,
-      "octogee-paid-customer-coach",
-      "coach",
+    await reportUsage({
+      db: db as any,
+      agentId: "octogee-paid-customer-coach",
+      role: "coach",
       agentDir,
-      {
+      usage: {
         input: 100_000, output: 100_000, cacheRead: 0, cacheWrite: 0,
         totalTokens: 200_000, costUsd: 5.0,
         model: "anthropic/claude-sonnet-4-6",
         costBreakdown: { input: 2.5, output: 2.5, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map([["octogee-paid-customer-coach", "paid-uid"]]),
-      () => {},
-      "gw-test",
-    );
+      agentToUid: new Map([["octogee-paid-customer-coach", "paid-uid"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
 
     const userUpdate = writes.find((w) => w.path === "users/paid-uid" && w.op === "update");
     expect(userUpdate).toBeDefined();
@@ -353,20 +353,20 @@ describe("reportUsage — v3.1 workspace paths", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-test-"));
     fs.writeFileSync(path.join(dir, "customer-config.json"), JSON.stringify({}));
 
-    await reportUsage(
-      db as any,
-      "octogee-eckert-coach",
-      "coach",
-      dir,
-      {
+    await reportUsage({
+      db: db as any,
+      agentId: "octogee-eckert-coach",
+      role: "coach",
+      agentDir: dir,
+      usage: {
         input: 1, output: 1, cacheRead: 0, cacheWrite: 0,
         totalTokens: 2, costUsd: 0.0001, model: "anthropic/claude-haiku-4-5",
         costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      new Map([["octogee-eckert-coach", "eckert-uid"]]),
-      () => {},
-      "gw-test",
-    );
+      agentToUid: new Map([["octogee-eckert-coach", "eckert-uid"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
 
     const wsWrites = writes.filter((w) => w.path.startsWith("workspaces/"));
     expect(wsWrites).toEqual([]);

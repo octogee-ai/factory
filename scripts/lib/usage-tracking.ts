@@ -46,34 +46,30 @@ export function extractRole(agentId: string): string {
   return "coach";
 }
 
+// Paths flow from internal agent directories (constructed under the agents/
+// root by the gateway provisioner), never from user input — the rule's
+// path-traversal concern doesn't apply at this boundary.
+function readJsonOrNull(filePath: string): { slug?: string } | null {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- internal agent dir, see file header
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read the workspace slug (workspace ID) from customer-config.json in an agent dir.
  * Returns null if the file cannot be read.
  */
 export function readWorkspaceId(agentDir: string): string | null {
-  // Primary: customer-config.json sits directly in the agent dir
-  const direct = path.join(agentDir, "customer-config.json");
-  if (fs.existsSync(direct)) {
-    try {
-      const cfg = JSON.parse(fs.readFileSync(direct, "utf-8"));
-      return cfg.slug || null;
-    } catch {
-      return null;
-    }
-  }
+  const direct = readJsonOrNull(path.join(agentDir, "customer-config.json"));
+  if (direct) return direct.slug || null;
 
-  // Fallback: shared/ sibling (one level up from role dir)
-  const sharedCfg = path.join(path.dirname(agentDir), "shared", "customer-config.json");
-  if (fs.existsSync(sharedCfg)) {
-    try {
-      const cfg = JSON.parse(fs.readFileSync(sharedCfg, "utf-8"));
-      return cfg.slug || null;
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
+  const shared = readJsonOrNull(
+    path.join(path.dirname(agentDir), "shared", "customer-config.json"),
+  );
+  return shared?.slug || null;
 }
 
 function parseLineForUsage(line: string): UsageData | null {
@@ -111,27 +107,100 @@ function modelKey(model: string): string {
   return model.replace(/\//g, "_").slice(0, 100);
 }
 
+export interface ReportUsageInput {
+  db: Firestore;
+  agentId: string;
+  role: string;
+  agentDir: string;
+  usage: UsageData;
+  agentToUid: Map<string, string>;
+  log: LogFn;
+  gatewayId: string;
+}
+
+type FirestoreUpdate = Record<string, unknown>;
+
+function decideTrialBackfill(
+  tier: string,
+  trialStartedAt: Date | null,
+  byotActive: boolean,
+  now: Date,
+): { trialStartedAt: Date | null; update: FirestoreUpdate } {
+  if (tier === "trial" && !trialStartedAt && !byotActive) {
+    return { trialStartedAt: now, update: { "subscription.trialStartedAt": now } };
+  }
+  return { trialStartedAt, update: {} };
+}
+
+function buildWindowUpdates(
+  usage: UsageData,
+  usageData: { windowCostUsd?: number; windowStartedAt?: Date | null },
+  windowBudgetUsd: number,
+  now: Date,
+): { windowUpdates: FirestoreUpdate; newWindowCostUsd: number; windowStartedAt: Date | null } {
+  const REFILL_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
+  const windowStartedAt = usageData.windowStartedAt ?? null;
+  const windowExpired = !windowStartedAt ||
+    (now.getTime() - windowStartedAt.getTime()) >= REFILL_MS;
+
+  if (windowExpired) {
+    return {
+      newWindowCostUsd: usage.costUsd,
+      windowStartedAt,
+      windowUpdates: {
+        "usage.windowCostUsd":    usage.costUsd,
+        "usage.windowTokensUsed": usage.totalTokens,
+        "usage.windowStartedAt":  now,
+        "usage.windowBudgetUsd":  windowBudgetUsd,
+      },
+    };
+  }
+  return {
+    newWindowCostUsd: (usageData.windowCostUsd ?? 0) + usage.costUsd,
+    windowStartedAt,
+    windowUpdates: {
+      "usage.windowCostUsd":    FieldValue.increment(usage.costUsd),
+      "usage.windowTokensUsed": FieldValue.increment(usage.totalTokens),
+      "usage.windowBudgetUsd":  windowBudgetUsd,
+    },
+  };
+}
+
+function decideThrottle(args: {
+  byotActive: boolean;
+  tier: string;
+  newWindowCostUsd: number;
+  windowBudgetUsd: number;
+  subscriptionStatus: string;
+  windowStartedAt: Date | null;
+}): { level: 0 | 1 | 3; reason: string } {
+  if (args.byotActive) {
+    return { level: 0, reason: "byot_skip" };
+  }
+  if (args.tier === "free") {
+    return { level: 3, reason: "free_tier_house_key" };
+  }
+  const state = computeThrottleLevel(
+    args.newWindowCostUsd,
+    args.windowBudgetUsd,
+    args.subscriptionStatus,
+    args.windowStartedAt,
+  );
+  const level = (state.level === 2 ? 3 : state.level) as 0 | 1 | 3;
+  return { level, reason: state.reason };
+}
+
 // Exported for unit testing. Not part of the public module surface — callers
 // should go through startUsageTracking(), which tails session JSONL files
 // and invokes this per parsed usage event.
-export async function reportUsage(
-  db: Firestore,
-  agentId: string,
-  role: string,
-  agentDir: string,
-  usage: UsageData,
-  agentToUid: Map<string, string>,
-  log: LogFn,
-  gatewayId: string,
-): Promise<void> {
+export async function reportUsage(input: ReportUsageInput): Promise<void> {
+  const { db, agentId, role, agentDir, usage, agentToUid, log, gatewayId } = input;
   const uid = agentToUid.get(agentId);
   if (!uid) return;
 
   const userRef = db.collection("users").doc(uid);
   const today   = new Date().toISOString().slice(0, 10);
   const logRef  = userRef.collection("usage_logs").doc(today);
-
-  // Workspace ID sourced from customer-config.json in the agent directory
   const workspaceId = readWorkspaceId(agentDir);
 
   try {
@@ -140,95 +209,43 @@ export async function reportUsage(
       const data = userDoc.data() || {};
       const usageData = data.usage || {};
       const tier = data.selectedTier || data.subscription?.tier || "trial";
-
-      // §9.2 of ADMIN-DASHBOARD-SPEC: throttle math reads windowCostUsd.
-      // Tokens are kept for diagnostic display only.
-      const REFILL_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
       const subscriptionStatus = data.subscription?.status ?? "active";
       const byotActive = data.byotActive === true;
-      let trialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
+      const now = new Date();
 
-      // Lazy backfill: trial users with no trialStartedAt fall through
-      // to windowBudgetUsd=0 below, which the throttle trigger and the
-      // dashboard treat as "no budget" → all-red UI + a warning log
-      // every single agent turn. The missing field is just a hole in
-      // our onboarding write path; the user IS on trial, we just never
-      // recorded when. Treat the first turn we see them on as day 1
-      // and persist that decision in the same transaction so all
-      // future turns see a populated field.
-      const trialStartedAtUpdate: Record<string, any> = {};
-      if (tier === "trial" && !trialStartedAt && !byotActive) {
-        const now = new Date();
-        trialStartedAt = now;
-        trialStartedAtUpdate["subscription.trialStartedAt"] = now;
+      const initialTrialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
+      const backfill = decideTrialBackfill(tier, initialTrialStartedAt, byotActive, now);
+      if (Object.keys(backfill.update).length) {
         log(`usage: backfilled subscription.trialStartedAt=now for trial user ${uid} (was missing)`);
       }
 
-      // For trial users we tier-derive in USD via tapered curve. Paid
-      // tiers convert weekly token budget at the Sonnet blended rate.
-      const windowBudgetUsd = windowBudgetUsdForTier(tier, trialStartedAt);
+      const windowBudgetUsd = windowBudgetUsdForTier(tier, backfill.trialStartedAt);
+      const startedAt = usageData.windowStartedAt?.toDate?.() ?? null;
+      const { newWindowCostUsd, windowUpdates, windowStartedAt } = buildWindowUpdates(
+        usage,
+        { windowCostUsd: usageData.windowCostUsd, windowStartedAt: startedAt },
+        windowBudgetUsd,
+        now,
+      );
 
-      const windowStartedAt = usageData.windowStartedAt?.toDate?.() || null;
-      const now = new Date();
-      const windowExpired = !windowStartedAt ||
-        (now.getTime() - windowStartedAt.getTime()) >= REFILL_MS;
-
-      let newWindowCostUsd: number;
-      const windowUpdates: Record<string, any> = {};
-
-      if (windowExpired) {
-        newWindowCostUsd    = usage.costUsd;
-        windowUpdates["usage.windowCostUsd"]    = usage.costUsd;
-        windowUpdates["usage.windowTokensUsed"] = usage.totalTokens;
-        windowUpdates["usage.windowStartedAt"]  = now;
-        windowUpdates["usage.windowBudgetUsd"]  = windowBudgetUsd;
-      } else {
-        newWindowCostUsd    = (usageData.windowCostUsd ?? 0) + usage.costUsd;
-        windowUpdates["usage.windowCostUsd"]    = FieldValue.increment(usage.costUsd);
-        windowUpdates["usage.windowTokensUsed"] = FieldValue.increment(usage.totalTokens);
-        // Refresh budget every turn so day-N tapering takes effect
-        // immediately on rollover without a separate cron.
-        windowUpdates["usage.windowBudgetUsd"]  = windowBudgetUsd;
-      }
-
-      // Throttle level (§9.2 + §9.3).
-      // BYOT customers pay Anthropic directly — never throttled.
-      // Otherwise delegate to functions/src/billing/throttle.ts so the
-      // gateway-side compute (this file) and the trigger-side compute
-      // (functions/src/triggers/onUsageUpdate.ts) can never drift.
-      // Trial users with no trialStartedAt fall through with budget=0,
-      // which the trigger treats as "unlimited" — log so ops can spot
-      // stuck users before they become free riders.
-      if (tier === "trial" && !trialStartedAt && !byotActive) {
+      if (tier === "trial" && !backfill.trialStartedAt && !byotActive) {
         log(`⚠ usage: trial user ${uid} has no subscription.trialStartedAt — running on platform key with no USD budget`);
       }
 
-      let throttleLevel: 0 | 1 | 3 = 0;
-      let throttleReason = "normal";
-      if (byotActive) {
-        throttleReason = "byot_skip";
-      } else if (tier === "free") {
-        // §9.5: free tier is always on the house key, no real budget.
-        // Without this branch, windowBudgetUsd=0 would route through
-        // computeThrottleLevel's "unlimited" path and free users would
-        // silently get unlimited service on the platform's dime.
-        throttleLevel = 3;
-        throttleReason = "free_tier_house_key";
-      } else {
-        const state = computeThrottleLevel(
-          newWindowCostUsd,
-          windowBudgetUsd,
-          subscriptionStatus,
-          windowStartedAt,
-        );
-        // Compute returns 0|1|2|3 in type but never emits 2 — narrow.
-        throttleLevel = (state.level === 2 ? 3 : state.level) as 0 | 1 | 3;
-        throttleReason = state.reason;
-      }
+      const throttle = decideThrottle({
+        byotActive,
+        tier,
+        newWindowCostUsd,
+        windowBudgetUsd,
+        subscriptionStatus,
+        windowStartedAt,
+      });
+      const throttleLevel = throttle.level;
+      const throttleReason = throttle.reason;
 
       t.update(userRef, {
         ...windowUpdates,
-        ...trialStartedAtUpdate,
+        ...backfill.update,
         "usage.totalTokensUsed":    FieldValue.increment(usage.totalTokens),
         "usage.tokensUsed":         FieldValue.increment(usage.totalTokens),
         "usage.costUsd":            FieldValue.increment(usage.costUsd),
@@ -323,9 +340,10 @@ export async function reportUsage(
     // arrayUnion schema migration colliding with a pre-existing scalar
     // field, or missing composite index) surface in logs instead of
     // silently retrying every turn.
-    const code = (err as any)?.code;
-    const stack = (err as any)?.stack;
-    log(`\u2717 usage write failed for ${agentId}${code ? ` [${code}]` : ""}: ${err}${stack ? `\n${stack}` : ""}`);
+    const e = err as { code?: string; stack?: string };
+    const codeTag = e.code ? ` [${e.code}]` : "";
+    const stackSuffix = e.stack ? `\n${e.stack}` : "";
+    log(`\u2717 usage write failed for ${agentId}${codeTag}: ${err}${stackSuffix}`);
   }
 }
 
@@ -367,7 +385,7 @@ async function processFile(
     if (!line.trim()) continue;
     const usage = parseLineForUsage(line);
     if (usage) {
-      await reportUsage(db, agentId, role, agentDir, usage, agentToUid, log, gatewayId);
+      await reportUsage({ db, agentId, role, agentDir, usage, agentToUid, log, gatewayId });
     }
   }
 
