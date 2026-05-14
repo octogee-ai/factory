@@ -265,6 +265,27 @@ both.**
 ✓ `git diff cloudbuild-base.yaml cloudbuild.yaml` shows version + fork-SHA
 in both files. Don't commit yet.
 
+### Step 12b — Rotate the previous canonical into `oc-build-matrix.yaml`
+
+CI builds the gateway against every OC version listed in
+[`infra/gateway/oc-build-matrix.yaml`](../oc-build-matrix.yaml) on every
+push to main, alongside the new canonical. After a canonical bump, you
+want the **previous** canonical to live there as the known-good A/B
+baseline for at least one cycle, so a regression in the new canonical
+is one dropdown-pick away from a comparison gateway.
+
+Edit `infra/gateway/oc-build-matrix.yaml`:
+
+- Add an entry for the previous canonical (`PREV_TAG#v`) with
+  `label: baseline-known-good` and `required: true`.
+- Drop the entry for the canonical-before-previous if it's still there
+  (one baseline is enough). Keep beta entries (`required: false`)
+  unless their base image was deleted.
+
+✓ `git diff infra/gateway/oc-build-matrix.yaml` shows the previous
+canonical added (and possibly the older one removed). Commit this with
+the cloudbuild bumps in Step 15 (one commit, three files).
+
 ### Step 13 — Build the base image
 
 The base image must exist before the gateway image build runs (CI does
@@ -321,8 +342,9 @@ git apply /tmp/oc-bumps.patch          # if you saved one above
 # (otherwise edit cloudbuild-base.yaml + cloudbuild.yaml here directly per Steps 11-12)
 ```
 
-✓ `git status` shows only `cloudbuild-base.yaml` + `cloudbuild.yaml` modified
-on `main` (no untracked feature-branch detritus).
+✓ `git status` shows `cloudbuild-base.yaml`, `cloudbuild.yaml`, and
+`infra/gateway/oc-build-matrix.yaml` modified on `main` (no untracked
+feature-branch detritus).
 
 ### Step 15 — Commit + push the cloudbuild bumps
 
@@ -331,7 +353,7 @@ is treated like docs), straight to main, no PR.
 
 ▸
 ```bash
-git add cloudbuild-base.yaml cloudbuild.yaml
+git add cloudbuild-base.yaml cloudbuild.yaml infra/gateway/oc-build-matrix.yaml
 git commit -m "chore(gateway): roll forward to OpenClaw ${NEW_TAG#v} (fork ${SHA})
 
 [describe cherry-pick health: clean? auto-merges? upstream audit findings?]
