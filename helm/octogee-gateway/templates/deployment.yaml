@@ -19,9 +19,12 @@ spec:
       labels:
         app: octogee-gateway
         gateway-instance: {{ .Values.instanceName }}
-      annotations:
-        cloud.google.com/compute-class: {{ .Values.computeClass | default "octogee-cost-optimized" | quote }}
     spec:
+      nodeSelector:
+        cloud.google.com/compute-class: {{ .Values.computeClass | default "Performance" | quote }}
+        {{- if .Values.machineFamily }}
+        cloud.google.com/machine-family: {{ .Values.machineFamily | quote }}
+        {{- end }}
       serviceAccountName: {{ .Values.serviceAccountName }}
       securityContext:
         runAsNonRoot: true
