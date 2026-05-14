@@ -73,7 +73,14 @@ RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -3 \
 # openclaw.template.json + envsubst replaces the old known-good config
 
 # ── envsubst for config templating ──────────────────────────────────────────
-RUN apt-get update && apt-get install -y --no-install-recommends gettext-base && rm -rf /var/lib/apt/lists/*
+# `chmod 1777 /tmp` is defensive: newer Debian bookworm apt sandboxes
+# signature verification through user `_apt` and needs a world-writable
+# /tmp. The OpenClaw npm install in Dockerfile.base sometimes leaves /tmp
+# with restricted perms (observed at OC 2026.5.12: "Couldn't create
+# temporary file /tmp/apt.conf.XXXX for passing config to apt-key").
+RUN chmod 1777 /tmp \
+    && apt-get update && apt-get install -y --no-install-recommends gettext-base \
+    && rm -rf /var/lib/apt/lists/*
 
 # ── Entrypoint + config template ───────────────────────────────────────────
 COPY --chown=node:node infra/gateway/openclaw.template.json /octogee/infra/gateway/openclaw.template.json
