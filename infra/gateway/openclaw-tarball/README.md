@@ -602,14 +602,13 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.5 the fork carries five patches — three essential, two diagnostic-only.
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.12 the fork carries four patches — three essential, one diagnostic.
 
-Short SHAs at v2026.5.5 (top of branch is `b1bf3b66`):
-- `b1bf3b66` — env-gated isControlUiVisible override
-- `f19c8305` — diagnostic per-phase config.patch trace
-- `e6232bfb` — config.patch returns post-write hash
-- `c0f79f1b` — diagnostic ws-upgrade trace
-- `29579aa2` — per-account surgical channel reload
+Short SHAs at v2026.5.12 (top of branch is `36f89b65`):
+- `36f89b65` — env-gated isControlUiVisible override
+- `92f5a74a` — diagnostic per-phase config.patch trace
+- `88608268` — config.patch returns post-write hash
+- `a2db297c` — per-account surgical channel reload
 
 **Essential:**
 
@@ -648,10 +647,15 @@ Short SHAs at v2026.5.5 (top of branch is `b1bf3b66`):
   apply / persist phases inside `config.patch` so we can spot regression
   points when a roll-forward suddenly slows down control-plane writes.
 
-- **WS-upgrade timing instrumentation** —
-  `src/gateway/server-http.ts`. Logs how long the gateway WebSocket upgrade
-  callback takes per connection. Helps identify boot-time saturation
-  windows where new sidecar/MM connections queue behind reload work.
+Patch dropped at the v2026.5.12 roll-forward:
+
+- **WS-upgrade timing instrumentation** (was `src/gateway/server-http.ts`) —
+  diagnostic-only. The 5.7 → 5.12 jump heavily refactored `server-http.ts`
+  upstream (new `resolvePluginRoutePathContext` + `checkGatewayHttpRequestAuth`
+  + `VOICECLAW_REALTIME_PATH` + `preauthConnectionBudget`), and the patch's
+  `__octogeeMark()` call sites no longer exist. Last carried at
+  `c0f79f1b` (on `octogee/gateway-scaling-patches-v2026.5.7`). Re-port to
+  the new shape if WS-upgrade timing signal becomes needed again.
 
 Patches deleted at the v2026.4.29 roll-forward (kept in git history on
 `octogee/gateway-scaling-patches-v2026.4.24` and `-v2026.4.25` if you need
