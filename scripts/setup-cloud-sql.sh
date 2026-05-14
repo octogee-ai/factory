@@ -14,6 +14,16 @@ PROJECT="octogee"
 INSTANCE="octogee-pg"
 REGION="us-central1"
 
+# Right-sized for pre-customer workload: 1 vCPU (Cloud SQL Enterprise floor)
+# + 1.7 GB RAM. Bump via gcloud `instances patch --tier=db-custom-N-MEMmb`
+# when MM/Gitea actually need more — Postgres OOMs are loud, so this is a
+# safer floor than the previous db-custom-1-3840 default.
+DESIRED_TIER="db-custom-1-1740"
+# PITR adds WAL archive storage cost (~few $/mo for MM activity). Pre-customer
+# we don't need point-in-time restore — the 7 daily backups already cover
+# the rollback envelope.
+DESIRED_PITR="false"
+
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${BLUE}[cloud-sql]${NC} $*"; }
 ok()   { echo -e "${GREEN}[cloud-sql]${NC} ✅ $*"; }
@@ -31,6 +41,41 @@ while true; do
   echo "  State: $STATE — waiting 15s..."
   sleep 15
 done
+
+# ── Enforce instance right-sizing (idempotent) ────────────────────────────────
+log "Checking instance tier + PITR settings..."
+CURRENT_TIER=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
+  --format="value(settings.tier)" 2>/dev/null || echo "")
+CURRENT_PITR=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
+  --format="value(settings.backupConfiguration.pointInTimeRecoveryEnabled)" 2>/dev/null || echo "")
+# gcloud renders the bool as "True"/"False" — normalize.
+CURRENT_PITR_NORM=$(echo "$CURRENT_PITR" | tr '[:upper:]' '[:lower:]')
+
+PATCH_FLAGS=()
+if [[ "$CURRENT_TIER" != "$DESIRED_TIER" ]]; then
+  log "Tier drift: $CURRENT_TIER → $DESIRED_TIER"
+  PATCH_FLAGS+=("--tier=$DESIRED_TIER")
+fi
+if [[ "$CURRENT_PITR_NORM" != "$DESIRED_PITR" ]]; then
+  log "PITR drift: $CURRENT_PITR_NORM → $DESIRED_PITR"
+  if [[ "$DESIRED_PITR" == "false" ]]; then
+    PATCH_FLAGS+=("--no-enable-point-in-time-recovery")
+  else
+    PATCH_FLAGS+=("--enable-point-in-time-recovery")
+  fi
+fi
+
+if [[ ${#PATCH_FLAGS[@]} -gt 0 ]]; then
+  warn "Patching instance settings — this may briefly restart Postgres."
+  gcloud sql instances patch "$INSTANCE" --project="$PROJECT" "${PATCH_FLAGS[@]}" --quiet
+  log "Waiting for instance to settle..."
+  while [[ "$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" --format='value(state)')" != "RUNNABLE" ]]; do
+    sleep 5
+  done
+  ok "Instance settings patched: tier=$DESIRED_TIER, PITR=$DESIRED_PITR"
+else
+  ok "Instance settings already match: tier=$DESIRED_TIER, PITR=$DESIRED_PITR"
+fi
 
 # ── Create databases ──────────────────────────────────────────────────────────
 log "Creating databases..."

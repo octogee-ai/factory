@@ -34,10 +34,15 @@ ilb:
   enabled: true
   staticIp: ""  # Set via terraform output mattermost_ilb_ip
 
+# MM's published minimum is 1 vCPU / 2 GiB for any real load; the prior
+# 500m/512Mi request would OOM as soon as a few users joined. Autopilot
+# requires limits.memory == requests.memory for non-bursty pods, so memory
+# is fixed at 2Gi on both sides. CPU can burst to limit on the general
+# compute class.
 resources:
   requests:
-    cpu: "500m"
-    memory: "512Mi"
+    cpu: "1000m"
+    memory: "2Gi"
     ephemeral-storage: "1Gi"
   limits:
     cpu: "2000m"
