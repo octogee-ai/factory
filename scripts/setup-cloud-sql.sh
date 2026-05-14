@@ -14,12 +14,15 @@ PROJECT="octogee"
 INSTANCE="octogee-pg"
 REGION="us-central1"
 
-# Right-sized for pre-customer workload: 1 vCPU (Cloud SQL Enterprise floor)
-# + 1.75 GiB RAM (1792 MiB = 256 × 7; memory must be a multiple of 256 MiB
-# in Cloud SQL custom tiers). Bump via gcloud `instances patch --tier=
-# db-custom-N-MEMmb` when MM/Gitea actually need more — Postgres OOMs are
-# loud, so this is a safer floor than the previous db-custom-1-3840 default.
-DESIRED_TIER="db-custom-1-1792"
+# Cloud SQL Postgres has a per-vCPU memory floor that's stricter than the
+# generic 0.9-6.5 GiB/vCPU custom-tier ratio — with 1 vCPU the minimum is
+# 3840 MiB. We can't go smaller without dropping to shared-core tiers
+# (db-f1-micro / db-g1-small), which are deprecated for new Postgres
+# instances. So db-custom-1-3840 IS the floor for 1 vCPU. Cost levers are
+# PITR (toggled below) and the operator's nightly stop/start, not RAM.
+# Confirmed empirically: a 1792 MiB patch attempt returned
+# "The total memory (1792MiB) must be at least 3840MiB."
+DESIRED_TIER="db-custom-1-3840"
 # PITR adds WAL archive storage cost (~few $/mo for MM activity). Pre-customer
 # we don't need point-in-time restore — the 7 daily backups already cover
 # the rollback envelope.
