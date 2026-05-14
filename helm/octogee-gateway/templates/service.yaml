@@ -32,6 +32,7 @@ metadata:
   name: workspace-api-{{ .Values.instanceName }}
   labels:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: workspace-api
 spec:
   selector:
     app: octogee-gateway

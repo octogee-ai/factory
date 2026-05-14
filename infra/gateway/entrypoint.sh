@@ -223,37 +223,29 @@ fi
   done
 ) &
 
-# ── Helper: wait until no OpenClaw gateway process is running. ──────────────
-# Uses a /proc cmdline scan so we don't depend on procps (pgrep) — not
-# installed in node:22-slim. Matches two cmdline shapes the OpenClaw
-# server binary can take:
-#   1. "openclaw gateway run" — the literal entrypoint invocation, used by
-#      pre-2026.4.24 builds that didn't rename their process title.
-#   2. "openclaw-gateway" — set by `process.title = 'openclaw-gateway'` in
-#      OpenClaw v2026.4.24+. After SIGUSR1 self-respawn, the successor
-#      child ALWAYS appears with this title; matching only (1) misses it
-#      and the supervisor races by spawning a second runtime alongside
-#      OpenClaw's own child (observed 2026-04-26 in test after #707 bumped
-#      the base image — two processes fighting for port 18789, plugin
-#      extraction ENOTEMPTY, MM bot identity, PVC writes).
-# Neither pattern matches CLI one-shots like `openclaw secrets reload`,
-# which keep their literal subcommand in argv and never rename to
-# "openclaw-gateway".
+# ── Helper: wait until port 18789 is free. ─────────────────────────────────
+# Detects whether ANY process is listening on 18789 by reading /proc/net/tcp
+# (always present, no extra dependencies). Replaces the prior /proc/*/cmdline
+# scan which assumed the OpenClaw process title was a known string — the
+# 2026-05-13 TEST crash-loop fired on 2026.5.2 AND 2026.5.7 because neither
+# version's cmdline matched the earlier `openclaw gateway run` /
+# `openclaw-gateway` patterns, so the guard returned "nothing running" while
+# OpenClaw's SIGUSR1-spawned successor was still alive, and the supervisor
+# raced for port 18789. Port-based detection has no openclaw-version
+# coupling and is the actual invariant we care about (the supervisor must
+# not respawn while anyone holds the listener).
+#
+# 18789 in hex is 4965. /proc/net/tcp emits "local_address: 00000000:4965"
+# (IPv4 0.0.0.0) and /proc/net/tcp6 emits "...:00000000:4965" (IPv6 ::).
+# State 0A = LISTEN.
 wait_for_gateway_exit() {
+  port_hex=$(printf '%04X' 18789)
   while true; do
-    running=""
-    for d in /proc/[0-9]*; do
-      [ -r "$d/cmdline" ] || continue
-      cmdline=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
-      case "$cmdline" in
-        *"openclaw gateway run"*|*"openclaw-gateway"*)
-          running="${d##*/}"
-          break
-          ;;
-      esac
-    done
-    [ -z "$running" ] && return 0
-    log "OpenClaw gateway (pid $running) still running; supervisor waiting..."
+    if ! grep -qE "^\s*[0-9]+:\s+[0-9A-F]+:${port_hex}\s.*\s0A\s" \
+         /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+      return 0
+    fi
+    log "OpenClaw gateway port 18789 still bound; supervisor waiting..."
     sleep 1
   done
 }
