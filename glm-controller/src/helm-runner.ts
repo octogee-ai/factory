@@ -189,6 +189,90 @@ async function readInstanceValue(
   };
 }
 
+// Helm refuses any new operation on a release whose previous
+// install/upgrade/rollback was interrupted (process killed mid-flight),
+// leaving it pinned in `pending-*`. Cowboy is itself redeployed on every
+// platform release, so being SIGTERM'd mid-`helm upgrade` is routine —
+// without recovery the reconcile loop retries this forever and the
+// gateway never advances. Helm 3.x emits this exact phrasing for all
+// three pending states.
+const IN_PROGRESS_PATTERN =
+  /another operation \(install\/upgrade\/rollback\) is in progress/i;
+
+interface HelmHistoryItem {
+  revision: number;
+  status: string;
+}
+
+// Only revisions that actually applied their manifests are safe rollback
+// targets. `failed` is excluded (it may have left a partial release);
+// `pending-*` is the wedge we're escaping.
+const GOOD_ROLLBACK_STATUSES = new Set(["deployed", "superseded"]);
+
+function findLastGoodRevision(history: readonly HelmHistoryItem[]): number | null {
+  let best: number | null = null;
+  for (const h of history) {
+    if (
+      typeof h.revision === "number" &&
+      GOOD_ROLLBACK_STATUSES.has(h.status) &&
+      (best === null || h.revision > best)
+    ) {
+      best = h.revision;
+    }
+  }
+  return best;
+}
+
+/**
+ * Clear a release stuck in `pending-*`. Roll back to the last revision
+ * that actually applied; if none ever did (a wedged first install),
+ * uninstall so the caller's retried `upgrade --install` fresh-installs.
+ * Returns a human-readable description of the action for logging.
+ * Throws if the recovery operation itself fails — the caller must NOT
+ * retry the upgrade against a still-stuck release.
+ */
+async function recoverStuckRelease(
+  deps: HelmSubprocessRunnerDeps,
+  namespace: string,
+  release: string,
+  upgradeTimeout: string,
+  uninstallTimeout: string,
+): Promise<string> {
+  const hist = await deps.runHelm([
+    "history", release, "-n", namespace, "-o", "json", "--max", "20",
+  ]);
+  if (hist.code !== 0) {
+    if (isReleaseNotFound(hist.stderr)) {
+      return `${release} no longer exists — retry will fresh-install`;
+    }
+    throw new Error(
+      `helm history ${release} failed during recovery (code=${hist.code}): ${hist.stderr.trim() || hist.stdout.trim()}`,
+    );
+  }
+  const history = JSON.parse(hist.stdout || "[]") as HelmHistoryItem[];
+  const target = findLastGoodRevision(history);
+  if (target === null) {
+    const un = await deps.runHelm([
+      "uninstall", release, "-n", namespace, "--wait", `--timeout=${uninstallTimeout}`,
+    ]);
+    if (un.code !== 0 && !isReleaseNotFound(un.stderr)) {
+      throw new Error(
+        `helm uninstall ${release} failed during recovery (code=${un.code}): ${un.stderr.trim() || un.stdout.trim()}`,
+      );
+    }
+    return `uninstalled stuck first-install ${release} (no good revision to roll back to)`;
+  }
+  const rb = await deps.runHelm([
+    "rollback", release, String(target), "-n", namespace, "--wait", `--timeout=${upgradeTimeout}`,
+  ]);
+  if (rb.code !== 0) {
+    throw new Error(
+      `helm rollback ${release} → revision ${target} failed during recovery (code=${rb.code}): ${rb.stderr.trim() || rb.stdout.trim()}`,
+    );
+  }
+  return `rolled back ${release} to revision ${target}`;
+}
+
 export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): HelmRunner {
   const upgradeTimeout = deps.upgradeTimeout ?? "10m";
   const uninstallTimeout = deps.uninstallTimeout ?? "5m";
@@ -240,7 +324,24 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       if (valuesFile) args.push("-f", valuesFile);
       if (takeOwnership) args.push("--take-ownership");
       args.push("--wait", `--timeout=${upgradeTimeout}`);
-      const result = await deps.runHelm(args);
+      let result = await deps.runHelm(args);
+      if (
+        result.code !== 0 &&
+        IN_PROGRESS_PATTERN.test(`${result.stderr}\n${result.stdout}`)
+      ) {
+        deps.log(
+          `[helm-runner] ⚠ ${release} stuck (another helm operation in progress) — attempting recovery`,
+        );
+        const recovered = await recoverStuckRelease(
+          deps,
+          namespace,
+          release,
+          upgradeTimeout,
+          uninstallTimeout,
+        );
+        deps.log(`[helm-runner] recovery: ${recovered} — retrying upgrade`);
+        result = await deps.runHelm(args);
+      }
       if (result.code !== 0) {
         throw new Error(
           `helm upgrade --install ${release} failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,

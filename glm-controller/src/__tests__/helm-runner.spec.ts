@@ -362,6 +362,209 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
   });
 });
 
+describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pending release", () => {
+  const upsertArgs = {
+    namespace: "octogee-test",
+    instanceName: "default",
+    gatewayId: "gw-test",
+    imageRepository: REPO,
+    imageTag: "newtag",
+    chartPath: "/charts/octogee-gateway",
+  } as const;
+
+  const IN_PROGRESS =
+    "Error: UPGRADE FAILED: another operation (install/upgrade/rollback) is in progress";
+
+  it("rolls back to the last deployed revision then retries the upgrade", async () => {
+    let upgrades = 0;
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      switch (args[0]) {
+        case "upgrade":
+          upgrades++;
+          return upgrades === 1
+            ? { stdout: "", stderr: IN_PROGRESS, code: 1 }
+            : { stdout: "ok", stderr: "", code: 0 };
+        case "history":
+          return {
+            stdout: JSON.stringify([
+              { revision: 2, status: "superseded" },
+              { revision: 3, status: "deployed" },
+              { revision: 4, status: "pending-upgrade" },
+            ]),
+            stderr: "",
+            code: 0,
+          };
+        case "rollback":
+          return { stdout: "Rollback was a success", stderr: "", code: 0 };
+        default:
+          throw new Error(`unexpected helm ${args[0]}`);
+      }
+    });
+    const log = vi.fn();
+    const runner = createHelmSubprocessRunner({ runHelm, log });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    expect(calls.map((c) => c[0])).toEqual([
+      "upgrade",
+      "history",
+      "rollback",
+      "upgrade",
+    ]);
+    const rollback = calls.find((c) => c[0] === "rollback");
+    expect(rollback).toBeDefined();
+    // Rolls back to the highest GOOD revision (deployed=3), not the
+    // superseded 2 and not the wedged pending-upgrade 4.
+    expect(rollback).toContain("octogee-gw-default");
+    expect(rollback).toContain("3");
+    expect(rollback).toContain("-n");
+    expect(rollback).toContain("octogee-test");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("stuck"));
+  });
+
+  it("targets the last `superseded` revision when no `deployed` revision remains", async () => {
+    let upgrades = 0;
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") {
+        upgrades++;
+        return upgrades === 1
+          ? { stdout: "", stderr: IN_PROGRESS, code: 1 }
+          : { stdout: "ok", stderr: "", code: 0 };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([
+            { revision: 1, status: "superseded" },
+            { revision: 2, status: "pending-upgrade" },
+          ]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    const rollback = calls.find((c) => c[0] === "rollback");
+    expect(rollback).toContain("1");
+  });
+
+  it("uninstalls a stuck first-install (pending-install, no good revision) then retries", async () => {
+    let upgrades = 0;
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") {
+        upgrades++;
+        return upgrades === 1
+          ? { stdout: "", stderr: IN_PROGRESS, code: 1 }
+          : { stdout: "ok", stderr: "", code: 0 };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([{ revision: 1, status: "pending-install" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "uninstall") return { stdout: "uninstalled", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    expect(calls.map((c) => c[0])).toEqual([
+      "upgrade",
+      "history",
+      "uninstall",
+      "upgrade",
+    ]);
+    expect(calls.find((c) => c[0] === "uninstall")).toContain("octogee-gw-default");
+  });
+
+  it("does NOT attempt recovery for a non-pending helm failure (real errors still surface)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      return {
+        stdout: "",
+        stderr: "Error: UPGRADE FAILED: timed out waiting for the condition",
+        code: 1,
+      };
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
+      /timed out/,
+    );
+    // Only the single failed upgrade — no history/rollback probing.
+    expect(calls.map((c) => c[0])).toEqual(["upgrade"]);
+  });
+
+  it("surfaces a clear error when the recovery rollback itself fails (no infinite silent loop)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") return { stdout: "", stderr: IN_PROGRESS, code: 1 };
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([{ revision: 2, status: "deployed" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "rollback") {
+        return { stdout: "", stderr: "Error: rollback failed: tiller lock", code: 1 };
+      }
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
+      /rollback/i,
+    );
+    // Recovery failed → do NOT re-run the upgrade.
+    expect(calls.map((c) => c[0])).toEqual(["upgrade", "history", "rollback"]);
+  });
+
+  it("retries the upgrade only once after recovery — a second failure throws", async () => {
+    let upgrades = 0;
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") {
+        upgrades++;
+        return upgrades === 1
+          ? { stdout: "", stderr: IN_PROGRESS, code: 1 }
+          : { stdout: "", stderr: "Error: UPGRADE FAILED: timed out", code: 1 };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([{ revision: 2, status: "deployed" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
+      /timed out/,
+    );
+    expect(upgrades).toBe(2);
+  });
+});
+
 describe("createHelmSubprocessRunner — removeInstance", () => {
   it("runs `helm uninstall octogee-gw-<name> -n <ns> --wait`", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "release \"octogee-gw-default\" uninstalled" }]);
