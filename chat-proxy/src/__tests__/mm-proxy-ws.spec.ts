@@ -362,6 +362,194 @@ describe("attachMmWsBridge — frame opcode preservation (MM rejects pre-auth bi
   });
 });
 
+describe("attachMmWsBridge — connection lifecycle logging", () => {
+  const authFrame = JSON.stringify({
+    seq: 1,
+    action: "authentication_challenge",
+    data: { token: "tok-xyz" },
+  });
+
+  it("logs upstream open", () => {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(0);
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.readyState = 1;
+    upstream.emit("open");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("upstream open"));
+  });
+
+  it("logs the resolved mmUserId exactly once (not per frame)", async () => {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(1);
+    upstream.readyState = 1;
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => "u-abc",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+
+    browser.emit("message", authFrame);
+    await tickN(5);
+    browser.emit("message", JSON.stringify({ seq: 2, action: "get_statuses" }));
+    browser.emit("message", JSON.stringify({ seq: 3, action: "get_statuses" }));
+    await tickN(5);
+
+    const authLines = log.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => /authenticated mmUserId=u-abc/.test(m));
+    expect(authLines).toHaveLength(1);
+  });
+
+  it("logs upstream close with code + reason + mmUserId (the flap signal)", () => {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(1);
+    upstream.readyState = 1;
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+
+    upstream.readyState = 3;
+    upstream.emit("close", 1000, Buffer.from("UnauthBinary"));
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("upstream close code=1000 reason=UnauthBinary"),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("mmUserId=unknown"),
+    );
+  });
+
+  it("logs browser close with code + reason", () => {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(1);
+    upstream.readyState = 1;
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+
+    browser.readyState = 3;
+    browser.emit("close", 1006, Buffer.from("abnormal"));
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("browser close code=1006 reason=abnormal"),
+    );
+  });
+
+  it("attributes a close to the authenticated user once known", async () => {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(1);
+    upstream.readyState = 1;
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => "u-target",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+    browser.emit("message", authFrame);
+    await tickN(5);
+
+    upstream.readyState = 3;
+    upstream.emit("close", 1011, Buffer.from("x"));
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("upstream close code=1011 reason=x mmUserId=u-target"),
+    );
+  });
+
+  it("does not log per forwarded frame (one line per lifecycle transition, not per message)", async () => {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(1);
+    upstream.readyState = 1;
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open"); // 1 lifecycle line
+
+    for (let i = 0; i < 5; i++) {
+      browser.emit("message", JSON.stringify({ seq: i, action: "get_statuses" }));
+      upstream.emit("message", JSON.stringify({ event: "typing", data: {} }));
+    }
+    await tickN(5);
+
+    // Only the single "upstream open" lifecycle line — no per-frame spam.
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("upstream open"));
+  });
+
+  it("logs exactly one close line per teardown (induced other-side close is suppressed, not a phantom)", () => {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(1);
+    upstream.readyState = 1;
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+
+    // MM drops the upstream; close() then tears down the browser side,
+    // which fires an induced browser 'close' with no peer code/reason.
+    upstream.readyState = 3;
+    upstream.emit("close", 1000, Buffer.from("UnauthBinary"));
+
+    const closeLines = log.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => / close code=/.test(m));
+    expect(closeLines).toHaveLength(1);
+    expect(closeLines[0]).toContain(
+      "upstream close code=1000 reason=UnauthBinary",
+    );
+  });
+});
+
 describe("maybeCaptureMmTokenForAuth", () => {
   it("resolves mmUserId for an authentication_challenge frame", async () => {
     const frame = JSON.stringify({

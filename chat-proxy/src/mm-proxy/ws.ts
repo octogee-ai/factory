@@ -66,6 +66,19 @@ export function attachMmWsBridge(
     safeClose(upstream);
   };
 
+  // Only the side that actually closed logs. close() tears down BOTH
+  // sockets, so the other side then fires an *induced* close carrying no
+  // peer code/reason — logging that too would emit a misleading phantom
+  // line per teardown and double the volume this path keeps deliberately
+  // low. `closed` is still false on the initiating handler (we log before
+  // close()); the induced handler sees it true and stays quiet.
+  const logClose = (side: "browser" | "upstream", code: number, reason: unknown) => {
+    if (closed) return;
+    deps.log(
+      `[mm-proxy/ws] ${side} close code=${code ?? "?"} reason=${reasonToStr(reason)} mmUserId=${mmUserId ?? "unknown"}`,
+    );
+  };
+
   const flushOutbox = () => {
     if (!upstreamOpen) return;
     while (browserOutbox.length > 0) {
@@ -82,6 +95,7 @@ export function attachMmWsBridge(
 
   upstream.on("open", () => {
     upstreamOpen = true;
+    deps.log(`[mm-proxy/ws] upstream open (mmUserId=${mmUserId ?? "unknown"})`);
     flushOutbox();
   });
 
@@ -95,7 +109,10 @@ export function attachMmWsBridge(
     if (!mmUserId && !pendingMmUserId) {
       pendingMmUserId = maybeCaptureMmTokenForAuth(data, deps.resolveMmUserId)
         .then((resolvedId) => {
-          if (resolvedId && !mmUserId) mmUserId = resolvedId;
+          if (resolvedId && !mmUserId) {
+            mmUserId = resolvedId;
+            deps.log(`[mm-proxy/ws] authenticated mmUserId=${resolvedId}`);
+          }
           return resolvedId ?? null;
         })
         .catch((err: Error) => {
@@ -145,8 +162,14 @@ export function attachMmWsBridge(
     });
   });
 
-  browserWs.on("close", () => close());
-  upstream.on("close", () => close());
+  browserWs.on("close", (code: number, reason: unknown) => {
+    logClose("browser", code, reason);
+    close();
+  });
+  upstream.on("close", (code: number, reason: unknown) => {
+    logClose("upstream", code, reason);
+    close();
+  });
   browserWs.on("error", (err: Error) =>
     deps.log(`[mm-proxy/ws] browser error: ${err.message}`),
   );
@@ -232,6 +255,14 @@ function rawDataToString(data: RawData | string): string {
   if (typeof data === "string") return data;
   if (Buffer.isBuffer(data)) return data.toString("utf-8");
   return Buffer.from(data as ArrayBuffer).toString("utf-8");
+}
+
+// `ws` delivers the WS close reason as a Buffer; normalize for a single
+// concise log line (empty when MM/the client sent no reason).
+function reasonToStr(reason: unknown): string {
+  if (reason == null) return "";
+  const str = Buffer.isBuffer(reason) ? reason.toString("utf-8") : String(reason);
+  return str.length > 120 ? `${str.slice(0, 120)}…` : str;
 }
 
 function parsePostField(eventData: unknown): MmPostShape | null {

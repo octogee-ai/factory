@@ -775,6 +775,7 @@ export function createServer() {
         socket.destroy();
         return;
       }
+      console.warn(`[mm-proxy/ws] upgrade accepted origin=${origin ?? "(none)"}`);
       mmWss.handleUpgrade(req, socket, head, (browserWs) => {
         attachMmWsBridge(
           {
