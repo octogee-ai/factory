@@ -306,9 +306,17 @@ else
   GW_IMAGE=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
     -o jsonpath='{.spec.template.spec.containers[?(@.name=="gateway")].image}' 2>/dev/null || echo "unknown")
 
-  # Extract git SHA from image tag if present
+  # Extract git SHA from image tag if present. Image tags are pinned to
+  # 7 chars by the build workflow; local `git rev-parse --short` defaults
+  # to 7 but auto-extends to 8 on disambiguation or with core.abbrev
+  # raised — comparing 7-char to 8-char would never match even when the
+  # deploy is current. Normalize HEAD to GW_SHA's length.
   GW_SHA=$(echo "$GW_IMAGE" | grep -o ':[a-f0-9]*$' | tr -d ':' || echo "")
-  LATEST_SHA=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  if [[ -n "$GW_SHA" ]]; then
+    LATEST_SHA=$(cd "$REPO_DIR" && git rev-parse HEAD 2>/dev/null | head -c "${#GW_SHA}" || echo "unknown")
+  else
+    LATEST_SHA=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  fi
 
   if [[ "${GW_DESIRED:-0}" -eq 0 ]]; then
     fail "Gateway scaled to 0 replicas — Cowboy's glmGateways doc may have desiredStatus=retired"
@@ -636,30 +644,30 @@ fi
 
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
 # Derive URLs from K8s Ingress resources — no hardcoded env-specific URLs.
-# Post-Option C: chat-proxy-ingress hosts the credential-mint endpoint and
-# the OpenClaw bridge (no longer the MM REST/WS proxy). mattermost-ingress
-# is the browser-direct MM path with IAP off — single hostname per role,
-# no aliases, no parallel public ingresses.
+# Post-rollback: chat-proxy-ingress fronts both the credential mint and the
+# MM REST + WS data path (browser only talks to chat-proxy for chat). The
+# mattermost-ingress is the IAP-gated admin path — direct MM access for
+# admin operations only; a 302 to the Google login page is the expected
+# response there.
 set_section bootstrap
 header "5d. Endpoint Health"
 for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress mattermost-ingress octogee-gateway-fleet-control-ingress; do
   if ! kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
     continue
   fi
-  # Iterate over every host on the ingress so the chat-proxy alias host
-  # (chat.* during the Option-C transition) gets checked too.
   HOSTS=$(kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" -o jsonpath='{range .spec.rules[*]}{.host}{"\n"}{end}' 2>/dev/null || echo "")
   if [[ -z "$HOSTS" ]]; then
     warn "$INGRESS_NAME — no host found"
     continue
   fi
-  # Probe path: the gateway's MM ingress has no /health route, but
-  # /api/v4/system/ping is what the BackendConfig health check uses.
-  # chat-proxy's health endpoint lives on the sidecar in octogee-gateway,
-  # not on a deployment named chat-proxy.
+  EXPECT_IAP_REDIRECT=false
   case "$INGRESS_NAME" in
     mattermost-ingress)
+      # IAP-gated admin ingress — unauthenticated requests get a 302 to
+      # accounts.google.com/o/oauth2 for sign-in. That IS the healthy
+      # signal; a 200 here would mean IAP is off.
       HEALTH_PATH="/api/v4/system/ping"
+      EXPECT_IAP_REDIRECT=true
       ;;
     chat-proxy-ingress)
       if [[ -n "$GW_DEPLOYMENT" ]]; then
@@ -678,9 +686,13 @@ for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress mattermost-ingress 
   while IFS= read -r HOST; do
     [[ -z "$HOST" ]] && continue
     URL="https://${HOST}${HEALTH_PATH}"
-    HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$URL" 2>/dev/null || echo "000")
+    PROBE=$(curl -sk -o /dev/null -w "%{http_code} %{redirect_url}" --max-time 5 "$URL" 2>/dev/null || echo "000 ")
+    HTTP_CODE="${PROBE%% *}"
+    REDIRECT_URL="${PROBE#* }"
     if [[ "$HTTP_CODE" == "200" ]]; then
       pass "$URL → $HTTP_CODE"
+    elif [[ "$EXPECT_IAP_REDIRECT" == "true" && "$HTTP_CODE" == "302" && "$REDIRECT_URL" == *"accounts.google.com"* ]]; then
+      pass "$URL → $HTTP_CODE (IAP login redirect — admin access gated, expected)"
     elif [[ "$HTTP_CODE" == "000" ]]; then
       warn "$URL → unreachable (TLS or DNS issue)"
     else
