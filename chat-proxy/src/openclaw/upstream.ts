@@ -25,6 +25,13 @@ export class UpstreamError extends Error {
 // to 4 (the gateway sends `expectedProtocol=4, minimumProbeProtocol=4`
 // and closes with code 1002 otherwise). Keep in sync with
 // `scripts/lib/gateway-rpc.ts` PROTOCOL_VERSION.
+//
+// Wire-surface depended on by Phase 7 (ACTIVITY-STREAM-SPEC §Phase 7
+// R7-C): the `session.message` / `sessions.changed` payload spread
+// (`totalTokens`, `contextTokens`, `totalTokensFresh`) and per-message
+// `usage` / `cost` / `model` are parsed by `session-telemetry.ts`. On
+// every OC base-image roll, re-verify these field names alongside this
+// bump — a silent rename degrades the context meter, not the handshake.
 const PROTOCOL_VERSION = 4;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 

@@ -590,3 +590,37 @@ describe("maybeCaptureMmTokenForAuth", () => {
     expect(await maybeCaptureMmTokenForAuth(frameEmptyToken, resolveMmUserId)).toBeNull();
   });
 });
+
+describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
+  it("broadcasts a non-MM frame to every live browser bridge and stops after close", async () => {
+    const { createMmWsRegistry } = await import("../mm-proxy/ws.js");
+    const registry = createMmWsRegistry();
+    const b1 = makeFakeWs(1);
+    const b2 = makeFakeWs(1);
+    const u1 = makeFakeWs(1);
+    const u2 = makeFakeWs(1);
+    const deps = (upstream: FakeWs) => ({
+      mmInternalWsUrl: "ws://mm/api/v4/websocket",
+      log: () => {},
+      resolveMmUserId: async () => "u",
+      openUpstream: () => upstream as unknown as WebSocket,
+      registry,
+    });
+    attachMmWsBridge(deps(u1), b1 as unknown as WebSocket);
+    attachMmWsBridge(deps(u2), b2 as unknown as WebSocket);
+
+    const frame = { event: "octogee.ctx", data: { channelId: "c1", pct: 13, used: 34900, limit: 272000 } };
+    registry.broadcast(frame);
+    await tick();
+    expect(b1.sent.map(String)).toContain(JSON.stringify(frame));
+    expect(b2.sent.map(String)).toContain(JSON.stringify(frame));
+
+    b1.close();
+    b1.sent.length = 0;
+    b2.sent.length = 0;
+    registry.broadcast(frame);
+    await tick();
+    expect(b1.sent).toHaveLength(0);
+    expect(b2.sent.map(String)).toContain(JSON.stringify(frame));
+  });
+});

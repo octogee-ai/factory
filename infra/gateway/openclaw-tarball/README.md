@@ -631,7 +631,8 @@ Short SHAs at v2026.5.12 (top of branch is `36f89b65`):
   Octogee's intended consumer of those events, so we opt in via env.
   Default behavior unchanged when the env var is unset.
   Env var is set in `helm/octogee/charts/gateway/templates/deployment.yaml`.
-  See `docs/ACTIVITY-STREAM-SPEC.md` §15.7 for context + scope-discipline note.
+  See `docs/ACTIVITY-STREAM-SPEC.md` Appendix A.5 (+ the A10-amendment
+  entry in `docs/decisions/DECISIONS.md`) for context + scope-discipline note.
 
 - **`config.patch` returns post-write hash** —
   `src/gateway/server-methods/config.ts`. Includes the merged-config hash

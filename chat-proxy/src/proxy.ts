@@ -29,7 +29,7 @@ import {
 } from "./openclaw/inbound-gate.js";
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { forwardMmRest } from "./mm-proxy/rest.js";
-import { attachMmWsBridge } from "./mm-proxy/ws.js";
+import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL;
@@ -50,6 +50,8 @@ if (!CHAT_PROXY_PUBLIC_URL) {
 const MM_PUBLIC_URL = MM_INTERNAL_URL;
 
 const MM_INTERNAL_WS_URL = MM_INTERNAL_URL.replace(/^http/, "ws") + "/api/v4/websocket";
+
+const mmWsRegistry = createMmWsRegistry();
 
 const mmUserIdCache = new Map<string, { userId: string; cachedAt: number }>();
 const MM_USER_ID_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -783,6 +785,7 @@ export function createServer() {
             log: (msg) => console.warn(msg),
             resolveMmUserId,
             openUpstream: (url) => new WebSocket(url),
+            registry: mmWsRegistry,
           },
           browserWs,
         );
@@ -887,6 +890,11 @@ if (process.env.NODE_ENV !== "test") {
         metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
         log: (msg) => console.warn(msg),
         editDiffFetcher: await buildEditDiffFetcher(),
+        emitEphemeral: (channelId, payload) =>
+          mmWsRegistry.broadcast({
+            event: 'octogee.ctx',
+            data: { channelId, ...payload },
+          }),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -900,7 +908,7 @@ if (process.env.NODE_ENV !== "test") {
       console.error(
         `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
         'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
-        'See docs/ACTIVITY-STREAM-SPEC.md §15.1.',
+        'See docs/ACTIVITY-STREAM-SPEC.md Appendix A.1.',
       );
       return;
     }

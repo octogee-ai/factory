@@ -15,6 +15,12 @@ export interface MmWsProxyDeps {
   resolveMmUserId: (mmToken: string) => Promise<string | null>;
   /** Factory for the upstream WS — injected so tests can supply a fake. */
   openUpstream: (url: string) => WebSocket;
+  /**
+   * Phase 7.C — when supplied, this bridge registers itself so the
+   * activity bridge can fan an ephemeral `octogee.ctx` frame onto every
+   * live browser WS without an MM round-trip. Auto-unregisters on close.
+   */
+  registry?: MmWsRegistry;
   now?: () => number;
   /**
    * Max time to wait for the mmUserId resolution before forwarding an
@@ -26,6 +32,31 @@ export interface MmWsProxyDeps {
 export interface MmWsBridge {
   /** Detach + close both sides. */
   close: () => void;
+}
+
+export interface MmWsRegistry {
+  add: (send: (frame: string) => void) => () => void;
+  broadcast: (frame: unknown) => void;
+}
+
+export function createMmWsRegistry(): MmWsRegistry {
+  const senders = new Set<(frame: string) => void>();
+  return {
+    add(send) {
+      senders.add(send);
+      return () => senders.delete(send);
+    },
+    broadcast(frame) {
+      const json = JSON.stringify(frame);
+      for (const send of senders) {
+        try {
+          send(json);
+        } catch {
+          // a dead socket must not abort the fan-out
+        }
+      }
+    },
+  };
 }
 
 export interface AckFrame {
@@ -59,9 +90,15 @@ export function attachMmWsBridge(
   const browserOutbox: Array<{ frame: RawData; binary: boolean }> = [];
   let inboundChain: Promise<void> = Promise.resolve();
 
+  const unregister = deps.registry?.add((frame: string) => {
+    if (closed || browserWs.readyState !== 1) return;
+    browserWs.send(frame);
+  });
+
   const close = () => {
     if (closed) return;
     closed = true;
+    unregister?.();
     safeClose(browserWs);
     safeClose(upstream);
   };
