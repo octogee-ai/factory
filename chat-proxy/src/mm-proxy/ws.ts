@@ -34,23 +34,44 @@ export interface MmWsBridge {
   close: () => void;
 }
 
+interface RegistryConn {
+  send: (frame: string) => void;
+  getMmUserId: () => string | null;
+}
+
 export interface MmWsRegistry {
-  add: (send: (frame: string) => void) => () => void;
-  broadcast: (frame: unknown) => void;
+  add: (send: (frame: string) => void, getMmUserId: () => string | null) => () => void;
+  /**
+   * Fan `frame` to live browser connections. When `isAllowed` is given,
+   * a connection only receives the frame if `isAllowed(itsMmUserId)`
+   * returns true — this is how Phase 8.1 scopes `octogee.ctx` to
+   * connections whose user is a member of the target activity channel,
+   * server-side. A connection whose `mmUserId` is still unresolved
+   * (pre-auth) is treated as not-allowed (fail-closed).
+   */
+  broadcast: (frame: unknown, isAllowed?: (mmUserId: string | null) => boolean) => void;
 }
 
 export function createMmWsRegistry(): MmWsRegistry {
-  const senders = new Set<(frame: string) => void>();
+  const conns = new Set<RegistryConn>();
   return {
-    add(send) {
-      senders.add(send);
-      return () => senders.delete(send);
+    add(send, getMmUserId) {
+      const conn: RegistryConn = { send, getMmUserId };
+      conns.add(conn);
+      return () => conns.delete(conn);
     },
-    broadcast(frame) {
+    broadcast(frame, isAllowed) {
       const json = JSON.stringify(frame);
-      for (const send of senders) {
+      for (const conn of conns) {
+        if (isAllowed) {
+          const uid = conn.getMmUserId();
+          // Fail closed in the registry itself: a pre-auth socket
+          // (uid===null) never receives a scoped frame, regardless of
+          // what the caller's predicate returns for null.
+          if (uid === null || !isAllowed(uid)) continue;
+        }
         try {
-          send(json);
+          conn.send(json);
         } catch {
           // a dead socket must not abort the fan-out
         }
@@ -90,10 +111,13 @@ export function attachMmWsBridge(
   const browserOutbox: Array<{ frame: RawData; binary: boolean }> = [];
   let inboundChain: Promise<void> = Promise.resolve();
 
-  const unregister = deps.registry?.add((frame: string) => {
-    if (closed || browserWs.readyState !== 1) return;
-    browserWs.send(frame);
-  });
+  const unregister = deps.registry?.add(
+    (frame: string) => {
+      if (closed || browserWs.readyState !== 1) return;
+      browserWs.send(frame);
+    },
+    () => mmUserId,
+  );
 
   const close = () => {
     if (closed) return;

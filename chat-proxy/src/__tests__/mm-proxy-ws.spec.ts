@@ -623,4 +623,38 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     expect(b1.sent).toHaveLength(0);
     expect(b2.sent.map(String)).toContain(JSON.stringify(frame));
   });
+
+  it("T8-1: scopes delivery to connections allowed by the predicate (membership)", async () => {
+    const { createMmWsRegistry } = await import("../mm-proxy/ws.js");
+    const registry = createMmWsRegistry();
+    const sentByMember: string[] = [];
+    const sentByNonMember: string[] = [];
+    const sentByPreAuth: string[] = [];
+    registry.add((f) => sentByMember.push(f), () => "u-member");
+    registry.add((f) => sentByNonMember.push(f), () => "u-other");
+    registry.add((f) => sentByPreAuth.push(f), () => null); // not yet authed
+
+    const members = new Set(["u-member"]);
+    const frame = { event: "octogee.ctx", data: { channelId: "c1", pct: 13 } };
+    registry.broadcast(frame, (uid) => uid !== null && members.has(uid));
+
+    expect(sentByMember.map(String)).toContain(JSON.stringify(frame));
+    expect(sentByNonMember).toHaveLength(0); // forged/other channel — nothing
+    expect(sentByPreAuth).toHaveLength(0); // fail-closed while mmUserId unresolved
+  });
+
+  it("Copilot#5: registry enforces fail-closed for null mmUserId even if the predicate is buggy", async () => {
+    const { createMmWsRegistry } = await import("../mm-proxy/ws.js");
+    const registry = createMmWsRegistry();
+    const preAuth: string[] = [];
+    registry.add((f) => preAuth.push(f), () => null);
+    // A predicate that wrongly green-lights everything must NOT be able
+    // to leak to a pre-auth socket — the registry skips null itself
+    // whenever a predicate is supplied.
+    registry.broadcast({ event: "octogee.ctx", data: { channelId: "c1" } }, () => true);
+    expect(preAuth).toHaveLength(0);
+    // No predicate at all (e.g. octogee_ack path) still broadcasts to everyone.
+    registry.broadcast({ event: "x" });
+    expect(preAuth).toHaveLength(1);
+  });
 });

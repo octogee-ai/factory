@@ -29,7 +29,15 @@ import {
 } from "./openclaw/inbound-gate.js";
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { forwardMmRest } from "./mm-proxy/rest.js";
-import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
+import { attachMmWsBridge, createMmWsRegistry, type MmWsRegistry } from "./mm-proxy/ws.js";
+import {
+  createChannelMemberResolver,
+  type ChannelMemberResolver,
+} from "./mm-proxy/channel-members.js";
+import {
+  createBridgeBootStatus,
+  bridgeHealthBody,
+} from "./openclaw/bridge-boot-status.js";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL;
@@ -118,6 +126,50 @@ function evictMmUserIdCacheIfNeeded(): void {
     const oldestKey = mmUserIdCache.keys().next().value;
     if (oldestKey === undefined) break;
     mmUserIdCache.delete(oldestKey);
+  }
+}
+
+async function fetchMmChannelMemberIds(
+  mmInternalUrl: string,
+  adminPat: string,
+  channelId: string,
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const MAX_PAGES = 25;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const resp = await fetch(
+      `${mmInternalUrl}/api/v4/channels/${channelId}/members?page=${page}&per_page=200`,
+      { headers: { Authorization: `Bearer ${adminPat}` } },
+    );
+    if (!resp.ok) {
+      throw new Error(`MM channel members ${channelId} → ${resp.status}`);
+    }
+    const batch = (await resp.json()) as Array<{ user_id?: unknown }>;
+    for (const m of batch) {
+      if (typeof m.user_id === "string") ids.add(m.user_id);
+    }
+    if (batch.length < 200) return ids;
+    // Last allowed page still full → more members exist. Fail closed
+    // (resolver caches nothing, delivers to nobody) rather than silently
+    // dropping legitimate members from the allowlist. No silent failures.
+    if (page === MAX_PAGES - 1) {
+      throw new Error(
+        `MM channel members ${channelId} exceeded ${MAX_PAGES * 200} — refusing partial set`,
+      );
+    }
+  }
+  return ids;
+}
+
+async function probeGatewayReady(
+  healthUrl: string,
+): Promise<{ ready: boolean; retryAfterMs?: number }> {
+  try {
+    const resp = await fetch(healthUrl, { signal: AbortSignal.timeout(2_000) });
+    if (resp.ok) return { ready: true };
+    return { ready: false, retryAfterMs: parseRetryAfterMs(resp.headers.get("retry-after")) };
+  } catch {
+    return { ready: false };
   }
 }
 
@@ -250,6 +302,67 @@ const approvalDroppedCounter = new Counter({
   help: 'Approval callback drops with reason',
   labelNames: ['reason'] as const,
   registers: [metricsRegistry],
+});
+
+const memberResolveFailuresTotal = new Counter({
+  name: 'octogee_bridge_member_resolve_failures_total',
+  help: 'Activity-channel membership resolution failures (ctx fan-out fails closed)',
+  registers: [metricsRegistry],
+});
+const lastMemberResolveWarnByChannel = new Map<string, number>();
+
+function makeEmitEphemeral(
+  channelMembers: ChannelMemberResolver,
+  registry: MmWsRegistry,
+  chains: Map<string, Promise<void>>,
+): (channelId: string, payload: { pct: number | null; used: number; limit: number }) => void {
+  // Serialize per-channel so async membership resolution can't deliver
+  // a stale pct after a fresher one (Copilot #2).
+  return (channelId, payload) => {
+    const prev = chains.get(channelId) ?? Promise.resolve();
+    const next = prev
+      .then(() => channelMembers.getMembers(channelId))
+      .then((members) => {
+        registry.broadcast(
+          { event: "octogee.ctx", data: { channelId, ...payload } },
+          (mmUserId) => mmUserId !== null && members.has(mmUserId),
+        );
+      })
+      .catch(() => {
+        // resolver already fails closed; nothing to recover
+      });
+    chains.set(channelId, next);
+  };
+}
+
+function reportMemberResolveFailure(channelId: string, err: unknown): void {
+  memberResolveFailuresTotal.inc();
+  const nowMs = Date.now();
+  const last = lastMemberResolveWarnByChannel.get(channelId) ?? 0;
+  if (nowMs - last > FRAME_DROP_LOG_WINDOW_MS) {
+    lastMemberResolveWarnByChannel.set(channelId, nowMs);
+    console.warn(
+      `[mm-proxy/channel-members] membership resolve failed for ${channelId} — ` +
+        `ctx meter fails closed (delivers to nobody) until it recovers: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+const bridgeBootStatusGauge = new Gauge({
+  name: 'octogee_bridge_boot_status',
+  help: 'Activity bridge boot state — one label is 1, the rest 0',
+  labelNames: ['status'] as const,
+  registers: [metricsRegistry],
+});
+
+// Phase 8.2 — anti-recurrence net for the Appendix A silent-bridge
+// failure. Module-scope so /healthz/bridge can read it; heartbeats
+// from t0 while non-connected (incl. a misconfigured-and-skipped
+// bridge — that *should* be loud).
+const bridgeBootStatus = createBridgeBootStatus({
+  gauge: bridgeBootStatusGauge,
+  log: (msg) => console.warn(msg),
 });
 
 let approvalCallbackHandler:
@@ -419,13 +532,21 @@ async function handleRequest(
     return;
   }
 
-  if (req.url === "/healthz" || req.url === "/health" || req.url === "/_health") {
+  const urlPath = (req.url || "").split("?")[0];
+
+  if (urlPath === "/healthz" || urlPath === "/health" || urlPath === "/_health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok" }));
     return;
   }
 
-  const urlPath = (req.url || "").split("?")[0];
+  if (urlPath === "/healthz/bridge") {
+    // Always 200 / ready:true — the pod must keep serving chat even when
+    // the activity bridge is degraded. `degraded` is the operator signal.
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(bridgeHealthBody(bridgeBootStatus.snapshot(), Date.now())));
+    return;
+  }
 
   if (urlPath === "/api/auth/mattermost" && req.method === "POST") {
     return handleMattermostMint(req, res);
@@ -875,8 +996,22 @@ if (process.env.NODE_ENV !== "test") {
         'Mount K8s secret `mattermost-gateway/admin_token` to enable. See ' +
         'helm/octogee/charts/gateway/templates/deployment.yaml.',
       );
+      bridgeBootStatus.set('mm-admin-pat-missing');
       return;
     }
+
+    // Phase 8.1 — scope the ephemeral `octogee.ctx` fan-out to MM users
+    // who are members of the target activity channel (server-side),
+    // closing the cross-user numeric-leak. Membership is resolved with
+    // the admin PAT and TTL-cached; the broadcast predicate is the
+    // member set, so no member list ever crosses the wire.
+    const channelMembers = createChannelMemberResolver({
+      ttlMs: 60_000,
+      fetchMembers: (channelId: string) =>
+        fetchMmChannelMemberIds(MM_INTERNAL_URL, mmAdminPat, channelId),
+      onError: reportMemberResolveFailure,
+    });
+    const ctxEmitChains = new Map<string, Promise<void>>();
     const { wireActivityBridge, connectBridgeUpstream } = await import('./openclaw/bridge-boot.js');
     let wired: Awaited<ReturnType<typeof wireActivityBridge>>;
     try {
@@ -890,11 +1025,7 @@ if (process.env.NODE_ENV !== "test") {
         metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
         log: (msg) => console.warn(msg),
         editDiffFetcher: await buildEditDiffFetcher(),
-        emitEphemeral: (channelId, payload) =>
-          mmWsRegistry.broadcast({
-            event: 'octogee.ctx',
-            data: { channelId, ...payload },
-          }),
+        emitEphemeral: makeEmitEphemeral(channelMembers, mmWsRegistry, ctxEmitChains),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -910,6 +1041,7 @@ if (process.env.NODE_ENV !== "test") {
         'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
         'See docs/ACTIVITY-STREAM-SPEC.md Appendix A.1.',
       );
+      bridgeBootStatus.set('gateway-id-missing');
       return;
     }
     const gatewayId = gatewayIdResult.gatewayId;
@@ -1014,29 +1146,28 @@ if (process.env.NODE_ENV !== "test") {
     // `/healthz` can't wedge the bridge.
     const healthUrl = gatewayHealthUrl();
     startBridgeUpstreamReconnectLoop({
-      probeReady: async () => {
-        try {
-          const resp = await fetch(healthUrl, { signal: AbortSignal.timeout(2_000) });
-          if (resp.ok) return { ready: true };
-          const retryAfter = resp.headers.get('retry-after');
-          const retryAfterMs = parseRetryAfterMs(retryAfter);
-          return { ready: false, retryAfterMs };
-        } catch {
-          return { ready: false };
-        }
-      },
+      probeReady: () => probeGatewayReady(healthUrl),
       probeIntervalMs: 500,
       openOnce: async () => {
-        const tokenResolved = await fetchGatewayToken({ gatewayId });
-        const ws = await openUpstream({
-          url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
-          token: tokenResolved,
-          identity: getOpenClawIdentity(),
-        });
+        let tokenResolved: string;
+        let ws: Awaited<ReturnType<typeof openUpstream>>;
+        try {
+          tokenResolved = await fetchGatewayToken({ gatewayId });
+          ws = await openUpstream({
+            url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+            token: tokenResolved,
+            identity: getOpenClawIdentity(),
+          });
+        } catch (err) {
+          const code = err instanceof UpstreamError ? err.code : undefined;
+          bridgeBootStatus.set(code === 'auth-failed' ? 'auth-failed' : 'unreachable');
+          throw err;
+        }
         let closed = false;
         let registered: (() => void) | null = null;
         ws.on('close', () => {
           closed = true;
+          bridgeBootStatus.set('unreachable');
           registered?.();
         });
         await connectBridgeUpstream(wired, {
@@ -1055,7 +1186,10 @@ if (process.env.NODE_ENV !== "test") {
         };
       },
       log: (msg) => console.warn(msg),
-      onConnected: () => console.log('[chat-proxy] activity bridge upstream WS connected'),
+      onConnected: () => {
+        bridgeBootStatus.set('connected');
+        console.log('[chat-proxy] activity bridge upstream WS connected');
+      },
     });
   })();
 }
