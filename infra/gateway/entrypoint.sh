@@ -242,7 +242,11 @@ fi
 # parent-exit + successor-holds-port pattern produced log spam with no
 # productive action. Hard crash recovery is now K8s's job: the deployment
 # has a liveness probe on TCP :18789 in helm/octogee-gateway/templates/
-# deployment.yaml — port-frees-without-successor → pod restart (~60s).
+# deployment.yaml — port-frees-without-successor → pod restart after
+# `periodSeconds × failureThreshold` of consistent failure (default 60s × 5
+# = ~5 min before restart fires, then a fresh boot before the new pod
+# serves). Tradeoff for the no-supervisor simplicity; if you need faster
+# crash recovery, tighten `probes.liveness` in values.yaml.
 log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
 openclaw gateway run --bind lan --port 18789 &
 
