@@ -751,6 +751,12 @@ export function _clearCaches(): void {
   mmCredsCache.clear();
 }
 
+export function gatewayHealthUrl(
+  base: string = process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789",
+): string {
+  return `${base}/healthz`;
+}
+
 export function createServer() {
   const server = http.createServer(handleRequest);
   const wss = new WebSocketServer({ noServer: true });
@@ -990,19 +996,18 @@ if (process.env.NODE_ENV !== "test") {
     });
     console.log('[chat-proxy] MM event listener started (reactions + reply-as-steer)');
 
-    // Canonical openclaw health path per docs/architecture/AGENT-ARCHITECTURE.md:64.
-    // K8s probes use `tcpSocket` because `/__openclaw__/health` can block
-    // for tens of seconds under per-account MM probe load (see
-    // docs/specs/MM-MULTI-ACCOUNT-FOLLOWUP-SPEC.md). The fetch timeout
-    // here caps each probe at 2s; the bridge-reconnect loop's
-    // `probeMaxConsecutiveNotReady` (default 30 ≈ 15s) caps the total
-    // probe budget before falling through to the legacy WS attempt, so
-    // a wedged `/health` can't wedge the bridge.
-    const gatewayHealthUrl = `${process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789'}/__openclaw__/health`;
+    // K8s probes use `tcpSocket`, not this path: `/healthz` can block for
+    // tens of seconds under per-account MM probe load (see
+    // docs/specs/MM-MULTI-ACCOUNT-FOLLOWUP-SPEC.md). The fetch timeout here
+    // caps each probe at 2s; the bridge-reconnect loop's
+    // `probeMaxConsecutiveNotReady` (default 30 ≈ 15s) caps the total probe
+    // budget before falling through to the legacy WS attempt, so a wedged
+    // `/healthz` can't wedge the bridge.
+    const healthUrl = gatewayHealthUrl();
     startBridgeUpstreamReconnectLoop({
       probeReady: async () => {
         try {
-          const resp = await fetch(gatewayHealthUrl, { signal: AbortSignal.timeout(2_000) });
+          const resp = await fetch(healthUrl, { signal: AbortSignal.timeout(2_000) });
           if (resp.ok) return { ready: true };
           const retryAfter = resp.headers.get('retry-after');
           const retryAfterMs = parseRetryAfterMs(retryAfter);

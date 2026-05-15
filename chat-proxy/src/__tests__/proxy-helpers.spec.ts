@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 process.env.NODE_ENV = 'test';
 process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
@@ -21,7 +21,7 @@ vi.mock('firebase-admin', () => ({
   },
 }));
 
-const { setCors, verifyAuth } = await import('../proxy');
+const { setCors, verifyAuth, gatewayHealthUrl } = await import('../proxy');
 
 describe('chat-proxy helper coverage', () => {
   beforeEach(() => {
@@ -58,5 +58,31 @@ describe('chat-proxy helper coverage', () => {
 
   it('rejects invalid auth tokens', async () => {
     await expect(verifyAuth({ headers: { authorization: 'Bearer no-good' } } as any)).resolves.toBeNull();
+  });
+});
+
+describe('gatewayHealthUrl — OC 2026.5.12 endpoint surface', () => {
+  const saved = process.env.OPENCLAW_GATEWAY_URL;
+  beforeEach(() => {
+    delete process.env.OPENCLAW_GATEWAY_URL;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.OPENCLAW_GATEWAY_URL;
+    else process.env.OPENCLAW_GATEWAY_URL = saved;
+  });
+
+  it('targets /healthz, never the removed /__openclaw__/* surface', () => {
+    const url = gatewayHealthUrl('http://127.0.0.1:18789');
+    expect(url).toBe('http://127.0.0.1:18789/healthz');
+    expect(url).not.toContain('__openclaw__');
+  });
+
+  it('defaults to the in-pod sidecar address when OPENCLAW_GATEWAY_URL is unset', () => {
+    expect(gatewayHealthUrl()).toBe('http://127.0.0.1:18789/healthz');
+  });
+
+  it('honors OPENCLAW_GATEWAY_URL when set', () => {
+    process.env.OPENCLAW_GATEWAY_URL = 'http://gw:18789';
+    expect(gatewayHealthUrl()).toBe('http://gw:18789/healthz');
   });
 });

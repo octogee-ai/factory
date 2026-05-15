@@ -190,13 +190,16 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node/.openclaw
-          # Startup probe uses HTTP /__openclaw__/health (not TCP) — gates
+          # Startup probe is HTTP GET /healthz (not TCP) — gates
           # liveness/readiness until openclaw is actually serving HTTP,
-          # not just port-bound. Once it succeeds once, liveness/readiness
-          # take over (TCP, won't flap on slow /health under steady load).
+          # not just port-bound. Unrouted paths fall through to openclaw's
+          # Control-UI static handler, which 503s (image skips ui:build);
+          # /healthz returns 200 {"status":"live"}. Once it succeeds once,
+          # liveness/readiness take over (TCP, won't flap on slow /healthz
+          # under steady load).
           startupProbe:
             httpGet:
-              path: /__openclaw__/health
+              path: /healthz
               port: 18789
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}

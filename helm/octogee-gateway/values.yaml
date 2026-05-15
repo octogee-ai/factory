@@ -101,21 +101,21 @@ resources:
     ephemeral-storage: "5Gi"
 
 probes:
-  # Startup uses an HTTP GET against `/__openclaw__/health` — proves
-  # openclaw is HTTP-responsive (not just port-bound), gating
-  # liveness/readiness until the gateway has actually finished
-  # initializing. 10s × 60 = up to 10 min boot window for slow customer
-  # reattach / agent load on fresh starts. Once it succeeds once,
-  # liveness/readiness take over (both TCP).
+  # Startup uses an HTTP GET against `/healthz` — proves openclaw is
+  # HTTP-responsive (not just port-bound), gating liveness/readiness
+  # until the gateway has actually finished initializing. 10s × 60 =
+  # up to 10 min boot window for slow customer reattach / agent load on
+  # fresh starts. Once it succeeds once, liveness/readiness take over
+  # (both TCP).
   startup:
     initialDelaySeconds: 15
     periodSeconds: 10
     failureThreshold: 60
     timeoutSeconds: 10
-  # Liveness stays TCP — `/__openclaw__/health` can block tens of seconds
-  # under per-account MM probe load (chat-proxy/src/proxy.ts:994). Using
-  # HTTP here would restart the pod on slow-but-alive openclaw. TCP
-  # confirms "process bound to port"; only port loss → restart.
+  # Liveness stays TCP — `/healthz` can block tens of seconds under
+  # per-account MM probe load (chat-proxy/src/proxy.ts:994). Using HTTP
+  # here would restart the pod on slow-but-alive openclaw. TCP confirms
+  # "process bound to port"; only port loss → restart.
   liveness:
     initialDelaySeconds: 0
     periodSeconds: 60

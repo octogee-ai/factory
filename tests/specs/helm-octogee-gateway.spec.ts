@@ -224,12 +224,21 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).toMatch(/chown -R 1000:1000 \/home\/node\/\.openclaw/);
   });
 
-  it("configures startup, liveness, and readiness probes on tcpSocket port 18789", () => {
+  it("startup probe is HTTP GET /healthz; liveness + readiness stay TCP; all on 18789", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    expect(dep).toMatch(/startupProbe:[\s\S]*?tcpSocket:[\s\S]*?port:\s*18789/);
-    expect(dep).toMatch(/livenessProbe:[\s\S]*?tcpSocket:[\s\S]*?port:\s*18789/);
-    expect(dep).toMatch(/readinessProbe:[\s\S]*?tcpSocket:[\s\S]*?port:\s*18789/);
+    const gw =
+      dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ??
+      "";
+    // openclaw 2026.5.x serves /healthz; any unrouted path falls through
+    // to the Control-UI static handler, which 503s (image skips ui:build)
+    // — a 503 startup probe never lets the gateway container go Ready.
+    expect(gw).toMatch(
+      /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/,
+    );
+    expect(gw).toMatch(/livenessProbe:\s+tcpSocket:\s+port:\s*18789/);
+    expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
+    expect(dep).not.toMatch(/__openclaw__/);
   });
 });
 

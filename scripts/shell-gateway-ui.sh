@@ -15,11 +15,10 @@
 #   ./scripts/shell-gateway-ui.sh --env=test --port=8789 # local port override
 #   ./scripts/shell-gateway-ui.sh --env=test --open      # also open browser
 #
-# Known endpoints once port-forward is up:
-#   http://localhost:{PORT}/                  — gateway root
-#   http://localhost:{PORT}/__openclaw__/health
-#   http://localhost:{PORT}/__openclaw__/metrics
-#   http://localhost:{PORT}/__openclaw__/canvas/
+# Known endpoints once port-forward is up (OC 2026.5.12 surface):
+#   http://localhost:{PORT}/healthz           — gateway liveness
+#   Prometheus metrics moved to :9091/metrics (not forwarded here)
+#   Control UI / canvas are not built into the gateway image
 #
 # Ctrl+C tears down the tunnel cleanly.
 
@@ -70,9 +69,8 @@ fi
 URL="http://localhost:${LOCAL_PORT}"
 
 echo "→ Port-forwarding octogee-gateway:18789 → ${URL} (env=${ENV}, namespace=${NAMESPACE})"
-echo "  Canvas:   ${URL}/__openclaw__/canvas/"
-echo "  Health:   ${URL}/__openclaw__/health"
-echo "  Metrics:  ${URL}/__openclaw__/metrics"
+echo "  Health:   ${URL}/healthz"
+echo "  (metrics moved to :9091/metrics; Control UI/canvas not built into the image)"
 echo "  (Ctrl+C to tear down)"
 
 if $OPEN_BROWSER; then
