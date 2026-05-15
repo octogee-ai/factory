@@ -339,7 +339,13 @@ function readTokenFromOpenClawJson(configPath?: string): string {
   return "";
 }
 
-const PROTOCOL_VERSION = 3;
+// Openclaw 2026.5.12 bumped the gateway WS handshake protocol from 3
+// to 4. The gateway sends `expectedProtocol=4, minimumProbeProtocol=4`
+// in the connect frame; any client still declaring 3 closes with
+// `protocol-mismatch` (code 1002). Bump this in lockstep with each
+// gateway base-image roll forward — keep `chat-proxy/src/openclaw/
+// upstream.ts` in sync.
+const PROTOCOL_VERSION = 4;
 
 interface OpenAndConnectParams {
   url: string;

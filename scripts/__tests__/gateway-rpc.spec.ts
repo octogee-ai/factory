@@ -85,7 +85,7 @@ async function startMockGateway(): Promise<MockServerHandle> {
             ok: true,
             payload: {
               type: "hello-ok",
-              protocol: 3,
+              protocol: 4,
               server: { version: "test", connId: "c1" },
               features: { methods: [], events: [] },
               snapshot: {},
@@ -484,7 +484,7 @@ describe("gateway-rpc", () => {
           ok: true,
           payload: {
             type: "hello-ok",
-            protocol: 3,
+            protocol: 4,
             server: { version: "test", connId: "c1" },
             features: { methods: [], events: [] },
             snapshot: {},
@@ -697,7 +697,7 @@ describe("token resolution", () => {
         ok: true,
         payload: {
           type: "hello-ok",
-          protocol: 3,
+          protocol: 4,
           server: { version: "test", connId: "c1" },
           features: { methods: [], events: [] },
           snapshot: {},
@@ -740,7 +740,7 @@ describe("token resolution", () => {
         ok: true,
         payload: {
           type: "hello-ok",
-          protocol: 3,
+          protocol: 4,
           server: { version: "test", connId: "c1" },
           features: { methods: [], events: [] },
           snapshot: {},
@@ -779,7 +779,7 @@ describe("token resolution", () => {
         ok: true,
         payload: {
           type: "hello-ok",
-          protocol: 3,
+          protocol: 4,
           server: { version: "test", connId: "c1" },
           features: { methods: [], events: [] },
           snapshot: {},

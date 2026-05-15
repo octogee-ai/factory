@@ -21,7 +21,11 @@ export class UpstreamError extends Error {
   }
 }
 
-const PROTOCOL_VERSION = 3;
+// Openclaw 2026.5.12 bumped the gateway WS handshake protocol from 3
+// to 4 (the gateway sends `expectedProtocol=4, minimumProbeProtocol=4`
+// and closes with code 1002 otherwise). Keep in sync with
+// `scripts/lib/gateway-rpc.ts` PROTOCOL_VERSION.
+const PROTOCOL_VERSION = 4;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 /**
