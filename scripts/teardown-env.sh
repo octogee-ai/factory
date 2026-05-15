@@ -301,88 +301,210 @@ if [[ "${FAST_DONE:-}" != "true" ]]; then
 fi
 
 # ── 5. Full: Cloud SQL DBs ────────────────────────────────────────────────
+# 2026-05-14 incident: --full ran "successfully" on PROD + TEST but every DB
+# still had data afterward. Two silent-failure paths existed: (a) gcloud
+# read errors got swallowed by `|| echo ""`, then both passwords looked
+# empty, then the script took the "fresh env, skipping DB drop" path with
+# only a `warn`; (b) the `sleep 4` after launching cloud-sql-proxy didn't
+# actually verify the proxy was up and pointed at the right instance.
+#
+# Hardening below:
+#   * `sm_read` distinguishes "secret legitimately absent" (NOT_FOUND) from
+#     "gcloud failed for some other reason" — only the former is allowed.
+#   * The silent "fresh env" skip is gone. If --full is requested and either
+#     password is missing, the script dies with explicit guidance.
+#   * Pre-launch port-5433 check catches stale proxies that would route to
+#     a wrong/unknown Cloud SQL instance.
+#   * cloud-sql-proxy startup waits for the listener (not sleep) + verifies
+#     the proxy process is still alive.
+#   * Authentication is probed against postgres before any DROP.
+#   * Pre + post inventory printed for each DB so the operator can SEE what
+#     was about to be dropped vs what's left.
+#   * psql calls use `-v ON_ERROR_STOP=1` to surface every SQL error as a
+#     non-zero exit (default psql shrugs at some errors).
 if $FULL; then
   echo ""
   info "Resetting Cloud SQL databases ($MM_DB_NAME, $GITEA_DB_NAME)..."
 
-  # Canonical secret names: MM uses `MM_DB_PASSWORD` (uppercase) everywhere
-  # (setup-secrets.sh, setup-mattermost.sh, helm chart env var, RUNBOOK).
-  # Gitea uses `gitea-db-password` (lowercase-hyphen). Two different
-  # historical conventions; both are load-bearing.
-  MM_DB_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project=octogee 2>/dev/null || echo "")
-  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee 2>/dev/null || echo "")
+  # ── 5a. Secret reads — fail loud on anything that isn't a clean NOT_FOUND.
+  sm_read() {
+    local secret_name="$1"
+    local stderr_file
+    stderr_file=$(mktemp)
+    gcloud secrets versions access latest --secret="$secret_name" --project=octogee 2>"$stderr_file"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+      rm -f "$stderr_file"
+      return 0
+    fi
+    if grep -qE "NOT_FOUND|was not found|does not exist" "$stderr_file" 2>/dev/null; then
+      rm -f "$stderr_file"
+      return 1  # legitimately absent — caller decides
+    fi
+    echo -e "  ${RED}❌ gcloud read failed for $secret_name (not a 404):${NC}" >&2
+    sed 's/^/      /' "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return 2
+  }
 
+  MM_DB_PASS=""
+  MM_DB_PASS_STATUS="present"
+  if ! MM_DB_PASS=$(sm_read MM_DB_PASSWORD); then
+    rc=$?
+    if [[ $rc -eq 1 ]]; then
+      MM_DB_PASS_STATUS="absent"
+    else
+      die "MM_DB_PASSWORD read failed (gcloud auth or network). Fix and re-run."
+    fi
+  fi
+
+  GITEA_DB_PASS=""
+  GITEA_DB_PASS_STATUS="present"
+  if ! GITEA_DB_PASS=$(sm_read gitea-db-password); then
+    rc=$?
+    if [[ $rc -eq 1 ]]; then
+      GITEA_DB_PASS_STATUS="absent"
+    else
+      die "gitea-db-password read failed (gcloud auth or network). Fix and re-run."
+    fi
+  fi
+
+  # 2026-05-14: removed the "both absent → fresh env, skip drop" path. If
+  # --full was requested, the operator believes there is data to drop;
+  # making the drop optional based on Secret Manager presence is what
+  # caused both envs to silently retain stale data. If the operator wants
+  # to skip the DB drop deliberately, they can leave off --full.
+  if [[ "$MM_DB_PASS_STATUS" == "absent" || "$GITEA_DB_PASS_STATUS" == "absent" ]]; then
+    echo ""
+    echo -e "  ${RED}❌ Refusing to silently skip the DB drop.${NC}"
+    echo "     MM_DB_PASSWORD:    $MM_DB_PASS_STATUS"
+    echo "     gitea-db-password: $GITEA_DB_PASS_STATUS"
+    echo ""
+    echo "     Either: the DB is truly empty / never provisioned —"
+    echo "             rerun WITHOUT --full to skip the DB section."
+    echo "         Or: passwords were lost — restore via setup-cloud-sql.sh,"
+    echo "             then re-run with --full."
+    exit 1
+  fi
+
+  # ── 5b. cloud-sql-proxy — local binary + port + listener + alive checks.
   PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || \
     ls /opt/homebrew/bin/cloud-sql-proxy 2>/dev/null || \
     ls /opt/homebrew/share/google-cloud-sdk/bin/cloud-sql-proxy 2>/dev/null || \
     echo "")
-
-  # Auto-install if missing (macOS + Homebrew)
   if [[ -z "$PROXY_BIN" ]] && command -v brew >/dev/null 2>&1; then
     info "cloud-sql-proxy not found — installing via Homebrew..."
     brew install cloud-sql-proxy >/dev/null 2>&1 && PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || echo "")
     [[ -n "$PROXY_BIN" ]] && ok "cloud-sql-proxy installed: $PROXY_BIN"
   fi
-
-  # --full means DB drop is not optional. Hard-fail on missing deps so the
-  # user doesn't think the script succeeded while silently leaving stale
-  # rows behind (we hit this during TEST — "all old MM data is still there").
   if [[ -z "$PROXY_BIN" ]]; then
     die "cloud-sql-proxy not found and --full requested. Install it (brew install cloud-sql-proxy) or run DB drops manually and rerun without --full."
   fi
-  # Missing-secret path: when both passwords are absent, the env has no
-  # prior provisioning (clean-slate rebuild) and there's nothing to drop —
-  # skip the DB section entirely. When only one is missing it's likely an
-  # operator-side gcloud auth issue, so still hard-fail on the partial
-  # case to surface drift.
-  if [[ -z "$MM_DB_PASS" && -z "$GITEA_DB_PASS" ]]; then
-    warn "Neither MM_DB_PASSWORD nor gitea-db-password in Secret Manager — assuming fresh env, skipping DB drop."
-    SKIP_DB_DROP=true
-  elif [[ -z "$MM_DB_PASS" ]]; then
-    die "Could not read MM_DB_PASSWORD from Secret Manager (gitea-db-password exists). Check gcloud auth + grant, or delete gitea-db-password too to skip the DB drop."
-  elif [[ -z "$GITEA_DB_PASS" ]]; then
-    die "Could not read gitea-db-password from Secret Manager (MM_DB_PASSWORD exists). Check gcloud auth + grant, or delete MM_DB_PASSWORD too to skip the DB drop."
-  else
-    SKIP_DB_DROP=false
+
+  if lsof -nP -iTCP:5433 -sTCP:LISTEN >/dev/null 2>&1; then
+    holders=$(lsof -nP -iTCP:5433 -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1"("$2")"}' | sort -u | tr '\n' ' ')
+    die "Local port 5433 is already in use by: ${holders:-(unknown)}. Stale cloud-sql-proxy? Kill it (pkill -f 'cloud-sql-proxy.*5433') and rerun."
   fi
 
-  if ! $SKIP_DB_DROP; then
-    "$PROXY_BIN" octogee:us-central1:octogee-pg --port=5433 &
-    PROXY_PID=$!
-    trap '[[ -n "${PROXY_PID:-}" ]] && kill "$PROXY_PID" 2>/dev/null' EXIT
-    sleep 4
+  PROXY_LOG=$(mktemp -t cloud-sql-proxy-teardown.XXXXX)
+  "$PROXY_BIN" octogee:us-central1:octogee-pg --port=5433 >"$PROXY_LOG" 2>&1 &
+  PROXY_PID=$!
+  trap '[[ -n "${PROXY_PID:-}" ]] && kill "$PROXY_PID" 2>/dev/null' EXIT
 
-    # Helper: drop + recreate a database, then assert it is empty. Each psql
-    # call is a separate -c (psql refuses to run DROP DATABASE inside a
-    # transaction block), and an explicit verify-empty check prevents silent
-    # no-op — if the drop didn't land, the table count would stay non-zero.
-    drop_and_verify() {
-      local user="$1" pass="$2" dbname="$3"
-      PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
-        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$dbname';" >/dev/null 2>&1 || true
-      PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
-        -c "DROP DATABASE IF EXISTS $dbname;" \
-        || die "DROP DATABASE $dbname failed"
-      PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
-        -c "CREATE DATABASE $dbname;" \
-        || die "CREATE DATABASE $dbname failed"
-      local tbl_count
-      tbl_count=$(PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d "$dbname" \
-        -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" \
-        2>/dev/null || echo "ERR")
-      if [[ "$tbl_count" != "0" ]]; then
-        die "$dbname not empty after drop+create (table count = $tbl_count) — aborting"
-      fi
-      ok "$dbname reset and verified empty"
-    }
-
-    drop_and_verify mattermost "$MM_DB_PASS" "$MM_DB_NAME"
-    drop_and_verify gitea      "$GITEA_DB_PASS" "$GITEA_DB_NAME"
-
-    kill "$PROXY_PID" 2>/dev/null || true
-    PROXY_PID=""
-    trap - EXIT
+  info "Waiting for cloud-sql-proxy listener on 127.0.0.1:5433..."
+  PROXY_UP=false
+  for i in $(seq 1 30); do
+    if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+      echo -e "  ${RED}❌ cloud-sql-proxy exited during startup. Last 20 lines of log:${NC}" >&2
+      tail -20 "$PROXY_LOG" | sed 's/^/      /' >&2
+      die "cloud-sql-proxy died — see above ($PROXY_LOG)"
+    fi
+    if nc -z 127.0.0.1 5433 2>/dev/null; then
+      PROXY_UP=true
+      ok "cloud-sql-proxy listening on :5433 (after ${i}s)"
+      break
+    fi
+    sleep 1
+  done
+  if ! $PROXY_UP; then
+    echo -e "  ${RED}❌ cloud-sql-proxy never started listening on :5433 (30s timeout). Log tail:${NC}" >&2
+    tail -20 "$PROXY_LOG" | sed 's/^/      /' >&2
+    die "cloud-sql-proxy didn't come up — see above"
   fi
+
+  # ── 5c. Auth probe — connect to postgres as each DB user.
+  if ! PGPASSWORD="$MM_DB_PASS" psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres \
+      -tAc "SELECT 1" >/dev/null 2>&1; then
+    die "Authentication failed for 'mattermost' user against $MM_DB_NAME. MM_DB_PASSWORD in Secret Manager may be out of sync with the DB user (e.g. setup-cloud-sql.sh partially completed). Re-run setup-cloud-sql.sh and retry."
+  fi
+  if ! PGPASSWORD="$GITEA_DB_PASS" psql -h 127.0.0.1 -p 5433 -U gitea -d postgres \
+      -tAc "SELECT 1" >/dev/null 2>&1; then
+    die "Authentication failed for 'gitea' user against $GITEA_DB_NAME. gitea-db-password may be out of sync with the DB user."
+  fi
+  ok "Both DB user credentials authenticate against the live instance"
+
+  # ── 5d. Pre-drop inventory — operator sees what's about to be nuked.
+  inventory_db() {
+    local user="$1" pass="$2" dbname="$3"
+    local line
+    line=$(PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d "$dbname" -tAc "
+      SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public') || ' tables, ' ||
+             pg_size_pretty(pg_database_size('$dbname'))
+    " 2>/dev/null)
+    line=${line//[[:space:]]/ }
+    line=${line## }
+    if [[ -z "$line" ]]; then line="(could not inspect — DB may not exist yet)"; fi
+    echo "    $dbname: $line"
+  }
+
+  echo ""
+  info "Pre-drop inventory:"
+  inventory_db mattermost "$MM_DB_PASS" "$MM_DB_NAME"
+  inventory_db gitea      "$GITEA_DB_PASS" "$GITEA_DB_NAME"
+  echo ""
+
+  # ── 5e. Drop + recreate + verify, per DB.
+  # Single -c per psql call (DROP DATABASE rejects transaction blocks).
+  # ON_ERROR_STOP=1 promotes every SQL warning into a non-zero exit so `|| die`
+  # actually fires; default psql silently swallows certain errors.
+  drop_and_verify() {
+    local user="$1" pass="$2" dbname="$3"
+    local before
+    before=$(PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d "$dbname" -tAc \
+      "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null || echo "?")
+    before=${before//[[:space:]]/}
+    info "Dropping $dbname (before: ${before:-?} tables)..."
+    PGPASSWORD="$pass" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
+      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$dbname' AND pid <> pg_backend_pid();" >/dev/null \
+      || die "Could not terminate active backends on $dbname (psql failed)"
+    PGPASSWORD="$pass" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
+      -c "DROP DATABASE IF EXISTS $dbname;" >/dev/null \
+      || die "DROP DATABASE $dbname failed — check active sessions or owner permissions"
+    PGPASSWORD="$pass" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5433 -U "$user" -d postgres \
+      -c "CREATE DATABASE $dbname;" >/dev/null \
+      || die "CREATE DATABASE $dbname failed"
+    local after
+    after=$(PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d "$dbname" -tAc \
+      "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null || echo "ERR")
+    after=${after//[[:space:]]/}
+    if [[ "$after" != "0" ]]; then
+      die "$dbname not empty after drop+create (tables=$after) — DROP DATABASE may have failed silently. Check $PROXY_LOG and active sessions."
+    fi
+    ok "$dbname: ${before:-?} tables → 0 (verified empty)"
+  }
+
+  drop_and_verify mattermost "$MM_DB_PASS" "$MM_DB_NAME"
+  drop_and_verify gitea      "$GITEA_DB_PASS" "$GITEA_DB_NAME"
+
+  kill "$PROXY_PID" 2>/dev/null || true
+  PROXY_PID=""
+  trap - EXIT
+  rm -f "$PROXY_LOG"
+
+  echo ""
+  echo -e "  ${BOLD}Cloud SQL reset complete:${NC}"
+  echo -e "    ${GREEN}✅ $MM_DB_NAME — dropped + recreated empty${NC}"
+  echo -e "    ${GREEN}✅ $GITEA_DB_NAME — dropped + recreated empty${NC}"
 fi
 
 # ── 6. Secret Manager: preserve infra secrets, wipe per-customer byok-* ──
