@@ -563,6 +563,157 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     );
     expect(upgrades).toBe(2);
   });
+
+  it("re-wedge: recovers a release stuck in pending-rollback (Cowboy killed during a prior recovery)", async () => {
+    let upgrades = 0;
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") {
+        upgrades++;
+        return upgrades === 1
+          ? { stdout: "", stderr: IN_PROGRESS, code: 1 }
+          : { stdout: "ok", stderr: "", code: 0 };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([
+            { revision: 2, status: "deployed" },
+            { revision: 3, status: "pending-rollback" },
+          ]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    // pending-rollback is NOT a good target — roll back to the deployed 2.
+    expect(calls.find((c) => c[0] === "rollback")).toContain("2");
+  });
+
+  it("rolls back to an old good revision even when many later revisions failed (never destructively uninstalls; no --max cap)", async () => {
+    let upgrades = 0;
+    const calls: string[][] = [];
+    const history = [
+      { revision: 1, status: "superseded" },
+      { revision: 2, status: "deployed" },
+      ...Array.from({ length: 25 }, (_, i) => ({
+        revision: 3 + i,
+        status: i % 2 === 0 ? "pending-upgrade" : "failed",
+      })),
+    ];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") {
+        upgrades++;
+        return upgrades === 1
+          ? { stdout: "", stderr: IN_PROGRESS, code: 1 }
+          : { stdout: "ok", stderr: "", code: 0 };
+      }
+      if (args[0] === "history") {
+        return { stdout: JSON.stringify(history), stderr: "", code: 0 };
+      }
+      if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    expect(calls.map((c) => c[0])).toEqual([
+      "upgrade",
+      "history",
+      "rollback",
+      "upgrade",
+    ]);
+    expect(calls.find((c) => c[0] === "rollback")).toContain("2");
+    expect(calls.some((c) => c[0] === "uninstall")).toBe(false);
+    expect(calls.find((c) => c[0] === "history")).not.toContain("--max");
+  });
+
+  it("surfaces a clear error when helm history returns unparseable output (no raw SyntaxError loop)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") return { stdout: "", stderr: IN_PROGRESS, code: 1 };
+      if (args[0] === "history") {
+        return {
+          stdout: "WARNING: couldn't read kubeconfig\nnot-json-at-all",
+          stderr: "",
+          code: 0,
+        };
+      }
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
+      /unparseable output during recovery/,
+    );
+    // No rollback/uninstall/retry off a release we can't reason about.
+    expect(calls.map((c) => c[0])).toEqual(["upgrade", "history"]);
+  });
+
+  it("fails closed on empty helm history (existing stuck release must have revisions) — no destructive uninstall", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") return { stdout: "", stderr: IN_PROGRESS, code: 1 };
+      if (args[0] === "history") return { stdout: "[]", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
+      /no usable revision history during recovery/,
+    );
+    expect(calls.map((c) => c[0])).toEqual(["upgrade", "history"]);
+  });
+
+  it("fails closed when helm history is valid JSON but not an array", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") return { stdout: "", stderr: IN_PROGRESS, code: 1 };
+      if (args[0] === "history") {
+        return { stdout: JSON.stringify({ error: "boom" }), stderr: "", code: 0 };
+      }
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
+      /no usable revision history during recovery/,
+    );
+    expect(calls.map((c) => c[0])).toEqual(["upgrade", "history"]);
+  });
+
+  it("fails closed when helm history is an array but no item has the {revision,status} shape", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "upgrade") return { stdout: "", stderr: IN_PROGRESS, code: 1 };
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([{ foo: 1 }, { revision: "not-a-number" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
+      /no usable revision history during recovery/,
+    );
+    expect(calls.map((c) => c[0])).toEqual(["upgrade", "history"]);
+  });
 });
 
 describe("createHelmSubprocessRunner — removeInstance", () => {
@@ -603,6 +754,141 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     await expect(
       runner.removeInstance({ namespace: "octogee-test", instanceName: "broken" }),
     ).rejects.toThrow(/pre-delete hook failed/);
+  });
+
+  it("self-heals a release stuck in pending-* before uninstalling (rolls back to last good, then uninstalls)", async () => {
+    let uninstalls = 0;
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "uninstall") {
+        uninstalls++;
+        return uninstalls === 1
+          ? {
+              stdout: "",
+              stderr:
+                "Error: uninstall failed: another operation (install/upgrade/rollback) is in progress",
+              code: 1,
+            }
+          : { stdout: "release \"octogee-gw-default\" uninstalled", stderr: "", code: 0 };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([
+            { revision: 2, status: "deployed" },
+            { revision: 3, status: "pending-upgrade" },
+          ]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),
+    ).resolves.toBeUndefined();
+
+    expect(calls.map((c) => c[0])).toEqual([
+      "uninstall",
+      "history",
+      "rollback",
+      "uninstall",
+    ]);
+    expect(calls.find((c) => c[0] === "rollback")).toContain("2");
+  });
+
+  it("self-heals a wedged first-install: recovery uninstalls it, retried uninstall is a not-found no-op", async () => {
+    let uninstalls = 0;
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "uninstall") {
+        uninstalls++;
+        if (uninstalls === 1) {
+          return {
+            stdout: "",
+            stderr:
+              "Error: uninstall failed: another operation (install/upgrade/rollback) is in progress",
+            code: 1,
+          };
+        }
+        if (uninstalls === 2) {
+          // recoverStuckRelease's own uninstall (no good revision)
+          return { stdout: "uninstalled", stderr: "", code: 0 };
+        }
+        // removeInstance's retried uninstall — release already gone
+        return { stdout: "", stderr: "Error: release: not found", code: 1 };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([{ revision: 1, status: "pending-install" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),
+    ).resolves.toBeUndefined();
+
+    expect(calls.map((c) => c[0])).toEqual([
+      "uninstall",
+      "history",
+      "uninstall",
+      "uninstall",
+    ]);
+  });
+
+  it("does not attempt recovery when uninstall fails 'release not found' (idempotent, no history probing)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      return { stdout: "", stderr: "Error: release: not found", code: 1 };
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee-test", instanceName: "ghost" }),
+    ).resolves.toBeUndefined();
+    expect(calls.map((c) => c[0])).toEqual(["uninstall"]);
+  });
+
+  it("surfaces a clear error when recovery before uninstall fails (no retry against a still-stuck release)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "uninstall") {
+        return {
+          stdout: "",
+          stderr:
+            "Error: uninstall failed: another operation (install/upgrade/rollback) is in progress",
+          code: 1,
+        };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([{ revision: 2, status: "deployed" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "rollback") {
+        return { stdout: "", stderr: "Error: rollback failed", code: 1 };
+      }
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),
+    ).rejects.toThrow(/rollback/i);
+    expect(calls.map((c) => c[0])).toEqual(["uninstall", "history", "rollback"]);
   });
 });
 

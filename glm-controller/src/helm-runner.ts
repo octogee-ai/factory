@@ -209,6 +209,41 @@ interface HelmHistoryItem {
 // `pending-*` is the wedge we're escaping.
 const GOOD_ROLLBACK_STATUSES = new Set(["deployed", "superseded"]);
 
+// We only reach recovery because helm itself reported this release stuck
+// in `pending-*` — so it exists and *must* have revision history. Every
+// "helm gave us something we can't reason about" shape (non-JSON banner,
+// valid JSON that isn't an array, an array with no recognizable
+// {revision,status} items, or empty) is treated as a hard recovery error:
+// throw so the bounded reconcile retry handles it, rather than letting
+// `findLastGoodRevision` return null and silently routing to the
+// destructive uninstall path (which would delete a possibly-healthy
+// release). The only non-throwing path is a well-formed, non-empty
+// history — exactly what a genuine wedged release always has.
+function parseHelmHistory(release: string, stdout: string): HelmHistoryItem[] {
+  const raw = stdout.trim() || "[]";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `helm history ${release} returned unparseable output during recovery: ${raw.slice(0, 200)}`,
+    );
+  }
+  const items = Array.isArray(parsed)
+    ? parsed.filter(
+        (h): h is HelmHistoryItem =>
+          typeof (h as { revision?: unknown } | null)?.revision === "number" &&
+          typeof (h as { status?: unknown } | null)?.status === "string",
+      )
+    : [];
+  if (items.length === 0) {
+    throw new Error(
+      `helm history ${release} returned no usable revision history during recovery: ${raw.slice(0, 200)}`,
+    );
+  }
+  return items;
+}
+
 function findLastGoodRevision(history: readonly HelmHistoryItem[]): number | null {
   let best: number | null = null;
   for (const h of history) {
@@ -238,8 +273,13 @@ async function recoverStuckRelease(
   upgradeTimeout: string,
   uninstallTimeout: string,
 ): Promise<string> {
+  // No `--max`: a low cap could truncate away the only good revision on
+  // a release that churned through many failed/pending revisions since
+  // its last deploy, making findLastGoodRevision return null and pushing
+  // recovery down the destructive uninstall path. Helm's own default cap
+  // (256) is plenty for the slow-moving gateway fleet.
   const hist = await deps.runHelm([
-    "history", release, "-n", namespace, "-o", "json", "--max", "20",
+    "history", release, "-n", namespace, "-o", "json",
   ]);
   if (hist.code !== 0) {
     if (isReleaseNotFound(hist.stderr)) {
@@ -249,7 +289,7 @@ async function recoverStuckRelease(
       `helm history ${release} failed during recovery (code=${hist.code}): ${hist.stderr.trim() || hist.stdout.trim()}`,
     );
   }
-  const history = JSON.parse(hist.stdout || "[]") as HelmHistoryItem[];
+  const history = parseHelmHistory(release, hist.stdout);
   const target = findLastGoodRevision(history);
   if (target === null) {
     const un = await deps.runHelm([
@@ -356,14 +396,38 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
 
     async removeInstance({ namespace, instanceName }) {
       const release = releaseNameForInstance(instanceName);
-      const result = await deps.runHelm([
+      const uninstallArgs = [
         "uninstall",
         release,
         "-n",
         namespace,
         "--wait",
         `--timeout=${uninstallTimeout}`,
-      ]);
+      ];
+      let result = await deps.runHelm(uninstallArgs);
+      // A release wedged in `pending-*` rejects `helm uninstall` with the
+      // same in-progress error as upgrade — a gateway that wedged and is
+      // then retired would otherwise fail uninstall forever, leaving an
+      // orphan helm release. Same recovery as upsert: clear the pending
+      // state, then retry the uninstall once.
+      if (
+        result.code !== 0 &&
+        !isReleaseNotFound(result.stderr) &&
+        IN_PROGRESS_PATTERN.test(`${result.stderr}\n${result.stdout}`)
+      ) {
+        deps.log(
+          `[helm-runner] ⚠ ${release} stuck (another helm operation in progress) — attempting recovery before uninstall`,
+        );
+        const recovered = await recoverStuckRelease(
+          deps,
+          namespace,
+          release,
+          upgradeTimeout,
+          uninstallTimeout,
+        );
+        deps.log(`[helm-runner] recovery: ${recovered} — retrying uninstall`);
+        result = await deps.runHelm(uninstallArgs);
+      }
       if (result.code !== 0) {
         if (isReleaseNotFound(result.stderr)) {
           deps.log(
