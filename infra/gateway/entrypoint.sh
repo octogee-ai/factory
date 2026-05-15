@@ -223,65 +223,28 @@ fi
   done
 ) &
 
-# ── Helper: wait until port 18789 is free. ─────────────────────────────────
-# Detects whether ANY process is listening on 18789 by reading /proc/net/tcp
-# (always present, no extra dependencies). Replaces the prior /proc/*/cmdline
-# scan which assumed the OpenClaw process title was a known string — the
-# 2026-05-13 TEST crash-loop fired on 2026.5.2 AND 2026.5.7 because neither
-# version's cmdline matched the earlier `openclaw gateway run` /
-# `openclaw-gateway` patterns, so the guard returned "nothing running" while
-# OpenClaw's SIGUSR1-spawned successor was still alive, and the supervisor
-# raced for port 18789. Port-based detection has no openclaw-version
-# coupling and is the actual invariant we care about (the supervisor must
-# not respawn while anyone holds the listener).
+# ── Start OpenClaw gateway ──────────────────────────────────────────────────
+# Single backgrounded child, no supervisor / respawn loop. OpenClaw 2026.5.x
+# handles config-driven restarts internally: when chokidar detects a change
+# to `openclaw.json`, openclaw forks a successor BEFORE the parent exits.
+# The successor binds :18789 and serves traffic; the parent exits cleanly.
+# Our entrypoint shell sees its tracked job complete but stays alive on the
+# other backgrounded jobs (provisioner, log-mirror, preview-proxy, etc.) —
+# so `wait` at the bottom of this script keeps the pod up.
 #
-# 18789 in hex is 4965. /proc/net/tcp emits "local_address: 00000000:4965"
-# (IPv4 0.0.0.0) and /proc/net/tcp6 emits "...:00000000:4965" (IPv6 ::).
-# State 0A = LISTEN.
-wait_for_gateway_exit() {
-  port_hex=$(printf '%04X' 18789)
-  while true; do
-    if ! grep -qE "^\s*[0-9]+:\s+[0-9A-F]+:${port_hex}\s.*\s0A\s" \
-         /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
-      return 0
-    fi
-    log "OpenClaw gateway port 18789 still bound; supervisor waiting..."
-    sleep 1
-  done
-}
-
-# ── Start OpenClaw gateway under a single-instance supervisor ───────────────
-# Previously this was `exec openclaw ...` which made OpenClaw PID 1 and tied
-# its lifecycle to the container's. OpenClaw self-restarts via SIGUSR1 when
-# its chokidar watcher detects an openclaw.json change — under `exec` that
-# cascaded into a whole-pod restart, losing the provisioner's in-memory
-# state, PVC-cached gitea tokens, etc., and taking ~6+ minutes to recover.
-#
-# Matching the while-loop pattern used above for provisioner / site-build /
-# preview-proxy, OpenClaw runs as a supervised child: when it exits
-# (crash OR self-restart), this loop respawns it without taking the pod
-# down. Other services keep running; only tenant MM WebSockets blip.
-#
-# The wait_for_gateway_exit() guard enforces at-most-one gateway per pod.
-# On config-driven restarts OpenClaw itself forks a replacement child
-# ("restart mode: full process restart (spawned pid N)") before the parent
-# exits. Without the guard, the supervisor saw the parent exit and
-# respawned its own gateway alongside OpenClaw's self-spawned child — two
-# processes racing on port 18789. Observed 2026-04-20 in prod when a Face
-# model switch via the admin dashboard triggered
-# `plugins.entries.octogee-router.config.faceModelOverrides.*` reload; the
-# pod had to be rollout-restarted manually. The guard blocks the
-# supervisor's next respawn until OpenClaw's own child (or any other
-# `openclaw gateway run`) fully exits, so only one instance is ever live.
-(
-  while true; do
-    wait_for_gateway_exit
-    log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
-    openclaw gateway run --bind lan --port 18789 || true
-    log "OpenClaw gateway exited — restarting in 2s..."
-    sleep 2
-  done
-) &
+# Previously a `while true; openclaw || true; sleep 2; done` respawn loop
+# ran here, gated on a `wait_for_gateway_exit` port-binding check. The
+# respawn was meant to recover from hard crashes; the guard prevented
+# stomping on openclaw's self-forked successor. Removed 2026-05-15 after
+# the guard's "port still bound; supervisor waiting" loop spun forever in
+# PROD on the first DM to Mac — openclaw added the operator's MM user id to
+# `commands.ownerAllowFrom`, self-restarted via SIGUSR1, and the supervisor
+# parent-exit + successor-holds-port pattern produced log spam with no
+# productive action. Hard crash recovery is now K8s's job: the deployment
+# has a liveness probe on TCP :18789 in helm/octogee-gateway/templates/
+# deployment.yaml — port-frees-without-successor → pod restart (~60s).
+log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
+openclaw gateway run --bind lan --port 18789 &
 
 # ── OpenClaw file-log mirror to container stdout ────────────────────────────
 # `openclaw logs` reads from a richer file log (/tmp/openclaw-1000/openclaw-

@@ -190,8 +190,13 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node/.openclaw
+          # Startup probe uses HTTP /__openclaw__/health (not TCP) — gates
+          # liveness/readiness until openclaw is actually serving HTTP,
+          # not just port-bound. Once it succeeds once, liveness/readiness
+          # take over (TCP, won't flap on slow /health under steady load).
           startupProbe:
-            tcpSocket:
+            httpGet:
+              path: /__openclaw__/health
               port: 18789
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
@@ -204,6 +209,10 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          # Readiness: TCP probe with `successThreshold` so a freshly-bound
+          # port has to stay bound for N×periodSeconds before traffic starts
+          # routing. Together with `failureThreshold`, prevents the
+          # bind/ready/unready oscillation observed on customer-add bursts.
           readinessProbe:
             tcpSocket:
               port: 18789
@@ -211,6 +220,7 @@ spec:
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold | default 1 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 
