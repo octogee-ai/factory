@@ -246,6 +246,122 @@ describe("attachMmWsBridge — buffering + mmUserId race", () => {
   });
 });
 
+interface OptWs extends EventEmitter {
+  readyState: 0 | 1 | 2 | 3;
+  frames: Array<{ data: unknown; binary: boolean | undefined }>;
+  send: (data: unknown, opts?: { binary?: boolean }) => void;
+  close: () => void;
+}
+
+function makeOptWs(state: 0 | 1 = 1): OptWs {
+  const ee = new EventEmitter() as OptWs;
+  ee.readyState = state;
+  ee.frames = [];
+  ee.send = (data: unknown, opts?: { binary?: boolean }) => {
+    ee.frames.push({ data, binary: opts?.binary });
+  };
+  ee.close = () => {
+    if (ee.readyState !== 3) {
+      ee.readyState = 3;
+      ee.emit("close");
+    }
+  };
+  return ee;
+}
+
+describe("attachMmWsBridge — frame opcode preservation (MM rejects pre-auth binary)", () => {
+  it("forwards a browser TEXT frame (Buffer in, isBinary=false) to upstream as text", () => {
+    const browser = makeOptWs(1);
+    const upstream = makeOptWs(1);
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log: vi.fn(),
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+
+    // `ws` v8 delivers the MM client's text auth_challenge as a Buffer
+    // with isBinary=false. If we forward it without {binary:false} the
+    // `ws` lib emits a binary frame and MM closes with UnauthBinary.
+    const auth = Buffer.from(
+      JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token: "t" } }),
+    );
+    browser.emit("message", auth, false);
+
+    expect(upstream.frames).toEqual([{ data: auth, binary: false }]);
+  });
+
+  it("preserves a genuinely binary browser frame as binary", () => {
+    const browser = makeOptWs(1);
+    const upstream = makeOptWs(1);
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log: vi.fn(),
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+
+    const bin = Buffer.from([0x01, 0x02, 0x03]);
+    browser.emit("message", bin, true);
+
+    expect(upstream.frames).toEqual([{ data: bin, binary: true }]);
+  });
+
+  it("preserves opcode for frames buffered before upstream 'open' (auth_challenge race)", () => {
+    const browser = makeOptWs(1);
+    const upstream = makeOptWs(0); // not yet open → buffered
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log: vi.fn(),
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+
+    const auth = Buffer.from(
+      JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token: "t" } }),
+    );
+    browser.emit("message", auth, false);
+    expect(upstream.frames).toEqual([]);
+
+    upstream.readyState = 1;
+    upstream.emit("open");
+
+    expect(upstream.frames).toEqual([{ data: auth, binary: false }]);
+  });
+
+  it("forwards upstream→browser frames preserving the text opcode", async () => {
+    const browser = makeOptWs(1);
+    const upstream = makeOptWs(1);
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log: vi.fn(),
+        resolveMmUserId: async () => "u1",
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+
+    const evt = Buffer.from(JSON.stringify({ event: "hello", data: {} }));
+    upstream.emit("message", evt, false);
+    await tickN(3);
+
+    expect(browser.frames).toEqual([{ data: evt, binary: false }]);
+  });
+});
+
 describe("maybeCaptureMmTokenForAuth", () => {
   it("resolves mmUserId for an authentication_challenge frame", async () => {
     const frame = JSON.stringify({

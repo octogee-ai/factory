@@ -56,7 +56,7 @@ export function attachMmWsBridge(
   let pendingMmUserId: Promise<string | null> | null = null;
   let closed = false;
   let upstreamOpen = false;
-  const browserOutbox: RawData[] = [];
+  const browserOutbox: Array<{ frame: RawData; binary: boolean }> = [];
   let inboundChain: Promise<void> = Promise.resolve();
 
   const close = () => {
@@ -69,10 +69,10 @@ export function attachMmWsBridge(
   const flushOutbox = () => {
     if (!upstreamOpen) return;
     while (browserOutbox.length > 0) {
-      const frame = browserOutbox.shift();
-      if (frame === undefined) break;
+      const queued = browserOutbox.shift();
+      if (queued === undefined) break;
       try {
-        upstream.send(frame);
+        upstream.send(queued.frame, { binary: queued.binary });
       } catch (err) {
         deps.log(`[mm-proxy/ws] flushOutbox send failed: ${(err as Error).message}`);
         return;
@@ -85,7 +85,13 @@ export function attachMmWsBridge(
     flushOutbox();
   });
 
-  browserWs.on("message", (data: RawData) => {
+  // `isBinary` MUST be preserved end to end. `ws` delivers every message
+  // as a Buffer; `ws.send(Buffer)` defaults to a binary frame. The MM
+  // client sends its `authentication_challenge` (and all actions) as
+  // text — forwarding them as binary makes Mattermost close the socket
+  // with `UnauthBinary: binary frames require authentication`, which the
+  // app sees as a 1 Hz connect/close reconnect loop.
+  browserWs.on("message", (data: RawData, isBinary: boolean) => {
     if (!mmUserId && !pendingMmUserId) {
       pendingMmUserId = maybeCaptureMmTokenForAuth(data, deps.resolveMmUserId)
         .then((resolvedId) => {
@@ -101,13 +107,13 @@ export function attachMmWsBridge(
         });
     }
     if (upstreamOpen && upstream.readyState === 1 /* OPEN */) {
-      upstream.send(data);
+      upstream.send(data, { binary: isBinary });
     } else {
-      browserOutbox.push(data);
+      browserOutbox.push({ frame: data, binary: isBinary });
     }
   });
 
-  upstream.on("message", (data: RawData) => {
+  upstream.on("message", (data: RawData, isBinary: boolean) => {
     inboundChain = inboundChain.then(async () => {
       let effectiveUserId = mmUserId;
       if (!effectiveUserId && pendingMmUserId) {
@@ -132,7 +138,7 @@ export function attachMmWsBridge(
         }
       }
       try {
-        browserWs.send(data);
+        browserWs.send(data, { binary: isBinary });
       } catch (err) {
         deps.log(`[mm-proxy/ws] downstream forward failed: ${(err as Error).message}`);
       }
