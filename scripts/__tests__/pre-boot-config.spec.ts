@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { applyPreBootPatches } from "../pre-boot-config.js";
+import {
+  applyPreBootPatches,
+  applyGatewayOverrides,
+  withTimeout,
+} from "../pre-boot-config.js";
 
 function emptyConfig(): any {
   return {};
@@ -197,3 +201,194 @@ describe("applyPreBootPatches — no-change reporting", () => {
   });
 });
 
+describe("applyGatewayOverrides — deep merge", () => {
+  it("deep-merges nested objects without clobbering sibling keys", () => {
+    const config: any = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      plugins: { entries: { mattermost: { enabled: true } } },
+    };
+    const changed = applyGatewayOverrides(config, {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      plugins: { entries: { "openai-responses": { enabled: true } } },
+    });
+    expect(changed).toBe(true);
+    expect(config.agents.defaults.model.primary).toBe("openai/gpt-5.5");
+    expect(config.plugins.entries.mattermost).toEqual({ enabled: true });
+    expect(config.plugins.entries["openai-responses"]).toEqual({ enabled: true });
+  });
+
+  it("replaces arrays wholesale (array-replace, not concat)", () => {
+    const config: any = { plugins: { allow: ["mattermost", "octogee-router"] } };
+    applyGatewayOverrides(config, { plugins: { allow: ["mattermost", "openai-responses"] } });
+    expect(config.plugins.allow).toEqual(["mattermost", "openai-responses"]);
+  });
+
+  it("overrides scalars and creates absent paths", () => {
+    const config: any = { gateway: { port: 18789 } };
+    applyGatewayOverrides(config, { gateway: { mode: "local" }, session: { dmScope: "per-channel-peer" } });
+    expect(config.gateway).toEqual({ port: 18789, mode: "local" });
+    expect(config.session).toEqual({ dmScope: "per-channel-peer" });
+  });
+
+  it("is a no-op for undefined / null / empty overrides", () => {
+    const base = { tools: { profile: "coding" } };
+    for (const ov of [undefined, null, {}]) {
+      const config: any = structuredClone(base);
+      const changed = applyGatewayOverrides(config, ov as any);
+      expect(changed).toBe(false);
+      expect(config).toEqual(base);
+    }
+  });
+
+  it("returns false when the override is identical to existing config", () => {
+    const config: any = { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } };
+    const changed = applyGatewayOverrides(config, {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    });
+    expect(changed).toBe(false);
+  });
+});
+
+describe("applyGatewayOverrides — secret safety (SecretRef-only)", () => {
+  it("strips inline plaintext secrets from auth.profiles and logs loudly", () => {
+    const logs: string[] = [];
+    const config: any = {};
+    applyGatewayOverrides(
+      config,
+      {
+        auth: {
+          profiles: {
+            "openai:benderecho": { type: "api_key", apiKey: "sk-live-PLAINTEXT" },
+          },
+        },
+      },
+      (m) => logs.push(m),
+    );
+    expect(config.auth.profiles["openai:benderecho"].apiKey).toBeUndefined();
+    expect(config.auth.profiles["openai:benderecho"].type).toBe("api_key");
+    expect(logs.join("\n")).toMatch(/openai:benderecho/);
+    expect(logs.join("\n")).toMatch(/apiKey/);
+  });
+
+  it("preserves SecretRef-shaped keyRef / tokenRef", () => {
+    const config: any = {};
+    applyGatewayOverrides(config, {
+      auth: {
+        profiles: {
+          "openai:benderecho": {
+            type: "api_key",
+            keyRef: { source: "exec", provider: "gcp-secret-manager", id: "benderecho-openai-api-key/latest" },
+          },
+        },
+      },
+    });
+    expect(config.auth.profiles["openai:benderecho"].keyRef).toEqual({
+      source: "exec",
+      provider: "gcp-secret-manager",
+      id: "benderecho-openai-api-key/latest",
+    });
+  });
+
+  it("strips a plaintext botToken from an override account entry", () => {
+    const logs: string[] = [];
+    const config: any = {};
+    applyGatewayOverrides(
+      config,
+      { channels: { mattermost: { accounts: { default: { botToken: "xoxb-PLAINTEXT" } } } } },
+      (m) => logs.push(m),
+    );
+    expect(config.channels?.mattermost?.accounts?.default?.botToken).toBeUndefined();
+    expect(logs.join("\n")).toMatch(/botToken/);
+  });
+});
+
+describe("applyGatewayOverrides + applyPreBootPatches — precedence (policy wins)", () => {
+  it("pre-boot policy overrides anything the per-gateway override tried to set", () => {
+    const config: any = {
+      tools: { profile: "coding" },
+      channels: { mattermost: { commands: { native: false }, accounts: {} } },
+    };
+    // Override attempts to escape gateway policy.
+    applyGatewayOverrides(config, {
+      tools: { profile: "research" },
+      channels: { mattermost: { commands: { native: true } } },
+    });
+    // Policy patches run AFTER the merge and must win.
+    applyPreBootPatches(config, {});
+    expect(config.tools.profile).toBe("coding");
+    expect(config.channels.mattermost.commands.native).toBe(false);
+  });
+});
+
+
+describe("applyGatewayOverrides — prototype pollution guard (Copilot #960)", () => {
+  it("drops __proto__/constructor/prototype keys, never pollutes, keeps safe keys", () => {
+    const logs: string[] = [];
+    const config: any = {};
+    const before = ({} as any).polluted;
+    applyGatewayOverrides(
+      config,
+      JSON.parse(
+        '{"__proto__":{"polluted":"yes"},"constructor":{"x":1},"prototype":{"y":2},"safe":1}',
+      ),
+      (m) => logs.push(m),
+    );
+    expect(({} as any).polluted).toBe(before);
+    expect(Object.prototype.hasOwnProperty.call(config, "__proto__")).toBe(false);
+    expect(config.constructor).toBe(Object);
+    expect(config.safe).toBe(1);
+    expect(logs.join("\n")).toMatch(/__proto__|prototype|constructor/);
+  });
+
+  it("guards nested prototype-pollution attempts", () => {
+    const config: any = {};
+    applyGatewayOverrides(
+      config,
+      JSON.parse('{"a":{"__proto__":{"polluted":"x"},"ok":1}}'),
+    );
+    expect(({} as any).polluted).toBeUndefined();
+    expect(config.a).toEqual({ ok: 1 });
+  });
+});
+
+describe("applyGatewayOverrides — SecretRef strictness (Copilot #960)", () => {
+  it("treats a string keyRef/tokenRef as an inline secret (must be a SecretRef object)", () => {
+    const logs: string[] = [];
+    const config: any = {};
+    applyGatewayOverrides(
+      config,
+      { auth: { profiles: { p: { keyRef: "sk-PLAINTEXT", tokenRef: "tok-PLAINTEXT" } } } },
+      (m) => logs.push(m),
+    );
+    expect(config.auth?.profiles?.p?.keyRef).toBeUndefined();
+    expect(config.auth?.profiles?.p?.tokenRef).toBeUndefined();
+    expect(logs.join("\n")).toMatch(/keyRef/);
+  });
+
+  it("preserves an object keyRef (a valid SecretRef)", () => {
+    const config: any = {};
+    applyGatewayOverrides(config, {
+      auth: {
+        profiles: {
+          p: { keyRef: { source: "exec", provider: "gcp-secret-manager", id: "x/latest" } },
+        },
+      },
+    });
+    expect(config.auth.profiles.p.keyRef).toEqual({
+      source: "exec",
+      provider: "gcp-secret-manager",
+      id: "x/latest",
+    });
+  });
+});
+
+describe("withTimeout (Copilot #960 — Firestore read must not stall boot)", () => {
+  it("passes through when the promise resolves before the timeout", async () => {
+    await expect(withTimeout(Promise.resolve("ok"), 1000)).resolves.toBe("ok");
+  });
+
+  it("rejects when the promise exceeds the timeout", async () => {
+    const slow = new Promise<string>((r) => setTimeout(() => r("late"), 100));
+    await expect(withTimeout(slow, 10)).rejects.toThrow(/timeout/i);
+  });
+});

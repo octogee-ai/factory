@@ -154,6 +154,108 @@ export function applyPreBootPatches(
   return changed;
 }
 
+const SECRET_BEARING_KEYS = new Set([
+  "apiKey",
+  "key",
+  "token",
+  "secret",
+  "password",
+  "botToken",
+]);
+
+// keyRef/tokenRef are SecretRef *objects*; a string value is an inline secret.
+const SECRETREF_OBJECT_KEYS = new Set(["keyRef", "tokenRef"]);
+
+// Computed assignment of these keys can poison Object.prototype.
+const PROTO_POLLUTION_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Reject a slow/unreachable promise so a degraded dependency cannot stall
+ * the boot path. Caller treats rejection as "proceed without it".
+ */
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+  });
+  return Promise.race([p.finally(() => clearTimeout(timer)), timeout]);
+}
+
+function stripInlineSecrets(
+  node: unknown,
+  pathLabel: string,
+  logFn: (msg: string) => void,
+): void {
+  if (!isPlainObject(node)) return;
+  for (const key of Object.keys(node)) {
+    if (PROTO_POLLUTION_KEYS.has(key)) {
+      Reflect.deleteProperty(node, key);
+      logFn(`dropped unsafe key ${pathLabel}.${key} (prototype pollution)`);
+      continue;
+    }
+    const val = Reflect.get(node, key);
+    const secretBearing =
+      SECRET_BEARING_KEYS.has(key) || SECRETREF_OBJECT_KEYS.has(key);
+    if (secretBearing && typeof val === "string") {
+      Reflect.deleteProperty(node, key);
+      logFn(
+        `dropped inline plaintext secret at ${pathLabel}.${key} — per-gateway overrides must reference Secret Manager via keyRef/tokenRef/SecretRef`,
+      );
+      continue;
+    }
+    if (val && typeof val === "object") {
+      stripInlineSecrets(val, `${pathLabel}.${key}`, logFn);
+    }
+  }
+}
+
+function valueEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function deepMergeInto(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): boolean {
+  let changed = false;
+  for (const [key, sv] of Object.entries(source)) {
+    if (PROTO_POLLUTION_KEYS.has(key)) continue;
+    const tv = Reflect.get(target, key);
+    if (isPlainObject(sv) && isPlainObject(tv)) {
+      if (deepMergeInto(tv, sv)) changed = true;
+    } else if (!Reflect.has(target, key) || !valueEqual(tv, sv)) {
+      Reflect.set(target, key, sv);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Deep-merge a per-gateway `openclawOverrides` blob into the rendered
+ * config. Pure: no I/O, no env. Arrays replace (not concat). Inline
+ * plaintext secrets are stripped + logged. Caller runs this before
+ * applyPreBootPatches so gateway policy wins. Design:
+ * docs/specs/PER-GATEWAY-CONFIG-SPEC.md.
+ */
+export function applyGatewayOverrides(
+  config: Record<string, unknown>,
+  overrides: unknown,
+  logFn: (msg: string) => void = () => {},
+): boolean {
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+    return false;
+  }
+  const sanitized = structuredClone(overrides) as Record<string, unknown>;
+  stripInlineSecrets(sanitized, "openclawOverrides", logFn);
+  if (Object.keys(sanitized).length === 0) return false;
+  return deepMergeInto(config, sanitized);
+}
+
 async function main(): Promise<void> {
   // Read config in try/catch rather than existsSync-then-read — avoids
   // TOCTOU (CodeQL js/file-system-race). The writeFileSync later in this
@@ -171,11 +273,37 @@ async function main(): Promise<void> {
   }
   const config = JSON.parse(configRaw);
 
-  const changed = applyPreBootPatches(config, process.env, log);
+  let overridesChanged = false;
+  const gatewayId = process.env.GATEWAY_ID;
+  if (gatewayId) {
+    try {
+      const { db } = await import("./lib/firebase.js");
+      const snap = await withTimeout(
+        db.collection("glmGateways").doc(gatewayId).get(),
+        4000,
+      );
+      const overrides = snap.exists
+        ? (snap.data() as { openclawOverrides?: unknown } | undefined)
+            ?.openclawOverrides
+        : undefined;
+      if (overrides) {
+        overridesChanged = applyGatewayOverrides(config, overrides, log);
+        if (overridesChanged) {
+          log(`applied openclawOverrides from glmGateways/${gatewayId}`);
+        }
+      }
+    } catch (e) {
+      log(
+        `WARN: could not fetch/apply glmGateways/${gatewayId} openclawOverrides — booting on template + policy only: ${(e as Error).message}`,
+      );
+    }
+  }
 
-  if (changed) {
+  const policyChanged = applyPreBootPatches(config, process.env, log);
+
+  if (overridesChanged || policyChanged) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
-    log("openclaw.json patched with env / stale-key cleanup");
+    log("openclaw.json patched (per-gateway overrides / env / stale-key cleanup)");
   } else {
     log("no changes needed");
   }

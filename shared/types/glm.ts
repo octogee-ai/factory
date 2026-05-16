@@ -20,6 +20,12 @@ export interface GatewayDesiredState {
   retireAfter?: number;
   /** Last reconcile error, if any. Cleared on successful reconcile. */
   lastError?: { at: number; message: string } | null;
+  /**
+   * Per-gateway partial `openclaw.json` overlay, deep-merged pre-boot
+   * (before gateway policy patches). SecretRef-only — never inline secrets.
+   * See docs/specs/PER-GATEWAY-CONFIG-SPEC.md.
+   */
+  openclawOverrides?: Record<string, unknown>;
 }
 
 export type OperationKind =
