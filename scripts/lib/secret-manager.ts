@@ -62,6 +62,22 @@ export async function writeSecret(params: {
   return { versionName: version.name };
 }
 
+/**
+ * Read the payload of a Secret Manager secret version (default `latest`)
+ * as a UTF-8 string. Thin SDK wrapper (I/O boundary), peer of writeSecret.
+ */
+export async function readSecret(
+  name: string,
+  version = "latest",
+): Promise<string> {
+  const [v] = await client().accessSecretVersion({
+    name: `${fqSecretName(name)}/versions/${version}`,
+  });
+  const data = v.payload?.data;
+  if (!data) throw new Error(`Secret ${name} has no payload`);
+  return Buffer.from(data as Uint8Array).toString("utf8");
+}
+
 export async function archiveSecret(name: string): Promise<{ disabledCount: number }> {
   const secretName = fqSecretName(name);
   try {

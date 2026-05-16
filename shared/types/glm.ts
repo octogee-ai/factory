@@ -26,6 +26,22 @@ export interface GatewayDesiredState {
    * See docs/specs/PER-GATEWAY-CONFIG-SPEC.md.
    */
   openclawOverrides?: Record<string, unknown>;
+  /**
+   * BYO-subscription credential refs, keyed by openclaw agent id (e.g.
+   * `octogee-ceckert-coach`). The value is a *reference* to an owner-scoped
+   * Secret Manager secret — never the credential itself. Pre-boot restores
+   * each into that agent's per-agent codex-home. One gateway can host many
+   * customers, each with their own ref. See BYO-SUBSCRIPTION-OAUTH-SPEC.md.
+   */
+  byosub?: Record<string, ByosubRef>;
+}
+
+export type ByosubProvider = "openai" | "anthropic";
+
+export interface ByosubRef {
+  provider: ByosubProvider;
+  /** Owner-scoped Secret Manager secret name, e.g. `byosub-{uid}-openai`. */
+  secretName: string;
 }
 
 export type OperationKind =

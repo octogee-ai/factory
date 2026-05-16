@@ -1,5 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
+import {
+  planByosubRestores,
+  restoreByosubCredentials,
+  agentIdsFromConfig,
+} from "./lib/byosub-restore.js";
 
 const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
@@ -256,6 +261,71 @@ export function applyGatewayOverrides(
   return deepMergeInto(config, sanitized);
 }
 
+async function applyGlmDesiredState(
+  config: Record<string, unknown>,
+  logFn: (msg: string) => void,
+): Promise<boolean> {
+  const gatewayId = process.env.GATEWAY_ID;
+  if (!gatewayId) return false;
+  let overridesChanged = false;
+  try {
+    const { db } = await import("./lib/firebase.js");
+    const snap = await withTimeout(
+      db.collection("glmGateways").doc(gatewayId).get(),
+      4000,
+    );
+    const data = snap.exists
+      ? (snap.data() as
+          | {
+              openclawOverrides?: unknown;
+              byosub?: Record<
+                string,
+                { provider: "openai" | "anthropic"; secretName: string }
+              >;
+            }
+          | undefined)
+      : undefined;
+    if (data?.openclawOverrides) {
+      overridesChanged = applyGatewayOverrides(
+        config,
+        data.openclawOverrides,
+        logFn,
+      );
+      if (overridesChanged) {
+        logFn(`applied openclawOverrides from glmGateways/${gatewayId}`);
+      }
+    }
+    const plan = planByosubRestores({
+      agentIds: agentIdsFromConfig(config),
+      byosub: data?.byosub,
+      openclawDir: OPENCLAW_DIR,
+      logFn,
+    });
+    if (plan.length) {
+      const { readSecret } = await import("./lib/secret-manager.js");
+      // Per-fetch bound is 4s; cap the serial aggregate too so boot latency
+      // can't scale unboundedly with tenancy on a shared gateway. Rejection
+      // (timeout) falls to the catch → WARN, boot continues.
+      const r = await withTimeout(
+        restoreByosubCredentials({
+          plan,
+          fetchSecret: (name) => withTimeout(readSecret(name), 4000),
+          logFn,
+        }),
+        4000 * plan.length + 2000,
+      );
+      logFn(
+        `byosub: restore complete for glmGateways/${gatewayId} — ${r.restored} restored, ${r.failed} failed`,
+      );
+    }
+  } catch (e) {
+    logFn(
+      `WARN: could not fetch/apply glmGateways/${gatewayId} openclawOverrides/byosub — booting on template + policy only: ${(e as Error).message}`,
+    );
+  }
+  return overridesChanged;
+}
+
 async function main(): Promise<void> {
   // Read config in try/catch rather than existsSync-then-read — avoids
   // TOCTOU (CodeQL js/file-system-race). The writeFileSync later in this
@@ -273,31 +343,7 @@ async function main(): Promise<void> {
   }
   const config = JSON.parse(configRaw);
 
-  let overridesChanged = false;
-  const gatewayId = process.env.GATEWAY_ID;
-  if (gatewayId) {
-    try {
-      const { db } = await import("./lib/firebase.js");
-      const snap = await withTimeout(
-        db.collection("glmGateways").doc(gatewayId).get(),
-        4000,
-      );
-      const overrides = snap.exists
-        ? (snap.data() as { openclawOverrides?: unknown } | undefined)
-            ?.openclawOverrides
-        : undefined;
-      if (overrides) {
-        overridesChanged = applyGatewayOverrides(config, overrides, log);
-        if (overridesChanged) {
-          log(`applied openclawOverrides from glmGateways/${gatewayId}`);
-        }
-      }
-    } catch (e) {
-      log(
-        `WARN: could not fetch/apply glmGateways/${gatewayId} openclawOverrides — booting on template + policy only: ${(e as Error).message}`,
-      );
-    }
-  }
+  const overridesChanged = await applyGlmDesiredState(config, log);
 
   const policyChanged = applyPreBootPatches(config, process.env, log);
 
