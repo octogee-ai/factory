@@ -152,6 +152,10 @@ function toIso(v: unknown): string | null {
   return ms == null ? null : new Date(ms).toISOString();
 }
 
+function ageMsOrNull(ms: number | null, now: number): number | null {
+  return ms == null ? null : now - ms;
+}
+
 function isValidGatewayImageRepository(repo: string): boolean {
   return repo.startsWith(GATEWAY_IMAGE_REPO_PREFIX);
 }
@@ -558,9 +562,8 @@ export function addAdminFleetRoutes(
 
         const gateways = gwSnap.docs.map((doc) => {
           const data = doc.data() as Record<string, unknown>;
-          const lastHeartbeatMs = toMillis(data.lastHeartbeatAt);
-          const heartbeatAgeMs =
-            lastHeartbeatMs == null ? null : now - lastHeartbeatMs;
+          const heartbeatAgeMs = ageMsOrNull(toMillis(data.lastHeartbeatAt), now);
+          const uptimeMs = ageMsOrNull(toMillis(data.startedAt), now);
           const inFlightJobId =
             typeof data.inFlightJobId === "string" ? data.inFlightJobId : null;
           const ownJobs = jobsByGateway.get(doc.id) ?? [];
@@ -610,6 +613,8 @@ export function addAdminFleetRoutes(
               : [],
             lastHeartbeatAt: toIso(data.lastHeartbeatAt),
             heartbeatAgeMs,
+            startedAt: toIso(data.startedAt),
+            uptimeMs,
             inFlightJobId,
             inFlightJob,
             lastError,
