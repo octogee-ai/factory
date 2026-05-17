@@ -2,7 +2,10 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { log, GIT_API_URL, GIT_API_TOKEN, GIT_ORG, GIT_SSH_HOST, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } from "./config.js";
+import { log, GIT_API_URL, GIT_API_TOKEN, GIT_SSH_HOST, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } from "./config.js";
+import { workspaceGiteaOrg, workspaceRepoName, projectRepoName, giteaUsername } from "./gitea-naming.js";
+
+export { giteaUsername };
 
 function adminHeaders(includeContentType = true): Record<string, string> {
   return {
@@ -48,9 +51,6 @@ export function generateCustomerSshKey(slug: string): string {
   return fs.readFileSync(pubPath, "utf-8").trim();
 }
 
-export function giteaUsername(slug: string): string {
-  return `ws-${slug}`;
-}
 
 /**
  * Read the public key currently registered in Gitea for ws-{slug} under
@@ -215,24 +215,6 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
   return token;
 }
 
-export async function grantRepoAccess(repoName: string, slug: string, permission = "write"): Promise<void> {
-  if (!GIT_API_TOKEN) return;
-
-  const username = giteaUsername(slug);
-  const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}/collaborators/${username}`, {
-    method: "PUT",
-    headers: adminHeaders(),
-    body: JSON.stringify({ permission }),
-  });
-
-  if (resp.ok || resp.status === 204) {
-    log(`[git] Granted ${permission} on ${repoName} to ${username}`);
-  } else {
-    const body = await resp.text();
-    log(`⚠ [git] Failed to grant ${permission} on ${repoName} to ${username}: ${resp.status} ${body}`);
-  }
-}
-
 export async function deleteGiteaUser(slug: string): Promise<void> {
   if (!GIT_API_TOKEN) return;
 
@@ -250,13 +232,13 @@ export async function deleteGiteaUser(slug: string): Promise<void> {
   }
 }
 
-function sshRemoteUrl(repoName: string): string {
-  return `git@${GIT_SSH_HOST}:${GIT_ORG}/${repoName}.git`;
+function sshRemoteUrl(org: string, repoName: string): string {
+  return `git@${GIT_SSH_HOST}:${org}/${repoName}.git`;
 }
 
-function httpCloneUrl(repoName: string): string {
+function httpCloneUrl(org: string, repoName: string): string {
   const gitHost = new URL(GIT_API_URL).origin;
-  return `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${GIT_ORG}/${repoName}.git`;
+  return `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${org}/${repoName}.git`;
 }
 
 export function gitExec(cwd: string, args: string, sshKeyPath?: string): string | null {
@@ -295,33 +277,34 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
     return false;
   }
 
-  const repoName = `${slug}-workspace`;
+  const org = workspaceGiteaOrg(slug);
+  const repoName = workspaceRepoName();
   const sshKey = customerSshKeyPath(slug);
   const hasCustomerKey = fs.existsSync(sshKey);
 
   try {
-    const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
+    const resp = await fetch(`${GIT_API_URL}/repos/${org}/${repoName}`, {
       headers: adminHeaders(false),
     });
     if (!resp.ok) {
-      log(`[git] Repo ${GIT_ORG}/${repoName} not found on Gitea (${resp.status}) — skipping clone`);
+      log(`[git] Repo ${org}/${repoName} not found on Gitea (${resp.status}) — skipping clone`);
       return false;
     }
   } catch (err: any) {
-    log(`⚠ [git] Gitea API check failed for ${repoName}: ${err.message}`);
+    log(`⚠ [git] Gitea API check failed for ${org}/${repoName}: ${err.message}`);
     return false;
   }
 
   let result: string | null;
   if (hasCustomerKey) {
-    const cloneUrl = sshRemoteUrl(repoName);
+    const cloneUrl = sshRemoteUrl(org, repoName);
     result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`, sshKey);
   } else {
-    const cloneUrl = httpCloneUrl(repoName);
+    const cloneUrl = httpCloneUrl(org, repoName);
     log(`[git] Cloning ${slug} via HTTP (no per-customer SSH key yet)`);
     result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`);
     if (result !== null) {
-      gitExec(dest, `remote set-url origin ${sshRemoteUrl(repoName)}`);
+      gitExec(dest, `remote set-url origin ${sshRemoteUrl(org, repoName)}`);
     }
   }
 
@@ -336,7 +319,7 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
   // ssh-cmd: cloneCustomerRepo
   setRepoSshCommand(dest, slug);
 
-  log(`[git] ✅ Cloned ${GIT_ORG}/${repoName} → customers/${slug}/`);
+  log(`[git] ✅ Cloned ${org}/${repoName} → customers/${slug}/`);
   return true;
 }
 
@@ -355,19 +338,20 @@ export async function cloneProjectRepo(
     return false;
   }
 
+  const org = workspaceGiteaOrg(slug);
   const sshKey = customerSshKeyPath(slug);
   const hasCustomerKey = fs.existsSync(sshKey);
 
   try {
-    const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${giteaRepoName}`, {
+    const resp = await fetch(`${GIT_API_URL}/repos/${org}/${giteaRepoName}`, {
       headers: adminHeaders(false),
     });
     if (!resp.ok) {
-      log(`[git] Project repo ${GIT_ORG}/${giteaRepoName} not found on Gitea (${resp.status}) — skipping clone`);
+      log(`[git] Project repo ${org}/${giteaRepoName} not found on Gitea (${resp.status}) — skipping clone`);
       return false;
     }
   } catch (err: any) {
-    log(`⚠ [git] Gitea API check failed for ${giteaRepoName}: ${err.message}`);
+    log(`⚠ [git] Gitea API check failed for ${org}/${giteaRepoName}: ${err.message}`);
     return false;
   }
 
@@ -375,14 +359,14 @@ export async function cloneProjectRepo(
 
   let result: string | null;
   if (hasCustomerKey) {
-    const cloneUrl = sshRemoteUrl(giteaRepoName);
+    const cloneUrl = sshRemoteUrl(org, giteaRepoName);
     result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${projectSlug}`, sshKey);
   } else {
-    const cloneUrl = httpCloneUrl(giteaRepoName);
+    const cloneUrl = httpCloneUrl(org, giteaRepoName);
     log(`[git] Cloning ${slug}/${projectSlug} via HTTP (no per-customer SSH key yet)`);
     result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${projectSlug}`);
     if (result !== null) {
-      gitExec(dest, `remote set-url origin ${sshRemoteUrl(giteaRepoName)}`);
+      gitExec(dest, `remote set-url origin ${sshRemoteUrl(org, giteaRepoName)}`);
     }
   }
 
@@ -397,7 +381,7 @@ export async function cloneProjectRepo(
   // ssh-cmd: initWorkspaceRepo
   setRepoSshCommand(dest, slug);
 
-  log(`[git] ✅ Cloned ${GIT_ORG}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
+  log(`[git] ✅ Cloned ${org}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
   return true;
 }
 
@@ -407,7 +391,8 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     return null;
   }
 
-  const repoName = `${slug}-workspace`;
+  const org = workspaceGiteaOrg(slug);
+  const repoName = workspaceRepoName();
 
   const gitignore = [
     "# Octogee workspace — track user-visible files, exclude system/build artifacts",
@@ -456,7 +441,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   setRepoSshCommand(coachDir, slug);
 
   try {
-    const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
+    const resp = await fetch(`${GIT_API_URL}/orgs/${org}/repos`, {
       method: "POST",
       headers: adminHeaders(),
       body: JSON.stringify({
@@ -469,7 +454,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
 
     if (!resp.ok && resp.status !== 409) {
       const body = await resp.text();
-      log(`⚠ [git] Failed to create repo ${GIT_ORG}/${repoName}: ${resp.status} ${body}`);
+      log(`⚠ [git] Failed to create repo ${org}/${repoName}: ${resp.status} ${body}`);
       return null;
     }
   } catch (err) {
@@ -477,9 +462,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
     return null;
   }
 
-  await grantRepoAccess(repoName, slug);
-
-  const originUrl = sshRemoteUrl(repoName);
+  const originUrl = sshRemoteUrl(org, repoName);
   const remoteResult = gitExec(coachDir, `remote add origin ${originUrl}`);
   if (remoteResult === null) {
     log(`⚠ [git] remote add failed for ${slug} — aborting (would leak orphan Firestore repoUrl)`);
@@ -492,7 +475,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   pushInitialSkeleton(coachDir, slug, keyArg);
 
   const gitHost = new URL(GIT_API_URL).origin;
-  const repoUrlDisplay = `${gitHost}/${GIT_ORG}/${repoName}`;
+  const repoUrlDisplay = `${gitHost}/${org}/${repoName}`;
   log(`[git] ✅ Workspace repo ready: ${repoUrlDisplay}`);
   return repoUrlDisplay;
 }
@@ -509,7 +492,8 @@ export async function initProjectRepo(
     return null;
   }
 
-  const repoName = `${slug}-${projectName}`;
+  const org = workspaceGiteaOrg(slug);
+  const repoName = projectRepoName(projectName);
   const sshKey = customerSshKeyPath(slug);
   const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
@@ -538,7 +522,7 @@ export async function initProjectRepo(
   }
 
   try {
-    const resp = await fetch(`${GIT_API_URL}/orgs/${GIT_ORG}/repos`, {
+    const resp = await fetch(`${GIT_API_URL}/orgs/${org}/repos`, {
       method: "POST",
       headers: adminHeaders(),
       body: JSON.stringify({
@@ -551,7 +535,7 @@ export async function initProjectRepo(
 
     if (!resp.ok && resp.status !== 409) {
       const body = await resp.text();
-      log(`⚠ [git] Failed to create project repo ${GIT_ORG}/${repoName}: ${resp.status} ${body}`);
+      log(`⚠ [git] Failed to create project repo ${org}/${repoName}: ${resp.status} ${body}`);
       return null;
     }
   } catch (err) {
@@ -559,9 +543,7 @@ export async function initProjectRepo(
     return null;
   }
 
-  await grantRepoAccess(repoName, slug);
-
-  const originUrl = sshRemoteUrl(repoName);
+  const originUrl = sshRemoteUrl(org, repoName);
   gitExec(projectDir, `remote add origin ${originUrl}`);
   const pushResult = gitExec(projectDir, "push -u origin main", keyArg);
   log(`[git] project push: ${pushResult !== null ? "OK" : "FAILED"}`);
@@ -572,7 +554,7 @@ export async function initProjectRepo(
   }
 
   const gitHost = new URL(GIT_API_URL).origin;
-  const repoUrlDisplay = `${gitHost}/${GIT_ORG}/${repoName}`;
+  const repoUrlDisplay = `${gitHost}/${org}/${repoName}`;
   log(`[git] ✅ Project repo created: ${repoUrlDisplay}`);
   return repoUrlDisplay;
 }
@@ -648,8 +630,10 @@ export async function syncAllWorkspaces(): Promise<void> {
     }
 
     if (remoteCheck.startsWith("http")) {
-      const repoName = `${slug}-workspace`;
-      gitExec(coachDir, `remote set-url origin ${sshRemoteUrl(repoName)}`);
+      gitExec(
+        coachDir,
+        `remote set-url origin ${sshRemoteUrl(workspaceGiteaOrg(slug), workspaceRepoName())}`,
+      );
       log(`[git-sync] ${slug}: migrated remote to SSH`);
     }
 
@@ -679,46 +663,33 @@ export async function syncAllWorkspaces(): Promise<void> {
 export async function archiveWorkspaceRepo(slug: string): Promise<void> {
   if (!GIT_API_TOKEN) return;
 
-  const repoName = `${slug}-workspace`;
+  const org = workspaceGiteaOrg(slug);
+  const repoName = workspaceRepoName();
   try {
-    await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
+    await fetch(`${GIT_API_URL}/repos/${org}/${repoName}`, {
       method: "PATCH",
       headers: adminHeaders(),
       body: JSON.stringify({ archived: true }),
     });
-    log(`[git] Archived repo: ${GIT_ORG}/${repoName}`);
+    log(`[git] Archived repo: ${org}/${repoName}`);
   } catch (err) {
-    log(`⚠ [git] Failed to archive repo ${repoName}: ${err}`);
+    log(`⚠ [git] Failed to archive repo ${org}/${repoName}: ${err}`);
   }
 }
 
 export async function archiveProjectRepo(slug: string, projectName: string): Promise<void> {
   if (!GIT_API_TOKEN) return;
 
-  const repoName = `${slug}-${projectName}`;
+  const org = workspaceGiteaOrg(slug);
+  const repoName = projectRepoName(projectName);
   try {
-    await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
+    await fetch(`${GIT_API_URL}/repos/${org}/${repoName}`, {
       method: "PATCH",
       headers: adminHeaders(),
       body: JSON.stringify({ archived: true }),
     });
-    log(`[git] Archived project repo: ${GIT_ORG}/${repoName}`);
+    log(`[git] Archived project repo: ${org}/${repoName}`);
   } catch (err) {
-    log(`⚠ [git] Failed to archive project repo ${repoName}: ${err}`);
-  }
-}
-
-export async function deleteRepo(repoName: string): Promise<void> {
-  if (!GIT_API_TOKEN || !GIT_ORG) return;
-
-  const resp = await fetch(`${GIT_API_URL}/repos/${GIT_ORG}/${repoName}`, {
-    method: "DELETE",
-    headers: adminHeaders(false),
-  });
-
-  if (resp.status === 204 || resp.status === 404) {
-    log(`[git-nuke] Repo ${GIT_ORG}/${repoName} deleted (or already gone)`);
-  } else {
-    log(`⚠ [git-nuke] Failed to delete repo ${repoName}: ${resp.status}`);
+    log(`⚠ [git] Failed to archive project repo ${org}/${repoName}: ${err}`);
   }
 }

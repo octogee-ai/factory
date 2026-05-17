@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { db } from "../../lib/db";
 import { giteaApi } from "../../lib/gitea";
+import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming";
 import { readProject } from "../../lib/firestoreReads";
 import { logger } from "../../middleware/logging";
 import { isValidProjectId } from "@shared/types/identity";
@@ -48,7 +49,8 @@ router.get("/:wid/:pid/readme", async (req: Request, res: Response) => {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    const repoName = project.giteaRepoName || `${wid}-proj-${pid}`;
+    const org = workspaceGiteaOrg(wid);
+    const repoName = projectRepoName(pid);
     // Gate canvasFile BEFORE it touches the Gitea URL — prevents a malicious
     // owner from steering the admin-token fetch via `../` segments or
     // absolute paths. Fallback to README.md on any invalid shape.
@@ -56,7 +58,7 @@ router.get("/:wid/:pid/readme", async (req: Request, res: Response) => {
     // Admin Gitea token — project repos under the Octogee org are readable
     // to the admin; per-customer tokens aren't required for a public read.
     try {
-      const file = await giteaApi(`${repoName}/contents/${filePath}`);
+      const file = await giteaApi(org, `${repoName}/contents/${filePath}`);
       const content = Buffer.from(
         (file as { content?: string })?.content ?? "",
         "base64",

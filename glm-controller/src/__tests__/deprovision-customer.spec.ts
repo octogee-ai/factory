@@ -37,8 +37,8 @@ function mkCleanup(overrides: Partial<CustomerCleanupContext> = {}): CustomerCle
     uid: "uid-alice",
     slug: "alice",
     email: "alice@example.com",
-    giteaOrg: "octogee",
-    repoNames: ["alice-workspace", "alice-blog"],
+    giteaOrg: "alice",
+    repoNames: ["workspace", "blog"],
     workspaceTeamId: "team-1",
     mmUserId: "mm-u-1",
     mmCoachUserId: "mm-coach-1",
@@ -55,6 +55,7 @@ function mkDeps(overrides: Partial<DeprovisionCustomerDeps> = {}): DeprovisionCu
     cloudCleanup: {
       gitea: {
         deleteRepo: vi.fn(async () => undefined),
+        deleteOrg: vi.fn(async () => undefined),
         deleteGiteaUser: vi.fn(async () => undefined),
       },
       mattermost: {
@@ -154,6 +155,7 @@ describe("createDeprovisionCustomerHandler — cloud step failure", () => {
           deleteRepo: vi.fn(async () => {
             throw new Error("gitea boom");
           }),
+          deleteOrg: vi.fn(async () => undefined),
           deleteGiteaUser: vi.fn(),
         },
         mattermost: {

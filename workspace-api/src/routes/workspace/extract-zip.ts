@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { storage } from "../../lib/db";
 import { logger } from "../../middleware/logging";
 import { updateManifest, removeFromManifest } from "../../lib/manifest";
+import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming";
 import {
   customerGiteaApi,
   ensureSlug,
@@ -28,7 +29,8 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
 
     const bucket = storage.bucket();
     const gcsZipPath = `customers/${slug}/${zipPath}`;
-    const repoName = `${slug}-workspace`;
+    const org = workspaceGiteaOrg(slug);
+    const repoName = workspaceRepoName();
 
     const zipFile = bucket.file(gcsZipPath);
     const [zipBuffer] = await zipFile.download();
@@ -91,11 +93,11 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
         const content = fileBuffer.toString("base64");
         let sha: string | undefined;
         try {
-          const existing = (await customerGiteaApi(req, `${repoName}/contents/${targetPath}`)) as { sha?: string };
+          const existing = (await customerGiteaApi(req, org, `${repoName}/contents/${targetPath}`)) as { sha?: string };
           sha = existing.sha;
         } catch { /* ignore */ }
 
-        await customerGiteaApi(req, `${repoName}/contents/${targetPath}`, "PUT", {
+        await customerGiteaApi(req, org, `${repoName}/contents/${targetPath}`, "PUT", {
           message: `zip-extract: ${relativePath}`,
           content,
           ...(sha ? { sha } : {}),
@@ -117,7 +119,7 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
     }
 
     if (Object.keys(manifestEntries).length > 0) {
-      await updateManifest(getCustomerGiteaToken(req), repoName, manifestEntries);
+      await updateManifest(getCustomerGiteaToken(req), org, repoName, manifestEntries);
     }
 
     try { await zipFile.delete(); } catch (e) {
@@ -127,6 +129,7 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
 
     await removeFromManifest(
       getCustomerGiteaToken(req),
+      org,
       repoName,
       zipPath,
       `blob: remove extracted zip ${zipPath} from manifest`,

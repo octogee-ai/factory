@@ -25,6 +25,7 @@ router.post("/delete-blob", withFileTarget(async (req, res, _next, target) => {
 
   await removeFromManifest(
     getCustomerGiteaToken(req),
+    target.org,
     target.repoName,
     filePath,
     `blob: removed ${filePath}`,

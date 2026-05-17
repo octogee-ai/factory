@@ -8,9 +8,9 @@ export interface WorkspaceMattermost {
 }
 
 export interface WorkspaceGitea {
-  /** Gitea org name. Equal to the username. */
+  /** Gitea org name. Equal to the username (one org per workspace). */
   orgName: string;
-  /** Workspace repo name (`{username}-workspace`). */
+  /** Workspace repo name within the org — always `workspace`. */
   repoName: string;
 }
 

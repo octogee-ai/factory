@@ -22,7 +22,7 @@ export interface CustomerCleanupContext {
   slug: string;
   email: string | null;
   giteaOrg: string;
-  /** Repo names to delete: <slug>-workspace + <slug>-proj-<projectSlug>... */
+  /** Repo names to delete: workspace + <projectSlug>... */
   repoNames: string[];
   /**
    * Project slugs (NOT repo names). Drives Firebase Hosting site

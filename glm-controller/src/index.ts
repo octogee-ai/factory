@@ -772,7 +772,6 @@ function buildDeprovisionCustomerHandler(
     // eslint-disable-next-line sonarjs/no-clear-text-protocols -- in-cluster ClusterIP service, not internet-facing
     process.env.GIT_API_URL ?? "http://gitea-http.octogee.svc.cluster.local:3000/api/v1";
   const giteaToken = process.env.GIT_API_TOKEN ?? "";
-  const giteaOrg = process.env.GIT_ORG ?? "octogee";
   const mmBaseUrl = process.env.MM_URL ?? "";
   const mmAdminToken = process.env.MM_ADMIN_TOKEN ?? "";
 
@@ -788,7 +787,7 @@ function buildDeprovisionCustomerHandler(
   });
 
   return createDeprovisionCustomerHandler({
-    loadCleanupContext: (uid) => loadCustomerCleanupContext({ db, giteaOrg }, uid),
+    loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
     unmountFromGateway: (gatewayId, slug) =>
       callUnmountRpc(db, secret, gatewayId, slug, logFn),
     cloudCleanup: {

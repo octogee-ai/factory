@@ -15,7 +15,7 @@ export interface NukeCloudCtx {
   slug: string;
   email: string | null;
   giteaOrg: string;
-  /** workspace + per-project repo names: <slug>-workspace, <slug>-proj-<projectSlug>... */
+  /** workspace + per-project repo names: workspace, <projectSlug>... */
   repoNames: string[];
   /**
    * Project slugs (NOT repo names). Drives Firebase Hosting site
@@ -82,12 +82,14 @@ export async function nukeUserCloudSide(
   const log = deps.log ?? (() => undefined);
   const results: NukeCloudStepResult[] = [];
 
-  // Step 3: Gitea — repos + per-customer Gitea user
+  // Step 3: Gitea — repos, then the (now-empty) per-workspace org + its
+  // team, then the per-customer Gitea user.
   results.push(
     await runStep("gitea", log, async () => {
       for (const repoName of ctx.repoNames) {
         await deps.gitea.deleteRepo(ctx.giteaOrg, repoName);
       }
+      await deps.gitea.deleteOrg(ctx.giteaOrg);
       await deps.gitea.deleteGiteaUser(ctx.slug);
     }),
   );

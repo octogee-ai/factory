@@ -1,4 +1,5 @@
 import { createProjectGiteaRepo, giteaWriteFile } from "../../lib/gitea";
+import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming";
 import { renderReadmeTemplate } from "@shared/templates/project-readmes";
 
 export async function ensureProjectGiteaRepo(input: {
@@ -9,8 +10,10 @@ export async function ensureProjectGiteaRepo(input: {
   projectType: string | null;
   visibility: string;
 }): Promise<void> {
-  const repoName = `${input.workspaceId}-proj-${input.slug}`;
+  const org = workspaceGiteaOrg(input.workspaceId);
+  const repoName = projectRepoName(input.slug);
   await createProjectGiteaRepo(
+    org,
     repoName,
     input.tagline || `Octogee project: ${input.name}`,
     input.visibility !== "public",
@@ -22,5 +25,5 @@ export async function ensureProjectGiteaRepo(input: {
     workspaceSlug: input.workspaceId,
     projectSlug: input.slug,
   });
-  await giteaWriteFile(repoName, "README.md", body, "auto: seed project README");
+  await giteaWriteFile(org, repoName, "README.md", body, "auto: seed project README");
 }

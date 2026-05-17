@@ -237,7 +237,7 @@ async function repairOne(p: ProjectToRepair): Promise<void> {
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
   if (p.targetVisibility) updates.visibility = p.targetVisibility;
-  if (!p.giteaRepoName) updates.giteaRepoName = `${p.workspaceId}-proj-${p.projectSlug}`;
+  if (!p.giteaRepoName) updates.giteaRepoName = p.projectSlug;
   await projectRef.update(updates);
   console.log(`  WROTE channels/general for ${p.workspaceId}/${p.projectSlug}`);
 }

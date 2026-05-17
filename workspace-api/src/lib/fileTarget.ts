@@ -1,10 +1,14 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { db } from "./db";
 import { readProject } from "./firestoreReads";
+import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming";
 
 export interface FileTarget {
   slug: string;
   projectSlug: string | null;
+  /** Gitea org — the workspace slug. */
+  org: string;
+  /** Bare repo name within the org (`workspace` or the project slug). */
   repoName: string;
   gcsPrefix: string;
 }
@@ -47,7 +51,8 @@ export async function resolveFileTarget(input: FileTargetInput): Promise<FileTar
       target: {
         slug,
         projectSlug,
-        repoName: `${slug}-proj-${projectSlug}`,
+        org: workspaceGiteaOrg(slug),
+        repoName: projectRepoName(projectSlug),
         gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
       },
     };
@@ -61,7 +66,8 @@ export async function resolveFileTarget(input: FileTargetInput): Promise<FileTar
     target: {
       slug,
       projectSlug: null,
-      repoName: `${slug}-workspace`,
+      org: workspaceGiteaOrg(slug),
+      repoName: workspaceRepoName(),
       gcsPrefix: `customers/${slug}`,
     },
   };

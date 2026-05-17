@@ -190,7 +190,8 @@ describe("POST /api/projects/:wid/:pid/join", () => {
       expect.objectContaining({ memberCount: expect.objectContaining({ __op: "increment", value: 1 }) }),
     );
     expect(mockGiteaApi).toHaveBeenCalledWith(
-      "alice-proj-game/collaborators/ws-bob",
+      "alice",
+      "game/collaborators/ws-bob",
       "PUT",
       { permission: "read" },
     );
@@ -261,7 +262,8 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
       "DELETE",
     );
     expect(mockGiteaApi).toHaveBeenCalledWith(
-      "alice-proj-game/collaborators/ws-bob",
+      "alice",
+      "game/collaborators/ws-bob",
       "DELETE",
     );
   });
@@ -403,7 +405,8 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
       "DELETE",
     );
     expect(mockGiteaApi).toHaveBeenCalledWith(
-      "alice-proj-game/collaborators/ws-guesty",
+      "alice",
+      "game/collaborators/ws-guesty",
       "DELETE",
     );
   });

@@ -281,7 +281,7 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
     expect(res.status).toBe(200);
     expect(res.body.content).toBe("# Hello from repo");
     expect(res.body.path).toBe("README.md");
-    expect(mockGiteaApi).toHaveBeenCalledWith("alice-proj-mygame/contents/README.md");
+    expect(mockGiteaApi).toHaveBeenCalledWith("alice", "mygame/contents/README.md");
   });
 
   it("returns 404 for private projects (visibility leak guard)", async () => {
@@ -355,7 +355,7 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
     const res = await request(app).get("/api/projects/alice/mygame/readme");
     expect(res.status).toBe(200);
     expect(res.body.path).toBe("README.md");
-    expect(mockGiteaApi).toHaveBeenCalledWith("alice-proj-mygame/contents/README.md");
+    expect(mockGiteaApi).toHaveBeenCalledWith("alice", "mygame/contents/README.md");
   });
 
   it("falls back to README.md when canvasFile is an absolute path", async () => {
@@ -386,7 +386,7 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
     const res = await request(app).get("/api/projects/alice/mygame/readme");
     expect(res.status).toBe(200);
     expect(res.body.path).toBe("docs/INTRO.md");
-    expect(mockGiteaApi).toHaveBeenCalledWith("alice-proj-mygame/contents/docs/INTRO.md");
+    expect(mockGiteaApi).toHaveBeenCalledWith("alice", "mygame/contents/docs/INTRO.md");
   });
 });
 
@@ -488,7 +488,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
     expect(doc.visibility).toBe("private");
     expect(doc.pendingVisibility).toBe("public");
-    expect(doc.giteaRepoName).toBe("alice-proj-mygame");
+    expect(doc.giteaRepoName).toBe("mygame");
   });
 
   it("returns 502 when teamId is missing (no MM workspace context)", async () => {
@@ -543,7 +543,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     expect(doc.provisioningState).toBe("active");
     expect(doc.visibility).toBe("public");
     expect(doc.pendingVisibility).toBeNull();
-    expect(doc.giteaRepoName).toBe("alice-proj-mygame");
+    expect(doc.giteaRepoName).toBe("mygame");
     expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
       kind: "general",
       mattermost: { channelId: "ch-new-123" },
@@ -564,12 +564,14 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       { user_id: "mock-mm-coach" },
     );
     expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
-      "alice-proj-mygame",
+      "alice",
+      "mygame",
       expect.any(String),
       false,
     );
     expect(mockGiteaWriteFile).toHaveBeenCalledWith(
-      "alice-proj-mygame",
+      "alice",
+      "mygame",
       "README.md",
       expect.stringContaining("My Game"),
       expect.any(String),
@@ -687,7 +689,8 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
 
     expect(res.status).toBe(200);
     expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
-      "alice-proj-privthing",
+      "alice",
+      "privthing",
       expect.any(String),
       true,
     );
@@ -798,12 +801,14 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       expect.objectContaining({ team_id: "team-abc", name: "alice-proj-mygame-general" }),
     );
     expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
-      "alice-proj-mygame",
+      "alice",
+      "mygame",
       expect.any(String),
       false,
     );
     expect(mockGiteaWriteFile).toHaveBeenCalledWith(
-      "alice-proj-mygame",
+      "alice",
+      "mygame",
       "README.md",
       expect.any(String),
       expect.any(String),

@@ -38,6 +38,15 @@ describe("createGiteaCleanupClient", () => {
     await expect(client.deleteRepo("octogee", "x")).rejects.toThrow(/500.*boom/);
   });
 
+  it("DELETEs /orgs/<org> for deleteOrg and treats 404 as success", async () => {
+    const { client, calls } = setup([{ status: 200 }]);
+    await client.deleteOrg("alice");
+    expect(calls[0].url).toBe("https://gitea.test/api/v1/orgs/alice");
+    expect(calls[0].init.method).toBe("DELETE");
+    const { client: c2 } = setup([{ status: 404, body: "no such org" }]);
+    await expect(c2.deleteOrg("gone")).resolves.toBeUndefined();
+  });
+
   it("DELETEs /admin/users/<giteaUsername(slug)> for deleteGiteaUser", async () => {
     const { client, calls } = setup([{ status: 200 }]);
     await client.deleteGiteaUser("alice");

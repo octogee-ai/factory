@@ -3,6 +3,7 @@ import { strictRateLimit } from "../../middleware/security";
 import { db, FieldValue } from "../../lib/db";
 import { mmApi } from "../../lib/mattermost";
 import { giteaApi } from "../../lib/gitea";
+import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming";
 import { logger } from "../../middleware/logging";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context";
 import { withProject } from "../../lib/withProject";
@@ -102,7 +103,8 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
     if (project.giteaRepoName && joinerGiteaUser) {
       try {
         await giteaApi(
-          `${project.giteaRepoName}/collaborators/${joinerGiteaUser}`,
+          workspaceGiteaOrg(wid),
+          `${projectRepoName(pid)}/collaborators/${joinerGiteaUser}`,
           "PUT",
           { permission: "read" },
         );
@@ -171,7 +173,8 @@ router.post("/:wid/:pid/leave", strictRateLimit, async (req: Request, res: Respo
     if (project.giteaRepoName && leaverGiteaUser) {
       try {
         await giteaApi(
-          `${project.giteaRepoName}/collaborators/${leaverGiteaUser}`,
+          workspaceGiteaOrg(wid),
+          `${projectRepoName(pid)}/collaborators/${leaverGiteaUser}`,
           "DELETE",
         );
       } catch (err) {

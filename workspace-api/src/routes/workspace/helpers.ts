@@ -9,11 +9,12 @@ export function getCustomerGiteaToken(req: Request): string {
 
 export async function customerGiteaApi(
   req: Request,
+  org: string,
   path: string,
   method = "GET",
   body?: unknown,
 ): Promise<unknown> {
-  return giteaApiAs(getCustomerGiteaToken(req), path, method, body);
+  return giteaApiAs(getCustomerGiteaToken(req), org, path, method, body);
 }
 
 export const HIDDEN = new Set([

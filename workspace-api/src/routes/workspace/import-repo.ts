@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { storage } from "../../lib/db";
 import { updateManifest } from "../../lib/manifest";
+import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming";
 import {
   customerGiteaApi,
   ensureSlug,
@@ -38,7 +39,8 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
       res.status(400).json({ error: `Invalid targetDir: ${destDirError}` });
       return;
     }
-    const workspaceRepo = `${slug}-workspace`;
+    const org = workspaceGiteaOrg(slug);
+    const workspaceRepo = workspaceRepoName();
     const ghToken = process.env.GITHUB_TOKEN;
 
     const treeResp = await fetch(
@@ -98,11 +100,11 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
       if (isTextFile(blob.path)) {
         let sha: string | undefined;
         try {
-          const existing = (await customerGiteaApi(req, `${workspaceRepo}/contents/${targetPath}`)) as { sha?: string };
+          const existing = (await customerGiteaApi(req, org, `${workspaceRepo}/contents/${targetPath}`)) as { sha?: string };
           sha = existing.sha;
         } catch { /* ignore */ }
 
-        await customerGiteaApi(req, `${workspaceRepo}/contents/${targetPath}`, "PUT", {
+        await customerGiteaApi(req, org, `${workspaceRepo}/contents/${targetPath}`, "PUT", {
           message: `import: ${blob.path} from ${owner}/${repo}`,
           content: blobData.content,
           ...(sha ? { sha } : {}),
@@ -124,7 +126,7 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
     }
 
     if (Object.keys(manifestEntries).length > 0) {
-      await updateManifest(getCustomerGiteaToken(req), workspaceRepo, manifestEntries);
+      await updateManifest(getCustomerGiteaToken(req), org, workspaceRepo, manifestEntries);
     }
 
     res.json({ success: true, targetDir: destDir, fileCount });

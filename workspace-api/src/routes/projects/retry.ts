@@ -7,6 +7,7 @@ import { projectGeneralChannelName } from "@shared/types/identity";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context";
 import { withProject } from "../../lib/withProject";
 import { ensureProjectGiteaRepo } from "./provisioning";
+import { projectRepoName } from "../../lib/gitea-naming";
 
 const router = Router();
 
@@ -162,7 +163,7 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
     // `pendingVisibility`, leave the current `visibility` untouched.
     const restoredVisibility =
       typeof project.pendingVisibility === "string" ? project.pendingVisibility : project.visibility;
-    const deterministicGiteaRepo = `${wid}-proj-${pid}`;
+    const deterministicGiteaRepo = projectRepoName(pid);
 
     // Gitea reconcile (PROJECTS-CANVAS-SPEC §D12): retry drives the repo
     // to the same ready state a fresh create would produce. Both helpers

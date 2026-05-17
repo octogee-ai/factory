@@ -20,7 +20,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
     }
   }
 
-  const { repoName } = target;
+  const { org, repoName } = target;
   const apiPath = path ? `${repoName}/contents/${path}` : `${repoName}/contents`;
 
   interface GiteaContentEntry {
@@ -31,7 +31,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
   }
   let contents: GiteaContentEntry[];
   try {
-    const raw = await customerGiteaApi(req, apiPath);
+    const raw = await customerGiteaApi(req, org, apiPath);
     contents = (Array.isArray(raw) ? raw : [raw]) as GiteaContentEntry[];
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -57,7 +57,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
       source: "git" as const,
     }));
 
-  const manifest = await getManifest(getCustomerGiteaToken(req), repoName, bustCache);
+  const manifest = await getManifest(getCustomerGiteaToken(req), org, repoName, bustCache);
   const gitPaths = new Set(gitFiles.map((f) => f.path));
   const prefix = path ? path + "/" : "";
 
@@ -97,8 +97,8 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
     return;
   }
 
-  const { repoName } = target;
-  const manifest = await getManifest(getCustomerGiteaToken(req), repoName);
+  const { org, repoName } = target;
+  const manifest = await getManifest(getCustomerGiteaToken(req), org, repoName);
   const blobEntry = manifest[path];
 
   if (blobEntry) {
@@ -119,7 +119,7 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
     return;
   }
 
-  const file = (await customerGiteaApi(req, `${repoName}/contents/${path}`)) as {
+  const file = (await customerGiteaApi(req, org, `${repoName}/contents/${path}`)) as {
     content?: string;
     sha?: string;
   };

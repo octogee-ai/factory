@@ -3,6 +3,7 @@ import { strictRateLimit } from "../../middleware/security";
 import { db, FieldValue } from "../../lib/db";
 import { mmApi } from "../../lib/mattermost";
 import { giteaApi } from "../../lib/gitea";
+import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming";
 import { logger } from "../../middleware/logging";
 import { withProject } from "../../lib/withProject";
 import { readChannel } from "../../lib/firestoreReads";
@@ -53,7 +54,8 @@ router.delete("/:wid/:pid/members/:guestUid", strictRateLimit, async (req: Reque
     if (project.giteaRepoName && guestGiteaUser) {
       try {
         await giteaApi(
-          `${project.giteaRepoName}/collaborators/${guestGiteaUser}`,
+          workspaceGiteaOrg(wid),
+          `${projectRepoName(pid)}/collaborators/${guestGiteaUser}`,
           "DELETE",
         );
       } catch (err) {

@@ -8,7 +8,6 @@ import type { CustomerCleanupContext } from "../../handlers/deprovision-customer
 
 export interface ContextDeps {
   db: Firestore;
-  giteaOrg: string;
 }
 
 function asString(v: unknown): string | null {
@@ -69,28 +68,25 @@ async function resolveAdminChannelId(db: Firestore, slug: string): Promise<strin
 }
 
 function resolveProjectRepoName(
-  workspaceSlug: string,
   projDoc: { id: string; data: () => unknown },
 ): string {
   const projData = (projDoc.data() ?? {}) as Record<string, unknown>;
-  // Project docs persist `giteaRepoName` when created via the
-  // workspace-api project flow — that's the canonical name to delete.
-  // Fallback constructs `<workspaceSlug>-proj-<projectSlug>` matching
-  // the same flow's naming convention. The earlier `<slug>-<projSlug>`
-  // shape would orphan project repos. (Copilot review)
+  // Project docs persist `giteaRepoName` (the bare project slug) when
+  // created via the workspace-api project flow — canonical name to delete.
+  // Fallback derives the same bare slug from the doc.
   const persisted = asString(projData.giteaRepoName);
   if (persisted) return persisted;
-  const projSlug =
-    asString(projData.slug) ?? asString(projData.projectSlug) ?? projDoc.id;
-  return `${workspaceSlug}-proj-${projSlug}`;
+  return (
+    asString(projData.slug) ?? asString(projData.projectSlug) ?? projDoc.id
+  );
 }
 
 async function resolveRepoNames(db: Firestore, slug: string): Promise<string[]> {
   if (!slug) return [];
-  const out: string[] = [`${slug}-workspace`];
+  const out: string[] = ["workspace"];
   const projectsSnap = await db.collection(`workspaces/${slug}/projects`).get();
   for (const projDoc of projectsSnap.docs) {
-    out.push(resolveProjectRepoName(slug, projDoc));
+    out.push(resolveProjectRepoName(projDoc));
   }
   return out;
 }
@@ -139,7 +135,7 @@ export async function loadCustomerCleanupContext(
     uid,
     slug,
     email: asString(userData.email),
-    giteaOrg: deps.giteaOrg,
+    giteaOrg: slug,
     repoNames,
     projectSlugs,
     workspaceTeamId,

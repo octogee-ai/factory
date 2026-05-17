@@ -67,13 +67,11 @@ function buildDb(initialDocs: Record<string, Record<string, unknown> | undefined
   };
 }
 
-const giteaOrg = "octogee";
-
 describe("loadCustomerCleanupContext", () => {
   it("returns null when the user doc does not exist", async () => {
     const db = buildDb({});
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-missing",
     );
     expect(ctx).toBeNull();
@@ -87,7 +85,7 @@ describe("loadCustomerCleanupContext", () => {
       },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
     expect(ctx?.slug).toBe("alice-canon");
@@ -99,7 +97,7 @@ describe("loadCustomerCleanupContext", () => {
       "users/uid-bob": { username: "bob-legacy" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-bob",
     );
     expect(ctx?.slug).toBe("bob-legacy");
@@ -111,7 +109,7 @@ describe("loadCustomerCleanupContext", () => {
       "users/uid-bare": { email: "bare@example.com" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-bare",
     );
     expect(ctx?.slug).toBe("");
@@ -120,7 +118,7 @@ describe("loadCustomerCleanupContext", () => {
     expect(ctx?.adminChannelId).toBeNull();
   });
 
-  it("constructs project repo names with the {slug}-proj-{projSlug} pattern when giteaRepoName absent", async () => {
+  it("derives bare project repo names (org-namespaced) when giteaRepoName absent", async () => {
     const db = buildDb({
       "users/uid-alice": {
         username: "alice",
@@ -130,14 +128,10 @@ describe("loadCustomerCleanupContext", () => {
       "workspaces/alice/projects/p2": { projectSlug: "shop" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
-    expect(ctx?.repoNames).toEqual([
-      "alice-workspace",
-      "alice-proj-blog",
-      "alice-proj-shop",
-    ]);
+    expect(ctx?.repoNames).toEqual(["workspace", "blog", "shop"]);
   });
 
   it("prefers projData.giteaRepoName when present (the actual Gitea name)", async () => {
@@ -152,7 +146,7 @@ describe("loadCustomerCleanupContext", () => {
       },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
     expect(ctx?.repoNames).toContain("alice-proj-canonical-name");
@@ -168,10 +162,10 @@ describe("loadCustomerCleanupContext", () => {
       "workspaces/alice/projects/legacy-doc-id": {},
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
-    expect(ctx?.repoNames).toEqual(["alice-workspace", "alice-proj-legacy-doc-id"]);
+    expect(ctx?.repoNames).toEqual(["workspace", "legacy-doc-id"]);
   });
 
   it("surfaces projectSlugs[] directly from project docs (PR #3 — drives Firebase Hosting deletes)", async () => {
@@ -189,7 +183,7 @@ describe("loadCustomerCleanupContext", () => {
       "workspaces/alice/projects/legacy-id": {},
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
     // Sorted for determinism — operator-facing logs read alphabetical.
@@ -201,7 +195,7 @@ describe("loadCustomerCleanupContext", () => {
       "users/uid-bob": { username: "bob", provisioning: { openclaw: { slug: "bob" } } },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-bob",
     );
     expect(ctx?.projectSlugs).toEqual([]);
@@ -212,7 +206,7 @@ describe("loadCustomerCleanupContext", () => {
       "users/uid-bare": { email: "bare@example.com" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-bare",
     );
     expect(ctx?.projectSlugs).toEqual([]);
@@ -231,7 +225,7 @@ describe("loadCustomerCleanupContext", () => {
       "workspaces/alice/channels/admin": { mattermost: { channelId: "mm-c-admin" } },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"], giteaOrg },
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
     expect(ctx).toMatchObject({
@@ -242,7 +236,7 @@ describe("loadCustomerCleanupContext", () => {
       workspaceTeamId: "team-1",
       adminChannelId: "mm-c-admin",
       currentGatewayId: "gw-test",
-      giteaOrg: "octogee",
+      giteaOrg: "alice",
     });
   });
 });

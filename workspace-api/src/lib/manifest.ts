@@ -22,23 +22,30 @@ interface CacheEntry {
 
 const manifestCache = new Map<string, CacheEntry>();
 
+function cacheKey(org: string, repoName: string): string {
+  return `${org}/${repoName}`;
+}
+
 export async function getManifest(
   token: string,
+  org: string,
   repoName: string,
   bustCache = false,
 ): Promise<Manifest> {
+  const key = cacheKey(org, repoName);
   if (!bustCache) {
-    const cached = manifestCache.get(repoName);
+    const cached = manifestCache.get(key);
     if (cached && Date.now() - cached.ts < MANIFEST_TTL_MS) return cached.data;
   }
   try {
     const resp = (await giteaApiAs(
       token,
+      org,
       `${repoName}/contents/${MANIFEST_PATH}`,
     )) as { content?: string };
     const decoded = Buffer.from(resp.content ?? "", "base64").toString("utf-8");
     const data: Manifest = JSON.parse(decoded);
-    manifestCache.set(repoName, { data, ts: Date.now() });
+    manifestCache.set(key, { data, ts: Date.now() });
     return data;
   } catch {
     return {};
@@ -50,10 +57,11 @@ interface RawManifest {
   sha: string | undefined;
 }
 
-async function fetchRawManifest(token: string, repoName: string): Promise<RawManifest> {
+async function fetchRawManifest(token: string, org: string, repoName: string): Promise<RawManifest> {
   try {
     const existing = (await giteaApiAs(
       token,
+      org,
       `${repoName}/contents/${MANIFEST_PATH}`,
     )) as { sha?: string; content?: string };
     return {
@@ -69,10 +77,12 @@ async function fetchRawManifest(token: string, repoName: string): Promise<RawMan
 
 async function fetchRawManifestAllowNotFound(
   token: string,
+  org: string,
   repoName: string,
 ): Promise<RawManifest | null> {
   const existing = (await giteaApiAsAllowNotFound(
     token,
+    org,
     `${repoName}/contents/${MANIFEST_PATH}`,
   )) as { sha?: string; content?: string } | null;
   if (!existing) return null;
@@ -86,29 +96,31 @@ async function fetchRawManifestAllowNotFound(
 
 export async function updateManifest(
   token: string,
+  org: string,
   repoName: string,
   entries: Record<string, unknown>,
 ): Promise<void> {
-  const { manifest, sha } = await fetchRawManifest(token, repoName);
+  const { manifest, sha } = await fetchRawManifest(token, org, repoName);
   Object.assign(manifest, entries);
   const content = Buffer.from(JSON.stringify(manifest, null, 2)).toString("base64");
-  await giteaApiAs(token, `${repoName}/contents/${MANIFEST_PATH}`, "PUT", {
+  await giteaApiAs(token, org, `${repoName}/contents/${MANIFEST_PATH}`, "PUT", {
     message: `blob: update manifest`,
     content,
     ...(sha ? { sha } : {}),
   });
-  manifestCache.delete(repoName);
+  manifestCache.delete(cacheKey(org, repoName));
 }
 
 export async function removeFromManifest(
   token: string,
+  org: string,
   repoName: string,
   paths: string | string[],
   commitMessage?: string,
 ): Promise<void> {
   const toRemove = Array.isArray(paths) ? paths : [paths];
   try {
-    const raw = await fetchRawManifestAllowNotFound(token, repoName);
+    const raw = await fetchRawManifestAllowNotFound(token, org, repoName);
     if (!raw) return;
     let changed = false;
     for (const p of toRemove) {
@@ -119,12 +131,12 @@ export async function removeFromManifest(
     }
     if (!changed) return;
     const content = Buffer.from(JSON.stringify(raw.manifest, null, 2)).toString("base64");
-    await giteaApiAs(token, `${repoName}/contents/${MANIFEST_PATH}`, "PUT", {
+    await giteaApiAs(token, org, `${repoName}/contents/${MANIFEST_PATH}`, "PUT", {
       message: commitMessage ?? `blob: remove ${toRemove.join(", ")}`,
       content,
       sha: raw.sha,
     });
-    manifestCache.delete(repoName);
+    manifestCache.delete(cacheKey(org, repoName));
   } catch (e: any) {
     logger.warn(`Manifest removal failed for ${repoName}: ${e.message}`);
   }

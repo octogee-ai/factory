@@ -945,13 +945,11 @@ async function buildEditDiffFetcher() {
   // rejected by the SSRF guard (or worse, send the PAT to the wrong
   // host), and a single derivation point keeps both surfaces in sync.
   const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
-  const giteaOrg = process.env.GITEA_ORG || 'octogee';
   const giteaPublicBaseUrl = process.env.GITEA_PUBLIC_BASE_URL || undefined;
   const { createGiteaEditDiffFetcher } = await import('./openclaw/gitea-edit-diff-fetcher.js');
   return createGiteaEditDiffFetcher({
     giteaUrl,
     giteaToken,
-    giteaOrg,
     giteaPublicBaseUrl,
     log: (msg) => console.warn(msg),
   });

@@ -4,8 +4,6 @@ const GITEA_URL =
   process.env.GITEA_URL ||
   `http://octogee-gitea-http.${process.env.K8S_NAMESPACE || "octogee"}.svc.cluster.local:3000`;
 
-export const GITEA_ORG = process.env.GITEA_ORG || "octogee";
-
 const GITEA_HOST = (() => {
   try { return new URL(GITEA_URL).host; } catch { return ""; }
 })();
@@ -26,12 +24,13 @@ function getToken(): string {
 
 async function giteaFetch(
   token: string,
+  org: string,
   path: string,
   method: string,
   body: unknown | undefined,
   allow404: boolean,
 ): Promise<unknown | null> {
-  const url = `${GITEA_URL}/api/v1/repos/${GITEA_ORG}/${path}`;
+  const url = `${GITEA_URL}/api/v1/repos/${org}/${path}`;
   assertGiteaUrl(url);
   const resp = await fetch(url, {
     method,
@@ -52,23 +51,24 @@ async function giteaFetch(
     }
     throw new Error(`Gitea API ${resp.status}`);
   }
+  if (resp.status === 204 || resp.status === 304) return null;
   return resp.json();
 }
 
-export async function giteaApi(path: string, method = "GET", body?: unknown): Promise<unknown> {
-  return giteaFetch(getToken(), path, method, body, false) as Promise<unknown>;
+export async function giteaApi(org: string, path: string, method = "GET", body?: unknown): Promise<unknown> {
+  return giteaFetch(getToken(), org, path, method, body, false) as Promise<unknown>;
 }
 
-export async function giteaApiAs(token: string, path: string, method = "GET", body?: unknown): Promise<unknown> {
-  return giteaFetch(token, path, method, body, false) as Promise<unknown>;
+export async function giteaApiAs(token: string, org: string, path: string, method = "GET", body?: unknown): Promise<unknown> {
+  return giteaFetch(token, org, path, method, body, false) as Promise<unknown>;
 }
 
-async function giteaApiAllowNotFound(path: string, method = "GET", body?: unknown): Promise<unknown | null> {
-  return giteaFetch(getToken(), path, method, body, true);
+async function giteaApiAllowNotFound(org: string, path: string, method = "GET", body?: unknown): Promise<unknown | null> {
+  return giteaFetch(getToken(), org, path, method, body, true);
 }
 
-export async function giteaApiAsAllowNotFound(token: string, path: string, method = "GET", body?: unknown): Promise<unknown | null> {
-  return giteaFetch(token, path, method, body, true);
+export async function giteaApiAsAllowNotFound(token: string, org: string, path: string, method = "GET", body?: unknown): Promise<unknown | null> {
+  return giteaFetch(token, org, path, method, body, true);
 }
 
 /**
@@ -77,12 +77,11 @@ export async function giteaApiAsAllowNotFound(token: string, path: string, metho
  * one-off cleanup; the customer-level deprovision flow uses
  * `glm-controller`'s GiteaCleanupClient instead.
  *
- * IMPORTANT: `giteaFetch` already prefixes `${GITEA_URL}/api/v1/repos/${GITEA_ORG}/`
- * — pass the bare repo name (or `<repo>/<sub>`), NOT a leading `/repos/<org>/`.
- * Earlier draft of this helper double-prefixed and silently 404'd.
+ * IMPORTANT: `giteaFetch` already prefixes `${GITEA_URL}/api/v1/repos/${org}/`
+ * — pass the bare repo name, NOT a leading `/repos/<org>/`.
  */
-export async function giteaDeleteRepo(repo: string): Promise<void> {
-  await giteaApiAllowNotFound(encodeURIComponent(repo), "DELETE");
+export async function giteaDeleteRepo(org: string, repo: string): Promise<void> {
+  await giteaApiAllowNotFound(org, encodeURIComponent(repo), "DELETE");
 }
 
 async function giteaAdminFetch(
@@ -115,11 +114,12 @@ async function giteaAdminFetch(
 }
 
 export async function createProjectGiteaRepo(
+  org: string,
   repoName: string,
   description: string,
   privateRepo: boolean,
 ): Promise<void> {
-  const url = `${GITEA_URL}/api/v1/orgs/${GITEA_ORG}/repos`;
+  const url = `${GITEA_URL}/api/v1/orgs/${org}/repos`;
   try {
     await giteaAdminFetch("POST", url, {
       name: repoName,
@@ -135,12 +135,13 @@ export async function createProjectGiteaRepo(
 }
 
 export async function giteaWriteFile(
+  org: string,
   repoName: string,
   filePath: string,
   content: string,
   commitMessage: string,
 ): Promise<void> {
-  const url = `${GITEA_URL}/api/v1/repos/${GITEA_ORG}/${repoName}/contents/${filePath}`;
+  const url = `${GITEA_URL}/api/v1/repos/${org}/${repoName}/contents/${filePath}`;
   const existing = await giteaAdminFetch("GET", url, undefined, true);
   if (existing !== null) return;
   await giteaAdminFetch("POST", url, {

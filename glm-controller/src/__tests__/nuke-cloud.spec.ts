@@ -6,8 +6,8 @@ function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
     uid: "uid-alice",
     slug: "alice",
     email: "alice@example.com",
-    giteaOrg: "octogee",
-    repoNames: ["alice-workspace", "alice-proj-blog"],
+    giteaOrg: "alice",
+    repoNames: ["workspace", "blog"],
     projectSlugs: ["blog"],
     workspaceTeamId: "team-1",
     mmUserId: "mm-u-1",
@@ -21,6 +21,7 @@ function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
   return {
     gitea: {
       deleteRepo: vi.fn(async () => undefined),
+      deleteOrg: vi.fn(async () => undefined),
       deleteGiteaUser: vi.fn(async () => undefined),
     },
     mattermost: {
@@ -58,8 +59,9 @@ describe("nukeUserCloudSide — happy path", () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
     expect(deps.gitea.deleteRepo).toHaveBeenCalledTimes(2);
-    expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("octogee", "alice-workspace");
-    expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("octogee", "alice-proj-blog");
+    expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("alice", "workspace");
+    expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("alice", "blog");
+    expect(deps.gitea.deleteOrg).toHaveBeenCalledWith("alice");
     expect(deps.gitea.deleteGiteaUser).toHaveBeenCalledWith("alice");
   });
 
@@ -178,7 +180,7 @@ describe("nukeUserCloudSide — hosting step (PR #3)", () => {
     // were still active it'd pass `["proj-blog"]` to the helper.
     await nukeUserCloudSide(
       mkCtx({
-        repoNames: ["alice-workspace", "alice-proj-blog"],
+        repoNames: ["workspace", "blog"],
         projectSlugs: ["blog"],
       }),
       deps,

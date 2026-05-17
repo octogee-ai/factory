@@ -10,6 +10,7 @@ import {
   PROJECT_ID_MAX_LENGTH,
 } from "@shared/types/identity";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context";
+import { projectRepoName } from "../../lib/gitea-naming";
 import { ensureProjectGiteaRepo } from "./provisioning";
 
 const router = Router();
@@ -104,10 +105,11 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
     // while `provisioningState` is not yet `active` so half-provisioned docs
     // never surface in public discovery; `pendingVisibility` preserves the
     // caller's intent so a failed → retry flow can apply it without the
-    // client re-submitting. `giteaRepoName` is deterministic (function of
-    // `workspaceId + slug`), so we persist it up-front — no reason to defer.
+    // client re-submitting. `giteaRepoName` is deterministic (the bare
+    // project slug, namespaced by the workspace org), so we persist it
+    // up-front — no reason to defer.
     const targetVisibility = visibility || "private";
-    const giteaRepoName = `${workspaceId}-proj-${slug}`;
+    const giteaRepoName = projectRepoName(slug);
 
     await projectRef.set({
       id: slug,
