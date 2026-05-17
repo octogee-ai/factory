@@ -163,6 +163,39 @@ router.get(
   },
 );
 
+// C2: the user-facing "is my subscription connected?" read. Derived
+// from the durable `glmGateways/{gatewayId}.byosub[coachAgentId]` ref —
+// returns only {connected, provider}. Never the secretName or credential
+// (those never cross to the customer surface).
+router.get(
+  "/connection",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const resolved = await resolveUserGateway(req.uid!);
+      if (!resolved) {
+        res.json({ connected: false });
+        return;
+      }
+      const snap = await db
+        .collection("glmGateways")
+        .doc(resolved.gatewayId)
+        .get();
+      const data = (snap.data() || {}) as {
+        byosub?: Record<string, { provider?: unknown } | undefined>;
+      };
+      const ref = data.byosub?.[coachAgentId(resolved.slug)];
+      if (ref && typeof ref.provider === "string") {
+        res.json({ connected: true, provider: ref.provider });
+        return;
+      }
+      res.json({ connected: false });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 // Internal: the gateway runner posts the captured credential here on
 // completion. R2 — workspace-api owns the Secret Manager write; the
 // gateway SA stays read-only. The gateway supplies only the opaque

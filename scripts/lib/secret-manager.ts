@@ -138,10 +138,11 @@ export async function provisionGatewayAuthSecret(params: {
 
   const member = `serviceAccount:${params.gatewayServiceAccount}`;
   const [policy] = await client().getIamPolicy({ resource: secretName });
-  const bindings = policy.bindings ?? [];
+  type IamBinding = { role?: string | null; members?: string[] | null };
+  const bindings: IamBinding[] = policy.bindings ?? [];
   let mutated = false;
   for (const role of GATEWAY_AUTH_TOKEN_SECRET_ROLES) {
-    let binding = bindings.find((b) => b.role === role);
+    let binding = bindings.find((b: IamBinding) => b.role === role);
     if (!binding) {
       binding = { role, members: [] };
       bindings.push(binding);
