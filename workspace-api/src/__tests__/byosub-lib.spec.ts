@@ -1,0 +1,105 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  byosubSecretName,
+  validateCodexCredential,
+  gatewayDeviceAuthClient,
+} from "../lib/byosub";
+
+describe("byosubSecretName", () => {
+  it("is owner-scoped and matches Chunk A secretNameFor", () => {
+    expect(byosubSecretName("uid-1", "openai")).toBe("byosub-uid-1-openai");
+  });
+});
+
+describe("validateCodexCredential — privileged write surface", () => {
+  const good = JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: { access_token: "a", refresh_token: "r", account_id: "acct" },
+    last_refresh: "2026-05-16T00:00:00Z",
+  });
+
+  it("accepts a well-formed codex auth.json", () => {
+    expect(validateCodexCredential(good)).toEqual({ ok: true });
+  });
+
+  it("rejects empty / non-JSON / non-object", () => {
+    expect(validateCodexCredential("").ok).toBe(false);
+    expect(validateCodexCredential("   ").ok).toBe(false);
+    expect(validateCodexCredential("not json").ok).toBe(false);
+    expect(validateCodexCredential("[]").ok).toBe(false);
+    expect(validateCodexCredential("42").ok).toBe(false);
+  });
+
+  it("requires the fields codex restore actually needs", () => {
+    expect(validateCodexCredential(JSON.stringify({ tokens: {} })).ok).toBe(false);
+    expect(
+      validateCodexCredential(JSON.stringify({ auth_mode: "chatgpt", tokens: {} })).ok,
+    ).toBe(false);
+    expect(
+      validateCodexCredential(
+        JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "a" } }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCodexCredential(
+        JSON.stringify({ auth_mode: "chatgpt", tokens: { refresh_token: "r" } }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("rejects an oversized payload (no attacker-controlled blobs into the credential sink)", () => {
+    const huge = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "a".repeat(40_000), refresh_token: "r" },
+    });
+    expect(validateCodexCredential(huge).ok).toBe(false);
+  });
+});
+
+describe("gatewayDeviceAuthClient — addresses the gateway by instanceName", () => {
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    process.env.INTERNAL_SERVICE_KEY = "k";
+    process.env.K8S_NAMESPACE = "octogee";
+    delete process.env.GATEWAY_INTERNAL_URL_TEMPLATE;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("derives the K8s Service from instanceName verbatim (no gw- stripping)", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = vi.fn(async (url: any) => {
+      seen.push(String(url));
+      return { ok: true, json: async () => ({ flowId: "f" }) } as any;
+    }) as any;
+    await gatewayDeviceAuthClient().start({ instanceName: "bender", agentId: "octogee-x-coach" });
+    expect(seen[0]).toBe(
+      "http://octogee-gateway-bender.octogee.svc.cluster.local:3003/internal/byosub/device-auth/start",
+    );
+  });
+
+  it("honors the GATEWAY_INTERNAL_URL_TEMPLATE override with {instanceName}", async () => {
+    process.env.GATEWAY_INTERNAL_URL_TEMPLATE = "http://127.0.0.1:9{instanceName}9";
+    const seen: string[] = [];
+    globalThis.fetch = vi.fn(async (url: any) => {
+      seen.push(String(url));
+      return { ok: true, json: async () => ({ state: "x" }) } as any;
+    }) as any;
+    await gatewayDeviceAuthClient().status({ instanceName: "00", flowId: "f1" });
+    expect(seen[0]).toBe(
+      "http://127.0.0.1:9009/internal/byosub/device-auth/status/f1",
+    );
+  });
+
+  it("throws on a non-2xx gateway response (surfaced, not swallowed)", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 502,
+      text: async () => "bad gateway",
+    })) as any;
+    await expect(
+      gatewayDeviceAuthClient().start({ instanceName: "bender", agentId: "a" }),
+    ).rejects.toThrow(/502/);
+  });
+});

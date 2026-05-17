@@ -18,6 +18,33 @@ describe("primaryWorkspaceSlug", () => {
   it("returns null when username is a non-string (defensive)", () => {
     expect(primaryWorkspaceSlug({ username: 123 as unknown as string })).toBeNull();
   });
+
+  it("prefers provisioning.openclaw.slug — the canonical post-provision identity", () => {
+    expect(
+      primaryWorkspaceSlug({
+        username: "old-handle",
+        provisioning: { openclaw: { slug: "smile-wring-011b" } },
+      }),
+    ).toBe("smile-wring-011b");
+  });
+
+  it("falls back to username when provisioning.openclaw.slug is absent/blank", () => {
+    expect(
+      primaryWorkspaceSlug({ username: "jane", provisioning: { openclaw: {} } }),
+    ).toBe("jane");
+    expect(
+      primaryWorkspaceSlug({
+        username: "jane",
+        provisioning: { openclaw: { slug: "" } },
+      }),
+    ).toBe("jane");
+  });
+
+  it("resolves provisioned users that have no username (onboarding-created)", () => {
+    expect(
+      primaryWorkspaceSlug({ provisioning: { openclaw: { slug: "blue-otter-77" } } }),
+    ).toBe("blue-otter-77");
+  });
 });
 
 describe("workspaceSlugsForUser", () => {

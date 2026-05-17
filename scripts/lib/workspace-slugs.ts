@@ -1,5 +1,10 @@
 export interface WorkspaceSlugSource {
   username?: string | null;
+  provisioning?: {
+    openclaw?: {
+      slug?: string | null;
+    } | null;
+  } | null;
 }
 
 function coerceString(v: unknown): string | null {
@@ -9,7 +14,10 @@ function coerceString(v: unknown): string | null {
 export function primaryWorkspaceSlug(
   data: WorkspaceSlugSource | null | undefined,
 ): string | null {
-  return coerceString(data?.username);
+  return (
+    coerceString(data?.provisioning?.openclaw?.slug) ??
+    coerceString(data?.username)
+  );
 }
 
 export function workspaceSlugsForUser(
