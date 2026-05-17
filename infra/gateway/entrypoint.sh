@@ -223,6 +223,18 @@ fi
   done
 ) &
 
+# ── Start BYO-sub credential sync-back watcher (observe-only) ───────────────
+(
+  while true; do
+    log "Starting BYO-sub sync-back watcher..."
+    /octogee/scripts/node_modules/.bin/tsx \
+      /octogee/scripts/byosub-syncback-runner.ts \
+      || true
+    log "BYO-sub sync-back watcher exited — restarting in 30s..."
+    sleep 30
+  done
+) &
+
 # ── Start OpenClaw gateway ──────────────────────────────────────────────────
 # Single backgrounded child, no supervisor / respawn loop. OpenClaw 2026.5.x
 # handles config-driven restarts internally: when chokidar detects a change
