@@ -47,7 +47,14 @@ interface FlowDoc {
   gatewayId: string;
   agentId: string;
   provider: string;
+  /** Set once on first successful capture — makes /capture single-write
+   * (a replayed flowId never re-writes Secret Manager). */
+  consumedAt?: number;
+  /** Sweep/TTL horizon — a stale, never-completed flow is reapable. */
+  expireAt?: number;
 }
+
+const FLOW_TTL_MS = 60 * 60 * 1000;
 
 async function readFlow(flowId: string): Promise<FlowDoc | null> {
   const snap = await db.collection("byosubFlows").doc(flowId).get();
@@ -106,6 +113,7 @@ router.post(
             agentId,
             provider,
             createdAt: Date.now(),
+            expireAt: Date.now() + FLOW_TTL_MS,
           });
         res.json(out);
       } catch (e) {
@@ -182,12 +190,20 @@ router.post(
           .json({ error: `Unsupported provider: ${flow.provider}` });
         return;
       }
+      const secretName = byosubSecretName(flow.uid, flow.provider);
+      // Single-write, idempotent response: a replayed (or retried) flowId
+      // never re-writes Secret Manager — and a replay carrying a *different*
+      // credential body is ignored, not honoured. A legit gateway retry
+      // still gets a sane ok.
+      if (flow.consumedAt) {
+        res.json({ ok: true, secretName, alreadyConsumed: true });
+        return;
+      }
       const v = validateCodexCredential(b.credential);
       if (!v.ok) {
         res.status(400).json({ error: `invalid credential: ${v.reason}` });
         return;
       }
-      const secretName = byosubSecretName(flow.uid, flow.provider);
       await writeSecret({
         name: secretName,
         value: b.credential,
@@ -200,6 +216,12 @@ router.post(
           { byosub: { [flow.agentId]: { provider: flow.provider, secretName } } },
           { merge: true },
         );
+      // Consume only after the durable write + ref succeeded, so a failed
+      // capture stays retryable.
+      await db
+        .collection("byosubFlows")
+        .doc(b.flowId)
+        .set({ consumedAt: Date.now() }, { merge: true });
       res.json({ ok: true, secretName });
     } catch (e) {
       next(e);

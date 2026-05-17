@@ -34,6 +34,62 @@ export function agentIdsFromConfig(config: unknown): string[] {
 const SAFE_AGENT_ID = /^[a-z0-9-]{1,64}$/;
 
 /**
+ * The shared agent-id path-safety boundary. Agent ids reach the gateway
+ * from Firestore (`glmGateways/{id}.byosub` keys, Chunk A) and from the
+ * device-auth start request (Chunk C1b) before being interpolated into a
+ * filesystem path AND a spawned process env — validate at every ingress;
+ * never rely on a downstream presence check.
+ */
+export function isSafeAgentId(agentId: string): boolean {
+  return typeof agentId === "string" && SAFE_AGENT_ID.test(agentId);
+}
+
+/**
+ * The per-agent codex-home directory. Single source of truth for the
+ * "where codex auth.json lives" invariant shared by Chunk A (restore),
+ * Chunk B (sync-back watch) and Chunk C1b (device-auth onboarding) —
+ * openclaw runs the codex app-server with this exact `CODEX_HOME`
+ * (verified live). Callers that interpolate an agentId into a filesystem
+ * path remain responsible for validating it (`SAFE_AGENT_ID`).
+ */
+export function codexHomeDir(openclawDir: string, agentId: string): string {
+  return path.join(openclawDir, "agents", agentId, "agent", "codex-home");
+}
+
+/** The codex `auth.json` inside the per-agent codex-home. */
+export function codexAuthJsonPath(openclawDir: string, agentId: string): string {
+  return path.join(codexHomeDir(openclawDir, agentId), "auth.json");
+}
+
+/**
+ * A *staging* codex-home, a sibling of the live one. The C1b device-auth
+ * child runs against this so a failed/expired/abandoned `codex login`
+ * never mutates the live per-agent `auth.json` — a re-Connect can never
+ * break an already-working agent (the "never break Bender" invariant).
+ * The live home is replaced only by an atomic promote of a *successfully
+ * captured* staged credential, or by Chunk A restore from Secret Manager.
+ */
+export function codexStagingHomeDir(
+  openclawDir: string,
+  agentId: string,
+): string {
+  return path.join(
+    openclawDir,
+    "agents",
+    agentId,
+    "agent",
+    "codex-home.staging",
+  );
+}
+
+export function codexStagingAuthJsonPath(
+  openclawDir: string,
+  agentId: string,
+): string {
+  return path.join(codexStagingHomeDir(openclawDir, agentId), "auth.json");
+}
+
+/**
  * Pure: resolve which per-agent codex-home `auth.json` files to restore for
  * this gateway. One shared gateway hosts many customers; each present agent
  * with an `openai` ref maps to its own per-agent codex-home (verified live:
@@ -53,7 +109,7 @@ export function planByosubRestores(opts: {
   const present = new Set(opts.agentIds);
   const plan: ByosubRestorePlanItem[] = [];
   for (const [agentId, ref] of Object.entries(opts.byosub)) {
-    if (!SAFE_AGENT_ID.test(agentId)) {
+    if (!isSafeAgentId(agentId)) {
       log(`byosub: skipping unsafe/invalid agent id ${JSON.stringify(agentId)}`);
       continue;
     }
@@ -75,14 +131,7 @@ export function planByosubRestores(opts: {
         agentId,
         provider: "openai",
         secretName: ref.secretName,
-        targetPath: path.join(
-          opts.openclawDir,
-          "agents",
-          agentId,
-          "agent",
-          "codex-home",
-          "auth.json",
-        ),
+        targetPath: codexAuthJsonPath(opts.openclawDir, agentId),
       });
     } else if (ref.provider === "anthropic") {
       log(

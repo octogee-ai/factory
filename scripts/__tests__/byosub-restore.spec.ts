@@ -6,6 +6,11 @@ import {
   planByosubRestores,
   restoreByosubCredentials,
   agentIdsFromConfig,
+  codexHomeDir,
+  codexAuthJsonPath,
+  codexStagingHomeDir,
+  codexStagingAuthJsonPath,
+  isSafeAgentId,
 } from "../lib/byosub-restore.js";
 
 const tmpDirs: string[] = [];
@@ -21,6 +26,55 @@ afterEach(() => {
 const OC = "/home/node/.openclaw";
 const codexAuth = (agentId: string) =>
   `${OC}/agents/${agentId}/agent/codex-home/auth.json`;
+
+describe("isSafeAgentId (shared path-safety boundary)", () => {
+  it("accepts real coach agent ids", () => {
+    expect(isSafeAgentId("octogee-smile-wring-011b-coach")).toBe(true);
+    expect(isSafeAgentId("octogee-a-coach")).toBe(true);
+  });
+  it("rejects traversal / unsafe / oversized / non-string ids", () => {
+    expect(isSafeAgentId("../../etc/passwd")).toBe(false);
+    expect(isSafeAgentId("octogee/../x")).toBe(false);
+    expect(isSafeAgentId("Octogee-A-Coach")).toBe(false);
+    expect(isSafeAgentId("")).toBe(false);
+    expect(isSafeAgentId("a".repeat(65))).toBe(false);
+    expect(isSafeAgentId(undefined as unknown as string)).toBe(false);
+    expect(isSafeAgentId(123 as unknown as string)).toBe(false);
+  });
+});
+
+describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () => {
+  it("composes the per-agent codex-home — the C1a/A/B invariant path", () => {
+    expect(codexHomeDir(OC, "octogee-ceckert-coach")).toBe(
+      "/home/node/.openclaw/agents/octogee-ceckert-coach/agent/codex-home",
+    );
+  });
+
+  it("auth.json sits directly in the codex-home dir", () => {
+    expect(codexAuthJsonPath(OC, "octogee-a-coach")).toBe(
+      codexAuth("octogee-a-coach"),
+    );
+  });
+
+  it("staging codex-home is a sibling of the live one — never the same path", () => {
+    const live = codexHomeDir(OC, "octogee-a-coach");
+    const staging = codexStagingHomeDir(OC, "octogee-a-coach");
+    expect(staging).not.toBe(live);
+    expect(staging.startsWith(`${OC}/agents/octogee-a-coach/agent/`)).toBe(true);
+    expect(codexStagingAuthJsonPath(OC, "octogee-a-coach")).toBe(
+      `${staging}/auth.json`,
+    );
+  });
+
+  it("is exactly the path planByosubRestores writes to (no drift between writer + restorer)", () => {
+    const [item] = planByosubRestores({
+      agentIds: ["octogee-a-coach"],
+      byosub: { "octogee-a-coach": { provider: "openai", secretName: "s" } },
+      openclawDir: OC,
+    });
+    expect(item.targetPath).toBe(codexAuthJsonPath(OC, "octogee-a-coach"));
+  });
+});
 
 describe("planByosubRestores", () => {
   it("returns [] for undefined/empty byosub", () => {

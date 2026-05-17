@@ -20,8 +20,33 @@ import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapt
 import { removeCustomerFromGateway } from "./customer-lifecycle.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { startDrainLoop } from "./drain-loop.js";
+import { createDeviceAuthManager } from "./byosub-device-auth.js";
+import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
+import { mountByosubDeviceAuth } from "./byosub-device-auth-http.js";
 
 const DRAIN_LOOP_INTERVAL_MS = 15 * 1000;
+
+/**
+ * BYO-sub device-auth (C1b). Guarded by X-Internal-Service-Key (not the
+ * fleet signature) — the only caller is workspace-api's
+ * gatewayDeviceAuthClient over K8s DNS. The codex child runs with the
+ * per-agent CODEX_HOME so its auth.json lands where Chunk A/B expect.
+ */
+function registerByosubDeviceAuth(
+  app: express.Express,
+  opts: StartFleetOptions,
+): void {
+  const internalServiceKey = opts.internalServiceKey ?? "";
+  const openclawDir =
+    opts.openclawDir ??
+    (process.env.HOME
+      ? `${process.env.HOME}/.openclaw`
+      : "/home/node/.openclaw");
+  const manager = createDeviceAuthManager(
+    realDeviceAuthDeps({ openclawDir, internalServiceKey, log: opts.log }),
+  );
+  mountByosubDeviceAuth(app, { manager, internalServiceKey, log: opts.log });
+}
 
 export interface BuildAdapterOptions {
   db: Firestore;
@@ -48,6 +73,11 @@ export interface StartFleetOptions {
   version: string;
   openclawVersion: string;
   adminMmUserId?: string;
+  /** BYO-sub device-auth (C1b): where per-agent codex-homes live. */
+  openclawDir?: string;
+  /** Shared internal-service key — guards the device-auth endpoints and
+   * authenticates the in-pod capture POST to workspace-api. */
+  internalServiceKey?: string;
 }
 
 export interface StartedFleetController {
@@ -219,6 +249,8 @@ export async function startFleetController(
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
+
+  registerByosubDeviceAuth(app, opts);
 
   const stopDrainLoop = startDrainLoop({
     gatewayId: opts.gatewayId,
