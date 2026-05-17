@@ -58,6 +58,13 @@ export interface GatewayState {
    */
   internalUrl?: string;
   /**
+   * Epoch ms when the current gateway process booted. Captured once per
+   * process (constant across heartbeats), so it resets on every gateway
+   * restart — `now − startedAt` is true process uptime / a restart-loop
+   * signal. Surfaced by admin-fleet-router as `uptimeMs`.
+   */
+  startedAt?: number;
+  /**
    * Per-customer failure tracker for exponential-backoff scheduling. Keyed
    * by slug. Pick-next skips any slug whose last failure is still inside
    * the backoff window computed from its `failCount`, so a single corrupt

@@ -26,6 +26,12 @@ import { mountByosubDeviceAuth } from "./byosub-device-auth-http.js";
 
 const DRAIN_LOOP_INTERVAL_MS = 15 * 1000;
 
+// Epoch ms of this gateway process boot. Captured once at module load and
+// stable across heartbeats — resets only when the process restarts, so
+// `now − startedAt` is true process uptime / a restart-loop signal.
+// process.uptime() back-references the real start if the module loaded late.
+const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
+
 /**
  * BYO-sub device-auth (C1b). Guarded by X-Internal-Service-Key (not the
  * fleet signature) — the only caller is workspace-api's
@@ -138,7 +144,7 @@ export async function startFleetController(
         version: opts.version,
         openclawVersion: opts.openclawVersion,
         mountedCustomers: runtime.mountedCustomers,
-        internalUrl,
+        internalUrl, startedAt: PROCESS_STARTED_AT_MS,
       });
     } catch (err) {
       opts.log(
