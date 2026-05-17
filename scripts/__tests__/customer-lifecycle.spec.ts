@@ -173,6 +173,9 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       state.giteaRegisteredPubKey = pubKey;
       return "gitea-pat-token";
     },
+    ensureGiteaOrg: async () => {
+      record("ensureGiteaOrg");
+    },
     readLocalCustomerPubKey: () => (state.disk.sshKey ? "ssh-pubkey" : null),
     readGiteaCustomerPubKey: async () => {
       if (state.giteaReadShouldThrow) {
@@ -316,6 +319,17 @@ describe("addCustomerToGateway — first-time provisioning", () => {
       "mark-complete",
       "notify-ops",
     ]);
+  });
+
+  it("ensures the per-workspace Gitea org BEFORE the workspace repo (#963)", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const orgIdx = state.calls.indexOf("ensureGiteaOrg");
+    const repoIdx = state.calls.indexOf("initWorkspaceRepoFromExistingDir");
+    // The repo lives in org `{slug}`; creating the repo before the org
+    // exists is the #963 gateway regression (404 GetOrgByName).
+    expect(orgIdx).toBeGreaterThan(-1);
+    expect(repoIdx).toBeGreaterThan(orgIdx);
   });
 
   it("writes provisioning.git.repoUrl IMMEDIATELY after the repo init succeeds", async () => {
