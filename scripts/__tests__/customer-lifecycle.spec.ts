@@ -1150,3 +1150,189 @@ describe("pubKeysMatch", () => {
     expect(pubKeysMatch(a, b)).toBe(false);
   });
 });
+
+describe("addCustomerToGateway — org-ensure precedes EVERY repo-touching path (the #963 incomplete-rollout class)", () => {
+  // #963 ("one Gitea org per workspace") moved the workspace/project repos
+  // into a per-workspace org `{slug}`. The org-ensure has to land in front
+  // of EVERY clone/init or Gitea answers 404 (GetOrgByName). #963 shipped
+  // that ensure into one bring-up path and missed a sibling four times
+  // (#963 → #968/#969/#970). #970 pinned a SINGLE path (first-time
+  // init-workspace). This generalizes the guard: ensureGiteaOrg is
+  // unconditional AND precedes the first repo-touching adapter call in
+  // every scenario, and the repo-touching surface is exhaustively
+  // classified so a NEW clone/init method cannot be added without
+  // inheriting the ordering assertion.
+
+  // Every adapter method classified: does calling it touch a repo that
+  // lives in the per-workspace org `{slug}` (so it MUST be preceded by
+  // ensureGiteaOrg)? Keyed off `keyof CustomerLifecycleAdapter` — adding a
+  // method to the PRODUCTION interface is a tsc error here until it is
+  // classified, so a new repo-touching path cannot be introduced without
+  // inheriting the ordering assertion below. The forcing function is the
+  // type, not a name regex on the test mock.
+  const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
+    cloneWorkspaceRepo: true,
+    initWorkspaceRepoFromExistingDir: true,
+    cloneProjectRepo: true,
+    log: false,
+    loadUserSnapshot: false,
+    setProvisioningStatus: false,
+    setRepoUrl: false,
+    persistGiteaToken: false,
+    setMattermostFields: false,
+    setGreetingResult: false,
+    setAgentIds: false,
+    hasCustomerDir: false,
+    hasWorkspaceGitDir: false,
+    hasGitRemote: false,
+    repoHasCommits: false,
+    ensureCustomerDirectories: false,
+    writeCustomerTemplateFiles: false,
+    writeCustomerConfig: false,
+    deleteCustomerDir: false,
+    hasCustomerSshKey: false,
+    generateCustomerSshKey: false,
+    createGiteaUser: false,
+    ensureGiteaOrg: false,
+    readLocalCustomerPubKey: false,
+    readGiteaCustomerPubKey: false,
+    deleteCustomerSshKey: false,
+    hasPersistedGiteaToken: false,
+    blobSyncForSlug: false,
+    listProjectsNeedingClone: false,
+    provisionMattermostUser: false,
+    scheduleBootGreetingCron: false,
+    applyAddCustomerConfigPatch: false,
+    applyRemoveCustomerConfigPatch: false,
+    waitForAccountHealthy: false,
+    notifyOpsOfSignup: false,
+    onMounted: false,
+    onUnmounted: false,
+    uidForSlug: false,
+    quiesceCustomer: false,
+    listExportPaths: false,
+    prepareImportDir: false,
+    activateImportedCustomer: false,
+  };
+
+  const REPO_TOUCHING = (
+    Object.keys(ADAPTER_REPO_TOUCHING) as Array<keyof CustomerLifecycleAdapter>
+  ).filter((k) => ADAPTER_REPO_TOUCHING[k]);
+
+  it("classifies exactly the clone/init workspace+project methods as repo-touching", () => {
+    expect([...REPO_TOUCHING].sort()).toEqual(
+      [
+        "cloneProjectRepo",
+        "cloneWorkspaceRepo",
+        "initWorkspaceRepoFromExistingDir",
+      ].sort(),
+    );
+  });
+
+  const mounted = (over: Partial<UserSnapshot> = {}) =>
+    snap({
+      status: "complete",
+      agentIds: ["octogee-test-coach"],
+      repoUrl: "http://gitea/octogee/test-workspace",
+      mattermostUserId: "mm-user",
+      greetingPosted: true,
+      ...over,
+    });
+
+  const scenarios: Array<{
+    name: string;
+    state: () => MockState;
+    expectRepoTouch: boolean;
+  }> = [
+    {
+      name: "first-time provision (init-workspace)",
+      state: () => makeState(snap({ status: "" }), emptyDisk()),
+      expectRepoTouch: true,
+    },
+    {
+      name: "restore from Gitea (clone-workspace)",
+      state: () => makeState(mounted(), emptyDisk()),
+      expectRepoTouch: true,
+    },
+    {
+      name: "empty-Gitea restore (clone then template re-apply)",
+      state: () => {
+        const s = makeState(mounted(), emptyDisk());
+        s.cloneSimulatesEmptyRepo = true;
+        return s;
+      },
+      expectRepoTouch: true,
+    },
+    {
+      name: "recovery from orphan dir (recovery init-workspace)",
+      state: () =>
+        makeState(mounted({ repoUrl: "" }), {
+          ...emptyDisk(),
+          customerDir: true,
+          workspaceGitDir: true,
+          gitRemote: false,
+        }),
+      expectRepoTouch: true,
+    },
+    {
+      name: "pending project clone (workspace already healthy)",
+      state: () => {
+        const s = makeState(mounted(), {
+          ...emptyDisk(),
+          customerDir: true,
+          workspaceGitDir: true,
+          gitRemote: true,
+          sshKey: true,
+          repoHasCommits: true,
+        });
+        s.giteaRegisteredPubKey = "ssh-pubkey";
+        s.persistedGiteaToken = "gitea-pat-token";
+        s.pendingProjects = [{ projectSlug: "p1", giteaRepoName: "test-p1" }];
+        return s;
+      },
+      expectRepoTouch: true,
+    },
+    {
+      name: "idempotent re-add (no repo touch — org still ensured)",
+      state: () =>
+        makeState(mounted(), {
+          customerDir: true,
+          workspaceGitDir: true,
+          gitRemote: true,
+          sshKey: true,
+          templatesWritten: true,
+          customerConfigWritten: true,
+          repoHasCommits: true,
+        }),
+      expectRepoTouch: false,
+    },
+  ];
+
+  it.each(scenarios)("$name", async ({ state, expectRepoTouch }) => {
+    const st = state();
+    // Default Gitea to a matching registered key unless the scenario set
+    // one. The SSH verify/register block runs BEFORE the org-ensure; an
+    // unset key would make it throw and abort the mount before line 461,
+    // so the ordering assertion would never run — a false GREEN that masks
+    // the very invariant under test.
+    if (st.giteaRegisteredPubKey === null) st.giteaRegisteredPubKey = "ssh-pubkey";
+    await addCustomerToGateway(makeAdapter(st), "uid-test");
+
+    const orgIdx = st.calls.indexOf("ensureGiteaOrg");
+    // Unconditional: the org-ensure runs in EVERY scenario, including the
+    // idempotent no-op (it self-heals a customer provisioned before the
+    // per-workspace-org scheme existed). Deleting the single call site
+    // makes orgIdx === -1 here for every scenario.
+    expect(orgIdx).toBeGreaterThan(-1);
+
+    const repoTouchIdxs = REPO_TOUCHING.map((m) => st.calls.indexOf(m)).filter(
+      (i) => i !== -1,
+    );
+    if (expectRepoTouch) {
+      expect(repoTouchIdxs.length).toBeGreaterThan(0);
+      expect(Math.min(...repoTouchIdxs)).toBeGreaterThan(orgIdx);
+    } else {
+      expect(repoTouchIdxs).toEqual([]);
+    }
+  });
+});
