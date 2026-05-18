@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
+import { OPENCLAW_PROTOCOL_VERSION } from "../../../shared/types/openclaw-wire.js";
 import {
   signConnectDevice,
   type DeviceIdentity,
@@ -21,19 +22,14 @@ export class UpstreamError extends Error {
   }
 }
 
-// Mirror of the canonical `OPENCLAW_PROTOCOL_VERSION`
-// (shared/types/openclaw-wire.ts). chat-proxy is a hermetic Docker build
-// and cannot import shared/, so the integer is duplicated here; drift is
-// caught at CI time by tests/specs/openclaw-wire-lockstep.spec.ts. Bump
-// alongside the shared constant on every OpenClaw base-image roll.
-//
 // Wire-surface depended on by Phase 7 (ACTIVITY-STREAM-SPEC §Phase 7
 // R7-C): the `session.message` / `sessions.changed` payload spread
 // (`totalTokens`, `contextTokens`, `totalTokensFresh`) and per-message
 // `usage` / `cost` / `model` are parsed by `session-telemetry.ts`. On
-// every OC base-image roll, re-verify these field names alongside this
-// bump — a silent rename degrades the context meter, not the handshake.
-const PROTOCOL_VERSION = 4;
+// every OC base-image roll, re-verify these field names alongside the
+// shared OPENCLAW_PROTOCOL_VERSION bump — a silent rename degrades the
+// context meter, not the handshake.
+const PROTOCOL_VERSION = OPENCLAW_PROTOCOL_VERSION;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 /**

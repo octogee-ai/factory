@@ -6,11 +6,9 @@
  * version. Bump this in lockstep with every OpenClaw gateway base-image
  * roll.
  *
- * `scripts/lib/gateway-rpc.ts` imports this directly. `chat-proxy/src/
- * openclaw/upstream.ts` is a hermetic Docker build and cannot reach
- * `shared/`, so it mirrors the integer; the lockstep is enforced at CI
- * time by `tests/specs/openclaw-wire-lockstep.spec.ts` rather than by a
- * hand-written "keep in sync" comment (which already drifted once — the
- * 2026.5.12 roll).
+ * Both in-pod clients — `scripts/lib/gateway-rpc.ts` and
+ * `chat-proxy/src/openclaw/upstream.ts` — import this directly, so the
+ * value cannot drift between them (it did once, on the 2026.5.12 roll,
+ * back when each hardcoded its own literal).
  */
 export const OPENCLAW_PROTOCOL_VERSION = 4;
