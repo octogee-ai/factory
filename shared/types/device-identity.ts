@@ -1,3 +1,18 @@
+/**
+ * Canonical OpenClaw device-identity crypto — the single source of truth
+ * for the Ed25519 keypair, the v3 device-auth payload, and the connect
+ * signature. Both in-pod clients sign the connect device for the *same*
+ * gateway, so this MUST be one implementation (it was duplicated in
+ * chat-proxy + scripts; the copies had drifted only cosmetically — same
+ * signature output — which is exactly how a real handshake-breaking drift
+ * would start). Pure node:crypto, no deps — safe for the dependency-light
+ * shared/ surface and importable from every package.
+ *
+ * scripts/lib/gateway-device-identity.ts composes this with on-disk
+ * persistence (the provisioner's `loadOrCreateDeviceIdentity`).
+ *
+ * Spec: docs/specs/CHAT-PROXY-SHARED-IMPORTS-SPEC.md (Stage 2).
+ */
 import * as crypto from "node:crypto";
 
 export interface DeviceIdentity {
@@ -9,7 +24,7 @@ export interface DeviceIdentity {
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 function base64UrlEncode(buf: Buffer): string {
-  let s = buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_");
+  let s = buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
   while (s.endsWith("=")) s = s.slice(0, -1);
   return s;
 }
@@ -84,7 +99,7 @@ export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): str
   ].join("|");
 }
 
-function signDevicePayload(privateKeyPem: string, payload: string): string {
+export function signDevicePayload(privateKeyPem: string, payload: string): string {
   const key = crypto.createPrivateKey(privateKeyPem);
   const sig = crypto.sign(null, Buffer.from(payload, "utf8"), key);
   return base64UrlEncode(sig);

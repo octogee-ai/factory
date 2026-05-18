@@ -4,7 +4,7 @@ import { OPENCLAW_PROTOCOL_VERSION } from "../../../shared/types/openclaw-wire.j
 import {
   signConnectDevice,
   type DeviceIdentity,
-} from "./device-identity.js";
+} from "../../../shared/types/device-identity.js";
 
 export type UpstreamErrorCode =
   | "connect-failed"

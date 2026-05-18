@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from "prom-client";
 import { startMetricsBaseline } from "./openclaw/metrics-baseline.js";
-import { generateIdentity, type DeviceIdentity } from "./openclaw/device-identity.js";
+import { generateIdentity, type DeviceIdentity } from "../../shared/types/device-identity.js";
 import { openUpstream, UpstreamError } from "./openclaw/upstream.js";
 import {
   resolveGatewayUrl,

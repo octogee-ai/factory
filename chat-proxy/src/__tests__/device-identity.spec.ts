@@ -4,7 +4,7 @@ import {
   buildDeviceAuthPayloadV3,
   signConnectDevice,
   publicKeyRawBase64UrlFromPem,
-} from '../openclaw/device-identity';
+} from '../../../shared/types/device-identity';
 import * as crypto from 'node:crypto';
 
 describe('generateIdentity', () => {
