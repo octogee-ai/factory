@@ -2,25 +2,19 @@ import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import { OPENCLAW_PROTOCOL_VERSION } from "../../../shared/types/openclaw-wire.js";
 import {
+  startConnectChallengeTracker,
+  waitForWsOpen,
+  sendWsRequest,
+} from "../../../shared/types/openclaw-wire-core.js";
+import {
   signConnectDevice,
   type DeviceIdentity,
 } from "../../../shared/types/device-identity.js";
 
-export type UpstreamErrorCode =
-  | "connect-failed"
-  | "auth-failed"
-  | "timeout"
-  | "invalid-response";
-
-export class UpstreamError extends Error {
-  override readonly name = "UpstreamError";
-  constructor(
-    readonly code: UpstreamErrorCode,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+export {
+  OpenclawWireError,
+  type OpenclawWireErrorCode,
+} from "../../../shared/types/openclaw-wire-core.js";
 
 // Wire-surface depended on by Phase 7 (ACTIVITY-STREAM-SPEC §Phase 7
 // R7-C): the `session.message` / `sessions.changed` payload spread
@@ -71,7 +65,7 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
   const nonceTracker = startConnectChallengeTracker(ws);
 
   try {
-    await waitForOpen(ws, timeoutMs);
+    await waitForWsOpen(ws, timeoutMs);
     const nonce = await nonceTracker.wait(timeoutMs);
 
     const clientInfo = {
@@ -92,8 +86,9 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
       platform: clientInfo.platform,
     });
 
-    await sendRequest(
+    await sendWsRequest(
       ws,
+      randomUUID(),
       "connect",
       {
         minProtocol: PROTOCOL_VERSION,
@@ -119,206 +114,3 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
   }
 }
 
-function waitForOpen(ws: WebSocket, timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      try {
-        ws.terminate();
-      } catch {
-        /* */
-      }
-      reject(
-        new UpstreamError("connect-failed", `WS open timed out after ${timeoutMs}ms`),
-      );
-    }, timeoutMs);
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (err: Error) => {
-      cleanup();
-      try {
-        ws.terminate();
-      } catch {
-        /* */
-      }
-      reject(new UpstreamError("connect-failed", `WS open failed: ${err.message}`));
-    };
-    function cleanup() {
-      clearTimeout(timer);
-      ws.removeListener("open", onOpen);
-      ws.removeListener("error", onError);
-    }
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-  });
-}
-
-function startConnectChallengeTracker(ws: WebSocket): {
-  wait: (timeoutMs: number) => Promise<string>;
-} {
-  let cached: string | null = null;
-  let pendingResolve: ((nonce: string) => void) | null = null;
-  let pendingReject: ((err: Error) => void) | null = null;
-
-  const onMessage = (data: unknown) => {
-    if (cached !== null) return;
-    let parsed: unknown;
-    try {
-      parsed =
-        typeof data === "string"
-          ? JSON.parse(data)
-          : JSON.parse((data as Buffer).toString("utf-8"));
-    } catch {
-      return;
-    }
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      (parsed as { type?: unknown }).type !== "event" ||
-      (parsed as { event?: unknown }).event !== "connect.challenge"
-    ) {
-      return;
-    }
-    const nonce = (parsed as { payload?: { nonce?: unknown } }).payload?.nonce;
-    if (typeof nonce !== "string" || nonce.length === 0) {
-      const err = new UpstreamError(
-        "invalid-response",
-        "connect.challenge event has no string nonce",
-      );
-      if (pendingReject) pendingReject(err);
-      return;
-    }
-    cached = nonce;
-    if (pendingResolve) pendingResolve(nonce);
-  };
-  ws.on("message", onMessage);
-
-  return {
-    wait(timeoutMs: number): Promise<string> {
-      if (cached !== null) return Promise.resolve(cached);
-      return new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          cleanup();
-          reject(
-            new UpstreamError(
-              "connect-failed",
-              `connect.challenge not received within ${timeoutMs}ms`,
-            ),
-          );
-        }, timeoutMs);
-        const onClose = () => {
-          cleanup();
-          reject(
-            new UpstreamError(
-              "connect-failed",
-              "socket closed before connect.challenge arrived",
-            ),
-          );
-        };
-        pendingResolve = (nonce) => {
-          cleanup();
-          resolve(nonce);
-        };
-        pendingReject = (err) => {
-          cleanup();
-          reject(err);
-        };
-        function cleanup() {
-          clearTimeout(timer);
-          ws.removeListener("close", onClose);
-          pendingResolve = null;
-          pendingReject = null;
-        }
-        ws.on("close", onClose);
-      });
-    },
-  };
-}
-
-interface ResponseFrame {
-  type: "res";
-  id: string;
-  ok: boolean;
-  payload?: unknown;
-  error?: { code: string; message: string };
-}
-
-function isResponseFrame(v: unknown): v is ResponseFrame {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    (v as { type?: unknown }).type === "res" &&
-    typeof (v as { id?: unknown }).id === "string" &&
-    typeof (v as { ok?: unknown }).ok === "boolean"
-  );
-}
-
-async function sendRequest(
-  ws: WebSocket,
-  method: string,
-  params: unknown,
-  timeoutMs: number,
-  mapConnectErrors = false,
-): Promise<unknown> {
-  const id = randomUUID();
-  return new Promise<unknown>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new UpstreamError("timeout", `${method} response timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    const onMessage = (data: unknown) => {
-      let parsed: unknown;
-      try {
-        parsed =
-          typeof data === "string"
-            ? JSON.parse(data)
-            : JSON.parse((data as Buffer).toString("utf-8"));
-      } catch {
-        return;
-      }
-      if (!isResponseFrame(parsed) || parsed.id !== id) return;
-      cleanup();
-      if (parsed.ok) {
-        resolve(parsed.payload);
-      } else {
-        const msg = parsed.error?.message ?? "unknown gateway error";
-        const code: UpstreamErrorCode = mapConnectErrors ? "auth-failed" : "invalid-response";
-        reject(new UpstreamError(code, msg));
-      }
-    };
-
-    const onClose = () => {
-      cleanup();
-      reject(
-        new UpstreamError(
-          mapConnectErrors ? "auth-failed" : "connect-failed",
-          `${method}: socket closed before response`,
-        ),
-      );
-    };
-    const onError = (err: Error) => {
-      cleanup();
-      reject(
-        new UpstreamError(
-          mapConnectErrors ? "auth-failed" : "connect-failed",
-          `${method}: socket error before response: ${err.message}`,
-        ),
-      );
-    };
-
-    function cleanup() {
-      clearTimeout(timer);
-      ws.removeListener("message", onMessage);
-      ws.removeListener("close", onClose);
-      ws.removeListener("error", onError);
-    }
-
-    ws.on("message", onMessage);
-    ws.on("close", onClose);
-    ws.on("error", onError);
-    ws.send(JSON.stringify({ type: "req", id, method, params }));
-  });
-}

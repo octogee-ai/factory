@@ -4,6 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { WebSocket } from "ws";
 import { OPENCLAW_PROTOCOL_VERSION } from "../../shared/types/openclaw-wire.js";
+import {
+  OpenclawWireError,
+  type OpenclawWireErrorCode,
+  startConnectChallengeTracker,
+  waitForWsOpen,
+  sendWsRequest,
+} from "../../shared/types/openclaw-wire-core.js";
 import { log as defaultLog } from "./config.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -11,25 +18,10 @@ import {
   type DeviceIdentity,
 } from "./gateway-device-identity.js";
 
-export type GatewayRpcErrorCode =
-  | "connect-failed"
-  | "auth-failed"
-  | "hash-mismatch"
-  | "invalid-patch"
-  | "timeout"
-  | "invalid-response"
-  | "rpc-error";
-
-export class GatewayRpcError extends Error {
-  override readonly name = "GatewayRpcError";
-  constructor(
-    readonly code: GatewayRpcErrorCode,
-    message: string,
-    readonly details?: unknown,
-  ) {
-    super(message);
-  }
-}
+export {
+  OpenclawWireError,
+  type OpenclawWireErrorCode,
+} from "../../shared/types/openclaw-wire-core.js";
 
 export interface ConnectTrace {
   url: string;
@@ -39,7 +31,7 @@ export interface ConnectTrace {
   challengeMs?: number;
   connectMs?: number;
   totalMs: number;
-  errorCode?: GatewayRpcErrorCode;
+  errorCode?: OpenclawWireErrorCode;
   errorMessage?: string;
 }
 
@@ -207,7 +199,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       onConnectTrace,
     });
     try {
-      return await sendRequest(ws, method, params, callTimeoutMs);
+      return await sendWsRequest(ws, randomUUID(), method, params, callTimeoutMs);
     } finally {
       try {
         ws.close();
@@ -220,10 +212,10 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       const payload = await call("config.get", {});
       const snap = payload as { hash?: unknown; config?: unknown } | undefined;
       if (!snap || typeof snap !== "object") {
-        throw new GatewayRpcError("invalid-response", "config.get returned non-object payload");
+        throw new OpenclawWireError("invalid-response", "config.get returned non-object payload");
       }
       if (typeof snap.hash !== "string" || snap.hash.length === 0) {
-        throw new GatewayRpcError("invalid-response", "config.get payload missing `hash`");
+        throw new OpenclawWireError("invalid-response", "config.get payload missing `hash`");
       }
       return { config: snap.config, hash: snap.hash };
     },
@@ -235,21 +227,21 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
           baseHash,
         });
         if (!payload || typeof payload !== "object") {
-          throw new GatewayRpcError("invalid-response", "config.patch returned non-object payload");
+          throw new OpenclawWireError("invalid-response", "config.patch returned non-object payload");
         }
         const p = payload as ConfigPatchResult;
         if (p.ok !== true) {
-          throw new GatewayRpcError("invalid-response", "config.patch payload missing `ok: true`");
+          throw new OpenclawWireError("invalid-response", "config.patch payload missing `ok: true`");
         }
         return p;
       } catch (err) {
-        if (err instanceof GatewayRpcError && err.code === "rpc-error") {
+        if (err instanceof OpenclawWireError && err.code === "rpc-error") {
           const msg = err.message.toLowerCase();
           if (msg.includes("config changed since last load") || msg.includes("base hash")) {
-            throw new GatewayRpcError("hash-mismatch", err.message, err.details);
+            throw new OpenclawWireError("hash-mismatch", err.message, err.details);
           }
           if (msg.includes("invalid config")) {
-            throw new GatewayRpcError("invalid-patch", err.message, err.details);
+            throw new OpenclawWireError("invalid-patch", err.message, err.details);
           }
         }
         throw err;
@@ -263,11 +255,11 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     async cronAdd(spec) {
       const payload = await call("cron.add", spec);
       if (!payload || typeof payload !== "object") {
-        throw new GatewayRpcError("invalid-response", "cron.add returned non-object payload");
+        throw new OpenclawWireError("invalid-response", "cron.add returned non-object payload");
       }
       const p = payload as { id?: unknown };
       if (typeof p.id !== "string" || p.id.length === 0) {
-        throw new GatewayRpcError("invalid-response", "cron.add payload missing string `id`");
+        throw new OpenclawWireError("invalid-response", "cron.add payload missing string `id`");
       }
       return payload as CronAddResult;
     },
@@ -275,20 +267,20 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     async secretsReload() {
       const payload = await call("secrets.reload", {});
       if (!payload || typeof payload !== "object") {
-        throw new GatewayRpcError(
+        throw new OpenclawWireError(
           "invalid-response",
           "secrets.reload returned non-object payload",
         );
       }
       const p = payload as { ok?: unknown; warningCount?: unknown };
       if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
-        throw new GatewayRpcError(
+        throw new OpenclawWireError(
           "invalid-response",
           `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`,
         );
       }
       if (p.ok !== undefined && typeof p.ok !== "boolean") {
-        throw new GatewayRpcError(
+        throw new OpenclawWireError(
           "invalid-response",
           `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`,
         );
@@ -358,7 +350,7 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
   let connectMs: number | undefined;
   let stage: ConnectTrace["stage"] = "ws-open";
 
-  const emitTrace = (success: boolean, err?: GatewayRpcError) => {
+  const emitTrace = (success: boolean, err?: OpenclawWireError) => {
     if (!params.onConnectTrace) return;
     params.onConnectTrace({
       url: params.url,
@@ -381,35 +373,7 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
 
   try {
     const wsOpenStart = Date.now();
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        cleanup();
-        try {
-          ws.terminate();
-        } catch { /* */ }
-        reject(
-          new GatewayRpcError("connect-failed", `WS open timed out after ${params.connectTimeoutMs}ms`),
-        );
-      }, params.connectTimeoutMs);
-      const onOpen = () => {
-        cleanup();
-        resolve();
-      };
-      const onError = (err: Error) => {
-        cleanup();
-        try {
-          ws.terminate();
-        } catch { /* */ }
-        reject(new GatewayRpcError("connect-failed", `WS open failed: ${err.message}`));
-      };
-      function cleanup() {
-        clearTimeout(timer);
-        ws.removeListener("open", onOpen);
-        ws.removeListener("error", onError);
-      }
-      ws.once("open", onOpen);
-      ws.once("error", onError);
-    });
+    await waitForWsOpen(ws, params.connectTimeoutMs);
     wsOpenMs = Date.now() - wsOpenStart;
 
     stage = "challenge";
@@ -436,8 +400,9 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
       platform: clientInfo.platform,
     });
     const connectStart = Date.now();
-    await sendRequest(
+    await sendWsRequest(
       ws,
+      randomUUID(),
       "connect",
       {
         minProtocol: PROTOCOL_VERSION,
@@ -458,171 +423,10 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
     try {
       ws.terminate();
     } catch { /* */ }
-    emitTrace(false, err instanceof GatewayRpcError ? err : undefined);
+    emitTrace(false, err instanceof OpenclawWireError ? err : undefined);
     throw err;
   }
 
   return ws;
-}
-
-function startConnectChallengeTracker(ws: WebSocket): {
-  wait: (timeoutMs: number) => Promise<string>;
-} {
-  let cached: string | null = null;
-  let pendingResolve: ((nonce: string) => void) | null = null;
-  let pendingReject: ((err: Error) => void) | null = null;
-
-  const onMessage = (data: unknown) => {
-    if (cached !== null) return;
-    let parsed: unknown;
-    try {
-      parsed =
-        typeof data === "string"
-          ? JSON.parse(data)
-          : JSON.parse((data as Buffer).toString("utf-8"));
-    } catch {
-      return;
-    }
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      (parsed as { type?: unknown }).type !== "event" ||
-      (parsed as { event?: unknown }).event !== "connect.challenge"
-    ) {
-      return;
-    }
-    const nonce = (parsed as { payload?: { nonce?: unknown } }).payload?.nonce;
-    if (typeof nonce !== "string" || nonce.length === 0) {
-      const err = new GatewayRpcError(
-        "invalid-response",
-        "connect.challenge event has no string nonce",
-      );
-      if (pendingReject) pendingReject(err);
-      return;
-    }
-    cached = nonce;
-    if (pendingResolve) pendingResolve(nonce);
-  };
-  ws.on("message", onMessage);
-
-  return {
-    wait(timeoutMs: number): Promise<string> {
-      if (cached !== null) return Promise.resolve(cached);
-      return new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          cleanup();
-          reject(
-            new GatewayRpcError(
-              "connect-failed",
-              `connect.challenge not received within ${timeoutMs}ms`,
-            ),
-          );
-        }, timeoutMs);
-        const onClose = () => {
-          cleanup();
-          reject(
-            new GatewayRpcError(
-              "connect-failed",
-              "socket closed before connect.challenge arrived",
-            ),
-          );
-        };
-        pendingResolve = (nonce) => {
-          cleanup();
-          resolve(nonce);
-        };
-        pendingReject = (err) => {
-          cleanup();
-          reject(err);
-        };
-        function cleanup() {
-          clearTimeout(timer);
-          ws.removeListener("close", onClose);
-          pendingResolve = null;
-          pendingReject = null;
-        }
-        ws.on("close", onClose);
-      });
-    },
-  };
-}
-
-interface ResponseFrame {
-  type: "res";
-  id: string;
-  ok: boolean;
-  payload?: unknown;
-  error?: { code: string; message: string; details?: unknown };
-}
-
-function isResponseFrame(v: unknown): v is ResponseFrame {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    (v as { type?: unknown }).type === "res" &&
-    typeof (v as { id?: unknown }).id === "string" &&
-    typeof (v as { ok?: unknown }).ok === "boolean"
-  );
-}
-
-async function sendRequest(
-  ws: WebSocket,
-  method: string,
-  params: unknown,
-  timeoutMs: number,
-  mapConnectErrors = false,
-): Promise<unknown> {
-  const id = randomUUID();
-  return new Promise<unknown>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new GatewayRpcError("timeout", `${method} response timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    const onMessage = (data: unknown) => {
-      let parsed: unknown;
-      try {
-        parsed =
-          typeof data === "string"
-            ? JSON.parse(data)
-            : JSON.parse((data as Buffer).toString("utf-8"));
-      } catch { return; }
-      if (!isResponseFrame(parsed) || parsed.id !== id) return;
-
-      cleanup();
-      if (parsed.ok) {
-        resolve(parsed.payload);
-        return;
-      }
-      const errCode = parsed.error?.code ?? "UNKNOWN";
-      const errMsg = parsed.error?.message ?? "gateway error";
-      if (mapConnectErrors) {
-        reject(new GatewayRpcError("auth-failed", errMsg, { serverCode: errCode, details: parsed.error?.details }));
-        return;
-      }
-      reject(new GatewayRpcError("rpc-error", errMsg, { serverCode: errCode, details: parsed.error?.details }));
-    };
-    const onClose = () => {
-      cleanup();
-      reject(new GatewayRpcError("connect-failed", `socket closed before ${method} response`));
-    };
-    const onError = (err: Error) => {
-      cleanup();
-      reject(new GatewayRpcError("connect-failed", `socket error during ${method}: ${err.message}`));
-    };
-
-    function cleanup() {
-      clearTimeout(timer);
-      ws.removeListener("message", onMessage);
-      ws.removeListener("close", onClose);
-      ws.removeListener("error", onError);
-    }
-
-    ws.on("message", onMessage);
-    ws.on("close", onClose);
-    ws.on("error", onError);
-
-    ws.send(JSON.stringify({ type: "req", id, method, params }));
-  });
 }
 

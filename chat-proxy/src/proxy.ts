@@ -4,7 +4,7 @@ import admin from "firebase-admin";
 import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from "prom-client";
 import { startMetricsBaseline } from "./openclaw/metrics-baseline.js";
 import { generateIdentity, type DeviceIdentity } from "../../shared/types/device-identity.js";
-import { openUpstream, UpstreamError } from "./openclaw/upstream.js";
+import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
 import {
   resolveGatewayUrl,
   GatewayResolveError,
@@ -723,7 +723,7 @@ function handleOpenClawWsUpgrade(
         upstream = await tryOpen(token);
         ocWsHandshakeTotal.inc({ outcome: "ok" });
       } catch (e) {
-        const code = e instanceof UpstreamError ? e.code : "unknown";
+        const code = e instanceof OpenclawWireError ? e.code : "unknown";
         if (code === "auth-failed") {
           invalidateGatewayToken(gatewayId);
           let fresh: string;
@@ -746,7 +746,7 @@ function handleOpenClawWsUpgrade(
             ocWsRotationRecoveredTotal.inc();
           } catch (retryErr) {
             const retryCode =
-              retryErr instanceof UpstreamError ? retryErr.code : "unknown";
+              retryErr instanceof OpenclawWireError ? retryErr.code : "unknown";
             console.log(
               `[proxy] OC WS: upstream handshake failed after rotation retry — ${retryCode}`,
             );
@@ -1157,7 +1157,7 @@ if (process.env.NODE_ENV !== "test") {
             identity: getOpenClawIdentity(),
           });
         } catch (err) {
-          const code = err instanceof UpstreamError ? err.code : undefined;
+          const code = err instanceof OpenclawWireError ? err.code : undefined;
           bridgeBootStatus.set(code === 'auth-failed' ? 'auth-failed' : 'unreachable');
           throw err;
         }

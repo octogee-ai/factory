@@ -1,6 +1,6 @@
 import { log as defaultLog } from "./config.js";
 import {
-  GatewayRpcError,
+  OpenclawWireError,
   createGatewayRpc,
   type GatewayRpcClient,
 } from "./gateway-rpc.js";
@@ -84,7 +84,7 @@ function invalidateCacheForHashMismatch(cache: ConfigCache | undefined): void {
 }
 
 function handleHashMismatch(
-  err: GatewayRpcError,
+  err: OpenclawWireError,
   ctx: {
     attempts: number;
     maxRetries: number;
@@ -204,7 +204,7 @@ export async function applyConfigPatch(
         );
         return { mode: "rpc", attempts };
       } catch (err) {
-        if (!(err instanceof GatewayRpcError)) {
+        if (!(err instanceof OpenclawWireError)) {
           throw err;
         }
 

@@ -3,7 +3,7 @@ import { createServer, type AddressInfo, type Server } from "node:net";
 import * as crypto from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
-  GatewayRpcError,
+  OpenclawWireError,
   createGatewayRpc,
   type ConnectTrace,
   type GatewayRpcClient,
@@ -194,26 +194,26 @@ describe("gateway-rpc", () => {
       expect(result.config).toEqual({ channels: { mattermost: { accounts: { "x-coach": { botToken: "***" } } } } });
     });
 
-    it("throws GatewayRpcError with 'hash-mismatch' code when the server rejects the base hash", async () => {
+    it("throws OpenclawWireError with 'hash-mismatch' code when the server rejects the base hash", async () => {
       server.setHandler("config.patch", () => ({
         ok: false,
         error: { code: "INVALID_REQUEST", message: "config changed since last load; re-run config.get and retry" },
       }));
 
       await expect(client.configPatch({}, "stalehash")).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "hash-mismatch",
       });
     });
 
-    it("throws GatewayRpcError with 'invalid-patch' code on a validation error", async () => {
+    it("throws OpenclawWireError with 'invalid-patch' code on a validation error", async () => {
       server.setHandler("config.patch", () => ({
         ok: false,
         error: { code: "INVALID_REQUEST", message: "invalid config: channels.mattermost.accounts.x-coach.botToken must be a string" },
       }));
 
       await expect(client.configPatch({}, "hash")).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "invalid-patch",
       });
     });
@@ -231,14 +231,14 @@ describe("gateway-rpc", () => {
       expect(config).toEqual({ channels: { mattermost: {} } });
     });
 
-    it("throws GatewayRpcError when the snapshot has no hash", async () => {
+    it("throws OpenclawWireError when the snapshot has no hash", async () => {
       server.setHandler("config.get", () => ({
         ok: true,
         payload: { valid: true, config: {} },
       }));
 
       await expect(client.configGet()).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "invalid-response",
       });
     });
@@ -288,7 +288,7 @@ describe("gateway-rpc", () => {
       expect(result.id).toBe("job-abc");
     });
 
-    it("throws GatewayRpcError('invalid-response') if the server returns a non-object payload", async () => {
+    it("throws OpenclawWireError('invalid-response') if the server returns a non-object payload", async () => {
       server.setHandler("cron.add", () => ({ ok: true, payload: "boom" }));
       await expect(
         client.cronAdd({
@@ -300,7 +300,7 @@ describe("gateway-rpc", () => {
           payload: { kind: "agentTurn", message: "hi" },
         }),
       ).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "invalid-response",
       });
     });
@@ -320,7 +320,7 @@ describe("gateway-rpc", () => {
           payload: { kind: "agentTurn", message: "hi" },
         }),
       ).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "rpc-error",
       });
     });
@@ -353,10 +353,10 @@ describe("gateway-rpc", () => {
       expect(result.warningCount).toBe(3);
     });
 
-    it("throws GatewayRpcError('invalid-response') if the gateway returns a non-object payload", async () => {
+    it("throws OpenclawWireError('invalid-response') if the gateway returns a non-object payload", async () => {
       server.setHandler("secrets.reload", () => ({ ok: true, payload: "boom" }));
       await expect(client.secretsReload()).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "invalid-response",
       });
     });
@@ -367,7 +367,7 @@ describe("gateway-rpc", () => {
         payload: { warningCount: "lots" },
       }));
       await expect(client.secretsReload()).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "invalid-response",
       });
     });
@@ -378,7 +378,7 @@ describe("gateway-rpc", () => {
         payload: { ok: "yes" },
       }));
       await expect(client.secretsReload()).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "invalid-response",
       });
     });
@@ -422,15 +422,15 @@ describe("gateway-rpc", () => {
   });
 
   describe("auth + transport errors", () => {
-    it("throws GatewayRpcError('auth-failed') when the server rejects the connect frame", async () => {
+    it("throws OpenclawWireError('auth-failed') when the server rejects the connect frame", async () => {
       server.setRejectAllAsAuth(true);
       await expect(client.configPatch({}, "h")).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "auth-failed",
       });
     });
 
-    it("throws GatewayRpcError('timeout') when the connect never completes", async () => {
+    it("throws OpenclawWireError('timeout') when the connect never completes", async () => {
       server.setConnectHandler(() => ({ ok: true, payload: {} })); // swallow reply — well, we'll NOT reply
       // Override: make connect handler never call respond by using a custom server that drops the message.
       // Simpler — stop the server and retarget to a port that accepts TCP but never speaks WS upgrade.
@@ -444,7 +444,7 @@ describe("gateway-rpc", () => {
       });
       try {
         await expect(offline.configPatch({}, "h")).rejects.toMatchObject({
-          name: "GatewayRpcError",
+          name: "OpenclawWireError",
           code: "connect-failed",
         });
       } finally {
@@ -452,26 +452,26 @@ describe("gateway-rpc", () => {
       }
     });
 
-    it("throws GatewayRpcError('invalid-response') when the server replies with non-JSON", async () => {
+    it("throws OpenclawWireError('invalid-response') when the server replies with non-JSON", async () => {
       // Hijack: point the client at a raw TCP server that speaks the WS upgrade
       // but sends garbage frames. Simpler: override setHandler to return an
       // inherently-invalid payload (the client should still tolerate missing
       // fields by surfacing invalid-response).
       server.setHandler("config.patch", () => ({ ok: true, payload: null }));
       await expect(client.configPatch({}, "h")).rejects.toMatchObject({
-        name: "GatewayRpcError",
+        name: "OpenclawWireError",
         code: "invalid-response",
       });
     });
   });
 
-  describe("GatewayRpcError", () => {
+  describe("OpenclawWireError", () => {
     it("exposes code + message and is instanceof Error", () => {
-      const e = new GatewayRpcError("hash-mismatch", "stale hash");
+      const e = new OpenclawWireError("hash-mismatch", "stale hash");
       expect(e).toBeInstanceOf(Error);
       expect(e.code).toBe("hash-mismatch");
       expect(e.message).toBe("stale hash");
-      expect(e.name).toBe("GatewayRpcError");
+      expect(e.name).toBe("OpenclawWireError");
     });
   });
 
@@ -879,7 +879,7 @@ describe("crash safety on connect timeout", () => {
     });
 
     await expect(client.configGet()).rejects.toMatchObject({
-      name: "GatewayRpcError",
+      name: "OpenclawWireError",
       code: "connect-failed",
     });
 

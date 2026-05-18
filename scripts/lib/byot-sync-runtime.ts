@@ -1,6 +1,6 @@
 import * as path from "path";
 import { applyByotState, deriveDesiredByotState } from "./byot-sync.js";
-import { createGatewayRpc, GatewayRpcError } from "./gateway-rpc.js";
+import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { isOauthProvider } from "./byot-multi-provider-config.js";
 import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
 import { OPENCLAW_DIR, log } from "./config.js";
@@ -20,7 +20,7 @@ export async function triggerSecretsReload(): Promise<void> {
     }
   } catch (err) {
     const detail =
-      err instanceof GatewayRpcError
+      err instanceof OpenclawWireError
         ? `${err.code}: ${err.message}`
         : err instanceof Error
           ? err.message

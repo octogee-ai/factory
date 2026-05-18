@@ -4,12 +4,12 @@ const secretsReloadSpy = vi.fn(async () => ({ ok: true, warningCount: 0 }));
 const closeSpy = vi.fn(async () => {});
 
 vi.mock("../lib/gateway-rpc", () => ({
-  GatewayRpcError: class GatewayRpcError extends Error {
+  OpenclawWireError: class OpenclawWireError extends Error {
     code: string;
     constructor(code: string, message: string) {
       super(message);
       this.code = code;
-      this.name = "GatewayRpcError";
+      this.name = "OpenclawWireError";
     }
   },
   createGatewayRpc: () => ({

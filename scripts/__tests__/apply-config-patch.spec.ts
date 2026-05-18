@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { applyConfigPatch } from "../lib/apply-config-patch.js";
-import { GatewayRpcError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
+import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
 
 function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
   return {
@@ -93,7 +93,7 @@ describe("applyConfigPatch — hash-mismatch", () => {
       .mockResolvedValueOnce({ config: {}, hash: "fresh" });
     const configPatch = vi
       .fn()
-      .mockRejectedValueOnce(new GatewayRpcError("hash-mismatch", "config changed since last load"))
+      .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "config changed since last load"))
       .mockResolvedValueOnce({ ok: true as const });
     const rpc = makeFakeRpc({ configGet, configPatch });
 
@@ -112,7 +112,7 @@ describe("applyConfigPatch — hash-mismatch", () => {
   it("hash-mismatch retries do NOT consume any backoff sleep (retry immediately)", async () => {
     const configPatch = vi
       .fn()
-      .mockRejectedValueOnce(new GatewayRpcError("hash-mismatch", "stale 1"))
+      .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "stale 1"))
       .mockResolvedValueOnce({ ok: true as const });
     const sleep = vi.fn(async () => {});
 
@@ -126,7 +126,7 @@ describe("applyConfigPatch — hash-mismatch", () => {
 
   it("throws hash-mismatch when maxRetries is exhausted", async () => {
     const configPatch = vi.fn(async () => {
-      throw new GatewayRpcError("hash-mismatch", "racing writer");
+      throw new OpenclawWireError("hash-mismatch", "racing writer");
     });
 
     await expect(
@@ -145,7 +145,7 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
     const configGet = vi
       .fn()
       .mockRejectedValueOnce(
-        new GatewayRpcError("connect-failed", "WS open timed out after 10000ms"),
+        new OpenclawWireError("connect-failed", "WS open timed out after 10000ms"),
       )
       .mockResolvedValueOnce({ config: {}, hash: "h1" });
     const sleep = vi.fn(async () => {});
@@ -166,7 +166,7 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
   it("treats rpc-error as transient and retries", async () => {
     const configGet = vi
       .fn()
-      .mockRejectedValueOnce(new GatewayRpcError("rpc-error", "server stalled"))
+      .mockRejectedValueOnce(new OpenclawWireError("rpc-error", "server stalled"))
       .mockResolvedValueOnce({ config: {}, hash: "h" });
 
     const result = await applyConfigPatch(
@@ -180,7 +180,7 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
 
   it("doubles the backoff between attempts (capped at retryBackoffMaxMs)", async () => {
     const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("timeout", "response timed out");
+      throw new OpenclawWireError("timeout", "response timed out");
     });
     const sleep = vi.fn(async () => {});
 
@@ -197,15 +197,15 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
           rpc: makeFakeRpc({ configGet }),
         },
       ),
-    ).rejects.toBeInstanceOf(GatewayRpcError);
+    ).rejects.toBeInstanceOf(OpenclawWireError);
 
     // maxRetries=5 → 4 sleeps between 5 attempts: 100, 200, 400 (capped), 400.
     expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200, 400, 400]);
   });
 
-  it("throws the GatewayRpcError when maxRetries is exhausted (no file-write fallback)", async () => {
+  it("throws the OpenclawWireError when maxRetries is exhausted (no file-write fallback)", async () => {
     const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("connect-failed", "ECONNREFUSED");
+      throw new OpenclawWireError("connect-failed", "ECONNREFUSED");
     });
 
     await expect(
@@ -223,7 +223,7 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
 describe("applyConfigPatch — permanent RPC errors throw without retry", () => {
   it("throws auth-failed without retry", async () => {
     const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("auth-failed", "bad token");
+      throw new OpenclawWireError("auth-failed", "bad token");
     });
     const sleep = vi.fn(async () => {});
 
@@ -240,7 +240,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
 
   it("throws invalid-patch without retry (server schema rejection)", async () => {
     const configPatch = vi.fn(async () => {
-      throw new GatewayRpcError("invalid-patch", "invalid config: channels.mattermost.accounts");
+      throw new OpenclawWireError("invalid-patch", "invalid config: channels.mattermost.accounts");
     });
     const sleep = vi.fn(async () => {});
 
@@ -255,7 +255,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
 
   it("throws invalid-response without retry", async () => {
     const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("invalid-response", "malformed");
+      throw new OpenclawWireError("invalid-response", "malformed");
     });
     const sleep = vi.fn(async () => {});
 
@@ -272,7 +272,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
 // ── Error bubbling for non-RPC exceptions ───────────────────────────────────
 
 describe("applyConfigPatch — caller error bubbling", () => {
-  it("propagates unknown (non-GatewayRpcError) errors without touching retry", async () => {
+  it("propagates unknown (non-OpenclawWireError) errors without touching retry", async () => {
     const rpc = makeFakeRpc({
       configGet: vi.fn(async () => {
         throw new Error("bug in caller");
@@ -309,7 +309,7 @@ describe("applyConfigPatch — timing instrumentation", () => {
     const configGet = vi
       .fn()
       .mockRejectedValueOnce(
-        new GatewayRpcError("connect-failed", "WS open timed out after 10000ms"),
+        new OpenclawWireError("connect-failed", "WS open timed out after 10000ms"),
       )
       .mockResolvedValueOnce({ config: {}, hash: "h" });
 
@@ -348,7 +348,7 @@ describe("applyConfigPatch — totalDeadlineMs", () => {
 
     const configGet = vi.fn(async () => {
       advance(5);
-      throw new GatewayRpcError("connect-failed", "WS open timed out after 5ms");
+      throw new OpenclawWireError("connect-failed", "WS open timed out after 5ms");
     });
 
     await expect(
@@ -379,7 +379,7 @@ describe("applyConfigPatch — totalDeadlineMs", () => {
     const clock = () => now;
     const configGet = vi
       .fn()
-      .mockRejectedValueOnce(new GatewayRpcError("rpc-error", "transient"))
+      .mockRejectedValueOnce(new OpenclawWireError("rpc-error", "transient"))
       .mockResolvedValueOnce({ config: {}, hash: "h" });
 
     await applyConfigPatch(
@@ -405,7 +405,7 @@ describe("applyConfigPatch — server retry-after hint", () => {
     const configPatch = vi
       .fn()
       .mockRejectedValueOnce(
-        new GatewayRpcError(
+        new OpenclawWireError(
           "rpc-error",
           "rate limit exceeded for config.patch; retry after 44s",
         ),
@@ -427,7 +427,7 @@ describe("applyConfigPatch — server retry-after hint", () => {
     const sleep = vi.fn(async () => {});
     const configGet = vi
       .fn()
-      .mockRejectedValueOnce(new GatewayRpcError("connect-failed", "ECONNRESET"))
+      .mockRejectedValueOnce(new OpenclawWireError("connect-failed", "ECONNRESET"))
       .mockResolvedValueOnce({ config: {}, hash: "h" });
 
     await applyConfigPatch(
@@ -448,7 +448,7 @@ describe("applyConfigPatch — server retry-after hint", () => {
     });
     const configPatch = vi.fn(async () => {
       now += 10;
-      throw new GatewayRpcError(
+      throw new OpenclawWireError(
         "rpc-error",
         "rate limit exceeded for config.patch; retry after 60s",
       );
@@ -500,7 +500,7 @@ describe("applyConfigPatch — abort signal", () => {
   it("aborts the sleep between retries and stops the loop", async () => {
     const ctrl = new AbortController();
     const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("connect-failed", "transient");
+      throw new OpenclawWireError("connect-failed", "transient");
     });
     const sleep = vi.fn(async () => {
       ctrl.abort(new Error("cancelled mid-backoff"));
@@ -525,7 +525,7 @@ describe("applyConfigPatch — abort signal", () => {
     // well under 5s.
     const ctrl = new AbortController();
     const configGet = vi.fn(async () => {
-      throw new GatewayRpcError("connect-failed", "ECONNRESET");
+      throw new OpenclawWireError("connect-failed", "ECONNRESET");
     });
     setTimeout(() => ctrl.abort(new Error("test-cancelled")), 30);
     const startedAt = Date.now();
@@ -622,7 +622,7 @@ describe("applyConfigPatch — config cache", () => {
     const configGet = vi.fn(async () => ({ config: { v: 1 }, hash: "fresh" }));
     const configPatch = vi
       .fn()
-      .mockRejectedValueOnce(new GatewayRpcError("hash-mismatch", "config changed since last load"))
+      .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "config changed since last load"))
       .mockResolvedValueOnce({ ok: true as const, hash: "after", config: { v: 2 } });
 
     await applyConfigPatch(

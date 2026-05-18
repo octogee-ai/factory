@@ -116,3 +116,12 @@ export type {
   SignConnectDeviceParams,
 } from './device-identity';
 
+export type { OpenclawWireErrorCode, WireSocket, ResponseFrame } from './openclaw-wire-core';
+export {
+  OpenclawWireError,
+  isResponseFrame,
+  waitForWsOpen,
+  startConnectChallengeTracker,
+  sendWsRequest,
+} from './openclaw-wire-core';
+
