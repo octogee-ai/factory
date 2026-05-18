@@ -1,9 +1,7 @@
 /**
- * Canonical gateway image-tag shape — the single source of truth shared by
- * the rollout validator (admin-fleet-router) and the recent-builds list
- * filter (artifact-registry). They must accept identical tags or the
- * Cowboy picker and manual SHA entry disagree. Operator-trusted: a
- * lowercase hex git SHA, optionally `-oc<freeform>` — e.g. -oc2026.5.12,
- * -oc2026.5.12-diag, -oc2026.5.16-beta.6. Still rejects non-hex/uppercase.
+ * Re-export of the canonical image-tag pattern. The single definition
+ * lives in shared/ so app + workspace-api + scripts share ONE source
+ * (see shared/types/image-tag.ts). Kept as a stable scripts/lib path so
+ * artifact-registry + admin-fleet-router imports don't churn.
  */
-export const IMAGE_TAG_PATTERN = /^[a-f0-9]{7,40}(-oc[a-z0-9][a-z0-9.-]*)?$/;
+export { IMAGE_TAG_PATTERN } from "../../shared/types/image-tag.js";
