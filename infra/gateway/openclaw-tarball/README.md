@@ -390,6 +390,16 @@ gcloud builds list --project=octogee --ongoing
 > ordering above; the post-merge re-run is idempotent (rebuilds the
 > same tags from the same commit). For a Dockerfile.base/entrypoint.sh-
 > only change, skip this step entirely — let the merge auto-fire it.
+>
+> **Fork-only bumps are safe too (freshness gate).** The base build
+> pushes a fork-qualified sentinel
+> `octogee-gateway-base:${NEW_TAG#v}-fork-<forkSha>` alongside the bare
+> `:${NEW_TAG#v}`. `gateway-build.yml`'s canonical poll-gate waits for
+> *that sentinel*, not the bare version tag — so a fork-SHA-only bump
+> (version unchanged → bare tag already exists, stale) still blocks the
+> gateway build until the new-fork base actually lands, instead of
+> building FROM the stale base. Closed the gap #990's existence-only
+> gate left for no-version-bump cycles (the 2026.5.18 `6ed39d7e` case).
 
 ### Step 14 — Stage the cloudbuild bumps on a clean main worktree
 
