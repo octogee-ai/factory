@@ -71,13 +71,31 @@ describe("validateRolloutBody", () => {
     }
   });
 
-  it("accepts a pinned-bundle tag with a hotfix suffix", () => {
+  it("accepts a pinned-bundle tag with a numeric hotfix suffix", () => {
     const r = validateRolloutBody({ imageTag: "a9d7600-oc2026.5.3-1" });
     expect("ok" in r).toBe(true);
   });
 
-  it("rejects an oc-suffix with no major.minor.patch", () => {
+  it("accepts a build-flavor suffix like -diag", () => {
+    const r = validateRolloutBody({ imageTag: "a9f521f-oc2026.5.12-diag" });
+    expect("ok" in r).toBe(true);
+    if ("ok" in r) {
+      expect(r.ok.imageTag).toBe("a9f521f-oc2026.5.12-diag");
+    }
+  });
+
+  it("accepts an oc prerelease version like -beta.6", () => {
+    const r = validateRolloutBody({ imageTag: "a9f521f-oc2026.5.16-beta.6" });
+    expect("ok" in r).toBe(true);
+  });
+
+  it("accepts a non-canonical -oc suffix (operator-trusted, not strict semver)", () => {
     const r = validateRolloutBody({ imageTag: "a9d7600-oc5.2" });
+    expect("ok" in r).toBe(true);
+  });
+
+  it("still anchors on the hex SHA even with an -oc suffix", () => {
+    const r = validateRolloutBody({ imageTag: "ZZZZZZZ-oc2026.5.12" });
     expect("error" in r).toBe(true);
   });
 });

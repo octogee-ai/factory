@@ -52,7 +52,7 @@ const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const GATEWAY_IMAGE_REPO_PREFIX =
   "us-central1-docker.pkg.dev/octogee/octogee/";
 const IMAGE_TAG_PATTERN =
-  /^[a-f0-9]{7,40}(-oc\d{4}\.\d+\.\d+(-\d+)?)?$/;
+  /^[a-f0-9]{7,40}(-oc[a-z0-9][a-z0-9.-]*)?$/;
 const RESTORE_JOB_STATES = [
   "pending",
   "dispatched",
