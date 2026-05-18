@@ -182,6 +182,55 @@ If you drop a patch, redo Step 4 without it. **Always confirm the audit
 findings with the operator before dropping anything** — sometimes a patch
 exists for a reason that isn't obvious from the file diff.
 
+### Step 5b — Agentic-harness surface audit
+
+**Why this exists:** Step 5 only answers "do our patches still apply." It
+is blind to the opposite risk — upstream *adding* a steering/observability
+surface (agent thinking, tool-progress, in-flight interrupt/steer hooks,
+run-lifecycle events, structured diagnostic channels) that the Octogee
+sidecar + PWA activity stream *should* be riding on but isn't. The
+`isControlUiVisible` / `OPENCLAW_BROADCAST_ALL_AGENT_RUNS` patch is the
+proof case: one ride-along we deliberately wired. Every release adds more.
+Once Octogee runs fully on OpenClaw we lose the dogfooding signal that
+tells us what best-in-class steering even looks like, so a missed surface
+becomes *silent*. This step forces a look every cycle.
+
+**Cadence:** every canonical-roll cycle (skip beta-only previews).
+**Teeth:** purely advisory — you MUST produce + file the triage table, but
+findings never gate the roll. Recording-with-eyes-on is the protection;
+adoption is a separate, deliberate decision.
+
+▸ Sweep `${PREV_TAG}..${NEW_TAG}` across the harness surfaces:
+
+```bash
+# new/changed gateway RPC verbs (control + observability surface)
+git diff --stat ${PREV_TAG}..${NEW_TAG} -- \
+  src/gateway/server-methods-list.ts src/gateway/method-scopes.ts src/gateway/server-methods/
+# broadcast / agent-event surface (the class our isControlUiVisible patch rides)
+git diff --stat ${PREV_TAG}..${NEW_TAG} -- \
+  src/infra/agent-events.ts src/utils/message-channel-constants.ts src/gateway/protocol/
+# ride-along observability — new structured reason codes / diagnostic channels
+git diff --stat ${PREV_TAG}..${NEW_TAG} -- src/logging/
+# run lifecycle / thinking / tool-progress / in-flight steering
+git diff --stat ${PREV_TAG}..${NEW_TAG} -- \
+  src/agents/pi-embedded-runner/ src/agents/command/
+# keyword sweep of the commit log
+git log ${PREV_TAG}..${NEW_TAG} --oneline --regexp-ignore-case --grep \
+  -E 'broadcast|agent.?event|tool.?progress|thinking|reasoning|session_(start|end|status)|control.?ui|steer|draft|preamble|interrupt|abort|elicit'
+```
+
+▸ For every non-trivial hit, add a row to the cycle's triage table:
+
+| Surface | New/changed this release | Consumed by chat-proxy/PWA today? | Steering vs. observability value | Action |
+|---|---|---|---|---|
+
+✓ **Action** is one of: `adopt-now` (rare — only a regression-class gap),
+`backlog` (the default — file it against `docs/ACTIVITY-STREAM-SPEC.md`,
+which is the canonical home; do **not** spin a new spec), or `N/A`
+(internal-only, nothing to ride). The filed table + any backlog entries
+are the deliverable. Paste the table into the roll-forward commit / PR
+body so the decision trail lives with the bump.
+
 ### Step 6 — Build OpenClaw
 
 ▸
