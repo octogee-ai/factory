@@ -101,3 +101,5 @@ export {
   GLM_OPERATIONS_COLLECTION,
 } from './glm';
 
+export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire';
+

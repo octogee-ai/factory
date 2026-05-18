@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { WebSocket } from "ws";
+import { OPENCLAW_PROTOCOL_VERSION } from "../../shared/types/openclaw-wire.js";
 import { log as defaultLog } from "./config.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -339,13 +340,7 @@ function readTokenFromOpenClawJson(configPath?: string): string {
   return "";
 }
 
-// Openclaw 2026.5.12 bumped the gateway WS handshake protocol from 3
-// to 4. The gateway sends `expectedProtocol=4, minimumProbeProtocol=4`
-// in the connect frame; any client still declaring 3 closes with
-// `protocol-mismatch` (code 1002). Bump this in lockstep with each
-// gateway base-image roll forward — keep `chat-proxy/src/openclaw/
-// upstream.ts` in sync.
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = OPENCLAW_PROTOCOL_VERSION;
 
 interface OpenAndConnectParams {
   url: string;

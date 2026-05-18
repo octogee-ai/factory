@@ -21,10 +21,11 @@ export class UpstreamError extends Error {
   }
 }
 
-// Openclaw 2026.5.12 bumped the gateway WS handshake protocol from 3
-// to 4 (the gateway sends `expectedProtocol=4, minimumProbeProtocol=4`
-// and closes with code 1002 otherwise). Keep in sync with
-// `scripts/lib/gateway-rpc.ts` PROTOCOL_VERSION.
+// Mirror of the canonical `OPENCLAW_PROTOCOL_VERSION`
+// (shared/types/openclaw-wire.ts). chat-proxy is a hermetic Docker build
+// and cannot import shared/, so the integer is duplicated here; drift is
+// caught at CI time by tests/specs/openclaw-wire-lockstep.spec.ts. Bump
+// alongside the shared constant on every OpenClaw base-image roll.
 //
 // Wire-surface depended on by Phase 7 (ACTIVITY-STREAM-SPEC §Phase 7
 // R7-C): the `session.message` / `sessions.changed` payload spread
