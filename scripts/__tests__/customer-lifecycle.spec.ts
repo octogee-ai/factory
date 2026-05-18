@@ -62,6 +62,7 @@ interface MockState {
    *  failure mid-mount. */
   persistGiteaTokenShouldFail: boolean;
   blobSyncShouldFail: boolean;
+  byosubActivated?: boolean;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
   /** When set, the most recent scheduleBootGreetingCron call's params. */
@@ -193,6 +194,10 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     blobSyncForSlug: async () => {
       record("blobSyncForSlug");
       if (state.blobSyncShouldFail) throw new Error("blob sync failed");
+    },
+    restoreByosubForAgent: async () => {
+      record("restoreByosubForAgent");
+      return state.byosubActivated ?? false;
     },
 
     listProjectsNeedingClone: async () => state.pendingProjects,
@@ -330,6 +335,25 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     // exists is the #963 gateway regression (404 GetOrgByName).
     expect(orgIdx).toBeGreaterThan(-1);
     expect(repoIdx).toBeGreaterThan(orgIdx);
+  });
+
+  it("converges BYOS from the durable ref on mount, BEFORE the config-patch reload (no user-doc signal needed)", async () => {
+    state.byosubActivated = true; // glmGateways.byosub ref present for this agent
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const restoreIdx = state.calls.indexOf("restoreByosubForAgent");
+    const patchIdx = state.calls.indexOf("applyAddCustomerConfigPatch");
+    // Must run before the mount config-patch so openclaw's reload picks
+    // up the freshly-written auth-profiles.json + restored codex-home.
+    expect(restoreIdx).toBeGreaterThan(-1);
+    expect(patchIdx).toBeGreaterThan(restoreIdx);
+    expect(result.steps).toContain("byosub-restore");
+  });
+
+  it("is a self-no-op for non-BYOS customers (called, but no step, no disruption)", async () => {
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(state.calls).toContain("restoreByosubForAgent");
+    expect(result.steps).not.toContain("byosub-restore");
   });
 
   it("writes provisioning.git.repoUrl IMMEDIATELY after the repo init succeeds", async () => {
@@ -1199,6 +1223,7 @@ describe("addCustomerToGateway — org-ensure precedes EVERY repo-touching path 
     deleteCustomerSshKey: false,
     hasPersistedGiteaToken: false,
     blobSyncForSlug: false,
+    restoreByosubForAgent: false,
     listProjectsNeedingClone: false,
     provisionMattermostUser: false,
     scheduleBootGreetingCron: false,

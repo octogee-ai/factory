@@ -1,3 +1,4 @@
+import * as path from "path";
 import { applyByotState, deriveDesiredByotState } from "./byot-sync.js";
 import { createGatewayRpc, GatewayRpcError } from "./gateway-rpc.js";
 import { isOauthProvider } from "./byot-multi-provider-config.js";
@@ -67,13 +68,28 @@ export async function restoreOauthStoreForSlug(
         const { readSecret } = await import("./secret-manager.js");
         return readSecret(name);
       });
+    const ocDir = deps?.openclawDir ?? OPENCLAW_DIR;
     const r = await restoreByosubForAgents({
       agentIds: [agentId],
       byosub: await fetchGlmByosub(),
-      openclawDir: deps?.openclawDir ?? OPENCLAW_DIR,
+      openclawDir: ocDir,
       fetchSecret,
       logFn,
     });
+    // Converge activation from the DURABLE glmGateways.byosub ref, not
+    // the user-doc signal. Gate on r.restored (the auth.json is freshly
+    // on disk THIS run) — NOT r.planned: flipping routing to codex while
+    // the codex-home is absent (e.g. a transient Secret Manager failure,
+    // restored=0/failed>0) would break the agent. On a failed restore we
+    // simply don't activate; the next mount retries. Write auth-profiles
+    // under the SAME agents base as the restored codex-home.
+    if (r.restored > 0) {
+      applyByotState(
+        slug,
+        { slug, provider: "openai-codex" },
+        path.join(ocDir, "agents"),
+      );
+    }
     return r.restored > 0;
   } catch (e) {
     logFn(`⚠ [byot-sync] oauth-store restore failed for ${slug}: ${(e as Error).message}`);

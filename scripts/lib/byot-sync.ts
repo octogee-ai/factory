@@ -12,8 +12,8 @@ function agentIdForSlug(slug: string): string {
   return `octogee-${slug}-coach`;
 }
 
-function agentDirForSlug(slug: string): string {
-  return path.join(AGENTS_DIR, agentIdForSlug(slug), "agent");
+function agentDirForSlug(slug: string, agentsDir: string = AGENTS_DIR): string {
+  return path.join(agentsDir, agentIdForSlug(slug), "agent");
 }
 
 const BYOT_FILES = ["auth-profiles.json", "models.json"] as const;
@@ -63,8 +63,15 @@ function removeIfExists(target: string): boolean {
   return true;
 }
 
-export function applyByotState(slug: string, input: ByotInput | null): boolean {
-  const dir = agentDirForSlug(slug);
+export function applyByotState(
+  slug: string,
+  input: ByotInput | null,
+  // Explicit agents base so a caller that restored the codex-home under a
+  // specific openclawDir writes auth-profiles.json under the SAME base
+  // (else AGENTS_DIR/OPENCLAW_AGENTS_DIR can decouple cred from profile).
+  agentsDir: string = AGENTS_DIR,
+): boolean {
+  const dir = agentDirForSlug(slug, agentsDir);
   const filePath = (f: string) => path.join(dir, f);
   const markerPath = filePath(BYOT_MARKER);
 

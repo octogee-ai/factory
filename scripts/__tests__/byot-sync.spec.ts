@@ -159,6 +159,31 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
         .auth_mode,
     ).toBe("chatgpt");
+    // Copilot #1: auth-profiles.json lands under the SAME agents base as
+    // the restored codex-home (not a divergent AGENTS_DIR/OPENCLAW_AGENTS_DIR).
+    const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
+    const prof = JSON.parse(fs.readFileSync(ap, "utf-8"));
+    expect(Object.values(prof.profiles)[0]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+    });
+  });
+
+  it("Copilot #2: a FAILED restore does NOT activate (no auth-profiles, routing unchanged)", async () => {
+    const oc = mk();
+    const ok = await restoreOauthStoreForSlug("tester-70", {
+      fetchGlmByosub: async () => ({
+        "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" },
+      }),
+      fetchSecret: async () => {
+        throw new Error("transient Secret Manager failure");
+      },
+      openclawDir: oc,
+      logFn: () => {},
+    });
+    expect(ok).toBe(false); // gated on r.restored, not r.planned
+    const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
+    expect(fs.existsSync(ap)).toBe(false); // never flip routing without the cred on disk
   });
 
   it("returns false when this customer has no byosub ref (nothing to restore)", async () => {
