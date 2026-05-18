@@ -99,11 +99,11 @@ describe("buildByotConfigForProvider — openai-compatible (custom provider) cha
   });
 });
 
-describe("codexRuntimeConfig — the model-switch BYOS also needs (not just the auth-profile)", () => {
-  it("returns the codex runtime model + the agentRuntime models-def", () => {
+describe("codexRuntimeConfig — BYOS coach model + plain registry entry", () => {
+  it("returns the codex model with a PLAIN models-def (no agentRuntime — the @openclaw/codex plugin supplies the harness)", () => {
     expect(codexRuntimeConfig()).toEqual({
       model: "openai/gpt-5.5",
-      modelsDef: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+      modelsDef: { "openai/gpt-5.5": {} },
     });
   });
 });

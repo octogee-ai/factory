@@ -17,6 +17,10 @@
       "openai:default": {
         "provider": "openai",
         "mode": "api_key"
+      },
+      "openai-codex:default": {
+        "provider": "openai-codex",
+        "mode": "oauth"
       }
     }
   },
@@ -51,7 +55,8 @@
           "params": {
             "cacheRetention": "short"
           }
-        }
+        },
+        "openai/gpt-5.5": {}
       },
       "workspace": "/home/node/.openclaw/workspace",
       "contextPruning": {
@@ -167,13 +172,18 @@
       "anthropic",
       "memory-core",
       "octogee-mattermost-tools",
-      "octogee-router"
+      "octogee-router",
+      "openai",
+      "codex"
     ],
     "entries": {
       "mattermost": {
         "enabled": true
       },
       "anthropic": {
+        "enabled": true
+      },
+      "codex": {
         "enabled": true
       },
       "octogee-mattermost-tools": {

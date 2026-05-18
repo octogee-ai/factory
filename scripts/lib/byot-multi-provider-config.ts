@@ -226,17 +226,17 @@ export function isOauthProvider(provider: Provider): boolean {
 }
 
 /**
- * The codex runtime model + the `agents.defaults.models` def that routes
- * it via codex. BYOS activation needs BOTH the per-agent oauth
- * auth-profile AND the agent's model switched to this — the auth-profile
- * alone does not switch the model (empirically disproved in TEST; the
- * `agentModelOverride` buildByotConfigForProvider computes was being
- * dropped). Single source: derived from the PROVIDERS registry.
+ * BYOS coach model + its `agents.defaults.models` registry entry. The
+ * entry is plain (`{}`): the `@openclaw/codex` plugin (baked into the
+ * gateway image) supplies the `codex` harness and routes `openai/gpt-5.5`
+ * through the per-agent codex-home OAuth — no `agentRuntime` key. Single
+ * source: the PROVIDERS registry. Consumed by the per-customer
+ * config-patch (per-agent model override + this registry entry).
  */
 export function codexRuntimeConfig(): {
   model: string;
-  modelsDef: Record<string, { agentRuntime: { id: "codex" } }>;
+  modelsDef: Record<string, Record<string, never>>;
 } {
   const model = PROVIDERS["openai-codex"].defaultModel!;
-  return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
+  return { model, modelsDef: { [model]: {} } };
 }

@@ -113,7 +113,22 @@ RUN rm /opt/octogee-router-deps/prebake-model.mjs \
     && ls -la /opt/octogee-router-models/Xenova/all-MiniLM-L6-v2/onnx/
 
 # ── OpenClaw Mattermost plugin ───────────────────────────────────────────────
-RUN openclaw plugins install @openclaw/mattermost 2>&1 | tail -3
+# Capture to a file rather than `| tail` — Docker's /bin/sh has no
+# `pipefail`, so a piped install failure would still produce a green
+# layer and ship an image missing the plugin. Fail the build loudly.
+RUN openclaw plugins install @openclaw/mattermost > /tmp/oc-plugin.log 2>&1 \
+      || { echo "FATAL: @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    tail -n 3 /tmp/oc-plugin.log; rm -f /tmp/oc-plugin.log
+
+# ── OpenClaw Codex plugin ────────────────────────────────────────────────────
+# Registers the `codex` agent harness — required for BYO-subscription
+# (ChatGPT Plus OAuth) customers whose coach runs openai/gpt-5.5 via codex.
+# Same build-time rail as @openclaw/mattermost above; same fail-loud
+# capture (a masked failure here recreates the exact runtime
+# `plugin not installed: codex` this image bake exists to prevent).
+RUN openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
+      || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    tail -n 3 /tmp/oc-plugin.log; rm -f /tmp/oc-plugin.log
 
 # ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────
 RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm
