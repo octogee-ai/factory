@@ -660,13 +660,12 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.12 the fork carries four patches — three essential, one diagnostic.
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.18 the fork carries **three patches — essentials only, zero diagnostics** (leanest stack to date; closest we've been to fork-free).
 
-Short SHAs at v2026.5.12 (top of branch is `36f89b65`):
-- `36f89b65` — env-gated isControlUiVisible override
-- `92f5a74a` — diagnostic per-phase config.patch trace
-- `88608268` — config.patch returns post-write hash
-- `a2db297c` — per-account surgical channel reload
+Short SHAs at v2026.5.18 (top of branch is `00e98fda`):
+- `00e98fda` — env-gated isControlUiVisible override
+- `57f9b7fa` — config.patch returns post-write hash
+- `1dcf7265` — per-account surgical channel reload
 
 **Essential:**
 
@@ -699,22 +698,29 @@ Short SHAs at v2026.5.12 (top of branch is `36f89b65`):
   Without this, every provisioner reconcile round-trips a patch even on a
   no-op, multiplying control-plane traffic per tenant on busy clusters.
 
-**Diagnostic (carried forward to confirm no regressions; reassess each cycle per the [policy](#diagnostic-patch-policy)):**
+**Diagnostics — none.** All diagnostic patches dropped at the v2026.5.18
+fresh reset:
 
-- **Per-phase `config.patch` timing instrumentation** —
-  `src/gateway/server-methods/config.ts`. Logs duration of parse / merge /
-  apply / persist phases inside `config.patch` so we can spot regression
-  points when a roll-forward suddenly slows down control-plane writes.
+- **Per-phase `config.patch` timing instrumentation** — dropped. No open
+  investigation; carried many cycles with no signal needed. Last on
+  `octogee/gateway-scaling-patches-v2026.5.16-beta.6` (`5606fd35`).
+- **MM start-account lifecycle trace** — dropped. Its investigation (the
+  `channels.mattermost.start-account` ~225s wedge + duplicate reply) is
+  **resolved upstream in 5.18**: #82592 (bound traced channel startup
+  handoff + abort guard) and #82346 (logout aborting active runs) are
+  both in this release. Instrumenting a problem fixed upstream is dead
+  weight. Last on `…-v2026.5.16-beta.6` (`36795ce3`); re-add only if the
+  wedge recurs on 5.18 in prod.
+- **WS-upgrade timing instrumentation** — dropped earlier at v2026.5.12
+  (the 5.7→5.12 `server-http.ts` refactor removed its `__octogeeMark()`
+  call sites). Last carried at `c0f79f1b` (`…-v2026.5.7`).
 
-Patch dropped at the v2026.5.12 roll-forward:
-
-- **WS-upgrade timing instrumentation** (was `src/gateway/server-http.ts`) —
-  diagnostic-only. The 5.7 → 5.12 jump heavily refactored `server-http.ts`
-  upstream (new `resolvePluginRoutePathContext` + `checkGatewayHttpRequestAuth`
-  + `VOICECLAW_REALTIME_PATH` + `preauthConnectionBudget`), and the patch's
-  `__octogeeMark()` call sites no longer exist. Last carried at
-  `c0f79f1b` (on `octogee/gateway-scaling-patches-v2026.5.7`). Re-port to
-  the new shape if WS-upgrade timing signal becomes needed again.
+Per the [diagnostic-patch policy](#diagnostic-patch-policy): re-port any
+of these to the current tree only if a fresh investigation needs the
+signal. Patch-free vanilla 5.18 was evaluated as a matrix preview and
+rejected — all 3 essentials remain required (surgical reload's N-tenant
+reconnect blast-radius is not mooted by fast SIGUSR1; isControlUiVisible
+is functional for the PWA activity stream, not perf).
 
 Patches deleted at the v2026.4.29 roll-forward (kept in git history on
 `octogee/gateway-scaling-patches-v2026.4.24` and `-v2026.4.25` if you need
