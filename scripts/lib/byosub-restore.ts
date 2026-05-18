@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { buildCodexAuthProfilesStore } from "./byot-multi-provider-config.js";
 
 export type ByosubProvider = "openai" | "anthropic";
 
@@ -163,18 +164,54 @@ export async function restoreByosubCredentials(opts: {
   let failed = 0;
   for (const item of opts.plan) {
     const tmp = `${item.targetPath}.tmp`;
+    // codex (provider "openai"): openclaw beta.6's @openclaw/codex reads the
+    // OAuth credential from <agentDir>/auth-profiles.json (openai-codex:
+    // default) — NOT codex-home/auth.json. agentDir = parent of codex-home.
+    const agentDir = path.dirname(path.dirname(item.targetPath));
+    const apPath = path.join(agentDir, "auth-profiles.json");
+    const apTmp = `${apPath}.tmp`;
     try {
       const payload = await opts.fetchSecret(item.secretName);
+      // Validate + map BEFORE any write so an unusable blob fails the item
+      // cleanly (preserves "never flip routing without the cred on disk").
+      const codexStore =
+        item.provider === "openai" ? buildCodexAuthProfilesStore(payload) : null;
       // targetPath is built in planByosubRestores from openclawDir + fixed
-      // segments + a SAFE_AGENT_ID-validated agentId (path-traversal guarded).
+      // segments + a SAFE_AGENT_ID-validated agentId (path-traversal guarded);
+      // apPath/apTmp derive from it (dirname×2 + literal filename), same
+      // guarded provenance. codex hard-fails on a partial auth.json, and the
+      // openclaw-read routing store (auth-profiles.json) must never appear
+      // without its codex-home sibling → cross-pair atomicity: stage BOTH
+      // temps (validated, 0600) before promoting EITHER, so a disk-full /
+      // perms / bad-payload failure aborts the item with nothing promoted;
+      // then promote codex-home first and auth-profiles.json LAST, so its
+      // presence is the atomic "item live + sibling already in place"
+      // signal. A crash strictly between the two renames self-heals on the
+      // next (idempotent) restore; routing is never flipped without the
+      // credential on disk. (No delete-rollback: removing a freshly-promoted
+      // file would destroy a previously-working agent's credential — the
+      // "never break Bender" invariant — and is strictly worse than the
+      // benign new-codex-home / prior-valid-auth-profiles residue.)
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- path-traversal-guarded per-agent codex-home (SAFE_AGENT_ID)
       fs.mkdirSync(path.dirname(item.targetPath), { recursive: true });
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent codex-home (see above)
       fs.writeFileSync(tmp, payload, { mode: 0o600 });
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent codex-home (see above)
       fs.chmodSync(tmp, 0o600);
+      if (codexStore) {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent agentDir (see above)
+        fs.writeFileSync(apTmp, JSON.stringify(codexStore, null, 2) + "\n", {
+          mode: 0o600,
+        });
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent agentDir (see above)
+        fs.chmodSync(apTmp, 0o600);
+      }
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent codex-home (see above)
       fs.renameSync(tmp, item.targetPath);
+      if (codexStore) {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent agentDir (see above)
+        fs.renameSync(apTmp, apPath);
+      }
       restored++;
       log(`byosub: restored ${item.provider} credential for ${item.agentId}`);
     } catch (e) {
@@ -184,6 +221,7 @@ export async function restoreByosubCredentials(opts: {
       );
       try {
         fs.rmSync(tmp, { force: true });
+        fs.rmSync(apTmp, { force: true });
       } catch {
         // best-effort temp cleanup
       }

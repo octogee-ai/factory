@@ -1,9 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   buildByotConfigForProvider,
+  buildCodexAuthProfilesStore,
   codexRuntimeConfig,
   type ByotConfigInput,
 } from "../lib/byot-multi-provider-config.js";
+
+const jwt = (claims: Record<string, unknown>) =>
+  "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".sig";
 
 describe("buildByotConfigForProvider — provider parity (BYOT api_key cases)", () => {
   it("anthropic → api_key profile via SecretRef, no model override", () => {
@@ -105,5 +109,76 @@ describe("codexRuntimeConfig — BYOS coach model + agentRuntime:codex routing",
       model: "openai/gpt-5.5",
       modelsDef: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
     });
+  });
+});
+
+describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (beta.6)", () => {
+  it("maps a codex auth.json into the proven openai-codex:default OAuthCredential", () => {
+    const idToken = jwt({
+      email: "u@example.com",
+      "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+    });
+    const authJson = JSON.stringify({
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: idToken,
+        access_token: "acc-123",
+        refresh_token: "ref-456",
+        account_id: "acct-789",
+      },
+      last_refresh: "2026-05-18T00:11:06Z",
+    });
+    expect(buildCodexAuthProfilesStore(authJson)).toEqual({
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "acc-123",
+          refresh: "ref-456",
+          expires: 0,
+          accountId: "acct-789",
+          idToken,
+          chatgptPlanType: "plus",
+          email: "u@example.com",
+          copyToAgents: true,
+        },
+      },
+    });
+  });
+
+  it("omits idToken/chatgptPlanType/email when id_token absent — no throw", () => {
+    const out = buildCodexAuthProfilesStore(
+      JSON.stringify({ tokens: { access_token: "a", refresh_token: "r", account_id: "x" } }),
+    );
+    const p = out.profiles["openai-codex:default"];
+    expect(p).toEqual({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "a",
+      refresh: "r",
+      expires: 0,
+      accountId: "x",
+      copyToAgents: true,
+    });
+  });
+
+  it("fail-loud when tokens.access_token is missing (useless credential)", () => {
+    expect(() =>
+      buildCodexAuthProfilesStore(JSON.stringify({ tokens: { refresh_token: "r" } })),
+    ).toThrow(/access_token/);
+    expect(() => buildCodexAuthProfilesStore("not json")).toThrow();
+  });
+
+  it("fail-loud when tokens.refresh_token is missing — expires:0 makes a refresh-less blob dead-on-arrival (PR #989)", () => {
+    // access present but no refresh: pre-fix this silently produced an
+    // expires:0 profile with no refresh material → openclaw fails at
+    // runtime AFTER validate-before-write passed (routing already flipped).
+    expect(() =>
+      buildCodexAuthProfilesStore(
+        JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "a" } }),
+      ),
+    ).toThrow(/refresh_token/);
   });
 });

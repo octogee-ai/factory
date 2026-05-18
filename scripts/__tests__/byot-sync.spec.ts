@@ -56,6 +56,22 @@ const ON = {
   provisioning: { openclaw: { status: "complete" } },
 };
 
+// A valid codex CLI auth.json — byosub-restore now validate-before-writes,
+// so an oauth-store materialization fixture must carry tokens.access_token
+// (a placeholder blob would fail the item and never embed auth-profiles).
+const jwt = (claims: Record<string, unknown>) =>
+  "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".s";
+const codexBlob = () =>
+  JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: {
+      id_token: jwt({ email: "u@example.com" }),
+      access_token: "acc-1",
+      refresh_token: "ref-1",
+      account_id: "acct-1",
+    },
+  });
+
 describe("deriveDesiredByotState — gating (characterization)", () => {
   it("disabled unless byotActive + username + status=complete", () => {
     expect(deriveDesiredByotState({ ...ON, byotActive: false }).enabled).toBe(false);
@@ -151,7 +167,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       fetchGlmByosub: async () => ({
         "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" },
       }),
-      fetchSecret: async () => '{"auth_mode":"chatgpt"}',
+      fetchSecret: async () => codexBlob(),
       openclawDir: oc,
     });
     expect(ok).toBe(true);
@@ -161,11 +177,19 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     ).toBe("chatgpt");
     // Copilot #1: auth-profiles.json lands under the SAME agents base as
     // the restored codex-home (not a divergent AGENTS_DIR/OPENCLAW_AGENTS_DIR).
+    // Strengthened: it carries the EMBEDDED live OAuthCredential (envelope
+    // v1, openai-codex:default, real access token) — not a routing stub.
+    // applyByotState runs last and must NOT clobber this (oauth-skip guard).
     const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
     const prof = JSON.parse(fs.readFileSync(ap, "utf-8"));
-    expect(Object.values(prof.profiles)[0]).toMatchObject({
+    expect(prof.version).toBe(1);
+    expect(prof.profiles["openai-codex:default"]).toMatchObject({
       type: "oauth",
       provider: "openai-codex",
+      access: "acc-1",
+      refresh: "ref-1",
+      expires: 0,
+      copyToAgents: true,
     });
   });
 

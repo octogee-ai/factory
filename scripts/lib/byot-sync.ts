@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   buildByotConfigForProvider,
+  isOauthProvider,
   PROVIDERS,
   type Provider,
   type ByotConfigInput,
@@ -100,6 +101,12 @@ export function applyByotState(
 
   let changed = false;
   for (const f of BYOT_FILES) {
+    // Plane-1 OAuth (codex/BYOS): byosub-restore is the SOLE writer of
+    // auth-profiles.json — it embeds the live OAuthCredential mapped from
+    // the restored codex auth.json. applyByotState must not stub-write or
+    // null-delete it here: restoreOauthStoreForSlug calls applyByotState
+    // *after* the restore, so touching it would clobber the credential.
+    if (f === "auth-profiles.json" && isOauthProvider(input.provider)) continue;
     const target = filePath(f);
     const want = desired[f];
     const existing = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;

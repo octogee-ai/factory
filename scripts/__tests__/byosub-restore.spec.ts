@@ -28,6 +28,32 @@ const OC = "/home/node/.openclaw";
 const codexAuth = (agentId: string) =>
   `${OC}/agents/${agentId}/agent/codex-home/auth.json`;
 
+// A *valid* codex CLI auth.json (the byosub-captured ChatGPT-sub blob).
+// Restore now validate-before-writes: an openai item whose secret can't be
+// mapped to an OAuthCredential fails the item (never half-writes), so every
+// success-path fixture must carry a real `tokens.access_token`.
+const jwt = (claims: Record<string, unknown>) =>
+  "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".s";
+const codexBlob = () =>
+  JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: jwt({
+        email: "u@example.com",
+        "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+      }),
+      access_token: "acc-1",
+      refresh_token: "ref-1",
+      account_id: "acct-1",
+    },
+    last_refresh: "2026-05-18T00:11:06Z",
+  });
+// The per-agent auth-profiles.json byosub-restore now embeds (Plane-1 OAuth)
+// — a sibling of codex-home, the SOLE openclaw-read codex credential store.
+const apPathFor = (oc: string, agentId: string) =>
+  path.join(oc, "agents", agentId, "agent", "auth-profiles.json");
+
 describe("isSafeAgentId (shared path-safety boundary)", () => {
   it("accepts real coach agent ids", () => {
     expect(isSafeAgentId("octogee-smile-wring-011b-coach")).toBe(true);
@@ -197,13 +223,89 @@ describe("restoreByosubCredentials", () => {
     };
     const r = await restoreByosubCredentials({
       plan: [item],
-      fetchSecret: async () => '{"auth_mode":"chatgpt","tokens":{"refresh_token":"rt"}}',
+      fetchSecret: async () => codexBlob(),
     });
     expect(r).toEqual({ restored: 1, failed: 0 });
     expect(fs.existsSync(item.targetPath)).toBe(true);
     expect(JSON.parse(fs.readFileSync(item.targetPath, "utf-8")).auth_mode).toBe("chatgpt");
     expect(fs.statSync(item.targetPath).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
+
+    // Plane-1: the codex credential openclaw actually reads is the embedded
+    // <agentDir>/auth-profiles.json (envelope v1, openai-codex:default oauth),
+    // written atomically (0600, no leftover .tmp) as a sibling of codex-home.
+    const ap = apPathFor(oc, "octogee-a-coach");
+    expect(fs.existsSync(ap)).toBe(true);
+    expect(fs.statSync(ap).mode & 0o777).toBe(0o600);
+    expect(fs.existsSync(ap + ".tmp")).toBe(false);
+    const store = JSON.parse(fs.readFileSync(ap, "utf-8"));
+    expect(store.version).toBe(1);
+    expect(store.profiles["openai-codex:default"]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "acc-1",
+      refresh: "ref-1",
+      expires: 0,
+      accountId: "acct-1",
+      chatgptPlanType: "plus",
+      email: "u@example.com",
+      copyToAgents: true,
+    });
+  });
+
+  it("validate-before-write: an unmappable blob fails the item — no codex-home, no auth-profiles (never half-flip routing)", async () => {
+    const oc = mkTmp();
+    const item = {
+      agentId: "octogee-a-coach",
+      provider: "openai" as const,
+      secretName: "byosub-a-openai",
+      targetPath: path.join(oc, "agents", "octogee-a-coach", "agent", "codex-home", "auth.json"),
+    };
+    const logs: string[] = [];
+    const r = await restoreByosubCredentials({
+      plan: [item],
+      // tokens present but no access_token → buildCodexAuthProfilesStore throws
+      fetchSecret: async () => '{"auth_mode":"chatgpt","tokens":{"refresh_token":"rt"}}',
+      logFn: (m) => logs.push(m),
+    });
+    expect(r).toEqual({ restored: 0, failed: 1 });
+    expect(fs.existsSync(item.targetPath)).toBe(false);
+    expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
+    const ap = apPathFor(oc, "octogee-a-coach");
+    expect(fs.existsSync(ap)).toBe(false);
+    expect(fs.existsSync(ap + ".tmp")).toBe(false);
+    expect(logs.join("\n")).toMatch(/octogee-a-coach|access_token/);
+  });
+
+  it("cross-pair atomicity (Copilot #989): a staging failure on auth-profiles.json aborts BEFORE codex-home is promoted — no half-promoted pair", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const item = {
+      agentId,
+      provider: "openai" as const,
+      secretName: "byosub-a-openai",
+      targetPath: path.join(oc, "agents", agentId, "agent", "codex-home", "auth.json"),
+    };
+    // Force the auth-profiles.json staging write to fail deterministically:
+    // pre-create its .tmp path as a *directory* so fs.writeFileSync(apTmp)
+    // throws EISDIR. With both temps staged before either rename, this must
+    // abort with codex-home/auth.json NOT promoted (pre-fix it was renamed
+    // into place first → the partial pair Copilot flagged).
+    const agentDir = path.join(oc, "agents", agentId, "agent");
+    fs.mkdirSync(path.join(agentDir, "auth-profiles.json.tmp"), { recursive: true });
+    const logs: string[] = [];
+    const r = await restoreByosubCredentials({
+      plan: [item],
+      fetchSecret: async () => codexBlob(),
+      logFn: (m) => logs.push(m),
+    });
+    expect(r).toEqual({ restored: 0, failed: 1 });
+    // The bug: codex-home/auth.json must not exist (never promoted).
+    expect(fs.existsSync(item.targetPath)).toBe(false);
+    expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
+    // auth-profiles.json itself was never written (only the .tmp dir blocker).
+    expect(fs.existsSync(apPathFor(oc, agentId))).toBe(false);
+    expect(logs.join("\n")).toMatch(/octogee-a-coach/);
   });
 
   it("isolates per-item failure: one bad fetch does not abort the others; never throws", async () => {
@@ -219,7 +321,7 @@ describe("restoreByosubCredentials", () => {
       plan: [mk("octogee-a-coach", "ok"), mk("octogee-b-coach", "boom")],
       fetchSecret: async (s) => {
         if (s === "boom") throw new Error("secret access denied");
-        return "{}";
+        return codexBlob();
       },
       logFn: (m) => logs.push(m),
     });
@@ -282,13 +384,19 @@ describe("restoreByosubForAgents (shared plan+restore composition)", () => {
         "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" },
       },
       openclawDir: oc,
-      fetchSecret: async () => '{"auth_mode":"chatgpt"}',
+      fetchSecret: async () => codexBlob(),
     });
     expect(r).toEqual({ restored: 1, failed: 0, planned: 1 });
     expect(
       JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
         .auth_mode,
     ).toBe("chatgpt");
+    // shared composition also embeds the Plane-1 auth-profiles.json
+    expect(
+      JSON.parse(fs.readFileSync(apPathFor(oc, "octogee-tester-70-coach"), "utf-8")).profiles[
+        "openai-codex:default"
+      ].provider,
+    ).toBe("openai-codex");
   });
 
   it("never throws on a bad secret — {failed:1, planned:1}", async () => {

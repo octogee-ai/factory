@@ -242,3 +242,103 @@ export function codexRuntimeConfig(): {
   const model = PROVIDERS["openai-codex"].defaultModel!;
   return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
 }
+
+/**
+ * Plane-1 (per-agent `<agentDir>/auth-profiles.json`) OAuth credential —
+ * openclaw's normalized shape. codex is the first row; future model-auth
+ * rows (e.g. github-copilot `type:"token"`) extend the same store by a
+ * registry row, not a rewrite.
+ */
+export interface OAuthCredential {
+  type: "oauth";
+  provider: string;
+  access: string;
+  refresh?: string;
+  expires: number;
+  accountId?: string;
+  idToken?: string;
+  chatgptPlanType?: string;
+  email?: string;
+  copyToAgents?: boolean;
+}
+
+/** On-disk auth-profiles.json envelope (openclaw AUTH_STORE_VERSION = 1). */
+export interface AuthProfilesStoreV1 {
+  version: 1;
+  profiles: Record<string, OAuthCredential>;
+}
+
+/** Resolved default profile id for the codex provider on beta.6. */
+export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+
+/**
+ * Map a codex CLI `auth.json` (the byosub-captured ChatGPT-sub blob) into
+ * the per-agent auth-profiles store openclaw beta.6's @openclaw/codex reads
+ * (provider "openai-codex"). `expires:0` makes openclaw mint a fresh access
+ * token from `refresh` on first use — so both `tokens.access_token` AND
+ * `tokens.refresh_token` are required: a refresh-less blob plus `expires:0`
+ * is a dead-on-arrival credential (openclaw would have no refresh material
+ * and a token it believes already expired). Fail loud on either missing —
+ * symmetric with the §13 capture-callback's required fields, so
+ * validate-before-write keeps its "never flip routing without a usable
+ * cred on disk" guarantee.
+ */
+export function buildCodexAuthProfilesStore(
+  codexAuthJsonText: string,
+): AuthProfilesStoreV1 {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(codexAuthJsonText);
+  } catch {
+    throw new Error("codex auth.json: unparseable JSON");
+  }
+  const tokens =
+    (parsed as { tokens?: Record<string, unknown> } | null)?.tokens ?? {};
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.length > 0 ? v : undefined;
+
+  const access = str(tokens.access_token);
+  if (!access) {
+    throw new Error("codex auth.json: missing tokens.access_token");
+  }
+  const refresh = str(tokens.refresh_token);
+  if (!refresh) {
+    throw new Error("codex auth.json: missing tokens.refresh_token");
+  }
+  const accountId = str(tokens.account_id);
+  const idToken = str(tokens.id_token);
+
+  let chatgptPlanType: string | undefined;
+  let email: string | undefined;
+  if (idToken) {
+    try {
+      const claims = JSON.parse(
+        Buffer.from(idToken.split(".")[1], "base64url").toString("utf8"),
+      ) as Record<string, unknown>;
+      email = str(claims.email);
+      const ocAuth = claims["https://api.openai.com/auth"] as
+        | Record<string, unknown>
+        | undefined;
+      chatgptPlanType = str(ocAuth?.chatgpt_plan_type);
+    } catch {
+      // id_token undecodable → plan/email simply absent; not fatal.
+    }
+  }
+
+  const profile: OAuthCredential = {
+    type: "oauth",
+    provider: "openai-codex",
+    access,
+    refresh,
+    expires: 0,
+    copyToAgents: true,
+    ...(accountId ? { accountId } : {}),
+    ...(idToken ? { idToken } : {}),
+    ...(chatgptPlanType ? { chatgptPlanType } : {}),
+    ...(email ? { email } : {}),
+  };
+  return {
+    version: 1,
+    profiles: { [OPENAI_CODEX_DEFAULT_PROFILE_ID]: profile },
+  };
+}
