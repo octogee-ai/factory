@@ -148,11 +148,17 @@ export const GATEWAY_UNREACHABLE_AFTER_MS = 3 * 60_000;
 /**
  * Upper bound on a single restore job. Past this the reconciler marks it
  * failed and clears the gateway's `inFlightJobId` so pick-next can proceed.
- * Chosen to cover the 2-minute worst-case cold start (classifier warm-up +
- * model-pricing fetch timeouts + Gitea clone) plus headroom for network
- * flakes.
+ *
+ * This only backstops the no-ack / process-death case: a *failing* restore
+ * acks failure promptly (markJobFailedAndGatewayAcked → inFlightJobId=null
+ * → onGatewayUpdatedForFleet → next pick), so recovery is event-chained,
+ * not TTL-paced. The old 10min value was a slow-provisioning artifact that
+ * let one hung job block every other customer's recovery on a gateway for
+ * 10min. Invariant (enforced by fleet-backoff.test.ts): must stay strictly
+ * greater than ADD_CUSTOMER_DEADLINE_MS (300_000) so a healthy in-flight
+ * restore is never reaped — set to that worst case + 60s headroom.
  */
-export const JOB_TTL_MS = 10 * 60_000;
+export const JOB_TTL_MS = 6 * 60_000;
 
 /**
  * Budget for the gateway to verify a mounted account reached
@@ -321,21 +327,24 @@ export const MIGRATION_SLUG_HEADER = "X-Migration-Slug";
  * customer on a gateway. Pick-next skips a slug while
  *   now - lastFailedAt < backoffMsForFailCount(failCount)
  *
- *   failCount=1 → 2 min
- *   failCount=2 → 4 min
- *   failCount=3 → 8 min
- *   failCount=5 → 32 min
- *   failCount=7+ → capped at 120 min (2h)
+ *   failCount=1 → 10 s
+ *   failCount=2 → 20 s
+ *   failCount=3 → 40 s
+ *   failCount=6 → 5.3 min
+ *   failCount≥11 → capped at 120 min (2h)
  *
- * Rationale: the cheap fail case (Gateway returning a fast 400 for a corrupt
- * user doc) previously spun at >1 attempt/sec because the controller re-
- * picked the same candidate on every `inFlightJobId=null` transition. Even
- * a 2-minute first cooldown is enough to restore sanity; the exponential
- * growth keeps genuinely-broken customers quiet without forever-banning
- * legitimate transients.
+ * Rationale: the only thing the cooldown must do is break the hot-loop
+ * where the controller re-picks the same candidate on every
+ * `inFlightJobId=null` transition (sub-second). A 10s first cooldown does
+ * that with margin; the old 2-min floor was a slow-provisioning artifact
+ * that turned a transiently-failed customer's recovery into minutes. The
+ * exponential growth + 2h cap still keeps a genuinely-broken customer
+ * quiet ("fails naturally", no forever-ban of transients).
  */
+const BACKOFF_BASE_MS = 10_000;
+const BACKOFF_CAP_MS = 120 * 60_000;
+
 export function backoffMsForFailCount(failCount: number): number {
   if (failCount <= 0) return 0;
-  const minutes = Math.min(Math.pow(2, failCount), 120);
-  return minutes * 60 * 1000;
+  return Math.min(BACKOFF_BASE_MS * Math.pow(2, failCount - 1), BACKOFF_CAP_MS);
 }
