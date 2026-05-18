@@ -575,6 +575,31 @@ operator confirmation, not for build correctness).
 
 **Fix:** Step 12 — keep `_OPENCLAW_FORK_SHA` identical in both files.
 
+### Base build fails at `openclaw plugins install @openclaw/<x>`
+
+**Symptom:** `octogee-gateway-base` build dies with
+`FATAL: @openclaw/<plugin> install failed` →
+`package install requires compiled runtime output for TypeScript entry
+./index.ts`.
+
+**Cause:** Several official OpenClaw plugins (`@openclaw/mattermost`,
+historically) publish a **TypeScript-source-only** registry package with
+no compiled `dist/`. OC 5.x's plugin loader rejects source-only installs
+in non-dev paths. These plugins are *also shipped as bundled extensions*
+in the OC dist tree (`dist/extensions/<x>/index.js`) — the registry
+install was redundant. It failed **silently for months** because the old
+recipe was `openclaw plugins install … | tail` and `sh` has no
+`pipefail`, so `tail`'s exit code greened the layer. #979's hardening
+(`exit 1` on failure) correctly surfaced the long-dead failure.
+
+**Fix:** If the plugin is bundled (`ls dist/extensions/<x>/index.js` in
+the fork checkout), the registry install is dead weight — remove that
+`RUN openclaw plugins install @openclaw/<x>` block from
+`Dockerfile.base`. Do **not** re-mask it with `|| true`. Confirm bundled
+status before removing; a genuinely-unbundled plugin still needs a
+working (compiled) install. Upstream #82425 ("repair source-only
+official plugin installs") is the broader fix landing in 5.16+.
+
 ---
 
 ## Diagnostic-patch policy
@@ -724,6 +749,56 @@ gcloud storage cp \
   infra/gateway/openclaw-tarball/openclaw-fork.tgz --project=octogee
 docker build -f infra/gateway/Dockerfile.base .
 ```
+
+---
+
+## Preview / diagnostic A/B base builds
+
+Use this when you need a base image that must **not** touch the
+production canonical tags — beta previews (`<ver>-beta.N`), or a
+diagnostic build carrying an investigation-only patch (`<ver>-diag`)
+for an A/B against the known-good version.
+
+`cloudbuild-base-beta.yaml` (committed, tracked) is the production
+`cloudbuild-base.yaml` minus the `:latest` tag/push. It still pushes the
+version-specific tag, so the only difference is the prod base-latest
+pointer stays clean. Version labels can carry `-diag` / `-beta.N`
+suffixes freely (Cloud Build substitutions don't validate them, unlike
+`scripts/build-pinned-gateway.sh`'s regex).
+
+The full A/B flow (real example: 5.12 vs 5.16-beta.6 lockup hunt):
+
+1. **Two fork branches, identical investigation patch.** Branch each off
+   its OC tag, cherry-pick the canonical stack, then cherry-pick the
+   *same* diagnostic commit onto both. Identical instrumentation is what
+   makes the A/B isolate the OC-version delta from instrumentation noise.
+2. **Build + pack + upload + mirror** each (Steps 6–10), distinct fork
+   SHAs.
+3. **Base images** — `cloudbuild-base-beta.yaml`, one per version:
+   ```bash
+   gcloud builds submit --config cloudbuild-base-beta.yaml \
+     --substitutions=_OPENCLAW_VERSION=<ver>-diag,_OPENCLAW_FORK_SHA=<sha> \
+     --project=octogee --async
+   ```
+4. **Gateway images** — the `scripts/build-pinned-gateway.sh` mechanic,
+   but its arg regex rejects `-beta.N`/`-diag`, so replicate it inline:
+   `git archive HEAD | tar -x -C $TMP` then from `$TMP`
+   `gcloud builds submit --config cloudbuild.yaml
+   --substitutions=_IMAGE_TAG=<sha>-oc<ver>,_OPENCLAW_VERSION=<ver>,_OPENCLAW_FORK_SHA=<fork>`.
+5. **Retag sidecars** (`octogee-chat-proxy`, `workspace-api`) from a main
+   SHA that has them to the `<sha>-oc<ver>` bundle tag — they're
+   OC-agnostic so they alias, not rebuild. Cowboy then deploys all three
+   under one `imageTag`.
+6. **Register in `oc-build-matrix.yaml`** (`required: false`) so CI
+   regenerates the bundle per-SHA going forward — no more manual rebuilds.
+   Drop the entries once the investigation closes.
+7. **Deploy via a canary**, never by rolling `gw-test`/`gw-prod` — Add
+   Gateway in the admin Gateways tab with `imageTag=<sha>-oc<ver>`,
+   migrate one customer, compare. (Cowboy is still the sole deployer.)
+
+`cloudbuild-base-beta.yaml` is intentionally generic + tracked because
+this pattern recurs every beta/diagnostic cycle — don't recreate it
+ad-hoc.
 
 ---
 
