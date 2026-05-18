@@ -2,7 +2,7 @@ import {
   getTierConfig,
   calculateAvailableTokens,
   type TierName,
-} from "./billing-tiers.js";
+} from "../../shared/types/billing-tiers.js";
 import type {
   CSIDocument,
   TrialState,
