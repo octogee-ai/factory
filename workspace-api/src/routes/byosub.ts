@@ -9,6 +9,7 @@ import {
   coachAgentId,
   gatewayDeviceAuthClient,
   byosubConnectionView,
+  isSafeGatewayId,
 } from "../lib/byosub";
 import { isSafeAgentId } from "../../../scripts/lib/byosub-restore";
 
@@ -320,14 +321,15 @@ router.post(
         state?: string;
       };
       if (
-        !b.gatewayId ||
-        typeof b.gatewayId !== "string" ||
+        !isSafeGatewayId(b.gatewayId) ||
         !b.agentId ||
         !isSafeAgentId(b.agentId) ||
         b.state !== "needs_reauth"
       ) {
+        // Reject a path-unsafe gatewayId here so it never reaches
+        // `.doc(gatewayId)` (Firestore would throw → 500 + wedge the sweep).
         res.status(400).json({
-          error: "gatewayId, path-safe agentId, state:'needs_reauth' required",
+          error: "path-safe gatewayId, path-safe agentId, state:'needs_reauth' required",
         });
         return;
       }

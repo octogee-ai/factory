@@ -18,6 +18,10 @@ export interface ByosubRestorePlanItem {
   provider: ByosubProvider;
   secretName: string;
   targetPath: string;
+  /** The gateway openclaw dir — so restore derives the per-agent
+   * auth-profiles/auth-state paths from the shared atoms (no writer/reader
+   * drift), not by recomputing from targetPath. */
+  openclawDir: string;
 }
 
 /** Pure: the openclaw agent ids present in a parsed openclaw.json. */
@@ -119,6 +123,20 @@ export function codexAuthStatePath(
 }
 
 /**
+ * openclaw's per-agent `auth-profiles.json` — the Plane-1 store
+ * `@openclaw/codex` reads (the embedded `openai-codex:default`
+ * OAuthCredential). Same single-source-of-truth dir as the auth-state
+ * sibling so the Chunk A *writer* and the conservative-restore *reader*
+ * can never drift.
+ */
+export function codexAuthProfilesPath(
+  openclawDir: string,
+  agentId: string,
+): string {
+  return path.join(codexAgentDir(openclawDir, agentId), "auth-profiles.json");
+}
+
+/**
  * Conservative-restore keystone (BYO-SUBSCRIPTION-OAUTH-SPEC.md §12-R8). The
  * on-disk per-agent credential is *authoritative* in steady state: openclaw
  * owns it and rotates the refresh token in place. Optimistically rewriting
@@ -190,6 +208,7 @@ export function planByosubRestores(opts: {
         provider: "openai",
         secretName: ref.secretName,
         targetPath: codexAuthJsonPath(opts.openclawDir, agentId),
+        openclawDir: opts.openclawDir,
       });
     } else if (ref.provider === "anthropic") {
       log(
@@ -224,21 +243,20 @@ export async function restoreByosubCredentials(opts: {
     const tmp = `${item.targetPath}.tmp`;
     // codex (provider "openai"): openclaw beta.6's @openclaw/codex reads the
     // OAuth credential from <agentDir>/auth-profiles.json (openai-codex:
-    // default) — NOT codex-home/auth.json. agentDir = parent of codex-home.
-    const agentDir = path.dirname(path.dirname(item.targetPath));
-    const apPath = path.join(agentDir, "auth-profiles.json");
+    // default) — NOT codex-home/auth.json. Derive every per-agent path from
+    // the shared atoms (single source of truth) so the Chunk A writer and
+    // the conservative-restore reader can never drift.
+    const apPath = codexAuthProfilesPath(item.openclawDir, item.agentId);
     const apTmp = `${apPath}.tmp`;
     // Conservative-restore keystone: openclaw owns the on-disk credential
     // and rotates it in place; optimistically rewriting it from Secret
     // Manager clobbers a freshly-rotated refresh token (the
     // `refresh_token_reused` root cause). Replace only on cold start or a
-    // recovery signal — never over a healthy on-disk cred. apPath /
-    // authStatePath derive from item.targetPath (planByosubRestores,
-    // SAFE_AGENT_ID-guarded), same provenance as the writes below.
+    // recovery signal — never over a healthy on-disk cred.
     if (item.provider === "openai") {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path-traversal-guarded per-agent agentDir (SAFE_AGENT_ID)
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path-traversal-guarded per-agent path (codexAuthProfilesPath / SAFE_AGENT_ID)
       const authProfilesPresent = fs.existsSync(apPath);
-      const authStatePath = path.join(agentDir, "auth-state.json");
+      const authStatePath = codexAuthStatePath(item.openclawDir, item.agentId);
       let authStateText: string | null = null;
       try {
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent agentDir (see above)

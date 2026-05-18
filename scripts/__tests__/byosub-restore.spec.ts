@@ -13,6 +13,7 @@ import {
   codexStagingAuthJsonPath,
   codexAgentDir,
   codexAuthStatePath,
+  codexAuthProfilesPath,
   shouldRestoreCodexCredential,
   isSafeAgentId,
 } from "../lib/byosub-restore.js";
@@ -111,6 +112,14 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
     expect(path.dirname(codexHomeDir(OC, "octogee-a-coach"))).toBe(
       codexAgentDir(OC, "octogee-a-coach"),
     );
+    // the writer (restore) + reader (R8) now go through these exact atoms —
+    // both siblings in the same agent dir, no recomputed-path drift.
+    expect(codexAuthProfilesPath(OC, "octogee-a-coach")).toBe(
+      "/home/node/.openclaw/agents/octogee-a-coach/agent/auth-profiles.json",
+    );
+    expect(path.dirname(codexAuthProfilesPath(OC, "octogee-a-coach"))).toBe(
+      path.dirname(codexAuthStatePath(OC, "octogee-a-coach")),
+    );
   });
 
   it("is exactly the path planByosubRestores writes to (no drift between writer + restorer)", () => {
@@ -147,6 +156,7 @@ describe("planByosubRestores", () => {
         provider: "openai",
         secretName: "byosub-uid1-openai",
         targetPath: codexAuth("octogee-ceckert-coach"),
+        openclawDir: OC,
       },
     ]);
   });
@@ -313,6 +323,7 @@ describe("restoreByosubCredentials", () => {
       provider: "openai" as const,
       secretName: "byosub-a-openai",
       targetPath: path.join(oc, "agents", "octogee-a-coach", "agent", "codex-home", "auth.json"),
+      openclawDir: oc,
     };
     const r = await restoreByosubCredentials({
       plan: [item],
@@ -353,6 +364,7 @@ describe("restoreByosubCredentials", () => {
       provider: "openai" as const,
       secretName: "byosub-a-openai",
       targetPath: path.join(oc, "agents", "octogee-a-coach", "agent", "codex-home", "auth.json"),
+      openclawDir: oc,
     };
     const logs: string[] = [];
     const r = await restoreByosubCredentials({
@@ -378,6 +390,7 @@ describe("restoreByosubCredentials", () => {
       provider: "openai" as const,
       secretName: "byosub-a-openai",
       targetPath: path.join(oc, "agents", agentId, "agent", "codex-home", "auth.json"),
+      openclawDir: oc,
     };
     // Force the auth-profiles.json staging write to fail deterministically:
     // pre-create its .tmp path as a *directory* so fs.writeFileSync(apTmp)
@@ -408,6 +421,7 @@ describe("restoreByosubCredentials", () => {
       provider: "openai" as const,
       secretName: s,
       targetPath: path.join(oc, "agents", a, "agent", "codex-home", "auth.json"),
+      openclawDir: oc,
     });
     const logs: string[] = [];
     const r = await restoreByosubCredentials({
@@ -442,6 +456,7 @@ describe("restoreByosubCredentials", () => {
           provider: "openai" as const,
           secretName: "byosub-a-openai",
           targetPath: path.join(agentDir, "codex-home", "auth.json"),
+          openclawDir: oc,
         },
       ],
       fetchSecret: async () => {
@@ -485,6 +500,7 @@ describe("restoreByosubCredentials", () => {
           provider: "openai" as const,
           secretName: "byosub-a-openai",
           targetPath: path.join(agentDir, "codex-home", "auth.json"),
+          openclawDir: oc,
         },
       ],
       fetchSecret: async () => codexBlob(),

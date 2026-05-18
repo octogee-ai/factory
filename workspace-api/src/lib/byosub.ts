@@ -12,6 +12,17 @@ export function byosubSecretName(uid: string, provider: string): string {
   return `byosub-${uid}-${provider}`;
 }
 
+/**
+ * A gateway id that is safe as a Firestore doc id. Gateway-supplied over
+ * the internal channel (`/auth-state`), then interpolated into
+ * `glmGateways/.doc(id)` — a `/` (or empty/overlong) makes Firestore throw,
+ * which would 500 + wedge the sweep instead of a clean 400. Real ids are
+ * slug-like (`default`, `gw-bender`, `gw-test`).
+ */
+export function isSafeGatewayId(id: unknown): id is string {
+  return typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id);
+}
+
 /** A real codex auth.json is a few KB; this is the privileged credential
  * sink, so cap the blob well above that and well below anything abusive. */
 const MAX_CREDENTIAL_BYTES = 32_768;

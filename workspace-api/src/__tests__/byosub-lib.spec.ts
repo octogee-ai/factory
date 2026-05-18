@@ -4,6 +4,7 @@ import {
   validateCodexCredential,
   gatewayDeviceAuthClient,
   byosubConnectionView,
+  isSafeGatewayId,
 } from "../lib/byosub";
 
 describe("byosubSecretName", () => {
@@ -136,5 +137,24 @@ describe("byosubConnectionView — honest status (presence ≠ liveness; R8)", (
     expect(
       byosubConnectionView({ provider: "openai", secretName: "s", status: "needs_reauth" }),
     ).toEqual({ connected: false, provider: "openai", status: "needs_reauth" });
+  });
+});
+
+describe("isSafeGatewayId (Copilot #992 — Firestore doc-id safety; clean 400 not 500)", () => {
+  it("accepts real slug-like gateway ids", () => {
+    expect(isSafeGatewayId("default")).toBe(true);
+    expect(isSafeGatewayId("gw-bender")).toBe(true);
+    expect(isSafeGatewayId("gw-test")).toBe(true);
+    expect(isSafeGatewayId("GW_test-1")).toBe(true);
+  });
+  it("rejects path-traversal / empty / overlong / non-string (would throw in .doc())", () => {
+    expect(isSafeGatewayId("gw/evil")).toBe(false);
+    expect(isSafeGatewayId("../x")).toBe(false);
+    expect(isSafeGatewayId("")).toBe(false);
+    expect(isSafeGatewayId("-leading-hyphen")).toBe(false);
+    expect(isSafeGatewayId("a".repeat(129))).toBe(false);
+    expect(isSafeGatewayId(undefined)).toBe(false);
+    expect(isSafeGatewayId(123)).toBe(false);
+    expect(isSafeGatewayId("has space")).toBe(false);
   });
 });
