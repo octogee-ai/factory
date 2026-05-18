@@ -1,7 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth, requireInternalServiceAuth } from "../middleware/auth";
 import { db } from "../lib/db";
-import { writeSecret } from "../../../scripts/lib/secret-manager";
+import {
+  writeSecret,
+  addSecretVersionIfExists,
+} from "../../../scripts/lib/secret-manager";
 import { primaryWorkspaceSlug } from "../../../scripts/lib/workspace-slugs";
 import {
   byosubSecretName,
@@ -353,6 +356,75 @@ router.post(
           { merge: true },
         );
       res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+// Internal: the gateway's periodic sync-back sweep posts a rotated codex
+// credential here (Chunk B). R2 — workspace-api owns the Secret Manager
+// write; the gateway SA stays read-only. Bounded: only an EXISTING
+// connected ref's own secret is overwritten (never creates one), and the
+// blob must be a plausible codex auth.json (validateCodexCredential). It
+// is a *token refresh* of an already-connected agent — NOT a connect: no
+// status / byotActive / config flip (those belong to /capture). A coarse
+// internal-key holder can at most overwrite a customer's own stored token
+// (→ a failed restore → R8 → reconnect); no cross-tenant escalation, no
+// credential exfiltration — same trust model as /capture.
+router.post(
+  "/sync-back",
+  requireInternalServiceAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const b = (req.body || {}) as {
+        gatewayId?: string;
+        agentId?: string;
+        credential?: string;
+      };
+      if (
+        !isSafeGatewayId(b.gatewayId) ||
+        !b.agentId ||
+        !isSafeAgentId(b.agentId) ||
+        typeof b.credential !== "string"
+      ) {
+        res.status(400).json({
+          error:
+            "path-safe gatewayId, path-safe agentId, credential string required",
+        });
+        return;
+      }
+      const v = validateCodexCredential(b.credential);
+      if (!v.ok) {
+        res.status(400).json({ error: `invalid credential: ${v.reason}` });
+        return;
+      }
+      const snap = await db.collection("glmGateways").doc(b.gatewayId).get();
+      const byosub = (
+        (snap.data() || {}) as {
+          byosub?: Record<string, { secretName?: unknown } | undefined>;
+        }
+      ).byosub;
+      const ref =
+        byosub && Object.prototype.hasOwnProperty.call(byosub, b.agentId)
+          ? byosub[b.agentId]
+          : undefined;
+      if (!ref || typeof ref.secretName !== "string" || !ref.secretName) {
+        // Not connected for this agent — nothing to sync-back into; no-op
+        // (never create a ref/secret from an unauthenticated-tuple signal).
+        res.json({ ok: true, noop: true });
+        return;
+      }
+      // Add a new version to the agent's OWN, already-existing secret —
+      // version-only (never create, never relabel): a rotation is not a
+      // (re)connect, and a secret a Disconnect/teardown destroyed must not
+      // be resurrected by a stale lingering ref. Secret gone → no-op.
+      const w = await addSecretVersionIfExists(ref.secretName, b.credential);
+      if (!w.ok) {
+        res.json({ ok: true, noop: true });
+        return;
+      }
+      res.json({ ok: true, secretName: ref.secretName });
     } catch (e) {
       next(e);
     }

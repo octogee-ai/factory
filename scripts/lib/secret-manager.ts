@@ -63,6 +63,37 @@ export async function writeSecret(params: {
 }
 
 /**
+ * Add a new version to an *existing* secret only — never create it, never
+ * touch labels. On NOT_FOUND (gRPC code 5) returns `{ok:false}` instead of
+ * throwing, so a caller (Chunk B sync-back) treats a secret a
+ * disconnect/teardown destroyed as a no-op rather than **resurrecting** a
+ * credential the customer revoked. Atomic (no get-then-write TOCTOU).
+ */
+export async function addSecretVersionIfExists(
+  name: string,
+  value: string,
+): Promise<
+  { ok: true; versionName: string } | { ok: false; reason: "not_found" }
+> {
+  const secretName = fqSecretName(name);
+  try {
+    const [version] = await client().addSecretVersion({
+      parent: secretName,
+      payload: { data: Buffer.from(value, "utf8") },
+    });
+    if (!version.name) {
+      throw new Error("Secret Manager returned an unnamed version");
+    }
+    return { ok: true, versionName: version.name };
+  } catch (err) {
+    if ((err as { code?: number } | null)?.code === 5) {
+      return { ok: false, reason: "not_found" };
+    }
+    throw err;
+  }
+}
+
+/**
  * Read the payload of a Secret Manager secret version (default `latest`)
  * as a UTF-8 string. Thin SDK wrapper (I/O boundary), peer of writeSecret.
  */

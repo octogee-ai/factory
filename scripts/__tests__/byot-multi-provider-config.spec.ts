@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildByotConfigForProvider,
   buildCodexAuthProfilesStore,
+  buildCodexAuthJsonFromStore,
   codexRuntimeConfig,
   type ByotConfigInput,
 } from "../lib/byot-multi-provider-config.js";
@@ -205,5 +206,70 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
     expect(exp0(jwt({}))).toBe(0); // JWT but no exp claim
     expect(exp0(jwt({ exp: "soon" }))).toBe(0); // exp not numeric
     expect(exp0(jwt({ exp: 0 }))).toBe(0); // non-positive
+  });
+});
+
+describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", () => {
+  it("round-trips a captured codex auth.json through store→json→store", () => {
+    const idToken = jwt({
+      email: "u@example.com",
+      "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+    });
+    const accessJwt = jwt({ exp: 1_893_456_000 });
+    const original = JSON.stringify({
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: null,
+      tokens: {
+        access_token: accessJwt,
+        refresh_token: "ref-ROTATED",
+        account_id: "acct-1",
+        id_token: idToken,
+      },
+    });
+    const store = buildCodexAuthProfilesStore(original);
+    const back = buildCodexAuthJsonFromStore(JSON.stringify(store));
+    expect(back).not.toBeNull();
+    // re-mapping the inverse must reproduce the same Plane-1 store
+    expect(buildCodexAuthProfilesStore(back as string)).toEqual(store);
+    const tokens = JSON.parse(back as string).tokens;
+    expect(tokens.access_token).toBe(accessJwt);
+    expect(tokens.refresh_token).toBe("ref-ROTATED");
+    expect(tokens.account_id).toBe("acct-1");
+    expect(tokens.id_token).toBe(idToken);
+  });
+
+  it("emits a blob validateCodexCredential-shaped (auth_mode + tokens.access/refresh)", () => {
+    const store = buildCodexAuthProfilesStore(
+      JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "a", refresh_token: "r" } }),
+    );
+    const blob = JSON.parse(buildCodexAuthJsonFromStore(JSON.stringify(store)) as string);
+    expect(blob.auth_mode).toBe("chatgpt");
+    expect(blob.tokens.access_token).toBe("a");
+    expect(blob.tokens.refresh_token).toBe("r");
+    expect("account_id" in blob.tokens).toBe(false); // omitted when absent
+  });
+
+  it("null when nothing usable to sync (no codex profile / missing access|refresh / garbage)", () => {
+    expect(buildCodexAuthJsonFromStore("not json")).toBeNull();
+    expect(buildCodexAuthJsonFromStore(JSON.stringify({ version: 1 }))).toBeNull();
+    expect(
+      buildCodexAuthJsonFromStore(
+        JSON.stringify({ profiles: { "anthropic:default": { type: "api_key" } } }),
+      ),
+    ).toBeNull();
+    expect(
+      buildCodexAuthJsonFromStore(
+        JSON.stringify({
+          profiles: { "openai-codex:default": { type: "oauth", access: "a" } },
+        }),
+      ),
+    ).toBeNull(); // no refresh → not round-trippable
+    expect(
+      buildCodexAuthJsonFromStore(
+        JSON.stringify({
+          profiles: { "openai-codex:default": { type: "api_key", access: "a", refresh: "r" } },
+        }),
+      ),
+    ).toBeNull(); // not an oauth profile
   });
 });

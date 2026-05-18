@@ -375,3 +375,50 @@ export function buildCodexAuthProfilesStore(
     profiles: { [OPENAI_CODEX_DEFAULT_PROFILE_ID]: profile },
   };
 }
+
+/**
+ * Inverse of buildCodexAuthProfilesStore — Chunk B sync-back. openclaw
+ * rotates the codex refresh token in place inside the per-agent
+ * auth-profiles.json; this maps that rotated OAuthCredential back into the
+ * codex auth.json *blob shape* Secret Manager stores (what
+ * validateCodexCredential accepts and the next restore re-maps). Returns
+ * null when there is nothing usable to sync (no openai-codex:default oauth
+ * profile, or missing access/refresh) — caller skips, never persists a
+ * non-round-trippable blob. Pure: `last_refresh` is informational,
+ * codex-regenerated and not validation-required, so it is omitted to keep
+ * this deterministic (round-trips through buildCodexAuthProfilesStore,
+ * which reads only `tokens.*`).
+ */
+export function buildCodexAuthJsonFromStore(
+  authProfilesStoreText: string,
+): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(authProfilesStoreText);
+  } catch {
+    return null;
+  }
+  const profiles = (parsed as { profiles?: Record<string, unknown> } | null)
+    ?.profiles;
+  if (!profiles || typeof profiles !== "object") return null;
+  // eslint-disable-next-line security/detect-object-injection -- constant profile-id key into a parsed-JSON record (no write, no proto access)
+  const p = profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID] as
+    | Record<string, unknown>
+    | undefined;
+  if (!p || p.type !== "oauth") return null;
+  const access = codexStr(p.access);
+  const refresh = codexStr(p.refresh);
+  if (!access || !refresh) return null; // not round-trippable → skip
+  const accountId = codexStr(p.accountId);
+  const idToken = codexStr(p.idToken);
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: access,
+      refresh_token: refresh,
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(idToken ? { id_token: idToken } : {}),
+    },
+  });
+}
