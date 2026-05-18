@@ -709,14 +709,51 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.18 the fork carries **three patches — essentials only, zero diagnostics** (leanest stack to date; closest we've been to fork-free).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.18 the fork carries **four essential patches, zero diagnostics**. (The 5.18 fresh-reset shipped 3; the 4th — the activity harness-signal feature — was appended via README trigger #2, no version bump, as **two commits / one logical essential patch (Hunks A+B)**, to enable the PWA in-flight-steering differentiator.)
 
-Short SHAs at v2026.5.18 (top of branch is `00e98fda`):
+Short SHAs at v2026.5.18 (top of branch is `6ed39d7e`):
+- `6ed39d7e` — activity harness-signal Hunk B: session-correlated execution-phase
+- `f1ae7fe8` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
 - `00e98fda` — env-gated isControlUiVisible override
 - `57f9b7fa` — config.patch returns post-write hash
 - `1dcf7265` — per-account surgical channel reload
 
 **Essential:**
+
+- **Activity harness-signal for sidecar bridges (Hunks A+B)** — one
+  logical essential feature, two commits, single env gate
+  `OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS=1` (default-off → vanilla
+  byte-identical). Closes the OC-side precondition for
+  `ACTIVITY-STREAM-SPEC.md` Appendix B B-P1-1 (+ B-P1-2 via Hunk B). Same
+  class/justification as `isControlUiVisible`; **not** diagnostic-only,
+  **not** subject to the carry-then-drop policy. Contract:
+  `docs/specs/ACTIVITY-HARNESS-SIGNAL-SPEC.md` §1.
+  - **Hunk A — env-gated diagnostic broadcast** (`f1ae7fe8`):
+    `src/gateway/server-runtime-subscriptions.ts` (+ `server-broadcast.ts`
+    scope guard; `diagnosticUnsub` threaded through the shutdown bundle in
+    `server-runtime-handles.ts` / `server.impl.ts` / `server-close.ts`,
+    symmetrical with `heartbeatUnsub`). An allowlisted slice of the
+    in-process diagnostic taxonomy (`session.long_running|stalled|stuck`,
+    `session.recovery.requested|completed`, `tool.loop`,
+    `session.execution_phase` — all sessionKey-bearing) re-emitted as a
+    new top-level `diagnostic` broadcast `{ sessionKey, type, ts, data }`,
+    scope `[READ_SCOPE]` (symmetrical with `sessions.changed`). Vanilla OC
+    keeps this taxonomy in-process with no WS surface; the chat-proxy
+    sidecar is the intended consumer (the "is the agent stuck / what's it
+    waiting on" feed). Default-off → no listener registered.
+  - **Hunk B — session-correlated execution-phase** (`6ed39d7e`):
+    OC's native `diagnostic.phase.completed` has no `sessionKey` and its
+    trace context is OTel-only — uncorrelatable from the sidecar. Adds an
+    additive `DiagnosticSessionExecutionPhaseEvent` (type
+    `session.execution_phase`, explicit `sessionKey?`) to the
+    `DiagnosticEventPayload` union (no existing type changes) + one gated
+    wrap on `params.onExecutionPhase` in
+    `src/agents/pi-embedded-runner/run.ts` (immediately after the
+    `effectiveSessionKey` reassign, mirroring that idiom — covers run.ts
+    `notifyExecutionPhase` and the direct `attempt.ts` calls, all of which
+    read `params.onExecutionPhase`). Default-off → params untouched. The
+    new type is in Hunk A's allowlist so it rides the same `diagnostic`
+    broadcast (B-P1-2's live phase/plan timeline).
 
 - **Per-account surgical channel reload** — `src/gateway/config-reload-plan.ts`,
   `src/gateway/server-reload-handlers.ts`. Adds a per-account bucket to
