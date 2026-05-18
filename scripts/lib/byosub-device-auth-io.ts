@@ -8,6 +8,7 @@
  * internal channel. Design: BYO-SUBSCRIPTION-OAUTH-SPEC §13.
  */
 import { spawn } from "child_process";
+import { mkdirSync } from "fs";
 import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
 import { dirname } from "path";
 import {
@@ -46,10 +47,16 @@ export function realDeviceAuthDeps(cfg: DeviceAuthIoConfig): DeviceAuthDeps {
       // mutate the live per-agent auth.json (the "never break Bender"
       // invariant). The live home is replaced only by an atomic promote
       // of a successfully captured staged credential.
+      const stagingHome = codexStagingHomeDir(cfg.openclawDir, agentId);
+      // codex-cli >=0.130 (OC 2026.5.12) refuses to start when CODEX_HOME
+      // does not exist ("path does not exist", exits before the device
+      // prompt) — older codex auto-created it. Create it up front.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- traversal-guarded per-agent staging codex-home (isSafeAgentId)
+      mkdirSync(stagingHome, { recursive: true });
       const child = spawn(codexBin, ["login", "--device-auth"], {
         env: {
           ...process.env,
-          CODEX_HOME: codexStagingHomeDir(cfg.openclawDir, agentId),
+          CODEX_HOME: stagingHome,
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
