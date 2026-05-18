@@ -99,11 +99,11 @@ describe("buildByotConfigForProvider — openai-compatible (custom provider) cha
   });
 });
 
-describe("codexRuntimeConfig — BYOS coach model + plain registry entry", () => {
-  it("returns the codex model with a PLAIN models-def (no agentRuntime — the @openclaw/codex plugin supplies the harness)", () => {
+describe("codexRuntimeConfig — BYOS coach model + agentRuntime:codex routing", () => {
+  it("pins agentRuntime:{id:codex} so a per-agent gpt-5.5 override routes through the codex harness, not direct OpenAI API", () => {
     expect(codexRuntimeConfig()).toEqual({
       model: "openai/gpt-5.5",
-      modelsDef: { "openai/gpt-5.5": {} },
+      modelsDef: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
     });
   });
 });

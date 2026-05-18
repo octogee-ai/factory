@@ -172,6 +172,22 @@ if [ -d /octogee/extensions ]; then
   log "Plugin extensions installed: $(ls "$OPENCLAW_DIR/extensions" 2>/dev/null || true)"
 fi
 
+# ── Restore staged @openclaw/codex into the emptyDir ────────────────────────
+# `openclaw plugins install` writes to ~/.openclaw/npm, which is an emptyDir
+# at runtime (no PVC) — so the build-time install is shadowed every boot.
+# The plugin tree is staged in the base image at /opt/openclaw-codex-deps;
+# symlink it into place so the `codex` harness loads. Same /opt→emptyDir
+# pattern as the extension node_modules symlinks above.
+if [ -d /opt/openclaw-codex-deps/npm/node_modules/@openclaw/codex ]; then
+  if [ -e "$OPENCLAW_DIR/npm" ] || [ -L "$OPENCLAW_DIR/npm" ]; then
+    rm -rf "$OPENCLAW_DIR/npm"
+  fi
+  ln -s /opt/openclaw-codex-deps/npm "$OPENCLAW_DIR/npm"
+  log "Codex plugin: symlinked ~/.openclaw/npm → /opt/openclaw-codex-deps/npm"
+else
+  log "⚠ Codex plugin: /opt/openclaw-codex-deps absent — codex harness unavailable"
+fi
+
 # ── Pre-boot: seed restart-triggering config from Firestore ─────────────
 # Queries advisory slugs + enforcement overrides BEFORE OpenClaw starts,
 # so the gateway boots with complete plugin config (no post-boot SIGUSR1).

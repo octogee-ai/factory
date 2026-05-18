@@ -227,16 +227,18 @@ export function isOauthProvider(provider: Provider): boolean {
 
 /**
  * BYOS coach model + its `agents.defaults.models` registry entry. The
- * entry is plain (`{}`): the `@openclaw/codex` plugin (baked into the
- * gateway image) supplies the `codex` harness and routes `openai/gpt-5.5`
- * through the per-agent codex-home OAuth — no `agentRuntime` key. Single
- * source: the PROVIDERS registry. Consumed by the per-customer
- * config-patch (per-agent model override + this registry entry).
+ * entry pins `agentRuntime:{id:"codex"}` so the model is explicitly routed
+ * through the `@openclaw/codex` harness (+ the per-agent codex-home OAuth)
+ * — required when openai/gpt-5.5 is a per-agent override on a Sonnet-
+ * default gateway, not the gateway default (proven against the Mac
+ * 2026.5.12 codex env; the plain `{}` form silently fell back to the
+ * direct OpenAI API → "No API key for provider openai"). Single source:
+ * the PROVIDERS registry. Consumed by the per-customer config-patch.
  */
 export function codexRuntimeConfig(): {
   model: string;
-  modelsDef: Record<string, Record<string, never>>;
+  modelsDef: Record<string, { agentRuntime: { id: "codex" } }>;
 } {
   const model = PROVIDERS["openai-codex"].defaultModel!;
-  return { model, modelsDef: { [model]: {} } };
+  return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
 }
