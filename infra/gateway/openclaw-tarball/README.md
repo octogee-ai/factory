@@ -246,7 +246,18 @@ In the octogee monorepo, edit `cloudbuild-base.yaml`:
 - Update the comment block listing the patches (one line per patch with the
   new short SHAs from `git log v${NEW_TAG#v}..HEAD --oneline`).
 
-✓ Diff shows both substitution changes plus the comment refresh.
+Then **sync the `bases:` block** in `infra/gateway/oc-build-matrix.yaml`
+— update the `label: canonical` entry's `version` + `forkSha` to the same
+values. ⚠ This is a hard obligation: `bases:` is the single source of
+truth for `scripts/rebuild-matrix-bases.sh` and the
+`gateway-base-rebuild.yml` workflow. The canonical `bases:` entry MUST
+equal `cloudbuild.yaml`'s `_OPENCLAW_VERSION`/`_OPENCLAW_FORK_SHA` or the
+base that the gateway image FROMs won't get rebuilt. (`bases:` is a
+separate top-level key from `versions:`; `gateway-build.yml` only reads
+`versions:`.)
+
+✓ Diff shows both substitution changes, the comment refresh, and the
+canonical `bases:` entry updated to match.
 
 ### Step 12 — Bump `cloudbuild.yaml` (the GATEWAY config)
 
@@ -274,40 +285,62 @@ want the **previous** canonical to live there as the known-good A/B
 baseline for at least one cycle, so a regression in the new canonical
 is one dropdown-pick away from a comparison gateway.
 
-Edit `infra/gateway/oc-build-matrix.yaml`:
+Edit `infra/gateway/oc-build-matrix.yaml` — **both blocks**:
 
-- Add an entry for the previous canonical (`PREV_TAG#v`) with
-  `label: baseline-known-good` and `required: true`.
-- Drop the entry for the canonical-before-previous if it's still there
-  (one baseline is enough). Keep beta entries (`required: false`)
-  unless their base image was deleted.
+- `versions:` — add an entry for the previous canonical (`PREV_TAG#v`)
+  with `label: baseline-known-good` and `required: true`. Drop the
+  canonical-before-previous if still there (one baseline is enough).
+  Keep beta entries (`required: false`) unless their base was deleted.
+- `bases:` — add the matching base entry for that same previous canonical
+  (`version` + `forkSha` + `config: cloudbuild-base.yaml`). Every
+  `versions:` entry needs a `bases:` entry or its base never rebuilds.
+  Conversely, drop the `bases:` entry for any version you removed from
+  `versions:`.
 
 ✓ `git diff infra/gateway/oc-build-matrix.yaml` shows the previous
-canonical added (and possibly the older one removed). Commit this with
+canonical added to **both** `versions:` and `bases:`. Commit this with
 the cloudbuild bumps in Step 15 (one commit, three files).
 
-### Step 13 — Build the base image
+### Step 13 — Build the base image (via the matrix-bases script)
 
-The base image must exist before the gateway image build runs (CI does
-`docker pull <base>:${_OPENCLAW_VERSION}`).
+The canonical base must exist in AR **before** Step 15's Release CI runs
+— `gateway-build.yml` does `docker pull octogee-gateway-base:${_OPENCLAW_VERSION}`
+for the bare `:<sha>` image, and for a fresh version that tag won't
+exist yet. So you pre-build it.
+
+**Do not hand-craft `gcloud builds submit --config cloudbuild-base.yaml`
+anymore.** The single source of truth is the `bases:` block you synced
+in Step 11; build from it:
 
 ▸
 ```bash
-gcloud builds submit --config cloudbuild-base.yaml \
-  --substitutions=_OPENCLAW_VERSION=${NEW_TAG#v},_OPENCLAW_FORK_SHA=${SHA} \
-  --project=octogee --async
+cd ~/workspace/octogee-ai/octogee
+scripts/rebuild-matrix-bases.sh            # dry-run: prints the plan
+scripts/rebuild-matrix-bases.sh --apply    # submits all base builds (async)
 ```
 
-This returns a build ID. Poll it:
+This rebuilds **every** base in the `bases:` block (canonical +
+diag/beta) from the current checkout with the correct per-base config
+and fork SHA. Poll until the canonical one is `SUCCESS`:
 
 ```bash
-BUILD_ID=<id-from-above>
-until s=$(gcloud builds describe $BUILD_ID --project=octogee --format='value(status)' 2>/dev/null); \
-    [ -n "$s" ] && [ "$s" != "QUEUED" ] && [ "$s" != "WORKING" ]; \
-    do echo "$(date +%H:%M:%S) status=$s"; sleep 30; done; echo "FINAL: $s"
+gcloud builds list --project=octogee --ongoing
+# or describe-loop the specific id from the script output
 ```
 
-✓ Final status: `SUCCESS`. Takes ~5-7 min.
+✓ Canonical `octogee-gateway-base:${NEW_TAG#v}` is `SUCCESS` in AR
+(~10 min/base, parallel-async).
+
+> **The post-merge guardrail (don't double-kick).** Step 15's push
+> touches `cloudbuild-base.yaml` + `oc-build-matrix.yaml`, which
+> auto-fires `gateway-base-rebuild.yml` → another full
+> `rebuild-matrix-bases.sh --apply`. That's the guardrail that makes a
+> bare `Dockerfile.base`/`entrypoint.sh` edit (no version bump) safe
+> *without any manual step* — just merge and it propagates. For a
+> version bump the pre-merge `--apply` here is still required for the
+> ordering above; the post-merge re-run is idempotent (rebuilds the
+> same tags from the same commit). For a Dockerfile.base/entrypoint.sh-
+> only change, skip this step entirely — let the merge auto-fire it.
 
 ### Step 14 — Stage the cloudbuild bumps on a clean main worktree
 
@@ -774,27 +807,38 @@ The full A/B flow (real example: 5.12 vs 5.16-beta.6 lockup hunt):
    makes the A/B isolate the OC-version delta from instrumentation noise.
 2. **Build + pack + upload + mirror** each (Steps 6–10), distinct fork
    SHAs.
-3. **Base images** — `cloudbuild-base-beta.yaml`, one per version:
+3. **Register both blocks of `oc-build-matrix.yaml`** — this is now the
+   driver, not a manual `gcloud builds submit`:
+   - `versions:` — one entry per A/B version, `required: false`
+     (diag/preview must never gate a merge; the beta base may not exist
+     for an arbitrary commit).
+   - `bases:` — matching entry per version: `version`, `forkSha` (the
+     fork SHA from step 2), `config: cloudbuild-base-beta.yaml` (the
+     no-`:latest`-clobber variant — diag/beta must not touch prod tags).
+4. **Base images** — driven from the `bases:` block, not hand-crafted:
    ```bash
-   gcloud builds submit --config cloudbuild-base-beta.yaml \
-     --substitutions=_OPENCLAW_VERSION=<ver>-diag,_OPENCLAW_FORK_SHA=<sha> \
-     --project=octogee --async
+   scripts/rebuild-matrix-bases.sh --apply   # builds every base incl. the new A/B ones
    ```
-4. **Gateway images** — the `scripts/build-pinned-gateway.sh` mechanic,
+   (Pushing the `oc-build-matrix.yaml` change also auto-fires
+   `gateway-base-rebuild.yml` which runs the same thing — but build them
+   pre-merge so they exist when the gateway images in step 5 need them.)
+5. **Gateway images** — the `scripts/build-pinned-gateway.sh` mechanic,
    but its arg regex rejects `-beta.N`/`-diag`, so replicate it inline:
    `git archive HEAD | tar -x -C $TMP` then from `$TMP`
    `gcloud builds submit --config cloudbuild.yaml
    --substitutions=_IMAGE_TAG=<sha>-oc<ver>,_OPENCLAW_VERSION=<ver>,_OPENCLAW_FORK_SHA=<fork>`.
-5. **Retag sidecars** (`octogee-chat-proxy`, `workspace-api`) from a main
+   (Once the `versions:` entry is merged, CI also regenerates these
+   per-SHA — the inline build is just for getting the first bundle now.)
+6. **Retag sidecars** (`octogee-chat-proxy`, `workspace-api`) from a main
    SHA that has them to the `<sha>-oc<ver>` bundle tag — they're
    OC-agnostic so they alias, not rebuild. Cowboy then deploys all three
    under one `imageTag`.
-6. **Register in `oc-build-matrix.yaml`** (`required: false`) so CI
-   regenerates the bundle per-SHA going forward — no more manual rebuilds.
-   Drop the entries once the investigation closes.
 7. **Deploy via a canary**, never by rolling `gw-test`/`gw-prod` — Add
    Gateway in the admin Gateways tab with `imageTag=<sha>-oc<ver>`,
    migrate one customer, compare. (Cowboy is still the sole deployer.)
+8. **Teardown when the investigation closes** — remove the entries from
+   **both** `versions:` and `bases:` so `rebuild-matrix-bases.sh` stops
+   rebuilding dead bases every cycle.
 
 `cloudbuild-base-beta.yaml` is intentionally generic + tracked because
 this pattern recurs every beta/diagnostic cycle — don't recreate it
