@@ -1,4 +1,20 @@
-export type Provider = "anthropic" | "openai" | "openai-compatible";
+/**
+ * Unified customer-credential config builder. One primitive for every
+ * customer-provided credential — BYOT (api_key) and BYOS (oauth) are the
+ * same thing, differing only by `mode`. Provider behaviour is DATA in the
+ * `PROVIDERS` registry, not control flow: adding google / github /
+ * openrouter is a row, never a new branch. The per-agent sandbox is
+ * OpenClaw's `auth.profiles` primitive (proven by BYOT); nothing here
+ * adds isolation — it only emits the per-agent config OpenClaw consumes.
+ */
+
+export type Provider =
+  | "anthropic"
+  | "openai"
+  | "openai-compatible"
+  | "openai-codex";
+
+export type CredentialMode = "api_key" | "oauth";
 
 export interface ByotConfigInput {
   slug: string;
@@ -13,8 +29,12 @@ export interface ExecSecretRef {
   id: string;
 }
 
+export type AuthProfileEntry =
+  | { type: "api_key"; provider: string; keyRef: ExecSecretRef }
+  | { type: "oauth"; provider: string };
+
 export interface AuthProfilesJson {
-  profiles: Record<string, { type: "api_key"; provider: string; keyRef: ExecSecretRef }>;
+  profiles: Record<string, AuthProfileEntry>;
 }
 
 export interface CustomProviderEntry {
@@ -34,12 +54,68 @@ export interface ByotConfigOutput {
   agentModelOverride: string | null;
 }
 
+/**
+ * Declarative per-provider behaviour. New providers = a row here.
+ *  - shape:"profile"  → emits a per-agent `auth.profiles` entry
+ *      (api_key → SecretRef→Secret Manager; oauth → no keyRef, the
+ *       credential is the per-agent oauth store openclaw isolates).
+ *  - shape:"customProvider" → emits a `models.providers` entry
+ *      (openai-completions); `baseUrl` preset = a named endpoint
+ *      (e.g. openrouter); absent = caller supplies the endpoint.
+ * `defaultModel`: null → never overrides the agent model (anthropic;
+ *  future tool-only oauth like google/github). string → `input.model ||`.
+ */
+export interface ProviderSpec {
+  mode: CredentialMode;
+  shape: "profile" | "customProvider";
+  /** auth.profiles key (shape:"profile" only). */
+  profileKey?: string;
+  /** provider name recorded in the profile / custom-provider entry. */
+  authProvider: string;
+  defaultModel: string | null;
+  /** customProvider: preset endpoint; absent → caller must supply baseUrl. */
+  baseUrl?: string;
+}
+
+export const PROVIDERS: Record<Provider, ProviderSpec> = {
+  anthropic: {
+    mode: "api_key",
+    shape: "profile",
+    profileKey: "anthropic:default",
+    authProvider: "anthropic",
+    defaultModel: null,
+  },
+  openai: {
+    mode: "api_key",
+    shape: "profile",
+    profileKey: "openai:default",
+    authProvider: "openai",
+    defaultModel: "openai/gpt-5",
+  },
+  "openai-codex": {
+    // BYOS — ChatGPT subscription. Same primitive as BYOT, oauth mode.
+    mode: "oauth",
+    shape: "profile",
+    profileKey: "openai-codex",
+    authProvider: "openai-codex",
+    defaultModel: "openai/gpt-5.5",
+  },
+  "openai-compatible": {
+    mode: "api_key",
+    shape: "customProvider",
+    authProvider: "openai-compatible",
+    defaultModel: null,
+  },
+  // Ready slots (add a row + its capture flow — no new code here):
+  //   openrouter: { mode:"api_key", shape:"customProvider",
+  //     authProvider:"openrouter", defaultModel:null,
+  //     baseUrl:"https://openrouter.ai/api/v1" }
+  //   google / github: { mode:"oauth", shape:"profile",
+  //     profileKey:"<p>", authProvider:"<p>", defaultModel:null }
+};
+
 const SECRET_RESOLVER_PROVIDER = "gcp-secret-manager";
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
-
-const DEFAULT_MODELS: Partial<Record<Provider, string>> = {
-  openai: "openai/gpt-5",
-};
 
 function secretIdFor(slug: string, provider: Provider): string {
   return `byok-${slug}-${provider}/latest`;
@@ -83,55 +159,24 @@ function assertModel(input: string): void {
   if (input.split("/").includes("..")) fail("must not contain .. segments");
 }
 
+function execRef(slug: string, provider: Provider): ExecSecretRef {
+  return { source: "exec", provider: SECRET_RESOLVER_PROVIDER, id: secretIdFor(slug, provider) };
+}
+
 export function buildByotConfigForProvider(input: ByotConfigInput): ByotConfigOutput {
   assertSlug(input.slug);
 
-  if (input.provider === "anthropic") {
-    return {
-      authProfiles: {
-        profiles: {
-          "anthropic:default": {
-            type: "api_key",
-            provider: "anthropic",
-            keyRef: {
-              source: "exec",
-              provider: SECRET_RESOLVER_PROVIDER,
-              id: secretIdFor(input.slug, "anthropic"),
-            },
-          },
-        },
-      },
-      models: null,
-      agentModelOverride: null,
-    };
+  const spec = PROVIDERS[input.provider];
+  if (!spec) {
+    throw new Error(`Unsupported provider: ${String(input.provider)}`);
   }
 
-  if (input.provider === "openai") {
-    const model = input.model || DEFAULT_MODELS.openai!;
-    return {
-      authProfiles: {
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: {
-              source: "exec",
-              provider: SECRET_RESOLVER_PROVIDER,
-              id: secretIdFor(input.slug, "openai"),
-            },
-          },
-        },
-      },
-      models: null,
-      agentModelOverride: model,
-    };
-  }
-
-  if (input.provider === "openai-compatible") {
-    if (!input.baseUrl) {
+  if (spec.shape === "customProvider") {
+    const baseUrl = spec.baseUrl ?? input.baseUrl;
+    if (!baseUrl) {
       throw new Error("baseUrl is required for openai-compatible providers");
     }
-    assertHttpUrl(input.baseUrl, "baseUrl");
+    assertHttpUrl(baseUrl, "baseUrl");
     if (!input.model) {
       throw new Error(
         "model is required for openai-compatible providers (no canonical default)",
@@ -145,12 +190,8 @@ export function buildByotConfigForProvider(input: ByotConfigInput): ByotConfigOu
         providers: {
           [provName]: {
             api: "openai-completions",
-            baseUrl: input.baseUrl,
-            apiKey: {
-              source: "exec",
-              provider: SECRET_RESOLVER_PROVIDER,
-              id: secretIdFor(input.slug, "openai-compatible"),
-            },
+            baseUrl,
+            apiKey: execRef(input.slug, input.provider),
             models: [{ id: input.model, name: input.model }],
           },
         },
@@ -159,11 +200,27 @@ export function buildByotConfigForProvider(input: ByotConfigInput): ByotConfigOu
     };
   }
 
-  const _exhaustive: never = input.provider;
-  throw new Error(`Unsupported provider: ${String(_exhaustive)}`);
+  const profile: AuthProfileEntry =
+    spec.mode === "api_key"
+      ? { type: "api_key", provider: spec.authProvider, keyRef: execRef(input.slug, input.provider) }
+      : { type: "oauth", provider: spec.authProvider };
+
+  return {
+    authProfiles: { profiles: { [spec.profileKey!]: profile } },
+    models: null,
+    agentModelOverride:
+      spec.defaultModel === null ? null : input.model || spec.defaultModel,
+  };
 }
 
 export function secretNameFor(slug: string, provider: Provider): string {
   assertSlug(slug);
   return `byok-${slug}-${provider}`;
+}
+
+/** Credential mode for a provider — the single seam consumers use instead
+ *  of reaching into the PROVIDERS registry directly. */
+export function isOauthProvider(provider: Provider): boolean {
+  // eslint-disable-next-line security/detect-object-injection -- typed Provider key into the closed PROVIDERS Record (no injection)
+  return PROVIDERS[provider].mode === "oauth";
 }

@@ -191,3 +191,33 @@ export async function restoreByosubCredentials(opts: {
   }
   return { restored, failed };
 }
+
+/**
+ * The single shared byosub restore orchestration: plan + restore for a
+ * set of agents. Used by BOTH pre-boot (all config agents at boot) and
+ * the per-customer sync (one mounted agent post-boot). Deps injected —
+ * the caller fetches `byosub` from `glmGateways/{gatewayId}` and supplies
+ * `fetchSecret`. Never throws (a degraded secret must not block boot or
+ * a mount). `planned` lets the caller decide whether to log/reload.
+ */
+export async function restoreByosubForAgents(opts: {
+  agentIds: string[];
+  byosub: Record<string, ByosubRef> | undefined;
+  openclawDir: string;
+  fetchSecret: (secretName: string) => Promise<string>;
+  logFn?: (m: string) => void;
+}): Promise<{ restored: number; failed: number; planned: number }> {
+  const plan = planByosubRestores({
+    agentIds: opts.agentIds,
+    byosub: opts.byosub,
+    openclawDir: opts.openclawDir,
+    logFn: opts.logFn,
+  });
+  if (plan.length === 0) return { restored: 0, failed: 0, planned: 0 };
+  const r = await restoreByosubCredentials({
+    plan,
+    fetchSecret: opts.fetchSecret,
+    logFn: opts.logFn,
+  });
+  return { ...r, planned: plan.length };
+}

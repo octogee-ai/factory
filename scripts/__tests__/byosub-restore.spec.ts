@@ -5,6 +5,7 @@ import * as path from "path";
 import {
   planByosubRestores,
   restoreByosubCredentials,
+  restoreByosubForAgents,
   agentIdsFromConfig,
   codexHomeDir,
   codexAuthJsonPath,
@@ -253,5 +254,55 @@ describe("agentIdsFromConfig", () => {
         },
       }),
     ).toEqual(["octogee-ceckert-coach", "octogee-ops-gw-bender"]);
+  });
+});
+
+describe("restoreByosubForAgents (shared plan+restore composition)", () => {
+  it("no-op when nothing to plan → {restored:0,failed:0,planned:0}, no fs", async () => {
+    const oc = mkTmp();
+    let fetched = false;
+    const r = await restoreByosubForAgents({
+      agentIds: ["octogee-a-coach"],
+      byosub: undefined,
+      openclawDir: oc,
+      fetchSecret: async () => {
+        fetched = true;
+        return "x";
+      },
+    });
+    expect(r).toEqual({ restored: 0, failed: 0, planned: 0 });
+    expect(fetched).toBe(false);
+  });
+
+  it("plans + restores the per-agent codex-home for a present oauth agent", async () => {
+    const oc = mkTmp();
+    const r = await restoreByosubForAgents({
+      agentIds: ["octogee-tester-70-coach"],
+      byosub: {
+        "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" },
+      },
+      openclawDir: oc,
+      fetchSecret: async () => '{"auth_mode":"chatgpt"}',
+    });
+    expect(r).toEqual({ restored: 1, failed: 0, planned: 1 });
+    expect(
+      JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
+        .auth_mode,
+    ).toBe("chatgpt");
+  });
+
+  it("never throws on a bad secret — {failed:1, planned:1}", async () => {
+    const oc = mkTmp();
+    const r = await restoreByosubForAgents({
+      agentIds: ["octogee-tester-70-coach"],
+      byosub: {
+        "octogee-tester-70-coach": { provider: "openai", secretName: "boom" },
+      },
+      openclawDir: oc,
+      fetchSecret: async () => {
+        throw new Error("secret denied");
+      },
+    });
+    expect(r).toEqual({ restored: 0, failed: 1, planned: 1 });
   });
 });

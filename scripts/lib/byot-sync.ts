@@ -2,7 +2,9 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   buildByotConfigForProvider,
+  PROVIDERS,
   type Provider,
+  type ByotConfigInput,
 } from "./byot-multi-provider-config.js";
 import { AGENTS_DIR, log } from "./config.js";
 
@@ -19,12 +21,9 @@ type ByotFile = (typeof BYOT_FILES)[number];
 
 const BYOT_MARKER = ".byot-managed";
 
-export interface ByotInput {
-  slug: string;
-  provider: Provider;
-  baseUrl?: string;
-  model?: string;
-}
+// One source of truth for the credential-config shape (was a byte-copy
+// of ByotConfigInput).
+export type ByotInput = ByotConfigInput;
 
 export function deriveDesiredByotState(userData: {
   byotActive?: boolean;
@@ -38,9 +37,13 @@ export function deriveDesiredByotState(userData: {
     return { enabled: false, input: null };
   }
   const cfg = userData.systemConfig?.byot;
+  // Data-driven: any provider in the PROVIDERS registry is recognized
+  // (BYOT api_key + BYOS oauth + future google/github/openrouter rows) —
+  // no per-provider OR-list. Unknown/absent → anthropic (api_key default).
+  const p = cfg?.provider;
   const provider: Provider =
-    cfg?.provider === "openai" || cfg?.provider === "openai-compatible"
-      ? cfg.provider
+    p && Object.prototype.hasOwnProperty.call(PROVIDERS, p)
+      ? (p as Provider)
       : "anthropic";
   return {
     enabled: true,

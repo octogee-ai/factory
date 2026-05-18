@@ -196,6 +196,25 @@ router.get(
   },
 );
 
+/**
+ * Flip the unified per-customer credential signal so BYOS rides the SAME
+ * watcher as BYOT. ORDER IS LOAD-BEARING: write system/config.byot FIRST,
+ * users/{uid}.byotActive LAST. The watcher reacts to users/{uid} and
+ * fetches system/config exactly once; byotActive-last guarantees the
+ * config subdoc is already visible (else it falls back to anthropic and
+ * never re-syncs). Matches BYOT ordering. Idempotent (merge) — safe to
+ * re-assert, which also backfills already-consumed pre-unification flows.
+ */
+async function flipUnifiedByosSignal(uid: string): Promise<void> {
+  await db
+    .collection("users")
+    .doc(uid)
+    .collection("system")
+    .doc("config")
+    .set({ byot: { provider: "openai-codex" } }, { merge: true });
+  await db.collection("users").doc(uid).set({ byotActive: true }, { merge: true });
+}
+
 // Internal: the gateway runner posts the captured credential here on
 // completion. R2 — workspace-api owns the Secret Manager write; the
 // gateway SA stays read-only. The gateway supplies only the opaque
@@ -229,6 +248,11 @@ router.post(
       // credential body is ignored, not honoured. A legit gateway retry
       // still gets a sane ok.
       if (flow.consumedAt) {
+        // Backfill / replay-safe: re-assert the unified signal
+        // (idempotent) so flows captured *before* unification — and any
+        // legit retry — still activate. The secret + glmGateways ref
+        // already exist (both precede consumedAt); no secret re-write.
+        await flipUnifiedByosSignal(flow.uid);
         res.json({ ok: true, secretName, alreadyConsumed: true });
         return;
       }
@@ -249,6 +273,10 @@ router.post(
           { byosub: { [flow.agentId]: { provider: flow.provider, secretName } } },
           { merge: true },
         );
+      // BYOS rides the SAME watcher as BYOT — flip the unified signal
+      // (config-first/byotActive-last; see flipUnifiedByosSignal). The
+      // glmGateways ref above is written first so the restore has it.
+      await flipUnifiedByosSignal(flow.uid);
       // Consume only after the durable write + ref succeeded, so a failed
       // capture stays retryable.
       await db

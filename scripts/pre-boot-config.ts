@@ -1,8 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import {
-  planByosubRestores,
-  restoreByosubCredentials,
+  restoreByosubForAgents,
   agentIdsFromConfig,
 } from "./lib/byosub-restore.js";
 
@@ -295,25 +294,17 @@ async function applyGlmDesiredState(
         logFn(`applied openclawOverrides from glmGateways/${gatewayId}`);
       }
     }
-    const plan = planByosubRestores({
+    const { readSecret } = await import("./lib/secret-manager.js");
+    // Per-fetch 4s bound caps boot latency under tenancy; a timeout falls
+    // to the catch → WARN, boot continues.
+    const r = await restoreByosubForAgents({
       agentIds: agentIdsFromConfig(config),
       byosub: data?.byosub,
       openclawDir: OPENCLAW_DIR,
+      fetchSecret: (name) => withTimeout(readSecret(name), 4000),
       logFn,
     });
-    if (plan.length) {
-      const { readSecret } = await import("./lib/secret-manager.js");
-      // Per-fetch bound is 4s; cap the serial aggregate too so boot latency
-      // can't scale unboundedly with tenancy on a shared gateway. Rejection
-      // (timeout) falls to the catch → WARN, boot continues.
-      const r = await withTimeout(
-        restoreByosubCredentials({
-          plan,
-          fetchSecret: (name) => withTimeout(readSecret(name), 4000),
-          logFn,
-        }),
-        4000 * plan.length + 2000,
-      );
+    if (r.planned > 0) {
       logFn(
         `byosub: restore complete for glmGateways/${gatewayId} — ${r.restored} restored, ${r.failed} failed`,
       );
