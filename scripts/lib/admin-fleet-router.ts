@@ -19,6 +19,7 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
 } from "../../shared/types/glm.js";
+import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 
 export interface FleetLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -51,8 +52,6 @@ const JOB_TTL_MS = 10 * 60_000;
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const GATEWAY_IMAGE_REPO_PREFIX =
   "us-central1-docker.pkg.dev/octogee/octogee/";
-const IMAGE_TAG_PATTERN =
-  /^[a-f0-9]{7,40}(-oc[a-z0-9][a-z0-9.-]*)?$/;
 const RESTORE_JOB_STATES = [
   "pending",
   "dispatched",

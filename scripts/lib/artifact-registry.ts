@@ -1,4 +1,5 @@
 import { GoogleAuth } from "google-auth-library";
+import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 
 export interface GatewayBuild {
   tag: string;
@@ -20,8 +21,6 @@ interface DockerImageItem {
   uploadTime?: string;
 }
 
-const SHA_TAG_PATTERN =
-  /^[a-f0-9]{7,40}(-oc\d{4}\.\d+\.\d+(-\d+)?)?$/;
 const DEFAULT_LIMIT = 30;
 const PAGE_SIZE = 200;
 
@@ -55,7 +54,7 @@ function extractBuildsForService(
     if (!digest) continue;
     const pushedAt = item.uploadTime ?? "";
     for (const tag of item.tags ?? []) {
-      if (!SHA_TAG_PATTERN.test(tag)) continue;
+      if (!IMAGE_TAG_PATTERN.test(tag)) continue;
       const existing = seen.get(tag);
       if (!existing || existing.pushedAt < pushedAt) {
         seen.set(tag, { tag, pushedAt, digest });

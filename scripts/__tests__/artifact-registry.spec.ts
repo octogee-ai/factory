@@ -72,6 +72,28 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
     expect(builds[0].tag).toBe("abc1234");
   });
 
+  it("returns build-flavor (-diag) and oc-prerelease (-beta.N) bundle tags", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeArResponse([
+        {
+          name: "projects/octogee/locations/us-central1/repositories/octogee/dockerImages/octogee-gateway@sha256:d1a",
+          tags: ["a9f521f-oc2026.5.12-diag"],
+          uploadTime: "2026-05-18T05:00:00Z",
+        },
+        {
+          name: "projects/octogee/locations/us-central1/repositories/octogee/dockerImages/octogee-gateway@sha256:b6a",
+          tags: ["a9f521f-oc2026.5.16-beta.6"],
+          uploadTime: "2026-05-18T04:00:00Z",
+        },
+      ]),
+    );
+    const builds = await listGatewayBuilds({ service: "octogee-gateway" });
+    expect(builds.map((b) => b.tag)).toEqual([
+      "a9f521f-oc2026.5.12-diag",
+      "a9f521f-oc2026.5.16-beta.6",
+    ]);
+  });
+
   it("excludes images for other services in the same repo", async () => {
     fetchMock.mockResolvedValueOnce(
       makeArResponse([
