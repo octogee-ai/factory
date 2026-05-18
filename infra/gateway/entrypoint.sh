@@ -278,24 +278,14 @@ fi
 log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
 openclaw gateway run --bind lan --port 18789 &
 
-# ── OpenClaw file-log mirror to container stdout ────────────────────────────
-# `openclaw logs` reads from a richer file log (/tmp/openclaw-1000/openclaw-
-# YYYY-MM-DD.log) via RPC; that channel is wider than what OpenClaw itself
-# writes to stdout under OPENCLAW_LOG_LEVEL=info. Mirror the file log so
-# kubectl/stern see the same content as `openclaw logs`.
-#
-# `tail -F` (capital F) follows by name, so the daily-rotated date-stamped
-# files keep streaming after midnight UTC without supervisor intervention.
-# The `[openclaw-file]` prefix distinguishes mirrored lines from OpenClaw's
-# direct stdout and from the entrypoint's own `log` lines.
-(
-  while true; do
-    until ls /tmp/openclaw-1000/openclaw-*.log >/dev/null 2>&1; do sleep 2; done
-    tail -F /tmp/openclaw-1000/openclaw-*.log 2>&1 \
-      | sed -u 's/^/[openclaw-file] /' || true
-    sleep 2
-  done
-) &
+# OpenClaw file-log mirror REMOVED 2026-05-18. The richer log is available
+# on demand via `openclaw logs` from the running gateway, so permanently
+# tailing /tmp/openclaw-*.log through an unbuffered `sed -u` to stdout was
+# pure waste: continuous CPU/syscall churn plus ~2x container-stdout volume
+# — a credible message-loop-latency contributor (see GATEWAY-PERFORMANCE-
+# BASELINE). Do NOT reinstate an unconditional tail mirror. Proper
+# root-cause follow-up: make OpenClaw log k8s-native (stdout) instead of to
+# a rotating file, then no mirror is ever needed.
 
 # ── Signal forwarding ──────────────────────────────────────────────────────
 # Kubernetes sends SIGTERM → PID 1 (this sh) → our trap → SIGTERM every

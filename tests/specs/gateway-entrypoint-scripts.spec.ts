@@ -77,4 +77,12 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
     );
     expect(missing, `entrypoint.sh references nonexistent scripts: ${missing.join(", ")}`).toEqual([]);
   });
+
+  // Regression pin: the unconditional OpenClaw file-log mirror was removed
+  // (CPU/syscall churn + ~2x stdout volume; rich log is on-demand via
+  // `openclaw logs`). Must not silently come back.
+  it("does not reinstate the unconditional openclaw file-log mirror", () => {
+    expect(entrypoint).not.toContain("tail -F /tmp/openclaw-1000");
+    expect(entrypoint).not.toContain("[openclaw-file]");
+  });
 });
