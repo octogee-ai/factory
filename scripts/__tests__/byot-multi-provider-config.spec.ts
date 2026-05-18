@@ -181,4 +181,29 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
       ),
     ).toThrow(/refresh_token/);
   });
+
+  it("real-expiry: access_token JWT exp (seconds) → openclaw expires (epoch ms)", () => {
+    const out = buildCodexAuthProfilesStore(
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: jwt({ exp: 1_893_456_000 }), refresh_token: "r" },
+      }),
+    );
+    // openclaw expires is epoch-ms (proven: `new Date(cred.expires)`).
+    expect(out.profiles["openai-codex:default"].expires).toBe(1_893_456_000_000);
+  });
+
+  it("fail-safe: non-JWT / no exp / non-numeric exp access_token → expires 0 (force refresh, prior behavior)", () => {
+    const exp0 = (accessToken: string) =>
+      buildCodexAuthProfilesStore(
+        JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: { access_token: accessToken, refresh_token: "r" },
+        }),
+      ).profiles["openai-codex:default"].expires;
+    expect(exp0("not-a-jwt")).toBe(0); // placeholder/opaque token
+    expect(exp0(jwt({}))).toBe(0); // JWT but no exp claim
+    expect(exp0(jwt({ exp: "soon" }))).toBe(0); // exp not numeric
+    expect(exp0(jwt({ exp: 0 }))).toBe(0); // non-positive
+  });
 });

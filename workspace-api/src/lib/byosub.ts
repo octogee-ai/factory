@@ -59,6 +59,31 @@ export function validateCodexCredential(
   return { ok: true };
 }
 
+export type ByosubStatus = "connected" | "needs_reauth";
+export interface ByosubConnectionView {
+  connected: boolean;
+  provider?: string;
+  status?: ByosubStatus;
+}
+
+/**
+ * Honest connection view from the durable `glmGateways/{gw}.byosub[agentId]`
+ * ref (R8). `connected` means *working*, NOT merely "a ref exists" — a ref
+ * whose openclaw on-disk credential died is reported `status:"needs_reauth"`
+ * with `connected:false`, so the UI distinguishes "never connected" (no
+ * status) from "was connected, reconnect needed" (→ Reconnect affordance).
+ */
+export function byosubConnectionView(
+  ref: { provider?: unknown; status?: unknown } | null | undefined,
+): ByosubConnectionView {
+  if (!ref || typeof ref.provider !== "string" || !ref.provider) {
+    return { connected: false };
+  }
+  const status: ByosubStatus =
+    ref.status === "needs_reauth" ? "needs_reauth" : "connected";
+  return { connected: status === "connected", provider: ref.provider, status };
+}
+
 export interface DeviceAuthStart {
   flowId: string;
   verificationUrl: string;

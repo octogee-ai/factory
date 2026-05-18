@@ -283,6 +283,57 @@ export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
  * validate-before-write keeps its "never flip routing without a usable
  * cred on disk" guarantee.
  */
+function codexStr(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+function codexJwtClaims(
+  token: string | undefined,
+): Record<string, unknown> | undefined {
+  if (!token) return undefined;
+  try {
+    return JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+  } catch {
+    return undefined; // not a decodable JWT → caller falls back
+  }
+}
+
+/**
+ * Claims derived from the codex JWTs. Real-expiry (secondary durability
+ * optimization; composes with the conservative-restore keystone): the
+ * access_token is a JWT — use its `exp` (RFC 7519 seconds) as openclaw's
+ * `expires` (epoch ms; proven from openclaw source: `new Date(cred.expires)`).
+ * openclaw then uses the restored token directly and refreshes only near
+ * *real* expiry instead of on every mount → fewer refresh rotations → less
+ * sync-back pressure. Fail-safe: not a decodable JWT / no positive numeric
+ * exp → `expires:0` (force refresh — prior behavior; never worse, and a
+ * still-healthy on-disk cred is protected by the keystone anyway).
+ */
+function codexJwtDerived(
+  access: string,
+  idToken: string | undefined,
+): { expires: number; chatgptPlanType?: string; email?: string } {
+  const accessExp = codexJwtClaims(access)?.exp;
+  const expires =
+    typeof accessExp === "number" && Number.isFinite(accessExp) && accessExp > 0
+      ? Math.floor(accessExp) * 1000
+      : 0;
+  const idClaims = codexJwtClaims(idToken);
+  if (!idClaims) return { expires };
+  const ocAuth = idClaims["https://api.openai.com/auth"] as
+    | Record<string, unknown>
+    | undefined;
+  const chatgptPlanType = codexStr(ocAuth?.chatgpt_plan_type);
+  const email = codexStr(idClaims.email);
+  return {
+    expires,
+    ...(chatgptPlanType ? { chatgptPlanType } : {}),
+    ...(email ? { email } : {}),
+  };
+}
+
 export function buildCodexAuthProfilesStore(
   codexAuthJsonText: string,
 ): AuthProfilesStoreV1 {
@@ -294,43 +345,25 @@ export function buildCodexAuthProfilesStore(
   }
   const tokens =
     (parsed as { tokens?: Record<string, unknown> } | null)?.tokens ?? {};
-  const str = (v: unknown): string | undefined =>
-    typeof v === "string" && v.length > 0 ? v : undefined;
 
-  const access = str(tokens.access_token);
+  const access = codexStr(tokens.access_token);
   if (!access) {
     throw new Error("codex auth.json: missing tokens.access_token");
   }
-  const refresh = str(tokens.refresh_token);
+  const refresh = codexStr(tokens.refresh_token);
   if (!refresh) {
     throw new Error("codex auth.json: missing tokens.refresh_token");
   }
-  const accountId = str(tokens.account_id);
-  const idToken = str(tokens.id_token);
-
-  let chatgptPlanType: string | undefined;
-  let email: string | undefined;
-  if (idToken) {
-    try {
-      const claims = JSON.parse(
-        Buffer.from(idToken.split(".")[1], "base64url").toString("utf8"),
-      ) as Record<string, unknown>;
-      email = str(claims.email);
-      const ocAuth = claims["https://api.openai.com/auth"] as
-        | Record<string, unknown>
-        | undefined;
-      chatgptPlanType = str(ocAuth?.chatgpt_plan_type);
-    } catch {
-      // id_token undecodable → plan/email simply absent; not fatal.
-    }
-  }
+  const accountId = codexStr(tokens.account_id);
+  const idToken = codexStr(tokens.id_token);
+  const { expires, chatgptPlanType, email } = codexJwtDerived(access, idToken);
 
   const profile: OAuthCredential = {
     type: "oauth",
     provider: "openai-codex",
     access,
     refresh,
-    expires: 0,
+    expires,
     copyToAgents: true,
     ...(accountId ? { accountId } : {}),
     ...(idToken ? { idToken } : {}),

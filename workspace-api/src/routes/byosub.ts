@@ -8,7 +8,9 @@ import {
   validateCodexCredential,
   coachAgentId,
   gatewayDeviceAuthClient,
+  byosubConnectionView,
 } from "../lib/byosub";
+import { isSafeAgentId } from "../../../scripts/lib/byosub-restore";
 
 const router = Router();
 
@@ -182,14 +184,15 @@ router.get(
         .doc(resolved.gatewayId)
         .get();
       const data = (snap.data() || {}) as {
-        byosub?: Record<string, { provider?: unknown } | undefined>;
+        byosub?: Record<
+          string,
+          { provider?: unknown; status?: unknown } | undefined
+        >;
       };
       const ref = data.byosub?.[coachAgentId(resolved.slug)];
-      if (ref && typeof ref.provider === "string") {
-        res.json({ connected: true, provider: ref.provider });
-        return;
-      }
-      res.json({ connected: false });
+      // Honest view: "connected" means working, not "a ref exists" — a
+      // needs_reauth ref reports connected:false + status (R8).
+      res.json(byosubConnectionView(ref));
     } catch (e) {
       next(e);
     }
@@ -270,7 +273,16 @@ router.post(
         .collection("glmGateways")
         .doc(flow.gatewayId)
         .set(
-          { byosub: { [flow.agentId]: { provider: flow.provider, secretName } } },
+          {
+            byosub: {
+              [flow.agentId]: {
+                provider: flow.provider,
+                secretName,
+                // Re-Connect clears a prior needs_reauth (merge overwrites).
+                status: "connected",
+              },
+            },
+          },
           { merge: true },
         );
       // BYOS rides the SAME watcher as BYOT — flip the unified signal
@@ -284,6 +296,61 @@ router.post(
         .doc(b.flowId)
         .set({ consumedAt: Date.now() }, { merge: true });
       res.json({ ok: true, secretName });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+// Internal: the gateway's periodic detection sweep posts here when openclaw's
+// on-disk auth-state shows the codex profile permanently dead (R8). R2 — the
+// gateway SA never writes glmGateways; workspace-api mediates. No credential
+// crosses. Bounded: only flips an EXISTING ref's status (never creates one),
+// so a coarse internal-key holder can at most surface a spurious Reconnect
+// prompt — it cannot inject a credential (that still needs the flow-bound
+// device-auth /capture).
+router.post(
+  "/auth-state",
+  requireInternalServiceAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const b = (req.body || {}) as {
+        gatewayId?: string;
+        agentId?: string;
+        state?: string;
+      };
+      if (
+        !b.gatewayId ||
+        typeof b.gatewayId !== "string" ||
+        !b.agentId ||
+        !isSafeAgentId(b.agentId) ||
+        b.state !== "needs_reauth"
+      ) {
+        res.status(400).json({
+          error: "gatewayId, path-safe agentId, state:'needs_reauth' required",
+        });
+        return;
+      }
+      const snap = await db.collection("glmGateways").doc(b.gatewayId).get();
+      const byosub = ((snap.data() || {}) as { byosub?: Record<string, unknown> })
+        .byosub;
+      if (
+        !byosub ||
+        !Object.prototype.hasOwnProperty.call(byosub, b.agentId)
+      ) {
+        // Nothing connected for this agent — cannot "need reauth"; no-op
+        // (don't create a ref from an unauthenticated-tuple signal).
+        res.json({ ok: true, noop: true });
+        return;
+      }
+      await db
+        .collection("glmGateways")
+        .doc(b.gatewayId)
+        .set(
+          { byosub: { [b.agentId]: { status: "needs_reauth" } } },
+          { merge: true },
+        );
+      res.json({ ok: true });
     } catch (e) {
       next(e);
     }

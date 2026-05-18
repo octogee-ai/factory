@@ -11,8 +11,12 @@ import {
   codexAuthJsonPath,
   codexStagingHomeDir,
   codexStagingAuthJsonPath,
+  codexAgentDir,
+  codexAuthStatePath,
+  shouldRestoreCodexCredential,
   isSafeAgentId,
 } from "../lib/byosub-restore.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../lib/byot-multi-provider-config.js";
 
 const tmpDirs: string[] = [];
 function mkTmp(): string {
@@ -90,6 +94,22 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
     expect(staging.startsWith(`${OC}/agents/octogee-a-coach/agent/`)).toBe(true);
     expect(codexStagingAuthJsonPath(OC, "octogee-a-coach")).toBe(
       `${staging}/auth.json`,
+    );
+  });
+
+  it("codexAuthStatePath = openclaw auth-state.json, sibling of auth-profiles.json (R8 reader/writer no-drift)", () => {
+    expect(codexAgentDir(OC, "octogee-a-coach")).toBe(
+      "/home/node/.openclaw/agents/octogee-a-coach/agent",
+    );
+    expect(codexAuthStatePath(OC, "octogee-a-coach")).toBe(
+      "/home/node/.openclaw/agents/octogee-a-coach/agent/auth-state.json",
+    );
+    // exactly the dir restoreByosubCredentials writes auth-profiles.json into
+    expect(path.dirname(codexAuthStatePath(OC, "octogee-a-coach"))).toBe(
+      codexAgentDir(OC, "octogee-a-coach"),
+    );
+    expect(path.dirname(codexHomeDir(OC, "octogee-a-coach"))).toBe(
+      codexAgentDir(OC, "octogee-a-coach"),
     );
   });
 
@@ -212,6 +232,79 @@ describe("planByosubRestores", () => {
   });
 });
 
+describe("shouldRestoreCodexCredential — conservative-restore keystone", () => {
+  const P = OPENAI_CODEX_DEFAULT_PROFILE_ID;
+  const NOW = 1_780_000_000_000;
+  const authPermanent = JSON.stringify({
+    version: 1,
+    usageStats: { [P]: { disabledReason: "auth_permanent", disabledUntil: NOW + 600_000 } },
+  });
+
+  it("cold start (no on-disk auth-profiles.json) → write — nothing healthy to clobber", () => {
+    expect(
+      shouldRestoreCodexCredential({
+        authProfilesPresent: false,
+        authStateText: null,
+        profileId: P,
+        now: NOW,
+      }),
+    ).toBe("write");
+    // even if a stale auth-state lingers, absence of the cred file = cold start
+    expect(
+      shouldRestoreCodexCredential({
+        authProfilesPresent: false,
+        authStateText: authPermanent,
+        profileId: P,
+        now: NOW,
+      }),
+    ).toBe("write");
+  });
+
+  it("steady state (healthy on-disk cred, no auth_permanent) → SKIP — never clobber openclaw's rotated token", () => {
+    expect(
+      shouldRestoreCodexCredential({
+        authProfilesPresent: true,
+        authStateText: null,
+        profileId: P,
+        now: NOW,
+      }),
+    ).toBe("skip");
+    expect(
+      shouldRestoreCodexCredential({
+        authProfilesPresent: true,
+        authStateText: JSON.stringify({ version: 1, usageStats: { [P]: { errorCount: 0 } } }),
+        profileId: P,
+        now: NOW,
+      }),
+    ).toBe("skip");
+  });
+
+  it("recovery (on-disk cred present but openclaw flagged auth_permanent) → write — replace the dead cred", () => {
+    expect(
+      shouldRestoreCodexCredential({
+        authProfilesPresent: true,
+        authStateText: authPermanent,
+        profileId: P,
+        now: NOW,
+      }),
+    ).toBe("write");
+  });
+
+  it("an elapsed auth_permanent window is healthy again → SKIP (openclaw will retry; don't clobber)", () => {
+    expect(
+      shouldRestoreCodexCredential({
+        authProfilesPresent: true,
+        authStateText: JSON.stringify({
+          version: 1,
+          usageStats: { [P]: { disabledReason: "auth_permanent", disabledUntil: NOW - 1 } },
+        }),
+        profileId: P,
+        now: NOW,
+      }),
+    ).toBe("skip");
+  });
+});
+
 describe("restoreByosubCredentials", () => {
   it("atomically writes auth.json (0600) into the agent codex-home, creating dirs", async () => {
     const oc = mkTmp();
@@ -225,7 +318,7 @@ describe("restoreByosubCredentials", () => {
       plan: [item],
       fetchSecret: async () => codexBlob(),
     });
-    expect(r).toEqual({ restored: 1, failed: 0 });
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
     expect(fs.existsSync(item.targetPath)).toBe(true);
     expect(JSON.parse(fs.readFileSync(item.targetPath, "utf-8")).auth_mode).toBe("chatgpt");
     expect(fs.statSync(item.targetPath).mode & 0o777).toBe(0o600);
@@ -268,7 +361,7 @@ describe("restoreByosubCredentials", () => {
       fetchSecret: async () => '{"auth_mode":"chatgpt","tokens":{"refresh_token":"rt"}}',
       logFn: (m) => logs.push(m),
     });
-    expect(r).toEqual({ restored: 0, failed: 1 });
+    expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
     expect(fs.existsSync(item.targetPath)).toBe(false);
     expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
     const ap = apPathFor(oc, "octogee-a-coach");
@@ -299,7 +392,7 @@ describe("restoreByosubCredentials", () => {
       fetchSecret: async () => codexBlob(),
       logFn: (m) => logs.push(m),
     });
-    expect(r).toEqual({ restored: 0, failed: 1 });
+    expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
     // The bug: codex-home/auth.json must not exist (never promoted).
     expect(fs.existsSync(item.targetPath)).toBe(false);
     expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
@@ -325,10 +418,82 @@ describe("restoreByosubCredentials", () => {
       },
       logFn: (m) => logs.push(m),
     });
-    expect(r).toEqual({ restored: 1, failed: 1 });
+    expect(r).toEqual({ restored: 1, failed: 1, skipped: 0 });
     expect(fs.existsSync(mk("octogee-a-coach", "ok").targetPath)).toBe(true);
     expect(fs.existsSync(mk("octogee-b-coach", "boom").targetPath)).toBe(false);
     expect(logs.join("\n")).toMatch(/octogee-b-coach|secret access denied/);
+  });
+
+  it("KEYSTONE: a healthy on-disk auth-profiles.json is NOT clobbered — skip, no SM read (the refresh_token_reused root cause)", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const agentDir = path.join(oc, "agents", agentId, "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    // openclaw owns this — it may hold a freshly-rotated RT we must not touch.
+    const liveCred = JSON.stringify({ version: 1, profiles: { rotated: "RT1" } });
+    fs.writeFileSync(path.join(agentDir, "auth-profiles.json"), liveCred);
+    // no auth-state.json → openclaw reports no failure → steady state.
+    let fetched = false;
+    const logs: string[] = [];
+    const r = await restoreByosubCredentials({
+      plan: [
+        {
+          agentId,
+          provider: "openai" as const,
+          secretName: "byosub-a-openai",
+          targetPath: path.join(agentDir, "codex-home", "auth.json"),
+        },
+      ],
+      fetchSecret: async () => {
+        fetched = true;
+        return codexBlob();
+      },
+      logFn: (m) => logs.push(m),
+    });
+    expect(r).toEqual({ restored: 0, failed: 0, skipped: 1 });
+    expect(fetched).toBe(false); // conservative: never even read Secret Manager
+    // the live credential is byte-identical — openclaw's rotated token survives
+    expect(fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf-8")).toBe(
+      liveCred,
+    );
+    expect(fs.existsSync(path.join(agentDir, "codex-home", "auth.json"))).toBe(false);
+    expect(logs.join("\n")).toMatch(/octogee-a-coach|skip|conservative/i);
+  });
+
+  it("recovery: on-disk cred present but openclaw flagged auth_permanent → restore REPLACES the dead cred", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const agentDir = path.join(oc, "agents", agentId, "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "auth-profiles.json"), '{"stale":true}');
+    fs.writeFileSync(
+      path.join(agentDir, "auth-state.json"),
+      JSON.stringify({
+        version: 1,
+        usageStats: {
+          "openai-codex:default": {
+            disabledReason: "auth_permanent",
+            disabledUntil: Date.now() + 3_600_000,
+          },
+        },
+      }),
+    );
+    const r = await restoreByosubCredentials({
+      plan: [
+        {
+          agentId,
+          provider: "openai" as const,
+          secretName: "byosub-a-openai",
+          targetPath: path.join(agentDir, "codex-home", "auth.json"),
+        },
+      ],
+      fetchSecret: async () => codexBlob(),
+    });
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
+    const store = JSON.parse(
+      fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+    );
+    expect(store.profiles["openai-codex:default"].access).toBe("acc-1"); // replaced
   });
 });
 
@@ -372,7 +537,7 @@ describe("restoreByosubForAgents (shared plan+restore composition)", () => {
         return "x";
       },
     });
-    expect(r).toEqual({ restored: 0, failed: 0, planned: 0 });
+    expect(r).toEqual({ restored: 0, failed: 0, skipped: 0, planned: 0 });
     expect(fetched).toBe(false);
   });
 
@@ -386,7 +551,7 @@ describe("restoreByosubForAgents (shared plan+restore composition)", () => {
       openclawDir: oc,
       fetchSecret: async () => codexBlob(),
     });
-    expect(r).toEqual({ restored: 1, failed: 0, planned: 1 });
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0, planned: 1 });
     expect(
       JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
         .auth_mode,
@@ -411,6 +576,6 @@ describe("restoreByosubForAgents (shared plan+restore composition)", () => {
         throw new Error("secret denied");
       },
     });
-    expect(r).toEqual({ restored: 0, failed: 1, planned: 1 });
+    expect(r).toEqual({ restored: 0, failed: 1, skipped: 0, planned: 1 });
   });
 });

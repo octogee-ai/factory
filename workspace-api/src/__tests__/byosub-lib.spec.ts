@@ -3,6 +3,7 @@ import {
   byosubSecretName,
   validateCodexCredential,
   gatewayDeviceAuthClient,
+  byosubConnectionView,
 } from "../lib/byosub";
 
 describe("byosubSecretName", () => {
@@ -101,5 +102,39 @@ describe("gatewayDeviceAuthClient — addresses the gateway by instanceName", ()
     await expect(
       gatewayDeviceAuthClient().start({ instanceName: "bender", agentId: "a" }),
     ).rejects.toThrow(/502/);
+  });
+});
+
+describe("byosubConnectionView — honest status (presence ≠ liveness; R8)", () => {
+  it("no ref / no provider → not connected, no status", () => {
+    expect(byosubConnectionView(undefined)).toEqual({ connected: false });
+    expect(byosubConnectionView(null)).toEqual({ connected: false });
+    expect(byosubConnectionView({})).toEqual({ connected: false });
+    expect(byosubConnectionView({ provider: "" })).toEqual({ connected: false });
+    expect(byosubConnectionView({ status: "connected" })).toEqual({ connected: false });
+  });
+
+  it("ref present, no/unknown/connected status → connected", () => {
+    expect(byosubConnectionView({ provider: "openai" })).toEqual({
+      connected: true,
+      provider: "openai",
+      status: "connected",
+    });
+    expect(byosubConnectionView({ provider: "openai", status: "connected" })).toEqual({
+      connected: true,
+      provider: "openai",
+      status: "connected",
+    });
+    expect(byosubConnectionView({ provider: "openai", status: "weird" })).toEqual({
+      connected: true,
+      provider: "openai",
+      status: "connected",
+    });
+  });
+
+  it("needs_reauth → connected:false but distinguishable (UI shows Reconnect, not 'never connected')", () => {
+    expect(
+      byosubConnectionView({ provider: "openai", secretName: "s", status: "needs_reauth" }),
+    ).toEqual({ connected: false, provider: "openai", status: "needs_reauth" });
   });
 });
