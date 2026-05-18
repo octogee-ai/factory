@@ -88,6 +88,14 @@ export interface StartFleetOptions {
 
 export interface StartedFleetController {
   stop: () => Promise<void>;
+  /**
+   * Resolves when the gateway first reaches `status=ready` (OpenClaw RPC
+   * up AND our Express server listening). The provisioner uses this to
+   * run a one-shot reconcile sweep the instant the gateway is genuinely
+   * ready — closing the boot race deterministically, with no fixed
+   * sleep. Never rejects (the readiness poller loops on failure).
+   */
+  whenReady: Promise<void>;
 }
 
 export async function startFleetController(
@@ -332,9 +340,8 @@ export async function startFleetController(
   // Tasks dispatch into a pod whose Express server wasn't accepting
   // connections yet, hitting a 3+ minute timeout/retry loop on
   // first-customer-after-add.
-  void waitForGatewayReady();
-
   return {
+    whenReady: waitForGatewayReady(),
     stop: async () => {
       clearInterval(heartbeatTimer);
       stopDrainLoop();
