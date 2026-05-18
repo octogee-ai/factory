@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildByotConfigForProvider,
+  codexRuntimeConfig,
   type ByotConfigInput,
 } from "../lib/byot-multi-provider-config.js";
 
@@ -95,5 +96,14 @@ describe("buildByotConfigForProvider — openai-compatible (custom provider) cha
         baseUrl: "https://llm.example.com",
       }),
     ).toThrow(/model is required/);
+  });
+});
+
+describe("codexRuntimeConfig — the model-switch BYOS also needs (not just the auth-profile)", () => {
+  it("returns the codex runtime model + the agentRuntime models-def", () => {
+    expect(codexRuntimeConfig()).toEqual({
+      model: "openai/gpt-5.5",
+      modelsDef: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+    });
   });
 });

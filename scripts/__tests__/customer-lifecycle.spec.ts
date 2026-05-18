@@ -63,6 +63,7 @@ interface MockState {
   persistGiteaTokenShouldFail: boolean;
   blobSyncShouldFail: boolean;
   byosubActivated?: boolean;
+  lastConfigPatchByosActive?: boolean;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
   /** When set, the most recent scheduleBootGreetingCron call's params. */
@@ -224,8 +225,9 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       return { jobId: "cron-job-abc" };
     },
 
-    applyAddCustomerConfigPatch: async () => {
+    applyAddCustomerConfigPatch: async (_snap, _mm, opts) => {
       record("applyAddCustomerConfigPatch");
+      state.lastConfigPatchByosActive = opts?.byosActive ?? false;
       return { elapsedMs: 42 };
     },
     applyRemoveCustomerConfigPatch: async () => {
@@ -348,12 +350,16 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     expect(restoreIdx).toBeGreaterThan(-1);
     expect(patchIdx).toBeGreaterThan(restoreIdx);
     expect(result.steps).toContain("byosub-restore");
+    // The config-patch MUST receive byosActive so it switches the agent's
+    // model to the codex runtime (auth-profile alone doesn't — #976 burn).
+    expect(state.lastConfigPatchByosActive).toBe(true);
   });
 
-  it("is a self-no-op for non-BYOS customers (called, but no step, no disruption)", async () => {
+  it("is a self-no-op for non-BYOS customers (called, but no step, default model)", async () => {
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
     expect(state.calls).toContain("restoreByosubForAgent");
     expect(result.steps).not.toContain("byosub-restore");
+    expect(state.lastConfigPatchByosActive).toBe(false); // no model switch
   });
 
   it("writes provisioning.git.repoUrl IMMEDIATELY after the repo init succeeds", async () => {

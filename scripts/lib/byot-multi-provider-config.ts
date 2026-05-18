@@ -224,3 +224,19 @@ export function isOauthProvider(provider: Provider): boolean {
   // eslint-disable-next-line security/detect-object-injection -- typed Provider key into the closed PROVIDERS Record (no injection)
   return PROVIDERS[provider].mode === "oauth";
 }
+
+/**
+ * The codex runtime model + the `agents.defaults.models` def that routes
+ * it via codex. BYOS activation needs BOTH the per-agent oauth
+ * auth-profile AND the agent's model switched to this — the auth-profile
+ * alone does not switch the model (empirically disproved in TEST; the
+ * `agentModelOverride` buildByotConfigForProvider computes was being
+ * dropped). Single source: derived from the PROVIDERS registry.
+ */
+export function codexRuntimeConfig(): {
+  model: string;
+  modelsDef: Record<string, { agentRuntime: { id: "codex" } }>;
+} {
+  const model = PROVIDERS["openai-codex"].defaultModel!;
+  return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
+}
