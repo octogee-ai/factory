@@ -1,13 +1,10 @@
 import { describe, it, expect } from "vitest";
-import {
-  resolveGatewayImageRepository,
-  GATEWAY_AR_BASE,
-  PROFILE_IMAGE_NAME,
-} from "../gateway-profiles";
+import { resolveGatewayImageRepository, PROFILE_IMAGE_NAME } from "../gateway-profiles";
 import { buildInstancesMap, buildHelmTargetMap, diffInstancesMap } from "../reconcile-plan";
 import type { GatewayDesiredState } from "../../../shared/types/glm";
 
 const STD_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+const OPERATOR_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
 
 function mkDesired(o: Partial<GatewayDesiredState>): GatewayDesiredState {
   return {
@@ -30,11 +27,19 @@ describe("resolveGatewayImageRepository", () => {
     expect(resolveGatewayImageRepository(mkDesired({ profile: "standard" }))).toBe(STD_REPO);
   });
 
-  it("profile 'operator' ⇒ derived operator image at GATEWAY_AR_BASE", () => {
-    expect(resolveGatewayImageRepository(mkDesired({ profile: "operator" }))).toBe(
-      `${GATEWAY_AR_BASE}/${PROFILE_IMAGE_NAME.operator}`,
-    );
+  it("profile 'operator' ⇒ profile image at the SAME registry/project (derived, not hardcoded)", () => {
+    expect(resolveGatewayImageRepository(mkDesired({ profile: "operator" }))).toBe(OPERATOR_REPO);
     expect(PROFILE_IMAGE_NAME.operator).toBe("octogee-gateway-operator");
+  });
+
+  it("derivation follows the instance's own registry — no hardcoded AR host/project", () => {
+    // Proves resolution is derived from imageRepository, so a future AR
+    // relocation needs no code change here (Copilot #3268109816).
+    expect(
+      resolveGatewayImageRepository(
+        mkDesired({ profile: "operator", imageRepository: "europe-docker.pkg.dev/acme/reg/octogee-gateway" }),
+      ),
+    ).toBe("europe-docker.pkg.dev/acme/reg/octogee-gateway-operator");
   });
 });
 
@@ -43,9 +48,7 @@ describe("Cowboy resolves profile in the helm maps (image name, NOT the tag)", (
     const map = buildInstancesMap([
       mkDesired({ instanceName: "bender", gatewayId: "gw-bender", profile: "operator" }),
     ]);
-    expect(map.bender.image.repository).toBe(
-      `${GATEWAY_AR_BASE}/octogee-gateway-operator`,
-    );
+    expect(map.bender.image.repository).toBe(OPERATOR_REPO);
     expect(map.bender.image.tag).toBe("abc1234");
   });
 
@@ -58,9 +61,7 @@ describe("Cowboy resolves profile in the helm maps (image name, NOT the tag)", (
     const map = buildHelmTargetMap([
       mkDesired({ instanceName: "bender", gatewayId: "gw-bender", profile: "operator" }),
     ], {});
-    expect(map.bender.image.repository).toBe(
-      `${GATEWAY_AR_BASE}/octogee-gateway-operator`,
-    );
+    expect(map.bender.image.repository).toBe(OPERATOR_REPO);
   });
 
   it("changing profile is a reconcile `update` (Cowboy rolls the instance onto the profile image)", () => {
