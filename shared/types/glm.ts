@@ -6,6 +6,19 @@
 
 export type GatewayDesiredStatus = "running" | "draining" | "retired";
 
+/**
+ * Gateway *capability profile* — orthogonal to the instance identity and
+ * to the fleet image SHA. `standard` is the pooled/cattle gateway image;
+ * `operator` is the same image + the operator toolkit (gcloud, kubectl,
+ * helm, terraform, firebase) for Builder-operator instances (e.g.
+ * BenderEcho). Cowboy resolves a profile to its image repository at the
+ * fleet SHA — see glm-controller `resolveGatewayImageRepository`. New
+ * profiles are one row in `infra/gateway/profiles.yaml`, never a new
+ * per-customer image name. See docs/architecture/GATEWAY-PLATFORM-SPEC.md
+ * §Gateway Profiles vs Gateway Instances.
+ */
+export type GatewayProfile = "standard" | "operator";
+
 export interface GatewayDesiredState {
   /** Operator-meaningful id, matches `users/{uid}.provisioning.openclaw.gatewayId`. */
   gatewayId: string;
@@ -13,6 +26,15 @@ export interface GatewayDesiredState {
   instanceName: string;
   imageRepository: string;
   imageTag: string;
+  /**
+   * Optional capability profile. Absent / `standard` ⇒ use
+   * `imageRepository` literally (zero change for the existing cattle
+   * fleet). A non-standard profile ⇒ Cowboy derives the repository for
+   * that profile at this same `imageTag` (the fleet SHA). The validated
+   * ergonomic knob — operators set `profile: "operator"`, not a raw repo
+   * string.
+   */
+  profile?: GatewayProfile;
   desiredStatus: GatewayDesiredStatus;
   /** Operator identity (uid for human, "ci:{sha}" for CI, "agent:{name}" for an automated caller). */
   createdBy: string;

@@ -3,6 +3,7 @@ import type {
   HelmInstanceValue,
   HelmInstancesMap,
 } from "../../shared/types/glm.js";
+import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 
 export type ReconcileChange =
   | { kind: "create"; instanceName: string; to: HelmInstanceValue }
@@ -37,7 +38,7 @@ export function buildInstancesMap(
     if (d.desiredStatus === "retired") continue;
     out[d.instanceName] = {
       enabled: true,
-      image: { repository: d.imageRepository, tag: d.imageTag },
+      image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
       gatewayId: d.gatewayId,
       ...(chartFingerprint ? { chartFingerprint } : {}),
       ...(d.serviceAccountName ? { serviceAccountName: d.serviceAccountName } : {}),
@@ -86,7 +87,7 @@ export function buildHelmTargetMap(
     }
     out[d.instanceName] = {
       enabled: true,
-      image: { repository: d.imageRepository, tag: d.imageTag },
+      image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
       gatewayId: d.gatewayId,
       ...(chartFingerprint ? { chartFingerprint } : {}),
       ...(d.serviceAccountName ? { serviceAccountName: d.serviceAccountName } : {}),
