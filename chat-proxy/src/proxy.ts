@@ -1,4 +1,5 @@
 import http from "node:http";
+import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from "prom-client";
@@ -486,8 +487,10 @@ async function getMmCreds(uid: string): Promise<GetMmCredsResult> {
     });
 
     return { ok: true, mmToken, mmUserId };
-  } catch (e: any) {
-    console.error(`[proxy] Failed to load MM creds for ${uid}: ${e.message}`);
+  } catch (e) {
+    console.error(
+      `[proxy] Failed to load MM creds for ${uid}: ${e instanceof Error ? e.message : String(e)}`,
+    );
     return { ok: false, reason: 'lookup-error' };
   }
 }
@@ -505,8 +508,12 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
   try {
     const decoded = await admin.auth().verifyIdToken(token);
     return decoded.uid;
-  } catch (e: any) {
-    console.error(`[proxy] auth failed: ${e.code || e.message}`);
+  } catch (e) {
+    const code =
+      typeof e === 'object' && e !== null
+        ? (e as { code?: string }).code
+        : undefined;
+    console.error(`[proxy] auth failed: ${code || (e instanceof Error ? e.message : String(e))}`);
     return null;
   }
 }
@@ -638,10 +645,81 @@ async function handleMattermostMint(
   }));
 }
 
+type UpstreamOutcome =
+  | { ok: true; upstream: WebSocket }
+  | { ok: false; httpStatus: string };
+
+// The upstream handshake is its own sub-state-machine: fetch a gateway
+// token, attempt the WS handshake, and on `auth-failed` rotate the token
+// once (invalidate → skip-cache refetch → single retry) before giving up.
+// Pulled out of handleOpenClawWsUpgrade so the upgrade handler reads as a
+// linear pipeline; refusal-status mapping stays with the caller (it owns
+// the raw socket). Pinned by proxy-oc-ws-upgrade.spec.ts.
+async function establishUpstreamWithRotation(
+  gatewayId: string,
+  gatewayUrl: string,
+): Promise<UpstreamOutcome> {
+  let token: string;
+  try {
+    token = await fetchGatewayToken({ gatewayId });
+  } catch (e) {
+    if (e instanceof GatewayTokenError) {
+      console.error(`[proxy] OC WS: token fetch failed — ${e.code}: ${e.message}`);
+      return { ok: false, httpStatus: "503 Service Unavailable" };
+    }
+    throw e;
+  }
+
+  const tryOpen = (authToken: string) =>
+    openUpstream({ url: gatewayUrl, token: authToken, identity: getOpenClawIdentity() });
+
+  try {
+    const upstream = await tryOpen(token);
+    ocWsHandshakeTotal.inc({ outcome: "ok" });
+    return { ok: true, upstream };
+  } catch (e) {
+    const code = e instanceof OpenclawWireError ? e.code : "unknown";
+    if (code !== "auth-failed") {
+      console.log(`[proxy] OC WS: upstream handshake failed — ${code}`);
+      ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
+      return { ok: false, httpStatus: "502 Bad Gateway" };
+    }
+
+    invalidateGatewayToken(gatewayId);
+    let fresh: string;
+    try {
+      fresh = await fetchGatewayToken({ gatewayId, skipCache: true });
+    } catch (fetchErr) {
+      const fetchCode =
+        fetchErr instanceof GatewayTokenError ? fetchErr.code : "unknown";
+      console.error(
+        `[proxy] OC WS: token re-fetch during rotation failed — ${fetchCode}`,
+      );
+      ocWsHandshakeTotal.inc({ outcome: `fail:refetch:${fetchCode}` });
+      return { ok: false, httpStatus: "503 Service Unavailable" };
+    }
+
+    try {
+      const upstream = await tryOpen(fresh);
+      ocWsHandshakeTotal.inc({ outcome: "ok" });
+      ocWsRotationRecoveredTotal.inc();
+      return { ok: true, upstream };
+    } catch (retryErr) {
+      const retryCode =
+        retryErr instanceof OpenclawWireError ? retryErr.code : "unknown";
+      console.log(
+        `[proxy] OC WS: upstream handshake failed after rotation retry — ${retryCode}`,
+      );
+      ocWsHandshakeTotal.inc({ outcome: `fail:${retryCode}` });
+      return { ok: false, httpStatus: "502 Bad Gateway" };
+    }
+  }
+}
+
 function handleOpenClawWsUpgrade(
   wss: WebSocketServer,
   req: http.IncomingMessage,
-  socket: any,
+  socket: Duplex,
   head: Buffer,
 ): void {
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
@@ -686,8 +764,8 @@ function handleOpenClawWsUpgrade(
           tx.delete(ticketRef);
           return claimUid;
         });
-      } catch (e: any) {
-        if (e?.message === TICKET_INVALID) {
+      } catch (e) {
+        if (e instanceof Error && e.message === TICKET_INVALID) {
           socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
           socket.destroy();
           return;
@@ -726,76 +804,13 @@ function handleOpenClawWsUpgrade(
         throw e;
       }
 
-      let token: string;
-      try {
-        token = await fetchGatewayToken({ gatewayId });
-      } catch (e) {
-        if (e instanceof GatewayTokenError) {
-          console.error(`[proxy] OC WS: token fetch failed — ${e.code}: ${e.message}`);
-          socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-        throw e;
-      }
-
-      let upstream: WebSocket | null = null;
-      const tryOpen = (authToken: string) =>
-        openUpstream({
-          url: gatewayUrl,
-          token: authToken,
-          identity: getOpenClawIdentity(),
-        });
-      try {
-        upstream = await tryOpen(token);
-        ocWsHandshakeTotal.inc({ outcome: "ok" });
-      } catch (e) {
-        const code = e instanceof OpenclawWireError ? e.code : "unknown";
-        if (code === "auth-failed") {
-          invalidateGatewayToken(gatewayId);
-          let fresh: string;
-          try {
-            fresh = await fetchGatewayToken({ gatewayId, skipCache: true });
-          } catch (fetchErr) {
-            const fetchCode =
-              fetchErr instanceof GatewayTokenError ? fetchErr.code : "unknown";
-            console.error(
-              `[proxy] OC WS: token re-fetch during rotation failed — ${fetchCode}`,
-            );
-            ocWsHandshakeTotal.inc({ outcome: `fail:refetch:${fetchCode}` });
-            socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
-            socket.destroy();
-            return;
-          }
-          try {
-            upstream = await tryOpen(fresh);
-            ocWsHandshakeTotal.inc({ outcome: "ok" });
-            ocWsRotationRecoveredTotal.inc();
-          } catch (retryErr) {
-            const retryCode =
-              retryErr instanceof OpenclawWireError ? retryErr.code : "unknown";
-            console.log(
-              `[proxy] OC WS: upstream handshake failed after rotation retry — ${retryCode}`,
-            );
-            ocWsHandshakeTotal.inc({ outcome: `fail:${retryCode}` });
-            socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-            socket.destroy();
-            return;
-          }
-        } else {
-          console.log(`[proxy] OC WS: upstream handshake failed — ${code}`);
-          ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
-          socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-      }
-      if (!upstream) {
-        console.error("[proxy] OC WS: upstream was never assigned — bug");
-        socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+      const outcome = await establishUpstreamWithRotation(gatewayId, gatewayUrl);
+      if (!outcome.ok) {
+        socket.write(`HTTP/1.1 ${outcome.httpStatus}\r\n\r\n`);
         socket.destroy();
         return;
       }
+      const upstream = outcome.upstream;
 
       const gateState = createGateState(expectedAgentId);
 
@@ -889,9 +904,9 @@ function handleOpenClawWsUpgrade(
         });
         upstream.on("error", () => clientWs.close());
       });
-    } catch (e: any) {
-      console.error(`[proxy] OC WS error: ${e?.message ?? e}`);
-      socket.write("HTTP/1.1 500 Internal Error\r\n\r\n");
+    } catch (e) {
+      console.error(`[proxy] OC WS error: ${e instanceof Error ? e.message : String(e)}`);
+      socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
       socket.destroy();
     }
   })();
