@@ -45,15 +45,22 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Read-only on PVCs — Mattermost / Gitea pets must never be touched by
-  # the controller, even though `helm upgrade` only patches the manifest
-  # annotations on them. PVC patch on a PVC that's expanding storage is
-  # a one-way ticket to data loss; keeping read-only here means a chart
-  # change that touches PVC spec falls back to the CI deploy path (which
-  # runs as a different SA with a wider role).
+  # Cowboy needs create/patch/delete on PVCs to reconcile personal/pet
+  # gateway volumes (rendered by the Cowboy-owned octogee-gateway chart).
+  # K8s RBAC Role verbs CANNOT be name-prefix-scoped, so this grant is
+  # namespace-wide — it does NOT by itself confine Cowboy to gw PVCs.
+  # The actual protection of the Mattermost/Gitea pet PVCs is two real,
+  # tested layers, not this RBAC:
+  #   1. Cowboy's mutating helm ops are structurally release-scoped to
+  #      `octogee-gw-*` (RELEASE_PREFIX / releaseNameForInstance in
+  #      helm-runner.ts; pinned by helm-runner.spec.ts "^octogee-gw-").
+  #   2. The MM + Gitea PVCs carry `helm.sh/resource-policy: keep`, so
+  #      even an errant helm uninstall cannot reclaim those volumes.
+  # If layer 1 is ever weakened, a controller-side name guard becomes
+  # mandatory (documented data-loss boundary, not a casual guard).
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods", "events"]
     verbs: ["get", "list", "watch"]
