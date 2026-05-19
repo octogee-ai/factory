@@ -17,13 +17,12 @@ USER root
 # ── Octogee provisioner + site API ──────────────────────────────────────────
 COPY --chown=node:node scripts/package.json scripts/package-lock.json* /octogee/scripts/
 WORKDIR /octogee/scripts
-# `--omit=dev`: nothing in scripts/ devDependencies is needed at runtime
-# (the prod entrypoint is `tsx`, a regular dep; @types/* + vitest +
-# firebase-tools are test/build-only). Was plain `npm install` and
-# leaked the whole dev tree into every customer gateway image — a
-# historical bloat that #1041 (firebase-tools devDep for the adapter
-# emulator-net job) made visible and worth fixing.
-RUN npm install --omit=dev --no-audit --no-fund
+# Full install (incl. devDependencies): `typescript` is a devDep but the
+# build-time typecheck two steps down (`npx tsc -p tsconfig.json --noEmit`)
+# needs it on disk — without it, npx silently fetches the unrelated
+# `tsc@2.0.4` registry package and exits 1. The runtime image stays slim
+# via `npm prune --omit=dev` after the typecheck.
+RUN npm install --no-audit --no-fund
 
 COPY --chown=node:node scripts/local-provisioner.ts /octogee/scripts/
 COPY --chown=node:node scripts/site-build-api.ts /octogee/scripts/
@@ -53,9 +52,14 @@ COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 COPY --chown=node:node shared/ /octogee/shared/
 
 # ── Type-check provisioner (catches errors at build time) ───────────────────
+# Then prune the dev tree — nothing in scripts/ devDependencies is needed
+# at runtime (the prod entrypoint is `tsx`, a regular dep; @types/* +
+# vitest + firebase-tools are test/build-only). Pruning here keeps the
+# runtime image slim without breaking the typecheck above.
 RUN npx tsc -p tsconfig.json --noEmit 2>&1; \
     EXIT=$?; \
-    if [ $EXIT -ne 0 ]; then echo "❌ Type-check failed — fix errors before deploying"; exit $EXIT; fi
+    if [ $EXIT -ne 0 ]; then echo "❌ Type-check failed — fix errors before deploying"; exit $EXIT; fi && \
+    npm prune --omit=dev --no-audit --no-fund
 
 
 # ── Workspace templates ─────────────────────────────────────────────────────
