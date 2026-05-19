@@ -43,8 +43,12 @@ vi.mock("child_process", async () => {
   };
 });
 
-import { deriveDesiredByotState } from "../lib/byot-sync.js";
-import { triggerSecretsReload, restoreOauthStoreForSlug } from "../lib/byot-sync-runtime";
+import { deriveDesiredByotState, byosCoachConfigPatch } from "../lib/byot-sync.js";
+import {
+  triggerSecretsReload,
+  restoreOauthStoreForSlug,
+  applyCoachModelPatch,
+} from "../lib/byot-sync-runtime";
 import { codexAuthJsonPath } from "../lib/byosub-restore.js";
 import * as fs from "fs";
 import * as os from "os";
@@ -228,5 +232,84 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       logFn: () => {},
     });
     expect(ok).toBe(false);
+  });
+});
+
+describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () => {
+  const id = "octogee-tester-70-coach";
+  it("null input / no-override providers → null (keep gateway default, no per-agent model)", () => {
+    expect(byosCoachConfigPatch(null)).toBeNull();
+    expect(byosCoachConfigPatch({ slug: "tester-70", provider: "anthropic" })).toBeNull();
+  });
+
+  it("openai-codex → coach model openai/gpt-5.5 + agentRuntime:codex registry pin", () => {
+    expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
+      agents: {
+        list: [{ id, model: "openai/gpt-5.5" }],
+        defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+      },
+    });
+  });
+
+  it("openai (api_key) → coach model only, NO agentRuntime pin", () => {
+    expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai" })).toEqual({
+      agents: { list: [{ id, model: "openai/gpt-5" }] },
+    });
+  });
+
+  it("openai-compatible → namespaced custom model, no agentRuntime pin", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        provider: "openai-compatible",
+        baseUrl: "https://llm.example.com",
+        model: "llama-3.1-70b",
+      }),
+    ).toEqual({ agents: { list: [{ id, model: "custom-tester-70/llama-3.1-70b" }] } });
+  });
+});
+
+describe("applyCoachModelPatch — applies the durable patch, best-effort", () => {
+  it("codex input → applies the codex patch once, returns true", async () => {
+    const calls: object[] = [];
+    const r = await applyCoachModelPatch(
+      { slug: "tester-70", provider: "openai-codex" },
+      {
+        applyPatch: async (p) => {
+          calls.push(p);
+        },
+      },
+    );
+    expect(r).toBe(true);
+    expect(calls).toEqual([
+      {
+        agents: {
+          list: [{ id: "octogee-tester-70-coach", model: "openai/gpt-5.5" }],
+          defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+        },
+      },
+    ]);
+  });
+
+  it("no-override / null → does NOT apply, returns false", async () => {
+    const applyPatch = vi.fn(async () => {});
+    expect(await applyCoachModelPatch(null, { applyPatch })).toBe(false);
+    expect(
+      await applyCoachModelPatch({ slug: "tester-70", provider: "anthropic" }, { applyPatch }),
+    ).toBe(false);
+    expect(applyPatch).not.toHaveBeenCalled();
+  });
+
+  it("never throws — a failed apply returns false (sync continues → retried next sync)", async () => {
+    const r = await applyCoachModelPatch(
+      { slug: "tester-70", provider: "openai-codex" },
+      {
+        applyPatch: async () => {
+          throw new Error("config.patch hash-mismatch exhausted");
+        },
+        logFn: () => {},
+      },
+    );
+    expect(r).toBe(false);
   });
 });

@@ -1,9 +1,59 @@
 import * as path from "path";
-import { applyByotState, deriveDesiredByotState } from "./byot-sync.js";
+import {
+  applyByotState,
+  byosCoachConfigPatch,
+  deriveDesiredByotState,
+  type ByotInput,
+} from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { isOauthProvider } from "./byot-multi-provider-config.js";
 import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
+import { applyConfigPatch } from "./apply-config-patch.js";
 import { OPENCLAW_DIR, log } from "./config.js";
+
+/**
+ * Point the customer's coach agent at the model their durable BYOT/BYOS
+ * state requires (#1001). The credential restore + secrets.reload alone
+ * never switched the agent — only the customer-lifecycle ADD path set the
+ * model, gated on a transient caller flag a BYOS Connect (on an existing
+ * customer) never drives. Applying it here, from `deriveDesiredByotState`
+ * on every sync, makes a Connect actually flip the agent AND re-asserts it
+ * on every post-reschedule mount (the openclaw.json regen otherwise reverts
+ * it to the gateway default). Best-effort: a failed patch never breaks the
+ * sync — the next sync retries.
+ */
+export async function applyCoachModelPatch(
+  input: ByotInput | null,
+  deps?: {
+    applyPatch?: (patch: object) => Promise<void>;
+    logFn?: (m: string) => void;
+  },
+): Promise<boolean> {
+  const logFn = deps?.logFn ?? log;
+  if (!input) return false;
+  const patch = byosCoachConfigPatch(input);
+  if (!patch) return false; // anthropic / tool-only → keep gateway default
+  const applyPatch =
+    deps?.applyPatch ??
+    (async (p: object) => {
+      await applyConfigPatch(
+        { buildPatch: () => p, logPrefix: `[byot-sync:${input.slug}]` },
+        { maxRetries: 3, totalDeadlineMs: 30_000 },
+      );
+    });
+  try {
+    await applyPatch(patch);
+    logFn(
+      `[byot-sync] ${input.slug}: coach model → ${patch.agents.list[0].model}`,
+    );
+    return true;
+  } catch (e) {
+    logFn(
+      `⚠ [byot-sync] coach-model patch failed for ${input.slug}: ${(e as Error).message}`,
+    );
+    return false;
+  }
+}
 
 export async function triggerSecretsReload(): Promise<void> {
   const rpc = createGatewayRpc({
@@ -117,5 +167,10 @@ export async function syncByotForCustomer(userData: {
       ? await restoreOauthStoreForSlug(slug)
       : false;
 
-  if (changed || restored) await triggerSecretsReload();
+  // #1001: point the coach agent at the provider's model (codex → gpt-5.5
+  // + agentRuntime:codex). Credential-on-disk + secrets.reload alone never
+  // switched the agent. Driven by the durable desired state every sync.
+  const patched = await applyCoachModelPatch(desired.input);
+
+  if (changed || restored || patched) await triggerSecretsReload();
 }

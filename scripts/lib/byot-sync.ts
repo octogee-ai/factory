@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   buildByotConfigForProvider,
+  codexRuntimeConfig,
   isOauthProvider,
   PROVIDERS,
   type Provider,
@@ -25,6 +26,47 @@ const BYOT_MARKER = ".byot-managed";
 // One source of truth for the credential-config shape (was a byte-copy
 // of ByotConfigInput).
 export type ByotInput = ByotConfigInput;
+
+type CodexModelsDef = Record<string, { agentRuntime: { id: "codex" } }>;
+export interface CoachModelPatch {
+  agents: {
+    list: Array<{ id: string; model: string }>;
+    defaults?: { models: CodexModelsDef };
+  };
+}
+
+/**
+ * The openclaw config-patch that points a customer's coach agent at the
+ * model their BYOT/BYOS provider requires (#1001). `buildByotConfigForProvider`
+ * is the single source of truth for the model (`agentModelOverride`):
+ * codex/openai → an explicit model; anthropic / tool-only oauth → null
+ * (keep the gateway-default model — no per-agent override). codex also
+ * needs the `agentRuntime:codex` registry row so the per-agent gpt-5.5
+ * override routes through the @openclaw/codex harness (codexRuntimeConfig).
+ * Returns null when no per-agent model change is required.
+ *
+ * Applied from the DURABLE desired state (deriveDesiredByotState) on every
+ * sync, so a BYOS Connect actually switches the agent AND every later sync
+ * / post-reschedule mount re-asserts it — closing the #1001 gap where only
+ * the customer-lifecycle add path set this (gated on a transient caller
+ * flag the Connect path never drove), leaving the agent on the default.
+ */
+export function byosCoachConfigPatch(
+  input: ByotInput | null,
+): CoachModelPatch | null {
+  if (!input) return null;
+  const cfg = buildByotConfigForProvider(input);
+  if (cfg.agentModelOverride == null) return null;
+  const patch: CoachModelPatch = {
+    agents: {
+      list: [{ id: agentIdForSlug(input.slug), model: cfg.agentModelOverride }],
+    },
+  };
+  if (input.provider === "openai-codex") {
+    patch.agents.defaults = { models: codexRuntimeConfig().modelsDef };
+  }
+  return patch;
+}
 
 export function deriveDesiredByotState(userData: {
   byotActive?: boolean;
