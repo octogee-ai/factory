@@ -1001,6 +1001,12 @@ if (process.env.NODE_ENV !== "test") {
   warnIfWsOriginsMisconfigured(console.warn);
   const server = createServer();
   server.listen(PORT, () => {
+    console.log(
+      `[chat-proxy] boot sha=${process.env.BUILD_SHA ?? "unknown"}` +
+        ` oc=${process.env.OPENCLAW_VERSION ?? "n/a"}` +
+        ` fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"}` +
+        ` node=${process.version} ts=${new Date().toISOString()}`,
+    );
     console.log(`[chat-proxy] listening on :${PORT}`);
     console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
     console.log(`[chat-proxy] chat-proxy public URL (browser-facing, returned by mint): ${CHAT_PROXY_PUBLIC_URL}`);

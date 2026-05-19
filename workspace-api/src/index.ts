@@ -139,9 +139,13 @@ if (process.env.NODE_ENV !== "test") {
   }
 
   app.listen(PORT, () => {
-    logger.info(`workspace-api listening on port ${PORT}`, {
+    logger.info(`workspace-api boot — listening on port ${PORT}`, {
       port: PORT,
       env: process.env.K8S_NAMESPACE || "local",
+      sha: process.env.BUILD_SHA || "unknown",
+      oc: process.env.OPENCLAW_VERSION || "n/a",
+      fork: process.env.OPENCLAW_FORK_SHA || "n/a",
+      node: process.version,
     });
   });
 }

@@ -2,7 +2,7 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { log, GIT_API_URL, GIT_API_TOKEN, GIT_SSH_HOST, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } from "./config.js";
+import { log, dlog, GIT_API_URL, GIT_API_TOKEN, GIT_SSH_HOST, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } from "./config.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName, giteaUsername } from "./gitea-naming.js";
 
 export { giteaUsername };
@@ -623,9 +623,20 @@ export async function syncAllWorkspaces(): Promise<void> {
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-    const remoteCheck = gitExec(coachDir, "remote get-url origin");
+    const remoteCheck = ((): string | null => {
+      try {
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- frozen literal, no input; silent probe (gitExec would log every no-origin as ⚠ at default level)
+        return execSync("git remote get-url origin", {
+          cwd: coachDir,
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+        }).trim();
+      } catch {
+        return null;
+      }
+    })();
     if (remoteCheck === null) {
-      log(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
+      dlog(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
       continue;
     }
 

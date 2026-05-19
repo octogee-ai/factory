@@ -43,6 +43,33 @@ export function log(msg: string): void {
   console.log(`${ts} [provisioner] ${msg}`);
 }
 
+/** Active log level, read per-call (env is stable in a pod; this keeps
+ *  it trivially testable). `info` (default) drops debug/heartbeat
+ *  noise; `debug` brings it all back. The PROD verbosity ratchet —
+ *  tune via the `LOG_LEVEL` env on the gateway deployment. */
+export function logLevel(): string {
+  return (process.env.LOG_LEVEL ?? "info").toLowerCase();
+}
+
+/** Heartbeat / diagnostic detail — silent unless LOG_LEVEL=debug.
+ *  Operational state changes + errors stay on `log()` (always on). */
+export function dlog(msg: string): void {
+  if (logLevel() === "debug") log(msg);
+}
+
+/** One-line boot banner with the build/runtime identity every app must
+ *  log at startup. Env (BUILD_SHA / OPENCLAW_VERSION / OPENCLAW_FORK_SHA)
+ *  is baked into the gateway image (infra/gateway/Dockerfile). */
+export function bootBanner(component: string): string {
+  return (
+    `boot ${component} sha=${process.env.BUILD_SHA ?? "unknown"}` +
+    ` oc=${process.env.OPENCLAW_VERSION ?? "n/a"}` +
+    ` fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"}` +
+    ` node=${process.version} logLevel=${logLevel()}` +
+    ` ts=${new Date().toISOString()}`
+  );
+}
+
 export function readOpenClawConfig(): any {
   return JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, "utf-8"));
 }
