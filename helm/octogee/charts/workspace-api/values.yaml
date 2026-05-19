@@ -109,6 +109,13 @@ ingress:
   # wants to pin the data plane to a specific gateway pod.
   targetService: workspace-api
 
+# Sibling Ingress on the same host that carries Cowboy-owned per-gateway
+# `/api/g/<gatewayId>/*` routes (FLEET-API-ROUTING-SPEC.md). Shares cert +
+# global static IP with `ingress` above so GCE merges them into one URL
+# map. Helm renders only the /health stub; Cowboy reclaims the path list.
+workspaceApiFleetIngress:
+  enabled: true
+
 # Cloud Armor WAF (policy created by Terraform, referenced by name)
 cloudArmor:
   enabled: false

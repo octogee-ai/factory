@@ -62,6 +62,41 @@ export function computeDesiredFleetPaths(opts: {
   return out;
 }
 
+/**
+ * Per-gateway path rules for the api.octogee.com workspace-api seam
+ * (FLEET-API-ROUTING-SPEC). One rule per gateway: `/api/g/<gatewayId>/*`
+ * → `workspace-api-<instanceName>:3001` (the per-instance Service that
+ * already pins to the gateway's pod). Helm continues to render the
+ * static admin / legacy paths on `workspace-api-ingress`; Cowboy owns
+ * the per-gateway path list on a sibling Ingress shell. Same SSA-with-
+ * field-manager pattern as `computeDesiredFleetPaths` above.
+ */
+export function computeDesiredApiFleetPaths(opts: {
+  gateways: ReadonlyArray<FleetGateway>;
+  workspaceApiPort: number;
+  /** Round-robin alias Service for the `/health` fallback path. K8s
+   *  Ingress requires every rule to have ≥1 path, so /health doubles as
+   *  the always-present minimum AND the LB health check target. */
+  workspaceApiServiceName: string;
+}): IngressPathRule[] {
+  const sorted = [...opts.gateways].sort((a, b) =>
+    a.gatewayId.localeCompare(b.gatewayId),
+  );
+  const out: IngressPathRule[] = sorted.map((gw) => ({
+    path: `/api/g/${gw.gatewayId}/*`,
+    pathType: "ImplementationSpecific",
+    serviceName: `workspace-api-${gw.instanceName}`,
+    servicePort: opts.workspaceApiPort,
+  }));
+  out.push({
+    path: "/health",
+    pathType: "ImplementationSpecific",
+    serviceName: opts.workspaceApiServiceName,
+    servicePort: opts.workspaceApiPort,
+  });
+  return out;
+}
+
 function ruleEqual(x: IngressPathRule, y: IngressPathRule): boolean {
   return (
     x.path === y.path &&
@@ -194,6 +229,85 @@ export async function syncFleetIngressPaths(
       // Bootstrap state: umbrella hasn't been deployed yet (or the
       // Ingress was manually deleted). Defer — once helm renders the
       // shell, the next reconciler tick picks up routing.
+      opts.log(
+        `[fleet-ingress] ingress ${opts.ingressName} not yet present in ${opts.namespace} — deferring`,
+      );
+      return { changed: false };
+    }
+    throw new Error(
+      `kubectl get ingress ${opts.ingressName} failed (code=${getResult.code}): ${getResult.stderr.trim() || getResult.stdout.trim()}`,
+    );
+  }
+  const live = JSON.parse(getResult.stdout) as Record<string, unknown>;
+  const livePaths = extractIngressPaths(live);
+  if (pathsEqual(livePaths, desired)) {
+    return { changed: false };
+  }
+
+  const next = buildAppliableIngress(live, desired);
+  const applyResult = await opts.runKubectl(
+    [
+      "apply",
+      "-n",
+      opts.namespace,
+      "--server-side",
+      `--field-manager=${FIELD_MANAGER}`,
+      "--force-conflicts",
+      "-f",
+      "-",
+    ],
+    { stdin: JSON.stringify(next) },
+  );
+  if (applyResult.code !== 0) {
+    throw new Error(
+      `kubectl apply ${opts.ingressName} failed (code=${applyResult.code}): ${applyResult.stderr.trim() || applyResult.stdout.trim()}`,
+    );
+  }
+  opts.log(
+    `[fleet-ingress] applied ${desired.length} path(s) to ${opts.ingressName} (${opts.namespace})`,
+  );
+  return { changed: true };
+}
+
+export interface SyncApiFleetIngressPathsOpts {
+  runKubectl: KubectlSubprocess;
+  ingressName: string;
+  namespace: string;
+  desiredGateways: ReadonlyArray<FleetGateway>;
+  workspaceApiPort: number;
+  workspaceApiServiceName: string;
+  log: (msg: string) => void;
+}
+
+/**
+ * SSA-reconcile per-gateway `/api/g/<gatewayId>/*` paths on the
+ * Cowboy-owned `workspace-api-fleet-ingress` shell. Mirror of
+ * `syncFleetIngressPaths` for the api.octogee.com seam — shares
+ * `buildAppliableIngress`, `extractIngressPaths`, `pathsEqual`, and the
+ * same field manager. Helm renders the Ingress shell (host, cert, IP);
+ * Cowboy owns spec.rules[].http.paths. Defers cleanly when the shell
+ * is not yet present.
+ */
+export async function syncApiFleetIngressPaths(
+  opts: SyncApiFleetIngressPathsOpts,
+): Promise<SyncFleetIngressPathsResult> {
+  const desired = computeDesiredApiFleetPaths({
+    gateways: opts.desiredGateways,
+    workspaceApiPort: opts.workspaceApiPort,
+    workspaceApiServiceName: opts.workspaceApiServiceName,
+  });
+
+  const getResult = await opts.runKubectl([
+    "get",
+    "ingress",
+    opts.ingressName,
+    "-n",
+    opts.namespace,
+    "-o",
+    "json",
+  ]);
+  if (getResult.code !== 0) {
+    if (isIngressNotFound(getResult.stderr)) {
       opts.log(
         `[fleet-ingress] ingress ${opts.ingressName} not yet present in ${opts.namespace} — deferring`,
       );

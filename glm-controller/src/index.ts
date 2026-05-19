@@ -21,6 +21,7 @@ import {
 } from "./helm-runner.js";
 import {
   spawnKubectl,
+  syncApiFleetIngressPaths,
   syncFleetIngressPaths,
   type FleetGateway,
   type KubectlSubprocess,
@@ -106,6 +107,14 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 // BackendConfig, IP); this controller writes the per-instance paths.
 const FLEET_INGRESS_NAME = process.env.FLEET_INGRESS_NAME ?? "octogee-gateway-fleet-control-ingress";
 const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway";
+// Cowboy-owned sibling Ingress on api.octogee.com that carries per-
+// gateway `/api/g/<gatewayId>/*` paths to the per-instance workspace-api
+// Service. The umbrella renders the shell (host, cert, IP, annotations);
+// this controller owns spec.rules[].http.paths via SSA. See
+// FLEET-API-ROUTING-SPEC.md.
+const WORKSPACE_API_FLEET_INGRESS_NAME =
+  process.env.WORKSPACE_API_FLEET_INGRESS_NAME ?? "workspace-api-fleet-ingress";
+const WORKSPACE_API_PORT = parseInt(process.env.WORKSPACE_API_PORT ?? "3001", 10);
 
 interface ControllerDeps {
   db: Firestore;
@@ -410,6 +419,25 @@ async function main(): Promise<void> {
       aliasServiceName: FLEET_ALIAS_SERVICE,
       log,
     }).then(() => undefined);
+  const syncApiFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
+    syncApiFleetIngressPaths({
+      runKubectl,
+      ingressName: WORKSPACE_API_FLEET_INGRESS_NAME,
+      namespace: NAMESPACE,
+      desiredGateways: gateways,
+      workspaceApiPort: WORKSPACE_API_PORT,
+      workspaceApiServiceName: "workspace-api",
+      log,
+    }).then(() => undefined);
+  // One fan-out per reconcile/handler tick — both Cowboy-owned Ingresses
+  // (fleet-control on fleet.octogee.com, api-routing on api.octogee.com)
+  // converge from the same gateway list. Sequential to keep log ordering
+  // intuitive; the SSA calls are idempotent so a partial failure is
+  // re-tried on the next tick.
+  const syncAllFleetIngresses = async (gateways: ReadonlyArray<FleetGateway>) => {
+    await syncFleetIngressForGateways(gateways);
+    await syncApiFleetIngressForGateways(gateways);
+  };
   // Handler-side closure: re-reads desired gateways from Firestore so
   // it always reflects the post-write state (add-gateway has already
   // written the new doc; retire-gateway has already deleted it).
@@ -421,7 +449,7 @@ async function main(): Promise<void> {
         (g): g is FleetGateway =>
           typeof g.gatewayId === "string" && typeof g.instanceName === "string",
       );
-    await syncFleetIngressForGateways(gateways);
+    await syncAllFleetIngresses(gateways);
   };
 
   const handlers = await buildHandlers(db, log, helm, handlerSyncFleetIngress);
@@ -433,7 +461,7 @@ async function main(): Promise<void> {
     helm,
     handlers,
     log,
-    syncFleetIngress: syncFleetIngressForGateways,
+    syncFleetIngress: syncAllFleetIngresses,
     chartFingerprint,
   };
 

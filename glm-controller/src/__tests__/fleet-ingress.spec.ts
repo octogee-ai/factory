@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  computeDesiredApiFleetPaths,
   computeDesiredFleetPaths,
   extractIngressPaths,
   pathsEqual,
@@ -68,6 +69,84 @@ describe("computeDesiredFleetPaths", () => {
       "/restore-customer/gw-alpha",
       "/restore-customer/gw-mike",
       "/restore-customer/gw-zebra",
+    ]);
+  });
+});
+
+describe("computeDesiredApiFleetPaths", () => {
+  const WSAPI_PORT = 3001;
+  const WSAPI_ALIAS = "workspace-api";
+
+  it("emits the static /health rule pointing at the alias Service when no gateways exist (K8s Ingress requires ≥1 path)", () => {
+    const paths = computeDesiredApiFleetPaths({
+      gateways: [],
+      workspaceApiPort: WSAPI_PORT,
+      workspaceApiServiceName: WSAPI_ALIAS,
+    });
+    expect(paths).toEqual([
+      {
+        path: "/health",
+        pathType: "ImplementationSpecific",
+        serviceName: WSAPI_ALIAS,
+        servicePort: WSAPI_PORT,
+      },
+    ]);
+  });
+
+  it("emits one /api/g/<gatewayId>/* path per gateway routed to the per-instance workspace-api Service, /health last", () => {
+    const gateways: FleetGateway[] = [
+      { gatewayId: "gw-bender", instanceName: "bender" },
+    ];
+    const paths = computeDesiredApiFleetPaths({
+      gateways,
+      workspaceApiPort: WSAPI_PORT,
+      workspaceApiServiceName: WSAPI_ALIAS,
+    });
+    expect(paths.map((p) => p.path)).toEqual([
+      "/api/g/gw-bender/*",
+      "/health",
+    ]);
+    expect(paths[0]).toMatchObject({
+      pathType: "ImplementationSpecific",
+      serviceName: "workspace-api-bender",
+      servicePort: WSAPI_PORT,
+    });
+    expect(paths.at(-1)).toMatchObject({ path: "/health", serviceName: WSAPI_ALIAS });
+  });
+
+  it("uses instanceName (never gatewayId) for the per-gateway Service name — same convention as fleet-control", () => {
+    const gateways: FleetGateway[] = [
+      { gatewayId: "gw-bender", instanceName: "bender" },
+      { gatewayId: "default", instanceName: "default" },
+    ];
+    const paths = computeDesiredApiFleetPaths({
+      gateways,
+      workspaceApiPort: WSAPI_PORT,
+      workspaceApiServiceName: WSAPI_ALIAS,
+    });
+    const gatewayPaths = paths.filter((p) => p.path.startsWith("/api/g/"));
+    expect(gatewayPaths.map((p) => p.serviceName)).toEqual([
+      "workspace-api-default",
+      "workspace-api-bender",
+    ]);
+  });
+
+  it("orders gateways by gatewayId for deterministic output (matches fleet-control)", () => {
+    const gateways: FleetGateway[] = [
+      { gatewayId: "gw-zebra", instanceName: "z" },
+      { gatewayId: "gw-alpha", instanceName: "a" },
+      { gatewayId: "default", instanceName: "default" },
+    ];
+    const paths = computeDesiredApiFleetPaths({
+      gateways,
+      workspaceApiPort: WSAPI_PORT,
+      workspaceApiServiceName: WSAPI_ALIAS,
+    });
+    const gatewayPaths = paths.filter((p) => p.path.startsWith("/api/g/"));
+    expect(gatewayPaths.map((p) => p.path)).toEqual([
+      "/api/g/default/*",
+      "/api/g/gw-alpha/*",
+      "/api/g/gw-zebra/*",
     ]);
   });
 });
@@ -373,5 +452,137 @@ describe("syncFleetIngressPaths", () => {
         log: vi.fn(),
       }),
     ).rejects.toThrow(/kubectl apply.*denied/);
+  });
+});
+
+describe("syncApiFleetIngressPaths", () => {
+  const ingressName = "workspace-api-fleet-ingress";
+  const namespace = "octogee-test";
+  const WSAPI_PORT = 3001;
+  const WSAPI_ALIAS = "workspace-api";
+
+  it("no-ops when live paths already match desired (no gateways → just /health)", async () => {
+    const live = {
+      kind: "Ingress",
+      metadata: { name: ingressName, namespace },
+      spec: {
+        rules: [
+          {
+            host: "api.example.com",
+            http: {
+              paths: [
+                {
+                  path: "/health",
+                  pathType: "ImplementationSpecific",
+                  backend: { service: { name: WSAPI_ALIAS, port: { number: WSAPI_PORT } } },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const { runKubectl, calls } = mockKubectl([{ stdout: JSON.stringify(live) }]);
+
+    const { syncApiFleetIngressPaths } = await import("../fleet-ingress");
+    const result = await syncApiFleetIngressPaths({
+      runKubectl,
+      ingressName,
+      namespace,
+      desiredGateways: [],
+      workspaceApiPort: WSAPI_PORT,
+      workspaceApiServiceName: WSAPI_ALIAS,
+      log: vi.fn(),
+    });
+
+    expect(result.changed).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args[0]).toBe("get");
+  });
+
+  it("applies per-gateway /api/g/<gatewayId>/* paths plus /health to the workspace-api seam", async () => {
+    const live = {
+      kind: "Ingress",
+      apiVersion: "networking.k8s.io/v1",
+      metadata: { name: ingressName, namespace },
+      spec: {
+        rules: [
+          {
+            host: "api.example.com",
+            http: {
+              paths: [
+                {
+                  path: "/health",
+                  pathType: "ImplementationSpecific",
+                  backend: { service: { name: WSAPI_ALIAS, port: { number: WSAPI_PORT } } },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const { runKubectl, calls } = mockKubectl([
+      { stdout: JSON.stringify(live) },
+      { stdout: "ingress.networking.k8s.io/workspace-api-fleet-ingress configured" },
+    ]);
+
+    const { syncApiFleetIngressPaths } = await import("../fleet-ingress");
+    const result = await syncApiFleetIngressPaths({
+      runKubectl,
+      ingressName,
+      namespace,
+      desiredGateways: [
+        { gatewayId: "default", instanceName: "default" },
+        { gatewayId: "gw-bender", instanceName: "bender" },
+      ],
+      workspaceApiPort: WSAPI_PORT,
+      workspaceApiServiceName: WSAPI_ALIAS,
+      log: vi.fn(),
+    });
+
+    expect(result.changed).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].args).toContain("apply");
+    expect(calls[1].args).toContain("--server-side");
+    const applied = JSON.parse(calls[1].stdin as string);
+    expect(applied.spec.rules[0].host).toBe("api.example.com");
+    expect(applied.spec.rules[0].http.paths.map((p: { path: string }) => p.path)).toEqual([
+      "/api/g/default/*",
+      "/api/g/gw-bender/*",
+      "/health",
+    ]);
+    expect(applied.spec.rules[0].http.paths[0].backend.service.name).toBe(
+      "workspace-api-default",
+    );
+    expect(applied.spec.rules[0].http.paths[1].backend.service.name).toBe(
+      "workspace-api-bender",
+    );
+    expect(applied.spec.rules[0].http.paths[2].backend.service.name).toBe(WSAPI_ALIAS);
+    const fmArg = calls[1].args.find((a) => a.startsWith("--field-manager"));
+    expect(fmArg).toMatch(/cowboy/);
+  });
+
+  it("defers cleanly when the ingress shell is not yet present (bootstrap)", async () => {
+    const { runKubectl, calls } = mockKubectl([
+      {
+        code: 1,
+        stderr: 'Error from server (NotFound): ingresses.networking.k8s.io "workspace-api-fleet-ingress" not found',
+      },
+    ]);
+    const log = vi.fn();
+    const { syncApiFleetIngressPaths } = await import("../fleet-ingress");
+    const result = await syncApiFleetIngressPaths({
+      runKubectl,
+      ingressName,
+      namespace,
+      desiredGateways: [{ gatewayId: "gw-bender", instanceName: "bender" }],
+      workspaceApiPort: WSAPI_PORT,
+      workspaceApiServiceName: WSAPI_ALIAS,
+      log,
+    });
+    expect(result.changed).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("deferring"));
   });
 });
