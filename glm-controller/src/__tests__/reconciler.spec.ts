@@ -415,6 +415,155 @@ describe("startReconciler — periodic retry after failed tick", () => {
   });
 });
 
+describe("startReconciler — issue #997: a PROD platform release must not roll customer gateways", () => {
+  // The test runner leaves K8S_NAMESPACE unset, so index.ts derives
+  // NAMESPACE="octogee" → the PROD policy path. These pin the issue #997
+  // acceptance: a glm-controller image bump (fresh chartFingerprint) on a
+  // platform release leaves the existing customer gateway pod untouched,
+  // while an explicit operator-driven imageTag change still rolls.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function flush() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("does NOT upsert (roll) an existing customer gateway when only the baked-in chart fingerprint changed", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      read: async () => ({
+        default: {
+          enabled: true,
+          image: { repository: "repo", tag: "sha-prod" },
+          gatewayId: "gw-prod",
+          chartFingerprint: "fp-OLD",
+        },
+      }),
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-prod",
+          instanceName: "default",
+          imageRepository: "repo",
+          imageTag: "sha-prod",
+          desiredStatus: "running",
+          createdBy: "operator",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      // Fresh Cowboy image baked with a changed gateway chart.
+      chartFingerprint: "fp-NEW",
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).not.toHaveBeenCalled();
+    const noChange = log.mock.calls.find(
+      ([msg]: [string]) => typeof msg === "string" && msg.includes("no changes"),
+    );
+    expect(noChange).toBeDefined();
+    stop();
+  });
+
+  it("STILL upserts on a fresh PROD cluster — empty actual is a `create`, never gated by the chart-fingerprint policy", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      read: async () => ({}), // fresh cluster: no deployed gateway releases
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-prod",
+          instanceName: "default",
+          imageRepository: "repo",
+          imageTag: "sha-prod",
+          desiredStatus: "running",
+          createdBy: "controller-default-bootstrap",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      chartFingerprint: "fp-NEW",
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("STILL upserts when the operator changes the desired imageTag (operator-driven PROD rollout via promote-gateway.ts)", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      read: async () => ({
+        default: {
+          enabled: true,
+          image: { repository: "repo", tag: "sha-OLD" },
+          gatewayId: "gw-prod",
+          chartFingerprint: "fp-OLD",
+        },
+      }),
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-prod",
+          instanceName: "default",
+          imageRepository: "repo",
+          imageTag: "sha-NEW",
+          desiredStatus: "running",
+          createdBy: "operator",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      chartFingerprint: "fp-NEW",
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+    stop();
+  });
+});
+
 describe("startReconciler — orphan vs drainee drift classification", () => {
   beforeEach(() => {
     vi.useFakeTimers();

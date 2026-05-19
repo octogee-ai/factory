@@ -333,3 +333,45 @@ describe("chart-template drift detection", () => {
     expect(changes[0].kind).toBe("update");
   });
 });
+
+describe("chart-drift comparison is caller-gated (issue #997 — PROD must not auto-roll)", () => {
+  const baseInstance = (tag: string) => ({
+    enabled: true,
+    image: { repository: REPO, tag },
+    gatewayId: "gw-prod",
+  });
+
+  it("compareChartFingerprint:false — chart-only drift produces NO changes (a glm-controller image bump must not roll customer pods)", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-old" } };
+    const desiredMap: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-new" } };
+    expect(
+      diffInstancesMap(actual, desiredMap, { compareChartFingerprint: false }),
+    ).toEqual([]);
+  });
+
+  it("compareChartFingerprint:false — the undefined→fingerprint transition is also suppressed (fresh Cowboy image must not roll the existing release)", () => {
+    const actual: HelmInstancesMap = { default: baseInstance("sha") };
+    const desiredMap: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-new" } };
+    expect(
+      diffInstancesMap(actual, desiredMap, { compareChartFingerprint: false }),
+    ).toEqual([]);
+  });
+
+  it("compareChartFingerprint:false — an image-tag change still rolls (operator-driven PROD rollout via promote-gateway.ts)", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("sha-old"), chartFingerprint: "fp-old" } };
+    const desiredMap: HelmInstancesMap = { default: { ...baseInstance("sha-new"), chartFingerprint: "fp-new" } };
+    const changes = diffInstancesMap(actual, desiredMap, {
+      compareChartFingerprint: false,
+    });
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ kind: "update", instanceName: "default" });
+  });
+
+  it("compareChartFingerprint defaults to true — chart-only drift still re-applies (TEST auto-roll unchanged)", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-old" } };
+    const desiredMap: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-new" } };
+    const changes = diffInstancesMap(actual, desiredMap);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].kind).toBe("update");
+  });
+});

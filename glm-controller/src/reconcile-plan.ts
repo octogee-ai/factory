@@ -89,10 +89,24 @@ export function buildHelmTargetMap(
   return out;
 }
 
+export interface DiffOptions {
+  /**
+   * Whether a chart-fingerprint mismatch counts as an `update`. TEST
+   * auto-rolls on chart drift (the CI shakedown flow). PROD gateway
+   * rollouts are operator-driven, so a glm-controller image bump on a
+   * platform release must NOT re-apply customer releases purely on
+   * chart-fingerprint drift — that churns live customer pods (issue
+   * #997). Defaults to true.
+   */
+  compareChartFingerprint?: boolean;
+}
+
 export function diffInstancesMap(
   actual: HelmInstancesMap,
   desired: HelmInstancesMap,
+  opts: DiffOptions = {},
 ): ReconcileChange[] {
+  const compareChartFingerprint = opts.compareChartFingerprint ?? true;
   const changes: ReconcileChange[] = [];
   const allNames = new Set([
     ...Object.keys(actual),
@@ -107,24 +121,23 @@ export function diffInstancesMap(
       changes.push({ kind: "create", instanceName: name, to: d });
     } else if (a && !d) {
       changes.push({ kind: "drift", instanceName: name, current: a });
-    } else if (a && d && !instanceEqual(a, d)) {
+    } else if (a && d && !instanceEqual(a, d, compareChartFingerprint)) {
       changes.push({ kind: "update", instanceName: name, from: a, to: d });
     }
   }
   return changes;
 }
 
-function instanceEqual(a: HelmInstanceValue, b: HelmInstanceValue): boolean {
-  // Strict chartFingerprint match. The post-upgrade transition case —
-  // deployed releases that predate this field (chartFingerprint=undefined)
-  // mismatch against the desired (chartFingerprint=<hex>) and trigger one
-  // re-apply per instance. After that pass, the field is set and future
-  // ticks compare strictly. This is the whole point: chart drift detected.
+function instanceEqual(
+  a: HelmInstanceValue,
+  b: HelmInstanceValue,
+  compareChartFingerprint: boolean,
+): boolean {
   return (
     a.enabled === b.enabled &&
     a.image.repository === b.image.repository &&
     a.image.tag === b.image.tag &&
     a.gatewayId === b.gatewayId &&
-    a.chartFingerprint === b.chartFingerprint
+    (!compareChartFingerprint || a.chartFingerprint === b.chartFingerprint)
   );
 }

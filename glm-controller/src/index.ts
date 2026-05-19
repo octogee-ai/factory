@@ -91,6 +91,13 @@ const GATEWAY_VALUES_FILE = (function () {
     : `${GATEWAY_CHART}/values.test.yaml`;
 })();
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
+// Chart-fingerprint drift auto-rolls gateway pods — rationale on
+// DiffOptions.compareChartFingerprint (issue #997). Derived from the
+// namespace like GATEWAY_VALUES_FILE: any namespace other than
+// `octogee` is treated as TEST and auto-rolls; only `octogee` /
+// `octogee-test` exist today, so a future cluster split must revisit
+// this rather than silently reintroduce the bug.
+const AUTO_ROLL_ON_CHART_DRIFT = NAMESPACE !== "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 // Cowboy-owned Ingress for /restore-customer/<gid>, /quiesce/<gid>,
@@ -202,7 +209,9 @@ export function startReconciler(deps: ControllerDeps): () => void {
       });
       const mountedByGatewayId = await readMountedByGatewayId(deps.db);
       const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
-      const changes = diffInstancesMap(actualMap, desiredMap);
+      const changes = diffInstancesMap(actualMap, desiredMap, {
+        compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
+      });
       const targetMap = buildHelmTargetMap(
         desired,
         actualMap,
@@ -246,7 +255,9 @@ export function startReconciler(deps: ControllerDeps): () => void {
           `[glm-controller] drift detected (preserved, not removed): ${draineeDrift.map((d) => d.instanceName).join(", ")}`,
         );
       }
-      const targetVsActual = diffInstancesMap(actualMap, targetMap);
+      const targetVsActual = diffInstancesMap(actualMap, targetMap, {
+        compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
+      });
       if (targetVsActual.length === 0) {
         deps.log(
           `[glm-controller] reconcile tick: no changes (${desired.length} desired, ${Object.keys(actualMap).length} actual)`,
@@ -424,7 +435,7 @@ async function main(): Promise<void> {
   };
 
   log(
-    `[glm-controller] starting — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} valuesFile=${GATEWAY_VALUES_FILE} fleetIngress=${FLEET_INGRESS_NAME}`,
+    `[glm-controller] starting — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftAutoRoll=${AUTO_ROLL_ON_CHART_DRIFT} valuesFile=${GATEWAY_VALUES_FILE} fleetIngress=${FLEET_INGRESS_NAME}`,
   );
 
   await bootstrapGlmGateways(deps);
