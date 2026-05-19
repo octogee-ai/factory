@@ -734,12 +734,17 @@ async function buildHandlers(
         instanceName: data.instanceName,
         imageRepository: data.imageRepository,
         imageTag: data.imageTag,
+        profile: data.profile,
       };
     },
-    updateGlmGatewayImage: async (gatewayId, imageRepository, imageTag) => {
+    updateGlmGatewayImage: async (gatewayId, imageRepository, imageTag, profile) => {
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({
         imageRepository,
         imageTag,
+        // `standard` is the cattle default — store it as field-absent so the
+        // pooled fleet's desired-state stays byte-identical (and an
+        // operator→standard revert truly restores it).
+        profile: profile === "standard" ? FieldValue.delete() : profile,
       });
     },
     readGatewayHeartbeat: async (gatewayId) => {

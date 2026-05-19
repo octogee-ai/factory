@@ -17,7 +17,8 @@ export type GatewayDesiredStatus = "running" | "draining" | "retired";
  * per-customer image name. See docs/architecture/GATEWAY-PLATFORM-SPEC.md
  * §Gateway Profiles vs Gateway Instances.
  */
-export type GatewayProfile = "standard" | "operator";
+export const GATEWAY_PROFILES = ["standard", "operator"] as const;
+export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 
 export interface GatewayDesiredState {
   /** Operator-meaningful id, matches `users/{uid}.provisioning.openclaw.gatewayId`. */

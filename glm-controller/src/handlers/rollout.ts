@@ -1,6 +1,12 @@
-import type { Operation, OperationStep, StepStatus } from "../../../shared/types/glm.js";
+import type {
+  Operation,
+  OperationStep,
+  StepStatus,
+  GatewayProfile,
+} from "../../../shared/types/glm.js";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
+import { resolveGatewayImageRepository } from "../gateway-profiles.js";
 
 export interface GatewayHeartbeatVersion {
   version: string | null;
@@ -11,17 +17,19 @@ export interface CurrentGatewaySpec {
   instanceName: string;
   imageRepository: string;
   imageTag: string;
+  profile?: GatewayProfile;
 }
 
 export interface RolloutDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
   /** Reads glmGateways/{id} so we can check current spec + map to instanceName for helm-render poll. */
   readCurrentSpec: (gatewayId: string) => Promise<CurrentGatewaySpec | null>;
-  /** Updates glmGateways/{id}.imageRepository + imageTag. The reconciler picks this up via onSnapshot. */
+  /** Updates glmGateways/{id}.imageRepository + imageTag + profile. The reconciler picks this up via onSnapshot. */
   updateGlmGatewayImage: (
     gatewayId: string,
     imageRepository: string,
     imageTag: string,
+    profile: GatewayProfile,
   ) => Promise<void>;
   /** Reads gateways/{id} heartbeat: version (image tag the pod published) + lastHeartbeatAt. */
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeatVersion | null>;
@@ -39,6 +47,7 @@ interface RolloutInput {
   gatewayId?: unknown;
   imageTag?: unknown;
   imageRepository?: unknown;
+  profile?: unknown;
 }
 
 interface PollResult {
@@ -48,38 +57,79 @@ interface PollResult {
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
+interface RolloutTarget {
+  gatewayId: string;
+  imageTag: string;
+  instanceName: string;
+  newRepository: string;
+  newProfile: GatewayProfile;
+  resolvedRepository: string;
+}
+
+async function resolveRolloutTarget(
+  op: Operation,
+  deps: Pick<RolloutDeps, "readCurrentSpec">,
+): Promise<{ error: string } | { target: RolloutTarget }> {
+  const input = op.input as RolloutInput;
+  const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
+  const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
+  const imageRepositoryOverride =
+    typeof input.imageRepository === "string" ? input.imageRepository : undefined;
+  const profileOverride =
+    typeof input.profile === "string" ? (input.profile as GatewayProfile) : undefined;
+
+  if (!gatewayId) return { error: "missing gatewayId in op.input" };
+  if (!imageTag) return { error: "missing imageTag in op.input" };
+
+  const current = await deps.readCurrentSpec(gatewayId);
+  if (!current) {
+    return { error: `glmGateways/${gatewayId} not found — cannot roll out` };
+  }
+  const newRepository = imageRepositoryOverride ?? current.imageRepository;
+  const currentProfile: GatewayProfile = current.profile ?? "standard";
+  const newProfile: GatewayProfile = profileOverride ?? currentProfile;
+  if (
+    newRepository === current.imageRepository &&
+    imageTag === current.imageTag &&
+    newProfile === currentProfile
+  ) {
+    return {
+      error: `gateway ${gatewayId} already on ${newRepository}:${imageTag} (${newProfile}) — no-op rollout`,
+    };
+  }
+  return {
+    target: {
+      gatewayId,
+      imageTag,
+      instanceName: current.instanceName,
+      newRepository,
+      newProfile,
+      resolvedRepository: resolveGatewayImageRepository({
+        profile: newProfile,
+        imageRepository: newRepository,
+      }),
+    },
+  };
+}
+
 export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
-    const input = op.input as RolloutInput;
-    const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
-    const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
-    const imageRepositoryOverride =
-      typeof input.imageRepository === "string" ? input.imageRepository : undefined;
-
-    if (!gatewayId) return { steps: [], success: false, error: "missing gatewayId in op.input" };
-    if (!imageTag) return { steps: [], success: false, error: "missing imageTag in op.input" };
-
-    const current = await deps.readCurrentSpec(gatewayId);
-    if (!current) {
-      return {
-        steps: [],
-        success: false,
-        error: `glmGateways/${gatewayId} not found — cannot roll out`,
-      };
+    const resolved = await resolveRolloutTarget(op, deps);
+    if ("error" in resolved) {
+      return { steps: [], success: false, error: resolved.error };
     }
-    const newRepository = imageRepositoryOverride ?? current.imageRepository;
-    if (newRepository === current.imageRepository && imageTag === current.imageTag) {
-      return {
-        steps: [],
-        success: false,
-        error: `gateway ${gatewayId} already on ${newRepository}:${imageTag} — no-op rollout`,
-      };
-    }
+    const { gatewayId, imageTag, newRepository, newProfile, resolvedRepository } =
+      resolved.target;
 
     const updateStartedAt = deps.now();
     await reportStep(ctx, { name: "update-spec", status: "running", startedAt: updateStartedAt });
     try {
-      await deps.updateGlmGatewayImage(gatewayId, newRepository, imageTag);
+      await deps.updateGlmGatewayImage(
+        gatewayId,
+        newRepository,
+        imageTag,
+        newProfile,
+      );
       await reportStep(ctx, {
         name: "update-spec",
         status: "done",
@@ -111,10 +161,10 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
       deps,
       check: async () => {
         const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-        const entry = map[current.instanceName];
-        return entry?.image.tag === imageTag && entry.image.repository === newRepository;
+        const entry = map[resolved.target.instanceName];
+        return entry?.image.tag === imageTag && entry.image.repository === resolvedRepository;
       },
-      timeoutMessage: `helm did not render ${current.instanceName}@${imageTag} within ${deps.helmRenderTimeoutMs}ms`,
+      timeoutMessage: `helm did not render ${resolved.target.instanceName}@${imageTag} within ${deps.helmRenderTimeoutMs}ms`,
     });
     if (!renderResult.ok) {
       return { steps: [], success: false, error: renderResult.errorMsg };

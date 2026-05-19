@@ -18,6 +18,8 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  GATEWAY_PROFILES,
+  type GatewayProfile,
 } from "../../shared/types/glm.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 
@@ -167,10 +169,11 @@ interface RolloutBodyError {
 interface RolloutBodyOk {
   imageTag: string;
   imageRepository: string | null;
+  profile?: GatewayProfile;
 }
 
 export function validateRolloutBody(
-  body: Partial<{ imageTag: string; imageRepository: string }>,
+  body: Partial<{ imageTag: string; imageRepository: string; profile: string }>,
 ): { error: RolloutBodyError } | { ok: RolloutBodyOk } {
   if (!body.imageTag || typeof body.imageTag !== "string") {
     return { error: { status: 400, body: { error: "missing imageTag" } } };
@@ -204,10 +207,28 @@ export function validateRolloutBody(
       },
     };
   }
+  if (
+    body.profile != null &&
+    (typeof body.profile !== "string" ||
+      !(GATEWAY_PROFILES as readonly string[]).includes(body.profile))
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: `profile must be one of: ${GATEWAY_PROFILES.join(", ")}`,
+          got: body.profile,
+        },
+      },
+    };
+  }
   return {
     ok: {
       imageTag: body.imageTag,
       imageRepository: body.imageRepository ?? null,
+      ...(body.profile != null
+        ? { profile: body.profile as GatewayProfile }
+        : {}),
     },
   };
 }
@@ -1111,13 +1132,17 @@ export function addAdminFleetRoutes(
       try {
         const id = req.params.id;
         const validation = validateRolloutBody(
-          req.body as Partial<{ imageTag: string; imageRepository: string }>,
+          req.body as Partial<{
+            imageTag: string;
+            imageRepository: string;
+            profile: string;
+          }>,
         );
         if ("error" in validation) {
           res.status(validation.error.status).json(validation.error.body);
           return;
         }
-        const { imageTag, imageRepository } = validation.ok;
+        const { imageTag, imageRepository, profile } = validation.ok;
 
         const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
         const snap = await ref.get();
@@ -1128,18 +1153,22 @@ export function addAdminFleetRoutes(
           return;
         }
         const data = snap.data() as
-          | { imageTag?: string; imageRepository?: string }
+          | { imageTag?: string; imageRepository?: string; profile?: string }
           | undefined;
         const targetRepo = imageRepository ?? data?.imageRepository ?? "";
+        const currentProfile = data?.profile ?? "standard";
+        const targetProfile = profile ?? currentProfile;
         if (
           data?.imageTag === imageTag &&
-          data.imageRepository === targetRepo
+          data.imageRepository === targetRepo &&
+          targetProfile === currentProfile
         ) {
           res.status(409).json({
             error: "gateway already on requested image — no-op rollout",
             gatewayId: id,
             imageTag,
             imageRepository: targetRepo,
+            profile: targetProfile,
           });
           return;
         }
@@ -1183,8 +1212,10 @@ export function addAdminFleetRoutes(
           gatewayId: string;
           imageTag: string;
           imageRepository?: string;
+          profile?: GatewayProfile;
         } = { gatewayId: id, imageTag };
         if (imageRepository) input.imageRepository = imageRepository;
+        if (profile) input.profile = profile;
         const operationId = await createOperation(db, {
           kind: "rollout",
           createdBy: actor.uid ?? "unknown",

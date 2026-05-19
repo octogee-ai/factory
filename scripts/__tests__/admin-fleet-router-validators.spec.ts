@@ -98,4 +98,42 @@ describe("validateRolloutBody", () => {
     const r = validateRolloutBody({ imageTag: "ZZZZZZZ-oc2026.5.12" });
     expect("error" in r).toBe(true);
   });
+
+  it("omits profile when not provided (cattle rollouts unchanged)", () => {
+    const r = validateRolloutBody({ imageTag: "abc1234" });
+    expect("ok" in r).toBe(true);
+    if ("ok" in r) expect(r.ok.profile).toBeUndefined();
+  });
+
+  it("accepts profile='operator'", () => {
+    const r = validateRolloutBody({ imageTag: "abc1234", profile: "operator" });
+    expect("ok" in r).toBe(true);
+    if ("ok" in r) expect(r.ok.profile).toBe("operator");
+  });
+
+  it("accepts profile='standard' (explicit revert to cattle image)", () => {
+    const r = validateRolloutBody({ imageTag: "abc1234", profile: "standard" });
+    expect("ok" in r).toBe(true);
+    if ("ok" in r) expect(r.ok.profile).toBe("standard");
+  });
+
+  it("rejects an unknown profile", () => {
+    const r = validateRolloutBody({ imageTag: "abc1234", profile: "superuser" });
+    expect("error" in r).toBe(true);
+    if ("error" in r) {
+      expect(r.error.status).toBe(400);
+      expect(r.error.body).toMatchObject({
+        error: expect.stringContaining("profile"),
+        got: "superuser",
+      });
+    }
+  });
+
+  it("rejects a non-string profile", () => {
+    const r = validateRolloutBody({
+      imageTag: "abc1234",
+      profile: 123 as unknown as string,
+    });
+    expect("error" in r).toBe(true);
+  });
 });

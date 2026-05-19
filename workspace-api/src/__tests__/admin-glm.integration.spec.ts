@@ -612,6 +612,59 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
     });
   });
 
+  it("profile-only flip at the SAME sha is NOT a no-op — creates a rollout op carrying profile", async () => {
+    glmGatewaysDocs["gw-bender"] = {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      imageRepository: REPO,
+      imageTag: "abcdef1",
+      // no profile field → cattle/standard today
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-bender/rollout")
+      .send({ imageTag: "abcdef1", profile: "operator" });
+    expect(res.status).toBe(202);
+    const op = calls.find((c) => c.collection === "glmOperations");
+    expect(op?.data).toMatchObject({
+      kind: "rollout",
+      input: { gatewayId: "gw-bender", imageTag: "abcdef1", profile: "operator" },
+    });
+  });
+
+  it("same sha AND same profile is still a 409 no-op (boundary not over-broadened)", async () => {
+    glmGatewaysDocs["gw-bender"] = {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      imageRepository: REPO,
+      imageTag: "abcdef1",
+      profile: "operator",
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-bender/rollout")
+      .send({ imageTag: "abcdef1", profile: "operator" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no-op/);
+    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
+  });
+
+  it("rejects an unknown profile with 400 (no op written)", async () => {
+    glmGatewaysDocs["gw-test"] = {
+      gatewayId: "gw-test",
+      instanceName: "default",
+      imageRepository: REPO,
+      imageTag: "oldSha",
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-test/rollout")
+      .send({ imageTag: "abcdef1", profile: "root" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/profile/);
+    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
+  });
+
   it("returns 400 when imageTag is not a SHA-style hex string (e.g. 'latest', 'v1.2.3')", async () => {
     glmGatewaysDocs["gw-test"] = {
       gatewayId: "gw-test",

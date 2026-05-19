@@ -5,6 +5,8 @@ import type { RolloutDeps, CurrentGatewaySpec } from "../handlers/rollout";
 import type { OperationContext } from "../operation-router";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+const OPERATOR_REPO =
+  "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
 
 function mkOp(overrides: Partial<Operation> = {}): Operation {
   return {
@@ -53,9 +55,15 @@ function makeDeps(state: FakeState, overrides: Partial<RolloutDeps> = {}): Rollo
       }),
     },
     readCurrentSpec: vi.fn(async (gatewayId: string) => state.specs.get(gatewayId) ?? null),
-    updateGlmGatewayImage: vi.fn(async (gatewayId, repo, tag) => {
+    updateGlmGatewayImage: vi.fn(async (gatewayId, repo, tag, profile) => {
       const cur = state.specs.get(gatewayId);
-      if (cur) state.specs.set(gatewayId, { ...cur, imageRepository: repo, imageTag: tag });
+      if (cur)
+        state.specs.set(gatewayId, {
+          ...cur,
+          imageRepository: repo,
+          imageTag: tag,
+          ...(profile ? { profile } : {}),
+        });
     }),
     readGatewayHeartbeat: vi.fn(async (gatewayId) => state.heartbeats.get(gatewayId) ?? null),
     helmRenderTimeoutMs: 60_000,
@@ -226,5 +234,59 @@ describe("createRolloutHandler — failures", () => {
     expect(result.error).toMatch(/heartbeat with version=newSha/);
     const failed = ctx.reported.find((s) => s.status === "failed");
     expect(failed?.name).toBe("heartbeat-fresh");
+  });
+});
+
+describe("createRolloutHandler — capability profile", () => {
+  it("a profile flip at the SAME sha is not a no-op: writes profile and waits on the RESOLVED operator repo", async () => {
+    const state: FakeState = {
+      specs: new Map([
+        // cattle/standard today (no profile field), on sha1
+        ["gw-bender", { instanceName: "bender", imageRepository: REPO, imageTag: "sha1" }],
+      ]),
+      helmInstances: new Map([["bender", { repository: REPO, tag: "sha1" }]]),
+      heartbeats: new Map([["gw-bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
+    };
+    let polls = 2;
+    const deps = makeDeps(state, {
+      wait: vi.fn(async (_ms: number) => {
+        if (--polls === 0) {
+          // Cowboy reconciles the profile → helm now renders the OPERATOR repo
+          // at the same sha. If the render predicate still compared against
+          // the standard repo it would never converge → timeout.
+          state.helmInstances.set("bender", { repository: OPERATOR_REPO, tag: "sha1" });
+        }
+      }),
+    });
+    const ctx = makeCtx();
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "gw-bender", imageTag: "sha1", profile: "operator" } }),
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(state.specs.get("gw-bender")?.profile).toBe("operator");
+    // desired-state imageRepository stays the standard repo — profile is the
+    // axis, Cowboy derives the operator repo.
+    expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
+  });
+
+  it("same sha AND same profile is still a no-op (boundary not over-broadened)", async () => {
+    const state: FakeState = {
+      specs: new Map([
+        ["gw-bender", { instanceName: "bender", imageRepository: REPO, imageTag: "sha1", profile: "operator" }],
+      ]),
+      helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "sha1" }]]),
+      heartbeats: new Map([["gw-bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
+    };
+    const deps = makeDeps(state);
+    const ctx = makeCtx();
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "gw-bender", imageTag: "sha1", profile: "operator" } }),
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/no-op/);
+    expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
   });
 });
