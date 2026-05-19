@@ -60,6 +60,36 @@ describe("buildInstancesMap", () => {
     expect(map.canary).toMatchObject({ gatewayId: "gw-test-canary", image: { tag: "def" } });
   });
 
+  it("preserves personal gateway helm knobs from desired state", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        instanceName: "bender",
+        gatewayId: "gw-bender",
+        serviceAccountName: "octogee-gateway-bender",
+        gatewayContainerSecurityContext: {
+          allowPrivilegeEscalation: true,
+          capabilities: { drop: ["ALL"] },
+        },
+        persistence: {
+          enabled: true,
+          storageClassName: "premium-rwo",
+          size: "20Gi",
+          accessModes: ["ReadWriteOnce"],
+        },
+      }),
+    ]);
+    expect(map.bender).toMatchObject({
+      serviceAccountName: "octogee-gateway-bender",
+      gatewayContainerSecurityContext: {
+        allowPrivilegeEscalation: true,
+      },
+      persistence: {
+        enabled: true,
+        size: "20Gi",
+      },
+    });
+  });
+
   it("returns an empty map when no desired state exists", () => {
     const map = buildInstancesMap([]);
     expect(map).toEqual({});
@@ -147,6 +177,61 @@ describe("diffInstancesMap", () => {
     expect(changes).toEqual<ReconcileChange[]>([
       { kind: "update", instanceName: "default", from: actual.default, to: desired.default },
     ]);
+  });
+
+  it("reports an update when personal gateway helm knobs change", () => {
+    const actual: HelmInstancesMap = {
+      bender: {
+        enabled: true,
+        image: { repository: REPO, tag: "abc" },
+        gatewayId: "gw-bender",
+      },
+    };
+    const desired: HelmInstancesMap = {
+      bender: {
+        ...actual.bender,
+        serviceAccountName: "octogee-gateway-bender",
+        persistence: { enabled: true, size: "20Gi" },
+      },
+    };
+    const changes = diffInstancesMap(actual, desired);
+    expect(changes).toEqual<ReconcileChange[]>([
+      { kind: "update", instanceName: "bender", from: actual.bender, to: desired.bender },
+    ]);
+  });
+
+  it("does NOT report an update when a helm-knob object differs only in key order (stable compare — no per-tick reconcile churn)", () => {
+    const actual: HelmInstancesMap = {
+      bender: {
+        enabled: true,
+        image: { repository: REPO, tag: "abc" },
+        gatewayId: "gw-bender",
+        gatewayContainerSecurityContext: {
+          allowPrivilegeEscalation: true,
+          capabilities: { drop: ["ALL"] },
+        },
+        persistence: { enabled: true, size: "20Gi", storageClassName: "premium-rwo" },
+      },
+    };
+    // Same content, keys re-ordered — this is exactly what
+    // `helm get values` round-trips back vs. the desired-state doc.
+    // A raw JSON.stringify compare sees two different strings and
+    // reports a spurious `update` every reconcile tick, rolling the
+    // gateway pod forever.
+    const desired: HelmInstancesMap = {
+      bender: {
+        enabled: true,
+        gatewayId: "gw-bender",
+        image: { tag: "abc", repository: REPO },
+        persistence: { storageClassName: "premium-rwo", size: "20Gi", enabled: true },
+        gatewayContainerSecurityContext: {
+          capabilities: { drop: ["ALL"] },
+          allowPrivilegeEscalation: true,
+        },
+      },
+    };
+    const changes = diffInstancesMap(actual, desired);
+    expect(changes).toEqual<ReconcileChange[]>([]);
   });
 
   it("reports an `update` when enabled flips from true to false (drain)", () => {

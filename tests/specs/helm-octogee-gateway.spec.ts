@@ -261,6 +261,44 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
   });
 });
 
+describe("helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
+  it("default instance stays cattle: emptyDir, no PVC, locked-down securityContext", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    expect(dep).toMatch(/emptyDir:\s*\{\}/);
+    expect(dep).toMatch(/allowPrivilegeEscalation:\s*false/);
+    expect(dep).toMatch(/drop:\s*\n\s*-\s*ALL/);
+    expect(
+      findDoc(out, "PersistentVolumeClaim", "octogee-gateway-default-data"),
+    ).toBeNull();
+  });
+
+  it("persistence.enabled renders a PVC that survives `helm uninstall` (pet volume must not be reclaimed)", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      "persistence.enabled": "true",
+    });
+    const pvc = findDoc(out, "PersistentVolumeClaim", "octogee-gateway-bender-data");
+    expect(pvc).not.toBeNull();
+    expect(pvc).toMatch(/helm\.sh\/resource-policy"?:\s*"?keep/);
+    const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
+    expect(dep).toMatch(
+      /persistentVolumeClaim:\s*\n\s*claimName:\s*"?octogee-gateway-bender-data/,
+    );
+  });
+
+  it("gatewayContainerSecurityContext override elevates one instance without touching the default", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      "gatewayContainerSecurityContext.allowPrivilegeEscalation": "true",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
+    expect(dep).toMatch(/allowPrivilegeEscalation:\s*true/);
+  });
+});
+
 describe("helm/octogee-gateway/ — required value validation", () => {
   it("fails to render when gatewayId is missing", () => {
     const args = [

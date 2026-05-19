@@ -18,6 +18,20 @@ export interface GatewayDesiredState {
   createdBy: string;
   /** Optional retire deadline — reconciler treats `desiredStatus=retired` after this point as a hard remove regardless of mountedCustomers. */
   retireAfter?: number;
+  /** Optional per-instance Kubernetes ServiceAccount override. */
+  serviceAccountName?: string;
+  /**
+   * Optional gateway-container securityContext override. Used for
+   * personal build gateways that need sudo/elevated exec while shared
+   * gateways keep the chart's locked-down default.
+   */
+  gatewayContainerSecurityContext?: Record<string, unknown>;
+  /**
+   * Optional per-instance OpenClaw home persistence. Default remains
+   * emptyDir; personal dogfood gateways may opt into a PVC until their
+   * complete durable restore path is proven.
+   */
+  persistence?: GatewayPersistenceSpec;
   /** Last reconcile error, if any. Cleared on successful reconcile. */
   lastError?: { at: number; message: string } | null;
   /**
@@ -34,6 +48,14 @@ export interface GatewayDesiredState {
    * customers, each with their own ref. See BYO-SUBSCRIPTION-OAUTH-SPEC.md.
    */
   byosub?: Record<string, ByosubRef>;
+}
+
+export interface GatewayPersistenceSpec {
+  enabled: boolean;
+  existingClaim?: string;
+  storageClassName?: string;
+  size?: string;
+  accessModes?: string[];
 }
 
 export type ByosubProvider = "openai" | "anthropic";
@@ -99,6 +121,9 @@ export interface HelmInstanceValue {
    * after upgrade to set the field.
    */
   chartFingerprint?: string;
+  serviceAccountName?: string;
+  gatewayContainerSecurityContext?: Record<string, unknown>;
+  persistence?: GatewayPersistenceSpec;
 }
 
 export type HelmInstancesMap = Record<string, HelmInstanceValue>;

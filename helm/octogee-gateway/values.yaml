@@ -27,6 +27,14 @@ image:
 
 serviceAccountName: octogee-gateway
 
+# Gateway container security defaults stay locked down. Personal build
+# gateways may override this per instance via glmGateways desired state.
+gatewayContainerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
 # GKE Autopilot compute class (selected via nodeSelector on the pod).
 # Built-in classes: "Performance", "Balanced", "Scale-Out", "Accelerator".
 # Custom classes (e.g. "octogee-cost-optimized") map through the
@@ -87,9 +95,18 @@ env:
 preview:
   host: "preview.octogee.com"
 
-# Gateway storage is always emptyDir. Pod-local state is disposable;
-# customers/<slug>/ rehydrates from Gitea post-boot. See gateway sub-
-# chart history for the full rationale (was helm/octogee/charts/gateway).
+# Gateway storage defaults to emptyDir. Pod-local state is disposable;
+# customers/<slug>/ rehydrates from Gitea post-boot. Personal dogfood
+# gateways may opt into a PVC per instance until their full durable
+# restore path is proven.
+persistence:
+  enabled: false
+  existingClaim: ""
+  storageClassName: premium-rwo
+  accessModes:
+    - ReadWriteOnce
+  size: 20Gi
+
 resources:
   requests:
     cpu: "1000m"

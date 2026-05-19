@@ -40,6 +40,11 @@ export function buildInstancesMap(
       image: { repository: d.imageRepository, tag: d.imageTag },
       gatewayId: d.gatewayId,
       ...(chartFingerprint ? { chartFingerprint } : {}),
+      ...(d.serviceAccountName ? { serviceAccountName: d.serviceAccountName } : {}),
+      ...(d.gatewayContainerSecurityContext
+        ? { gatewayContainerSecurityContext: d.gatewayContainerSecurityContext }
+        : {}),
+      ...(d.persistence ? { persistence: d.persistence } : {}),
     };
   }
   return out;
@@ -84,6 +89,11 @@ export function buildHelmTargetMap(
       image: { repository: d.imageRepository, tag: d.imageTag },
       gatewayId: d.gatewayId,
       ...(chartFingerprint ? { chartFingerprint } : {}),
+      ...(d.serviceAccountName ? { serviceAccountName: d.serviceAccountName } : {}),
+      ...(d.gatewayContainerSecurityContext
+        ? { gatewayContainerSecurityContext: d.gatewayContainerSecurityContext }
+        : {}),
+      ...(d.persistence ? { persistence: d.persistence } : {}),
     };
   }
   return out;
@@ -138,6 +148,30 @@ function instanceEqual(
     a.image.repository === b.image.repository &&
     a.image.tag === b.image.tag &&
     a.gatewayId === b.gatewayId &&
-    (!compareChartFingerprint || a.chartFingerprint === b.chartFingerprint)
+    (!compareChartFingerprint || a.chartFingerprint === b.chartFingerprint) &&
+    a.serviceAccountName === b.serviceAccountName &&
+    stableStringify(a.gatewayContainerSecurityContext ?? null) ===
+      stableStringify(b.gatewayContainerSecurityContext ?? null) &&
+    stableStringify(a.persistence ?? null) === stableStringify(b.persistence ?? null)
   );
+}
+
+// Deterministic JSON: object keys sorted recursively, array order
+// preserved. `helm get values` round-trips these objects back in a
+// different key order than the desired-state doc; a raw JSON.stringify
+// compare would then report a spurious `update` every reconcile tick
+// and roll the gateway pod forever.
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(v as Record<string, unknown>).sort(
+    ([a], [b]) => {
+      if (a < b) return -1;
+      if (a > b) return 1;
+      return 0;
+    },
+  );
+  return `{${entries
+    .map(([k, val]) => `${JSON.stringify(k)}:${stableStringify(val)}`)
+    .join(",")}}`;
 }

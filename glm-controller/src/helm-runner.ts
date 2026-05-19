@@ -36,6 +36,9 @@ export interface HelmRunner {
     gatewayId: string;
     imageRepository: string;
     imageTag: string;
+    serviceAccountName?: string;
+    gatewayContainerSecurityContext?: Record<string, unknown>;
+    persistence?: HelmInstancesMap[string]["persistence"];
     chartPath: string;
     valuesFile?: string;
     takeOwnership?: boolean;
@@ -105,6 +108,9 @@ interface PerReleaseValues {
   imageTag?: unknown;
   image?: { repository?: unknown; tag?: unknown };
   chartFingerprint?: unknown;
+  serviceAccountName?: unknown;
+  gatewayContainerSecurityContext?: unknown;
+  persistence?: unknown;
 }
 
 /**
@@ -186,7 +192,36 @@ async function readInstanceValue(
     image: { repository: imageRepo, tag: imageTag },
     gatewayId,
     ...(chartFingerprint ? { chartFingerprint } : {}),
+    ...readPersonalKnobs(v),
   };
+}
+
+// Per-instance pet knobs as round-tripped by `helm get values`. Split
+// out of readInstanceValue so that function stays under the complexity
+// ratchet; each knob is optional and absent unless the live release
+// actually carries it.
+function readPersonalKnobs(
+  v: PerReleaseValues,
+): Partial<HelmInstancesMap[string]> {
+  const out: Partial<HelmInstancesMap[string]> = {};
+  if (typeof v.serviceAccountName === "string" && v.serviceAccountName.length > 0) {
+    out.serviceAccountName = v.serviceAccountName;
+  }
+  if (isPlainObject(v.gatewayContainerSecurityContext)) {
+    out.gatewayContainerSecurityContext = v.gatewayContainerSecurityContext;
+  }
+  if (isPlainObject(v.persistence)) {
+    out.persistence = v.persistence as unknown as HelmInstancesMap[string]["persistence"];
+  }
+  return out;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v != null && typeof v === "object" && !Array.isArray(v);
+}
+
+function pushSetJson(args: string[], key: string, value: unknown): void {
+  args.push("--set-json", `${key}=${JSON.stringify(value)}`);
 }
 
 // Helm refuses any new operation on a release whose previous
@@ -340,6 +375,9 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       valuesFile,
       takeOwnership,
       chartFingerprint,
+      serviceAccountName,
+      gatewayContainerSecurityContext,
+      persistence,
     }) {
       const release = releaseNameForInstance(instanceName);
       const args = [
@@ -360,6 +398,15 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       ];
       if (chartFingerprint) {
         args.push("--set", `chartFingerprint=${chartFingerprint}`);
+      }
+      if (serviceAccountName) {
+        args.push("--set", `serviceAccountName=${serviceAccountName}`);
+      }
+      if (gatewayContainerSecurityContext) {
+        pushSetJson(args, "gatewayContainerSecurityContext", gatewayContainerSecurityContext);
+      }
+      if (persistence) {
+        pushSetJson(args, "persistence", persistence);
       }
       if (valuesFile) args.push("-f", valuesFile);
       if (takeOwnership) args.push("--take-ownership");

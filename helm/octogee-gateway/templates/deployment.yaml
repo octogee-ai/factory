@@ -62,9 +62,7 @@ spec:
             - containerPort: {{ .Values.env.fleetControllerPort | default "3003" }}
               name: fleet-http
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
+            {{- toYaml .Values.gatewayContainerSecurityContext | nindent 12 }}
           env:
             - name: HOME
               value: "/home/node"
@@ -358,4 +356,9 @@ spec:
         {{- end }}
       volumes:
         - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "octogee-gateway-%s-data" .Values.instanceName) | quote }}
+          {{- else }}
           emptyDir: {}
+          {{- end }}

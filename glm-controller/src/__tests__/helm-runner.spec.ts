@@ -103,6 +103,47 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     expect(map.default.chartFingerprint).toBe(fp);
   });
 
+  it("round-trips personal gateway helm knobs from `helm get values`", async () => {
+    const { runHelm } = mockSubprocess([
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-bender", namespace: "octogee", status: "deployed" },
+        ]),
+      },
+      {
+        stdout: JSON.stringify({
+          gatewayId: "gw-bender",
+          instanceName: "bender",
+          imageTag: "abc1234",
+          image: { repository: REPO },
+          serviceAccountName: "octogee-gateway-bender",
+          gatewayContainerSecurityContext: {
+            allowPrivilegeEscalation: true,
+            capabilities: { drop: ["ALL"] },
+          },
+          persistence: {
+            enabled: true,
+            storageClassName: "premium-rwo",
+            size: "20Gi",
+            accessModes: ["ReadWriteOnce"],
+          },
+        }),
+      },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const map = await runner.readDeployedInstances({ namespace: "octogee" });
+    expect(map.bender).toMatchObject({
+      serviceAccountName: "octogee-gateway-bender",
+      gatewayContainerSecurityContext: {
+        allowPrivilegeEscalation: true,
+      },
+      persistence: {
+        enabled: true,
+        size: "20Gi",
+      },
+    });
+  });
+
   it("leaves chartFingerprint undefined when the helm release predates the field (transition case)", async () => {
     const { runHelm } = mockSubprocess([
       {
@@ -325,6 +366,41 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     });
 
     expect(calls[0]).toContain(`chartFingerprint=${"f".repeat(64)}`);
+  });
+
+  it("passes personal gateway knobs as helm values", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee",
+      instanceName: "bender",
+      gatewayId: "gw-bender",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+      serviceAccountName: "octogee-gateway-bender",
+      gatewayContainerSecurityContext: {
+        allowPrivilegeEscalation: true,
+        capabilities: { drop: ["ALL"] },
+      },
+      persistence: {
+        enabled: true,
+        storageClassName: "premium-rwo",
+        size: "20Gi",
+        accessModes: ["ReadWriteOnce"],
+      },
+    });
+
+    const args = calls[0];
+    expect(args).toContain("serviceAccountName=octogee-gateway-bender");
+    expect(args).toContain("--set-json");
+    expect(args).toContain(
+      'gatewayContainerSecurityContext={"allowPrivilegeEscalation":true,"capabilities":{"drop":["ALL"]}}',
+    );
+    expect(args).toContain(
+      'persistence={"enabled":true,"storageClassName":"premium-rwo","size":"20Gi","accessModes":["ReadWriteOnce"]}',
+    );
   });
 
   it("omits chartFingerprint --set when not provided (operator-driven helm calls)", async () => {
