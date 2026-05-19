@@ -8,7 +8,8 @@
     "provision": "tsx local-provisioner.ts",
     "fleet": "tsx ops/fleet.ts",
     "bump-gateway-imagetag": "tsx bump-gateway-imagetag.ts",
-    "test": "npx vitest run __tests__"
+    "test": "npx vitest run __tests__",
+    "audit-coverage": "tsx audit-coverage.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
