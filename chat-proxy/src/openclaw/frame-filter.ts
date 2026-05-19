@@ -28,6 +28,7 @@ export const PER_USER_EVENTS = new Set<string>([
   "sessions.changed",
   "session.message",
   "session.tool",
+  "diagnostic",
 ]);
 
 const SYSTEM_EVENTS = new Set<string>([

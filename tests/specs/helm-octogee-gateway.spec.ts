@@ -71,6 +71,15 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).not.toBeNull();
   });
 
+  it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
+    expect(dep).not.toBeNull();
+    expect(dep).toMatch(/name:\s*OPENCLAW_BROADCAST_ALL_AGENT_RUNS/);
+    // Hunks A+B (B-P1-1/2/3) are dormant without this — same failure
+    // class as the Appendix A.5 silent bridge.
+    expect(dep).toMatch(/name:\s*OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS/);
+  });
+
   it("every doc starts with `apiVersion:` (regression: requireIdentity helper used to leak its values onto the first line)", () => {
     // The `octogee-gateway.requireIdentity` helper used to call
     // `required ...` directly, which returns the validated value;

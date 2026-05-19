@@ -311,20 +311,23 @@ const memberResolveFailuresTotal = new Counter({
 });
 const lastMemberResolveWarnByChannel = new Map<string, number>();
 
-function makeEmitEphemeral(
+// Membership-scoped, per-channel-serialized ephemeral frame emitter.
+// Phase 8.1 security (members-only) + Copilot #2 (no stale-after-fresh)
+// hygiene, frame-name-agnostic so `octogee.ctx` (Phase 7.C) and
+// `octogee.phase` (Phase 2 B-P1-2) share one audited path.
+function makeScopedFrameEmitter<P extends object>(
+  event: string,
   channelMembers: ChannelMemberResolver,
   registry: MmWsRegistry,
   chains: Map<string, Promise<void>>,
-): (channelId: string, payload: { pct: number | null; used: number; limit: number }) => void {
-  // Serialize per-channel so async membership resolution can't deliver
-  // a stale pct after a fresher one (Copilot #2).
+): (channelId: string, payload: P) => void {
   return (channelId, payload) => {
     const prev = chains.get(channelId) ?? Promise.resolve();
     const next = prev
       .then(() => channelMembers.getMembers(channelId))
       .then((members) => {
         registry.broadcast(
-          { event: "octogee.ctx", data: { channelId, ...payload } },
+          { event, data: { channelId, ...payload } },
           (mmUserId) => mmUserId !== null && members.has(mmUserId),
         );
       })
@@ -333,6 +336,30 @@ function makeEmitEphemeral(
       });
     chains.set(channelId, next);
   };
+}
+
+function makeEmitEphemeral(
+  channelMembers: ChannelMemberResolver,
+  registry: MmWsRegistry,
+  chains: Map<string, Promise<void>>,
+): (channelId: string, payload: { pct: number | null; used: number; limit: number }) => void {
+  return makeScopedFrameEmitter("octogee.ctx", channelMembers, registry, chains);
+}
+
+function makeEmitPhase(
+  channelMembers: ChannelMemberResolver,
+  registry: MmWsRegistry,
+  chains: Map<string, Promise<void>>,
+): (
+  channelId: string,
+  payload: {
+    status: string | null;
+    planTitle: string | null;
+    planSteps: string[];
+    terminal: string | null;
+  },
+) => void {
+  return makeScopedFrameEmitter("octogee.phase", channelMembers, registry, chains);
 }
 
 function reportMemberResolveFailure(channelId: string, err: unknown): void {
@@ -1010,6 +1037,7 @@ if (process.env.NODE_ENV !== "test") {
       onError: reportMemberResolveFailure,
     });
     const ctxEmitChains = new Map<string, Promise<void>>();
+    const phaseEmitChains = new Map<string, Promise<void>>();
     const { wireActivityBridge, connectBridgeUpstream } = await import('./openclaw/bridge-boot.js');
     let wired: Awaited<ReturnType<typeof wireActivityBridge>>;
     try {
@@ -1024,6 +1052,7 @@ if (process.env.NODE_ENV !== "test") {
         log: (msg) => console.warn(msg),
         editDiffFetcher: await buildEditDiffFetcher(),
         emitEphemeral: makeEmitEphemeral(channelMembers, mmWsRegistry, ctxEmitChains),
+        emitPhase: makeEmitPhase(channelMembers, mmWsRegistry, phaseEmitChains),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

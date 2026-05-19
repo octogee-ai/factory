@@ -88,6 +88,8 @@ spec:
               value: {{ .Values.instanceName | quote }}
             - name: OPENCLAW_BROADCAST_ALL_AGENT_RUNS
               value: "1"
+            - name: OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS
+              value: "1"
             - name: MM_BOT_USERNAME
               value: "mac-{{ .Values.gatewayId }}"
             - name: GITHUB_ORG
