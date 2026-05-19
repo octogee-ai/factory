@@ -17,7 +17,13 @@ USER root
 # ── Octogee provisioner + site API ──────────────────────────────────────────
 COPY --chown=node:node scripts/package.json scripts/package-lock.json* /octogee/scripts/
 WORKDIR /octogee/scripts
-RUN npm install
+# `--omit=dev`: nothing in scripts/ devDependencies is needed at runtime
+# (the prod entrypoint is `tsx`, a regular dep; @types/* + vitest +
+# firebase-tools are test/build-only). Was plain `npm install` and
+# leaked the whole dev tree into every customer gateway image — a
+# historical bloat that #1041 (firebase-tools devDep for the adapter
+# emulator-net job) made visible and worth fixing.
+RUN npm install --omit=dev --no-audit --no-fund
 
 COPY --chown=node:node scripts/local-provisioner.ts /octogee/scripts/
 COPY --chown=node:node scripts/site-build-api.ts /octogee/scripts/
