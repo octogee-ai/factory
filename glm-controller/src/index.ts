@@ -114,7 +114,16 @@ const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway"
 // FLEET-API-ROUTING-SPEC.md.
 const WORKSPACE_API_FLEET_INGRESS_NAME =
   process.env.WORKSPACE_API_FLEET_INGRESS_NAME ?? "workspace-api-fleet-ingress";
-const WORKSPACE_API_PORT = parseInt(process.env.WORKSPACE_API_PORT ?? "3001", 10);
+// Hardcoded, deliberately. K8s injects service-discovery env vars
+// (`<SVC>_PORT=tcp://<ip>:<port>`) into every pod for every Service in
+// the namespace. Reading `process.env.WORKSPACE_API_PORT` collides with
+// the injected URL form for the `workspace-api` Service →
+// `parseInt("tcp://…", 10)` = NaN → `port: { number: null }` in the SSA
+// payload → "Required value: port name or number is required" + every
+// reconcile tick fails (in PROD on 2026-05-19). The well-known sidecar
+// port matches the helm/octogee-gateway Service template and never
+// varies per env.
+const WORKSPACE_API_PORT = 3001;
 
 interface ControllerDeps {
   db: Firestore;
