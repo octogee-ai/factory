@@ -52,15 +52,28 @@ COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 # functions/src/_shared symlink that sidesteps its rootDir constraint).
 COPY --chown=node:node shared/ /octogee/shared/
 
+# Install shared/ deps (FULL — including devDeps like @types/ws) so the
+# typecheck below can resolve imports that walk into shared/.
+# `scripts/lib/builder-shell-server.ts` imports `shared/ws/upgrade-router`
+# which imports the `ws` npm package; tsc needs both the runtime package
+# (in shared's prod deps) AND the type declarations (in shared's
+# devDependencies — @types/ws). Without this, tsc two steps down fails
+# with TS2307 "Cannot find module 'ws'".
+# The devDeps are pruned together with scripts/'s devDeps at the
+# combined prune step below.
+RUN cd /octogee/shared && npm ci --no-audit --no-fund
+
 # ── Type-check provisioner (catches errors at build time) ───────────────────
 # Then prune the dev tree — nothing in scripts/ devDependencies is needed
 # at runtime (the prod entrypoint is `tsx`, a regular dep; @types/* +
 # vitest + firebase-tools are test/build-only). Pruning here keeps the
-# runtime image slim without breaking the typecheck above.
+# runtime image slim without breaking the typecheck above. Same prune
+# for shared/ — runtime needs `ws` (prod dep), not @types/ws / vitest.
 RUN npx tsc -p tsconfig.json --noEmit 2>&1; \
     EXIT=$?; \
     if [ $EXIT -ne 0 ]; then echo "❌ Type-check failed — fix errors before deploying"; exit $EXIT; fi && \
-    npm prune --omit=dev --no-audit --no-fund
+    npm prune --omit=dev --no-audit --no-fund && \
+    cd /octogee/shared && npm prune --omit=dev --no-audit --no-fund
 
 
 # ── Workspace templates ─────────────────────────────────────────────────────
