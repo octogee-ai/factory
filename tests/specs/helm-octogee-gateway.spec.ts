@@ -225,12 +225,36 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).toMatch(/- name:\s*MM_INTERACTIONS_ALLOWED_SOURCE_IPS[\s\S]*?value:\s*"10\.117\.0\.0\/17"/);
   });
 
-  it("renders an init container that runs as root to chown /home/node/.openclaw", () => {
+  it("renders an init container that runs as root to seed + chown /home/node (operator pet-home parity)", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/initContainers:[\s\S]*?- name:\s*fix-perms/);
     expect(dep).toMatch(/runAsUser:\s*0[\s\S]*?runAsNonRoot:\s*false/);
-    expect(dep).toMatch(/chown -R 1000:1000 \/home\/node\/\.openclaw/);
+    // PVC scope is the whole home, not just .openclaw. The init seeds
+    // shell defaults from /etc/skel idempotently (cp -an = no-clobber)
+    // so a fresh PVC boots with .bashrc/.profile + operator
+    // customizations on subsequent boots survive untouched.
+    expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
+    expect(dep).toMatch(/chown -R 1000:1000 \/home\/node\b/);
+    expect(dep).not.toMatch(/chown -R 1000:1000 \/home\/node\/\.openclaw\b/);
+  });
+
+  it("mounts the data PVC at /home/node (the whole operator home, not just .openclaw)", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    // gateway + workspace-api containers + the fix-perms init container
+    // all share the same PVC at /home/node. chat-proxy stays stateless.
+    const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
+    expect(dataMounts.length).toBe(3);
+    expect(dep).not.toMatch(/mountPath:\s*\/home\/node\/\.openclaw\b/);
+  });
+
+  it("NPM_CONFIG_CACHE points at /home/node/.npm-cache (conventional home location)", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    expect(dep).toMatch(
+      /- name:\s*NPM_CONFIG_CACHE[\s\S]*?value:\s*"\/home\/node\/\.npm-cache"/,
+    );
   });
 
   it("startup probe is HTTP GET /healthz; liveness + readiness stay TCP; all on 18789", () => {

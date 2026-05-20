@@ -38,14 +38,22 @@ spec:
             - sh
             - -c
             - |
-              chown -R 1000:1000 /home/node/.openclaw || true
-              mkdir -p /home/node/.openclaw/.npm-cache && chown -R 1000:1000 /home/node/.openclaw/.npm-cache || true
+              # First-boot seed: copy shell defaults (.bashrc, .profile,
+              # .bash_logout) into the PVC the first time the home is
+              # empty. `cp -an` is archive + no-clobber → idempotent, so
+              # subsequent boots leave operator customizations alone.
+              # PVC scope is the whole home for operator/pet gateways
+              # (Mac Studio parity); the OS still flows through the
+              # image every reschedule.
+              cp -an /etc/skel/. /home/node/ 2>/dev/null || true
+              chown -R 1000:1000 /home/node || true
+              mkdir -p /home/node/.npm-cache && chown -R 1000:1000 /home/node/.npm-cache || true
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
           volumeMounts:
             - name: data
-              mountPath: /home/node/.openclaw
+              mountPath: /home/node
           resources:
             requests:
               cpu: "50m"
@@ -67,7 +75,7 @@ spec:
             - name: HOME
               value: "/home/node"
             - name: NPM_CONFIG_CACHE
-              value: "/home/node/.openclaw/.npm-cache"
+              value: "/home/node/.npm-cache"
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -189,7 +197,7 @@ spec:
                   key: key
           volumeMounts:
             - name: data
-              mountPath: /home/node/.openclaw
+              mountPath: /home/node
           # Startup probe is HTTP GET /healthz (not TCP) — gates
           # liveness/readiness until openclaw is actually serving HTTP,
           # not just port-bound. Unrouted paths fall through to openclaw's
@@ -340,7 +348,7 @@ spec:
             {{- toYaml .Values.workspaceApi.resources | nindent 12 }}
           volumeMounts:
             - name: data
-              mountPath: /home/node/.openclaw
+              mountPath: /home/node
           readinessProbe:
             httpGet:
               path: /health
