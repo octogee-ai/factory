@@ -19,31 +19,33 @@
 import * as admin from "firebase-admin";
 import { db } from "../../lib/db";
 
+// Capture fetch at module-load time so the helper's emulator REST
+// calls (collection sweep, Auth user wipe, custom-token exchange) are
+// immune to any test that replaces `globalThis.fetch` to assert on
+// production-code outbound calls. Without this capture, a test that
+// mocks fetch BEFORE awaiting `getIdTokenForUid()` would catch the
+// auth-emulator round-trip instead of its intended SUT call — the
+// exact failure seen on projects.emulator.spec.ts (mocked fetch
+// received the signInWithCustomToken URL).
+const originalFetch: typeof fetch = globalThis.fetch.bind(globalThis);
+
 export const TICKETS_COLLECTION = "builderShellTickets";
 export const SESSIONS_COLLECTION = "builder_shell_sessions";
 export const GATEWAYS_COLLECTION = "glmGateways";
 
-async function deleteCollection(name: string): Promise<void> {
-  const snap = await db.collection(name).limit(500).get();
-  if (snap.empty) return;
-  const batch = db.batch();
-  for (const d of snap.docs) batch.delete(d.ref);
-  await batch.commit();
-  if (snap.size === 500) await deleteCollection(name);
-}
-
 export async function resetEmulator(): Promise<void> {
-  await Promise.all([
-    deleteCollection(TICKETS_COLLECTION),
-    deleteCollection(SESSIONS_COLLECTION),
-    deleteCollection(GATEWAYS_COLLECTION),
-  ]);
-  // Clear all Auth users via the emulator-only deleteUsers REST path.
-  const host = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+  const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST;
   const project = process.env.GCLOUD_PROJECT;
-  if (host && project) {
-    await fetch(
-      `http://${host}/emulator/v1/projects/${project}/accounts`,
+  if (firestoreHost && project) {
+    await originalFetch(
+      `http://${firestoreHost}/emulator/v1/projects/${project}/databases/(default)/documents`,
+      { method: "DELETE" },
+    ).catch(() => {});
+  }
+  const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+  if (authHost && project) {
+    await originalFetch(
+      `http://${authHost}/emulator/v1/projects/${project}/accounts`,
       { method: "DELETE" },
     ).catch(() => {});
   }
@@ -74,7 +76,7 @@ export async function getIdTokenForUid(uid: string): Promise<string> {
   if (!host || !project) {
     throw new Error("Auth emulator env missing — call requireEmulator() first");
   }
-  const res = await fetch(
+  const res = await originalFetch(
     `http://${host}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key`,
     {
       method: "POST",
