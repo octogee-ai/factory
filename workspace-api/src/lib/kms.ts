@@ -32,6 +32,23 @@ export interface KmsClient {
   }): Promise<[{ plaintext?: Buffer | string | Uint8Array | null }, ...unknown[]]>;
 }
 
+// KMS response bytes come typed as `Buffer | string | Uint8Array`: the
+// protobuf-over-gRPC serializer can deliver either raw bytes (Uint8Array
+// in Node) or — under some JSON-codec paths — a base64-encoded string.
+// Force-casting string→Uint8Array and passing to `Buffer.from(_)` would
+// UTF-8-encode the string and produce garbage ciphertext/plaintext. This
+// helper normalizes all three to a Buffer of the real bytes. Copilot
+// review on #1064 — the lying-cast risk symmetric to the field-name lie
+// we just shut down.
+function bytesToBuffer(v: string | Buffer | Uint8Array): Buffer {
+  if (typeof v === "string") {
+    // protobuf bytes-as-string serialization is base64
+    return Buffer.from(v, "base64");
+  }
+  if (Buffer.isBuffer(v)) return v;
+  return Buffer.from(v);
+}
+
 let _kmsClient: KmsClient | null = null;
 
 /**
@@ -81,7 +98,7 @@ export async function encryptSecret(plaintext: string): Promise<string> {
   if (ciphertext === undefined || ciphertext === null) {
     throw new Error("KMS encrypt returned no ciphertext");
   }
-  return Buffer.from(ciphertext as Uint8Array).toString("base64");
+  return bytesToBuffer(ciphertext).toString("base64");
 }
 
 /**
@@ -104,5 +121,5 @@ export async function decryptSecret(ciphertextBase64: string): Promise<string> {
   if (plaintext === undefined || plaintext === null) {
     throw new Error("KMS decrypt returned no plaintext");
   }
-  return Buffer.from(plaintext as Uint8Array).toString("utf-8");
+  return bytesToBuffer(plaintext).toString("utf-8");
 }

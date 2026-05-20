@@ -75,6 +75,36 @@ describe("encryptSecret", () => {
     _setKmsClientForTesting(mockKms({ encrypt: encrypt as unknown as KmsClient["encrypt"] }));
     await expect(encryptSecret("x")).rejects.toThrow(/no ciphertext/);
   });
+
+  // Copilot #1064 review: the KMS response interface allows
+  // `Buffer | string | Uint8Array`. A force-cast to Uint8Array would
+  // UTF-8-encode a string return and produce garbage ciphertext. The
+  // wrapper now branches: protobuf serializes bytes-as-string in base64.
+  it("handles a string-typed ciphertext return as base64-encoded bytes (not utf-8)", async () => {
+    const ciphertextBytes = Buffer.from("opaque-ciphertext-bytes");
+    const ciphertextAsBase64String = ciphertextBytes.toString("base64");
+    const encrypt = vi.fn(async () => [{ ciphertext: ciphertextAsBase64String }] as [
+      { ciphertext: string },
+    ]);
+    _setKmsClientForTesting(mockKms({ encrypt: encrypt as unknown as KmsClient["encrypt"] }));
+
+    const result = await encryptSecret("my-secret-token");
+    // The returned ciphertext (base64 for Firestore storage) must equal
+    // the bytes the SDK conceptually returned — NOT base64-of-utf8-of-
+    // base64 (the corruption a force-cast would produce).
+    expect(result).toBe(ciphertextAsBase64String);
+  });
+
+  it("handles a Uint8Array-typed ciphertext return", async () => {
+    const ciphertextBytes = new Uint8Array(Buffer.from("opaque-ciphertext-bytes"));
+    const encrypt = vi.fn(async () => [{ ciphertext: ciphertextBytes }] as [
+      { ciphertext: Uint8Array },
+    ]);
+    _setKmsClientForTesting(mockKms({ encrypt: encrypt as unknown as KmsClient["encrypt"] }));
+
+    const result = await encryptSecret("my-secret-token");
+    expect(result).toBe(Buffer.from(ciphertextBytes).toString("base64"));
+  });
 });
 
 describe("decryptSecret", () => {
@@ -111,6 +141,33 @@ describe("decryptSecret", () => {
     });
     _setKmsClientForTesting(mockKms({ decrypt: decrypt as unknown as KmsClient["decrypt"] }));
     await expect(decryptSecret("YWJj")).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+
+  // Copilot #1064 review — symmetric to encrypt. A force-cast of a
+  // string-typed plaintext return to Uint8Array would re-interpret the
+  // base64 string as utf-8 bytes and corrupt the recovered plaintext.
+  it("handles a string-typed plaintext return as base64-encoded bytes (not utf-8)", async () => {
+    const realPlaintext = "Bearer ya29.a0AfB-original-refresh-token";
+    const plaintextAsBase64String = Buffer.from(realPlaintext, "utf-8").toString("base64");
+    const decrypt = vi.fn(async () => [{ plaintext: plaintextAsBase64String }] as [
+      { plaintext: string },
+    ]);
+    _setKmsClientForTesting(mockKms({ decrypt: decrypt as unknown as KmsClient["decrypt"] }));
+
+    const result = await decryptSecret("YWJj");
+    expect(result).toBe(realPlaintext);
+  });
+
+  it("handles a Uint8Array-typed plaintext return", async () => {
+    const realPlaintext = "Bearer ya29.a0AfB-original-refresh-token";
+    const plaintextBytes = new Uint8Array(Buffer.from(realPlaintext, "utf-8"));
+    const decrypt = vi.fn(async () => [{ plaintext: plaintextBytes }] as [
+      { plaintext: Uint8Array },
+    ]);
+    _setKmsClientForTesting(mockKms({ decrypt: decrypt as unknown as KmsClient["decrypt"] }));
+
+    const result = await decryptSecret("YWJj");
+    expect(result).toBe(realPlaintext);
   });
 });
 

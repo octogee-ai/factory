@@ -60,6 +60,11 @@ beforeEach(() => {
 
 afterEach(() => {
   _setKmsClientForTesting(null);
+  // Copilot #1064: per-test fetchSpy.mockRestore() at the end of the
+  // test body leaks the spy into subsequent tests if an assertion
+  // throws first. vi.restoreAllMocks() runs unconditionally between
+  // tests so a flake here can't cascade.
+  vi.restoreAllMocks();
 });
 
 async function readSecret(provider: string): Promise<Record<string, unknown> | undefined> {
@@ -175,7 +180,7 @@ describe("integrations — Twilio credentials at rest", () => {
 describe("integrations — Google OAuth callback credentials at rest", () => {
   it("GET /api/integrations/google/callback stores `encryptedAccessToken` + `encryptedRefreshToken` as ciphertext", async () => {
     // Mock the upstream token-exchange + userinfo fetches the route makes
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
+    vi.spyOn(globalThis, "fetch").mockImplementation((async (
       url: string | URL,
     ) => {
       const u = String(url);
@@ -228,14 +233,13 @@ describe("integrations — Google OAuth callback credentials at rest", () => {
     // Legacy plaintext field names must NOT exist
     expect(tokens).not.toHaveProperty("accessToken");
     expect(tokens).not.toHaveProperty("refreshToken");
-
-    fetchSpy.mockRestore();
+    // fetchSpy is restored via the file-level afterEach (vi.restoreAllMocks)
   });
 });
 
 describe("integrations — Microsoft OAuth callback credentials at rest", () => {
   it("GET /api/integrations/microsoft/callback stores `encryptedAccessToken` + `encryptedRefreshToken` as ciphertext", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
+    vi.spyOn(globalThis, "fetch").mockImplementation((async (
       url: string | URL,
     ) => {
       const u = String(url);
@@ -281,15 +285,14 @@ describe("integrations — Microsoft OAuth callback credentials at rest", () => 
     expect(tokens.encryptedRefreshToken).toBeTypeOf("string");
     expect(tokens).not.toHaveProperty("accessToken");
     expect(tokens).not.toHaveProperty("refreshToken");
-
-    fetchSpy.mockRestore();
+    // fetchSpy is restored via the file-level afterEach (vi.restoreAllMocks)
   });
 });
 
 describe("integrations — universal invariant (regression guard)", () => {
   it("after exercising every secret-writing route, no `users/{uid}/secrets/*` doc contains the original plaintext", async () => {
     // Exercise all 4 paths sequentially against fresh emulator state.
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
+    vi.spyOn(globalThis, "fetch").mockImplementation((async (
       url: string | URL,
     ) => {
       const u = String(url);
@@ -381,7 +384,6 @@ describe("integrations — universal invariant (regression guard)", () => {
         ).toBe(false);
       }
     }
-
-    fetchSpy.mockRestore();
+    // fetchSpy is restored via the file-level afterEach (vi.restoreAllMocks)
   });
 });
