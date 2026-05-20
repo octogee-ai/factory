@@ -719,14 +719,14 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.18 the fork carries **four essential patches, zero diagnostics**. (The 5.18 fresh-reset shipped 3; the 4th — the activity harness-signal feature — was appended via README trigger #2, no version bump, as **two commits / one logical essential patch (Hunks A+B)**, to enable the PWA in-flight-steering differentiator.)
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.19 the fork carries **four essential patches, zero diagnostics** — same stack carried clean from 5.18 over a 250-commit upstream canonical roll (upstream touched ZERO of our patch files; 1 cherry-pick auto-merge in `src/infra/diagnostic-events.ts` for Hunk B; no manual conflicts, no drops).
 
-Short SHAs at v2026.5.18 (top of branch is `6ed39d7e`):
-- `6ed39d7e` — activity harness-signal Hunk B: session-correlated execution-phase
-- `f1ae7fe8` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
-- `00e98fda` — env-gated isControlUiVisible override
-- `57f9b7fa` — config.patch returns post-write hash
-- `1dcf7265` — per-account surgical channel reload
+Short SHAs at v2026.5.19 (top of branch is `2984d843`):
+- `2984d843` — activity harness-signal Hunk B: session-correlated execution-phase
+- `ab1c50d0` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+- `08bce6a0` — env-gated isControlUiVisible override
+- `fd5133e5` — config.patch returns post-write hash
+- `de54651a` — per-account surgical channel reload
 
 **Essential:**
 
