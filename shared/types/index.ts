@@ -116,6 +116,34 @@ export type {
   SignConnectDeviceParams,
 } from './device-identity';
 
+export type {
+  PtyFrame,
+  PtyClientFrame,
+  PtyServerFrame,
+  PtyStdinFrame,
+  PtyStdoutFrame,
+  PtyResizeFrame,
+  PtySignalFrame,
+  PtyExitFrame,
+  PtyErrorFrame,
+  PtyFrameType,
+  PtySignalName,
+} from './builder-shell-pty';
+export {
+  PTY_FRAME,
+  PTY_SIGNALS,
+  PTY_BUDGET,
+  PTY_DEFAULT,
+  ALLOWED_DRIVER_SIGNALS,
+  encodeStdin,
+  encodeStdout,
+  encodeResize,
+  encodeSignal,
+  encodeExit,
+  encodeError,
+  decodeFrame,
+} from './builder-shell-pty';
+
 export type { OpenclawWireErrorCode, WireSocket, ResponseFrame } from './openclaw-wire-core';
 export {
   OpenclawWireError,

@@ -21,6 +21,7 @@
     "firebase-admin": "^13.10.0",
     "google-auth-library": "^10.6.2",
     "http-proxy": "^1.18.1",
+    "node-pty": "^1.1.0",
     "tsx": "^4.22.2",
     "unique-names-generator": "^4.7.1",
     "ws": "^8.20.1"
