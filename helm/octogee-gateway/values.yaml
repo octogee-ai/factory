@@ -27,6 +27,15 @@ image:
 
 serviceAccountName: octogee-gateway
 
+# Capability profile — Cowboy passes `--set profile=<id>` for non-default
+# profiles (`operator` today). Empty default preserves cattle behavior
+# (welcome path for new Builders + L3-throttle platform fallback). The
+# chart gates profile-conditional resources on this — e.g. operator
+# gateways skip the platform `ANTHROPIC_API_KEY` env injection so per-
+# account OAuth (`claude auth login`) and per-agent BYOS are not shadowed
+# at runtime. See docs/specs/BYO-SUBSCRIPTION-OAUTH-SPEC.md §3b.
+profile: ""
+
 # Gateway container security defaults stay locked down. Personal build
 # gateways may override this per instance via glmGateways desired state.
 gatewayContainerSecurityContext:

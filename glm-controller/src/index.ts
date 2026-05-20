@@ -180,6 +180,7 @@ async function applyChanges(
       serviceAccountName: change.to.serviceAccountName,
       gatewayContainerSecurityContext: change.to.gatewayContainerSecurityContext,
       persistence: change.to.persistence,
+      profile: change.to.profile,
       chartPath: GATEWAY_CHART,
       valuesFile: GATEWAY_VALUES_FILE,
       chartFingerprint: deps.chartFingerprint,

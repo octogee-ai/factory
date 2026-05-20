@@ -275,6 +275,53 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
   });
 });
 
+// ── profile-aware credential injection ──────────────────────────────────
+// Operator-profile gateways (BenderEcho today, future Builder-operators)
+// authenticate to external LLM providers via per-account login
+// (`claude auth login`, `codex login`) — tokens persist on the PVC at
+// the CLIs' standard paths, so a platform-injected ANTHROPIC_API_KEY
+// env var would shadow the operator's OAuth credential at runtime
+// (Claude Code reads env first). Standard/cattle gateways keep the
+// platform-injected key (the shared-pool model).
+describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
+  it("injects ANTHROPIC_API_KEY on the gateway container for the standard profile (default, zero-regression)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
+    expect(dep).not.toBeNull();
+    expect(dep).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+  });
+
+  it("injects ANTHROPIC_API_KEY when profile is explicitly standard", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-default", { profile: "standard" }),
+      "Deployment",
+      "octogee-gateway-default",
+    );
+    expect(dep).not.toBeNull();
+    expect(dep).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+  });
+
+  it("OMITS ANTHROPIC_API_KEY when profile is operator (operator uses `claude auth login` instead)", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      "Deployment",
+      "octogee-gateway-default",
+    );
+    expect(dep).not.toBeNull();
+    expect(dep).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+  });
+
+  it("keeps the Mattermost + Gitea platform tokens for ALL profiles (chat-proxy + workspace-api need them)", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      "Deployment",
+      "octogee-gateway-default",
+    );
+    expect(dep).not.toBeNull();
+    expect(dep).toMatch(/name:\s*MM_BOT_TOKEN\b/);
+    expect(dep).toMatch(/name:\s*GIT_API_TOKEN\b/);
+  });
+});
+
 describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
   it("annotates the gateway Service with the per-port BackendConfig map", () => {
     const out = helmTemplate();

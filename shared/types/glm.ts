@@ -147,6 +147,16 @@ export interface HelmInstanceValue {
   serviceAccountName?: string;
   gatewayContainerSecurityContext?: Record<string, unknown>;
   persistence?: GatewayPersistenceSpec;
+  /**
+   * Capability profile passed to the chart as a helm value so templates
+   * can render profile-conditional resources (e.g. operator gateways
+   * skip `ANTHROPIC_API_KEY` env injection — operators authenticate via
+   * `claude auth login` / per-agent BYOS; the platform env would shadow
+   * those, see BYO-SUBSCRIPTION-OAUTH-SPEC §3b). Cattle/standard leaves
+   * this absent — chart default `profile: ""` preserves cattle behavior
+   * (welcome path + L3 throttle fallback).
+   */
+  profile?: GatewayProfile;
 }
 
 export type HelmInstancesMap = Record<string, HelmInstanceValue>;

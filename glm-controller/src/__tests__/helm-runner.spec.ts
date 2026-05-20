@@ -403,6 +403,39 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     );
   });
 
+  it("passes --set profile=<profile> when profile is provided (operator/non-default)", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee",
+      instanceName: "bender",
+      gatewayId: "gw-bender",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+      profile: "operator",
+    });
+
+    expect(calls[0]).toContain("profile=operator");
+  });
+
+  it("omits --set profile when profile is undefined (cattle/standard default = chart's profile=\"\")", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test",
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(calls[0].some((a) => a.startsWith("profile="))).toBe(false);
+  });
+
   it("omits chartFingerprint --set when not provided (operator-driven helm calls)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });

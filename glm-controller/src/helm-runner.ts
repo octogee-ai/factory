@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
-import type { HelmInstancesMap } from "../../shared/types/glm.js";
+import type {
+  GatewayProfile,
+  HelmInstancesMap,
+} from "../../shared/types/glm.js";
 
 /**
  * Per-release helm interface for the gateway-pod fleet.
@@ -49,6 +52,15 @@ export interface HelmRunner {
      * unchanged.
      */
     chartFingerprint?: string;
+    /**
+     * Capability profile — passed as a `--set profile=...` helm value when
+     * present so chart templates can render profile-conditional resources
+     * (e.g. operator gateways skip platform `ANTHROPIC_API_KEY` env
+     * injection — operators auth via per-agent BYOS / `claude auth login`).
+     * Cattle leaves this absent; chart default `profile: ""` preserves the
+     * existing welcome-path env injection.
+     */
+    profile?: GatewayProfile;
   }): Promise<void>;
 
   /** Uninstall ONE gateway instance's helm release. */
@@ -378,6 +390,7 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       serviceAccountName,
       gatewayContainerSecurityContext,
       persistence,
+      profile,
     }) {
       const release = releaseNameForInstance(instanceName);
       const args = [
@@ -398,6 +411,9 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       ];
       if (chartFingerprint) {
         args.push("--set", `chartFingerprint=${chartFingerprint}`);
+      }
+      if (profile) {
+        args.push("--set", `profile=${profile}`);
       }
       if (serviceAccountName) {
         args.push("--set", `serviceAccountName=${serviceAccountName}`);

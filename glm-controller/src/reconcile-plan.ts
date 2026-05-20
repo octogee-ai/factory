@@ -46,6 +46,7 @@ export function buildInstancesMap(
         ? { gatewayContainerSecurityContext: d.gatewayContainerSecurityContext }
         : {}),
       ...(d.persistence ? { persistence: d.persistence } : {}),
+      ...(d.profile ? { profile: d.profile } : {}),
     };
   }
   return out;
@@ -95,6 +96,7 @@ export function buildHelmTargetMap(
         ? { gatewayContainerSecurityContext: d.gatewayContainerSecurityContext }
         : {}),
       ...(d.persistence ? { persistence: d.persistence } : {}),
+      ...(d.profile ? { profile: d.profile } : {}),
     };
   }
   return out;

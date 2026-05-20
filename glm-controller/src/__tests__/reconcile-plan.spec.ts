@@ -94,6 +94,23 @@ describe("buildInstancesMap", () => {
     const map = buildInstancesMap([]);
     expect(map).toEqual({});
   });
+
+  // Profile flows through the helm value so the chart can render the
+  // operator-vs-cattle credential split (helm/octogee-gateway gates
+  // ANTHROPIC_API_KEY env on profile != operator — operator uses BYOS/login).
+  it("propagates the operator profile onto the helm instance value (so the chart can gate env injection)", () => {
+    const map = buildInstancesMap([
+      mkDesired({ instanceName: "bender", profile: "operator" }),
+    ]);
+    expect(map.bender.profile).toBe("operator");
+  });
+
+  it("omits profile when desired state has none (cattle default — chart sees profile=\"\")", () => {
+    const map = buildInstancesMap([
+      mkDesired({ instanceName: "default" }),
+    ]);
+    expect(map.default).not.toHaveProperty("profile");
+  });
 });
 
 describe("deriveFleetImageTag — what sidecars should run", () => {

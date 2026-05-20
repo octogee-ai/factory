@@ -137,11 +137,20 @@ spec:
             - name: PREVIEW_HOST
               value: {{ .Values.preview.host | quote }}
             {{- end }}
+            {{- if ne .Values.profile "operator" }}
+            # Operator-profile gateways MUST NOT inherit the platform
+            # ANTHROPIC_API_KEY — it beats Claude subscription OAuth at
+            # runtime, silently shadowing per-account `claude auth login`
+            # and per-agent BYOS credentials (BYO-SUBSCRIPTION-OAUTH-SPEC
+            # §3b: "BYOT does not work at all without stripping it").
+            # Cattle keeps it for the new-Builder welcome path + L3-throttle
+            # platform fallback (§9.4).
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: octogee-anthropic
                   key: api_key
+            {{- end }}
             - name: GIT_API_TOKEN
               valueFrom:
                 secretKeyRef:
