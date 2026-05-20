@@ -1,37 +1,29 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeAll, beforeEach, afterEach } from 'vitest';
+import { getIdTokenForUid, requireEmulator, resetEmulator } from '../../../shared/test-helpers/firestore-emulator';
 
 process.env.NODE_ENV = 'test';
+process.env.FIREBASE_PROJECT ??= 'octogee-test';
 process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
 process.env.CHAT_PROXY_PUBLIC_URL = 'https://chat-test.octogee.com';
 
-const verifyIdToken = vi.fn(async (token: string) => {
-  if (token === 'good-token') return { uid: 'user-1' };
-  throw new Error('bad token');
-});
-
-vi.mock('firebase-admin', () => ({
-  default: {
-    initializeApp: vi.fn(),
-    credential: { cert: vi.fn() },
-    firestore: () => ({
-      doc: () => ({ get: async () => ({ exists: true, data: () => ({}) }) }),
-    }),
-    auth: () => ({ verifyIdToken }),
-  },
-}));
-
 const { setCors, verifyAuth, gatewayHealthUrl } = await import('../proxy');
 
-describe('chat-proxy helper coverage', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+beforeAll(() => {
+  requireEmulator();
+});
 
+beforeEach(async () => {
+  await resetEmulator();
+});
+
+describe('chat-proxy helper coverage', () => {
   it('sets CORS for allowed origins', () => {
     const headers = new Map<string, string>();
-    const req = { headers: { origin: 'https://octogee.web.app' } } as any;
-    const res = { setHeader: (key: string, value: string) => headers.set(key, value) } as any;
+    const req = { headers: { origin: 'https://octogee.web.app' } } as never;
+    const res = {
+      setHeader: (key: string, value: string) => headers.set(key, value),
+    } as never;
 
     setCors(req, res);
 
@@ -41,8 +33,10 @@ describe('chat-proxy helper coverage', () => {
 
   it('does not set allow-origin for disallowed origins', () => {
     const headers = new Map<string, string>();
-    const req = { headers: { origin: 'https://evil.example.com' } } as any;
-    const res = { setHeader: (key: string, value: string) => headers.set(key, value) } as any;
+    const req = { headers: { origin: 'https://evil.example.com' } } as never;
+    const res = {
+      setHeader: (key: string, value: string) => headers.set(key, value),
+    } as never;
 
     setCors(req, res);
 
@@ -51,13 +45,20 @@ describe('chat-proxy helper coverage', () => {
   });
 
   it('accepts Bearer and BEARER tokens, rejects missing auth', async () => {
-    await expect(verifyAuth({ headers: { authorization: 'Bearer good-token' } } as any)).resolves.toBe('user-1');
-    await expect(verifyAuth({ headers: { authorization: 'BEARER good-token' } } as any)).resolves.toBe('user-1');
-    await expect(verifyAuth({ headers: {} } as any)).resolves.toBeNull();
+    const idToken = await getIdTokenForUid('user-1');
+    await expect(
+      verifyAuth({ headers: { authorization: `Bearer ${idToken}` } } as never),
+    ).resolves.toBe('user-1');
+    await expect(
+      verifyAuth({ headers: { authorization: `BEARER ${idToken}` } } as never),
+    ).resolves.toBe('user-1');
+    await expect(verifyAuth({ headers: {} } as never)).resolves.toBeNull();
   });
 
   it('rejects invalid auth tokens', async () => {
-    await expect(verifyAuth({ headers: { authorization: 'Bearer no-good' } } as any)).resolves.toBeNull();
+    await expect(
+      verifyAuth({ headers: { authorization: 'Bearer no-good' } } as never),
+    ).resolves.toBeNull();
   });
 });
 

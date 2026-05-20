@@ -6,7 +6,7 @@ import {
   setupEmulatorTest,
 
   getIdTokenForUid,
-} from "./helpers/firestore-emulator";
+} from "@shared/test-helpers/firestore-emulator";
 
 const mockMmApi = vi.fn();
 vi.mock("../lib/mattermost", () => ({

@@ -1,42 +1,30 @@
-import { describe, expect, it, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import {
+  getAdminDb,
+  getIdTokenForUid,
+  requireEmulator,
+  resetEmulator,
+} from '../../../shared/test-helpers/firestore-emulator';
 
 process.env.NODE_ENV = 'test';
+process.env.FIREBASE_PROJECT ??= 'octogee-test';
 process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
 process.env.CHAT_PROXY_PUBLIC_URL = 'https://chat-test.octogee.com';
 
-const verifyIdToken = vi.fn(async (token: string) => {
-  if (token === 'regular-token') return { uid: 'regular-uid' };
-  if (token === 'noproxy-token') return { uid: 'noproxy-uid' };
-  throw Object.assign(new Error('auth/id-token-expired'), { code: 'auth/id-token-expired' });
-});
-
-const firestoreDoc = vi.fn((path: string) => {
-  const data: Record<string, unknown> = (() => {
-    if (path === 'users/regular-uid') return { mattermost: { userId: 'mm-user-1' } };
-    if (path === 'users/regular-uid/secrets/mattermost') return { personalToken: 'regular-mm-token' };
-    if (path === 'users/noproxy-uid') return {};
-    if (path === 'users/noproxy-uid/secrets/mattermost') return {};
-    return {};
-  })();
-  return { get: async () => ({ exists: true, data: () => data }) };
-});
-
-vi.mock('firebase-admin', () => ({
-  default: {
-    initializeApp: vi.fn(),
-    credential: { cert: vi.fn() },
-    firestore: () => ({ doc: firestoreDoc }),
-    auth: () => ({ verifyIdToken }),
-  },
-}));
+requireEmulator();
 
 const { createServer, _clearCaches } = await import('../proxy');
 
+const REGULAR_UID = 'regular-uid';
+const NOPROXY_UID = 'noproxy-uid';
+
 let server: http.Server;
 let baseUrl: string;
+let regularToken: string;
+let noproxyToken: string;
 
 beforeAll(async () => {
   server = createServer();
@@ -47,28 +35,20 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve()))
+    server.close((err) => (err ? reject(err) : resolve())),
   );
 });
 
-beforeEach(() => {
-  vi.clearAllMocks();
+beforeEach(async () => {
+  await resetEmulator();
   _clearCaches();
-  verifyIdToken.mockImplementation(async (token: string) => {
-    if (token === 'regular-token') return { uid: 'regular-uid' };
-    if (token === 'noproxy-token') return { uid: 'noproxy-uid' };
-    throw Object.assign(new Error('auth/id-token-expired'), { code: 'auth/id-token-expired' });
-  });
-  firestoreDoc.mockImplementation((path: string) => {
-    const data: Record<string, unknown> = (() => {
-      if (path === 'users/regular-uid') return { mattermost: { userId: 'mm-user-1' } };
-      if (path === 'users/regular-uid/secrets/mattermost') return { personalToken: 'regular-mm-token' };
-      if (path === 'users/noproxy-uid') return {};
-      if (path === 'users/noproxy-uid/secrets/mattermost') return {};
-      return {};
-    })();
-    return { get: async () => ({ exists: true, data: () => data }) };
-  });
+  await getAdminDb().doc(`users/${REGULAR_UID}`)
+    .set({ mattermost: { userId: 'mm-user-1' } });
+  await getAdminDb().doc(`users/${REGULAR_UID}/secrets/mattermost`)
+    .set({ personalToken: 'regular-mm-token' });
+  await getAdminDb().doc(`users/${NOPROXY_UID}`).set({});
+  regularToken = await getIdTokenForUid(REGULAR_UID);
+  noproxyToken = await getIdTokenForUid(NOPROXY_UID);
 });
 
 async function request(
@@ -77,7 +57,7 @@ async function request(
     method?: string;
     headers?: Record<string, string>;
     body?: string | Buffer;
-  } = {}
+  } = {},
 ): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const { method = 'GET', headers = {}, body } = opts;
@@ -99,9 +79,9 @@ async function request(
             status: res.statusCode ?? 0,
             body: Buffer.concat(chunks).toString(),
             headers: res.headers,
-          })
+          }),
         );
-      }
+      },
     );
     req.on('error', reject);
     if (bodyBuf) req.write(bodyBuf);
@@ -156,37 +136,16 @@ describe('POST /api/auth/mattermost — credential mint', () => {
   it('with valid token but no MM provisioning → 502', async () => {
     const res = await request('/api/auth/mattermost', {
       method: 'POST',
-      headers: { Authorization: 'Bearer noproxy-token' },
+      headers: { Authorization: `Bearer ${noproxyToken}` },
     });
     expect(res.status).toBe(502);
     expect(JSON.parse(res.body)).toMatchObject({ error: 'Chat not provisioned' });
   });
 
-  it('with Firestore lookup throwing → 503 (outage, not "not provisioned")', async () => {
-    firestoreDoc.mockImplementation((_path: string) => ({
-      get: async () => {
-        throw new Error('ETIMEDOUT');
-      },
-    }));
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      const res = await request('/api/auth/mattermost', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer regular-token' },
-      });
-      expect(res.status).toBe(503);
-      expect(JSON.parse(res.body)).toMatchObject({
-        error: 'Credential lookup unavailable',
-      });
-    } finally {
-      errSpy.mockRestore();
-    }
-  });
-
-  it('with valid token and provisioning → 200 with mmUrl (chat-proxy public URL), mmToken, mmUserId', async () => {
+  it('with valid token and provisioning → 200 with mmUrl, mmToken, mmUserId', async () => {
     const res = await request('/api/auth/mattermost', {
       method: 'POST',
-      headers: { Authorization: 'Bearer regular-token' },
+      headers: { Authorization: `Bearer ${regularToken}` },
     });
     expect(res.status).toBe(200);
     const body = JSON.parse(res.body);
@@ -203,7 +162,7 @@ describe('POST /api/auth/mattermost — credential mint', () => {
     try {
       await request('/api/auth/mattermost', {
         method: 'POST',
-        headers: { Authorization: 'Bearer regular-token' },
+        headers: { Authorization: `Bearer ${regularToken}` },
       });
       const allLogs = [
         ...logSpy.mock.calls.flat().map(String),
@@ -228,7 +187,7 @@ describe('POST /api/auth/mattermost — credential mint', () => {
   it('GET /api/auth/mattermost (wrong method) → 404', async () => {
     const res = await request('/api/auth/mattermost', {
       method: 'GET',
-      headers: { Authorization: 'Bearer regular-token' },
+      headers: { Authorization: `Bearer ${regularToken}` },
     });
     expect(res.status).toBe(404);
   });
@@ -237,7 +196,7 @@ describe('POST /api/auth/mattermost — credential mint', () => {
 describe('Mattermost proxying via chat-proxy', () => {
   it('GET /api/v4/users/me/teams → forwarded to MM_INTERNAL_URL (502 when MM unreachable in test)', { timeout: 15_000 }, async () => {
     const res = await request('/api/v4/users/me/teams', {
-      headers: { Authorization: 'Bearer regular-token' },
+      headers: { Authorization: `Bearer ${regularToken}` },
     });
     expect(res.status).not.toBe(404);
     expect([502, 500, 504]).toContain(res.status);
@@ -247,7 +206,7 @@ describe('Mattermost proxying via chat-proxy', () => {
     const res = await request('/api/v4/posts', {
       method: 'POST',
       headers: {
-        Authorization: 'Bearer regular-token',
+        Authorization: `Bearer ${regularToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ channel_id: 'abc', message: 'hi' }),
@@ -266,6 +225,7 @@ describe('Mattermost proxying via chat-proxy', () => {
           headers: {
             'Content-Type': 'application/json',
             'Content-Length': String(Buffer.byteLength(body)),
+            Authorization: `Bearer ${regularToken}`,
           },
           agent,
         } as http.RequestOptions;

@@ -12,5 +12,9 @@ export default defineConfig({
   },
   test: {
     include: ["__tests__/**/*.emulator.spec.ts"],
+    // Single shared Firestore emulator instance; one spec's
+    // recursiveClear must not race another spec's writes.
+    fileParallelism: false,
+    testTimeout: 15_000,
   },
 });

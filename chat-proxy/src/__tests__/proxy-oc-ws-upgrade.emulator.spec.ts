@@ -3,6 +3,12 @@ import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { WebSocket as WsClient } from 'ws';
+import {
+  getAdminDb,
+  requireEmulator,
+  resetEmulator,
+} from '../../../shared/test-helpers/firestore-emulator';
+import { TICKETS_COLLECTION } from './helpers/collections';
 
 // What this spec pins
 // ───────────────────
@@ -22,8 +28,11 @@ import { WebSocket as WsClient } from 'ws';
 // 250-line handler apart — which is the whole point.
 
 process.env.NODE_ENV = 'test';
+process.env.FIREBASE_PROJECT ??= 'octogee-test';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
 process.env.CHAT_PROXY_PUBLIC_URL = 'https://chat-test.octogee.com';
+
+requireEmulator();
 
 const TICKET = '11111111-2222-3333-4444-555555555555';
 
@@ -54,8 +63,6 @@ const h = vi.hoisted(() => {
 
   // Mutable per-test control surface.
   const ctl: {
-    ticket: { exists: boolean; expiresAt: number; uid: string | null };
-    ticketDeleted: boolean;
     originAllowed: boolean;
     resolve: () => { url: string; gatewayId: string; userData: Record<string, unknown> };
     deriveAgentId: () => string;
@@ -67,8 +74,6 @@ const h = vi.hoisted(() => {
     gatewayIdChangeCb: ((next: string) => void) | null;
     lastUpstream: { close: ReturnType<typeof vi.fn> } | null;
   } = {
-    ticket: { exists: true, expiresAt: Date.now() + 60_000, uid: 'uid-1' },
-    ticketDeleted: false,
     originAllowed: true,
     resolve: () => ({ url: 'ws://gw.internal:18789', gatewayId: 'gw-1', userData: {} }),
     deriveAgentId: () => 'agent-1',
@@ -105,34 +110,6 @@ const h = vi.hoisted(() => {
     ExpectedAgentIdError,
   };
 });
-
-vi.mock('firebase-admin', () => ({
-  default: {
-    initializeApp: vi.fn(),
-    credential: { cert: vi.fn() },
-    auth: () => ({ verifyIdToken: vi.fn() }),
-    firestore: () => ({
-      doc: () => ({ get: async () => ({ exists: true, data: () => ({}) }) }),
-      // The ticket is consumed in a Firestore transaction: get → validate →
-      // delete (one-time-use). We model exactly that contract.
-      runTransaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => {
-        const tx = {
-          get: async () => ({
-            exists: h.ctl.ticket.exists,
-            data: () => ({
-              expiresAt: h.ctl.ticket.expiresAt,
-              uid: h.ctl.ticket.uid,
-            }),
-          }),
-          delete: () => {
-            h.ctl.ticketDeleted = true;
-          },
-        };
-        return fn(tx);
-      },
-    }),
-  },
-}));
 
 vi.mock('../openclaw/ws-origin.js', () => ({
   isAllowedWsOrigin: () => h.ctl.originAllowed,
@@ -207,9 +184,22 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-beforeEach(() => {
-  h.ctl.ticket = { exists: true, expiresAt: Date.now() + 60_000, uid: 'uid-1' };
-  h.ctl.ticketDeleted = false;
+async function seedTicket(opts: { expiresAt?: number; uid?: string | null } = {}): Promise<void> {
+  const data: Record<string, unknown> = {
+    expiresAt: opts.expiresAt ?? Date.now() + 60_000,
+  };
+  if (opts.uid !== undefined && opts.uid !== null) data.uid = opts.uid;
+  await getAdminDb().collection(TICKETS_COLLECTION).doc(TICKET).set(data);
+}
+
+async function ticketExists(): Promise<boolean> {
+  const snap = await getAdminDb().collection(TICKETS_COLLECTION).doc(TICKET).get();
+  return snap.exists;
+}
+
+beforeEach(async () => {
+  await resetEmulator();
+  await seedTicket({ uid: 'uid-1' });
   h.ctl.originAllowed = true;
   h.ctl.resolve = () => ({
     url: 'ws://gw.internal:18789',
@@ -298,19 +288,19 @@ describe('OC WS upgrade — refusal decision table (security boundary)', () => {
   });
 
   it('rejects a ticket that does not exist with 401', async () => {
-    h.ctl.ticket = { exists: false, expiresAt: 0, uid: null };
+    await getAdminDb().collection(TICKETS_COLLECTION).doc(TICKET).delete();
     const r = await connect();
     expect(r).toEqual({ kind: 'rejected', status: 401 });
   });
 
   it('rejects an expired ticket with 401', async () => {
-    h.ctl.ticket = { exists: true, expiresAt: Date.now() - 1, uid: 'uid-1' };
+    await seedTicket({ expiresAt: Date.now() - 1, uid: 'uid-1' });
     const r = await connect();
     expect(r).toEqual({ kind: 'rejected', status: 401 });
   });
 
   it('rejects a ticket with no claimant uid with 401', async () => {
-    h.ctl.ticket = { exists: true, expiresAt: Date.now() + 60_000, uid: null };
+    await seedTicket({ uid: null });
     const r = await connect();
     expect(r).toEqual({ kind: 'rejected', status: 401 });
   });
@@ -417,7 +407,7 @@ describe('OC WS upgrade — happy path frame proxying & teardown', () => {
   it('consumes the ticket exactly once and upgrades the connection', async () => {
     const r = await connect();
     expect(r.kind).toBe('open');
-    expect(h.ctl.ticketDeleted).toBe(true); // one-time-use enforced
+    expect(await ticketExists()).toBe(false);
     await settle(r);
   });
 
