@@ -1,7 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   applyPreBootPatches,
   applyGatewayOverrides,
+  buildGitconfigContent,
+  hydrateGitIdentity,
+  pickSoleTenantSlug,
+  slugFromCoachAgentId,
   withTimeout,
 } from "../pre-boot-config.js";
 
@@ -390,5 +394,267 @@ describe("withTimeout (Copilot #960 — Firestore read must not stall boot)", ()
   it("rejects when the promise exceeds the timeout", async () => {
     const slow = new Promise<string>((r) => setTimeout(() => r("late"), 100));
     await expect(withTimeout(slow, 10)).rejects.toThrow(/timeout/i);
+  });
+});
+
+// ── Phase 1: gitconfig hydration — first-boot ~/.gitconfig seed ──────────
+// Contract: this MUST NOT FAIL regardless of what Firestore returns or
+// doesn't return about the builder. Smart defaults cascade Firebase Auth
+// displayName/email → slug → generic "Octogee Builder". Idempotent: an
+// existing ~/.gitconfig is left alone (operator customizations win).
+// Boot is never blocked — a Firestore timeout or write failure logs and
+// continues.
+
+describe("slugFromCoachAgentId", () => {
+  it("extracts the workspace slug from a canonical coach agent id", () => {
+    expect(slugFromCoachAgentId("octogee-ceckert-coach")).toBe("ceckert");
+  });
+
+  it("returns null for non-coach agent ids (ops/tools/etc.)", () => {
+    expect(slugFromCoachAgentId("octogee-ops-something")).toBeNull();
+    expect(slugFromCoachAgentId("random")).toBeNull();
+    expect(slugFromCoachAgentId("")).toBeNull();
+  });
+
+  it("preserves kebab-case slugs (the hyphen is part of the slug, not a delimiter)", () => {
+    expect(slugFromCoachAgentId("octogee-my-builder-coach")).toBe("my-builder");
+  });
+});
+
+describe("pickSoleTenantSlug", () => {
+  it("returns the unique slug when one coach agent is present", () => {
+    expect(pickSoleTenantSlug(["octogee-ceckert-coach"])).toBe("ceckert");
+  });
+
+  it("returns null when multiple distinct tenants are mounted (multi-tenant cattle)", () => {
+    expect(pickSoleTenantSlug(["octogee-ceckert-coach", "octogee-bender-coach"]))
+      .toBeNull();
+  });
+
+  it("returns null when no coach agents are present (fresh gateway, ops-only)", () => {
+    expect(pickSoleTenantSlug([])).toBeNull();
+    expect(pickSoleTenantSlug(["octogee-ops-tools"])).toBeNull();
+  });
+
+  it("treats duplicate ids for the same tenant as a single tenant", () => {
+    expect(pickSoleTenantSlug(["octogee-ceckert-coach", "octogee-ceckert-coach"]))
+      .toBe("ceckert");
+  });
+});
+
+describe("buildGitconfigContent — first-boot seed shape", () => {
+  it("emits [user] section with the given name and email", () => {
+    const out = buildGitconfigContent({ name: "Chris Eckert", email: "c@e.com" });
+    expect(out).toContain("[user]");
+    expect(out).toMatch(/name = Chris Eckert/);
+    expect(out).toMatch(/email = c@e\.com/);
+  });
+
+  it("emits [push] autoSetupRemote = true (the manual `git config` line we want to delete from the operator runbook)", () => {
+    const out = buildGitconfigContent({ name: "X", email: "y@z.com" });
+    expect(out).toMatch(/\[push\]\s*\n\s*autoSetupRemote = true/);
+  });
+
+  it("emits [init] defaultBranch = main", () => {
+    const out = buildGitconfigContent({ name: "X", email: "y@z.com" });
+    expect(out).toMatch(/\[init\]\s*\n\s*defaultBranch = main/);
+  });
+
+  it("includes a first-boot comment header so operators know editing it is safe", () => {
+    const out = buildGitconfigContent({ name: "X", email: "Y" });
+    expect(out).toMatch(/^#.*first-boot/im);
+  });
+});
+
+describe("hydrateGitIdentity — always produces a working gitconfig, never blocks boot", () => {
+  const baseDeps = (overrides: Record<string, unknown> = {}) => ({
+    gitconfigPath: "/home/node/.gitconfig",
+    agentIds: [] as readonly string[],
+    fileExists: () => false,
+    fetchUserBySlug: async () => null,
+    writeFile: vi.fn(),
+    logFn: vi.fn(),
+    ...overrides,
+  });
+
+  it("writes Firebase Auth identity when single-tenant + displayName + email all present", async () => {
+    const writeFile = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fetchUserBySlug: async () => ({ displayName: "Chris Eckert", email: "c@e.com" }),
+      writeFile,
+    }));
+    expect(changed).toBe(true);
+    expect(writeFile).toHaveBeenCalledOnce();
+    const [p, content] = writeFile.mock.calls[0];
+    expect(p).toBe("/home/node/.gitconfig");
+    expect(content).toMatch(/name = Chris Eckert/);
+    expect(content).toMatch(/email = c@e\.com/);
+  });
+
+  it("falls back to slug-derived identity when Firestore returns nothing (smart default, no skip)", async () => {
+    const writeFile = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fetchUserBySlug: async () => null,
+      writeFile,
+    }));
+    expect(changed).toBe(true);
+    const content = writeFile.mock.calls[0][1];
+    expect(content).toMatch(/name = ceckert/);
+    expect(content).toMatch(/email = ceckert@users\.noreply\.octogee\.com/);
+  });
+
+  it("falls back when Firestore returns a doc with NO displayName/email", async () => {
+    const writeFile = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fetchUserBySlug: async () => ({}),
+      writeFile,
+    }));
+    expect(changed).toBe(true);
+    const content = writeFile.mock.calls[0][1];
+    expect(content).toMatch(/name = ceckert/);
+  });
+
+  it("falls back when Firestore THROWS (transient outage must not block boot)", async () => {
+    const writeFile = vi.fn();
+    const logFn = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fetchUserBySlug: async () => { throw new Error("firestore unreachable"); },
+      writeFile,
+      logFn,
+    }));
+    expect(changed).toBe(true);
+    expect(writeFile).toHaveBeenCalledOnce();
+    expect(logFn.mock.calls.flat().join(" ")).toMatch(/firestore.*unreachable/i);
+  });
+
+  it("writes generic identity for multi-tenant cattle (git still works; per-agent isolation is Phase 2)", async () => {
+    const writeFile = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach", "octogee-bender-coach"],
+      writeFile,
+    }));
+    expect(changed).toBe(true);
+    const content = writeFile.mock.calls[0][1];
+    expect(content).toMatch(/name = Octogee Builder/);
+    expect(content).toMatch(/email = .*@users\.noreply\.octogee\.com/);
+  });
+
+  it("writes generic identity for fresh gateway with no agents mounted yet", async () => {
+    const writeFile = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: [],
+      writeFile,
+    }));
+    expect(changed).toBe(true);
+    expect(writeFile.mock.calls[0][1]).toMatch(/Octogee Builder/);
+  });
+
+  it("idempotent: existing ~/.gitconfig is preserved (operator customizations win)", async () => {
+    const writeFile = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fileExists: () => true,
+      fetchUserBySlug: async () => ({ displayName: "Chris", email: "c@e.com" }),
+      writeFile,
+    }));
+    expect(changed).toBe(false);
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("never throws even when writeFile itself fails (disk full / readonly fs)", async () => {
+    const writeFile = vi.fn(() => { throw new Error("ENOSPC: disk full"); });
+    const logFn = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: [],
+      writeFile,
+      logFn,
+    }));
+    expect(changed).toBe(false);
+    expect(logFn.mock.calls.flat().join(" ")).toMatch(/disk full/i);
+  });
+
+  // Copilot #1055 P1: a throwing fileExists must not break the never-
+  // throws contract — treat the failure as "absent, attempt write."
+  it("never throws when fileExists itself throws (treats failure as absent + proceeds)", async () => {
+    const writeFile = vi.fn();
+    const logFn = vi.fn();
+    const changed = await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fileExists: () => { throw new Error("EACCES: permission denied"); },
+      fetchUserBySlug: async () => ({ displayName: "Chris", email: "c@e.com" }),
+      writeFile,
+      logFn,
+    }));
+    expect(changed).toBe(true);
+    expect(writeFile).toHaveBeenCalledOnce();
+    expect(logFn.mock.calls.flat().join(" ")).toMatch(/fileExists.*threw/i);
+  });
+
+  // Copilot #1055 P0: a newline in displayName would let the value
+  // inject a new gitconfig section ("Chris\n[user]\nname = Evil").
+  // The structural property: the file always has exactly one [user]
+  // section, exactly one name=, exactly one email=. The literal
+  // substring may still appear *inside* the cleaned name value (e.g.
+  // "name = Chris[user]email = evil...") but it's no longer parsed as
+  // a separate key — section injection is what we're defending against.
+  it("sanitizes newlines in displayName (prevents gitconfig section injection)", async () => {
+    const writeFile = vi.fn();
+    await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fetchUserBySlug: async () => ({
+        displayName: "Chris\n[user]\n\temail = evil@attacker.com",
+        email: "c@e.com",
+      }),
+      writeFile,
+    }));
+    const content = writeFile.mock.calls[0][1] as string;
+    // Exactly one [user] header — no injected section
+    expect(content.match(/^\[user\]$/gm)?.length).toBe(1);
+    // Exactly one email key, and it's the legitimate value (the injected
+    // "email = evil@attacker.com" got collapsed into the name string).
+    const emailLines = content
+      .split("\n")
+      .filter((l) => /^\s*email\s*=/.test(l));
+    expect(emailLines.length).toBe(1);
+    expect(emailLines[0]).toContain("c@e.com");
+    expect(emailLines[0]).not.toContain("attacker.com");
+  });
+
+  it("sanitizes CR / NUL / tab in email (other C0 control chars)", async () => {
+    const writeFile = vi.fn();
+    await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fetchUserBySlug: async () => ({
+        displayName: "Chris",
+        email: "c@e\r.com\t ",
+      }),
+      writeFile,
+    }));
+    const content = writeFile.mock.calls[0][1] as string;
+    const emailLine = content
+      .split("\n")
+      .find((l) => l.trim().startsWith("email ="));
+    expect(emailLine).toBeDefined();
+    expect(emailLine).toMatch(/email = c@e\.com$/);
+  });
+
+  it("falls back to fallback when displayName is entirely whitespace + control chars (cleaning empties it)", async () => {
+    const writeFile = vi.fn();
+    await hydrateGitIdentity(baseDeps({
+      agentIds: ["octogee-ceckert-coach"],
+      fetchUserBySlug: async () => ({
+        displayName: "\n\r\t   ",
+        email: "c@e.com",
+      }),
+      writeFile,
+    }));
+    const content = writeFile.mock.calls[0][1] as string;
+    // displayName is cleaned to empty → cascade falls to slug
+    expect(content).toMatch(/name = ceckert/);
+    expect(content).toMatch(/email = c@e\.com/);
   });
 });
