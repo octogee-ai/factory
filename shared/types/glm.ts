@@ -71,7 +71,47 @@ export interface GatewayDesiredState {
    * customers, each with their own ref. See BYO-SUBSCRIPTION-OAUTH-SPEC.md.
    */
   byosub?: Record<string, ByosubRef>;
+  /**
+   * Firebase UID of the Builder who owns this operator-profile gateway.
+   * Gates `glmGateways/{id}` reads + shell-ticket mint at the Builder-
+   * facing surface. Cattle gateways leave absent. Spec:
+   * GATEWAY-PLATFORM-SPEC.md §Operator Shell Access.
+   */
+  ownerUid?: string;
+  /**
+   * Additional Firebase UIDs with shell access. Primary `ownerUid`
+   * keeps exclusive write authority; co-owners are shell-only.
+   */
+  coOwnerUids?: string[];
+  /**
+   * Builder slug (matches `users/{uid}.slug`). Source of the
+   * `builder=<slug>` GCP resource label for cost attribution. Spec:
+   * GATEWAY-PLATFORM-SPEC.md §Billing & Cost Attribution.
+   */
+  builderSlug?: string;
+  /** Billing tier (`hobby` | `pro` | `operator` | `enterprise`). Source of `tier=<id>` GCP resource label. */
+  tier?: string;
 }
+
+/**
+ * Audit record for a Builder-facing web-terminal session. Written under
+ * `builder_shell_sessions/{sessionId}` at open (status=active); updated
+ * on close (status + endedAt + durationMs). Spec:
+ * GATEWAY-PLATFORM-SPEC.md §Operator Shell Access.
+ */
+export interface BuilderShellSession {
+  sessionId: string;
+  gatewayId: string;
+  uid: string;
+  via: "owner" | "co-owner";
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number | null;
+  status: "active" | "closed" | "timed-out" | "errored";
+  error?: string;
+}
+
+export const BUILDER_SHELL_SESSIONS_COLLECTION = "builder_shell_sessions" as const;
 
 export interface GatewayPersistenceSpec {
   enabled: boolean;

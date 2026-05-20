@@ -25,10 +25,12 @@ import onboardingRoutes from "./routes/onboarding";
 import postsRoutes from "./routes/posts";
 
 import agentRoutes from "./routes/agents";
+import builderGatewaysRoutes from "./routes/builder/gateways";
 import internalBillingRoutes from "./routes/internal/billing";
 import internalNotificationRoutes from "./routes/internal/notifications";
 import internalEngagementRoutes from "./routes/internal/engagement";
 import internalCSIRoutes from "./routes/internal/csi";
+import internalBuilderShellRoutes from "./routes/internal/builder-shell";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
@@ -120,6 +122,7 @@ mountApi(app, "/profile", profileRoutes);
 mountApi(app, "/onboarding", onboardingRoutes);
 mountApi(app, "/posts", postsRoutes);
 mountApi(app, "/agents", agentRoutes);
+mountApi(app, "/builder", builderGatewaysRoutes);
 
 app.use("/internal/agents", agentRoutes);
 app.use("/internal/billing", internalBillingRoutes);
@@ -127,6 +130,7 @@ app.use("/internal/notifications", notificationRoutes);
 app.use("/internal/notifications", internalNotificationRoutes);
 app.use("/internal/engagement", internalEngagementRoutes);
 app.use("/internal/csi", internalCSIRoutes);
+app.use("/internal/builder-shell", internalBuilderShellRoutes);
 
 app.use(errorHandler);
 
