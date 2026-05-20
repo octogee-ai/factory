@@ -194,6 +194,20 @@ function buildWindowUpdates(
   };
 }
 
+// Per-bucket token-count increments shared by every doc that aggregates
+// usage by input/output/cache. Appears as the `token_breakdown` sub-object
+// on workspace session + model docs, and (spread) inside `breakdown` on
+// the user-level log. Keep it a flat helper; cost-side increments stay
+// inline at their single user-log call site (not 3-site shared yet).
+function tokenBreakdownIncrements(usage: UsageData): Record<string, ReturnType<typeof FieldValue.increment>> {
+  return {
+    input:      FieldValue.increment(usage.input),
+    output:     FieldValue.increment(usage.output),
+    cacheRead:  FieldValue.increment(usage.cacheRead),
+    cacheWrite: FieldValue.increment(usage.cacheWrite),
+  };
+}
+
 function decideThrottle(args: {
   byotActive: boolean;
   tier: string;
@@ -284,21 +298,25 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
         "usage.lastUpdated":        FieldValue.serverTimestamp(),
       });
 
+      // `set({}, { merge: true })` does NOT interpret dotted keys as nested
+      // paths (only `.update()` does). Emit nested objects so consumers
+      // reading `log.breakdown.coach` / `log.breakdown.input` get the
+      // values back. Nested merge composes correctly with FieldValue.
+      // increment per-leaf across repeated calls.
       t.set(logRef, {
         date:             today,
         tokensUsed:       FieldValue.increment(usage.totalTokens),
         costUsd:          FieldValue.increment(usage.costUsd),
         interactions:     FieldValue.increment(1),
         gatewayId,
-        [`breakdown.${role}`]:         FieldValue.increment(usage.totalTokens),
-        "breakdown.input":             FieldValue.increment(usage.input),
-        "breakdown.output":            FieldValue.increment(usage.output),
-        "breakdown.cacheRead":         FieldValue.increment(usage.cacheRead),
-        "breakdown.cacheWrite":        FieldValue.increment(usage.cacheWrite),
-        "breakdown.costInput":         FieldValue.increment(usage.costBreakdown.input),
-        "breakdown.costOutput":        FieldValue.increment(usage.costBreakdown.output),
-        "breakdown.costCacheRead":     FieldValue.increment(usage.costBreakdown.cacheRead),
-        "breakdown.costCacheWrite":    FieldValue.increment(usage.costBreakdown.cacheWrite),
+        breakdown: {
+          [role]: FieldValue.increment(usage.totalTokens),
+          ...tokenBreakdownIncrements(usage),
+          costInput:      FieldValue.increment(usage.costBreakdown.input),
+          costOutput:     FieldValue.increment(usage.costBreakdown.output),
+          costCacheRead:  FieldValue.increment(usage.costBreakdown.cacheRead),
+          costCacheWrite: FieldValue.increment(usage.costBreakdown.cacheWrite),
+        },
       }, { merge: true });
 
       // workspaceId is the slug (e.g. "eckert"); the top-level workspaces
@@ -310,7 +328,8 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
       if (workspaceId) {
         const wsRef = db.collection("workspaces").doc(workspaceId);
 
-        // usage_sessions/{date} — daily rollup for this workspace
+        // usage_sessions/{date} — daily rollup for this workspace.
+        // Nested objects (not dotted keys) — see logRef comment above.
         t.set(wsRef.collection("usage_sessions").doc(today), {
           date:            today,
           tokensUsed:      FieldValue.increment(usage.totalTokens),
@@ -318,15 +337,12 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
           interactions:    FieldValue.increment(1),
           gatewayId,
           workspaceId,
-          [`roles.${role}`]:              FieldValue.increment(usage.totalTokens),
-          "token_breakdown.input":        FieldValue.increment(usage.input),
-          "token_breakdown.output":       FieldValue.increment(usage.output),
-          "token_breakdown.cacheRead":    FieldValue.increment(usage.cacheRead),
-          "token_breakdown.cacheWrite":   FieldValue.increment(usage.cacheWrite),
+          roles: { [role]: FieldValue.increment(usage.totalTokens) },
+          token_breakdown: tokenBreakdownIncrements(usage),
         }, { merge: true });
 
         // usage_models/{modelKey}_{date} — per-model per-day granularity,
-        // per role.
+        // per role. Nested token_breakdown (not dotted keys).
         const mk = `${modelKey(usage.model)}_${today}`;
         t.set(wsRef.collection("usage_models").doc(mk), {
           date:              today,
@@ -337,20 +353,19 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
           interaction_count: FieldValue.increment(1),
           role,
           lastUsedAt:        FieldValue.serverTimestamp(),
-          "token_breakdown.input":      FieldValue.increment(usage.input),
-          "token_breakdown.output":     FieldValue.increment(usage.output),
-          "token_breakdown.cacheRead":  FieldValue.increment(usage.cacheRead),
-          "token_breakdown.cacheWrite": FieldValue.increment(usage.cacheWrite),
+          token_breakdown:   tokenBreakdownIncrements(usage),
         }, { merge: true });
 
-        // usage_summary/current — rolling workspace totals (single doc)
+        // usage_summary/current — rolling workspace totals (single doc).
+        // Nested modelCosts (not dotted) so consumers reading
+        // `summary.modelCosts[modelKey]` get the value back.
         t.set(wsRef.collection("usage_summary").doc("current"), {
           workspaceId,
           totalTokens:        FieldValue.increment(usage.totalTokens),
           totalCostUsd:       FieldValue.increment(usage.costUsd),
           totalInteractions:  FieldValue.increment(1),
           lastUpdated:        FieldValue.serverTimestamp(),
-          [`modelCosts.${modelKey(usage.model)}`]: FieldValue.increment(usage.costUsd),
+          modelCosts: { [modelKey(usage.model)]: FieldValue.increment(usage.costUsd) },
         }, { merge: true });
       }
     });

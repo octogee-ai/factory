@@ -14,9 +14,24 @@ const db = admin.firestore();
 const { reportUsage, readWorkspaceId } = await import("../lib/usage-tracking.js");
 
 async function recursiveClear(coll: string): Promise<void> {
-  const snap = await db.collection(coll).limit(500).get();
-  for (const d of snap.docs) await db.recursiveDelete(d.ref);
-  if (snap.size === 500) await recursiveClear(coll);
+  // listDocuments() (Admin SDK) returns every DocumentReference under the
+  // collection — INCLUDING ghost parents (refs with subcollection data
+  // but no doc body). `.get()` would skip those, leaving subcollection
+  // state alive across tests. reportUsage writes to
+  // `workspaces/{slug}/usage_sessions/{date}` without ever writing
+  // `workspaces/{slug}` itself, so the slug is always a ghost parent.
+  //
+  // Bounded concurrency: an earlier-test crash could leave many docs;
+  // an unbounded Promise.all over recursiveDelete would either flake on
+  // the emulator's RPC pool or starve the next test. 10 in flight is
+  // plenty for the emulator and keeps the helper safe to copy.
+  const refs = await db.collection(coll).listDocuments();
+  const CHUNK = 10;
+  for (let i = 0; i < refs.length; i += CHUNK) {
+    await Promise.all(
+      refs.slice(i, i + CHUNK).map((r) => db.recursiveDelete(r)),
+    );
+  }
 }
 
 beforeEach(async () => {
@@ -90,17 +105,16 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(deprecatedSnap.empty).toBe(true);
   });
 
-  // TODO(pr-1d-followup): this single assertion regressed during the
-  // mock→emulator conversion — `session?.tokensUsed` reads as
-  // undefined even though the impl writes FieldValue.increment(35) to
-  // workspaces/{slug}/usage_sessions/{date}. 15 of the 16 cases in
-  // this spec pass; the workspace-side write path is exercised by the
-  // sibling per-model/per-summary assertions further down. Skip until
-  // the root cause is identified — likely a divergence between the
-  // emulator's increment-resolution timing and the test's read window,
-  // not a real production bug. Spec preserved (not deleted) so the
-  // path stays visible.
-  it.skip("session + model + summary docs carry (role, model, slug, gateway, tokens, cost) — no per-turn key fingerprint", async () => {
+  // The mock→emulator conversion (#1059) surfaced a real production bug:
+  // `t.set({...dotted...}, {merge: true})` does NOT interpret dotted keys
+  // as nested paths (only `.update()` does). The impl writes literal
+  // "roles.brain" / "token_breakdown.input" / "modelCosts.X" / "breakdown.*"
+  // field names instead of nested objects. The previous TODO blamed
+  // "emulator increment-resolution timing" — that was a misread of WHICH
+  // assertion failed (the dump shows `tokensUsed = 35` is fine; what fails
+  // is `session.roles?.brain` because `roles` is undefined). Targeted per-
+  // doc structure tests below pin the contract explicitly.
+  it("session + model + summary docs carry (role, model, slug, gateway, tokens, cost) — no per-turn key fingerprint", async () => {
     await seedUser("chris-uid", { selectedTier: "pro", usage: {} });
     const agentDir = makeAgentDir("christopher");
 
@@ -381,6 +395,305 @@ describe("reportUsage — v3.1 workspace paths", () => {
 
     const user = await readDoc("users/eckert-uid");
     expect(user?.usage).toBeDefined();
+  });
+});
+
+// ── Contract: every nested aggregation is a NESTED object on the doc ───
+// Firestore Admin SDK `t.set({...}, { merge: true })` does NOT interpret
+// dotted keys as nested paths (only `.update()` does). The impl must
+// emit nested objects so consumers reading `doc.roles[role]`,
+// `doc.token_breakdown.input`, `doc.modelCosts[modelKey]`,
+// `doc.breakdown[role]` get the values back — not undefined.
+
+describe("reportUsage — nested-object contract (no dotted-literal field names)", () => {
+  function baseUsage(overrides: Partial<{
+    input: number; output: number; cacheRead: number; cacheWrite: number;
+    totalTokens: number; costUsd: number; model: string;
+    costBreakdown: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  }> = {}) {
+    return {
+      input: 10,
+      output: 20,
+      cacheRead: 5,
+      cacheWrite: 0,
+      totalTokens: 35,
+      costUsd: 0.01,
+      model: "anthropic/claude-sonnet-4-6",
+      costBreakdown: { input: 0.004, output: 0.005, cacheRead: 0.001, cacheWrite: 0 },
+      ...overrides,
+    };
+  }
+
+  async function callOnce(opts: {
+    uid: string;
+    slug: string;
+    role: string;
+    usage?: ReturnType<typeof baseUsage>;
+  }) {
+    await seedUser(opts.uid, { selectedTier: "pro", usage: {} });
+    const agentDir = makeAgentDir(opts.slug);
+    await reportUsage({
+      db: db as never,
+      agentId: `octogee-${opts.slug}-coach`,
+      role: opts.role,
+      agentDir,
+      usage: opts.usage ?? baseUsage(),
+      agentToUid: new Map([[`octogee-${opts.slug}-coach`, opts.uid]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
+  }
+
+  it("usage_sessions: roles is a NESTED object (not a 'roles.<role>' literal field)", async () => {
+    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
+    const session = await readDoc(`workspaces/alice/usage_sessions/${today}`);
+    expect(session?.roles).toBeTypeOf("object");
+    expect((session?.roles as Record<string, number>).coach).toBe(35);
+    // The literal-dotted form must NOT exist on the doc.
+    expect(Object.keys(session ?? {})).not.toContain("roles.coach");
+  });
+
+  it("usage_sessions: token_breakdown is a NESTED object (not 'token_breakdown.input' literals)", async () => {
+    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
+    const session = await readDoc(`workspaces/alice/usage_sessions/${today}`);
+    expect(session?.token_breakdown).toBeTypeOf("object");
+    const tb = session?.token_breakdown as Record<string, number>;
+    expect(tb.input).toBe(10);
+    expect(tb.output).toBe(20);
+    expect(tb.cacheRead).toBe(5);
+    expect(tb.cacheWrite).toBe(0);
+    for (const k of ["input", "output", "cacheRead", "cacheWrite"]) {
+      expect(Object.keys(session ?? {})).not.toContain(`token_breakdown.${k}`);
+    }
+  });
+
+  it("usage_models: token_breakdown is a NESTED object", async () => {
+    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
+    const model = await readDoc(
+      `workspaces/alice/usage_models/anthropic_claude-sonnet-4-6_${today}`,
+    );
+    expect(model?.token_breakdown).toBeTypeOf("object");
+    const tb = model?.token_breakdown as Record<string, number>;
+    expect(tb.input).toBe(10);
+    expect(tb.output).toBe(20);
+    for (const k of ["input", "output", "cacheRead", "cacheWrite"]) {
+      expect(Object.keys(model ?? {})).not.toContain(`token_breakdown.${k}`);
+    }
+  });
+
+  it("usage_summary: modelCosts is a NESTED object (not 'modelCosts.<modelKey>' literal)", async () => {
+    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
+    const summary = await readDoc("workspaces/alice/usage_summary/current");
+    expect(summary?.modelCosts).toBeTypeOf("object");
+    const mc = summary?.modelCosts as Record<string, number>;
+    expect(mc["anthropic_claude-sonnet-4-6"]).toBeCloseTo(0.01);
+    expect(Object.keys(summary ?? {})).not.toContain(
+      "modelCosts.anthropic_claude-sonnet-4-6",
+    );
+  });
+
+  it("users/{uid}/usage_logs: breakdown is a NESTED object (not 'breakdown.<role>' / 'breakdown.input' literals)", async () => {
+    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
+    const log = await readDoc(`users/u1/usage_logs/${today}`);
+    expect(log?.breakdown).toBeTypeOf("object");
+    const bd = log?.breakdown as Record<string, number>;
+    expect(bd.coach).toBe(35);   // role-scoped tokens
+    expect(bd.input).toBe(10);
+    expect(bd.output).toBe(20);
+    expect(bd.cacheRead).toBe(5);
+    expect(bd.costInput).toBeCloseTo(0.004);
+    expect(bd.costOutput).toBeCloseTo(0.005);
+    expect(bd.costCacheRead).toBeCloseTo(0.001);
+    for (const k of ["coach", "input", "output", "cacheRead", "cacheWrite",
+                     "costInput", "costOutput", "costCacheRead", "costCacheWrite"]) {
+      expect(Object.keys(log ?? {})).not.toContain(`breakdown.${k}`);
+    }
+  });
+
+  // Universal invariant: any top-level key with a `.` in it is a sign of
+  // the dotted-set/merge bug class. Catches future regressions even if
+  // someone adds a new aggregation we haven't named individually above.
+  it("no doc written by reportUsage has any top-level field name containing `.`", async () => {
+    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
+    const docs = await Promise.all([
+      readDoc(`users/u1/usage_logs/${today}`),
+      readDoc(`workspaces/alice/usage_sessions/${today}`),
+      readDoc(`workspaces/alice/usage_models/anthropic_claude-sonnet-4-6_${today}`),
+      readDoc("workspaces/alice/usage_summary/current"),
+    ]);
+    for (const [i, doc] of docs.entries()) {
+      const dotted = Object.keys(doc ?? {}).filter((k) => k.includes("."));
+      expect(dotted, `doc[${i}] has dotted-literal keys: ${dotted.join(", ")}`)
+        .toEqual([]);
+    }
+  });
+});
+
+// ── Contract: increments accumulate correctly under repeated calls ─────
+// The dotted-literal bug also hides accumulation drift: if `roles.coach`
+// is one key and `roles.brain` is a different key, they accumulate
+// separately by accident. After the fix, they should accumulate into
+// the same nested `roles` object.
+
+describe("reportUsage — accumulation across multiple calls", () => {
+  it("two coach calls on the same workspace+date double session totals (FieldValue.increment works)", async () => {
+    await seedUser("u-acc", { selectedTier: "pro", usage: {} });
+    const agentDir = makeAgentDir("acme");
+    for (let i = 0; i < 2; i++) {
+      await reportUsage({
+        db: db as never,
+        agentId: "octogee-acme-coach",
+        role: "coach",
+        agentDir,
+        usage: {
+          input: 10, output: 20, cacheRead: 5, cacheWrite: 0,
+          totalTokens: 35, costUsd: 0.01,
+          model: "anthropic/claude-sonnet-4-6",
+          costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+        agentToUid: new Map([["octogee-acme-coach", "u-acc"]]),
+        log: () => {},
+        gatewayId: "gw-test",
+      });
+    }
+    const session = await readDoc(`workspaces/acme/usage_sessions/${today}`);
+    expect(session?.tokensUsed).toBe(70);
+    expect(session?.interactions).toBe(2);
+    expect(session?.costUsd).toBeCloseTo(0.02);
+    expect((session?.roles as Record<string, number>).coach).toBe(70);
+  });
+
+  it("two calls with DIFFERENT roles populate distinct roles.* entries (both accumulate to session.tokensUsed)", async () => {
+    await seedUser("u-roles", { selectedTier: "pro", usage: {} });
+    const agentDirCoach = makeAgentDir("acme");
+    const agentDirBrain = makeAgentDir("acme");
+    await reportUsage({
+      db: db as never,
+      agentId: "octogee-acme-coach",
+      role: "coach",
+      agentDir: agentDirCoach,
+      usage: {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+        totalTokens: 35, costUsd: 0.01,
+        model: "anthropic/claude-sonnet-4-6",
+        costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      agentToUid: new Map([["octogee-acme-coach", "u-roles"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
+    await reportUsage({
+      db: db as never,
+      agentId: "octogee-acme-coach",
+      role: "brain",
+      agentDir: agentDirBrain,
+      usage: {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+        totalTokens: 100, costUsd: 0.05,
+        model: "anthropic/claude-sonnet-4-6",
+        costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      agentToUid: new Map([["octogee-acme-coach", "u-roles"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
+    const session = await readDoc(`workspaces/acme/usage_sessions/${today}`);
+    const roles = session?.roles as Record<string, number>;
+    expect(roles.coach).toBe(35);
+    expect(roles.brain).toBe(100);
+    expect(session?.tokensUsed).toBe(135);
+  });
+
+  it("two calls with DIFFERENT models populate distinct summary.modelCosts.* entries", async () => {
+    await seedUser("u-models", { selectedTier: "pro", usage: {} });
+    const agentDir = makeAgentDir("acme");
+    for (const m of ["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"]) {
+      await reportUsage({
+        db: db as never,
+        agentId: "octogee-acme-coach",
+        role: "coach",
+        agentDir,
+        usage: {
+          input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+          totalTokens: 1, costUsd: m.includes("haiku") ? 0.001 : 0.01,
+          model: m,
+          costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+        agentToUid: new Map([["octogee-acme-coach", "u-models"]]),
+        log: () => {},
+        gatewayId: "gw-test",
+      });
+    }
+    const summary = await readDoc("workspaces/acme/usage_summary/current");
+    const mc = summary?.modelCosts as Record<string, number>;
+    expect(mc["anthropic_claude-sonnet-4-6"]).toBeCloseTo(0.01);
+    expect(mc["anthropic_claude-haiku-4-5"]).toBeCloseTo(0.001);
+    expect(summary?.totalCostUsd).toBeCloseTo(0.011);
+  });
+
+  it("token_breakdown accumulates across two calls on the same role+model+date", async () => {
+    await seedUser("u-tb", { selectedTier: "pro", usage: {} });
+    const agentDir = makeAgentDir("acme");
+    for (let i = 0; i < 2; i++) {
+      await reportUsage({
+        db: db as never,
+        agentId: "octogee-acme-coach",
+        role: "coach",
+        agentDir,
+        usage: {
+          input: 10, output: 20, cacheRead: 5, cacheWrite: 2,
+          totalTokens: 37, costUsd: 0.01,
+          model: "anthropic/claude-sonnet-4-6",
+          costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+        agentToUid: new Map([["octogee-acme-coach", "u-tb"]]),
+        log: () => {},
+        gatewayId: "gw-test",
+      });
+    }
+    const session = await readDoc(`workspaces/acme/usage_sessions/${today}`);
+    const tb = session?.token_breakdown as Record<string, number>;
+    expect(tb.input).toBe(20);
+    expect(tb.output).toBe(40);
+    expect(tb.cacheRead).toBe(10);
+    expect(tb.cacheWrite).toBe(4);
+  });
+});
+
+// ── Contract: privacy — no key-fingerprint fields on any workspace doc ─
+// User log was already covered ("user-level write does NOT carry
+// lastKeyFingerprint"). Adding the symmetric coverage for the workspace
+// docs the existing skipped test was originally trying to assert.
+
+describe("reportUsage — privacy invariants (no key-fingerprint fields)", () => {
+  it("workspace session/model/summary docs carry no keyFingerprint / keyFingerprints / lastKeyFingerprint", async () => {
+    await seedUser("u-priv", { selectedTier: "pro", usage: {} });
+    const agentDir = makeAgentDir("acme");
+    await reportUsage({
+      db: db as never,
+      agentId: "octogee-acme-coach",
+      role: "coach",
+      agentDir,
+      usage: {
+        input: 10, output: 20, cacheRead: 5, cacheWrite: 0,
+        totalTokens: 35, costUsd: 0.01,
+        model: "anthropic/claude-sonnet-4-6",
+        costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      agentToUid: new Map([["octogee-acme-coach", "u-priv"]]),
+      log: () => {},
+      gatewayId: "gw-test",
+    });
+    const docs = await Promise.all([
+      readDoc(`workspaces/acme/usage_sessions/${today}`),
+      readDoc(`workspaces/acme/usage_models/anthropic_claude-sonnet-4-6_${today}`),
+      readDoc("workspaces/acme/usage_summary/current"),
+    ]);
+    for (const doc of docs) {
+      expect(doc).not.toHaveProperty("keyFingerprint");
+      expect(doc).not.toHaveProperty("keyFingerprints");
+      expect(doc).not.toHaveProperty("lastKeyFingerprint");
+    }
   });
 });
 
