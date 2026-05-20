@@ -69,6 +69,10 @@ spec:
               name: preview
             - containerPort: {{ .Values.env.fleetControllerPort | default "3003" }}
               name: fleet-http
+            {{- if eq .Values.profile "operator" }}
+            - containerPort: {{ .Values.env.builderShellPort | default "3005" }}
+              name: builder-shell
+            {{- end }}
           securityContext:
             {{- toYaml .Values.gatewayContainerSecurityContext | nindent 12 }}
           env:
@@ -306,6 +310,18 @@ spec:
                   name: gitea-token
                   key: token
                   optional: true
+            # Builder-shell WS wiring (operator-profile only — chat-proxy
+            # still runs on cattle pods for MM/OpenClaw, but
+            # attachBuilderShellRoute() bails when these envs are unset).
+            {{- if eq .Values.profile "operator" }}
+            - name: WORKSPACE_API_INTERNAL_URL
+              value: "http://localhost:{{ .Values.workspaceApi.port }}"
+            - name: INTERNAL_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: internal-service-key
+                  key: key
+            {{- end }}
           resources:
             {{- toYaml .Values.chatProxy.resources | nindent 12 }}
           readinessProbe:

@@ -259,6 +259,36 @@ fi
   done
 ) &
 
+# ── Start builder-shell PTY server (operator profile only) ─────────────────
+# Per docs/specs/DEV-CONTINUITY-BRIDGE-SPEC.md §2.4 Proof Spike #1 +
+# docs/architecture/GATEWAY-PLATFORM-SPEC.md §Operator Shell Access.
+# Listens on :3005 for in-pod chat-proxy → BuilderShellPty traffic.
+# Cattle gateways DO NOT expose a builder shell; the Helm Service for
+# them omits the builder-shell port, and the entrypoint skips this
+# loop entirely.
+#
+# Auth: defense-in-depth via INTERNAL_SERVICE_KEY in addition to
+# K8s-namespace Service isolation. The shared secret is the same one
+# the platform uses for service-to-service (chat-proxy → workspace-api,
+# gateway → workspace-api). Setting BUILDER_SHELL_REQUIRE_KEY=true
+# here means any in-cluster pod that lands on the gateway's :3005
+# without the header is 401'd. Without this, a compromised pod in the
+# same namespace (cattle, etc.) could connect directly and bypass
+# chat-proxy's Origin allowlist + redeem-ticket discipline.
+if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
+  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
+  (
+    while true; do
+      log "Starting builder-shell PTY server (require_key=${BUILDER_SHELL_REQUIRE_KEY})..."
+      /octogee/scripts/node_modules/.bin/tsx \
+        /octogee/scripts/builder-shell-server.ts \
+        || true
+      log "Builder-shell server exited — restarting in 5s..."
+      sleep 5
+    done
+  ) &
+fi
+
 # ── Start BYO-sub credential sync-back watcher (observe-only) ───────────────
 (
   while true; do

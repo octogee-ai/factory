@@ -30,6 +30,7 @@ COPY --chown=node:node scripts/preview-proxy.ts /octogee/scripts/
 COPY --chown=node:node scripts/get-customer-uid.ts /octogee/scripts/
 COPY --chown=node:node scripts/pre-boot-config.ts /octogee/scripts/
 COPY --chown=node:node scripts/byosub-syncback-runner.ts /octogee/scripts/
+COPY --chown=node:node scripts/builder-shell-server.ts /octogee/scripts/
 COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/

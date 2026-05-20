@@ -5,6 +5,7 @@ import admin from "firebase-admin";
 import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from "prom-client";
 import { startMetricsBaseline } from "./openclaw/metrics-baseline.js";
 import { generateIdentity, type DeviceIdentity } from "../../shared/types/device-identity.js";
+import { WsUpgradeRouter } from "../../shared/ws/upgrade-router.js";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
 import {
   resolveGatewayUrl,
@@ -925,14 +926,23 @@ export function gatewayHealthUrl(
 export function createServer() {
   const server = http.createServer(handleRequest);
   const wss = new WebSocketServer({ noServer: true });
-
   const mmWss = new WebSocketServer({ noServer: true });
+
+  // Shared router for new WS surfaces (builder-shell, etc.). MM +
+  // OpenClaw branches stay inline because they own specialized
+  // internal handshake/Origin/metric paths that don't pay back the
+  // refactor cost yet. Future WS surfaces register via
+  // `wsRouter.add({...})`; the router's `dispatch` is invoked from
+  // the upgrade handler below when neither MM nor OpenClaw match.
+  const wsRouter = new WsUpgradeRouter();
 
   server.on("upgrade", (req, socket, head) => {
     const urlPath = (req.url || "").split("?")[0];
     if (urlPath.startsWith("/api/openclaw/ws/")) {
       handleOpenClawWsUpgrade(wss, req, socket, head);
-    } else if (urlPath === "/api/v4/websocket") {
+      return;
+    }
+    if (urlPath === "/api/v4/websocket") {
       const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
       if (!isAllowedWsOrigin(origin)) {
         console.warn(`[mm-proxy/ws] rejected origin=${origin ?? "(none)"}`);
@@ -953,13 +963,60 @@ export function createServer() {
           browserWs,
         );
       });
-    } else {
-      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-      socket.destroy();
+      return;
     }
+    if (wsRouter.dispatch(req, socket, head)) return;
+    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    socket.destroy();
   });
 
+  // Exposed so attachBuilderShellRoute() can register its route on
+  // the same server without adding a second `server.on('upgrade')`
+  // listener. The router was created above with no routes — only
+  // builder-shell adds one in startup.
+  (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
   return server;
+}
+
+/** Wire the builder-shell upgrade route onto the chat-proxy HTTP
+ *  server. Called from startup (not from createServer) so tests can
+ *  build a server without dragging in workspace-api/internal-key env. */
+async function attachBuilderShellRoute(server: ReturnType<typeof createServer>): Promise<void> {
+  const workspaceApiUrl = process.env.WORKSPACE_API_INTERNAL_URL;
+  const internalKey = process.env.INTERNAL_SERVICE_KEY;
+  const namespace = process.env.K8S_NAMESPACE || "octogee";
+  if (!workspaceApiUrl || !internalKey) {
+    console.warn(
+      "[builder-shell] WORKSPACE_API_INTERNAL_URL or INTERNAL_SERVICE_KEY unset — builder-shell WS disabled",
+    );
+    return;
+  }
+  const { buildRedeemFetcher } = await import("./builder-shell/redeem.js");
+  const { buildConnectUpstream } = await import("./builder-shell/upstream.js");
+  const { attachBuilderShellUpgrade } = await import("./builder-shell/upgrade.js");
+  const router = (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter;
+  attachBuilderShellUpgrade(server, {
+    router,
+    redeem: buildRedeemFetcher({ baseUrl: workspaceApiUrl, internalServiceKey: internalKey }),
+    connectUpstream: buildConnectUpstream({
+      namespace,
+      internalServiceKey: internalKey,
+    }),
+    // Use the same Origin policy as MM + OpenClaw — reads
+    // OCTOGEE_ALLOWED_WS_ORIGINS env at every call so a helm restart
+    // with new allowlist picks up without re-attaching the route.
+    allowedOrigins: isAllowedWsOrigin,
+    onEvent: (e) => {
+      if (e.kind === "session-closed") {
+        console.warn(
+          `[builder-shell] session closed sessionId=${e.sessionId} uid=${e.uid} gatewayId=${e.gatewayId} reason=${e.reason}`,
+        );
+      } else {
+        console.warn(`[builder-shell] ticket rejected reason=${e.reason}`);
+      }
+    },
+  });
+  console.log(`[builder-shell] WS route attached (workspace-api=${workspaceApiUrl}, ns=${namespace})`);
 }
 
 /**
@@ -1000,6 +1057,14 @@ async function buildEditDiffFetcher() {
 if (process.env.NODE_ENV !== "test") {
   warnIfWsOriginsMisconfigured(console.warn);
   const server = createServer();
+  attachBuilderShellRoute(server).catch((err) => {
+    // Don't crash chat-proxy on builder-shell wiring failure — MM +
+    // OpenClaw still serve. Log loudly so ops sees the disable.
+    console.error(
+      "[builder-shell] route attach failed — WS route disabled:",
+      err instanceof Error ? err.message : err,
+    );
+  });
   server.listen(PORT, () => {
     console.log(
       `[chat-proxy] boot sha=${process.env.BUILD_SHA ?? "unknown"}` +
