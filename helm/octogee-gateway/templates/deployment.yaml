@@ -92,6 +92,12 @@ spec:
               value: {{ .Values.gatewayId | quote }}
             - name: GATEWAY_INSTANCE_NAME
               value: {{ .Values.instanceName | quote }}
+            # Capability profile (cattle vs operator) — read by
+            # entrypoint.sh to gate operator-only boot steps such as the
+            # Claude Code first-run stamper. Cattle renders this as "",
+            # so the entrypoint's `= "operator"` check is a no-op.
+            - name: GATEWAY_PROFILE
+              value: {{ .Values.profile | quote }}
             - name: OPENCLAW_BROADCAST_ALL_AGENT_RUNS
               value: "1"
             - name: OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS

@@ -320,6 +320,23 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(dep).toMatch(/name:\s*MM_BOT_TOKEN\b/);
     expect(dep).toMatch(/name:\s*GIT_API_TOKEN\b/);
   });
+
+  it("threads the chart's profile through to the gateway container as GATEWAY_PROFILE so the entrypoint can gate operator-only boot steps", () => {
+    const operatorDep =
+      findDoc(
+        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    expect(operatorDep).toMatch(
+      /- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"operator"/,
+    );
+    // Default/cattle rendering: env var still present but empty —
+    // entrypoint's `[ "$GATEWAY_PROFILE" = "operator" ]` falls through,
+    // no operator-only code runs.
+    const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(cattleDep).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*""/);
+  });
 });
 
 describe("helm/octogee-gateway/ — per-instance Service annotations", () => {

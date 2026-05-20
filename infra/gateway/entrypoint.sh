@@ -129,6 +129,26 @@ SSHEOF
 chmod 600 "$HOME/.ssh/config"
 log "SSH config written for Gitea (host: ${GIT_SSH_HOST}, no global identity file)"
 
+# ── Operator-profile: Claude Code first-run stamp ──────────────────────────
+# Bender's PVC needed this stamped by hand on first boot — Claude's TUI
+# drops into setup-wizard mode until ~/.claude.json carries
+# hasCompletedOnboarding/_hasCompletedAuthFlow, even when
+# `claude auth status` reports a valid max-tier login. The stamper:
+#   - REQUIRES an existing ~/.claude/.credentials.json (refuses to fake
+#     completion without underlying OAuth)
+#   - PRESERVES every other key in ~/.claude.json
+#   - is idempotent across reboots
+# Operator-only by GATEWAY_PROFILE gate AND by COPY-set (only
+# Dockerfile.operator ships the script). See
+# tests/specs/stamp-claude-first-run.spec.ts.
+STAMPER=/octogee/infra/gateway/stamp-claude-first-run.mjs
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$STAMPER" ]; then
+  # The stamper writes ~/.claude.json itself with 0600 — the
+  # file-permission hardening block below does NOT cover it. If that
+  # invariant ever moves to the entrypoint, add an explicit chmod here.
+  node "$STAMPER" || log "stamp-claude-first-run: non-fatal failure"
+fi
+
 # ── Harden file permissions ─────────────────────────────────────────────────
 # The init container sets 775 for PVC/emptyDir. Tighten sensitive files.
 chmod 700 "$OPENCLAW_DIR" 2>/dev/null || true
