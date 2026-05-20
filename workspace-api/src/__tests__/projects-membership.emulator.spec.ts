@@ -1,172 +1,198 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const firestoreData: Record<string, any> = {};
-const mockSet = vi.fn(async (_path: string, _data: any) => undefined);
-const mockUpdate = vi.fn(async (_path: string, _data: any) => undefined);
-const mockDelete = vi.fn(async (_path: string) => undefined);
+import { db } from "../lib/db";
+import {
+  setupEmulatorTest,
 
-function resetFirestoreMocks() {
-  for (const k of Object.keys(firestoreData)) delete firestoreData[k];
-  mockSet.mockClear();
-  mockUpdate.mockClear();
-  mockDelete.mockClear();
-}
-
-vi.mock("../lib/db", () => {
-  const makeDocRef = (path: string): any => ({
-    get: async () => {
-      const data = firestoreData[path];
-      return { exists: !!data, data: () => data };
-    },
-    set: async (data: any) => {
-      firestoreData[path] = { ...(firestoreData[path] || {}), ...data };
-      mockSet(path, data);
-    },
-    update: async (data: any) => {
-      firestoreData[path] = { ...(firestoreData[path] || {}), ...data };
-      mockUpdate(path, data);
-    },
-    delete: async () => {
-      delete firestoreData[path];
-      mockDelete(path);
-    },
-    collection: (sub: string) => ({
-      doc: (subId: string) => makeDocRef(`${path}/${sub}/${subId}`),
-    }),
-  });
-
-  return {
-    auth: {
-      verifyIdToken: vi.fn().mockResolvedValue({ uid: "caller-uid" }),
-    },
-    db: {
-      doc: (path: string) => makeDocRef(path),
-      collection: (name: string) => ({
-        doc: (id: string) => makeDocRef(`${name}/${id}`),
-      }),
-    },
-    FieldValue: {
-      serverTimestamp: () => ({ __op: "serverTimestamp" }),
-      increment: (n: number) => ({ __op: "increment", value: n }),
-    },
-  };
-});
+  getIdTokenForUid,
+} from "./helpers/firestore-emulator";
 
 const mockMmApi = vi.fn();
 vi.mock("../lib/mattermost", () => ({
-  mmApi: (...args: any[]) => mockMmApi(...args),
+  mmApi: (...args: unknown[]) => mockMmApi(...args),
 }));
 
 const mockGetWorkspaceMmContext = vi.fn();
 vi.mock("../lib/mattermost-context", () => ({
-  getWorkspaceMmContext: (...args: any[]) => mockGetWorkspaceMmContext(...args),
+  getWorkspaceMmContext: (...args: unknown[]) => mockGetWorkspaceMmContext(...args),
 }));
 
 const mockGiteaApi = vi.fn();
 vi.mock("../lib/gitea", () => ({
-  giteaApi: (...args: any[]) => mockGiteaApi(...args),
+  giteaApi: (...args: unknown[]) => mockGiteaApi(...args),
   createProjectGiteaRepo: vi.fn(),
   giteaWriteFile: vi.fn(),
 }));
 
 import { createApp } from "../index";
 
-function authHeaders() {
-  return { Authorization: "Bearer valid-token" };
+const CALLER_UID = "caller-uid";
+
+async function authHeader(uid: string = CALLER_UID): Promise<{ Authorization: string }> {
+  const token = await getIdTokenForUid(uid);
+  return { Authorization: `Bearer ${token}` };
 }
 
-function seedPublicAliceGame() {
-  firestoreData["workspaces/alice/projects/game"] = {
-    id: "game",
-    ownerUid: "alice-uid",
-    workspaceId: "alice",
-    slug: "game",
-    name: "Game",
-    visibility: "public",
-    provisioningState: "active",
-    giteaRepoName: "alice-proj-game",
-    memberCount: 2,
-  };
-  firestoreData["workspaces/alice/projects/game/channels/general"] = {
-    id: "general",
-    kind: "general",
-    name: "general",
-    mattermost: { channelId: "ch-alice-game" },
-  };
-  firestoreData["users/caller-uid"] = {
-    username: "bob",
-    mattermost: { userId: "mm-bob" },
-  };
-  firestoreData["users/alice-uid"] = {
+async function seedCaller(uid: string, username = "bob", mmUserId = "mm-bob"): Promise<void> {
+  await db.collection("users").doc(uid).set({
+    username,
+    mattermost: { userId: mmUserId },
+  });
+  await db
+    .collection("users")
+    .doc(uid)
+    .collection("system")
+    .doc("config")
+    .set({ role: "user" });
+}
+
+async function seedPublicAliceGame(
+  overrides: Record<string, unknown> = {},
+): Promise<void> {
+  await db
+    .collection("workspaces")
+    .doc("alice")
+    .collection("projects")
+    .doc("game")
+    .set({
+      id: "game",
+      ownerUid: "alice-uid",
+      workspaceId: "alice",
+      slug: "game",
+      name: "Game",
+      visibility: "public",
+      provisioningState: "active",
+      giteaRepoName: "alice-proj-game",
+      memberCount: 2,
+      ...overrides,
+    });
+  await db
+    .collection("workspaces")
+    .doc("alice")
+    .collection("projects")
+    .doc("game")
+    .collection("channels")
+    .doc("general")
+    .set({
+      id: "general",
+      kind: "general",
+      name: "general",
+      mattermost: { channelId: "ch-alice-game" },
+    });
+  await db.collection("users").doc("alice-uid").set({
     username: "alice",
     mattermost: { userId: "mm-alice" },
-  };
+  });
 }
 
-beforeEach(() => {
-  resetFirestoreMocks();
+async function getProjectDoc(): Promise<Record<string, unknown> | undefined> {
+  const snap = await db
+    .collection("workspaces")
+    .doc("alice")
+    .collection("projects")
+    .doc("game")
+    .get();
+  return snap.data();
+}
+
+async function getMemberDoc(uid: string): Promise<Record<string, unknown> | undefined> {
+  const snap = await db
+    .collection("workspaces")
+    .doc("alice")
+    .collection("projects")
+    .doc("game")
+    .collection("members")
+    .doc(uid)
+    .get();
+  return snap.data();
+}
+
+async function getStarDoc(id: string): Promise<Record<string, unknown> | undefined> {
+  const snap = await db.collection("stars").doc(id).get();
+  return snap.data();
+}
+
+setupEmulatorTest();
+beforeEach(async () => {
   mockMmApi.mockReset();
   mockGiteaApi.mockReset();
   mockGetWorkspaceMmContext.mockReset();
   mockGetWorkspaceMmContext.mockResolvedValue({ teamId: "team-alice" });
+  await seedCaller(CALLER_UID);
 });
 
 describe("POST /api/projects/:wid/:pid/join", () => {
+  it("returns 401 when unauthenticated", async () => {
+    const app = createApp();
+    const res = await request(app).post("/api/projects/alice/game/join").send({});
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 on a malformed Bearer token", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/game/join")
+      .set("Authorization", "Bearer not-a-real-token")
+      .send({});
+    expect(res.status).toBe(401);
+  });
+
   it("returns 404 when the project does not exist", async () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/ghost/join")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(404);
   });
 
   it("returns 400 when the caller is the project owner", async () => {
-    seedPublicAliceGame();
-    firestoreData["workspaces/alice/projects/game"].ownerUid = "caller-uid";
+    await seedPublicAliceGame({ ownerUid: CALLER_UID });
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/join")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/already own/i);
   });
 
   it("returns 403 when the project is private", async () => {
-    seedPublicAliceGame();
-    firestoreData["workspaces/alice/projects/game"].visibility = "private";
+    await seedPublicAliceGame({ visibility: "private" });
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/join")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/invite/i);
   });
 
   it("short-circuits with alreadyMember:true when the member doc exists", async () => {
-    seedPublicAliceGame();
-    firestoreData["workspaces/alice/projects/game/members/caller-uid"] = {
-      id: "caller-uid",
-      role: "member",
-    };
+    await seedPublicAliceGame();
+    await db
+      .collection("workspaces")
+      .doc("alice")
+      .collection("projects")
+      .doc("game")
+      .collection("members")
+      .doc(CALLER_UID)
+      .set({ id: CALLER_UID, role: "member" });
+
+    const beforeMemberCount = (await getProjectDoc())?.memberCount;
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/join")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true, alreadyMember: true });
-    expect(mockUpdate).not.toHaveBeenCalledWith(
-      "workspaces/alice/projects/game",
-      expect.objectContaining({ memberCount: expect.anything() }),
-    );
+    expect((await getProjectDoc())?.memberCount).toBe(beforeMemberCount);
   });
 
   it("adds the caller as a member + increments memberCount on first join", async () => {
-    seedPublicAliceGame();
+    await seedPublicAliceGame();
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if (method === "POST" && path === "/teams/team-alice/members") return { ok: true };
       if (method === "POST" && path.includes("/channels/ch-alice-game/members")) return { ok: true };
@@ -177,18 +203,15 @@ describe("POST /api/projects/:wid/:pid/join", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/join")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(firestoreData["workspaces/alice/projects/game/members/caller-uid"]).toMatchObject({
-      id: "caller-uid",
+    expect(await getMemberDoc(CALLER_UID)).toMatchObject({
+      id: CALLER_UID,
       role: "member",
     });
-    expect(mockUpdate).toHaveBeenCalledWith(
-      "workspaces/alice/projects/game",
-      expect.objectContaining({ memberCount: expect.objectContaining({ __op: "increment", value: 1 }) }),
-    );
+    expect((await getProjectDoc())?.memberCount).toBe(3);
     expect(mockGiteaApi).toHaveBeenCalledWith(
       "alice",
       "game/collaborators/ws-bob",
@@ -199,64 +222,68 @@ describe("POST /api/projects/:wid/:pid/join", () => {
 });
 
 describe("POST /api/projects/:wid/:pid/leave", () => {
+  it("returns 401 when unauthenticated", async () => {
+    const app = createApp();
+    const res = await request(app).post("/api/projects/alice/game/leave").send({});
+    expect(res.status).toBe(401);
+  });
+
   it("returns 404 when the project does not exist", async () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/ghost/leave")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(404);
   });
 
   it("returns 400 when the caller is the project owner", async () => {
-    seedPublicAliceGame();
-    firestoreData["workspaces/alice/projects/game"].ownerUid = "caller-uid";
+    await seedPublicAliceGame({ ownerUid: CALLER_UID });
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/leave")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/cannot leave/i);
   });
 
   it("short-circuits with notAMember:true when the member doc is absent", async () => {
-    seedPublicAliceGame();
+    await seedPublicAliceGame();
+    const beforeMemberCount = (await getProjectDoc())?.memberCount;
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/leave")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true, notAMember: true });
-    expect(mockUpdate).not.toHaveBeenCalledWith(
-      "workspaces/alice/projects/game",
-      expect.objectContaining({ memberCount: expect.anything() }),
-    );
+    expect((await getProjectDoc())?.memberCount).toBe(beforeMemberCount);
   });
 
   it("removes the member doc + decrements memberCount on the happy path", async () => {
-    seedPublicAliceGame();
-    firestoreData["workspaces/alice/projects/game/members/caller-uid"] = {
-      id: "caller-uid",
-      role: "member",
-    };
+    await seedPublicAliceGame();
+    await db
+      .collection("workspaces")
+      .doc("alice")
+      .collection("projects")
+      .doc("game")
+      .collection("members")
+      .doc(CALLER_UID)
+      .set({ id: CALLER_UID, role: "member" });
     mockMmApi.mockResolvedValue({ ok: true });
     mockGiteaApi.mockResolvedValue({ ok: true });
 
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/leave")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(firestoreData["workspaces/alice/projects/game/members/caller-uid"]).toBeUndefined();
-    expect(mockUpdate).toHaveBeenCalledWith(
-      "workspaces/alice/projects/game",
-      expect.objectContaining({ memberCount: expect.objectContaining({ __op: "increment", value: -1 }) }),
-    );
+    expect(await getMemberDoc(CALLER_UID)).toBeUndefined();
+    expect((await getProjectDoc())?.memberCount).toBe(1);
     expect(mockMmApi).toHaveBeenCalledWith(
       "/channels/ch-alice-game/members/mm-bob",
       "DELETE",
@@ -270,26 +297,34 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
 });
 
 describe("POST /api/projects/:wid/:pid/star", () => {
+  it("returns 401 when unauthenticated", async () => {
+    const app = createApp();
+    const res = await request(app).post("/api/projects/alice/game/star").send({});
+    expect(res.status).toBe(401);
+  });
+
   it("returns 404 when the project does not exist (first star attempt)", async () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/ghost/star")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(404);
   });
 
   it("creates the typed-target star doc on first call (CF aggregator owns starCount)", async () => {
-    seedPublicAliceGame();
+    await seedPublicAliceGame();
+    const beforeStarCount = (await getProjectDoc())?.starCount;
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/star")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ starred: true });
-    expect(firestoreData["stars/caller-uid_p_alice_game"]).toMatchObject({
-      actorUid: "caller-uid",
+    const star = await getStarDoc(`${CALLER_UID}_p_alice_game`);
+    expect(star).toMatchObject({
+      actorUid: CALLER_UID,
       target: {
         type: "project",
         workspaceSlug: "alice",
@@ -297,109 +332,104 @@ describe("POST /api/projects/:wid/:pid/star", () => {
         ownerUid: "alice-uid",
       },
     });
-    expect(mockUpdate).not.toHaveBeenCalledWith(
-      "workspaces/alice/projects/game",
-      expect.objectContaining({ starCount: expect.anything() }),
-    );
+    expect((await getProjectDoc())?.starCount).toBe(beforeStarCount);
   });
 
   it("removes the star doc when toggled off (CF aggregator decrements)", async () => {
-    seedPublicAliceGame();
-    firestoreData["stars/caller-uid_p_alice_game"] = {
-      actorUid: "caller-uid",
+    await seedPublicAliceGame();
+    await db.collection("stars").doc(`${CALLER_UID}_p_alice_game`).set({
+      actorUid: CALLER_UID,
       target: {
         type: "project",
         workspaceSlug: "alice",
         projectSlug: "game",
         ownerUid: "alice-uid",
       },
-    };
+    });
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/game/star")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ starred: false });
-    expect(firestoreData["stars/caller-uid_p_alice_game"]).toBeUndefined();
-    expect(mockUpdate).not.toHaveBeenCalledWith(
-      "workspaces/alice/projects/game",
-      expect.objectContaining({ starCount: expect.anything() }),
-    );
+    expect(await getStarDoc(`${CALLER_UID}_p_alice_game`)).toBeUndefined();
   });
 });
 
 describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
+  it("returns 401 when unauthenticated", async () => {
+    const app = createApp();
+    const res = await request(app).delete("/api/projects/alice/game/members/guest-uid");
+    expect(res.status).toBe(401);
+  });
+
   it("returns 404 when the project does not exist", async () => {
     const app = createApp();
     const res = await request(app)
       .delete("/api/projects/alice/ghost/members/guest-uid")
-      .set(authHeaders());
+      .set(await authHeader());
     expect(res.status).toBe(404);
   });
 
   it("returns 403 when the caller is not the project owner", async () => {
-    seedPublicAliceGame();
+    await seedPublicAliceGame();
     const app = createApp();
     const res = await request(app)
       .delete("/api/projects/alice/game/members/guest-uid")
-      .set(authHeaders());
+      .set(await authHeader());
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/only the project owner/i);
   });
 
-  it("returns 400 when the caller tries to remove the owner", async () => {
-    seedPublicAliceGame();
-    firestoreData["workspaces/alice/projects/game"].ownerUid = "caller-uid";
+  it("returns 400 when the caller (as owner) tries to remove the owner", async () => {
+    await seedPublicAliceGame({ ownerUid: CALLER_UID });
     const app = createApp();
     const res = await request(app)
-      .delete("/api/projects/alice/game/members/caller-uid")
-      .set(authHeaders());
+      .delete(`/api/projects/alice/game/members/${CALLER_UID}`)
+      .set(await authHeader());
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/cannot remove the project owner/i);
   });
 
   it("short-circuits with notAMember:true when the guest has no member doc", async () => {
-    seedPublicAliceGame();
-    firestoreData["workspaces/alice/projects/game"].ownerUid = "caller-uid";
+    await seedPublicAliceGame({ ownerUid: CALLER_UID });
+    const beforeMemberCount = (await getProjectDoc())?.memberCount;
     const app = createApp();
     const res = await request(app)
       .delete("/api/projects/alice/game/members/ghost-guest")
-      .set(authHeaders());
+      .set(await authHeader());
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true, notAMember: true });
-    expect(mockUpdate).not.toHaveBeenCalledWith(
-      "workspaces/alice/projects/game",
-      expect.objectContaining({ memberCount: expect.anything() }),
-    );
+    expect((await getProjectDoc())?.memberCount).toBe(beforeMemberCount);
   });
 
   it("removes the guest, decrements memberCount, and revokes MM+Gitea access", async () => {
-    seedPublicAliceGame();
-    firestoreData["workspaces/alice/projects/game"].ownerUid = "caller-uid";
-    firestoreData["workspaces/alice/projects/game/members/guest-uid"] = {
-      id: "guest-uid",
-      role: "member",
-    };
-    firestoreData["users/guest-uid"] = {
+    await seedPublicAliceGame({ ownerUid: CALLER_UID });
+    await db
+      .collection("workspaces")
+      .doc("alice")
+      .collection("projects")
+      .doc("game")
+      .collection("members")
+      .doc("guest-uid")
+      .set({ id: "guest-uid", role: "member" });
+    await db.collection("users").doc("guest-uid").set({
       username: "guesty",
       mattermost: { userId: "mm-guest" },
-    };
+    });
     mockMmApi.mockResolvedValue({ ok: true });
     mockGiteaApi.mockResolvedValue({ ok: true });
 
     const app = createApp();
     const res = await request(app)
       .delete("/api/projects/alice/game/members/guest-uid")
-      .set(authHeaders());
+      .set(await authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(firestoreData["workspaces/alice/projects/game/members/guest-uid"]).toBeUndefined();
-    expect(mockUpdate).toHaveBeenCalledWith(
-      "workspaces/alice/projects/game",
-      expect.objectContaining({ memberCount: expect.objectContaining({ __op: "increment", value: -1 }) }),
-    );
+    expect(await getMemberDoc("guest-uid")).toBeUndefined();
+    expect((await getProjectDoc())?.memberCount).toBe(1);
     expect(mockMmApi).toHaveBeenCalledWith(
       "/channels/ch-alice-game/members/mm-guest",
       "DELETE",

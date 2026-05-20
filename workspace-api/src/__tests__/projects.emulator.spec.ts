@@ -1,120 +1,106 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const firestoreData: Record<string, any> = {};
+import { db } from "../lib/db";
+import {
+  setupEmulatorTest,
 
-const mockSet = vi.fn(async (_path: string, _data: any) => undefined);
-const mockUpdate = vi.fn(async (_path: string, _data: any) => undefined);
-
-function resetFirestoreMocks() {
-  for (const k of Object.keys(firestoreData)) delete firestoreData[k];
-  mockSet.mockClear();
-  mockUpdate.mockClear();
-}
-
-function deepMerge(target: any, source: any): any {
-  if (typeof target !== "object" || target === null) return source;
-  if (typeof source !== "object" || source === null) return source;
-  const out: any = { ...target };
-  for (const key of Object.keys(source)) {
-    const srcVal = source[key];
-    const tgtVal = target[key];
-    if (
-      srcVal &&
-      typeof srcVal === "object" &&
-      !Array.isArray(srcVal) &&
-      tgtVal &&
-      typeof tgtVal === "object" &&
-      !Array.isArray(tgtVal)
-    ) {
-      out[key] = deepMerge(tgtVal, srcVal);
-    } else {
-      out[key] = srcVal;
-    }
-  }
-  return out;
-}
-
-vi.mock("../lib/db", () => {
-  const makeDocRef = (path: string): any => ({
-    get: async () => {
-      const data = firestoreData[path];
-      return { exists: !!data, data: () => data };
-    },
-    set: async (data: any, options?: { merge?: boolean }) => {
-      const prev = firestoreData[path] || {};
-      const merge = options?.merge === true;
-      firestoreData[path] = merge ? deepMerge(prev, data) : { ...prev, ...data };
-      mockSet(path, data);
-    },
-    update: async (data: any) => {
-      firestoreData[path] = { ...(firestoreData[path] || {}), ...data };
-      mockUpdate(path, data);
-    },
-    delete: async () => { delete firestoreData[path]; },
-    collection: (sub: string) => ({
-      doc: (subId: string) => makeDocRef(`${path}/${sub}/${subId}`),
-    }),
-  });
-
-  return {
-    auth: {
-      verifyIdToken: vi.fn().mockResolvedValue({ uid: "caller-uid" }),
-    },
-    db: {
-      doc: (path: string) => makeDocRef(path),
-      collection: (name: string) => ({
-        doc: (id: string) => makeDocRef(`${name}/${id}`),
-      }),
-    },
-    FieldValue: {
-      serverTimestamp: () => ({ __op: "serverTimestamp" }),
-      increment: (n: number) => ({ __op: "increment", value: n }),
-    },
-  };
-});
+  getIdTokenForUid,
+} from "./helpers/firestore-emulator";
 
 const mockMmApi = vi.fn();
 vi.mock("../lib/mattermost", () => ({
-  mmApi: (...args: any[]) => mockMmApi(...args),
+  mmApi: (...args: unknown[]) => mockMmApi(...args),
 }));
 
 const mockGetWorkspaceMmContext = vi.fn();
 vi.mock("../lib/mattermost-context", () => ({
-  getWorkspaceMmContext: (...args: any[]) => mockGetWorkspaceMmContext(...args),
+  getWorkspaceMmContext: (...args: unknown[]) => mockGetWorkspaceMmContext(...args),
 }));
 
 const mockCreateProjectGiteaRepo = vi.fn();
 const mockGiteaWriteFile = vi.fn();
 const mockGiteaApi = vi.fn();
 vi.mock("../lib/gitea", () => ({
-  giteaApi: (...args: any[]) => mockGiteaApi(...args),
-  createProjectGiteaRepo: (...args: any[]) => mockCreateProjectGiteaRepo(...args),
-  giteaWriteFile: (...args: any[]) => mockGiteaWriteFile(...args),
+  giteaApi: (...args: unknown[]) => mockGiteaApi(...args),
+  createProjectGiteaRepo: (...args: unknown[]) => mockCreateProjectGiteaRepo(...args),
+  giteaWriteFile: (...args: unknown[]) => mockGiteaWriteFile(...args),
 }));
 
 import { createApp } from "../index";
 
-function authHeaders() {
-  return { Authorization: "Bearer valid-token" };
+const CALLER_UID = "caller-uid";
+
+async function authHeader(uid: string = CALLER_UID): Promise<{ Authorization: string }> {
+  const token = await getIdTokenForUid(uid);
+  return { Authorization: `Bearer ${token}` };
 }
+
+async function seedCaller(uid: string, username = "alice", workspaceId = "alice"): Promise<void> {
+  await db.collection("users").doc(uid).set({ username, workspaceId });
+  await db
+    .collection("users")
+    .doc(uid)
+    .collection("system")
+    .doc("config")
+    .set({ role: "user" });
+}
+
+async function seedProject(
+  wid: string,
+  pid: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await db.collection("workspaces").doc(wid).collection("projects").doc(pid).set(data);
+}
+
+async function getProject(wid: string, pid: string): Promise<Record<string, unknown> | undefined> {
+  const snap = await db.collection("workspaces").doc(wid).collection("projects").doc(pid).get();
+  return snap.data();
+}
+
+async function getProjectChannel(
+  wid: string,
+  pid: string,
+  channelId: string,
+): Promise<Record<string, unknown> | undefined> {
+  const snap = await db
+    .collection("workspaces")
+    .doc(wid)
+    .collection("projects")
+    .doc(pid)
+    .collection("channels")
+    .doc(channelId)
+    .get();
+  return snap.data();
+}
+
+setupEmulatorTest();
+beforeEach(async () => {
+  mockMmApi.mockReset();
+  mockGetWorkspaceMmContext.mockReset();
+  mockCreateProjectGiteaRepo.mockReset();
+  mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
+  mockGiteaWriteFile.mockReset();
+  mockGiteaWriteFile.mockResolvedValue(undefined);
+  mockGiteaApi.mockReset();
+});
 
 describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
   const ORIG_BUILD_URL = process.env.SITE_BUILD_API_URL;
   const ORIG_INTERNAL_KEY = process.env.INTERNAL_SERVICE_KEY;
 
-  beforeEach(() => {
-    resetFirestoreMocks();
-    firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
-    firestoreData["workspaces/alice/projects/mygame"] = {
+  beforeEach(async () => {
+    await seedCaller(CALLER_UID);
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
       visibility: "public",
       provisioningState: "active",
-    };
+    });
   });
 
   afterEach(() => {
@@ -124,6 +110,16 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     else process.env.INTERNAL_SERVICE_KEY = ORIG_INTERNAL_KEY;
   });
 
+  it("returns 401 when unauthenticated", async () => {
+    process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
+    process.env.INTERNAL_SERVICE_KEY = "secret";
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/deploy-preview")
+      .send({});
+    expect(res.status).toBe(401);
+  });
+
   it("returns 503 when SITE_BUILD_API_URL or INTERNAL_SERVICE_KEY is unset", async () => {
     delete process.env.SITE_BUILD_API_URL;
     delete process.env.INTERNAL_SERVICE_KEY;
@@ -131,7 +127,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/deploy-preview")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(503);
@@ -144,7 +140,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/ghost/deploy-preview")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(404);
   });
@@ -152,11 +148,19 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
   it("returns 403 when the caller is not the project owner", async () => {
     process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
     process.env.INTERNAL_SERVICE_KEY = "secret";
-    firestoreData["workspaces/alice/projects/mygame"].ownerUid = "someone-else";
+    await seedProject("alice", "mygame", {
+      id: "mygame",
+      ownerUid: "someone-else",
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "public",
+      provisioningState: "active",
+    });
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/deploy-preview")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
     expect(res.status).toBe(403);
   });
@@ -180,13 +184,12 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
       const app = createApp();
       const res = await request(app)
         .post("/api/projects/alice/mygame/deploy-preview")
-        .set(authHeaders())
+        .set(await authHeader())
         .send({});
       expect(res.status).toBe(200);
       expect(res.body.previewUrl).toBe("https://octogee-alice-mygame.web.app");
-      expect(firestoreData["workspaces/alice/projects/mygame"].previewUrl).toBe(
-        "https://octogee-alice-mygame.web.app",
-      );
+      const proj = await getProject("alice", "mygame");
+      expect(proj?.previewUrl).toBe("https://octogee-alice-mygame.web.app");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -195,7 +198,12 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
   it("returns 502 + leaves previewUrl unchanged when site-build-api fails", async () => {
     process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
     process.env.INTERNAL_SERVICE_KEY = "secret";
-    firestoreData["workspaces/alice/projects/mygame"].previewUrl = null;
+    await db
+      .collection("workspaces")
+      .doc("alice")
+      .collection("projects")
+      .doc("mygame")
+      .set({ previewUrl: null }, { merge: true });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () => {
       return new Response("Build failed", { status: 500 });
@@ -205,10 +213,11 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
       const app = createApp();
       const res = await request(app)
         .post("/api/projects/alice/mygame/deploy-preview")
-        .set(authHeaders())
+        .set(await authHeader())
         .send({});
       expect(res.status).toBe(502);
-      expect(firestoreData["workspaces/alice/projects/mygame"].previewUrl).toBeNull();
+      const proj = await getProject("alice", "mygame");
+      expect(proj?.previewUrl).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -217,7 +226,12 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
   it("returns 504 when the upstream fetch aborts (AbortError / TimeoutError)", async () => {
     process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
     process.env.INTERNAL_SERVICE_KEY = "secret";
-    firestoreData["workspaces/alice/projects/mygame"].previewUrl = null;
+    await db
+      .collection("workspaces")
+      .doc("alice")
+      .collection("projects")
+      .doc("mygame")
+      .set({ previewUrl: null }, { merge: true });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () => {
       const err = new Error("The operation was aborted") as Error & { name: string };
@@ -229,11 +243,12 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
       const app = createApp();
       const res = await request(app)
         .post("/api/projects/alice/mygame/deploy-preview")
-        .set(authHeaders())
+        .set(await authHeader())
         .send({});
       expect(res.status).toBe(504);
       expect(res.body.error).toMatch(/timed out/i);
-      expect(firestoreData["workspaces/alice/projects/mygame"].previewUrl).toBeNull();
+      const proj = await getProject("alice", "mygame");
+      expect(proj?.previewUrl).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -249,7 +264,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
       const app = createApp();
       const r = await request(app)
         .post("/api/projects/-bad/My-Bad/deploy-preview")
-        .set(authHeaders())
+        .set(await authHeader())
         .send({});
       expect(r.status).toBe(404);
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -260,17 +275,12 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
 });
 
 describe("GET /api/projects/:wid/:pid/readme (public)", () => {
-  beforeEach(() => {
-    resetFirestoreMocks();
-    mockGiteaApi.mockReset();
-  });
-
   it("returns the rendered README for a public project (no auth header required)", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       visibility: "public",
       giteaRepoName: "alice-proj-mygame",
       canvasFile: "README.md",
-    };
+    });
     mockGiteaApi.mockResolvedValue({
       content: Buffer.from("# Hello from repo", "utf-8").toString("base64"),
     });
@@ -285,10 +295,10 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   });
 
   it("returns 404 for private projects (visibility leak guard)", async () => {
-    firestoreData["workspaces/alice/projects/secret"] = {
+    await seedProject("alice", "secret", {
       visibility: "private",
       giteaRepoName: "alice-proj-secret",
-    };
+    });
 
     const app = createApp();
     const res = await request(app).get("/api/projects/alice/secret/readme");
@@ -304,10 +314,10 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   });
 
   it("allows unlisted projects to read via direct URL", async () => {
-    firestoreData["workspaces/alice/projects/soft"] = {
+    await seedProject("alice", "soft", {
       visibility: "unlisted",
       giteaRepoName: "alice-proj-soft",
-    };
+    });
     mockGiteaApi.mockResolvedValue({
       content: Buffer.from("# Unlisted is fine", "utf-8").toString("base64"),
     });
@@ -318,10 +328,10 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   });
 
   it("returns empty content (not 500) when the Gitea repo 404s on the file", async () => {
-    firestoreData["workspaces/alice/projects/fresh"] = {
+    await seedProject("alice", "fresh", {
       visibility: "public",
       giteaRepoName: "alice-proj-fresh",
-    };
+    });
     const err = new Error("Gitea API 404") as Error & { status: number };
     err.status = 404;
     mockGiteaApi.mockRejectedValue(err);
@@ -342,11 +352,11 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   });
 
   it("falls back to README.md when canvasFile contains a path traversal", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       visibility: "public",
       giteaRepoName: "alice-proj-mygame",
       canvasFile: "../../../../etc/passwd",
-    };
+    });
     mockGiteaApi.mockResolvedValue({
       content: Buffer.from("# Safe content", "utf-8").toString("base64"),
     });
@@ -359,11 +369,11 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   });
 
   it("falls back to README.md when canvasFile is an absolute path", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       visibility: "public",
       giteaRepoName: "alice-proj-mygame",
       canvasFile: "/etc/passwd",
-    };
+    });
     mockGiteaApi.mockResolvedValue({
       content: Buffer.from("hi", "utf-8").toString("base64"),
     });
@@ -374,11 +384,11 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   });
 
   it("honors a legitimate nested canvasFile path", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       visibility: "public",
       giteaRepoName: "alice-proj-mygame",
       canvasFile: "docs/INTRO.md",
-    };
+    });
     mockGiteaApi.mockResolvedValue({
       content: Buffer.from("# Intro", "utf-8").toString("base64"),
     });
@@ -390,18 +400,22 @@ describe("GET /api/projects/:wid/:pid/readme (public)", () => {
   });
 });
 
-
 describe("GET /api/projects/slug-available", () => {
-  beforeEach(() => {
-    resetFirestoreMocks();
-    firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
+  beforeEach(async () => {
+    await seedCaller(CALLER_UID);
+  });
+
+  it("returns 401 when unauthenticated", async () => {
+    const app = createApp();
+    const res = await request(app).get("/api/projects/slug-available?slug=mygame");
+    expect(res.status).toBe(401);
   });
 
   it("rejects slugs containing hyphens", async () => {
     const app = createApp();
     const res = await request(app)
       .get("/api/projects/slug-available?slug=my-game")
-      .set(authHeaders());
+      .set(await authHeader());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(false);
     expect(res.body.reason).toMatch(/no hyphens/i);
@@ -411,7 +425,7 @@ describe("GET /api/projects/slug-available", () => {
     const app = createApp();
     const res = await request(app)
       .get("/api/projects/slug-available?slug=MyGame")
-      .set(authHeaders());
+      .set(await authHeader());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(false);
   });
@@ -420,7 +434,7 @@ describe("GET /api/projects/slug-available", () => {
     const app = createApp();
     const res = await request(app)
       .get("/api/projects/slug-available?slug=settings")
-      .set(authHeaders());
+      .set(await authHeader());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(false);
     expect(res.body.reason).toMatch(/reserved/);
@@ -430,7 +444,7 @@ describe("GET /api/projects/slug-available", () => {
     const app = createApp();
     const res = await request(app)
       .get("/api/projects/slug-available?slug=seventeencharsxxx")
-      .set(authHeaders());
+      .set(await authHeader());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(false);
   });
@@ -439,28 +453,38 @@ describe("GET /api/projects/slug-available", () => {
     const app = createApp();
     const res = await request(app)
       .get("/api/projects/slug-available?slug=mygame")
-      .set(authHeaders());
+      .set(await authHeader());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(true);
   });
+
+  it("returns available=false when a project with that slug already exists in the workspace", async () => {
+    await seedProject("alice", "mygame", { id: "mygame" });
+    const app = createApp();
+    const res = await request(app)
+      .get("/api/projects/slug-available?slug=mygame")
+      .set(await authHeader());
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(false);
+  });
 });
 
-
 describe("POST /api/projects — MM channel failure is hard-failure", () => {
-  beforeEach(() => {
-    resetFirestoreMocks();
-    firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
-    mockMmApi.mockReset();
-    mockGetWorkspaceMmContext.mockReset();
-    mockCreateProjectGiteaRepo.mockReset();
-    mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
-    mockGiteaWriteFile.mockReset();
-    mockGiteaWriteFile.mockResolvedValue(undefined);
+  beforeEach(async () => {
+    await seedCaller(CALLER_UID);
+  });
+
+  it("returns 401 when unauthenticated", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects")
+      .send({ name: "My Game", slug: "mygame", visibility: "public" });
+    expect(res.status).toBe(401);
   });
 
   it("returns 502 and marks provisioningState:failed when MM channel POST throws", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -475,25 +499,24 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({ name: "My Game", slug: "mygame", visibility: "public" });
 
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/provisioning/i);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    const doc = await getProject("alice", "mygame");
     expect(doc).toBeDefined();
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toBeTruthy();
-    expect(doc.provisioningState).not.toBe("active");
-    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
-    expect(doc.visibility).toBe("private");
-    expect(doc.pendingVisibility).toBe("public");
-    expect(doc.giteaRepoName).toBe("mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(doc?.provisioningError).toBeTruthy();
+    expect(await getProjectChannel("alice", "mygame", "general")).toBeUndefined();
+    expect(doc?.visibility).toBe("private");
+    expect(doc?.pendingVisibility).toBe("public");
+    expect(doc?.giteaRepoName).toBe("mygame");
   });
 
   it("returns 502 when teamId is missing (no MM workspace context)", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: null,
       userId: "mock-mm-user",
@@ -507,18 +530,18 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({ name: "My Game", slug: "mygame", visibility: "public" });
 
     expect(res.status).toBe(502);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
+    const doc = await getProject("alice", "mygame");
     expect(doc?.provisioningState).toBe("failed");
     expect(mockMmApi).not.toHaveBeenCalled();
   });
 
   it("succeeds with 200 + provisioningState:active when MM channel creation succeeds", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -533,18 +556,18 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({ name: "My Game", slug: "mygame", visibility: "public" });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.channelId).toBe("ch-new-123");
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("active");
-    expect(doc.visibility).toBe("public");
-    expect(doc.pendingVisibility).toBeNull();
-    expect(doc.giteaRepoName).toBe("mygame");
-    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("active");
+    expect(doc?.visibility).toBe("public");
+    expect(doc?.pendingVisibility).toBeNull();
+    expect(doc?.giteaRepoName).toBe("mygame");
+    expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
       kind: "general",
       mattermost: { channelId: "ch-new-123" },
     });
@@ -580,7 +603,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
 
   it("returns 502 + marks failed when callerCtx.userId is null (owner not provisioned)", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: null,
@@ -595,20 +618,20 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({ name: "My Game", slug: "mygame", visibility: "public" });
 
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/channel members/i);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/owner has no Mattermost userId/i);
-    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/owner has no Mattermost userId/i);
+    expect(await getProjectChannel("alice", "mygame", "general")).toBeUndefined();
   });
 
   it("returns 502 + marks failed when callerCtx.coachUserId is null (agent not provisioned)", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -629,19 +652,19 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({ name: "My Game", slug: "mygame", visibility: "public" });
 
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/channel members/i);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/agent has no Mattermost userId/i);
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/agent has no Mattermost userId/i);
   });
 
   it("returns 502 + marks failed when membership POST throws", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -662,18 +685,18 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({ name: "My Game", slug: "mygame", visibility: "public" });
 
     expect(res.status).toBe(502);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/Add owner.*gateway timeout/i);
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/Add owner.*gateway timeout/i);
   });
 
   it("passes private=true to Gitea when the requested visibility is private", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
@@ -684,7 +707,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({ name: "Private Thing", slug: "privthing", visibility: "private" });
 
     expect(res.status).toBe(200);
@@ -698,7 +721,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
 
   it("returns 502 + marks failed when Gitea repo creation throws", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
@@ -710,36 +733,37 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({ name: "My Game", slug: "mygame", visibility: "public" });
 
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/code repo/i);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/Gitea down/);
-    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/Gitea down/);
+    expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
       mattermost: { channelId: "ch-new-999" },
     });
   });
 });
 
 describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
-  beforeEach(() => {
-    resetFirestoreMocks();
-    firestoreData["users/caller-uid"] = { username: "alice", workspaceId: "alice" };
-    mockMmApi.mockReset();
-    mockGetWorkspaceMmContext.mockReset();
-    mockCreateProjectGiteaRepo.mockReset();
-    mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
-    mockGiteaWriteFile.mockReset();
-    mockGiteaWriteFile.mockResolvedValue(undefined);
+  beforeEach(async () => {
+    await seedCaller(CALLER_UID);
+  });
+
+  it("returns 401 when unauthenticated", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/mygame/retry-provisioning")
+      .send({});
+    expect(res.status).toBe(401);
   });
 
   it("creates the MM channel + channels/general doc and restores requested visibility (failed → active)", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
@@ -748,9 +772,9 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       giteaRepoName: "alice-proj-mygame",
       provisioningState: "failed",
       provisioningError: "MM unreachable",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -778,17 +802,17 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("active");
-    expect(doc.provisioningError).toBeNull();
-    expect(doc.visibility).toBe("public");
-    expect(doc.pendingVisibility).toBeNull();
-    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("active");
+    expect(doc?.provisioningError).toBeNull();
+    expect(doc?.visibility).toBe("public");
+    expect(doc?.pendingVisibility).toBeNull();
+    expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
       kind: "general",
       mattermost: { channelId: "ch-retry-456" },
     });
@@ -816,18 +840,18 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   });
 
   it("flips to failed with a Gitea-specific error when the Gitea reconcile throws during retry", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
       visibility: "private",
       pendingVisibility: "public",
       provisioningState: "failed",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
@@ -844,29 +868,29 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/code repo/i);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/Gitea unreachable/);
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/Gitea unreachable/);
   });
 
   it("reuses an existing MM channel when lookup-by-name returns it (idempotent retry)", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
       visibility: "private",
       pendingVisibility: "public",
       provisioningState: "failed",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -876,7 +900,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockImplementation(async (path: string, method?: string, body?: any) => {
+    mockMmApi.mockImplementation(async (path: string, method?: string, body?: { name?: string }) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         return { id: "ch-existing-999", type: "P" };
       }
@@ -892,14 +916,14 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(200);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("active");
-    expect(doc.visibility).toBe("public");
-    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("active");
+    expect(doc?.visibility).toBe("public");
+    expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
       mattermost: { channelId: "ch-existing-999" },
     });
     const primaryCreateCalls = mockMmApi.mock.calls.filter(
@@ -919,18 +943,18 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   });
 
   it("converts a legacy type-O channel to type-P during retry (pre-fix data)", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
       visibility: "private",
       pendingVisibility: "public",
       provisioningState: "active",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -940,7 +964,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockImplementation(async (path: string, method?: string, body?: any) => {
+    mockMmApi.mockImplementation(async (path: string, method?: string, body?: { name?: string }) => {
       if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
         return { id: "ch-legacy-O", type: "O" };
       }
@@ -959,7 +983,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(200);
@@ -971,18 +995,18 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   });
 
   it("returns 502 + keeps state as failed when membership POST throws during retry", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
       visibility: "private",
       pendingVisibility: "public",
       provisioningState: "failed",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -1005,28 +1029,28 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(502);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/Add owner.*gateway timeout/i);
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/Add owner.*gateway timeout/i);
   });
 
   it("returns 502 + marks failed when O→P conversion fails (hard requirement)", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
       visibility: "private",
       pendingVisibility: "public",
       provisioningState: "active",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -1051,29 +1075,29 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(502);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/insufficient privileges/i);
-    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toBeUndefined();
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/insufficient privileges/i);
+    expect(await getProjectChannel("alice", "mygame", "general")).toBeUndefined();
   });
 
   it("returns 502 + keeps state as failed when callerCtx.coachUserId is null on retry", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
       visibility: "private",
       pendingVisibility: "public",
       provisioningState: "failed",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -1096,28 +1120,28 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/channel members/i);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/agent has no Mattermost userId/i);
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/agent has no Mattermost userId/i);
   });
 
   it("repairs an active project missing the channels/general subdoc (the existing TEST data shape)", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       name: "My Game",
       visibility: "public",
       provisioningState: "active",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -1132,28 +1156,28 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(200);
-    expect(firestoreData["workspaces/alice/projects/mygame/channels/general"]).toMatchObject({
+    expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
       mattermost: { channelId: "ch-repair-789" },
     });
   });
 
   it("returns 403 when caller is not the project owner", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
       ownerUid: "other-uid",
       workspaceId: "alice",
       slug: "mygame",
       provisioningState: "failed",
-    };
+    });
 
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(403);
@@ -1164,7 +1188,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/ghost/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(404);
@@ -1172,16 +1196,16 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   });
 
   it("returns 502 + keeps state as failed when MM retry itself throws", async () => {
-    firestoreData["workspaces/alice/projects/mygame"] = {
+    await seedProject("alice", "mygame", {
       id: "mygame",
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       workspaceId: "alice",
       slug: "mygame",
       provisioningState: "failed",
       provisioningError: "old error",
-    };
+    });
     mockGetWorkspaceMmContext.mockResolvedValue({
-      ownerUid: "caller-uid",
+      ownerUid: CALLER_UID,
       slug: "alice",
       teamId: "team-abc",
       userId: "mock-mm-user",
@@ -1196,12 +1220,12 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     const app = createApp();
     const res = await request(app)
       .post("/api/projects/alice/mygame/retry-provisioning")
-      .set(authHeaders())
+      .set(await authHeader())
       .send({});
 
     expect(res.status).toBe(502);
-    const doc = firestoreData["workspaces/alice/projects/mygame"];
-    expect(doc.provisioningState).toBe("failed");
-    expect(doc.provisioningError).toMatch(/still broken/);
+    const doc = await getProject("alice", "mygame");
+    expect(doc?.provisioningState).toBe("failed");
+    expect(String(doc?.provisioningError)).toMatch(/still broken/);
   });
 });
