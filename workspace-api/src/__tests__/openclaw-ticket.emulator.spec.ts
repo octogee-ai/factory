@@ -1,21 +1,17 @@
 import request from "supertest";
 import express from "express";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import openclawRouter from "../routes/openclaw";
 import { db } from "../lib/db";
 import {
-  requireEmulator,
-  resetEmulator,
   getIdTokenForUid,
+  setupEmulatorTest,
 } from "./helpers/firestore-emulator";
 
-beforeAll(() => requireEmulator());
-beforeEach(async () => {
-  await resetEmulator();
-  process.env.CHAT_PROXY_URL = "https://chat-proxy.test.octogee.com";
+setupEmulatorTest({
+  env: { CHAT_PROXY_URL: "https://chat-proxy.test.octogee.com" },
 });
-afterAll(() => resetEmulator());
 
 function buildApp() {
   const app = express();

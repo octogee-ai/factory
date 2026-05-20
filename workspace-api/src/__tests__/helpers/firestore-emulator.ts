@@ -17,6 +17,11 @@
 // process; the firebase-admin SDK auto-routes when those envs are set.
 
 import * as admin from "firebase-admin";
+import {
+  beforeAll as vitestBeforeAll,
+  beforeEach as vitestBeforeEach,
+  afterAll as vitestAfterAll,
+} from "vitest";
 import { db } from "../../lib/db";
 
 // Capture fetch at module-load time so the helper's emulator REST
@@ -102,4 +107,74 @@ export async function seedAdmin(uid: string): Promise<void> {
     .collection("system")
     .doc("config")
     .set({ role: "admin" });
+}
+
+// Registers the standard emulator-test lifecycle: env assertion at
+// beforeAll, full reset between tests, final reset on suite teardown.
+// Module-scope hooks fire in registration order, so calling this BEFORE
+// `useAuthToken(uid)` guarantees the token mint runs against a clean
+// Auth emulator. Per-describe `beforeEach` can then layer on mock /
+// seed setup without re-wiping the emulator.
+//
+// Optional `env` snapshot: process.env keys are written before each
+// test and restored to their pre-suite values at afterAll. Avoids the
+// silent env-leak between specs that several emulator specs were
+// hitting (CHAT_PROXY_PUBLIC_URL, INTERNAL_SERVICE_KEY, INVITE_SECRET,
+// CHAT_PROXY_URL).
+export function setupEmulatorTest(opts: { env?: Record<string, string> } = {}): void {
+  const envSnapshot: Record<string, string | undefined> = {};
+  vitestBeforeAll(() => {
+    requireEmulator();
+    if (opts.env) {
+      for (const k of Object.keys(opts.env)) envSnapshot[k] = process.env[k];
+    }
+  });
+  vitestBeforeEach(async () => {
+    await resetEmulator();
+    if (opts.env) Object.assign(process.env, opts.env);
+  });
+  vitestAfterAll(async () => {
+    await resetEmulator();
+    if (opts.env) {
+      for (const [k, prior] of Object.entries(envSnapshot)) {
+        if (prior === undefined) delete process.env[k];
+        else process.env[k] = prior;
+      }
+    }
+  });
+}
+
+// Pre-minted ID token, refreshed in beforeEach. Sync `.bearer()` lets
+// per-route supertest helpers stay chainable — see how the byosub /
+// byot / builder-* specs use it. The Promise<Test> trap from naïve
+// `async function connect() { return request().post().set(await
+// getIdTokenForUid(...)) }` is what this avoids: awaiting the returned
+// Promise auto-sends the supertest Test, so any `.send()` chained
+// after fails on the Response.
+export interface AuthTokenHandle {
+  bearer: () => string;
+  raw: () => string;
+}
+
+export function useAuthToken(uid: string): AuthTokenHandle {
+  let token: string | null = null;
+  vitestBeforeEach(async () => {
+    token = await getIdTokenForUid(uid);
+  });
+  return {
+    bearer(): string {
+      if (!token) {
+        throw new Error(
+          `useAuthToken("${uid}").bearer() called before beforeEach — call useAuthToken at module scope`,
+        );
+      }
+      return `Bearer ${token}`;
+    },
+    raw(): string {
+      if (!token) {
+        throw new Error(`useAuthToken("${uid}").raw() called before beforeEach`);
+      }
+      return token;
+    },
+  };
 }
