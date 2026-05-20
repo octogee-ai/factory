@@ -4,6 +4,7 @@ import {
   computeDesiredFleetPaths,
   extractIngressPaths,
   pathsEqual,
+  syncApiFleetIngressPaths,
   syncFleetIngressPaths,
   type FleetGateway,
   type IngressPathRule,
@@ -484,7 +485,6 @@ describe("syncApiFleetIngressPaths", () => {
     };
     const { runKubectl, calls } = mockKubectl([{ stdout: JSON.stringify(live) }]);
 
-    const { syncApiFleetIngressPaths } = await import("../fleet-ingress");
     const result = await syncApiFleetIngressPaths({
       runKubectl,
       ingressName,
@@ -527,7 +527,6 @@ describe("syncApiFleetIngressPaths", () => {
       { stdout: "ingress.networking.k8s.io/workspace-api-fleet-ingress configured" },
     ]);
 
-    const { syncApiFleetIngressPaths } = await import("../fleet-ingress");
     const result = await syncApiFleetIngressPaths({
       runKubectl,
       ingressName,
@@ -571,7 +570,6 @@ describe("syncApiFleetIngressPaths", () => {
       },
     ]);
     const log = vi.fn();
-    const { syncApiFleetIngressPaths } = await import("../fleet-ingress");
     const result = await syncApiFleetIngressPaths({
       runKubectl,
       ingressName,
