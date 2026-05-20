@@ -196,6 +196,12 @@ workspaceApi:
     APP_URL: "https://octogee.com"
     CHAT_PROXY_URL: "https://chat.octogee.com"
     SITE_URL: "https://octogee.com"
+    # Credential-at-rest KMS key (terraform/modules/kms output
+    # `kms_creds_key_name`). Set per environment via values.{prod,
+    # test}.yaml — workspace-api fails loud at first integrations write
+    # if missing (no silent plaintext fallback). See
+    # workspace-api/src/lib/kms.ts.
+    OCTOGEE_KMS_KEY_NAME: ""
   secrets:
     - envName: STRIPE_SECRET_KEY
       secretName: stripe-secrets

@@ -3,10 +3,39 @@ import { requireAuth } from "../middleware/auth";
 import { logger } from "../middleware/logging";
 import { db, FieldValue } from "../lib/db";
 import { GOOGLE_SCOPES, MICROSOFT_SCOPES } from "../lib/integrations";
+import { encryptSecret } from "../lib/kms";
 import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validation";
+
+// `users/{uid}/secrets/{provider}` is Admin-SDK-only by Firestore rule
+// (site/firestore.rules:62 — `allow read, write: if false`). But that
+// is not the security boundary for OAuth refresh tokens / IMAP passwords
+// / Twilio auth tokens — a DB leak, a backup-access vector, or a
+// workspace-api SA compromise would expose every Builder's third-party
+// credentials in the clear. All secret values are KMS-encrypted before
+// write. Field naming convention: `encrypted{Field}` for every
+// ciphertext value, so consumers reading the doc cannot mistake
+// ciphertext for plaintext. See workspace-api/src/lib/kms.ts.
 
 const router = Router();
 const APP_URL = process.env.APP_URL || "https://octogee.com";
+
+// Shared by both OAuth callbacks (google + microsoft). Encrypts the
+// access token always and the refresh token when present (refresh
+// is optional on token-exchange responses). Returned object is the
+// exact shape both routes persist under `secrets/{provider}.tokens`.
+async function encryptOAuthTokens(tokenData: {
+  access_token: string;
+  refresh_token?: string;
+}): Promise<{
+  encryptedAccessToken: string;
+  encryptedRefreshToken: string | null;
+}> {
+  const encryptedAccessToken = await encryptSecret(tokenData.access_token);
+  const encryptedRefreshToken = tokenData.refresh_token
+    ? await encryptSecret(tokenData.refresh_token)
+    : null;
+  return { encryptedAccessToken, encryptedRefreshToken };
+}
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -66,15 +95,27 @@ router.get("/google/callback", async (req: Request, res: Response, _next: NextFu
     if (!userInfoRes.ok) throw new Error("Failed to get Google user info");
     const userInfo = await userInfoRes.json() as { email: string };
 
+    // Encrypt the access + refresh tokens before they touch Firestore.
+    // Encryption errors are surfaced (the redirect to integration_error
+    // is loud and visible to the user — never silently store plaintext).
+    const { encryptedAccessToken, encryptedRefreshToken } =
+      await encryptOAuthTokens(tokenData);
+
     // Write safe metadata to integrations/ (client-readable)
     await db.collection("users").doc(uid).collection("integrations").doc("google").set({
       provider: "google", status: "connected", email: userInfo.email, scopes: GOOGLE_SCOPES,
       connectedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
     });
-    // Write tokens to secrets/ (client-blocked, Admin SDK only)
+    // Write tokens to secrets/ (client-blocked, Admin SDK only) — all
+    // sensitive values are KMS-ciphertext (base64-encoded strings).
     await db.collection("users").doc(uid).collection("secrets").doc("google").set({
       provider: "google",
-      tokens: { accessToken: tokenData.access_token, refreshToken: tokenData.refresh_token || null, expiresAt: Date.now() + tokenData.expires_in * 1000, tokenType: tokenData.token_type },
+      tokens: {
+        encryptedAccessToken,
+        encryptedRefreshToken,
+        expiresAt: Date.now() + tokenData.expires_in * 1000,
+        tokenType: tokenData.token_type,
+      },
       updatedAt: FieldValue.serverTimestamp(),
     });
 
@@ -150,15 +191,24 @@ router.get("/microsoft/callback", async (req: Request, res: Response, _next: Nex
     const userInfo = await userInfoRes.json() as { mail?: string; userPrincipalName?: string };
     const email = userInfo.mail || userInfo.userPrincipalName || "unknown";
 
+    const { encryptedAccessToken, encryptedRefreshToken } =
+      await encryptOAuthTokens(tokenData);
+
     // Write safe metadata to integrations/ (client-readable)
     await db.collection("users").doc(uid).collection("integrations").doc("microsoft").set({
       provider: "microsoft", status: "connected", email, scopes: MICROSOFT_SCOPES,
       connectedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
     });
-    // Write tokens to secrets/ (client-blocked, Admin SDK only)
+    // Write tokens to secrets/ (client-blocked, Admin SDK only) — all
+    // sensitive values are KMS-ciphertext (base64-encoded strings).
     await db.collection("users").doc(uid).collection("secrets").doc("microsoft").set({
       provider: "microsoft",
-      tokens: { accessToken: tokenData.access_token, refreshToken: tokenData.refresh_token || null, expiresAt: Date.now() + tokenData.expires_in * 1000, tokenType: tokenData.token_type },
+      tokens: {
+        encryptedAccessToken,
+        encryptedRefreshToken,
+        expiresAt: Date.now() + tokenData.expires_in * 1000,
+        tokenType: tokenData.token_type,
+      },
       updatedAt: FieldValue.serverTimestamp(),
     });
 
@@ -182,6 +232,10 @@ router.post("/imap", requireAuth, async (req: Request, res: Response, next: Next
     const { email, imapHost, imapPort, smtpHost, smtpPort, username, password } = req.body;
     if (!email || !imapHost || !username || !password) { res.status(400).json({ error: "Missing required fields" }); return; }
 
+    // Same password is used for both IMAP and SMTP per the standard
+    // shared-credential pattern; one KMS call, ciphertext reused.
+    const encryptedPassword = await encryptSecret(password);
+
     // Write safe metadata to integrations/ (client-readable)
     await db.collection("users").doc(uid).collection("integrations").doc("imap").set({
       provider: "imap", status: "pending", email,
@@ -189,11 +243,12 @@ router.post("/imap", requireAuth, async (req: Request, res: Response, next: Next
       smtp: { host: smtpHost || imapHost.replace("imap.", "smtp."), port: smtpPort || 587, username },
       connectedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
     });
-    // Write credentials to secrets/ (client-blocked, Admin SDK only)
+    // Write credentials to secrets/ (client-blocked, Admin SDK only) —
+    // KMS-ciphertext, never plaintext.
     await db.collection("users").doc(uid).collection("secrets").doc("imap").set({
       provider: "imap",
-      imap: { encryptedPassword: password /* TODO: encrypt at rest */ },
-      smtp: { encryptedPassword: password /* TODO: encrypt at rest */ },
+      imap: { encryptedPassword },
+      smtp: { encryptedPassword },
       updatedAt: FieldValue.serverTimestamp(),
     });
     res.json({ success: true });
@@ -206,16 +261,19 @@ router.post("/twilio", requireAuth, async (req: Request, res: Response, next: Ne
     const { accountSid, authToken, fromNumber } = req.body;
     if (!accountSid || !authToken || !fromNumber) { res.status(400).json({ error: "Missing required fields" }); return; }
 
+    const encryptedAuthToken = await encryptSecret(authToken);
+
     // Write safe metadata to integrations/ (client-readable)
     await db.collection("users").doc(uid).collection("integrations").doc("twilio").set({
       provider: "twilio", status: "pending",
       twilio: { accountSid, fromNumber },
       connectedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
     });
-    // Write credentials to secrets/ (client-blocked, Admin SDK only)
+    // Write credentials to secrets/ (client-blocked, Admin SDK only) —
+    // KMS-ciphertext, never plaintext.
     await db.collection("users").doc(uid).collection("secrets").doc("twilio").set({
       provider: "twilio",
-      twilio: { encryptedAuthToken: authToken /* TODO: encrypt at rest */ },
+      twilio: { encryptedAuthToken },
       updatedAt: FieldValue.serverTimestamp(),
     });
     res.json({ success: true });

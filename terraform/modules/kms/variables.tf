@@ -1,0 +1,33 @@
+variable "project_id" {
+  description = "GCP project that owns the KMS key ring + key"
+  type        = string
+}
+
+variable "region" {
+  description = "GCP region for the key ring (us-central1 matches the rest of the platform)"
+  type        = string
+  default     = "us-central1"
+}
+
+variable "key_ring_name" {
+  description = "Name of the KMS key ring"
+  type        = string
+  default     = "octogee-creds"
+}
+
+variable "crypto_key_name" {
+  description = "Name of the symmetric crypto key (creates `projects/{p}/locations/{r}/keyRings/{ring}/cryptoKeys/{name}`)"
+  type        = string
+  default     = "integrations-at-rest"
+}
+
+variable "consumer_sa_email" {
+  description = "Service account email that needs encrypt + decrypt on the key (workspace-api SA in production)"
+  type        = string
+}
+
+variable "additional_decrypter_sas" {
+  description = "Extra SAs to grant decrypt-only (break-glass / recovery scripts; empty by default — append upward, never start broad)"
+  type        = list(string)
+  default     = []
+}
