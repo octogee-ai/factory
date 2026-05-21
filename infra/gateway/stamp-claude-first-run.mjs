@@ -30,8 +30,15 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-export function readClaudeVersion({ claudeBin = "claude" } = {}) {
-  const result = spawnSync(claudeBin, ["--version"], { encoding: "utf8" });
+export function readClaudeVersion({ claudeBin } = {}) {
+  // Default to $CLAUDE_BIN so the operator image (which installs a wrapper at
+  // /usr/local/bin/claude) can point us at the moved-aside real binary
+  // (/usr/local/bin/claude-real). Resolving "claude" via PATH inside this
+  // stamper hits the wrapper, which re-invokes the stamper, which calls
+  // `claude --version`, → infinite recursion → cgroup OOM (the bender
+  // crash-loop on every post-#1054 operator image).
+  const bin = claudeBin ?? process.env.CLAUDE_BIN ?? "claude";
+  const result = spawnSync(bin, ["--version"], { encoding: "utf8" });
   if (result.status !== 0) return null;
   const first = (result.stdout || "").trim().split(/\s+/)[0];
   return first || null;

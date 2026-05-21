@@ -227,4 +227,44 @@ describe("readClaudeVersion — parses `claude --version` stdout, returns null o
   it("returns null when the binary cannot be spawned at all (path doesn't exist)", () => {
     expect(readClaudeVersion({ claudeBin: "/nonexistent-binary-zzz" })).toBeNull();
   });
+
+  it("defaults claudeBin to process.env.CLAUDE_BIN when set — prevents the operator-image wrapper recursion", () => {
+    // Dockerfile.operator installs /usr/local/bin/claude as a shell wrapper
+    // that runs the stamper before exec'ing the real binary. If the stamper's
+    // own `claude --version` lookup resolves via PATH, it spawns the wrapper
+    // again → infinite recursion → cgroup OOM (root cause of the bender
+    // crash-loop on every post-#1054 operator image). The wrapper sets
+    // CLAUDE_BIN to the moved-aside real binary path; the stamper must honor
+    // it as the default claudeBin so neither the boot-stamper nor the
+    // wrapper-stamper invocation can ever resolve back to the wrapper.
+    const fakeBin = path.join(makeHome(), "fake-claude-real");
+    writeFileSync(fakeBin, "#!/bin/sh\necho '2.1.999 (Claude Code)'\n");
+    chmodSync(fakeBin, 0o755);
+    const prior = process.env.CLAUDE_BIN;
+    process.env.CLAUDE_BIN = fakeBin;
+    try {
+      // No claudeBin arg → must read CLAUDE_BIN, not fall back to PATH "claude"
+      expect(readClaudeVersion()).toBe("2.1.999");
+    } finally {
+      if (prior === undefined) delete process.env.CLAUDE_BIN;
+      else process.env.CLAUDE_BIN = prior;
+    }
+  });
+
+  it("explicit claudeBin arg still wins over process.env.CLAUDE_BIN (test ergonomics: env is a default, not a clamp)", () => {
+    const envBin = path.join(makeHome(), "env-fake-claude");
+    writeFileSync(envBin, "#!/bin/sh\necho 'env-version (Claude Code)'\n");
+    chmodSync(envBin, 0o755);
+    const argBin = path.join(makeHome(), "arg-fake-claude");
+    writeFileSync(argBin, "#!/bin/sh\necho 'arg-version (Claude Code)'\n");
+    chmodSync(argBin, 0o755);
+    const prior = process.env.CLAUDE_BIN;
+    process.env.CLAUDE_BIN = envBin;
+    try {
+      expect(readClaudeVersion({ claudeBin: argBin })).toBe("arg-version");
+    } finally {
+      if (prior === undefined) delete process.env.CLAUDE_BIN;
+      else process.env.CLAUDE_BIN = prior;
+    }
+  });
 });
