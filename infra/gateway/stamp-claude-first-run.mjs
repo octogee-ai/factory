@@ -51,7 +51,9 @@ function resolveCredentialsPath(home, claudeConfigDir) {
 }
 
 function loadExistingConfig(configPath) {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath = $HOME/.claude.json (gateway-owned env, not user input)
   if (!fs.existsSync(configPath)) return {};
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- see above
   const raw = fs.readFileSync(configPath, "utf8");
   if (!raw.trim()) return {};
   try {
@@ -59,6 +61,7 @@ function loadExistingConfig(configPath) {
   } catch {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const backup = `${configPath}.broken.${stamp}`;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths derived from $HOME, same trust domain
     fs.renameSync(configPath, backup);
     return {};
   }
@@ -69,12 +72,15 @@ function atomicWriteJson(configPath, config) {
   // O_WRONLY|O_CREAT|O_TRUNC + mode 0600 → no umask window. fs.writeFileSync
   // with options.mode does the same under the hood, but we use the fd path
   // explicitly so the close-then-rename order is unambiguous.
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tmpPath = `${configPath}.tmp`, $HOME-derived
   const fd = fs.openSync(tmpPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC, 0o600);
   try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fd write (rule false-positive on the fd-form)
     fs.writeFileSync(fd, JSON.stringify(config, null, 2));
   } finally {
     fs.closeSync(fd);
   }
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths $HOME-derived
   fs.renameSync(tmpPath, configPath);
 }
 
@@ -94,6 +100,7 @@ function isAlreadyStamped(config, claudeVersion) {
 export function stampFirstRun({ home, claudeVersion, claudeConfigDir } = {}) {
   const resolvedHome = home ?? process.env.HOME ?? "/home/node";
   const credentialsPath = resolveCredentialsPath(resolvedHome, claudeConfigDir);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- credentialsPath derived from $HOME / $CLAUDE_CONFIG_DIR (gateway-owned env)
   if (!fs.existsSync(credentialsPath)) {
     return { stamped: false, reason: "no-credentials" };
   }

@@ -216,6 +216,20 @@ if [ -f "$OPENCLAW_DIR/openclaw.json" ] && [ -f "${SA_KEY_PATH:-$OPENCLAW_DIR/se
   /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 
+# ── Pre-boot: per-gateway Mac ops MM identity (#998) ────────────────────
+# Replaces the shared `mac-gw-prod` user with mac-${GATEWAY_ID} so two
+# gateways in the same env stop fighting for one MM session. Idempotent
+# in MM (find-or-create), writes the PAT to the PVC, and patches
+# openclaw.json's accounts.default.botToken so OpenClaw connects as the
+# per-gateway identity instead of the shared envsubst'd MM_BOT_TOKEN.
+# Non-fatal: a transient MM error must not crash the gateway boot — the
+# next reboot retries, and OpenClaw will keep the previously-patched
+# token in openclaw.json meanwhile.
+if [ -f "$OPENCLAW_DIR/openclaw.json" ] && [ -n "${MM_URL:-}" ] && [ -n "${MM_ADMIN_PAT:-}" ]; then
+  log "Pre-boot: bootstrapping per-gateway Mac ops MM identity (mac-${GATEWAY_ID})..."
+  node /octogee/scripts/bootstrap-mac-ops.mjs || log "bootstrap-mac-ops: non-fatal failure, continuing..."
+fi
+
 # ── Boot sync: REMOVED ───────────────────────────────────────────────────────
 # The gateway now boots with only the default account (written by
 # pre-boot-config.ts). Customer workspaces + openclaw.json customer entries
