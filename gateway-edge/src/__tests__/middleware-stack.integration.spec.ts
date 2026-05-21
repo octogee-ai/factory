@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../lib/db', () => ({
+vi.mock('../../../gateway-edge/src/lib/db', () => ({
   auth: { verifyIdToken: vi.fn() },
   db: {
     collection: () => ({
@@ -21,7 +21,7 @@ vi.mock('../lib/db', () => ({
   },
 }));
 
-vi.mock('../lib/stripe', () => ({
+vi.mock('../../../gateway-edge/src/lib/stripe', () => ({
   getStripe: () => ({
     webhooks: {
       constructEvent: vi.fn((_body: any, _sig: string, _secret: string) => ({ type: 'noop', data: { object: {} } })),
@@ -167,16 +167,8 @@ describe('gateway-edge middleware stack', () => {
     expect(res.headers['ratelimit-limit'] ?? res.headers['ratelimit']).toBeDefined();
   });
 
-  it('preserves raw body path for stripe webhook route', async () => {
-    const app = createApp();
-    const payload = JSON.stringify({ id: 'evt_123', type: 'noop' });
-    const res = await request(app)
-      .post('/api/billing/webhook')
-      .set('Stripe-Signature', 'sig_test')
-      .set('Content-Type', 'application/json')
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ received: true });
-  });
+  // Stripe-webhook raw-body middleware contract: tested in
+  // octogee-api/src/__tests__/billing-stripe.integration.spec.ts now
+  // that /api/billing/webhook lives on octogee-api (gateway-edge no
+  // longer mounts the billing router after POST-BENDER-CLEANUP-SPEC §2.5).
 });

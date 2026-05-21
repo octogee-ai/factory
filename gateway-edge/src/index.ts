@@ -1,36 +1,23 @@
-import express, { Request, Response } from "express";
+import express, { Request, Response, Router } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 import { corsMiddleware } from "./middleware/cors";
 import { requestLogger } from "./middleware/logging";
 import { errorHandler } from "./middleware/errors";
 import { logger } from "./middleware/logging";
 import { helmetMiddleware, globalRateLimit } from "./middleware/security";
+import { requireAuth } from "./middleware/auth";
 
 import { mountApi } from "./routes/mount-api";
-import workspaceRoutes from "./routes/workspace";
-import mattermostRoutes from "./routes/mattermost";
-import openclawRoutes from "./routes/openclaw";
-import billingRoutes from "./routes/billing";
-import adminRoutes from "./routes/admin";
-import inviteRoutes from "./routes/invites";
-import integrationRoutes from "./routes/integrations";
-import byosubRoutes from "./routes/byosub";
-import discordRoutes from "./routes/discord";
-import notificationRoutes from "./routes/notifications";
-import sharingRoutes from "./routes/sharing";
-import projectRoutes from "./routes/projects";
-import entitiesRoutes from "./routes/entities";
-import profileRoutes from "./routes/profile";
-import onboardingRoutes from "./routes/onboarding";
-import postsRoutes from "./routes/posts";
-
-import agentRoutes from "./routes/agents";
-import builderGatewaysRoutes from "./routes/builder/gateways";
+// Locality routers — handle requests that read/write per-gateway-pod
+// state. Stay mounted on this sidecar because they cannot be served
+// from a stable cluster service. Per POST-BENDER-CLEANUP-SPEC §2.5,
+// gateway-edge no longer mounts the 16 cluster prefixes
+// (sharing, entities, mattermost, openclaw, billing, admin, invites,
+// integrations, byosub, discord, notifications, profile, onboarding,
+// posts, agents, builder) — those moved to octogee-api.
+import gitRoutes from "./routes/workspace/git";
+import deployPreviewRoutes from "./routes/projects/deploy-preview";
 import internalBillingRoutes from "./routes/internal/billing";
-import internalNotificationRoutes from "./routes/internal/notifications";
-import internalEngagementRoutes from "./routes/internal/engagement";
-import internalCSIRoutes from "./routes/internal/csi";
-import internalBuilderShellRoutes from "./routes/internal/builder-shell";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
@@ -64,7 +51,10 @@ app.use((req, res, next) => {
   if (req.path === '/metrics') return next();
   const end = httpRequestDuration.startTimer();
   res.on('finish', () => {
-    const route = req.route?.path || req.path;
+    // Fall back to a constant label for unmatched requests — req.path
+    // would let attacker-controlled URLs explode the Prometheus series
+    // cardinality. Same pattern octogee-api uses.
+    const route = req.route?.path || 'unmatched';
     const labels = { method: req.method, route, status: String(res.statusCode) };
     end(labels);
     httpRequestTotal.inc(labels);
@@ -74,17 +64,7 @@ app.use((req, res, next) => {
 
 app.use(requestLogger);
 
-app.use((req, res, next) => {
-  if (req.path === "/api/billing/webhook") {
-    express.raw({ type: "application/json" })(req, res, (err) => {
-      if (err) return next(err);
-      (req as Request & { rawBody?: Buffer }).rawBody = req.body;
-      next();
-    });
-  } else {
-    express.json({ limit: "10mb" })(req, res, next);
-  }
-});
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/metrics', async (_req, res) => {
@@ -98,39 +78,33 @@ const healthHandler = (_req: Request, res: Response) => {
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
-// All `/api/<p>` routes are dual-mounted at `/api/g/:gatewayId/<p>` too,
-// the fleet path-affinity seam (FLEET-API-ROUTING-SPEC.md). Cowboy's
-// per-gateway ingress paths target the per-instance gateway-edge
-// Service, so a scoped request lands on the user's home gateway pod
-// where local per-customer state lives. Handlers are unchanged: the
-// path's :gatewayId is a routing key, not an authz input — authz stays
-// Firebase token + slug/project ownership.
-mountApi(app, "/workspace", workspaceRoutes);
-mountApi(app, "/sharing", sharingRoutes);
-mountApi(app, "/projects", projectRoutes);
-mountApi(app, "/entities", entitiesRoutes);
-mountApi(app, "/mattermost", mattermostRoutes);
-mountApi(app, "/openclaw", openclawRoutes);
-mountApi(app, "/billing", billingRoutes);
-mountApi(app, "/admin", adminRoutes);
-mountApi(app, "/invites", inviteRoutes);
-mountApi(app, "/integrations", integrationRoutes);
-mountApi(app, "/byosub", byosubRoutes);
-mountApi(app, "/discord", discordRoutes);
-mountApi(app, "/notifications", notificationRoutes);
-mountApi(app, "/profile", profileRoutes);
-mountApi(app, "/onboarding", onboardingRoutes);
-mountApi(app, "/posts", postsRoutes);
-mountApi(app, "/agents", agentRoutes);
-mountApi(app, "/builder", builderGatewaysRoutes);
+// Locality routers, mounted at both /api/<p> and /api/g/:gatewayId/<p>
+// via mountApi (FLEET-API-ROUTING-SPEC.md). Cowboy's per-gateway
+// ingress paths target the per-instance gateway-edge Service, so a
+// scoped request lands on the user's home gateway pod where local
+// per-customer state lives.
 
-app.use("/internal/agents", agentRoutes);
+// workspace/git — read/write the local /home/node/.openclaw/customers
+// working tree on this pod.
+const workspaceLocality = Router();
+workspaceLocality.use(requireAuth);
+workspaceLocality.use(gitRoutes);
+mountApi(app, "/workspace", workspaceLocality);
+
+// projects/.../deploy-preview — calls localhost site-build-api sidecar
+// on this pod. The other projects sub-routers (create, retry, star,
+// members, join-leave, readme, delete) are cluster — octogee-api owns
+// them.
+const projectsLocality = Router();
+projectsLocality.use(requireAuth);
+projectsLocality.use(deployPreviewRoutes);
+mountApi(app, "/projects", projectsLocality);
+
+// Internal billing — usage RPC against localhost OpenClaw. Not Ingress-
+// routed (intra-cluster service-to-service only). The other /internal/*
+// endpoints (notifications, engagement, csi, builder-shell, agents) are
+// cluster — octogee-api owns them.
 app.use("/internal/billing", internalBillingRoutes);
-app.use("/internal/notifications", notificationRoutes);
-app.use("/internal/notifications", internalNotificationRoutes);
-app.use("/internal/engagement", internalEngagementRoutes);
-app.use("/internal/csi", internalCSIRoutes);
-app.use("/internal/builder-shell", internalBuilderShellRoutes);
 
 app.use(errorHandler);
 
