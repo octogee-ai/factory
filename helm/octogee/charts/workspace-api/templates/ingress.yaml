@@ -47,6 +47,21 @@ spec:
               data plane to a specific pod. */}}
           {{- $svc := .Values.ingress.targetService | default "workspace-api" }}
           {{- $glm := .Values.ingress.glmService | default "glm-controller" }}
+          {{- $api := .Values.ingress.octogeeApiService | default "octogee-api" }}
+          {{- /* Cluster prefixes lifted from workspace-api → octogee-api per
+              docs/specs/POST-BENDER-CLEANUP-SPEC.md §2. GCE Ingress
+              evaluates rules in document order; these must precede the
+              /api/* catch-all that lands on workspace-api. Each prefix
+              renders BOTH `/api/<p>/*` and `/api/<p>` because GCE
+              `/foo/*` does not match the bare `/foo`.
+
+              NOT in this list (deferred — have locality sub-routes):
+                - workspace (has /git tied to gateway-local FS)
+                - projects  (has /:wid/:pid/deploy-preview tied to gateway-local site-build-api)
+              The /api/admin/* catch-all is included; the more-specific
+              glm-controller admin paths above keep their precedence
+              because they appear earlier in the rules list. */}}
+          {{- $octogeeApiPrefixes := list "sharing" "entities" "mattermost" "openclaw" "billing" "invites" "integrations" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "admin" }}
           # Cowboy HTTP — fleet routes served from glm-controller so the
           # admin Gateways tab keeps responding when no gateway pods are
           # booted. GCE URL maps prefer most-specific path; these rules
@@ -162,6 +177,32 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
+          # ── octogee-api cluster prefixes ────────────────────────
+          # Rendered AFTER the glm-controller specifics above (so admin
+          # paths stay on glm) and BEFORE the /api/* catch-all (so
+          # cluster routes don't fall through to workspace-api).
+          {{- range $prefix := $octogeeApiPrefixes }}
+          - path: /api/{{ $prefix }}/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $api }}
+                port:
+                  name: http
+          - path: /api/{{ $prefix }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $api }}
+                port:
+                  name: http
+          {{- end }}
+          # ── catch-all → workspace-api ──────────────────────────
+          # Receives /api/workspace/*, /api/projects/*, and anything
+          # else not explicitly carved out above. Both prefixes have
+          # locality sub-routes (workspace/git, projects/*/deploy-
+          # preview) that must stay on the gateway-pod sidecar; they're
+          # deferred to a follow-up PR that handles the sub-path carve.
           - path: /api/*
             pathType: ImplementationSpecific
             backend:
