@@ -260,6 +260,11 @@ spec:
           ports:
             - containerPort: {{ .Values.chatProxy.port }}
               name: chat-proxy
+            # Dedicated Prometheus-scrape port. Exposed ONLY through
+            # the cluster-internal `chat-proxy` Service `metrics` port
+            # (ServiceMonitor target) — never Ingress-routed. PR-2d.
+            - containerPort: {{ .Values.chatProxy.metricsPort | default 9092 }}
+              name: cp-metrics
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -267,6 +272,8 @@ spec:
           env:
             - name: PORT
               value: "{{ .Values.chatProxy.port }}"
+            - name: METRICS_PORT
+              value: "{{ .Values.chatProxy.metricsPort | default 9092 }}"
             - name: MM_INTERNAL_URL
               value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — chat-proxy forwards REST + WS data path here)" .Values.env.mmInternalUrl | quote }}
             - name: CHAT_PROXY_PUBLIC_URL

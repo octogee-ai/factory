@@ -169,19 +169,29 @@ vi.mock('../openclaw/inbound-gate.js', () => ({
   observeOutboundForState: () => {},
 }));
 
-const { createServer } = await import('../proxy');
+const { createServer, createMetricsServer } = await import('../proxy');
 
 let server: http.Server;
 let port: number;
+let metricsServer: http.Server;
+let metricsPort: number;
 
 beforeAll(async () => {
   server = createServer();
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   port = (server.address() as AddressInfo).port;
+  // PR-2d: /metrics moved to a dedicated listener. Spin it up so the
+  // existing `readMetrics()` helper can scrape counter values.
+  metricsServer = createMetricsServer();
+  await new Promise<void>((resolve) =>
+    metricsServer.listen(0, '127.0.0.1', resolve),
+  );
+  metricsPort = (metricsServer.address() as AddressInfo).port;
 });
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => metricsServer.close(() => resolve()));
 });
 
 async function seedTicket(opts: { expiresAt?: number; uid?: string | null } = {}): Promise<void> {
@@ -250,7 +260,7 @@ function connect(opts: { ticketPath?: string; origin?: string } = {}): Promise<
 // cumulative across the shared server, so we assert *deltas*, never
 // absolute values.
 async function readMetrics(): Promise<string> {
-  const res = await fetch(`http://127.0.0.1:${port}/metrics`);
+  const res = await fetch(`http://127.0.0.1:${metricsPort}/metrics`);
   return res.text();
 }
 function metricValue(text: string, linePrefix: string): number {

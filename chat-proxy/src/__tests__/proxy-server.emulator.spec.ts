@@ -16,7 +16,7 @@ process.env.CHAT_PROXY_PUBLIC_URL = 'https://chat-test.octogee.com';
 
 requireEmulator();
 
-const { createServer, _clearCaches } = await import('../proxy');
+const { createServer, createMetricsServer, _clearCaches } = await import('../proxy');
 
 const REGULAR_UID = 'regular-uid';
 const NOPROXY_UID = 'noproxy-uid';
@@ -109,12 +109,125 @@ describe('health endpoints', () => {
   });
 });
 
-describe('metrics endpoint', () => {
-  it('GET /metrics → 200 with Prometheus content-type (no auth)', async () => {
+describe('metrics endpoint — moved off the public Ingress-routed port (PR-2d)', () => {
+  it('GET /metrics on the MAIN port → 404 (not served here anymore)', async () => {
     const res = await request('/metrics');
-    expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toMatch(/text\/plain/);
-    expect(res.body).toMatch(/chat_proxy_/);
+    expect(res.status).toBe(404);
+  });
+
+  it('createMetricsServer() returns a separate listener that DOES serve /metrics', async () => {
+    const metricsServer = createMetricsServer();
+    await new Promise<void>((resolve) =>
+      metricsServer.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      const addr = metricsServer.address() as AddressInfo;
+      const res = await new Promise<{
+        status: number;
+        body: string;
+        headers: http.IncomingHttpHeaders;
+      }>((resolve, reject) => {
+        const req = http.request(
+          `http://127.0.0.1:${addr.port}/metrics`,
+          { method: 'GET' },
+          (r) => {
+            const chunks: Buffer[] = [];
+            r.on('data', (c) => chunks.push(c));
+            r.on('end', () =>
+              resolve({
+                status: r.statusCode ?? 0,
+                body: Buffer.concat(chunks).toString(),
+                headers: r.headers,
+              }),
+            );
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/text\/plain/);
+      expect(res.body).toMatch(/chat_proxy_/);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        metricsServer.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
+  });
+
+  it('the metrics server matches /metrics?<query> too — scrapers may append cache-busting params', async () => {
+    const metricsServer = createMetricsServer();
+    await new Promise<void>((resolve) =>
+      metricsServer.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      const addr = metricsServer.address() as AddressInfo;
+      const res = await new Promise<{ status: number }>((resolve, reject) => {
+        const req = http.request(
+          `http://127.0.0.1:${addr.port}/metrics?ts=${Date.now()}`,
+          { method: 'GET' },
+          (r) => resolve({ status: r.statusCode ?? 0 }),
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        metricsServer.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
+  });
+
+  it('the metrics server returns 405 (Method Not Allowed) on POST /metrics — prom is GET-only', async () => {
+    const metricsServer = createMetricsServer();
+    await new Promise<void>((resolve) =>
+      metricsServer.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      const addr = metricsServer.address() as AddressInfo;
+      const res = await new Promise<{ status: number; headers: http.IncomingHttpHeaders }>(
+        (resolve, reject) => {
+          const req = http.request(
+            `http://127.0.0.1:${addr.port}/metrics`,
+            { method: 'POST' },
+            (r) => resolve({ status: r.statusCode ?? 0, headers: r.headers }),
+          );
+          req.on('error', reject);
+          req.end();
+        },
+      );
+      expect(res.status).toBe(405);
+      expect(res.headers.allow).toBe('GET, HEAD');
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        metricsServer.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
+  });
+
+  it('the metrics server returns 404 for any path other than /metrics — minimal surface', async () => {
+    const metricsServer = createMetricsServer();
+    await new Promise<void>((resolve) =>
+      metricsServer.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      const addr = metricsServer.address() as AddressInfo;
+      const res = await new Promise<{ status: number }>((resolve, reject) => {
+        const req = http.request(
+          `http://127.0.0.1:${addr.port}/api/auth/mattermost`,
+          { method: 'POST' },
+          (r) => resolve({ status: r.statusCode ?? 0 }),
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      expect(res.status).toBe(404);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        metricsServer.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
   });
 });
 

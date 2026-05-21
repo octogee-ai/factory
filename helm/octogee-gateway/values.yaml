@@ -171,6 +171,11 @@ chatProxy:
     repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-chat-proxy
     tag: ""  # inherits from imageTag
   port: 8080
+  # Prometheus-scrape port (PR-2d). ClusterIP-only via the chat-proxy
+  # Service `metrics` port. Never Ingress-routed. Splitting it off the
+  # public port prevents chat.octogee.com/metrics from leaking counter
+  # cardinality + prom-client default process telemetry.
+  metricsPort: 9092
   resources:
     requests:
       cpu: 100m

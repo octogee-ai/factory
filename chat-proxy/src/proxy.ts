@@ -42,6 +42,9 @@ import {
 } from "./openclaw/bridge-boot-status.js";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
+// Dedicated Prometheus-scrape port. ClusterIP-only — never Ingress-routed.
+// See createMetricsServer() + PR-2d for the rationale.
+const METRICS_PORT = parseInt(process.env.METRICS_PORT || "9092", 10);
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL;
 const CHAT_PROXY_PUBLIC_URL = process.env.CHAT_PROXY_PUBLIC_URL;
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
@@ -573,12 +576,14 @@ async function handleRequest(
     return;
   }
 
-  if (req.url === "/metrics") {
-    const metrics = await metricsRegistry.metrics();
-    res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
-    res.end(metrics);
-    return;
-  }
+  // /metrics is intentionally NOT served on the public-Ingress port.
+  // Prometheus scrapes the dedicated metrics listener (port 9092)
+  // via the cluster-internal Service. Falling through to the 404
+  // handler below prevents chat.octogee.com/metrics from exposing
+  // counter cardinality + the default prom-client process telemetry
+  // (CPU, memory, GC, file descriptors) to anonymous external
+  // clients. See createMetricsServer() below + helm/octogee/charts/
+  // chat-proxy. PR-2d production hardening.
 
   const urlPath = (req.url || "").split("?")[0];
 
@@ -936,6 +941,40 @@ export function gatewayHealthUrl(
   return `${base}/healthz`;
 }
 
+/**
+ * Dedicated HTTP listener for Prometheus scrape. Bound to METRICS_PORT
+ * (default 9092) and exposed ONLY via the cluster-internal `chat-proxy`
+ * Service `metrics` port — no Ingress route. Serves /metrics; everything
+ * else returns 404. Splitting the metrics endpoint off the main
+ * public-Ingress port (8080) prevents `chat.octogee.com/metrics` from
+ * exposing counter cardinality + the default prom-client process
+ * telemetry (CPU, memory, GC, file descriptors).
+ */
+export function createMetricsServer() {
+  return http.createServer(async (req, res) => {
+    // Normalize like the main handler does so /metrics?foo=bar still
+    // matches. Prom-client doesn't use query strings but scrapers can
+    // append them (e.g. for cache-busting); be lenient.
+    const urlPath = (req.url || "").split("?")[0];
+    if (urlPath === "/metrics") {
+      // Prom-client convention is GET-only. Reject other methods with
+      // 405 — a misconfigured client should hear about it, not get
+      // counter contents back regardless of verb.
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { "Content-Type": "text/plain", Allow: "GET, HEAD" });
+        res.end("method not allowed");
+        return;
+      }
+      const metrics = await metricsRegistry.metrics();
+      res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
+      res.end(metrics);
+      return;
+    }
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("not found");
+  });
+}
+
 export function createServer() {
   const server = http.createServer(handleRequest);
   const wss = new WebSocketServer({ noServer: true });
@@ -1082,6 +1121,13 @@ if (process.env.NODE_ENV !== "test") {
       "[builder-shell] route attach failed — WS route disabled:",
       err instanceof Error ? err.message : err,
     );
+  });
+  // Dedicated metrics listener — ClusterIP-only via the chat-proxy
+  // Service's `metrics` port, never reached from the public Ingress.
+  const metricsServer = createMetricsServer();
+  metricsServer.listen(METRICS_PORT, () => {
+    // eslint-disable-next-line no-console -- boot log
+    console.log(`[chat-proxy] metrics listener on :${METRICS_PORT}`);
   });
   server.listen(PORT, () => {
     console.log(
