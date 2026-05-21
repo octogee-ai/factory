@@ -47,3 +47,31 @@ spec:
       port: {{ .Values.workspaceApi.port }}
       targetPort: {{ .Values.workspaceApi.port }}
   type: ClusterIP
+---
+# Per-instance chat-proxy Service. Selects ONLY the chat-proxy sidecar
+# in this gateway's pod. Used by chat-proxy-fleet-ingress (chat.octogee.com)
+# to route /g/<gatewayId>/* to the correct gateway pod so the chat-proxy
+# bridges upstream same-pod (127.0.0.1:18789) to the matching openclaw
+# sidecar. Same NEG annotation as the legacy `chat-proxy` Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-proxy-{{ .Values.instanceName }}
+  labels:
+    {{- include "octogee-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: chat-proxy
+  annotations:
+    cloud.google.com/neg: '{"ingress":true}'
+    cloud.google.com/backend-config: '{"default":"chat-proxy-backend"}'
+spec:
+  selector:
+    app: octogee-gateway
+    gateway-instance: {{ .Values.instanceName }}
+  ports:
+    - name: http
+      port: {{ .Values.chatProxy.port | default 8080 }}
+      targetPort: chat-proxy
+    - name: metrics
+      port: {{ .Values.chatProxy.metricsPort | default 9092 }}
+      targetPort: cp-metrics
+  type: ClusterIP

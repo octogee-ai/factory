@@ -22,6 +22,7 @@ import {
 import {
   spawnKubectl,
   syncApiFleetIngressPaths,
+  syncChatProxyFleetIngressPaths,
   syncFleetIngressPaths,
   type FleetGateway,
   type KubectlSubprocess,
@@ -114,6 +115,13 @@ const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway"
 // FLEET-API-ROUTING-SPEC.md.
 const WORKSPACE_API_FLEET_INGRESS_NAME =
   process.env.WORKSPACE_API_FLEET_INGRESS_NAME ?? "workspace-api-fleet-ingress";
+// Sibling fleet-ingress for chat.octogee.com — per-gateway `/g/<gw>/*`
+// routes to per-instance `chat-proxy-<instance>` Services. Helm renders
+// the shell on the same host/cert/IP as `chat-proxy-ingress` so GCE
+// merges into one URL map. Cowboy owns spec.rules[].http.paths via SSA.
+const CHAT_PROXY_FLEET_INGRESS_NAME =
+  process.env.CHAT_PROXY_FLEET_INGRESS_NAME ?? "chat-proxy-fleet-ingress";
+const CHAT_PROXY_PORT = 8080;
 // Hardcoded, deliberately. K8s injects service-discovery env vars
 // (`<SVC>_PORT=tcp://<ip>:<port>`) into every pod for every Service in
 // the namespace. Reading `process.env.WORKSPACE_API_PORT` collides with
@@ -444,9 +452,20 @@ async function main(): Promise<void> {
   // converge from the same gateway list. Sequential to keep log ordering
   // intuitive; the SSA calls are idempotent so a partial failure is
   // re-tried on the next tick.
+  const syncChatProxyFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
+    syncChatProxyFleetIngressPaths({
+      runKubectl,
+      ingressName: CHAT_PROXY_FLEET_INGRESS_NAME,
+      namespace: NAMESPACE,
+      desiredGateways: gateways,
+      chatProxyPort: CHAT_PROXY_PORT,
+      chatProxyServiceName: "chat-proxy",
+      log,
+    }).then(() => undefined);
   const syncAllFleetIngresses = async (gateways: ReadonlyArray<FleetGateway>) => {
     await syncFleetIngressForGateways(gateways);
     await syncApiFleetIngressForGateways(gateways);
+    await syncChatProxyFleetIngressForGateways(gateways);
   };
   // Handler-side closure: re-reads desired gateways from Firestore so
   // it always reflects the post-write state (add-gateway has already

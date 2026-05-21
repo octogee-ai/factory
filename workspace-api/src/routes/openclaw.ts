@@ -7,6 +7,12 @@ const router = Router();
 
 const TICKET_TTL_MS = 30_000;
 
+// Canonical gatewayId shape, matches chat-proxy/src/openclaw/bridge-gateway-id.ts
+// and chat-proxy/src/gateway-prefix.ts. A malformed value on the user doc is
+// treated as "no provisioning" so the browser falls back to the bare path
+// rather than constructing a URL that the fleet ingress can't route.
+const GATEWAY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
 // ── POST /ticket — mint an OC WS ticket ─────────────────────────────────────
 
 router.post("/ticket", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
@@ -20,8 +26,26 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
       expiresAt: Date.now() + TICKET_TTL_MS,
     });
 
+    // Return the user's gatewayId so the browser constructs the
+    // gateway-scoped WS URL (`<proxyUrl>/g/<gatewayId>/api/openclaw/ws/<ticket>`).
+    // chat-proxy-fleet-ingress (chat.octogee.com) routes `/g/<gw>/*` to
+    // the per-instance chat-proxy Service so the request lands in the
+    // gateway's own pod and the chat-proxy bridges upstream same-pod.
+    // Empty when the user has no openclaw provisioning yet — the browser
+    // falls back to the bare `/api/openclaw/ws/<ticket>` path (legacy
+    // single-pod default-gateway route still works during migration).
+    //
+    // Source: req.user is already populated by requireAuth (see
+    // workspace-api/src/middleware/auth.ts) — no second Firestore read.
+    const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
+    const rawGatewayId = provisioning?.openclaw?.gatewayId;
+    const gatewayId =
+      typeof rawGatewayId === "string" && GATEWAY_ID_PATTERN.test(rawGatewayId)
+        ? rawGatewayId
+        : "";
+
     const proxyUrl = process.env.CHAT_PROXY_URL || "";
-    res.json({ wsTicket: ticket, proxyUrl });
+    res.json({ wsTicket: ticket, proxyUrl, gatewayId });
   } catch (e) {
     next(e);
   }

@@ -30,6 +30,7 @@ import {
   observeOutboundForState,
 } from "./openclaw/inbound-gate.js";
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
+import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
 import { forwardMmRest } from "./mm-proxy/rest.js";
 import { attachMmWsBridge, createMmWsRegistry, type MmWsRegistry } from "./mm-proxy/ws.js";
 import {
@@ -585,7 +586,11 @@ async function handleRequest(
   // clients. See createMetricsServer() below + helm/octogee/charts/
   // chat-proxy. PR-2d production hardening.
 
-  const urlPath = (req.url || "").split("?")[0];
+  // Strip the gateway prefix from req.url + return the stripped urlPath.
+  // forwardMmRest + approvalCallbackHandler construct upstream URLs from
+  // req.url, so a single mutation point keeps the strip consistent
+  // across every consumer (matcher + proxy target).
+  const urlPath = applyGatewayPrefixStripInPlace(req);
 
   if (urlPath === "/healthz" || urlPath === "/health" || urlPath === "/_health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -750,7 +755,7 @@ function handleOpenClawWsUpgrade(
     return;
   }
 
-  const urlPath = (req.url || "").split("?")[0];
+  const urlPath = stripGatewayPrefix((req.url || "").split("?")[0]);
   const pathMatch = urlPath.match(/\/api\/openclaw\/ws\/([a-f0-9-]{36})$/);
   const ticket = pathMatch?.[1] || null;
 
@@ -989,7 +994,10 @@ export function createServer() {
   const wsRouter = new WsUpgradeRouter();
 
   server.on("upgrade", (req, socket, head) => {
-    const urlPath = (req.url || "").split("?")[0];
+    // Strip the gateway prefix here too: the OC + MM WS upgrade matchers
+    // below check the stripped path, AND `handleOpenClawWsUpgrade`
+    // re-reads req.url for its UUID extraction.
+    const urlPath = applyGatewayPrefixStripInPlace(req);
     if (urlPath.startsWith("/api/openclaw/ws/")) {
       handleOpenClawWsUpgrade(wss, req, socket, head);
       return;
