@@ -760,14 +760,23 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.19 the fork carries **four essential patches, zero diagnostics** — same stack carried clean from 5.18 over a 250-commit upstream canonical roll (upstream touched ZERO of our patch files; 1 cherry-pick auto-merge in `src/infra/diagnostic-events.ts` for Hunk B; no manual conflicts, no drops).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.19 the fork carries **five essential patches, zero diagnostics**. The newest is the mattermost connect-log ✅ marker (operator-visibility patch) — mirrored across all three slots so the marker shows up regardless of which OC version a gateway runs.
 
-Short SHAs at v2026.5.19 (top of branch is `2984d843`):
+Short SHAs at v2026.5.19 (top of branch is `5e0d2619`):
+- `5e0d2619` — mattermost connect log: ✅ marker for operator visibility on GW startup
 - `2984d843` — activity harness-signal Hunk B: session-correlated execution-phase
 - `ab1c50d0` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
 - `08bce6a0` — env-gated isControlUiVisible override
 - `fd5133e5` — config.patch returns post-write hash
 - `de54651a` — per-account surgical channel reload
+
+Per-slot top SHAs (✅ patch mirrored across all three this cycle):
+
+| Slot | Version | Fork SHA |
+|---|---|---|
+| current | 2026.5.19 | `5e0d2619` |
+| previous | 2026.5.18 | `96ec3c02` |
+| preview | 2026.5.20-beta.2 | `aeadde4b` |
 
 **Essential:**
 
