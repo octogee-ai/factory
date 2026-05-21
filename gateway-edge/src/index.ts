@@ -128,7 +128,16 @@ if (process.env.NODE_ENV !== "test") {
   const server = http.createServer((req, res) => {
     const rawPath = (req.url || "").split("?")[0];
     if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath))) {
-      void chatProxyHandleRequest(req, res);
+      chatProxyHandleRequest(req, res).catch((err) => {
+        logger.error("[chat-proxy] request handler failed", {
+          path: rawPath,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Internal error" }));
+        }
+      });
     } else {
       app(req, res);
     }
@@ -151,7 +160,7 @@ if (process.env.NODE_ENV !== "test") {
     });
   });
 
-  void startChatProxyBackground().catch((err) => {
+  startChatProxyBackground().catch((err) => {
     logger.error("[chat-proxy] background boot failed", {
       err: err instanceof Error ? err.message : String(err),
     });

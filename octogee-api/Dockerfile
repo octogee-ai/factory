@@ -32,6 +32,10 @@ COPY octogee-api/src/ ./src/
 COPY gateway-edge/src/ /gateway-edge/src/
 COPY shared/ /shared/
 COPY scripts/lib/ /scripts/lib/
+# shared/ws/upgrade-router.ts imports `ws` at build time; tsc resolves it
+# by walking up from /shared, which can't see /octogee-api/node_modules.
+# Install shared's own declared deps (ws + @types/ws) at /shared.
+RUN npm ci --prefix /shared --ignore-scripts
 
 RUN npm run build
 

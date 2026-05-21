@@ -30,6 +30,13 @@ COPY gateway-edge/tsconfig.json ./
 COPY gateway-edge/src/ ./src/
 COPY shared/ /shared/
 COPY scripts/lib/ /scripts/lib/
+# shared/ws/upgrade-router.ts imports `ws` at build time (pulled in
+# transitively by the folded chat-proxy). tsc resolves `ws` by walking
+# up from /shared, which can't see /gateway-edge/node_modules — so
+# install shared's own declared deps (ws + @types/ws) at /shared.
+# Runtime resolution is unaffected: the emitted dist lives under
+# /gateway-edge and resolves `ws` from /gateway-edge/node_modules.
+RUN npm ci --prefix /shared --ignore-scripts
 # `npm run build` = tsc → tsc-alias → verify:no-alias-leakage. The
 # alias rewriter and post-build grep guard together prevent the
 # MODULE_NOT_FOUND @shared/* runtime failure. See README "Shared code".
