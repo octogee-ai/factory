@@ -274,3 +274,10 @@ workspaceApi:
     limits:
       cpu: 500m
       memory: 512Mi
+
+# NetworkPolicy locking down operator-profile gateway :3005 (builder
+# shell) to same-pod / same-instance ingress only. See
+# templates/builder-shell-network-policy.yaml. Disable per gateway if
+# a cluster doesn't support NetworkPolicy enforcement.
+networkPolicy:
+  enabled: true

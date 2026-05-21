@@ -2,7 +2,11 @@ import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { db } from "../../lib/db";
 import { logger } from "../../middleware/logging";
-import { mintTicket, TicketCapExceededError } from "../../lib/builder-shell-tickets";
+import {
+  mintTicket,
+  HourlyMintQuotaExceededError,
+  TicketCapExceededError,
+} from "../../lib/builder-shell-tickets";
 import {
   BuilderGatewayListEntry,
   BuilderGatewaysMeResponse,
@@ -118,8 +122,31 @@ router.post(
         ticket = await mintTicket({ uid, gatewayId, via });
       } catch (err) {
         if (err instanceof TicketCapExceededError) {
+          logger.warn("builder-shell: concurrent-ticket cap exceeded", {
+            uid: err.uid,
+            gatewayId,
+            cap: err.cap,
+          });
           res.status(429).json({
             error: "Too many in-flight shell tickets — wait for one to expire (30s) before requesting another",
+          });
+          return;
+        }
+        if (err instanceof HourlyMintQuotaExceededError) {
+          logger.warn("builder-shell: hourly mint quota exceeded", {
+            uid: err.uid,
+            gatewayId,
+            quota: err.quota,
+            windowMs: err.windowMs,
+          });
+          // Retry-After in seconds — conservative: tell the client
+          // to back off ~5 min before retrying, even though the
+          // earliest entry rolls out of the window at some point in
+          // the past hour. 5 min is short enough to feel responsive
+          // and long enough to drain a hot loop.
+          res.set("Retry-After", "300");
+          res.status(429).json({
+            error: `Hourly shell-mint quota exceeded for this user (${err.quota}/hour). Try again later.`,
           });
           return;
         }

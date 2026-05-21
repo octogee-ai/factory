@@ -191,6 +191,19 @@ const ocWsConnectionsActive = new Gauge({
   registers: [metricsRegistry],
 });
 
+// PR-2c: capacity planning + ops visibility. Each builder-shell
+// session-close emits one inc with the reason label. Backpressure
+// closes (`backpressure-client` / `backpressure-upstream`) are the
+// signal that 4 MiB outbound cap is biting — if these climb, the
+// chat-proxy is either undersized, the client is on a slow link,
+// or the gateway is producing faster than reasonable to drain.
+const builderShellSessionCloseTotal = new Counter({
+  name: 'chat_proxy_builder_shell_session_close_total',
+  help: 'Builder-shell session close events, by reason (client-disconnect / upstream-disconnect / upstream-unreachable / backpressure-* / invalid-ticket)',
+  labelNames: ['reason'] as const,
+  registers: [metricsRegistry],
+});
+
 const ocWsHandshakeTotal = new Counter({
   name: 'chat_proxy_openclaw_ws_handshakes_total',
   help: 'Total OpenClaw upstream handshake outcomes',
@@ -1007,6 +1020,11 @@ async function attachBuilderShellRoute(server: ReturnType<typeof createServer>):
     // with new allowlist picks up without re-attaching the route.
     allowedOrigins: isAllowedWsOrigin,
     onEvent: (e) => {
+      // Single Prometheus counter for capacity planning + paging.
+      // Labels are the BridgeSessionEvent.reason union; if the union
+      // widens (e.g. new backpressure mode) the label set widens
+      // along with it.
+      builderShellSessionCloseTotal.inc({ reason: e.reason });
       if (e.kind === "session-closed") {
         console.warn(
           `[builder-shell] session closed sessionId=${e.sessionId} uid=${e.uid} gatewayId=${e.gatewayId} reason=${e.reason}`,
