@@ -246,6 +246,66 @@ function pushSetJson(args: string[], key: string, value: unknown): void {
 const IN_PROGRESS_PATTERN =
   /another operation \(install\/upgrade\/rollback\) is in progress/i;
 
+// Release states that need recovery before a fresh `helm upgrade` is
+// safe to attempt. The post-flight `IN_PROGRESS_PATTERN` check only
+// triggers when helm itself reports the conflict — but a prior `helm
+// upgrade --wait` that timed out (pods OOM / ImagePullBackOff / slow
+// readiness) errors with "context deadline exceeded" without matching
+// IN_PROGRESS, leaving the release stuck in pending-*. Next reconcile
+// → same timeout → wedge forever. Pre-flight `helm status` catches
+// this and runs recoverStuckRelease before the upgrade attempt.
+// (gw-bender wedge 2026-05-20: OC 2026.5.19 OOM → 3-min timeout →
+// pending-upgrade → 4 more reconcile ticks each hit the same timeout
+// before manual `helm rollback` unwedged it.)
+const PENDING_STATUSES = new Set([
+  "pending-install",
+  "pending-upgrade",
+  "pending-rollback",
+]);
+
+/**
+ * Read the current helm release status. Returns null for a release
+ * that doesn't exist (fresh-install path). Throws on any other error
+ * — a control-plane outage during the status check must not be
+ * silently swallowed (the recovery decision depends on it).
+ */
+async function getReleaseStatus(
+  deps: HelmSubprocessRunnerDeps,
+  namespace: string,
+  release: string,
+): Promise<string | null> {
+  const result = await deps.runHelm([
+    "status", release, "-n", namespace, "-o", "json",
+  ]);
+  if (result.code !== 0) {
+    if (isReleaseNotFound(result.stderr)) return null;
+    throw new Error(
+      `helm status ${release} (ns=${namespace}) failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  }
+  let parsed: { info?: { status?: unknown } };
+  try {
+    parsed = JSON.parse(result.stdout) as { info?: { status?: unknown } };
+  } catch (e) {
+    throw new Error(
+      `helm status ${release} (ns=${namespace}): could not parse JSON output: ${(e as Error).message}`,
+    );
+  }
+  // Fail closed when `info.status` is absent/non-string: a changed
+  // `helm status -o json` shape silently returning null here would be
+  // treated as "release not found" and skip recovery → the wedge we're
+  // trying to escape. Surface the unexpected shape so the operator
+  // sees it instead.
+  const status = parsed.info?.status;
+  if (typeof status !== "string" || status.length === 0) {
+    const sample = result.stdout.slice(0, 200);
+    throw new Error(
+      `helm status ${release} (ns=${namespace}): info.status missing or non-string in response (got ${typeof status}). stdout[:200]: ${sample}`,
+    );
+  }
+  return status;
+}
+
 interface HelmHistoryItem {
   revision: number;
   status: string;
@@ -427,6 +487,27 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       if (valuesFile) args.push("-f", valuesFile);
       if (takeOwnership) args.push("--take-ownership");
       args.push("--wait", `--timeout=${upgradeTimeout}`);
+
+      // Pre-flight: detect a release left in pending-* by a prior
+      // --wait timeout (pods OOM / ImagePullBackOff / slow readiness)
+      // and roll back BEFORE the new upgrade attempt. Without this,
+      // the wedge persists across reconcile ticks because the timeout
+      // error class doesn't match the post-flight IN_PROGRESS pattern.
+      const preFlightStatus = await getReleaseStatus(deps, namespace, release);
+      if (preFlightStatus !== null && PENDING_STATUSES.has(preFlightStatus)) {
+        deps.log(
+          `[helm-runner] ⚠ ${release} pre-flight detected stuck state '${preFlightStatus}' — running recovery before upgrade`,
+        );
+        const recovered = await recoverStuckRelease(
+          deps,
+          namespace,
+          release,
+          upgradeTimeout,
+          uninstallTimeout,
+        );
+        deps.log(`[helm-runner] pre-flight recovery: ${recovered}`);
+      }
+
       let result = await deps.runHelm(args);
       if (
         result.code !== 0 &&

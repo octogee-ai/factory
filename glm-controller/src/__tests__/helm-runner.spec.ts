@@ -5,6 +5,13 @@ import {
   type HelmSubprocess,
 } from "../helm-runner";
 
+// `calls` captures every helm invocation the test issued — including
+// the pre-flight `helm status` IF the test wires runHelm directly. To
+// keep existing tests' calls-sequence assertions ergonomic, wrap the
+// returned runHelm with `withPreflightStatusNotFound` at the runner
+// construction site (see the replace_all in every call site below);
+// that wrapper intercepts status BEFORE it reaches the inner mock,
+// so `calls` only captures upgrade/history/rollback/uninstall.
 function mockSubprocess(
   responses: Array<{ stdout?: string; stderr?: string; code?: number }>,
 ): { runHelm: HelmSubprocess; calls: string[][] } {
@@ -21,6 +28,24 @@ function mockSubprocess(
     };
   });
   return { runHelm, calls };
+}
+
+// Wrap a custom runHelm so the new pre-flight `helm status` call (added
+// to upsertInstance) defaults to "release not found" — the fresh-install
+// branch that skips recovery and proceeds to upgrade. The wrapped
+// function never sees status calls (its `calls.push(args)` only captures
+// upgrade/history/rollback/uninstall).
+//
+// Pre-flight-dedicated tests do NOT use this wrapper — they exercise the
+// status branch directly via their own inner runHelm. See the "pre-
+// flight" tests at the bottom of the self-heal describe block.
+function withPreflightStatusNotFound(inner: HelmSubprocess): HelmSubprocess {
+  return async (args: string[]) => {
+    if (args[0] === "status") {
+      return { stdout: "", stderr: "Error: release: not found", code: 1 };
+    }
+    return inner(args);
+  };
 }
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
@@ -54,7 +79,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
         }),
       },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
 
@@ -98,7 +123,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
         }),
       },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
     expect(map.default.chartFingerprint).toBe(fp);
   });
@@ -130,7 +155,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
         }),
       },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     const map = await runner.readDeployedInstances({ namespace: "octogee" });
     expect(map.bender).toMatchObject({
       serviceAccountName: "octogee-gateway-bender",
@@ -160,14 +185,14 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
         }),
       },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
     expect(map.default.chartFingerprint).toBeUndefined();
   });
 
   it("returns an empty map when no octogee-gw-* releases exist (fresh cluster)", async () => {
     const { runHelm } = mockSubprocess([{ stdout: "[]" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
     expect(map).toEqual({});
   });
@@ -183,7 +208,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       { stdout: JSON.stringify({ instanceName: "broken" }) },
     ]);
     const log = vi.fn();
-    const runner = createHelmSubprocessRunner({ runHelm, log });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log });
     const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
     expect(map).toEqual({});
     expect(log).toHaveBeenCalledWith(
@@ -219,7 +244,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       },
     ]);
     const log = vi.fn();
-    const runner = createHelmSubprocessRunner({ runHelm, log });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log });
     const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
     expect(map.smoke).toEqual({
       enabled: true,
@@ -247,7 +272,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
         }),
       },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     const map = await runner.readDeployedInstances({ namespace: "octogee-test" });
     expect(map.numeric).toEqual({
       enabled: true,
@@ -260,7 +285,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     const { runHelm } = mockSubprocess([
       { code: 1, stderr: "Error: connection refused" },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     await expect(
       runner.readDeployedInstances({ namespace: "octogee-test" }),
     ).rejects.toThrow(/connection refused/);
@@ -270,7 +295,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
 describe("createHelmSubprocessRunner — upsertInstance", () => {
   it("runs `helm upgrade --install octogee-gw-<name> <chart> -n <ns> --set ... --wait`", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee-test",
@@ -300,7 +325,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
   it("passes --take-ownership when set (cutover from umbrella-managed pods)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee-test",
@@ -317,7 +342,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
   it("omits --take-ownership by default (steady-state ops)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee-test",
@@ -333,7 +358,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
   it("threads -f <valuesFile> when provided so per-namespace defaults follow", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee-test",
@@ -353,7 +378,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
   it("passes --set chartFingerprint=<hex> when chartFingerprint is provided", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee-test",
@@ -370,7 +395,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
   it("passes personal gateway knobs as helm values", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee",
@@ -405,7 +430,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
   it("passes --set profile=<profile> when profile is provided (operator/non-default)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee",
@@ -422,7 +447,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
   it("omits --set profile when profile is undefined (cattle/standard default = chart's profile=\"\")", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee-test",
@@ -438,7 +463,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
   it("omits chartFingerprint --set when not provided (operator-driven helm calls)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee-test",
@@ -456,7 +481,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     const { runHelm } = mockSubprocess([
       { code: 1, stderr: "Error: timed out" },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
       runner.upsertInstance({
@@ -512,7 +537,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       }
     });
     const log = vi.fn();
-    const runner = createHelmSubprocessRunner({ runHelm, log });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
 
@@ -557,7 +582,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
 
@@ -586,7 +611,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       if (args[0] === "uninstall") return { stdout: "uninstalled", stderr: "", code: 0 };
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
 
@@ -609,7 +634,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
         code: 1,
       };
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /timed out/,
@@ -635,7 +660,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       }
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /rollback/i,
@@ -665,7 +690,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /timed out/,
@@ -697,7 +722,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
 
@@ -730,7 +755,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
 
@@ -759,7 +784,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       }
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /unparseable output during recovery/,
@@ -776,7 +801,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       if (args[0] === "history") return { stdout: "[]", stderr: "", code: 0 };
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /no usable revision history during recovery/,
@@ -794,7 +819,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       }
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /no usable revision history during recovery/,
@@ -816,19 +841,240 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       }
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /no usable revision history during recovery/,
     );
     expect(calls.map((c) => c[0])).toEqual(["upgrade", "history"]);
   });
+
+  // ── Pre-flight stuck-state recovery ──────────────────────────────────
+  // The post-flight `IN_PROGRESS_PATTERN` check only triggers when helm
+  // itself reports "another operation in progress". A `helm upgrade
+  // --wait` that times out (pods crash-loop / ImagePullBackOff / OOM)
+  // leaves the release in `pending-upgrade` BUT errors with "context
+  // deadline exceeded" — different error class, doesn't match the
+  // pattern, no recovery fires. Next Cowboy reconcile tick → same
+  // timeout → infinite wedge (reproduced today on gw-bender:
+  // OpenClaw 2026.5.19 OOM → 3-min --wait timeout → pending-upgrade →
+  // 3 more reconcile ticks each hit the same timeout, never recovered).
+  //
+  // Fix: pre-flight `helm status` check inside upsertInstance. If the
+  // release is in any `pending-*` state when Cowboy arrives, run the
+  // existing `recoverStuckRelease` FIRST, then proceed with the new
+  // upgrade. Uses the same recovery primitive — no new code, just
+  // earlier detection.
+
+  it("pre-flight detects pending-upgrade and rolls back BEFORE attempting upgrade (the bender-OOM wedge class)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "status") {
+        return {
+          stdout: JSON.stringify({ info: { status: "pending-upgrade" } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([
+            { revision: 3, status: "deployed" },
+            { revision: 4, status: "pending-upgrade" },
+          ]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
+      if (args[0] === "upgrade") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const log = vi.fn();
+    const runner = createHelmSubprocessRunner({ runHelm, log });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    // Exactly: status (pre-flight) → history (recovery) → rollback → upgrade.
+    // NO second upgrade attempt — the first one succeeds because pre-flight
+    // already unwedged the release. (Existing post-flight test shows the
+    // 2-upgrade shape; this PR adds the 1-upgrade pre-flight path.)
+    expect(calls.map((c) => c[0])).toEqual([
+      "status",
+      "history",
+      "rollback",
+      "upgrade",
+    ]);
+    // Rolled back to revision 3 (deployed), not 4 (the wedged pending one)
+    const rollback = calls.find((c) => c[0] === "rollback")!;
+    expect(rollback).toContain("3");
+    expect(log).toHaveBeenCalledWith(
+      expect.stringMatching(/pre-flight.*pending-upgrade/),
+    );
+  });
+
+  it("pre-flight detects pending-rollback (Cowboy killed mid-recovery) — same shape, recovers + upgrades", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "status") {
+        return {
+          stdout: JSON.stringify({ info: { status: "pending-rollback" } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "history") {
+        return {
+          stdout: JSON.stringify([{ revision: 2, status: "deployed" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
+      if (args[0] === "upgrade") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    expect(calls.map((c) => c[0])).toEqual([
+      "status",
+      "history",
+      "rollback",
+      "upgrade",
+    ]);
+  });
+
+  it("pre-flight detects pending-install (failed first-install) — uninstalls then upgrades", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "status") {
+        return {
+          stdout: JSON.stringify({ info: { status: "pending-install" } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "history") {
+        return {
+          // pending-install with no good revision history → recovery
+          // uninstalls (the existing path).
+          stdout: JSON.stringify([{ revision: 1, status: "pending-install" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "uninstall") return { stdout: "ok", stderr: "", code: 0 };
+      if (args[0] === "upgrade") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    expect(calls.map((c) => c[0])).toEqual([
+      "status",
+      "history",
+      "uninstall",
+      "upgrade",
+    ]);
+  });
+
+  it("pre-flight on a healthy 'deployed' release skips recovery (no extra helm calls)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "status") {
+        return {
+          stdout: JSON.stringify({ info: { status: "deployed" } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "upgrade") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+
+    // status → upgrade. No history/rollback probing.
+    expect(calls.map((c) => c[0])).toEqual(["status", "upgrade"]);
+  });
+
+  it("pre-flight on a 'failed' (non-pending) release skips recovery (helm upgrade can override a failed state)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "status") {
+        return {
+          stdout: JSON.stringify({ info: { status: "failed" } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (args[0] === "upgrade") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+    expect(calls.map((c) => c[0])).toEqual(["status", "upgrade"]);
+  });
+
+  it("pre-flight on a non-existent release (fresh install) proceeds directly to upgrade", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "status") {
+        return {
+          stdout: "",
+          stderr: "Error: release: not found",
+          code: 1,
+        };
+      }
+      if (args[0] === "upgrade") return { stdout: "ok", stderr: "", code: 0 };
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
+    // status (not-found) → upgrade (fresh install). No recovery.
+    expect(calls.map((c) => c[0])).toEqual(["status", "upgrade"]);
+  });
+
+  it("pre-flight surfaces a non-not-found helm status error (no silent swallow)", async () => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "status") {
+        return {
+          stdout: "",
+          stderr: "Error: Kubernetes cluster unreachable: context deadline exceeded",
+          code: 1,
+        };
+      }
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
+      /helm status.*Kubernetes cluster unreachable/,
+    );
+    // No upgrade attempted — fail-loud on the status check (silent
+    // proceed would hide a control-plane outage).
+    expect(calls.map((c) => c[0])).toEqual(["status"]);
+  });
 });
 
 describe("createHelmSubprocessRunner — removeInstance", () => {
   it("runs `helm uninstall octogee-gw-<name> -n <ns> --wait`", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "release \"octogee-gw-default\" uninstalled" }]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.removeInstance({
       namespace: "octogee-test",
@@ -847,7 +1093,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     const { runHelm } = mockSubprocess([
       { code: 1, stderr: "Error: uninstall: Release not loaded: release: not found" },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
       runner.removeInstance({ namespace: "octogee-test", instanceName: "ghost" }),
@@ -858,7 +1104,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     const { runHelm } = mockSubprocess([
       { code: 1, stderr: "Error: pre-delete hook failed" },
     ]);
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
       runner.removeInstance({ namespace: "octogee-test", instanceName: "broken" }),
@@ -894,7 +1140,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
       if (args[0] === "rollback") return { stdout: "ok", stderr: "", code: 0 };
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
       runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),
@@ -940,7 +1186,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
       }
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
       runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),
@@ -960,7 +1206,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
       calls.push(args);
       return { stdout: "", stderr: "Error: release: not found", code: 1 };
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
       runner.removeInstance({ namespace: "octogee-test", instanceName: "ghost" }),
@@ -992,7 +1238,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
       }
       throw new Error(`unexpected helm ${args[0]}`);
     });
-    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
       runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),

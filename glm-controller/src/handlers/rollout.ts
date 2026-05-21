@@ -68,7 +68,7 @@ interface RolloutTarget {
 
 async function resolveRolloutTarget(
   op: Operation,
-  deps: Pick<RolloutDeps, "readCurrentSpec">,
+  deps: Pick<RolloutDeps, "readCurrentSpec" | "helm" | "log">,
 ): Promise<{ error: string } | { target: RolloutTarget }> {
   const input = op.input as RolloutInput;
   const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
@@ -88,14 +88,38 @@ async function resolveRolloutTarget(
   const newRepository = imageRepositoryOverride ?? current.imageRepository;
   const currentProfile: GatewayProfile = current.profile ?? "standard";
   const newProfile: GatewayProfile = profileOverride ?? currentProfile;
-  if (
+  const resolvedRepository = resolveGatewayImageRepository({
+    profile: newProfile,
+    imageRepository: newRepository,
+  });
+
+  // The no-op short-circuit checks DESIRED (Firestore) AND ACTUAL
+  // (helm-deployed) — both must match the request to bail. Reason:
+  // an operator's manual `helm rollback` (recovering from a wedged
+  // pending-upgrade — see helm-runner's pre-flight recovery) can put
+  // actual back to an older SHA while Firestore desired still points
+  // at the never-deployed SHA. The operator's next attempt to re-pick
+  // that SHA in the Cowboy UI is real drift to fix, NOT a no-op.
+  // Reproduced today on gw-bender post-recovery.
+  const desiredMatchesRequest =
     newRepository === current.imageRepository &&
     imageTag === current.imageTag &&
-    newProfile === currentProfile
-  ) {
-    return {
-      error: `gateway ${gatewayId} already on ${newRepository}:${imageTag} (${newProfile}) — no-op rollout`,
-    };
+    newProfile === currentProfile;
+  if (desiredMatchesRequest) {
+    const deployedMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
+    const deployed = deployedMap[current.instanceName];
+    const actualMatchesRequest =
+      !!deployed &&
+      deployed.image.repository === resolvedRepository &&
+      deployed.image.tag === imageTag;
+    if (actualMatchesRequest) {
+      return {
+        error: `gateway ${gatewayId} already on ${newRepository}:${imageTag} (${newProfile}) — no-op rollout`,
+      };
+    }
+    deps.log(
+      `[rollout] ${gatewayId} spec matches request but actual deployed (${deployed?.image.repository ?? "absent"}:${deployed?.image.tag ?? "absent"}) differs — proceeding to converge`,
+    );
   }
   return {
     target: {
@@ -104,10 +128,7 @@ async function resolveRolloutTarget(
       instanceName: current.instanceName,
       newRepository,
       newProfile,
-      resolvedRepository: resolveGatewayImageRepository({
-        profile: newProfile,
-        imageRepository: newRepository,
-      }),
+      resolvedRepository,
     },
   };
 }

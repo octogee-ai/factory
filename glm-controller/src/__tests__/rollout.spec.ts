@@ -197,6 +197,83 @@ describe("createRolloutHandler — refusals + edge cases", () => {
     // updateGlmGatewayImage should NOT have been called
     expect(state.specs.get("gw-test")?.imageTag).toBe("sameSha");
   });
+
+  // Reproduced today on gw-bender: a manual `helm rollback` (operator
+  // recovery from a wedged pending-upgrade) put the actual deployed
+  // image back to an older SHA, but Firestore's desired-state still
+  // had the never-deployed SHA. The operator then re-picked that same
+  // SHA in the Cowboy UI and got "no-op rollout" — Cowboy compared
+  // ONLY against Firestore desired, not against actual deployed.
+  // The retry was blocked even though there was real drift to fix.
+  it("does NOT refuse no-op when Firestore desired matches request but actual deployed differs (drift)", async () => {
+    let helmReadCount = 0;
+    const state: FakeState = {
+      specs: new Map([
+        // Firestore desired already says "newSha" (set by a prior
+        // rollout that wedged in helm and never reached the pod).
+        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "newSha" }],
+      ]),
+      // Actual deployed is the old SHA (operator rolled back via
+      // helm CLI to unwedge). Drift between desired and actual.
+      helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
+      heartbeats: new Map([["gw-test", { version: "oldSha", lastHeartbeatAt: 0 }]]),
+    };
+    const deps = makeDeps(state, {
+      // First read (the no-op pre-check) sees drift → proceeds.
+      // After update-spec, simulate helm converging (flip the deployed
+      // image to newSha) so helm-render + heartbeat pass.
+      helm: {
+        readDeployedInstances: vi.fn(async () => {
+          helmReadCount++;
+          const tag = helmReadCount === 1 ? "oldSha" : "newSha";
+          return {
+            default: {
+              enabled: true,
+              image: { repository: REPO, tag },
+              gatewayId: "gw-test",
+            },
+          };
+        }),
+      },
+      readGatewayHeartbeat: vi.fn(async (gatewayId) =>
+        // simulate heartbeat catching up after the new image deploys
+        helmReadCount >= 2
+          ? { version: "newSha", lastHeartbeatAt: 0 }
+          : state.heartbeats.get(gatewayId) ?? null,
+      ),
+    });
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "gw-test", imageTag: "newSha" } }),
+      makeCtx(),
+    );
+    // The rollout MUST NOT be rejected as no-op. Coalesce to empty
+    // string so the negative match works when result.error is undefined
+    // (the success path).
+    expect(result.error ?? "").not.toMatch(/no-op|already on/i);
+    expect(result.success).toBe(true);
+  });
+
+  it("STILL refuses no-op when desired matches request AND actual deployed matches request (true no-op)", async () => {
+    // Belt-and-suspenders: when both desired and actual agree with the
+    // request, the rollout is genuinely a no-op (existing behavior
+    // preserved — drift detection didn't accidentally drop the
+    // legitimate no-op short-circuit).
+    const state: FakeState = {
+      specs: new Map([
+        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "sameSha" }],
+      ]),
+      helmInstances: new Map([["default", { repository: REPO, tag: "sameSha" }]]),
+      heartbeats: new Map([["gw-test", { version: "sameSha", lastHeartbeatAt: 0 }]]),
+    };
+    const deps = makeDeps(state);
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "gw-test", imageTag: "sameSha" } }),
+      makeCtx(),
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/no-op|already on/i);
+    expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
+  });
 });
 
 describe("createRolloutHandler — failures", () => {
