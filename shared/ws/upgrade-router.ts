@@ -17,7 +17,9 @@
 
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { WebSocketServer, type WebSocket } from "ws";
+import * as WsPkg from "ws";
+import type { WebSocket } from "ws";
+import type { WebSocketServer as WebSocketServerType } from "ws";
 
 /** What the upgrade handler receives once the route accepts the
  *  connection. `ticket` is whatever `extractTicket` returned (or
@@ -69,10 +71,17 @@ export interface WsUpgradeRoute {
 
 interface CompiledRoute extends WsUpgradeRoute {
   matchesPath: (pathname: string) => boolean;
-  wss: WebSocketServer;
+  wss: WebSocketServerType;
 }
 
 const DEFAULT_MAX_PAYLOAD_BYTES = 1 << 20;
+type WebSocketServerConstructor = new (
+  opts: ConstructorParameters<typeof WebSocketServerType>[0],
+) => WebSocketServerType;
+const WebSocketServerCtor = (
+  WsPkg.WebSocketServer
+  ?? (WsPkg as unknown as { Server: WebSocketServerConstructor }).Server
+) as WebSocketServerConstructor;
 
 export class WsUpgradeRouter {
   private readonly routes: CompiledRoute[] = [];
@@ -83,7 +92,7 @@ export class WsUpgradeRouter {
       typeof route.match === "string"
         ? (p: string) => p === route.match
         : (route.match as (p: string) => boolean);
-    const wss = new WebSocketServer({
+    const wss = new WebSocketServerCtor({
       noServer: true,
       maxPayload: route.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
     });
