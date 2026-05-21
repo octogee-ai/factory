@@ -387,6 +387,67 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
   });
 });
 
+// Structural split: NetworkPolicy has TWO ingress rules. First rule has
+// `- from:` (backstop, same-instance-only). Second rule has only `- ports:`
+// (allow any source). Split the rendered NP at the second-rule marker so
+// each test can assert against the right scope — port-presence alone would
+// pass even if a regression accidentally put :3003 inside the from-rule.
+function splitNetworkPolicyRules(np: string): { restricted: string; open: string } {
+  const fromIdx = np.indexOf("- from:");
+  const openIdx = np.indexOf("\n    - ports:", fromIdx);
+  if (fromIdx === -1 || openIdx === -1) {
+    throw new Error(`NetworkPolicy structure unexpected — fromIdx=${fromIdx} openIdx=${openIdx}`);
+  }
+  return { restricted: np.slice(fromIdx, openIdx), open: np.slice(openIdx) };
+}
+
+describe("helm/octogee-gateway/ — operator-profile NetworkPolicy port allowlist", () => {
+  it("restricts :3005 (builder-shell) to same-instance pods — the backstop intent", () => {
+    const np = findDoc(
+      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      "NetworkPolicy",
+      "octogee-gateway-builder-shell-default",
+    );
+    expect(np).not.toBeNull();
+    const { restricted } = splitNetworkPolicyRules(np!);
+    expect(restricted).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*default/);
+    expect(restricted).toMatch(/port:\s*3005/);
+    expect(restricted).not.toMatch(/port:\s*3003/);
+  });
+
+  it("allows other pod ports from any source — listed in a rule WITHOUT `from:` so the LB / sibling workloads / Prometheus can reach them", () => {
+    const np = findDoc(
+      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      "NetworkPolicy",
+      "octogee-gateway-builder-shell-default",
+    );
+    expect(np).not.toBeNull();
+    const { open } = splitNetworkPolicyRules(np!);
+    // The open rule must NOT carry a from: selector — that's the whole point.
+    expect(open).not.toMatch(/from:/);
+    // Every port the LB / cluster legitimately reaches:
+    // fleet-http (Cloud Tasks /restore-customer + LB health check)
+    expect(open).toMatch(/port:\s*3003/);
+    // gateway-edge (api.octogee.com /api/g/<gw>/*)
+    expect(open).toMatch(/port:\s*3001/);
+    // chat-proxy (chat.octogee.com /g/<gw>/*)
+    expect(open).toMatch(/port:\s*8080/);
+    // preview (preview-ingress)
+    expect(open).toMatch(/port:\s*9080/);
+    // gateway + chat-proxy metrics (Prometheus scrape)
+    expect(open).toMatch(/port:\s*9091/);
+    expect(open).toMatch(/port:\s*9092/);
+    // openclaw WS — cross-pod Cowboy/fleet-controller RPC + internalUrl
+    // dialing the per-instance Service.
+    expect(open).toMatch(/port:\s*18789/);
+  });
+
+  it("is NOT rendered for standard-profile gateways (cattle don't expose :3005 so no backstop needed)", () => {
+    const out = helmTemplate();
+    expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
+  });
+});
+
 describe("helm/octogee-gateway/ — required value validation", () => {
   it("fails to render when gatewayId is missing", () => {
     const args = [
