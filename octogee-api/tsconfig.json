@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2022",
+    "outDir": "dist",
+    "rootDir": "..",
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true,
+    "skipLibCheck": true,
+    "noUnusedLocals": false,
+    "paths": {
+      "@shared/*": ["../shared/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "../shared/types/**/*.ts",
+    "../workspace-api/src/**/*.ts",
+    "../scripts/lib/admin-fleet-router.ts",
+    "../scripts/lib/secret-manager.ts",
+    "../scripts/lib/artifact-registry.ts",
+    "../scripts/lib/workspace-slugs.ts"
+  ],
+  "exclude": [
+    "src/__tests__",
+    "node_modules",
+    "dist",
+    "../shared/**/*.spec.ts",
+    "../workspace-api/src/__tests__/**/*"
+  ]
+}

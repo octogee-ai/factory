@@ -14,8 +14,11 @@ dependencies:
 - name: workspace-api
   repository: file://charts/workspace-api
   version: 0.1.0
+- name: octogee-api
+  repository: file://charts/octogee-api
+  version: 0.1.0
 - name: glm-controller
   repository: file://charts/glm-controller
   version: 0.1.0
-digest: sha256:26a857f43831d58e156d971cd0d797cebf8a936ce0a040e33a0eace2ec11e7fb
-generated: "2026-05-05T14:42:15.266166-07:00"
+digest: sha256:79ddacb415ccc360ba1ded946c0b44f060b61e676bf156c9428729dae1cdfcd3
+generated: "2026-05-21T11:15:29.88435-07:00"
