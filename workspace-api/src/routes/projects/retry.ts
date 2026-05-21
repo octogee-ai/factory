@@ -12,7 +12,7 @@ import { projectRepoName } from "../../lib/gitea-naming";
 const router = Router();
 
 router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Request, res: Response) => {
-  const { wid, pid } = req.params;
+  const { wid, pid } = req.params as { wid: string; pid: string };
   await withProject(req, res, wid, pid, {
     ownerOnly: true,
     ownerErrorMessage: "Only the project owner can retry provisioning",

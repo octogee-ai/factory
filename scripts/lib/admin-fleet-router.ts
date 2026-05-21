@@ -481,7 +481,7 @@ export function addAdminFleetRoutes(
     "/customer/:uid/delete",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const uid = req.params.uid;
+        const uid = req.params.uid as string;
         const userRef = db.collection("users").doc(uid);
         const userSnap = await userRef.get();
         if (!userSnap.exists) {
@@ -767,7 +767,7 @@ export function addAdminFleetRoutes(
     "/gateways/:id/details",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const id = req.params.id;
+        const id = req.params.id as string;
         const [glmSnap, hbSnap, usersSnap, opsSnap] = await Promise.all([
           db.collection(GLM_GATEWAYS_COLLECTION).doc(id).get(),
           db.collection("gateways").doc(id).get(),
@@ -821,7 +821,7 @@ export function addAdminFleetRoutes(
     "/customers/:uid/assign",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const uid = req.params.uid;
+        const uid = req.params.uid as string;
         const body = req.body as Partial<{ gatewayId: string }>;
         if (!body.gatewayId || typeof body.gatewayId !== "string") {
           res.status(400).json({ error: "missing gatewayId in body" });
@@ -1003,7 +1003,7 @@ export function addAdminFleetRoutes(
     "/gateways/:id",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const id = req.params.id;
+        const id = req.params.id as string;
         const body = req.body as Partial<{
           imageTag: string;
           desiredStatus: "running" | "draining" | "retired";
@@ -1053,7 +1053,7 @@ export function addAdminFleetRoutes(
     "/gateways/:id",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const id = req.params.id;
+        const id = req.params.id as string;
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
         const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
@@ -1130,7 +1130,7 @@ export function addAdminFleetRoutes(
     // eslint-disable-next-line complexity -- linear preflight after extraction (validateRolloutBody + findInFlightJobId): body validate → exists → no-op → in-flight → conflicting-op → write. Each guard's response shape is distinct.
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const id = req.params.id;
+        const id = req.params.id as string;
         const validation = validateRolloutBody(
           req.body as Partial<{
             imageTag: string;
@@ -1233,7 +1233,7 @@ export function addAdminFleetRoutes(
     "/customers/by-slug/:slug",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const slug = req.params.slug;
+        const slug = req.params.slug as string;
         const slugSnap = await db
           .collection("users")
           .where("provisioning.openclaw.slug", "==", slug)
@@ -1263,7 +1263,7 @@ export function addAdminFleetRoutes(
     "/customers/:uid/migrate",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const uid = req.params.uid;
+        const uid = req.params.uid as string;
         const body = req.body as Partial<{ to: string }>;
         if (typeof body.to !== "string" || body.to.length === 0) {
           res
@@ -1378,7 +1378,7 @@ export function addAdminFleetRoutes(
     "/restore-jobs/:jobId/kick",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const jobId = req.params.jobId;
+        const jobId = req.params.jobId as string;
         const jobRef = db.collection("restoreJobs").doc(jobId);
         const actor = req as ActorRequest;
         const kickedBy = actor.uid ?? "unknown";

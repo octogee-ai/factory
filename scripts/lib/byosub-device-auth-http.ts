@@ -87,7 +87,7 @@ export function createDeviceAuthStatusHandler(
   const log = deps.log ?? (() => {});
   return (req, res) => {
     if (denied(req, res, deps.internalServiceKey, log)) return;
-    const out = deps.manager.status(req.params.flowId);
+    const out = deps.manager.status(req.params.flowId as string);
     if (!out) {
       res.status(404).json({ error: "flow not found" });
       return;

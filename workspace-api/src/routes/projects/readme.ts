@@ -32,7 +32,7 @@ function isSafeCanvasPath(p: unknown): p is string {
 const WORKSPACE_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 router.get("/:wid/:pid/readme", async (req: Request, res: Response) => {
-  const { wid, pid } = req.params;
+  const { wid, pid } = req.params as { wid: string; pid: string };
   if (!WORKSPACE_SLUG_RE.test(wid) || !isValidProjectId(pid)) {
     res.status(404).json({ error: "Project not found" });
     return;

@@ -138,7 +138,7 @@ router.get(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const flow = await readFlow(req.params.flowId);
+      const flow = await readFlow(req.params.flowId as string);
       // Owner-bound: a non-owner (or unknown flow) gets an indistinguishable
       // 404 — no cross-tenant flow-state leak on a shared gateway.
       if (!flow || flow.uid !== req.uid!) {
@@ -155,7 +155,7 @@ router.get(
       try {
         const out = await gatewayDeviceAuthClient().status({
           instanceName,
-          flowId: req.params.flowId,
+          flowId: req.params.flowId as string,
         });
         res.json(out);
       } catch (e) {

@@ -85,7 +85,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = req.uid!;
-      const gatewayId = req.params.id;
+      const gatewayId = req.params.id as string;
       if (!/^[a-z0-9-]+$/.test(gatewayId)) {
         res.status(400).json({ error: "Invalid gateway id" });
         return;

@@ -11,7 +11,7 @@ import { readChannel } from "../../lib/firestoreReads";
 const router = Router();
 
 router.delete("/:wid/:pid/members/:guestUid", strictRateLimit, async (req: Request, res: Response) => {
-  const { wid, pid, guestUid } = req.params;
+  const { wid, pid, guestUid } = req.params as { wid: string; pid: string; guestUid: string };
   await withProject(req, res, wid, pid, {
     ownerOnly: true,
     ownerErrorMessage: "Only the project owner can remove guests",

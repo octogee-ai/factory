@@ -158,7 +158,7 @@ async function hydrateFromFirestore(
 
 router.get("/:kind/:id/members", async (req: Request, res: Response) => {
   const uid = req.uid!;
-  const { kind, id } = req.params;
+  const { kind, id } = req.params as { kind: string; id: string };
 
   if (kind !== "workspace" && kind !== "project") {
     res.status(400).json({ error: "kind must be 'workspace' or 'project'" });
@@ -271,7 +271,7 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
 //                 project's guestUids array.
 router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response) => {
   const callerUid = req.uid!;
-  const { kind, id, mmUserId } = req.params;
+  const { kind, id, mmUserId } = req.params as { kind: string; id: string; mmUserId: string };
 
   if (kind !== "workspace" && kind !== "project") {
     res.status(400).json({ error: "kind must be 'workspace' or 'project'" });

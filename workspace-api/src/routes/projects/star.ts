@@ -7,7 +7,7 @@ import { starDocId } from "../../../../shared/types/social";
 const router = Router();
 
 router.post("/:wid/:pid/star", async (req: Request, res: Response) => {
-  const { wid, pid } = req.params;
+  const { wid, pid } = req.params as { wid: string; pid: string };
   const uid = req.uid!;
 
   try {

@@ -12,7 +12,7 @@ import { readChannel } from "../../lib/firestoreReads";
 const router = Router();
 
 router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Response) => {
-  const { wid, pid } = req.params;
+  const { wid, pid } = req.params as { wid: string; pid: string };
   await withProject(req, res, wid, pid, {
     logTag: "[projects] Join failed for",
     errorMessage: "Failed to join project",
@@ -119,7 +119,7 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
 });
 
 router.post("/:wid/:pid/leave", strictRateLimit, async (req: Request, res: Response) => {
-  const { wid, pid } = req.params;
+  const { wid, pid } = req.params as { wid: string; pid: string };
   await withProject(req, res, wid, pid, {
     logTag: "[projects] Leave failed for",
     errorMessage: "Failed to leave project",
