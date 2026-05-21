@@ -195,7 +195,9 @@ Once Octogee runs fully on OpenClaw we lose the dogfooding signal that
 tells us what best-in-class steering even looks like, so a missed surface
 becomes *silent*. This step forces a look every cycle.
 
-**Cadence:** every canonical-roll cycle (skip beta-only previews).
+**Cadence:** every preview-to-current promotion cycle (skip preview
+refreshes — those just track upstream's pre-stable iterations on a
+slot that hasn't changed semantically).
 **Teeth:** purely advisory — you MUST produce + file the triage table, but
 findings never gate the roll. Recording-with-eyes-on is the protection;
 adoption is a separate, deliberate decision.
@@ -296,17 +298,17 @@ In the octogee monorepo, edit `cloudbuild-base.yaml`:
   new short SHAs from `git log v${NEW_TAG#v}..HEAD --oneline`).
 
 Then **sync the `bases:` block** in `infra/gateway/oc-build-matrix.yaml`
-— update the `label: canonical` entry's `version` + `forkSha` to the same
+— update the `label: current` entry's `version` + `forkSha` to the same
 values. ⚠ This is a hard obligation: `bases:` is the single source of
 truth for `scripts/rebuild-matrix-bases.sh` and the
-`gateway-base-rebuild.yml` workflow. The canonical `bases:` entry MUST
+`gateway-base-rebuild.yml` workflow. The `current` `bases:` entry MUST
 equal `cloudbuild.yaml`'s `_OPENCLAW_VERSION`/`_OPENCLAW_FORK_SHA` or the
 base that the gateway image FROMs won't get rebuilt. (`bases:` is a
 separate top-level key from `versions:`; `gateway-build.yml` only reads
 `versions:`.)
 
 ✓ Diff shows both substitution changes, the comment refresh, and the
-canonical `bases:` entry updated to match.
+`current` `bases:` entry updated to match.
 
 ### Step 12 — Bump `cloudbuild.yaml` (the GATEWAY config)
 
@@ -325,30 +327,64 @@ both.**
 ✓ `git diff cloudbuild-base.yaml cloudbuild.yaml` shows version + fork-SHA
 in both files. Don't commit yet.
 
-### Step 12b — Rotate the previous canonical into `oc-build-matrix.yaml`
+### Step 12b — Rotate slots in `oc-build-matrix.yaml`
 
-CI builds the gateway against every OC version listed in
-[`infra/gateway/oc-build-matrix.yaml`](../oc-build-matrix.yaml) on every
-push to main, alongside the new canonical. After a canonical bump, you
-want the **previous** canonical to live there as the known-good A/B
-baseline for at least one cycle, so a regression in the new canonical
-is one dropdown-pick away from a comparison gateway.
+We carry three rotating slots — `preview`, `current`, `previous` — in
+both blocks of `oc-build-matrix.yaml`. Which slot you're touching this
+cycle determines what you edit. CI builds the gateway against every
+entry in `versions:` on every push to main, alongside the version
+pinned in `cloudbuild.yaml`.
 
-Edit `infra/gateway/oc-build-matrix.yaml` — **both blocks**:
+| Slot | What it tracks | When to touch |
+|---|---|---|
+| `preview` | upstream's next stable in flight (whatever upstream cuts) | refresh in place each time upstream cuts a new pre-stable; empty between cycles |
+| `current` | the stable canonical (the cloudbuild.yaml `_OPENCLAW_VERSION` pin) | replaced when you promote a preview to GA |
+| `previous` | the just-replaced current (rollback safety net + A/B baseline) | set at promotion time; the old `previous` is dropped at the next promotion |
 
-- `versions:` — add an entry for the previous canonical (`PREV_TAG#v`)
-  with `label: baseline-known-good` and `required: true`. Drop the
-  canonical-before-previous if still there (one baseline is enough).
-  Keep beta entries (`required: false`) unless their base was deleted.
-- `bases:` — add the matching base entry for that same previous canonical
-  (`version` + `forkSha` + `config: cloudbuild-base.yaml`). Every
-  `versions:` entry needs a `bases:` entry or its base never rebuilds.
-  Conversely, drop the `bases:` entry for any version you removed from
-  `versions:`.
+`bases:` always carries entries for every slot that exists. `versions:`
+carries `preview` + `previous` (gateway-build.yml excludes the
+`current` version since the main `build` job already produces it as the
+bare `:<sha>` image — listing it here would double-build).
 
-✓ `git diff infra/gateway/oc-build-matrix.yaml` shows the previous
-canonical added to **both** `versions:` and `bases:`. Commit this with
-the cloudbuild bumps in Step 15 (one commit, three files).
+**This cycle is a preview refresh** (upstream cut a new pre-stable but
+`current` is unchanged):
+
+- `versions:` — replace the existing `preview` entry's `version` (and
+  if you re-cut the integration branch, you also bump `forkSha` in the
+  matching `bases:` row below). Keep the `previous` entry untouched.
+- `bases:` — replace the `preview` entry's `version` + `forkSha`.
+  `config: cloudbuild-base-beta.yaml` stays (no `:latest` clobber).
+  Keep the `current` + `previous` entries untouched.
+- ⚠ Skip Step 12 entirely — `cloudbuild.yaml` does NOT change on a
+  preview refresh. The whole point of `preview` is to test an upstream
+  pre-stable without disturbing the production `current`.
+
+**This cycle is a preview-to-current promotion** (upstream cut a stable
+we're adopting):
+
+- `versions:` — DROP the entry for the old `previous` (no longer
+  needed), CHANGE the old `previous` entry to track what was `current`
+  (its row already exists if `current` was rotated in correctly last
+  cycle — otherwise add it now), and DROP the entry for the new
+  `current` (which is what `preview` was — gateway-build.yml will
+  exclude it via the cloudbuild.yaml pin).
+- `bases:` — drop the old `previous` row; relabel the old `current` row
+  to `previous`; relabel the old `preview` row to `current` and switch
+  its `config:` from `cloudbuild-base-beta.yaml` to `cloudbuild-base.yaml`
+  (now that it gets `:latest`). Keep its `version` + `forkSha`.
+- Step 12 IS required this cycle — `cloudbuild.yaml` and
+  `cloudbuild-base.yaml` both bump to the promoted version + fork SHA.
+
+**This cycle is a fork-only refresh on the current slot** (we changed
+patches without bumping the upstream OC tag):
+
+- Bump `_OPENCLAW_FORK_SHA` in `cloudbuild.yaml` + `cloudbuild-base.yaml`
+  (Step 12 still required), bump the `forkSha` field in the `current`
+  row of `bases:`. `versions:` doesn't change (no version-string move).
+
+✓ `git diff infra/gateway/oc-build-matrix.yaml` shows only the slots
+you intended to move. Commit with the cloudbuild bumps (if any) in
+Step 15 (one commit).
 
 ### Step 13 — Build the base image (via the matrix-bases script)
 
@@ -368,17 +404,18 @@ scripts/rebuild-matrix-bases.sh            # dry-run: prints the plan
 scripts/rebuild-matrix-bases.sh --apply    # submits all base builds (async)
 ```
 
-This rebuilds **every** base in the `bases:` block (canonical +
-diag/beta) from the current checkout with the correct per-base config
-and fork SHA. Poll until the canonical one is `SUCCESS`:
+This rebuilds **every** base in the `bases:` block (`current` +
+`previous` + `preview`, plus any ad-hoc diag entries) from the current
+checkout with the correct per-base config and fork SHA. Poll until the
+`current` slot's base is `SUCCESS`:
 
 ```bash
 gcloud builds list --project=octogee --ongoing
 # or describe-loop the specific id from the script output
 ```
 
-✓ Canonical `octogee-gateway-base:${NEW_TAG#v}` is `SUCCESS` in AR
-(~10 min/base, parallel-async).
+✓ `octogee-gateway-base:${NEW_TAG#v}` (the `current` slot's version) is
+`SUCCESS` in AR (~10 min/base, parallel-async).
 
 > **The post-merge guardrail (don't double-kick).** Step 15's push
 > touches `cloudbuild-base.yaml` + `oc-build-matrix.yaml`, which
@@ -394,7 +431,7 @@ gcloud builds list --project=octogee --ongoing
 > **Fork-only bumps are safe too (freshness gate).** The base build
 > pushes a fork-qualified sentinel
 > `octogee-gateway-base:${NEW_TAG#v}-fork-<forkSha>` alongside the bare
-> `:${NEW_TAG#v}`. `gateway-build.yml`'s canonical poll-gate waits for
+> `:${NEW_TAG#v}`. `gateway-build.yml`'s `current`-slot poll-gate waits for
 > *that sentinel*, not the bare version tag — so a fork-SHA-only bump
 > (version unchanged → bare tag already exists, stale) still blocks the
 > gateway build until the new-fork base actually lands, instead of
@@ -506,13 +543,17 @@ mattermost-tools tool dispatch), now's when you confirm.
 
 ✓ Operator decides this passes.
 
-### Step 19 — Update the patch list
+### Step 19 — Update the patch list (only when the `current` slot changes)
 
-Edit the [Current patches](#current-patches) section of this file with
-any added/dropped/diagnostic-policy-flipped patches from this cycle.
+[Current patches](#current-patches) anchors to the `current` slot's
+SHAs, not the `preview` slot's. Edit it only when this cycle touched
+`current` — i.e. a preview-to-current promotion, a fork-only refresh
+on `current`, or an actual patch add/drop/policy-flip. **Skip on a pure
+preview refresh** (preview-slot SHAs live in `oc-build-matrix.yaml`'s
+preview entry; the integration branch on ceckert is authoritative).
 Commit the doc update direct to main (same flow as Step 15).
 
-✓ This file matches `git log ${NEW_TAG}..octogee/gateway-scaling-patches-${NEW_TAG}`.
+✓ When applicable: this file matches `git log ${NEW_TAG}..octogee/gateway-scaling-patches-${NEW_TAG}` for the `current` slot's `NEW_TAG`.
 
 ### Step 20 — PROD promote (separate decision, same path)
 
@@ -887,18 +928,20 @@ docker build -f infra/gateway/Dockerfile.base .
 
 ---
 
-## Preview / diagnostic A/B base builds
+## Ad-hoc A/B base builds (diagnostic experiments)
 
-Use this when you need a base image that must **not** touch the
-production canonical tags — beta previews (`<ver>-beta.N`), or a
-diagnostic build carrying an investigation-only patch (`<ver>-diag`)
-for an A/B against the known-good version.
+The `preview` slot (see Step 12b) handles the routine "upstream cut a
+pre-stable" case. This section covers the **ad-hoc diagnostic** case:
+you need an extra base image carrying an investigation-only patch
+(`<ver>-diag`) for an A/B against the `current` slot — something
+beyond what the three named slots cover.
 
-`cloudbuild-base-beta.yaml` (committed, tracked) is the production
-`cloudbuild-base.yaml` minus the `:latest` tag/push. It still pushes the
-version-specific tag, so the only difference is the prod base-latest
-pointer stays clean. Version labels can carry `-diag` / `-beta.N`
-suffixes freely (Cloud Build substitutions don't validate them, unlike
+Both this flow and the `preview` slot share `cloudbuild-base-beta.yaml`
+(committed, tracked) — the production `cloudbuild-base.yaml` minus the
+`:latest` tag/push. It still pushes the version-specific tag, so the
+only difference is the prod base-latest pointer stays clean. Version
+labels can carry `-diag` / `-beta.N` suffixes freely (Cloud Build
+substitutions don't validate them, unlike
 `scripts/build-pinned-gateway.sh`'s regex).
 
 The full A/B flow (real example: 5.12 vs 5.16-beta.6 lockup hunt):
