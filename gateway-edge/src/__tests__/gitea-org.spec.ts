@@ -27,7 +27,7 @@ describe("gateway-edge gitea client — per-workspace org", () => {
 
   it("giteaApi targets /repos/{org}/{path} — org is an explicit arg, not GITEA_ORG", async () => {
     fetchMock.mockResolvedValueOnce(res(200, { ok: true }));
-    const { giteaApi } = await import("../lib/gitea");
+    const { giteaApi } = await import("../lib/gitea.js");
     await giteaApi("acme", "workspace/contents/README.md");
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://gitea.test:3000/api/v1/repos/acme/workspace/contents/README.md",
@@ -36,7 +36,7 @@ describe("gateway-edge gitea client — per-workspace org", () => {
 
   it("giteaApiAs threads the caller token and the workspace org", async () => {
     fetchMock.mockResolvedValueOnce(res(200, {}));
-    const { giteaApiAs } = await import("../lib/gitea");
+    const { giteaApiAs } = await import("../lib/gitea.js");
     await giteaApiAs("cust-tok", "alice", "my-game/contents/x");
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://gitea.test:3000/api/v1/repos/alice/my-game/contents/x");
@@ -45,7 +45,7 @@ describe("gateway-edge gitea client — per-workspace org", () => {
 
   it("createProjectGiteaRepo posts to /orgs/{org}/repos", async () => {
     fetchMock.mockResolvedValueOnce(res(201, {}));
-    const { createProjectGiteaRepo } = await import("../lib/gitea");
+    const { createProjectGiteaRepo } = await import("../lib/gitea.js");
     await createProjectGiteaRepo("alice", "my-game", "desc", true);
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://gitea.test:3000/api/v1/orgs/alice/repos",
@@ -54,7 +54,7 @@ describe("gateway-edge gitea client — per-workspace org", () => {
 
   it("giteaDeleteRepo deletes {org}/{repo}", async () => {
     fetchMock.mockResolvedValueOnce(res(204));
-    const { giteaDeleteRepo } = await import("../lib/gitea");
+    const { giteaDeleteRepo } = await import("../lib/gitea.js");
     await giteaDeleteRepo("alice", "my-game");
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://gitea.test:3000/api/v1/repos/alice/my-game");
@@ -62,7 +62,7 @@ describe("gateway-edge gitea client — per-workspace org", () => {
   });
 
   it("does not export a GITEA_ORG constant (no shared-org fallback)", async () => {
-    const mod = await import("../lib/gitea");
+    const mod = await import("../lib/gitea.js");
     expect("GITEA_ORG" in mod).toBe(false);
   });
 });

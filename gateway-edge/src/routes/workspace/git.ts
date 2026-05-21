@@ -1,6 +1,6 @@
 import { Router } from "express";
 import * as path from "node:path";
-import { withFileTarget, type FileTarget } from "../../lib/fileTarget";
+import { withFileTarget, type FileTarget } from "../../lib/fileTarget.js";
 import {
   gitBranches,
   gitCheckout,
@@ -13,8 +13,8 @@ import {
   resolveProjectDir,
   type CommitAuthor,
   type WorkspaceGitError,
-} from "../../lib/workspace-git";
-import { logger } from "../../middleware/logging";
+} from "../../lib/workspace-git.js";
+import { logger } from "../../middleware/logging.js";
 
 const router = Router();
 

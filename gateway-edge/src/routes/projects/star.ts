@@ -1,8 +1,8 @@
 import { Router, Request, Response } from "express";
-import { db, FieldValue } from "../../lib/db";
-import { logger } from "../../middleware/logging";
-import { readProject } from "../../lib/firestoreReads";
-import { starDocId } from "../../../../shared/types/social";
+import { db, FieldValue } from "../../lib/db.js";
+import { logger } from "../../middleware/logging.js";
+import { readProject } from "../../lib/firestoreReads.js";
+import { starDocId } from "../../../../shared/types/social.js";
 
 const router = Router();
 

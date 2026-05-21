@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { storage } from "../../lib/db";
-import { validateFilePath } from "../../lib/path-validation";
-import { withFileTarget } from "../../lib/fileTarget";
-import { getManifest } from "../../lib/manifest";
-import { customerGiteaApi, getCustomerGiteaToken, HIDDEN, pathHasReservedOrHiddenSegment } from "./helpers";
+import { storage } from "../../lib/db.js";
+import { validateFilePath } from "../../lib/path-validation.js";
+import { withFileTarget } from "../../lib/fileTarget.js";
+import { getManifest } from "../../lib/manifest.js";
+import { customerGiteaApi, getCustomerGiteaToken, HIDDEN, pathHasReservedOrHiddenSegment } from "./helpers.js";
 
 const router = Router();
 

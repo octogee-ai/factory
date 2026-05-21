@@ -16,9 +16,9 @@ import request from "supertest";
 import {
   setupEmulatorTest,
   useAuthToken,
-} from "@shared/test-helpers/firestore-emulator";
-import { db } from "../lib/db";
-import { _setKmsClientForTesting, type KmsClient } from "../lib/kms";
+} from "@shared/test-helpers/firestore-emulator.js";
+import { db } from "../lib/db.js";
+import { _setKmsClientForTesting, type KmsClient } from "../lib/kms.js";
 
 const UID = "uid-encrypt-test";
 const PLAINTEXT_PASSWORD = "hunter2-imap-original-plaintext";
@@ -44,7 +44,7 @@ function deterministicMockKms(): KmsClient {
   };
 }
 
-const { createApp } = await import("../index");
+const { createApp } = await import("../index.js");
 
 setupEmulatorTest({
   env: {

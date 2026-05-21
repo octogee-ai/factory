@@ -1,13 +1,13 @@
 import { Router, Request, Response } from "express";
-import { strictRateLimit } from "../../middleware/security";
-import { db, FieldValue } from "../../lib/db";
-import { mmApi } from "../../lib/mattermost";
-import { giteaApi } from "../../lib/gitea";
-import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming";
-import { logger } from "../../middleware/logging";
-import { getWorkspaceMmContext } from "../../lib/mattermost-context";
-import { withProject } from "../../lib/withProject";
-import { readChannel } from "../../lib/firestoreReads";
+import { strictRateLimit } from "../../middleware/security.js";
+import { db, FieldValue } from "../../lib/db.js";
+import { mmApi } from "../../lib/mattermost.js";
+import { giteaApi } from "../../lib/gitea.js";
+import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
+import { logger } from "../../middleware/logging.js";
+import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
+import { withProject } from "../../lib/withProject.js";
+import { readChannel } from "../../lib/firestoreReads.js";
 
 const router = Router();
 
@@ -91,7 +91,7 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
     // spec §4.1 + G.O — atomic membership across the pair).
     if (activityChannelId && joinerMmUserId) {
       try {
-        const { syncActivityMembershipAdd } = await import("../../lib/activityPair");
+        const { syncActivityMembershipAdd } = await import("../../lib/activityPair.js");
         await syncActivityMembershipAdd(activityChannelId, joinerMmUserId);
       } catch (err) {
         logger.warn(`[projects] activity-channel join failed:`, { err });
@@ -162,7 +162,7 @@ router.post("/:wid/:pid/leave", strictRateLimit, async (req: Request, res: Respo
     // Mirror leave on the activity sibling.
     if (activityChannelId && leaverMmUserId) {
       try {
-        const { syncActivityMembershipRemove } = await import("../../lib/activityPair");
+        const { syncActivityMembershipRemove } = await import("../../lib/activityPair.js");
         await syncActivityMembershipRemove(activityChannelId, leaverMmUserId);
       } catch (err) {
         logger.warn(`[projects] activity-channel leave failed:`, { err });

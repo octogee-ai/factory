@@ -24,7 +24,7 @@ import {
   readMember,
   readProject,
   readWorkspace,
-} from '../lib/firestoreReads';
+} from '../lib/firestoreReads.js';
 
 beforeEach(() => {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];

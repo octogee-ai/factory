@@ -1,6 +1,6 @@
-import type { Agent, Channel, Member, Project, Workspace } from "@shared/types";
-import { USERNAME_RE } from "@shared/types/identity";
-import { db } from "./db";
+import type { Agent, Channel, Member, Project, Workspace } from "@shared/types/index.js";
+import { USERNAME_RE } from "@shared/types/identity.js";
+import { db } from "./db.js";
 
 type DocRef = FirebaseFirestore.DocumentReference;
 

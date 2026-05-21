@@ -1,11 +1,11 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth, requireInternalServiceAuth } from "../middleware/auth";
-import { db } from "../lib/db";
+import { requireAuth, requireInternalServiceAuth } from "../middleware/auth.js";
+import { db } from "../lib/db.js";
 import {
   writeSecret,
   addSecretVersionIfExists,
-} from "../../../scripts/lib/secret-manager";
-import { primaryWorkspaceSlug } from "../../../scripts/lib/workspace-slugs";
+} from "../../../scripts/lib/secret-manager.js";
+import { primaryWorkspaceSlug } from "../../../scripts/lib/workspace-slugs.js";
 import {
   byosubSecretName,
   validateCodexCredential,
@@ -13,8 +13,8 @@ import {
   gatewayDeviceAuthClient,
   byosubConnectionView,
   isSafeGatewayId,
-} from "../lib/byosub";
-import { isSafeAgentId } from "../../../scripts/lib/byosub-restore";
+} from "../lib/byosub.js";
+import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
 
 const router = Router();
 

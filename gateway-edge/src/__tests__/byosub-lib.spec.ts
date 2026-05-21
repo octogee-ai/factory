@@ -5,7 +5,7 @@ import {
   gatewayDeviceAuthClient,
   byosubConnectionView,
   isSafeGatewayId,
-} from "../lib/byosub";
+} from "../lib/byosub.js";
 
 describe("byosubSecretName", () => {
   it("is owner-scoped and matches Chunk A secretNameFor", () => {

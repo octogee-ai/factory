@@ -1,7 +1,7 @@
 import * as crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
-import { auth, db } from "../lib/db";
-import { logger } from "./logging";
+import { auth, db } from "../lib/db.js";
+import { logger } from "./logging.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace

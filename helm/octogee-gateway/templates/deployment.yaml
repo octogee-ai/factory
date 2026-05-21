@@ -254,98 +254,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 
-        {{- if .Values.chatProxy.enabled }}
-        - name: chat-proxy
-          image: "{{ .Values.chatProxy.image.repository }}:{{ .Values.chatProxy.image.tag | default .Values.imageTag }}"
-          ports:
-            - containerPort: {{ .Values.chatProxy.port }}
-              name: chat-proxy
-            # Dedicated Prometheus-scrape port. Exposed ONLY through
-            # the cluster-internal `chat-proxy` Service `metrics` port
-            # (ServiceMonitor target) — never Ingress-routed. PR-2d.
-            - containerPort: {{ .Values.chatProxy.metricsPort | default 9092 }}
-              name: cp-metrics
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
-          env:
-            - name: PORT
-              value: "{{ .Values.chatProxy.port }}"
-            - name: METRICS_PORT
-              value: "{{ .Values.chatProxy.metricsPort | default 9092 }}"
-            - name: MM_INTERNAL_URL
-              value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — chat-proxy forwards REST + WS data path here)" .Values.env.mmInternalUrl | quote }}
-            - name: CHAT_PROXY_PUBLIC_URL
-              value: {{ required "env.chatProxyPublicUrl is required (browser-facing chat-proxy URL returned by /api/auth/mattermost mint)" .Values.env.chatProxyPublicUrl | quote }}
-            - name: MM_PUBLIC_URL
-              value: {{ .Values.env.mmInternalUrl | quote }}
-            - name: FIREBASE_PROJECT
-              value: {{ .Values.env.firebaseProjectId | quote }}
-            - name: GCP_PROJECT_ID
-              value: {{ .Values.env.gcloudProject | quote }}
-            - name: OPENCLAW_GATEWAY_URL
-              value: "http://127.0.0.1:18789"
-            - name: GATEWAY_ID
-              value: {{ .Values.gatewayId | quote }}
-            - name: MM_ADMIN_PAT
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: admin_token
-                  optional: true
-            - name: OCTOGEE_APPROVAL_SIGNING_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: approval-signing
-                  key: secret
-            - name: OCTOGEE_ALLOWED_WS_ORIGINS
-              value: {{ .Values.env.allowedWsOrigins | default "" | quote }}
-            - name: K8S_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-            - name: GITEA_ORG
-              value: {{ .Values.env.githubOrg | default "octogee" | quote }}
-            {{- if .Values.env.giteaPublicBaseUrl }}
-            - name: GITEA_PUBLIC_BASE_URL
-              value: {{ .Values.env.giteaPublicBaseUrl | quote }}
-            {{- end }}
-            - name: GITEA_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: gitea-token
-                  key: token
-                  optional: true
-            # Builder-shell WS wiring (operator-profile only — chat-proxy
-            # still runs on cattle pods for MM/OpenClaw, but
-            # attachBuilderShellRoute() bails when these envs are unset).
-            {{- if eq .Values.profile "operator" }}
-            - name: GATEWAY_EDGE_INTERNAL_URL
-              value: "http://localhost:{{ .Values.gatewayEdge.port }}"
-            - name: INTERNAL_SERVICE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: internal-service-key
-                  key: key
-            {{- end }}
-          resources:
-            {{- toYaml .Values.chatProxy.resources | nindent 12 }}
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: {{ .Values.chatProxy.port }}
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: {{ .Values.chatProxy.port }}
-            initialDelaySeconds: 10
-            periodSeconds: 30
-        {{- end }}
-
         {{- if .Values.gatewayEdge.enabled }}
+        # chat-proxy folded in — one container, one port (3001) serves the
+        # API, the chat WS surface, and /metrics (POST-BENDER-CLEANUP-SPEC §2.6).
         - name: gateway-edge
           image: "{{ .Values.gatewayEdge.image.repository }}:{{ .Values.gatewayEdge.image.tag | default .Values.imageTag }}"
           ports:
@@ -368,6 +279,50 @@ spec:
               value: "http://127.0.0.1:18789"
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
+            - name: MM_INTERNAL_URL
+              value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — chat-proxy forwards REST + WS data path here)" .Values.env.mmInternalUrl | quote }}
+            - name: CHAT_PROXY_PUBLIC_URL
+              value: {{ required "env.chatProxyPublicUrl is required (browser-facing chat-proxy URL returned by /api/auth/mattermost mint)" .Values.env.chatProxyPublicUrl | quote }}
+            - name: MM_PUBLIC_URL
+              value: {{ .Values.env.mmInternalUrl | quote }}
+            - name: FIREBASE_PROJECT
+              value: {{ .Values.env.firebaseProjectId | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.env.gcloudProject | quote }}
+            - name: OCTOGEE_ALLOWED_WS_ORIGINS
+              value: {{ .Values.env.allowedWsOrigins | default "" | quote }}
+            - name: GITEA_ORG
+              value: {{ .Values.env.githubOrg | default "octogee" | quote }}
+            {{- if .Values.env.giteaPublicBaseUrl }}
+            - name: GITEA_PUBLIC_BASE_URL
+              value: {{ .Values.env.giteaPublicBaseUrl | quote }}
+            {{- end }}
+            - name: MM_ADMIN_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: admin_token
+                  optional: true
+            - name: OCTOGEE_APPROVAL_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: approval-signing
+                  key: secret
+            - name: GITEA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-token
+                  key: token
+                  optional: true
+            {{- if eq .Values.profile "operator" }}
+            - name: GATEWAY_EDGE_INTERNAL_URL
+              value: "http://localhost:{{ .Values.gatewayEdge.port }}"
+            - name: INTERNAL_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: internal-service-key
+                  key: key
+            {{- end }}
             {{- range $key, $val := .Values.gatewayEdge.env }}
             {{- if $val }}
             - name: {{ $key }}

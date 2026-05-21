@@ -2,12 +2,12 @@ import request from "supertest";
 import express from "express";
 import { describe, expect, it } from "vitest";
 
-import openclawRouter from "../routes/openclaw";
-import { db } from "../lib/db";
+import openclawRouter from "../routes/openclaw.js";
+import { db } from "../lib/db.js";
 import {
   getIdTokenForUid,
   setupEmulatorTest,
-} from "@shared/test-helpers/firestore-emulator";
+} from "@shared/test-helpers/firestore-emulator.js";
 
 setupEmulatorTest({
   env: { CHAT_PROXY_URL: "https://chat-proxy.test.octogee.com" },

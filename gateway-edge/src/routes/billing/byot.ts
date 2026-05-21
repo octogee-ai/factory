@@ -1,16 +1,16 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth } from "../../middleware/auth";
-import { logger } from "../../middleware/logging";
-import { db, FieldValue } from "../../lib/db";
+import { requireAuth } from "../../middleware/auth.js";
+import { logger } from "../../middleware/logging.js";
+import { db, FieldValue } from "../../lib/db.js";
 import {
   validateProviderKey,
   isSupportedProvider,
   type Provider,
-} from "../../billing/provider-key-format";
-import { probeProviderKey } from "../../billing/provider-probe";
-import { writeSecret, archiveSecret } from "../../../../scripts/lib/secret-manager";
-import { primaryWorkspaceSlug } from "../../../../scripts/lib/workspace-slugs";
-import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers";
+} from "../../billing/provider-key-format.js";
+import { probeProviderKey } from "../../billing/provider-probe.js";
+import { writeSecret, archiveSecret } from "../../../../scripts/lib/secret-manager.js";
+import { primaryWorkspaceSlug } from "../../../../scripts/lib/workspace-slugs.js";
+import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers.js";
 
 const router = Router();
 

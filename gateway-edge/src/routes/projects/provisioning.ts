@@ -1,6 +1,6 @@
-import { createProjectGiteaRepo, giteaWriteFile } from "../../lib/gitea";
-import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming";
-import { renderReadmeTemplate } from "@shared/templates/project-readmes";
+import { createProjectGiteaRepo, giteaWriteFile } from "../../lib/gitea.js";
+import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
+import { renderReadmeTemplate } from "@shared/templates/project-readmes/index.js";
 
 export async function ensureProjectGiteaRepo(input: {
   workspaceId: string;

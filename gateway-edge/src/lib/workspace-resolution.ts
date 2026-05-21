@@ -1,4 +1,4 @@
-import { readWorkspace } from "./firestoreReads";
+import { readWorkspace } from "./firestoreReads.js";
 
 export async function resolveWorkspaceUid(slug: string): Promise<string | null> {
   const workspace = await readWorkspace(slug);

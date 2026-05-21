@@ -7,8 +7,8 @@ import {
   getAdminDb,
   requireEmulator,
   resetEmulator,
-} from '../../../shared/test-helpers/firestore-emulator';
-import { TICKETS_COLLECTION } from './helpers/collections';
+} from '../../../../shared/test-helpers/firestore-emulator.js';
+import { TICKETS_COLLECTION } from './helpers/collections.js';
 
 // What this spec pins
 // ───────────────────

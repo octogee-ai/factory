@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { logger } from "./logging";
+import { logger } from "./logging.js";
 
 const STATUS_MAP: Record<string, number> = {
   Unauthenticated: 401,

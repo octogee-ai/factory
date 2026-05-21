@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { storage } from "../../lib/db";
-import { updateManifest } from "../../lib/manifest";
-import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming";
+import { storage } from "../../lib/db.js";
+import { updateManifest } from "../../lib/manifest.js";
+import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
 import {
   customerGiteaApi,
   ensureSlug,
@@ -10,7 +10,7 @@ import {
   getMimeType,
   isTextFile,
   validateWorkspacePath,
-} from "./helpers";
+} from "./helpers.js";
 
 const router = Router();
 

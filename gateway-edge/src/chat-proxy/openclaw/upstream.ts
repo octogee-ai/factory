@@ -1,20 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
-import { OPENCLAW_PROTOCOL_VERSION } from "../../../shared/types/openclaw-wire.js";
+import { OPENCLAW_PROTOCOL_VERSION } from "../../../../shared/types/openclaw-wire.js";
 import {
   startConnectChallengeTracker,
   waitForWsOpen,
   sendWsRequest,
-} from "../../../shared/types/openclaw-wire-core.js";
+} from "../../../../shared/types/openclaw-wire-core.js";
 import {
   signConnectDevice,
   type DeviceIdentity,
-} from "../../../shared/types/device-identity.js";
+} from "../../../../shared/types/device-identity.js";
 
 export {
   OpenclawWireError,
   type OpenclawWireErrorCode,
-} from "../../../shared/types/openclaw-wire-core.js";
+} from "../../../../shared/types/openclaw-wire-core.js";
 
 // Wire-surface depended on by Phase 7 (ACTIVITY-STREAM-SPEC §Phase 7
 // R7-C): the `session.message` / `sessions.changed` payload spread

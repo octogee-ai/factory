@@ -2,7 +2,7 @@ import express, { Router } from "express";
 import request from "supertest";
 import { describe, it, expect } from "vitest";
 
-import { mountApi } from "../routes/mount-api";
+import { mountApi } from "../routes/mount-api.js";
 
 describe("mountApi — fleet path-affinity seam (FLEET-API-ROUTING-SPEC)", () => {
   it("mounts a router at /api/<p> AND /api/g/:gatewayId/<p>", async () => {

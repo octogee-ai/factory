@@ -1,5 +1,5 @@
-import { db } from "./db";
-import { readAgent, readChannel, readWorkspace } from "./firestoreReads";
+import { db } from "./db.js";
+import { readAgent, readChannel, readWorkspace } from "./firestoreReads.js";
 
 export interface WorkspaceMmContext {
   ownerUid: string;

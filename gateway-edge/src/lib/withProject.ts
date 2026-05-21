@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
-import type { Project } from "@shared/types";
-import { db } from "./db";
-import { readProject } from "./firestoreReads";
-import { logger } from "../middleware/logging";
-import { isValidProjectId, USERNAME_RE } from "@shared/types/identity";
+import type { Project } from "@shared/types/index.js";
+import { db } from "./db.js";
+import { readProject } from "./firestoreReads.js";
+import { logger } from "../middleware/logging.js";
+import { isValidProjectId, USERNAME_RE } from "@shared/types/identity.js";
 
 export type ProjectCtx = {
   projectRef: FirebaseFirestore.DocumentReference;

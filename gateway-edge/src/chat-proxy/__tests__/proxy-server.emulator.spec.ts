@@ -6,7 +6,7 @@ import {
   getIdTokenForUid,
   requireEmulator,
   resetEmulator,
-} from '../../../shared/test-helpers/firestore-emulator';
+} from '../../../../shared/test-helpers/firestore-emulator.js';
 
 process.env.NODE_ENV = 'test';
 process.env.FIREBASE_PROJECT ??= 'octogee-test';

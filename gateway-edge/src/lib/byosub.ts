@@ -1,4 +1,4 @@
-import { coachAgentId } from "../../../scripts/lib/byosub-onboarding";
+import { coachAgentId } from "../../../scripts/lib/byosub-onboarding.js";
 
 export { coachAgentId };
 

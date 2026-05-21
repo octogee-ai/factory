@@ -1,4 +1,4 @@
-import type { WorkspaceVibe } from './display-names';
+import type { WorkspaceVibe } from './display-names.js';
 
 export type WorkspaceVisibility = 'public' | 'private' | 'unlisted';
 

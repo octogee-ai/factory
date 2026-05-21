@@ -1,10 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth } from "../middleware/auth";
-import { logger } from "../middleware/logging";
-import { db, FieldValue } from "../lib/db";
-import { GOOGLE_SCOPES, MICROSOFT_SCOPES } from "../lib/integrations";
-import { encryptSecret } from "../lib/kms";
-import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validation";
+import { requireAuth } from "../middleware/auth.js";
+import { logger } from "../middleware/logging.js";
+import { db, FieldValue } from "../lib/db.js";
+import { GOOGLE_SCOPES, MICROSOFT_SCOPES } from "../lib/integrations.js";
+import { encryptSecret } from "../lib/kms.js";
+import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validation.js";
 
 // `users/{uid}/secrets/{provider}` is Admin-SDK-only by Firestore rule
 // (site/firestore.rules:62 — `allow read, write: if false`). But that

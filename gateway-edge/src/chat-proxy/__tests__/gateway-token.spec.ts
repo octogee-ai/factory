@@ -4,8 +4,8 @@ import {
   GatewayTokenError,
   fetchGatewayToken,
   invalidateGatewayToken,
-} from "../openclaw/gateway-token";
-import { GATEWAY_TOKEN_PLACEHOLDER } from "../openclaw/gateway-token-constants";
+} from "../openclaw/gateway-token.js";
+import { GATEWAY_TOKEN_PLACEHOLDER } from "../openclaw/gateway-token-constants.js";
 
  
 function makeClient(result: unknown, throws?: Error): any {

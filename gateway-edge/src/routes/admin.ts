@@ -1,18 +1,18 @@
 import { Router } from "express";
-import { requireAdmin } from "../middleware/auth";
-import { logger } from "../middleware/logging";
-import { db, FieldValue } from "../lib/db";
-import { updateCSIForUser } from "../csi/updater";
-import { getWorkspaceMmContext } from "../lib/mattermost-context";
-import { workspaceSlugsForUser } from "../../../scripts/lib/workspace-slugs";
-import { provisionGatewayAuthSecret } from "../../../scripts/lib/secret-manager";
-import { listGatewayBuilds } from "../../../scripts/lib/artifact-registry";
-import { addAdminFleetRoutes } from "../../../scripts/lib/admin-fleet-router";
+import { requireAdmin } from "../middleware/auth.js";
+import { logger } from "../middleware/logging.js";
+import { db, FieldValue } from "../lib/db.js";
+import { updateCSIForUser } from "../csi/updater.js";
+import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
+import { workspaceSlugsForUser } from "../../../scripts/lib/workspace-slugs.js";
+import { provisionGatewayAuthSecret } from "../../../scripts/lib/secret-manager.js";
+import { listGatewayBuilds } from "../../../scripts/lib/artifact-registry.js";
+import { addAdminFleetRoutes } from "../../../scripts/lib/admin-fleet-router.js";
 import {
   addAdminCustomerRoutes,
   type CsiRefreshResult,
-} from "../../../scripts/lib/admin-customer-router";
-import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "../../../scripts/lib/firebase-auth-helpers";
+} from "../../../scripts/lib/admin-customer-router.js";
+import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "../../../scripts/lib/firebase-auth-helpers.js";
 
 const router = Router();
 router.use(requireAdmin);

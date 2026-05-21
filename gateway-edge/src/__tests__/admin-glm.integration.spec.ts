@@ -259,7 +259,7 @@ vi.mock("../middleware/auth", () => ({
 }));
 
 import express from "express";
-import adminRouter from "../routes/admin";
+import adminRouter from "../routes/admin.js";
 
 function buildApp() {
   const app = express();
@@ -1445,14 +1445,17 @@ describe("GET /api/admin/builds — Artifact Registry SHA picker", () => {
     expect(builderCalls).toHaveLength(0);
   });
 
-  it("accepts the chat-proxy and gateway-edge services", async () => {
+  it("accepts the gateway-edge service; rejects the retired chat-proxy image", async () => {
     nextBuildsResult = [];
     const app = buildApp();
+    // chat-proxy folded into gateway-edge (POST-BENDER-CLEANUP-SPEC §2.6)
+    // — octogee-chat-proxy is no longer a build target, so it's off the
+    // allowlist and rejected with 400.
     const a = await request(app).get("/api/admin/builds?service=octogee-chat-proxy");
     const b = await request(app).get("/api/admin/builds?service=gateway-edge");
-    expect(a.status).toBe(200);
+    expect(a.status).toBe(400);
     expect(b.status).toBe(200);
-    expect(builderCalls.map((c) => c.service)).toEqual(["octogee-chat-proxy", "gateway-edge"]);
+    expect(builderCalls.map((c) => c.service)).toEqual(["gateway-edge"]);
   });
 
   it("clamps limit to a sane maximum", async () => {

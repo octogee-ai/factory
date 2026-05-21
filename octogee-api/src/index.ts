@@ -20,52 +20,52 @@
 import express, { Request, Response } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 
-import { corsMiddleware } from "../../gateway-edge/src/middleware/cors";
-import { requestLogger, logger } from "../../gateway-edge/src/middleware/logging";
-import { errorHandler } from "../../gateway-edge/src/middleware/errors";
-import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middleware/security";
+import { corsMiddleware } from "../../gateway-edge/src/middleware/cors.js";
+import { requestLogger, logger } from "../../gateway-edge/src/middleware/logging.js";
+import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
+import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middleware/security.js";
 
 // ── Cluster routes (43 of 46) ────────────────────────────────────────────
-import mattermostRoutes from "../../gateway-edge/src/routes/mattermost";
-import openclawRoutes from "../../gateway-edge/src/routes/openclaw";
-import billingRoutes from "../../gateway-edge/src/routes/billing";
-import adminRoutes from "../../gateway-edge/src/routes/admin";
-import inviteRoutes from "../../gateway-edge/src/routes/invites";
-import integrationRoutes from "../../gateway-edge/src/routes/integrations";
-import byosubRoutes from "../../gateway-edge/src/routes/byosub";
-import discordRoutes from "../../gateway-edge/src/routes/discord";
-import notificationRoutes from "../../gateway-edge/src/routes/notifications";
-import sharingRoutes from "../../gateway-edge/src/routes/sharing";
-import entitiesRoutes from "../../gateway-edge/src/routes/entities";
-import profileRoutes from "../../gateway-edge/src/routes/profile";
-import onboardingRoutes from "../../gateway-edge/src/routes/onboarding";
-import postsRoutes from "../../gateway-edge/src/routes/posts";
-import agentRoutes from "../../gateway-edge/src/routes/agents";
-import builderGatewaysRoutes from "../../gateway-edge/src/routes/builder/gateways";
+import mattermostRoutes from "../../gateway-edge/src/routes/mattermost.js";
+import openclawRoutes from "../../gateway-edge/src/routes/openclaw.js";
+import billingRoutes from "../../gateway-edge/src/routes/billing/index.js";
+import adminRoutes from "../../gateway-edge/src/routes/admin.js";
+import inviteRoutes from "../../gateway-edge/src/routes/invites.js";
+import integrationRoutes from "../../gateway-edge/src/routes/integrations.js";
+import byosubRoutes from "../../gateway-edge/src/routes/byosub.js";
+import discordRoutes from "../../gateway-edge/src/routes/discord.js";
+import notificationRoutes from "../../gateway-edge/src/routes/notifications.js";
+import sharingRoutes from "../../gateway-edge/src/routes/sharing.js";
+import entitiesRoutes from "../../gateway-edge/src/routes/entities.js";
+import profileRoutes from "../../gateway-edge/src/routes/profile.js";
+import onboardingRoutes from "../../gateway-edge/src/routes/onboarding.js";
+import postsRoutes from "../../gateway-edge/src/routes/posts.js";
+import agentRoutes from "../../gateway-edge/src/routes/agents.js";
+import builderGatewaysRoutes from "../../gateway-edge/src/routes/builder/gateways.js";
 
 // workspace/* sub-routers mounted individually so locality `git` is skipped.
-import workspaceDisplayNameRoutes from "../../gateway-edge/src/routes/workspace/display-name";
-import workspaceFilesRoutes from "../../gateway-edge/src/routes/workspace/files";
-import workspaceUploadRoutes from "../../gateway-edge/src/routes/workspace/upload";
-import workspaceDeleteBlobRoutes from "../../gateway-edge/src/routes/workspace/delete-blob";
-import workspaceExtractZipRoutes from "../../gateway-edge/src/routes/workspace/extract-zip";
-import workspaceImportRepoRoutes from "../../gateway-edge/src/routes/workspace/import-repo";
-import { requireAuth } from "../../gateway-edge/src/middleware/auth";
+import workspaceDisplayNameRoutes from "../../gateway-edge/src/routes/workspace/display-name.js";
+import workspaceFilesRoutes from "../../gateway-edge/src/routes/workspace/files.js";
+import workspaceUploadRoutes from "../../gateway-edge/src/routes/workspace/upload.js";
+import workspaceDeleteBlobRoutes from "../../gateway-edge/src/routes/workspace/delete-blob.js";
+import workspaceExtractZipRoutes from "../../gateway-edge/src/routes/workspace/extract-zip.js";
+import workspaceImportRepoRoutes from "../../gateway-edge/src/routes/workspace/import-repo.js";
+import { requireAuth } from "../../gateway-edge/src/middleware/auth.js";
 
 // projects/* sub-routers mounted individually so locality `deploy-preview` is skipped.
-import projectsReadmeRoutes from "../../gateway-edge/src/routes/projects/readme";
-import projectsCreateRoutes from "../../gateway-edge/src/routes/projects/create";
-import projectsRetryRoutes from "../../gateway-edge/src/routes/projects/retry";
-import projectsJoinLeaveRoutes from "../../gateway-edge/src/routes/projects/join-leave";
-import projectsStarRoutes from "../../gateway-edge/src/routes/projects/star";
-import projectsMembersRoutes from "../../gateway-edge/src/routes/projects/members";
-import projectsDeleteRoutes from "../../gateway-edge/src/routes/projects/delete";
+import projectsReadmeRoutes from "../../gateway-edge/src/routes/projects/readme.js";
+import projectsCreateRoutes from "../../gateway-edge/src/routes/projects/create.js";
+import projectsRetryRoutes from "../../gateway-edge/src/routes/projects/retry.js";
+import projectsJoinLeaveRoutes from "../../gateway-edge/src/routes/projects/join-leave.js";
+import projectsStarRoutes from "../../gateway-edge/src/routes/projects/star.js";
+import projectsMembersRoutes from "../../gateway-edge/src/routes/projects/members.js";
+import projectsDeleteRoutes from "../../gateway-edge/src/routes/projects/delete.js";
 
 // Internal (service-to-service, requireInternalServiceAuth).
-import internalNotificationRoutes from "../../gateway-edge/src/routes/internal/notifications";
-import internalEngagementRoutes from "../../gateway-edge/src/routes/internal/engagement";
-import internalCSIRoutes from "../../gateway-edge/src/routes/internal/csi";
-import internalBuilderShellRoutes from "../../gateway-edge/src/routes/internal/builder-shell";
+import internalNotificationRoutes from "../../gateway-edge/src/routes/internal/notifications.js";
+import internalEngagementRoutes from "../../gateway-edge/src/routes/internal/engagement.js";
+import internalCSIRoutes from "../../gateway-edge/src/routes/internal/csi.js";
+import internalBuilderShellRoutes from "../../gateway-edge/src/routes/internal/builder-shell.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 

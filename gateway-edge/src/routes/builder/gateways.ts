@@ -1,18 +1,18 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth } from "../../middleware/auth";
-import { db } from "../../lib/db";
-import { logger } from "../../middleware/logging";
+import { requireAuth } from "../../middleware/auth.js";
+import { db } from "../../lib/db.js";
+import { logger } from "../../middleware/logging.js";
 import {
   mintTicket,
   HourlyMintQuotaExceededError,
   TicketCapExceededError,
-} from "../../lib/builder-shell-tickets";
+} from "../../lib/builder-shell-tickets.js";
 import {
   BuilderGatewayListEntry,
   BuilderGatewaysMeResponse,
   BuilderShellTicketMintResponse,
   BUILDER_SHELL_WS_PATH_PREFIX,
-} from "../../../../shared/types/builder-shell";
+} from "../../../../shared/types/builder-shell.js";
 
 const router = Router();
 router.use(requireAuth);

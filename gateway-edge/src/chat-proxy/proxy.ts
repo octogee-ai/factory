@@ -2,10 +2,10 @@ import http from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
-import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from "prom-client";
+import { Registry, Counter, Gauge, Histogram } from "prom-client";
 import { startMetricsBaseline } from "./openclaw/metrics-baseline.js";
-import { generateIdentity, type DeviceIdentity } from "../../shared/types/device-identity.js";
-import { WsUpgradeRouter } from "../../shared/ws/upgrade-router.js";
+import { generateIdentity, type DeviceIdentity } from "../../../shared/types/device-identity.js";
+import { WsUpgradeRouter } from "../../../shared/ws/upgrade-router.js";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
 import {
   resolveGatewayUrl,
@@ -42,24 +42,23 @@ import {
   bridgeHealthBody,
 } from "./openclaw/bridge-boot-status.js";
 
-const PORT = parseInt(process.env.PORT || "8080", 10);
-// Dedicated Prometheus-scrape port. ClusterIP-only — never Ingress-routed.
-// See createMetricsServer() + PR-2d for the rationale.
-const METRICS_PORT = parseInt(process.env.METRICS_PORT || "9092", 10);
-const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL;
-const CHAT_PROXY_PUBLIC_URL = process.env.CHAT_PROXY_PUBLIC_URL;
+// CHAT_PROXY_PORT not PORT — shares a process with gateway-edge (PORT=3001).
+// Guarded by NODE_ENV: process.exit at module load would kill the test
+// runner now that gateway-edge side-effect-imports this file.
+if (process.env.NODE_ENV !== "test") {
+  if (!process.env.MM_INTERNAL_URL) {
+    console.error("FATAL: MM_INTERNAL_URL is required (in-cluster Mattermost URL, e.g. http://mattermost.<ns>.svc.cluster.local:8065)");
+    process.exit(1);
+  }
+  if (!process.env.CHAT_PROXY_PUBLIC_URL) {
+    console.error("FATAL: CHAT_PROXY_PUBLIC_URL is required (browser-facing chat-proxy URL returned by the credential mint endpoint, e.g. https://chat.octogee.com)");
+    process.exit(1);
+  }
+}
+const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid";
+const CHAT_PROXY_PUBLIC_URL = process.env.CHAT_PROXY_PUBLIC_URL || "https://chat-test.invalid";
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
-
-if (!MM_INTERNAL_URL) {
-  console.error("FATAL: MM_INTERNAL_URL is required (in-cluster Mattermost URL, e.g. http://mattermost.<ns>.svc.cluster.local:8065)");
-  process.exit(1);
-}
-
-if (!CHAT_PROXY_PUBLIC_URL) {
-  console.error("FATAL: CHAT_PROXY_PUBLIC_URL is required (browser-facing chat-proxy URL returned by the credential mint endpoint, e.g. https://chat.octogee.com)");
-  process.exit(1);
-}
 
 const MM_PUBLIC_URL = MM_INTERNAL_URL;
 
@@ -179,8 +178,13 @@ async function probeGatewayReady(
   }
 }
 
-const metricsRegistry = new Registry();
-collectDefaultMetrics({ register: metricsRegistry });
+// Exported so gateway-edge's /metrics endpoint can merge chat-proxy's
+// metrics into the single registry it serves on port 3001 — no separate
+// metrics listener/port after the fold. Default process metrics are
+// collected once by gateway-edge's registry; collecting them here too
+// would duplicate-name on Registry.merge.
+export const chatProxyMetricsRegistry = new Registry();
+const metricsRegistry = chatProxyMetricsRegistry;
 
 const mintRequestsTotal = new Counter({
   name: 'chat_proxy_mint_requests_total',
@@ -565,7 +569,24 @@ export function setCors(req: http.IncomingMessage, res: http.ServerResponse): vo
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-async function handleRequest(
+/**
+ * Paths the chat-proxy HTTP handler owns. The gateway-edge single-server
+ * dispatcher (gateway-edge/src/index.ts) routes these to
+ * chatProxyHandleRequest and everything else to Express. Checked against
+ * the gateway-prefix-stripped path. `/health` + `/api/health` + `/metrics`
+ * are deliberately NOT here — gateway-edge owns those.
+ */
+export function chatProxyOwnsHttpPath(strippedPath: string): boolean {
+  return (
+    strippedPath === "/healthz" ||
+    strippedPath === "/healthz/bridge" ||
+    strippedPath === "/api/auth/mattermost" ||
+    strippedPath === "/api/openclaw/approval/callback" ||
+    strippedPath.startsWith("/api/v4/")
+  );
+}
+
+export async function chatProxyHandleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse
 ): Promise<void> {
@@ -946,42 +967,7 @@ export function gatewayHealthUrl(
   return `${base}/healthz`;
 }
 
-/**
- * Dedicated HTTP listener for Prometheus scrape. Bound to METRICS_PORT
- * (default 9092) and exposed ONLY via the cluster-internal `chat-proxy`
- * Service `metrics` port — no Ingress route. Serves /metrics; everything
- * else returns 404. Splitting the metrics endpoint off the main
- * public-Ingress port (8080) prevents `chat.octogee.com/metrics` from
- * exposing counter cardinality + the default prom-client process
- * telemetry (CPU, memory, GC, file descriptors).
- */
-export function createMetricsServer() {
-  return http.createServer(async (req, res) => {
-    // Normalize like the main handler does so /metrics?foo=bar still
-    // matches. Prom-client doesn't use query strings but scrapers can
-    // append them (e.g. for cache-busting); be lenient.
-    const urlPath = (req.url || "").split("?")[0];
-    if (urlPath === "/metrics") {
-      // Prom-client convention is GET-only. Reject other methods with
-      // 405 — a misconfigured client should hear about it, not get
-      // counter contents back regardless of verb.
-      if (req.method !== "GET" && req.method !== "HEAD") {
-        res.writeHead(405, { "Content-Type": "text/plain", Allow: "GET, HEAD" });
-        res.end("method not allowed");
-        return;
-      }
-      const metrics = await metricsRegistry.metrics();
-      res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
-      res.end(metrics);
-      return;
-    }
-    res.writeHead(404, { "Content-Type": "text/plain" });
-    res.end("not found");
-  });
-}
-
-export function createServer() {
-  const server = http.createServer(handleRequest);
+export function attachChatProxyWsUpgrade(server: http.Server) {
   const wss = new WebSocketServer({ noServer: true });
   const mmWss = new WebSocketServer({ noServer: true });
 
@@ -1035,13 +1021,12 @@ export function createServer() {
   // listener. The router was created above with no routes — only
   // builder-shell adds one in startup.
   (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
-  return server;
 }
 
 /** Wire the builder-shell upgrade route onto the chat-proxy HTTP
  *  server. Called from startup (not from createServer) so tests can
  *  build a server without dragging in gateway-edge/internal-key env. */
-async function attachBuilderShellRoute(server: ReturnType<typeof createServer>): Promise<void> {
+export async function attachBuilderShellRoute(server: http.Server): Promise<void> {
   const gatewayEdgeUrl = process.env.GATEWAY_EDGE_INTERNAL_URL;
   const internalKey = process.env.INTERNAL_SERVICE_KEY;
   const namespace = process.env.K8S_NAMESPACE || "octogee";
@@ -1119,36 +1104,17 @@ async function buildEditDiffFetcher() {
   });
 }
 
-if (process.env.NODE_ENV !== "test") {
+/**
+ * Boot the chat-proxy background work — metrics-baseline poller + the
+ * MM activity bridge. The HTTP+WS surface itself is attached to
+ * gateway-edge's single server (attachChatProxyWsUpgrade + the
+ * chatProxyHandleRequest dispatch in gateway-edge/src/index.ts); this
+ * function only starts the work that has no inbound socket.
+ */
+export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
-  const server = createServer();
-  attachBuilderShellRoute(server).catch((err) => {
-    // Don't crash chat-proxy on builder-shell wiring failure — MM +
-    // OpenClaw still serve. Log loudly so ops sees the disable.
-    console.error(
-      "[builder-shell] route attach failed — WS route disabled:",
-      err instanceof Error ? err.message : err,
-    );
-  });
-  // Dedicated metrics listener — ClusterIP-only via the chat-proxy
-  // Service's `metrics` port, never reached from the public Ingress.
-  const metricsServer = createMetricsServer();
-  metricsServer.listen(METRICS_PORT, () => {
-    // eslint-disable-next-line no-console -- boot log
-    console.log(`[chat-proxy] metrics listener on :${METRICS_PORT}`);
-  });
-  server.listen(PORT, () => {
-    console.log(
-      `[chat-proxy] boot sha=${process.env.BUILD_SHA ?? "unknown"}` +
-        ` oc=${process.env.OPENCLAW_VERSION ?? "n/a"}` +
-        ` fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"}` +
-        ` node=${process.version} ts=${new Date().toISOString()}`,
-    );
-    console.log(`[chat-proxy] listening on :${PORT}`);
-    console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
-    console.log(`[chat-proxy] chat-proxy public URL (browser-facing, returned by mint): ${CHAT_PROXY_PUBLIC_URL}`);
-    console.log(`[chat-proxy] Firebase project: ${FIREBASE_PROJECT}`);
-  });
+  console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
+  console.log(`[chat-proxy] public URL (browser-facing, returned by mint): ${CHAT_PROXY_PUBLIC_URL}`);
 
   const gatewayMetricsUrl = process.env.OPENCLAW_GATEWAY_METRICS_URL
     ?? "http://127.0.0.1:18789/metrics";

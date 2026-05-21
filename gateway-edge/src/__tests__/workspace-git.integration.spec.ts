@@ -67,7 +67,7 @@ vi.mock("../lib/stripe", () => ({
   getWebhookSecret: () => "whsec_test",
 }));
 
-import { createApp } from "../index";
+import { createApp } from "../index.js";
 
 function gitInit(dir: string): void {
   spawnSync("git", ["init", "--initial-branch=main"], { cwd: dir });

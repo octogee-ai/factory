@@ -15,7 +15,7 @@ import {
   parseLog,
   parsePorcelain,
   resolveCustomerDir,
-} from "../lib/workspace-git";
+} from "../lib/workspace-git.js";
 
 const NUL = String.fromCharCode(0x00);
 const RS = String.fromCharCode(0x1e);

@@ -120,7 +120,7 @@ vi.mock("../middleware/logging", () => ({
 }));
 
 import express from "express";
-import adminRouter from "../routes/admin";
+import adminRouter from "../routes/admin.js";
 
 function buildApp() {
   const app = express();

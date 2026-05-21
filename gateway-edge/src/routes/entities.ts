@@ -9,15 +9,15 @@
  * Loop per_page=200 until empty once channels exceed that cap.
  */
 import { Router, Request, Response } from "express";
-import { requireAuth } from "../middleware/auth";
-import { db, FieldValue } from "../lib/db";
-import { mmApi } from "../lib/mattermost";
-import { resolveWorkspaceUid } from "../lib/workspace-resolution";
-import { decomposeProjectId } from "../lib/projectId";
-import { logger } from "../middleware/logging";
-import { workspaceGeneralChannelName } from "@shared/types/identity";
-import { getWorkspaceMmContext } from "../lib/mattermost-context";
-import { readChannel, readProject } from "../lib/firestoreReads";
+import { requireAuth } from "../middleware/auth.js";
+import { db, FieldValue } from "../lib/db.js";
+import { mmApi } from "../lib/mattermost.js";
+import { resolveWorkspaceUid } from "../lib/workspace-resolution.js";
+import { decomposeProjectId } from "../lib/projectId.js";
+import { logger } from "../middleware/logging.js";
+import { workspaceGeneralChannelName } from "@shared/types/identity.js";
+import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
+import { readChannel, readProject } from "../lib/firestoreReads.js";
 
 const router = Router();
 router.use(requireAuth);

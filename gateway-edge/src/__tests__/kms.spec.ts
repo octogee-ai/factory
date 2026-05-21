@@ -5,7 +5,7 @@ import {
   decryptSecret,
   encryptSecret,
   type KmsClient,
-} from "../lib/kms";
+} from "../lib/kms.js";
 
 const KEY =
   "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest";

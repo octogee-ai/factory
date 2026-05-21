@@ -1,9 +1,9 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth, requireAgentKeyForUser, requireAdmin } from "../middleware/auth";
-import { logger } from "../middleware/logging";
-import { db, FieldValue } from "../lib/db";
-import { readAgent } from "../lib/firestoreReads";
-import { mmApi } from "../lib/mattermost";
+import { requireAuth, requireAgentKeyForUser, requireAdmin } from "../middleware/auth.js";
+import { logger } from "../middleware/logging.js";
+import { db, FieldValue } from "../lib/db.js";
+import { readAgent } from "../lib/firestoreReads.js";
+import { mmApi } from "../lib/mattermost.js";
 
 const router = Router();
 

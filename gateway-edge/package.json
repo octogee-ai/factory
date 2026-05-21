@@ -1,15 +1,16 @@
 {
   "name": "@octogee/gateway-edge",
   "version": "1.0.0",
-  "description": "Octogee workspace API — consolidated HTTP service (ex Cloud Functions)",
+  "description": "Octogee gateway-edge sidecar — locality-bound HTTP routes (ESM)",
+  "type": "module",
   "main": "dist/gateway-edge/src/index.js",
   "scripts": {
     "build": "tsc && tsc-alias -p tsconfig.json && npm run verify:no-alias-leakage",
     "build:watch": "tsc --watch",
     "start": "node dist/gateway-edge/src/index.js",
     "dev": "tsx watch src/index.ts",
-    "test": "vitest run --exclude 'src/__tests__/**/*.emulator.spec.ts'",
-    "test:watch": "vitest --exclude 'src/__tests__/**/*.emulator.spec.ts'",
+    "test": "vitest run --exclude 'src/**/__tests__/**/*.emulator.spec.ts'",
+    "test:watch": "vitest --exclude 'src/**/__tests__/**/*.emulator.spec.ts'",
     "test:emulator": "GCLOUD_PROJECT=octogee-test firebase emulators:exec --only firestore,auth --project=octogee-test 'GCLOUD_PROJECT=octogee-test npx vitest run --config vitest.emulator.config.ts'",
     "test:all": "npm test && npm run test:emulator",
     "test:coverage": "vitest run --coverage",
@@ -33,7 +34,8 @@
     "prom-client": "^15.1.3",
     "resend": "^6.12.3",
     "sharp": "^0.34.5",
-    "stripe": "^22.1.1"
+    "stripe": "^22.1.1",
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@types/busboy": "^1.5.4",
@@ -41,6 +43,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",
     "@types/supertest": "^7.2.0",
+    "@types/ws": "^8.5.0",
     "@vitest/coverage-v8": "^4.1.7",
     "firebase-tools": "^15.18.0",
     "supertest": "^7.2.2",

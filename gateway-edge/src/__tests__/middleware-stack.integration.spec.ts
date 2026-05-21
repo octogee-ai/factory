@@ -30,7 +30,7 @@ vi.mock('../../../gateway-edge/src/lib/stripe', () => ({
   getWebhookSecret: () => 'whsec_test',
 }));
 
-import { createApp } from '../index';
+import { createApp } from '../index.js';
 
 describe('gateway-edge middleware stack', () => {
   beforeEach(() => {

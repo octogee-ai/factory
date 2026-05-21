@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
-import { db } from "./db";
-import { readProject } from "./firestoreReads";
-import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming";
+import { db } from "./db.js";
+import { readProject } from "./firestoreReads.js";
+import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming.js";
 
 export interface FileTarget {
   slug: string;

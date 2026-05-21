@@ -27,7 +27,7 @@ import {
   attributeChannelToUsername,
   deriveJoinedUsernames,
   deriveContactedUsernames,
-} from './identity';
+} from './identity.js';
 
 const MM_TEAM_NAME_RE = /^[a-z0-9]+([a-z\-0-9]+|(__)?)[a-z0-9]+$/;
 

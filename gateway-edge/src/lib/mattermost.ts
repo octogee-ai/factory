@@ -1,4 +1,4 @@
-import { logger } from "../middleware/logging";
+import { logger } from "../middleware/logging.js";
 
 const MM_URL =
   process.env.MM_URL ||

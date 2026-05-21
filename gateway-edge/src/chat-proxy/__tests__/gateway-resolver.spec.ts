@@ -3,7 +3,7 @@ import {
   canonicalGatewayUrl,
   resolveGatewayUrl,
   GatewayResolveError,
-} from '../openclaw/gateway-resolver';
+} from '../openclaw/gateway-resolver.js';
 
 type DocData = Record<string, unknown> | undefined;
 

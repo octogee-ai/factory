@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
-    "module": "commonjs",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "target": "es2022",
     "outDir": "dist",
     "rootDir": "..",
@@ -23,5 +24,5 @@
     "../scripts/lib/artifact-registry.ts",
     "../scripts/lib/workspace-slugs.ts"
   ],
-  "exclude": ["src/__tests__", "node_modules", "dist", "../shared/**/*.spec.ts"]
+  "exclude": ["src/**/__tests__/**", "node_modules", "dist", "../shared/**/*.spec.ts"]
 }

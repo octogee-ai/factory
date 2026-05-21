@@ -1,10 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
 import Busboy from "busboy";
-import { storage } from "../../lib/db";
-import { validateFilePath } from "../../lib/path-validation";
-import { resolveFileTarget, withFileTarget, type FileTarget } from "../../lib/fileTarget";
-import { updateManifest } from "../../lib/manifest";
-import { logger } from "../../middleware/logging";
+import { storage } from "../../lib/db.js";
+import { validateFilePath } from "../../lib/path-validation.js";
+import { resolveFileTarget, withFileTarget, type FileTarget } from "../../lib/fileTarget.js";
+import { updateManifest } from "../../lib/manifest.js";
+import { logger } from "../../middleware/logging.js";
 import {
   customerGiteaApi,
   getCustomerGiteaToken,
@@ -12,7 +12,7 @@ import {
   getMimeType,
   IMAGE_EXTENSIONS,
   pathHasReservedOrHiddenSegment,
-} from "./helpers";
+} from "./helpers.js";
 
 const router = Router();
 

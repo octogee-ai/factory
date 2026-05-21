@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, beforeEach, afterEach } from 'vitest';
-import { getIdTokenForUid, requireEmulator, resetEmulator } from '../../../shared/test-helpers/firestore-emulator';
+import { getIdTokenForUid, requireEmulator, resetEmulator } from '../../../../shared/test-helpers/firestore-emulator.js';
 
 process.env.NODE_ENV = 'test';
 process.env.FIREBASE_PROJECT ??= 'octogee-test';

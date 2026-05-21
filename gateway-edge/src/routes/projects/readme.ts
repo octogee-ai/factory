@@ -1,10 +1,10 @@
 import { Router, Request, Response } from "express";
-import { db } from "../../lib/db";
-import { giteaApi } from "../../lib/gitea";
-import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming";
-import { readProject } from "../../lib/firestoreReads";
-import { logger } from "../../middleware/logging";
-import { isValidProjectId } from "@shared/types/identity";
+import { db } from "../../lib/db.js";
+import { giteaApi } from "../../lib/gitea.js";
+import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
+import { readProject } from "../../lib/firestoreReads.js";
+import { logger } from "../../middleware/logging.js";
+import { isValidProjectId } from "@shared/types/identity.js";
 
 const router = Router();
 

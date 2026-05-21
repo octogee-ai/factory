@@ -1,4 +1,4 @@
-import { logger } from "../middleware/logging";
+import { logger } from "../middleware/logging.js";
 
 const GITEA_URL =
   process.env.GITEA_URL ||

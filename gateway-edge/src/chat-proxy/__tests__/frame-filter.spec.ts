@@ -4,7 +4,7 @@ import {
   deriveExpectedAgentId,
   resolveExpectedAgentId,
   ExpectedAgentIdError,
-} from "../openclaw/frame-filter";
+} from "../openclaw/frame-filter.js";
 
 const EXPECTED = "octogee-dave-coach";
 const ctx = { expectedAgentId: EXPECTED };

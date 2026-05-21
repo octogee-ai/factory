@@ -1,12 +1,12 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { db } from "../lib/db";
+import { db } from "../lib/db.js";
 import {
   setupEmulatorTest,
 
   getIdTokenForUid,
-} from "@shared/test-helpers/firestore-emulator";
+} from "@shared/test-helpers/firestore-emulator.js";
 
 const mockMmApi = vi.fn();
 vi.mock("../lib/mattermost", () => ({
@@ -27,7 +27,7 @@ vi.mock("../lib/gitea", () => ({
   giteaWriteFile: (...args: unknown[]) => mockGiteaWriteFile(...args),
 }));
 
-import { createApp } from "../index";
+import { createApp } from "../index.js";
 
 const CALLER_UID = "caller-uid";
 

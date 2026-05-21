@@ -4,7 +4,7 @@ import {
   getCustomerGiteaToken,
   pathHasReservedOrHiddenSegment,
   validateWorkspacePath,
-} from '../routes/workspace/helpers';
+} from '../routes/workspace/helpers.js';
 
 describe('validateWorkspacePath', () => {
   it('accepts a normal nested path', () => {

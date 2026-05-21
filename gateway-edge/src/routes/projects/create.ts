@@ -1,17 +1,17 @@
 import { Router, Request, Response } from "express";
-import { strictRateLimit } from "../../middleware/security";
-import { db, FieldValue } from "../../lib/db";
-import { mmApi } from "../../lib/mattermost";
-import { logger } from "../../middleware/logging";
+import { strictRateLimit } from "../../middleware/security.js";
+import { db, FieldValue } from "../../lib/db.js";
+import { mmApi } from "../../lib/mattermost.js";
+import { logger } from "../../middleware/logging.js";
 import {
   projectGeneralChannelName,
   isValidProjectId,
   PROJECT_ID_MIN_LENGTH,
   PROJECT_ID_MAX_LENGTH,
-} from "@shared/types/identity";
-import { getWorkspaceMmContext } from "../../lib/mattermost-context";
-import { projectRepoName } from "../../lib/gitea-naming";
-import { ensureProjectGiteaRepo } from "./provisioning";
+} from "@shared/types/identity.js";
+import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
+import { projectRepoName } from "../../lib/gitea-naming.js";
+import { ensureProjectGiteaRepo } from "./provisioning.js";
 
 const router = Router();
 
@@ -249,7 +249,7 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
     // project's provisioningState to "failed" so /retry-provisioning can
     // reconcile rather than leaving a half-provisioned pair.
     try {
-      const { provisionActivityPair } = await import("../../lib/activityPair");
+      const { provisionActivityPair } = await import("../../lib/activityPair.js");
       await provisionActivityPair({
         primaryName: channelName,
         primaryChannelId: mmChannelId,

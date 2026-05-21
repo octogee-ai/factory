@@ -142,39 +142,51 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
 });
 
 describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
-  it("inherits gateway, chat-proxy, gateway-edge images from one imageTag field by default", () => {
+  it("inherits gateway + gateway-edge images from one imageTag field by default", () => {
     const out = helmTemplate("octogee-gw-default", { imageTag: "cafef00d" });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     // Find each container block and assert the resolved image tag.
+    // chat-proxy folded into gateway-edge (POST-BENDER-CLEANUP-SPEC §2.6)
+    // — no separate chat-proxy container/image.
     const gatewayBlock = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
-    const chatProxyBlock = dep.match(/- name:\s*chat-proxy[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     const wsApiBlock = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(gatewayBlock?.[0]).toMatch(/image:\s*"[^"]*octogee-gateway:cafef00d"/);
-    expect(chatProxyBlock?.[0]).toMatch(/image:\s*"[^"]*octogee-chat-proxy:cafef00d"/);
     expect(wsApiBlock?.[0]).toMatch(/image:\s*"[^"]*gateway-edge:cafef00d"/);
+    expect(dep).not.toMatch(/octogee-chat-proxy/);
   });
 
   it("per-image override beats imageTag (escape hatch for hotfix)", () => {
     const out = helmTemplate("octogee-gw-default", {
       imageTag: "abc1234",
-      "chatProxy.image.tag": "hotfix-cp-99",
+      "gatewayEdge.image.tag": "hotfix-ge-99",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const cp = dep.match(/- name:\s*chat-proxy[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
-    expect(cp?.[0]).toMatch(/image:\s*"[^"]*octogee-chat-proxy:hotfix-cp-99"/);
-    // gateway + gateway-edge still use bundle SHA
+    const ge = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
+    expect(ge?.[0]).toMatch(/image:\s*"[^"]*gateway-edge:hotfix-ge-99"/);
+    // gateway still uses bundle SHA
     const gw = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(gw?.[0]).toMatch(/image:\s*"[^"]*octogee-gateway:abc1234"/);
   });
 });
 
-describe("helm/octogee-gateway/ — gateway-edge sidecar (Phase 6.B collocation)", () => {
-  it("renders gateway-edge as a third sidecar inside the gateway pod", () => {
+describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)", () => {
+  it("renders gateway + gateway-edge containers; no separate chat-proxy container", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/- name:\s*gateway/);
-    expect(dep).toMatch(/- name:\s*chat-proxy/);
     expect(dep).toMatch(/- name:\s*gateway-edge/);
+    expect(dep).not.toMatch(/- name:\s*chat-proxy\b/);
+  });
+
+  it("gateway-edge container exposes one port (chat-proxy folded onto 3001) — no separate chat/metrics ports", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const ge = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
+    expect(ge?.[0]).toMatch(/name:\s*gateway-edge/);
+    // chat-proxy + metrics now share the single gateway-edge port (3001);
+    // the old 8080/9092 named ports are gone after the single-server merge.
+    expect(ge?.[0]).not.toMatch(/name:\s*chat-proxy/);
+    expect(ge?.[0]).not.toMatch(/name:\s*cp-metrics/);
   });
 
   it("gateway-edge sidecar exposes port 3001 and probes /health", () => {

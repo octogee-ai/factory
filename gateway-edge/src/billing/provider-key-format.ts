@@ -1,4 +1,4 @@
-import { validateAnthropicKey, type KeyValidationResult } from "./anthropic-key-format";
+import { validateAnthropicKey, type KeyValidationResult } from "./anthropic-key-format.js";
 
 export type Provider = "anthropic" | "openai" | "openai-compatible";
 

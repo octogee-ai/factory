@@ -4,21 +4,21 @@ export type {
   ProjectStatus,
   ProjectProvisioningState,
   ProjectType,
-} from './project';
+} from './project.js';
 
 export type {
   Agent,
   AgentMattermost,
-} from './agent';
+} from './agent.js';
 
 export type {
   Workspace,
   WorkspaceVisibility,
   WorkspaceMattermost,
   WorkspaceGitea,
-} from './workspace';
+} from './workspace.js';
 
-export type { WorkspaceVibe, WorkspaceChannelKind } from './display-names';
+export type { WorkspaceVibe, WorkspaceChannelKind } from './display-names.js';
 export {
   WORKSPACE_VIBE_PRESETS,
   DEFAULT_VIBE_NOUN,
@@ -29,18 +29,18 @@ export {
   titleCaseVibe,
   computeWorkspaceDisplayName,
   computeProjectChannelDisplayName,
-} from './display-names';
+} from './display-names.js';
 
 export type {
   Channel,
   ChannelKind,
   ChannelMattermost,
-} from './channel';
+} from './channel.js';
 
 export type {
   Member,
   MemberRole,
-} from './member';
+} from './member.js';
 
 export {
   TRIAL_DAILY_BUDGETS_USD,
@@ -52,14 +52,14 @@ export {
   trialWindowBudgetUsd,
   trialDayN,
   windowBudgetUsdForTier,
-} from './billing';
+} from './billing.js';
 
 export type {
   NotificationCategory,
   DeliveryChannel,
   NotificationAction,
   InboxDocument,
-} from './notifications';
+} from './notifications.js';
 
 export type {
   GatewayStatus,
@@ -68,7 +68,7 @@ export type {
   RestoreJobState,
   RestoreJob,
   CustomerSnapshot,
-} from './fleet-controller';
+} from './fleet-controller.js';
 export {
   GATEWAY_HEARTBEAT_INTERVAL_MS,
   GATEWAY_UNREACHABLE_AFTER_MS,
@@ -83,7 +83,7 @@ export {
   SIGNATURE_HEADER,
   GATEWAYS_COLLECTION,
   RESTORE_JOBS_COLLECTION,
-} from './fleet-controller';
+} from './fleet-controller.js';
 
 export type {
   GatewayDesiredStatus,
@@ -95,13 +95,13 @@ export type {
   Operation,
   HelmInstanceValue,
   HelmInstancesMap,
-} from './glm';
+} from './glm.js';
 export {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
-} from './glm';
+} from './glm.js';
 
-export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire';
+export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 
 // Types only on the common barrel — device-identity.ts imports
 // node:crypto, so a *value* re-export here would drag a Node-only
@@ -114,7 +114,7 @@ export type {
   DeviceAuthPayloadV3Params,
   SignedDevicePayload,
   SignConnectDeviceParams,
-} from './device-identity';
+} from './device-identity.js';
 
 export type {
   PtyFrame,
@@ -128,7 +128,7 @@ export type {
   PtyErrorFrame,
   PtyFrameType,
   PtySignalName,
-} from './builder-shell-pty';
+} from './builder-shell-pty.js';
 export {
   PTY_FRAME,
   PTY_SIGNALS,
@@ -142,14 +142,14 @@ export {
   encodeExit,
   encodeError,
   decodeFrame,
-} from './builder-shell-pty';
+} from './builder-shell-pty.js';
 
-export type { OpenclawWireErrorCode, WireSocket, ResponseFrame } from './openclaw-wire-core';
+export type { OpenclawWireErrorCode, WireSocket, ResponseFrame } from './openclaw-wire-core.js';
 export {
   OpenclawWireError,
   isResponseFrame,
   waitForWsOpen,
   startConnectChallengeTracker,
   sendWsRequest,
-} from './openclaw-wire-core';
+} from './openclaw-wire-core.js';
 

@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import { giteaApiAs } from "../../lib/gitea";
-import { validateFilePath } from "../../lib/path-validation";
+import { giteaApiAs } from "../../lib/gitea.js";
+import { validateFilePath } from "../../lib/path-validation.js";
 
 export function getCustomerGiteaToken(req: Request): string {
   if (req.giteaToken) return req.giteaToken;

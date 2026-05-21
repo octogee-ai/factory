@@ -1,8 +1,8 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { classifyHttp } from "./anthropic-probe";
-import { logger } from "../middleware/logging";
-import type { Provider } from "./provider-key-format";
+import { classifyHttp } from "./anthropic-probe.js";
+import { logger } from "../middleware/logging.js";
+import type { Provider } from "./provider-key-format.js";
 
 export interface ProbeRequest {
   provider: Provider;

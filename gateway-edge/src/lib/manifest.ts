@@ -1,5 +1,5 @@
-import { giteaApiAs, giteaApiAsAllowNotFound } from "./gitea";
-import { logger } from "../middleware/logging";
+import { giteaApiAs, giteaApiAsAllowNotFound } from "./gitea.js";
+import { logger } from "../middleware/logging.js";
 
 export interface ManifestEntry {
   type: "blob";

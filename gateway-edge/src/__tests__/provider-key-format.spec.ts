@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { validateProviderKey, isSupportedProvider, type Provider } from "../billing/provider-key-format";
+import { validateProviderKey, isSupportedProvider, type Provider } from "../billing/provider-key-format.js";
 
 describe("isSupportedProvider", () => {
   test.each<[string, boolean]>([

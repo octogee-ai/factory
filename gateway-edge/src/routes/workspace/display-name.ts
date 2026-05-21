@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { readWorkspace } from "../../lib/firestoreReads";
-import { mmApi } from "../../lib/mattermost";
-import { logger } from "../../middleware/logging";
+import { readWorkspace } from "../../lib/firestoreReads.js";
+import { mmApi } from "../../lib/mattermost.js";
+import { logger } from "../../middleware/logging.js";
 
 const router = Router();
 

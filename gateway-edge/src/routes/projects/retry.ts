@@ -1,13 +1,13 @@
 import { Router, Request, Response } from "express";
-import { strictRateLimit } from "../../middleware/security";
-import { db, FieldValue } from "../../lib/db";
-import { mmApi } from "../../lib/mattermost";
-import { logger } from "../../middleware/logging";
-import { projectGeneralChannelName } from "@shared/types/identity";
-import { getWorkspaceMmContext } from "../../lib/mattermost-context";
-import { withProject } from "../../lib/withProject";
-import { ensureProjectGiteaRepo } from "./provisioning";
-import { projectRepoName } from "../../lib/gitea-naming";
+import { strictRateLimit } from "../../middleware/security.js";
+import { db, FieldValue } from "../../lib/db.js";
+import { mmApi } from "../../lib/mattermost.js";
+import { logger } from "../../middleware/logging.js";
+import { projectGeneralChannelName } from "@shared/types/identity.js";
+import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
+import { withProject } from "../../lib/withProject.js";
+import { ensureProjectGiteaRepo } from "./provisioning.js";
+import { projectRepoName } from "../../lib/gitea-naming.js";
 
 const router = Router();
 
@@ -122,7 +122,7 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
     // Activity sibling — idempotent on retry (provisionActivityPair finds
     // the existing channel by name when MM rejects the second create).
     try {
-      const { provisionActivityPair } = await import("../../lib/activityPair");
+      const { provisionActivityPair } = await import("../../lib/activityPair.js");
       await provisionActivityPair({
         primaryName: channelName,
         primaryChannelId: mmChannelId,

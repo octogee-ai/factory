@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import * as crypto from "crypto";
-import { requireAuth } from "../middleware/auth";
-import { db, FieldValue } from "../lib/db";
+import { requireAuth } from "../middleware/auth.js";
+import { db, FieldValue } from "../lib/db.js";
 
 const router = Router();
 

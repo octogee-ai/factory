@@ -1,12 +1,12 @@
 import { Router, Request, Response } from "express";
-import { strictRateLimit } from "../../middleware/security";
-import { db, FieldValue } from "../../lib/db";
-import { mmApi } from "../../lib/mattermost";
-import { giteaApi } from "../../lib/gitea";
-import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming";
-import { logger } from "../../middleware/logging";
-import { withProject } from "../../lib/withProject";
-import { readChannel } from "../../lib/firestoreReads";
+import { strictRateLimit } from "../../middleware/security.js";
+import { db, FieldValue } from "../../lib/db.js";
+import { mmApi } from "../../lib/mattermost.js";
+import { giteaApi } from "../../lib/gitea.js";
+import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
+import { logger } from "../../middleware/logging.js";
+import { withProject } from "../../lib/withProject.js";
+import { readChannel } from "../../lib/firestoreReads.js";
 
 const router = Router();
 

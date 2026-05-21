@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { storage } from "../../lib/db";
-import { withFileTarget } from "../../lib/fileTarget";
-import { removeFromManifest } from "../../lib/manifest";
-import { getCustomerGiteaToken, validateWorkspacePath } from "./helpers";
+import { storage } from "../../lib/db.js";
+import { withFileTarget } from "../../lib/fileTarget.js";
+import { removeFromManifest } from "../../lib/manifest.js";
+import { getCustomerGiteaToken, validateWorkspacePath } from "./helpers.js";
 
 const router = Router();
 

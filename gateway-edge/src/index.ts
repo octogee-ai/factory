@@ -1,23 +1,32 @@
 import express, { Request, Response, Router } from "express";
+import http from "node:http";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
-import { corsMiddleware } from "./middleware/cors";
-import { requestLogger } from "./middleware/logging";
-import { errorHandler } from "./middleware/errors";
-import { logger } from "./middleware/logging";
-import { helmetMiddleware, globalRateLimit } from "./middleware/security";
-import { requireAuth } from "./middleware/auth";
+import { corsMiddleware } from "./middleware/cors.js";
+import { requestLogger } from "./middleware/logging.js";
+import { errorHandler } from "./middleware/errors.js";
+import { logger } from "./middleware/logging.js";
+import { helmetMiddleware, globalRateLimit } from "./middleware/security.js";
+import { requireAuth } from "./middleware/auth.js";
 
-import { mountApi } from "./routes/mount-api";
-// Locality routers — handle requests that read/write per-gateway-pod
-// state. Stay mounted on this sidecar because they cannot be served
-// from a stable cluster service. Per POST-BENDER-CLEANUP-SPEC §2.5,
-// gateway-edge no longer mounts the 16 cluster prefixes
-// (sharing, entities, mattermost, openclaw, billing, admin, invites,
-// integrations, byosub, discord, notifications, profile, onboarding,
-// posts, agents, builder) — those moved to octogee-api.
-import gitRoutes from "./routes/workspace/git";
-import deployPreviewRoutes from "./routes/projects/deploy-preview";
-import internalBillingRoutes from "./routes/internal/billing";
+import { mountApi } from "./routes/mount-api.js";
+import gitRoutes from "./routes/workspace/git.js";
+import deployPreviewRoutes from "./routes/projects/deploy-preview.js";
+import internalBillingRoutes from "./routes/internal/billing.js";
+
+// chat-proxy folded in: it shares this process's single HTTP server
+// (port 3001) rather than running its own. The dispatcher in the boot
+// block routes chat-proxy-owned HTTP paths to chatProxyHandleRequest and
+// everything else to Express; WS upgrades + the background activity
+// bridge attach the same way.
+import {
+  chatProxyHandleRequest,
+  chatProxyOwnsHttpPath,
+  attachChatProxyWsUpgrade,
+  attachBuilderShellRoute,
+  startChatProxyBackground,
+  chatProxyMetricsRegistry,
+} from "./chat-proxy/proxy.js";
+import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
@@ -68,8 +77,11 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/metrics', async (_req, res) => {
-  res.set('Content-Type', metricsRegistry.contentType);
-  res.end(await metricsRegistry.metrics());
+  // Merge gateway-edge's registry (defaults + HTTP metrics) with
+  // chat-proxy's (bridge/frame/WS metrics) — one /metrics, one port.
+  const merged = Registry.merge([metricsRegistry, chatProxyMetricsRegistry]);
+  res.set('Content-Type', merged.contentType);
+  res.end(await merged.metrics());
 });
 
 const healthHandler = (_req: Request, res: Response) => {
@@ -78,32 +90,18 @@ const healthHandler = (_req: Request, res: Response) => {
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
-// Locality routers, mounted at both /api/<p> and /api/g/:gatewayId/<p>
-// via mountApi (FLEET-API-ROUTING-SPEC.md). Cowboy's per-gateway
-// ingress paths target the per-instance gateway-edge Service, so a
-// scoped request lands on the user's home gateway pod where local
-// per-customer state lives.
-
-// workspace/git — read/write the local /home/node/.openclaw/customers
-// working tree on this pod.
+// Locality routes only — these read/write per-gateway-pod state and
+// can't move to the cluster singleton. Everything else is octogee-api.
 const workspaceLocality = Router();
 workspaceLocality.use(requireAuth);
 workspaceLocality.use(gitRoutes);
 mountApi(app, "/workspace", workspaceLocality);
 
-// projects/.../deploy-preview — calls localhost site-build-api sidecar
-// on this pod. The other projects sub-routers (create, retry, star,
-// members, join-leave, readme, delete) are cluster — octogee-api owns
-// them.
 const projectsLocality = Router();
 projectsLocality.use(requireAuth);
 projectsLocality.use(deployPreviewRoutes);
 mountApi(app, "/projects", projectsLocality);
 
-// Internal billing — usage RPC against localhost OpenClaw. Not Ingress-
-// routed (intra-cluster service-to-service only). The other /internal/*
-// endpoints (notifications, engagement, csi, builder-shell, agents) are
-// cluster — octogee-api owns them.
 app.use("/internal/billing", internalBillingRoutes);
 
 app.use(errorHandler);
@@ -124,7 +122,25 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
-  app.listen(PORT, () => {
+  // Single HTTP server for both surfaces. chat-proxy-owned paths go to
+  // its raw handler; everything else to Express. WS upgrades + the
+  // builder-shell route attach to the same server.
+  const server = http.createServer((req, res) => {
+    const rawPath = (req.url || "").split("?")[0];
+    if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath))) {
+      void chatProxyHandleRequest(req, res);
+    } else {
+      app(req, res);
+    }
+  });
+  attachChatProxyWsUpgrade(server);
+  attachBuilderShellRoute(server).catch((err) => {
+    logger.error("[builder-shell] route attach failed — WS route disabled", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  });
+
+  server.listen(PORT, () => {
     logger.info(`gateway-edge boot — listening on port ${PORT}`, {
       port: PORT,
       env: process.env.K8S_NAMESPACE || "local",
@@ -132,6 +148,12 @@ if (process.env.NODE_ENV !== "test") {
       oc: process.env.OPENCLAW_VERSION || "n/a",
       fork: process.env.OPENCLAW_FORK_SHA || "n/a",
       node: process.version,
+    });
+  });
+
+  void startChatProxyBackground().catch((err) => {
+    logger.error("[chat-proxy] background boot failed", {
+      err: err instanceof Error ? err.message : String(err),
     });
   });
 }

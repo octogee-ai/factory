@@ -65,7 +65,6 @@ const RESTORE_JOB_STATES = [
 type RestoreJobStateLabel = (typeof RESTORE_JOB_STATES)[number];
 const BUILDS_SERVICE_ALLOWLIST = new Set([
   "octogee-gateway",
-  "octogee-chat-proxy",
   "gateway-edge",
 ]);
 
