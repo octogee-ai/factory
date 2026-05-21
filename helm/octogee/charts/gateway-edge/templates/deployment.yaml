@@ -1,0 +1,13 @@
+{{- /*
+  Sidecar architecture: gateway-edge runs INSIDE the octogee-gateway pod
+  as a third sidecar (alongside chat-proxy), per docs/ACTIVITY-STREAM-SPEC.md
+  §10 Phase 6.B. The standalone gateway-edge Deployment that previously
+  lived here is no longer rendered. The Service in this chart is retained
+  and re-pointed at the gateway pod (matches chat-proxy pattern).
+
+  Why: gateway-edge → gateway RPC needs loopback for the Phase B working-
+  tree endpoints (workspace.git.{status,diff,log}). Gateway / chat-proxy /
+  gateway-edge always deploy together as one customer-pod unit anyway —
+  bringing gateway-edge into the same pod finishes that pattern and
+  eliminates the cross-pod hop entirely.
+*/ -}}

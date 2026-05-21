@@ -1,6 +1,6 @@
 /**
  * Gateway internal device-auth HTTP endpoints (Chunk C1b). Mounted on the
- * fleet-http Express app (port 3003); the only caller is workspace-api's
+ * fleet-http Express app (port 3003); the only caller is gateway-edge's
  * `gatewayDeviceAuthClient`, addressed by K8s Service name and
  * authenticated with `X-Internal-Service-Key` (same shape site-build-api
  * uses). Handlers are thin: all flow logic lives in the unit-tested
@@ -17,7 +17,7 @@ export interface DeviceAuthHttpDeps {
   log?: (m: string) => void;
 }
 
-/** Length-checked constant-time compare — mirrors workspace-api's
+/** Length-checked constant-time compare — mirrors gateway-edge's
  * `requireInternalServiceAuth`; the key is a shared bearer secret and
  * fleet-http binds 0.0.0.0, so the compare must not be byte-timeable. */
 function internalKeyEquals(presented: string, key: string): boolean {

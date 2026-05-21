@@ -7,7 +7,7 @@ function res(status: number, body: unknown = {}): Response {
   return new Response(noBody ? null : JSON.stringify(body), { status });
 }
 
-describe("workspace-api gitea client — per-workspace org", () => {
+describe("gateway-edge gitea client — per-workspace org", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {

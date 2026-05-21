@@ -93,14 +93,14 @@ app.get('/metrics', async (_req, res) => {
 });
 
 const healthHandler = (_req: Request, res: Response) => {
-  res.json({ status: "ok", service: "workspace-api", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", service: "gateway-edge", timestamp: new Date().toISOString() });
 };
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
 // All `/api/<p>` routes are dual-mounted at `/api/g/:gatewayId/<p>` too,
 // the fleet path-affinity seam (FLEET-API-ROUTING-SPEC.md). Cowboy's
-// per-gateway ingress paths target the per-instance workspace-api
+// per-gateway ingress paths target the per-instance gateway-edge
 // Service, so a scoped request lands on the user's home gateway pod
 // where local per-customer state lives. Handlers are unchanged: the
 // path's :gatewayId is a routing key, not an authz input — authz stays
@@ -151,7 +151,7 @@ if (process.env.NODE_ENV !== "test") {
   }
 
   app.listen(PORT, () => {
-    logger.info(`workspace-api boot — listening on port ${PORT}`, {
+    logger.info(`gateway-edge boot — listening on port ${PORT}`, {
       port: PORT,
       env: process.env.K8S_NAMESPACE || "local",
       sha: process.env.BUILD_SHA || "unknown",

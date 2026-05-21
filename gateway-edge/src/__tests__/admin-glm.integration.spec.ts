@@ -1445,14 +1445,14 @@ describe("GET /api/admin/builds — Artifact Registry SHA picker", () => {
     expect(builderCalls).toHaveLength(0);
   });
 
-  it("accepts the chat-proxy and workspace-api services", async () => {
+  it("accepts the chat-proxy and gateway-edge services", async () => {
     nextBuildsResult = [];
     const app = buildApp();
     const a = await request(app).get("/api/admin/builds?service=octogee-chat-proxy");
-    const b = await request(app).get("/api/admin/builds?service=workspace-api");
+    const b = await request(app).get("/api/admin/builds?service=gateway-edge");
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
-    expect(builderCalls.map((c) => c.service)).toEqual(["octogee-chat-proxy", "workspace-api"]);
+    expect(builderCalls.map((c) => c.service)).toEqual(["octogee-chat-proxy", "gateway-edge"]);
   });
 
   it("clamps limit to a sane maximum", async () => {

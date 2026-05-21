@@ -4,12 +4,12 @@
 // rule (site/firestore.rules:62 — `allow read, write: if false`). But
 // "client-blocked" is not the security boundary that matters for OAuth
 // refresh tokens / IMAP passwords / Twilio auth tokens — a DB leak, a
-// backup-access vector, or a workspace-api SA compromise would expose
+// backup-access vector, or a gateway-edge SA compromise would expose
 // every Builder's third-party credentials in the clear.
 //
 // This wrapper KMS-encrypts those values before they touch Firestore.
 // Single symmetric key per environment (octogee-test, octogee-prod);
-// workload-identity-bound IAM grants the workspace-api SA `cryptoKey
+// workload-identity-bound IAM grants the gateway-edge SA `cryptoKey
 // EncrypterDecrypter` on the key. Fail-loud on missing env so no
 // silent plaintext fallback can ever ship.
 //

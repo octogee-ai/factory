@@ -10,11 +10,11 @@
 gatewayId: ""
 
 # Helm release / DNS-friendly suffix. Forms the per-instance Service
-# name (`octogee-gateway-<instanceName>`, `workspace-api-<instanceName>`)
+# name (`octogee-gateway-<instanceName>`, `gateway-edge-<instanceName>`)
 # that the umbrella's fleet-control Ingress routes to.
 instanceName: ""
 
-# Bundle SHA. All three sidecars (gateway, workspace-api, chat-proxy)
+# Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take
 # precedence when set, but the operator workflow is single-SHA.
 imageTag: "latest"
@@ -184,11 +184,11 @@ chatProxy:
       cpu: 500m
       memory: 256Mi
 
-# ── workspace-api sidecar ──────────────────────────────────────────────────
-workspaceApi:
+# ── gateway-edge sidecar ──────────────────────────────────────────────────
+gatewayEdge:
   enabled: true
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/workspace-api
+    repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
     tag: ""  # inherits from imageTag
   port: 3001
   env:
@@ -203,9 +203,9 @@ workspaceApi:
     SITE_URL: "https://octogee.com"
     # Credential-at-rest KMS key (terraform/modules/kms output
     # `kms_creds_key_name`). Set per environment via values.{prod,
-    # test}.yaml — workspace-api fails loud at first integrations write
+    # test}.yaml — gateway-edge fails loud at first integrations write
     # if missing (no silent plaintext fallback). See
-    # workspace-api/src/lib/kms.ts.
+    # gateway-edge/src/lib/kms.ts.
     OCTOGEE_KMS_KEY_NAME: ""
   secrets:
     - envName: STRIPE_SECRET_KEY

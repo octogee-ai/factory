@@ -32,7 +32,7 @@ vi.mock('../lib/stripe', () => ({
 
 import { createApp } from '../index';
 
-describe('workspace-api middleware stack', () => {
+describe('gateway-edge middleware stack', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.NODE_ENV = 'test';
@@ -89,7 +89,7 @@ describe('workspace-api middleware stack', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
-    expect(res.body.service).toBe('workspace-api');
+    expect(res.body.service).toBe('gateway-edge');
   });
 
   it('parses JSON bodies on internal routes', async () => {

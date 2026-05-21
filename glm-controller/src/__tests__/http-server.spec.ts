@@ -347,10 +347,10 @@ describe("createHttpServer — admin gateway routes", () => {
   });
 
   // Customer-detail factory mount (PR #865 lift). The compute-heavy
-  // CSI pipeline lives in workspace-api so glm-controller's stub
+  // CSI pipeline lives in gateway-edge so glm-controller's stub
   // returns 503 with a friendly reason instead of pretending to
   // refresh. The customer-list / customer-detail GETs are exercised
-  // by the workspace-api integration suite (admin-csi.integration);
+  // by the gateway-edge integration suite (admin-csi.integration);
   // we just verify the route is mounted here so a missing factory
   // wire-up shows up as a deterministic test failure.
 
@@ -371,7 +371,7 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.status).toBe(503);
     expect(res.body.unavailable).toBe(true);
     expect(res.body.success).toBe(false);
-    expect(res.body.reason).toMatch(/csi.*workspace-api|gateway pod/i);
+    expect(res.body.reason).toMatch(/csi.*gateway-edge|gateway pod/i);
   });
 
   describe("POST /api/admin/restore-jobs/:jobId/kick — unstick a stuck customer", () => {

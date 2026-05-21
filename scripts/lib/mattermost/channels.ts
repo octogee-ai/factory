@@ -78,7 +78,7 @@ export async function createProjectChannel(
   }
 
   // Project channel members: customer + admin. Coach is added by
-  // workspace-api when the coach user id is known at call time (or on the
+  // gateway-edge when the coach user id is known at call time (or on the
   // next provisioner sweep).
   for (const memberId of customerChannelMembers("project", {
     customerMmUserId,

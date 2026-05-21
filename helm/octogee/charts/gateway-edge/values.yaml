@@ -1,5 +1,5 @@
 image:
-  repository: us-central1-docker.pkg.dev/octogee/octogee/workspace-api
+  repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
   tag: latest
 
 replicas: 1
@@ -102,18 +102,18 @@ ingress:
   staticIpName: workspace-api-ip
   certName: workspace-api-cert
   # Service the api ingress backs onto. Defaults to the alias
-  # Service `workspace-api` (rendered by this sub-chart, selects every
+  # Service `gateway-edge` (rendered by this sub-chart, selects every
   # gateway pod via app=octogee-gateway). The alias survives fresh
   # clusters and any moment between per-instance releases. Override
-  # to a per-instance Service like `workspace-api-canary` if an env
+  # to a per-instance Service like `gateway-edge-canary` if an env
   # wants to pin the data plane to a specific gateway pod.
-  targetService: workspace-api
+  targetService: gateway-edge
 
 # Sibling Ingress on the same host that carries Cowboy-owned per-gateway
 # `/api/g/<gatewayId>/*` routes (FLEET-API-ROUTING-SPEC.md). Shares cert +
 # global static IP with `ingress` above so GCE merges them into one URL
 # map. Helm renders only the /health stub; Cowboy reclaims the path list.
-workspaceApiFleetIngress:
+gatewayEdgeFleetIngress:
   enabled: true
 
 # Cloud Armor WAF (policy created by Terraform, referenced by name)

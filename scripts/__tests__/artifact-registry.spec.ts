@@ -103,7 +103,7 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
           uploadTime: "2026-05-04T10:00:00Z",
         },
         {
-          name: "projects/octogee/locations/us-central1/repositories/octogee/dockerImages/workspace-api@sha256:bbb",
+          name: "projects/octogee/locations/us-central1/repositories/octogee/dockerImages/gateway-edge@sha256:bbb",
           tags: ["def5678"],
           uploadTime: "2026-05-04T11:00:00Z",
         },
@@ -174,14 +174,14 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
   });
 
   it("paginates until enough service-matching builds are found", async () => {
-    // Page 1: only non-matching services (workspace-api), forcing pagination
+    // Page 1: only non-matching services (gateway-edge), forcing pagination
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
         dockerImages: [
           {
-            name: "projects/octogee/locations/us-central1/repositories/octogee/dockerImages/workspace-api@sha256:01",
+            name: "projects/octogee/locations/us-central1/repositories/octogee/dockerImages/gateway-edge@sha256:01",
             tags: ["abc1234"],
             uploadTime: "2026-05-04T10:00:00Z",
           },

@@ -496,7 +496,7 @@ git push origin main
 ### Step 16 — Watch Release CI
 
 `release.yml` orchestrates `gateway-build.yml`, which builds the 3 sidecar
-images (gateway, workspace-api, chat-proxy) on the same SHA via matrix.
+images (gateway, gateway-edge, chat-proxy) on the same SHA via matrix.
 There's no deploy step — that's intentional, [see the architectural rule](#architectural-rule-for-this-flow).
 
 ▸
@@ -508,7 +508,7 @@ gh run watch <release-run-id> --exit-status
 ✓ All steps green. The CI run ends after the matrix builds finish; the
 new SHA is now in Artifact Registry as
 `octogee-gateway:<short-sha>`, `octogee-chat-proxy:<short-sha>`,
-`workspace-api:<short-sha>`.
+`gateway-edge:<short-sha>`.
 
 The release does not roll any pods. Nothing in TEST has moved yet.
 
@@ -983,7 +983,7 @@ The full A/B flow (real example: 5.12 vs 5.16-beta.6 lockup hunt):
    --substitutions=_IMAGE_TAG=<sha>-oc<ver>,_OPENCLAW_VERSION=<ver>,_OPENCLAW_FORK_SHA=<fork>`.
    (Once the `versions:` entry is merged, CI also regenerates these
    per-SHA — the inline build is just for getting the first bundle now.)
-6. **Retag sidecars** (`octogee-chat-proxy`, `workspace-api`) from a main
+6. **Retag sidecars** (`octogee-chat-proxy`, `gateway-edge`) from a main
    SHA that has them to the `<sha>-oc<ver>` bundle tag — they're
    OC-agnostic so they alias, not rebuild. Cowboy then deploys all three
    under one `imageTag`.

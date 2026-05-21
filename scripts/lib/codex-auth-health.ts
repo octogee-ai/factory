@@ -54,7 +54,7 @@ export function deriveCodexAuthHealth(
 /**
  * R8 periodic detection sweep — pure orchestration, all I/O injected. For
  * each mounted agent: read openclaw's auth-state file, derive health, and
- * signal workspace-api on `needs_reauth`. Per-item isolation: one bad
+ * signal gateway-edge on `needs_reauth`. Per-item isolation: one bad
  * read/signal logs + continues, never aborts the sweep, never throws (the
  * reconcile loop must not be wedged by a degraded agent). Tally lets the
  * caller log. See BYO-SUBSCRIPTION-OAUTH-SPEC.md §12-R8.
@@ -65,7 +65,7 @@ export async function checkCodexAuthHealthForAgents(opts: {
   now: number;
   /** Contents of the agent's `auth-state.json`, or null when absent. */
   readAuthState: (agentId: string) => string | null;
-  /** Server-mediated R2 signal → workspace-api (no credential). */
+  /** Server-mediated R2 signal → gateway-edge (no credential). */
   signalNeedsReauth: (agentId: string) => Promise<void>;
   logFn?: (m: string) => void;
 }): Promise<{ checked: number; needsReauth: number; signalled: number }> {

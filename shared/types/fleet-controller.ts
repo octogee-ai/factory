@@ -52,7 +52,7 @@ export interface GatewayState {
   lastError: GatewayLastError | null;
   /**
    * Cluster-internal URL where this gateway's OpenClaw RPC listens. Written
-   * by the heartbeat; read by workspace-api / chat-proxy to resolve a
+   * by the heartbeat; read by gateway-edge / chat-proxy to resolve a
    * user's assigned gateway to a connectable host. Canonical shape:
    * `http://octogee-gateway-{gatewayId}.{namespace}.svc.cluster.local:{port}`.
    */

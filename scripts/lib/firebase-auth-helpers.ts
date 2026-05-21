@@ -1,5 +1,5 @@
 /**
- * Shared firebase-admin/auth helpers used by both workspace-api and
+ * Shared firebase-admin/auth helpers used by both gateway-edge and
  * glm-controller. Dep-injected so tests don't need a Firebase instance.
  */
 

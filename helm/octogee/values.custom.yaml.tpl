@@ -57,11 +57,11 @@ chat-proxy:
   ingress:
     enabled: false
 
-workspace-api:
+gateway-edge:
   cloudArmor:
     enabled: false
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/workspace-api
+    repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
   env:
     FIREBASE_PROJECT_ID: "octogee-test"
     GCLOUD_PROJECT: "octogee-test"

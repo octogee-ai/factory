@@ -109,12 +109,12 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 const FLEET_INGRESS_NAME = process.env.FLEET_INGRESS_NAME ?? "octogee-gateway-fleet-control-ingress";
 const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway";
 // Cowboy-owned sibling Ingress on api.octogee.com that carries per-
-// gateway `/api/g/<gatewayId>/*` paths to the per-instance workspace-api
+// gateway `/api/g/<gatewayId>/*` paths to the per-instance gateway-edge
 // Service. The umbrella renders the shell (host, cert, IP, annotations);
 // this controller owns spec.rules[].http.paths via SSA. See
 // FLEET-API-ROUTING-SPEC.md.
-const WORKSPACE_API_FLEET_INGRESS_NAME =
-  process.env.WORKSPACE_API_FLEET_INGRESS_NAME ?? "workspace-api-fleet-ingress";
+const GATEWAY_EDGE_FLEET_INGRESS_NAME =
+  process.env.GATEWAY_EDGE_FLEET_INGRESS_NAME ?? "gateway-edge-fleet-ingress";
 // Sibling fleet-ingress for chat.octogee.com — per-gateway `/g/<gw>/*`
 // routes to per-instance `chat-proxy-<instance>` Services. Helm renders
 // the shell on the same host/cert/IP as `chat-proxy-ingress` so GCE
@@ -124,14 +124,14 @@ const CHAT_PROXY_FLEET_INGRESS_NAME =
 const CHAT_PROXY_PORT = 8080;
 // Hardcoded, deliberately. K8s injects service-discovery env vars
 // (`<SVC>_PORT=tcp://<ip>:<port>`) into every pod for every Service in
-// the namespace. Reading `process.env.WORKSPACE_API_PORT` collides with
-// the injected URL form for the `workspace-api` Service →
+// the namespace. Reading `process.env.GATEWAY_EDGE_PORT` collides with
+// the injected URL form for the `gateway-edge` Service →
 // `parseInt("tcp://…", 10)` = NaN → `port: { number: null }` in the SSA
 // payload → "Required value: port name or number is required" + every
 // reconcile tick fails (in PROD on 2026-05-19). The well-known sidecar
 // port matches the helm/octogee-gateway Service template and never
 // varies per env.
-const WORKSPACE_API_PORT = 3001;
+const GATEWAY_EDGE_PORT = 3001;
 
 interface ControllerDeps {
   db: Firestore;
@@ -440,11 +440,11 @@ async function main(): Promise<void> {
   const syncApiFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
     syncApiFleetIngressPaths({
       runKubectl,
-      ingressName: WORKSPACE_API_FLEET_INGRESS_NAME,
+      ingressName: GATEWAY_EDGE_FLEET_INGRESS_NAME,
       namespace: NAMESPACE,
       desiredGateways: gateways,
-      workspaceApiPort: WORKSPACE_API_PORT,
-      workspaceApiServiceName: "workspace-api",
+      gatewayEdgePort: GATEWAY_EDGE_PORT,
+      gatewayEdgeServiceName: "gateway-edge",
       log,
     }).then(() => undefined);
   // One fan-out per reconcile/handler tick — both Cowboy-owned Ingresses

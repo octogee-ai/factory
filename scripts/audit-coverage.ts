@@ -9,7 +9,7 @@
  *
  * Usage:
  *   npm run --prefix scripts audit-coverage              # whole repo, 120d
- *   tsx scripts/audit-coverage.ts --since=90d --top=30 app workspace-api
+ *   tsx scripts/audit-coverage.ts --since=90d --top=30 app gateway-edge
  *   tsx scripts/audit-coverage.ts scripts                # one package
  *
  * Per repo policy `scripts/` carries no test gate — self-verifying:

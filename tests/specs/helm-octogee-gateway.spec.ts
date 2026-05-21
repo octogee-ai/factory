@@ -1,6 +1,6 @@
 // Tests the helm/octogee-gateway/ standalone chart — one helm release
 // per gateway instance, owned by Cowboy. Replaces the old helm-gateway-
-// instances + helm-multi-instance-routing + helm-workspace-api-sidecar
+// instances + helm-multi-instance-routing + helm-gateway-edge-sidecar
 // suites that rendered the now-deleted gateway sub-chart of the umbrella.
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -108,9 +108,9 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(svc).toMatch(/gateway-instance:\s*default/);
   });
 
-  it("renders the workspace-api-<instanceName> alias Service", () => {
+  it("renders the gateway-edge-<instanceName> alias Service", () => {
     const out = helmTemplate();
-    const svc = findDoc(out, "Service", "workspace-api-default");
+    const svc = findDoc(out, "Service", "gateway-edge-default");
     expect(svc).not.toBeNull();
     expect(svc).toMatch(/gateway-instance:\s*default/);
   });
@@ -137,21 +137,21 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     });
     expect(findDoc(out, "Deployment", "octogee-gateway-canary")).not.toBeNull();
     expect(findDoc(out, "Service", "octogee-gateway-canary")).not.toBeNull();
-    expect(findDoc(out, "Service", "workspace-api-canary")).not.toBeNull();
+    expect(findDoc(out, "Service", "gateway-edge-canary")).not.toBeNull();
   });
 });
 
 describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
-  it("inherits gateway, chat-proxy, workspace-api images from one imageTag field by default", () => {
+  it("inherits gateway, chat-proxy, gateway-edge images from one imageTag field by default", () => {
     const out = helmTemplate("octogee-gw-default", { imageTag: "cafef00d" });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     // Find each container block and assert the resolved image tag.
     const gatewayBlock = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     const chatProxyBlock = dep.match(/- name:\s*chat-proxy[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
-    const wsApiBlock = dep.match(/- name:\s*workspace-api[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
+    const wsApiBlock = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(gatewayBlock?.[0]).toMatch(/image:\s*"[^"]*octogee-gateway:cafef00d"/);
     expect(chatProxyBlock?.[0]).toMatch(/image:\s*"[^"]*octogee-chat-proxy:cafef00d"/);
-    expect(wsApiBlock?.[0]).toMatch(/image:\s*"[^"]*workspace-api:cafef00d"/);
+    expect(wsApiBlock?.[0]).toMatch(/image:\s*"[^"]*gateway-edge:cafef00d"/);
   });
 
   it("per-image override beats imageTag (escape hatch for hotfix)", () => {
@@ -162,35 +162,35 @@ describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const cp = dep.match(/- name:\s*chat-proxy[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(cp?.[0]).toMatch(/image:\s*"[^"]*octogee-chat-proxy:hotfix-cp-99"/);
-    // gateway + workspace-api still use bundle SHA
+    // gateway + gateway-edge still use bundle SHA
     const gw = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(gw?.[0]).toMatch(/image:\s*"[^"]*octogee-gateway:abc1234"/);
   });
 });
 
-describe("helm/octogee-gateway/ — workspace-api sidecar (Phase 6.B collocation)", () => {
-  it("renders workspace-api as a third sidecar inside the gateway pod", () => {
+describe("helm/octogee-gateway/ — gateway-edge sidecar (Phase 6.B collocation)", () => {
+  it("renders gateway-edge as a third sidecar inside the gateway pod", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/- name:\s*gateway/);
     expect(dep).toMatch(/- name:\s*chat-proxy/);
-    expect(dep).toMatch(/- name:\s*workspace-api/);
+    expect(dep).toMatch(/- name:\s*gateway-edge/);
   });
 
-  it("workspace-api sidecar exposes port 3001 and probes /health", () => {
+  it("gateway-edge sidecar exposes port 3001 and probes /health", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const wsBlock =
-      dep.match(/- name:\s*workspace-api[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
+      dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
     expect(wsBlock).toMatch(/containerPort:\s*3001/);
     expect(wsBlock).toMatch(/path:\s*\/health/);
   });
 
-  it("workspace-api sidecar wires every secret from the chart's secrets list", () => {
+  it("gateway-edge sidecar wires every secret from the chart's secrets list", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const wsBlock =
-      dep.match(/- name:\s*workspace-api[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
+      dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
     // Spot-check a sample of required + optional secrets that the
     // factory (admin-fleet-router) and BYOT routes need.
     expect(wsBlock).toMatch(/INTERNAL_SERVICE_KEY/);
@@ -242,7 +242,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
   it("mounts the data PVC at /home/node (the whole operator home, not just .openclaw)", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    // gateway + workspace-api containers + the fix-perms init container
+    // gateway + gateway-edge containers + the fix-perms init container
     // all share the same PVC at /home/node. chat-proxy stays stateless.
     const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
     expect(dataMounts.length).toBe(3);
@@ -310,7 +310,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(dep).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
   });
 
-  it("keeps the Mattermost + Gitea platform tokens for ALL profiles (chat-proxy + workspace-api need them)", () => {
+  it("keeps the Mattermost + Gitea platform tokens for ALL profiles (chat-proxy + gateway-edge need them)", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", { profile: "operator" }),
       "Deployment",

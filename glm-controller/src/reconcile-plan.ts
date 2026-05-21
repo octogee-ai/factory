@@ -12,7 +12,7 @@ export type ReconcileChange =
 
 /**
  * The fleet-wide gateway image tag — drives sidecars (chat-proxy,
- * workspace-api) so the whole gateway pod rolls together per #846.
+ * gateway-edge) so the whole gateway pod rolls together per #846.
  *
  * Picks the `default` instance's imageTag if present (the canonical primary).
  * Falls back to the first non-retired instance's imageTag for canary-only or

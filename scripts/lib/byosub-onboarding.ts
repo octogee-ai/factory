@@ -4,7 +4,7 @@
  * self-completes (it polls OpenAI); we react to its exit + the async
  * human approval window. Design: BYO-SUBSCRIPTION-OAUTH-SPEC.md §13.
  * I/O (child spawn, HTTP, capture-callback) lives in the gateway runner /
- * workspace-api handlers and is exercised in TEST.
+ * gateway-edge handlers and is exercised in TEST.
  */
 
 export type FlowState =

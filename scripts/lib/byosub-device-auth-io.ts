@@ -3,7 +3,7 @@
  * child spawn, fs read, the R2 capture POST — exercised in TEST, not
  * unit-tested (the orchestration in byosub-device-auth.ts is). codex runs
  * with the per-agent CODEX_HOME so its auth.json lands exactly where
- * Chunk A restores / Chunk B watches. workspace-api owns the Secret
+ * Chunk A restores / Chunk B watches. gateway-edge owns the Secret
  * Manager write; this only hands it the credential over the in-pod
  * internal channel. Design: BYO-SUBSCRIPTION-OAUTH-SPEC §13.
  */
@@ -22,14 +22,14 @@ import type { DeviceAuthChild, DeviceAuthDeps } from "./byosub-device-auth.js";
 export interface DeviceAuthIoConfig {
   openclawDir: string;
   internalServiceKey: string;
-  /** workspace-api is an in-pod sidecar; default reaches it on localhost. */
-  workspaceApiBaseUrl?: string;
+  /** gateway-edge is an in-pod sidecar; default reaches it on localhost. */
+  gatewayEdgeBaseUrl?: string;
   codexBin?: string;
   log?: (m: string) => void;
 }
 
 export function realDeviceAuthDeps(cfg: DeviceAuthIoConfig): DeviceAuthDeps {
-  const base = cfg.workspaceApiBaseUrl ?? "http://127.0.0.1:3001";
+  const base = cfg.gatewayEdgeBaseUrl ?? "http://127.0.0.1:3001";
   const codexBin = cfg.codexBin ?? "codex";
   const log = cfg.log ?? (() => {});
   return {

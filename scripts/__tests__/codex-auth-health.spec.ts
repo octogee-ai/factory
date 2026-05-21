@@ -195,7 +195,7 @@ describe("checkCodexAuthHealthForAgents — periodic detection sweep (injected I
       now: NOW,
       readAuthState: () => disabled,
       signalNeedsReauth: async () => {
-        throw new Error("workspace-api 503");
+        throw new Error("gateway-edge 503");
       },
       logFn: (m) => logs.push(m),
     });

@@ -409,7 +409,7 @@ describe("gitCommit hardening (Phase 6.C.2 — #839 Copilot P0)", () => {
   // Customer-controlled .git/hooks/* — without the
   // -c core.hooksPath=/dev/null pin (and the --no-verify defense), a
   // pre-commit hook would execute arbitrary code inside the
-  // workspace-api sidecar on every owner commit.
+  // gateway-edge sidecar on every owner commit.
   let repo: string;
   beforeAll(async () => {
     repo = await fs.mkdtemp(path.join(os.tmpdir(), "wshooks-"));

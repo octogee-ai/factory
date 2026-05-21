@@ -1,7 +1,7 @@
 /**
  * Admin Fleet Router — shared Express factory for admin/fleet endpoints.
  *
- * Mounted by both workspace-api (today) and glm-controller (post-#PR), so
+ * Mounted by both gateway-edge (today) and glm-controller (post-#PR), so
  * the admin Gateways tab keeps responding even when no gateway pods are
  * booted. Dependencies are injected; this file imports nothing from
  * either consumer.
@@ -44,7 +44,7 @@ export interface FleetRouterDeps {
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
 }
 
-/** Fields workspace-api / glm-controller auth middleware put on req. */
+/** Fields gateway-edge / glm-controller auth middleware put on req. */
 type ActorRequest = Request & {
   uid?: string;
   user?: { email?: string | null };
@@ -66,7 +66,7 @@ type RestoreJobStateLabel = (typeof RESTORE_JOB_STATES)[number];
 const BUILDS_SERVICE_ALLOWLIST = new Set([
   "octogee-gateway",
   "octogee-chat-proxy",
-  "workspace-api",
+  "gateway-edge",
 ]);
 
 const OP_KINDS = new Set([
@@ -452,7 +452,7 @@ async function createOperation(
 /**
  * Mounts every admin /fleet/customer-lifecycle endpoint onto the supplied
  * router. The caller is responsible for `requireAdmin` — this factory is
- * deliberately middleware-agnostic so workspace-api and glm-controller
+ * deliberately middleware-agnostic so gateway-edge and glm-controller
  * can each apply their own.
  *
  * Routing reality (Phase 1, this PR):
@@ -460,7 +460,7 @@ async function createOperation(
  *     by the umbrella Ingress so they survive a missing gateway pod.
  *   - Customer-lifecycle writes (`/customer/:uid/delete`,
  *     `/customers/:uid/{assign,migrate}`) are mounted here so glm-controller
- *     can serve them, but the Ingress still routes them to workspace-api
+ *     can serve them, but the Ingress still routes them to gateway-edge
  *     today (GCE path matching can't disambiguate `/customer/:uid/delete`
  *     from `/customer/:uid` without a wildcard segment). The mount is
  *     forward-compat for the next ingress reshuffle once we collapse the

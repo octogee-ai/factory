@@ -61,7 +61,7 @@ export interface SyncBackResult {
  * One sweep over the watched per-agent credential files. `observe` logs a
  * change fingerprint and never reads/pushes the secret (the rotation-data
  * collector + zero-risk first ship). `active` reads the rotated payload and
- * hands it to the injected `pushCredential` (workspace-api-mediated per R2 —
+ * hands it to the injected `pushCredential` (gateway-edge-mediated per R2 —
  * the gateway SA stays read-only). Per-item isolation: a push failure counts
  * + does NOT advance `prev` (retried next sweep) and never throws. Returns
  * the advanced `prev` map (caller threads it forward); the input map is not

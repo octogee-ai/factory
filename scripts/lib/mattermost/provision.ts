@@ -368,7 +368,7 @@ export async function provisionMattermostUser(
     // downstream code can treat the result like a user object.
     //
     // Display name is "Octo" by default; renamed via Settings or milestone,
-    // synced by the workspace-api PATCH /api/agents/me endpoint + the
+    // synced by the gateway-edge PATCH /api/agents/me endpoint + the
     // gateway sweep, which both call PUT /bots/{id} with `display_name`.
     const coachUsername = `${slug}-coach`;
     const createdBot = await mmApiCall("POST", "/bots", {

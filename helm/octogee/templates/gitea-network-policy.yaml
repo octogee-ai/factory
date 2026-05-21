@@ -24,8 +24,8 @@ spec:
         - podSelector:
             matchLabels:
               app: octogee-gateway
-      # gateway pod hosts workspace-api as a sidecar (Phase 6.B), so this
-      # one selector covers gateway, chat-proxy, AND workspace-api egress
+      # gateway pod hosts gateway-edge as a sidecar (Phase 6.B), so this
+      # one selector covers gateway, chat-proxy, AND gateway-edge egress
       # to gitea (file read/write, repo management).
       ports:
         - protocol: TCP

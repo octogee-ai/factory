@@ -283,8 +283,8 @@ fi
 #
 # Auth: defense-in-depth via INTERNAL_SERVICE_KEY in addition to
 # K8s-namespace Service isolation. The shared secret is the same one
-# the platform uses for service-to-service (chat-proxy → workspace-api,
-# gateway → workspace-api). Setting BUILDER_SHELL_REQUIRE_KEY=true
+# the platform uses for service-to-service (chat-proxy → gateway-edge,
+# gateway → gateway-edge). Setting BUILDER_SHELL_REQUIRE_KEY=true
 # here means any in-cluster pod that lands on the gateway's :3005
 # without the header is 401'd. Without this, a compromised pod in the
 # same namespace (cattle, etc.) could connect directly and bypass

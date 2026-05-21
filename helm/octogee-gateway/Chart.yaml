@@ -1,7 +1,7 @@
 apiVersion: v2
 name: octogee-gateway
 description: |
-  Single Octogee gateway pod (gateway + workspace-api + chat-proxy
+  Single Octogee gateway pod (gateway + gateway-edge + chat-proxy
   sidecars). One release per gateway instance, owned by Cowboy
   (glm-controller). The umbrella `octogee` release no longer renders
   gateway pods — see docs/operations/RUNBOOK.md §Gateway lifecycle.

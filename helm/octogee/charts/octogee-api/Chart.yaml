@@ -1,6 +1,6 @@
 apiVersion: v2
 name: octogee-api
-description: Cluster-singleton HTTP API — non-locality routes lifted from workspace-api. See docs/specs/POST-BENDER-CLEANUP-SPEC.md.
+description: Cluster-singleton HTTP API — non-locality routes lifted from gateway-edge. See docs/specs/POST-BENDER-CLEANUP-SPEC.md.
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

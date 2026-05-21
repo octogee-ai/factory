@@ -1,71 +1,71 @@
 /**
  * octogee-api — cluster-singleton HTTP service for non-locality routes.
  *
- * Lifted from workspace-api per `docs/specs/POST-BENDER-CLEANUP-SPEC.md`.
- * Mounts the 43 of 46 workspace-api routes that have no per-gateway-pod
+ * Lifted from gateway-edge per `docs/specs/POST-BENDER-CLEANUP-SPEC.md`.
+ * Mounts the 43 of 46 gateway-edge routes that have no per-gateway-pod
  * locality dependency. Stable hostname + stable connection pools unblock
  * Astro SSR on octogee.com (was previously round-robined across every
- * gateway pod's workspace-api sidecar).
+ * gateway pod's gateway-edge sidecar).
  *
  * Locality routes that stay on the gateway-pod sidecar:
  *   - workspace/git          (local /home/node/.openclaw/customers FS)
  *   - internal/billing       (calls localhost OpenClaw RPC for usage)
  *   - projects/deploy-preview (calls localhost site-build-api sidecar)
  *
- * Route handlers are imported as-is from workspace-api/src/routes/* —
+ * Route handlers are imported as-is from gateway-edge/src/routes/* —
  * no code movement, both packages compile the same sources independently.
- * When workspace-api is later renamed gateway-edge and slimmed, this
+ * When gateway-edge is later slimmed to just its 3 locality routes, this
  * import path becomes the single source-of-truth location.
  */
 import express, { Request, Response } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 
-import { corsMiddleware } from "../../workspace-api/src/middleware/cors";
-import { requestLogger, logger } from "../../workspace-api/src/middleware/logging";
-import { errorHandler } from "../../workspace-api/src/middleware/errors";
-import { helmetMiddleware, globalRateLimit } from "../../workspace-api/src/middleware/security";
+import { corsMiddleware } from "../../gateway-edge/src/middleware/cors";
+import { requestLogger, logger } from "../../gateway-edge/src/middleware/logging";
+import { errorHandler } from "../../gateway-edge/src/middleware/errors";
+import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middleware/security";
 
 // ── Cluster routes (43 of 46) ────────────────────────────────────────────
-import mattermostRoutes from "../../workspace-api/src/routes/mattermost";
-import openclawRoutes from "../../workspace-api/src/routes/openclaw";
-import billingRoutes from "../../workspace-api/src/routes/billing";
-import adminRoutes from "../../workspace-api/src/routes/admin";
-import inviteRoutes from "../../workspace-api/src/routes/invites";
-import integrationRoutes from "../../workspace-api/src/routes/integrations";
-import byosubRoutes from "../../workspace-api/src/routes/byosub";
-import discordRoutes from "../../workspace-api/src/routes/discord";
-import notificationRoutes from "../../workspace-api/src/routes/notifications";
-import sharingRoutes from "../../workspace-api/src/routes/sharing";
-import entitiesRoutes from "../../workspace-api/src/routes/entities";
-import profileRoutes from "../../workspace-api/src/routes/profile";
-import onboardingRoutes from "../../workspace-api/src/routes/onboarding";
-import postsRoutes from "../../workspace-api/src/routes/posts";
-import agentRoutes from "../../workspace-api/src/routes/agents";
-import builderGatewaysRoutes from "../../workspace-api/src/routes/builder/gateways";
+import mattermostRoutes from "../../gateway-edge/src/routes/mattermost";
+import openclawRoutes from "../../gateway-edge/src/routes/openclaw";
+import billingRoutes from "../../gateway-edge/src/routes/billing";
+import adminRoutes from "../../gateway-edge/src/routes/admin";
+import inviteRoutes from "../../gateway-edge/src/routes/invites";
+import integrationRoutes from "../../gateway-edge/src/routes/integrations";
+import byosubRoutes from "../../gateway-edge/src/routes/byosub";
+import discordRoutes from "../../gateway-edge/src/routes/discord";
+import notificationRoutes from "../../gateway-edge/src/routes/notifications";
+import sharingRoutes from "../../gateway-edge/src/routes/sharing";
+import entitiesRoutes from "../../gateway-edge/src/routes/entities";
+import profileRoutes from "../../gateway-edge/src/routes/profile";
+import onboardingRoutes from "../../gateway-edge/src/routes/onboarding";
+import postsRoutes from "../../gateway-edge/src/routes/posts";
+import agentRoutes from "../../gateway-edge/src/routes/agents";
+import builderGatewaysRoutes from "../../gateway-edge/src/routes/builder/gateways";
 
 // workspace/* sub-routers mounted individually so locality `git` is skipped.
-import workspaceDisplayNameRoutes from "../../workspace-api/src/routes/workspace/display-name";
-import workspaceFilesRoutes from "../../workspace-api/src/routes/workspace/files";
-import workspaceUploadRoutes from "../../workspace-api/src/routes/workspace/upload";
-import workspaceDeleteBlobRoutes from "../../workspace-api/src/routes/workspace/delete-blob";
-import workspaceExtractZipRoutes from "../../workspace-api/src/routes/workspace/extract-zip";
-import workspaceImportRepoRoutes from "../../workspace-api/src/routes/workspace/import-repo";
-import { requireAuth } from "../../workspace-api/src/middleware/auth";
+import workspaceDisplayNameRoutes from "../../gateway-edge/src/routes/workspace/display-name";
+import workspaceFilesRoutes from "../../gateway-edge/src/routes/workspace/files";
+import workspaceUploadRoutes from "../../gateway-edge/src/routes/workspace/upload";
+import workspaceDeleteBlobRoutes from "../../gateway-edge/src/routes/workspace/delete-blob";
+import workspaceExtractZipRoutes from "../../gateway-edge/src/routes/workspace/extract-zip";
+import workspaceImportRepoRoutes from "../../gateway-edge/src/routes/workspace/import-repo";
+import { requireAuth } from "../../gateway-edge/src/middleware/auth";
 
 // projects/* sub-routers mounted individually so locality `deploy-preview` is skipped.
-import projectsReadmeRoutes from "../../workspace-api/src/routes/projects/readme";
-import projectsCreateRoutes from "../../workspace-api/src/routes/projects/create";
-import projectsRetryRoutes from "../../workspace-api/src/routes/projects/retry";
-import projectsJoinLeaveRoutes from "../../workspace-api/src/routes/projects/join-leave";
-import projectsStarRoutes from "../../workspace-api/src/routes/projects/star";
-import projectsMembersRoutes from "../../workspace-api/src/routes/projects/members";
-import projectsDeleteRoutes from "../../workspace-api/src/routes/projects/delete";
+import projectsReadmeRoutes from "../../gateway-edge/src/routes/projects/readme";
+import projectsCreateRoutes from "../../gateway-edge/src/routes/projects/create";
+import projectsRetryRoutes from "../../gateway-edge/src/routes/projects/retry";
+import projectsJoinLeaveRoutes from "../../gateway-edge/src/routes/projects/join-leave";
+import projectsStarRoutes from "../../gateway-edge/src/routes/projects/star";
+import projectsMembersRoutes from "../../gateway-edge/src/routes/projects/members";
+import projectsDeleteRoutes from "../../gateway-edge/src/routes/projects/delete";
 
 // Internal (service-to-service, requireInternalServiceAuth).
-import internalNotificationRoutes from "../../workspace-api/src/routes/internal/notifications";
-import internalEngagementRoutes from "../../workspace-api/src/routes/internal/engagement";
-import internalCSIRoutes from "../../workspace-api/src/routes/internal/csi";
-import internalBuilderShellRoutes from "../../workspace-api/src/routes/internal/builder-shell";
+import internalNotificationRoutes from "../../gateway-edge/src/routes/internal/notifications";
+import internalEngagementRoutes from "../../gateway-edge/src/routes/internal/engagement";
+import internalCSIRoutes from "../../gateway-edge/src/routes/internal/csi";
+import internalBuilderShellRoutes from "../../gateway-edge/src/routes/internal/builder-shell";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
@@ -135,7 +135,7 @@ export function createApp() {
   app.get("/health", healthHandler);
   app.get("/api/health", healthHandler);
 
-  // ── Cluster routes — single mount at /api/<path>. Unlike workspace-api,
+  // ── Cluster routes — single mount at /api/<path>. Unlike gateway-edge,
   // octogee-api does NOT dual-mount at /api/g/:gatewayId/* — that path is
   // the per-gateway-pod affinity seam, served only by the gateway sidecar.
   const WORKSPACE = "/api/workspace";

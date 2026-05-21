@@ -30,8 +30,8 @@ env:
   # TEST ns "octogee-test" = TEST project. Matches the glm-controller pattern.
   # K8S_NAMESPACE is also downward API, not values-driven.
 
-# Mirrors workspace-api's secret list — same routes, same secret needs.
-# When workspace-api is later renamed gateway-edge and slimmed to ~3
+# Mirrors gateway-edge's secret list — same routes, same secret needs.
+# When gateway-edge is later renamed gateway-edge and slimmed to ~3
 # locality routes, this list shrinks back to only what octogee-api needs.
 secrets:
   - envName: STRIPE_SECRET_KEY

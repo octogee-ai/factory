@@ -34,18 +34,18 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: workspace-api-{{ .Values.instanceName }}
+  name: gateway-edge-{{ .Values.instanceName }}
   labels:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
-    app.kubernetes.io/name: workspace-api
+    app.kubernetes.io/name: gateway-edge
 spec:
   selector:
     app: octogee-gateway
     gateway-instance: {{ .Values.instanceName }}
   ports:
     - name: http
-      port: {{ .Values.workspaceApi.port }}
-      targetPort: {{ .Values.workspaceApi.port }}
+      port: {{ .Values.gatewayEdge.port }}
+      targetPort: {{ .Values.gatewayEdge.port }}
   type: ClusterIP
 ---
 # Per-instance chat-proxy Service. Selects ONLY the chat-proxy sidecar

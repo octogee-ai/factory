@@ -1,12 +1,12 @@
 {
-  "name": "@octogee/workspace-api",
+  "name": "@octogee/gateway-edge",
   "version": "1.0.0",
   "description": "Octogee workspace API — consolidated HTTP service (ex Cloud Functions)",
-  "main": "dist/workspace-api/src/index.js",
+  "main": "dist/gateway-edge/src/index.js",
   "scripts": {
     "build": "tsc && tsc-alias -p tsconfig.json && npm run verify:no-alias-leakage",
     "build:watch": "tsc --watch",
-    "start": "node dist/workspace-api/src/index.js",
+    "start": "node dist/gateway-edge/src/index.js",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run --exclude 'src/__tests__/**/*.emulator.spec.ts'",
     "test:watch": "vitest --exclude 'src/__tests__/**/*.emulator.spec.ts'",

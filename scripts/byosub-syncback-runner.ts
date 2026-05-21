@@ -4,7 +4,7 @@
  * (codex rotated the token in place), records it. **Observe-only** first
  * ship (spec §8 / Chunk B): zero secret reads, zero writes, zero IAM — it
  * is the detection mechanism AND the natural-rotation data collector. The
- * `active` push (workspace-api-mediated per R2) is a tested-but-unwired
+ * `active` push (gateway-edge-mediated per R2) is a tested-but-unwired
  * follow-on. Codex access tokens are ~10-day and rotation is lenient, so a
  * slow poll is fine — this is not a hot path.
  */

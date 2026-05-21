@@ -10,8 +10,8 @@ export interface RequireAdminDeps {
 
 // Contract: the admin-fleet-router factory only reads `req.uid` (for
 // `createdBy`) and `req.user.email` (for audit fields it doesn't yet
-// emit on glm-controller, but workspace-api does). Anything else on
-// `req.user` is workspace-api-specific (e.g. giteaToken) and not
+// emit on glm-controller, but gateway-edge does). Anything else on
+// `req.user` is gateway-edge-specific (e.g. giteaToken) and not
 // surfaced here — glm-controller only needs the auth-identity slice.
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace

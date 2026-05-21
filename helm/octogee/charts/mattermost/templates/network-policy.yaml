@@ -23,8 +23,8 @@ spec:
     # runs as a sidecar of the octogee-gateway pod (helm/octogee/charts/gateway
     # /templates/deployment.yaml), so its source pod label is `app: octogee-gateway`.
     # Allow from gateway pod (OpenClaw bot, provisioner, site-build-api,
-    # chat-proxy sidecar, AND the workspace-api sidecar — Phase 6.B
-    # collocation made workspace-api a sibling container in this pod, so
+    # chat-proxy sidecar, AND the gateway-edge sidecar — Phase 6.B
+    # collocation made gateway-edge a sibling container in this pod, so
     # one selector covers all three).
     - from:
         - podSelector:

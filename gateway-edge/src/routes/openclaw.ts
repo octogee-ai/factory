@@ -36,7 +36,7 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
     // single-pod default-gateway route still works during migration).
     //
     // Source: req.user is already populated by requireAuth (see
-    // workspace-api/src/middleware/auth.ts) — no second Firestore read.
+    // gateway-edge/src/middleware/auth.ts) — no second Firestore read.
     const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;
     const gatewayId =

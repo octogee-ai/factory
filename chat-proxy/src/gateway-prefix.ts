@@ -8,7 +8,7 @@
 // `/api/v4/...`, etc.) don't know about it. Strip it here so every
 // matcher works unchanged on both `/api/<p>` AND `/g/<gw>/api/<p>`.
 //
-// Mirror of the workspace-api dual-mount helper landed earlier today
+// Mirror of the gateway-edge dual-mount helper landed earlier today
 // (FLEET-API-ROUTING-SPEC.md task #14).
 //
 // Implementation note: split-based (no nested-quantifier regex) to

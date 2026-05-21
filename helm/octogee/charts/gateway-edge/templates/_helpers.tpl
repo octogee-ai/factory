@@ -1,9 +1,9 @@
 {{/*
 Common labels
 */}}
-{{- define "workspace-api.labels" -}}
+{{- define "gateway-edge.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
-app.kubernetes.io/name: workspace-api
+app.kubernetes.io/name: gateway-edge
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}

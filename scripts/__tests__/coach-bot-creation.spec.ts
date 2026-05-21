@@ -9,9 +9,9 @@ const __dirname = path.dirname(__filename);
 const PROVISION_SRC = path.resolve(__dirname, "../lib/mattermost/provision.ts");
 const PROFILE_SYNC_SRC = path.resolve(__dirname, "../lib/mattermost/profile-sync.ts");
 const MILESTONES_SRC = path.resolve(__dirname, "../lib/milestones.ts");
-const WORKSPACE_API_AGENTS_SRC = path.resolve(
+const GATEWAY_EDGE_AGENTS_SRC = path.resolve(
   __dirname,
-  "../../workspace-api/src/routes/agents.ts",
+  "../../gateway-edge/src/routes/agents.ts",
 );
 
 describe("coach is a MM bot — creation contract", () => {
@@ -45,8 +45,8 @@ describe("coach is a MM bot — creation contract", () => {
 });
 
 describe("coach is a MM bot — rename contract", () => {
-  it("workspace-api PATCH /me uses PUT /bots/{id} with display_name", () => {
-    const src = fs.readFileSync(WORKSPACE_API_AGENTS_SRC, "utf-8");
+  it("gateway-edge PATCH /me uses PUT /bots/{id} with display_name", () => {
+    const src = fs.readFileSync(GATEWAY_EDGE_AGENTS_SRC, "utf-8");
     expect(src).toMatch(/`\/bots\/\$\{coachMmUserId\}`,\s*"PUT"/);
     expect(src).toMatch(/display_name:\s*patch\.name/);
     // Regression guard: the old user-patch path is gone.

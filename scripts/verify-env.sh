@@ -229,7 +229,7 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
 
   status "mattermost-gateway admin_user present" "mattermost-gateway admin_user missing" "$MM_ADMIN_USER"
   status "mattermost-gateway admin_pass present" "mattermost-gateway admin_pass missing" "$MM_ADMIN_PASS"
-  status "mattermost-gateway admin_token present" "mattermost-gateway admin_token missing (workspace-api /admin-token will fail)" "$MM_ADMIN_TOKEN"
+  status "mattermost-gateway admin_token present" "mattermost-gateway admin_token missing (gateway-edge /admin-token will fail)" "$MM_ADMIN_TOKEN"
   status "mattermost-gateway admin_user_id present" "mattermost-gateway admin_user_id missing" "$MM_ADMIN_USER_ID"
   status "mattermost-gateway bot_token present" "mattermost-gateway bot_token missing (chat-proxy will fail)" "$MM_BOT_TOKEN"
   status "mattermost-gateway bot_user_id present" "mattermost-gateway bot_user_id missing" "$MM_BOT_USER_ID"
@@ -651,7 +651,7 @@ fi
 # response there.
 set_section bootstrap
 header "5d. Endpoint Health"
-for INGRESS_NAME in workspace-api-ingress chat-proxy-ingress mattermost-ingress octogee-gateway-fleet-control-ingress; do
+for INGRESS_NAME in gateway-edge-ingress chat-proxy-ingress mattermost-ingress octogee-gateway-fleet-control-ingress; do
   if ! kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
     continue
   fi

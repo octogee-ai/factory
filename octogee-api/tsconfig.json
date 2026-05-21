@@ -18,7 +18,7 @@
   "include": [
     "src/**/*.ts",
     "../shared/types/**/*.ts",
-    "../workspace-api/src/**/*.ts",
+    "../gateway-edge/src/**/*.ts",
     "../scripts/lib/admin-fleet-router.ts",
     "../scripts/lib/secret-manager.ts",
     "../scripts/lib/artifact-registry.ts",
@@ -29,6 +29,6 @@
     "node_modules",
     "dist",
     "../shared/**/*.spec.ts",
-    "../workspace-api/src/__tests__/**/*"
+    "../gateway-edge/src/__tests__/**/*"
   ]
 }

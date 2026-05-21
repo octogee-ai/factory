@@ -1,5 +1,5 @@
 // Cross-package emulator-backed test helpers for Firestore + Firebase
-// Auth specs. Used by workspace-api and chat-proxy; ready for any
+// Auth specs. Used by gateway-edge and chat-proxy; ready for any
 // future package that mounts emulator-backed specs.
 //
 // Why emulator-backed over mocks: real Firestore transaction semantics
@@ -64,7 +64,7 @@ const getDb = getAdminDb;
 const getAuth = getAdminAuth;
 
 // NOTE: collection-name constants intentionally NOT exported here.
-// They are package-domain (workspace-api: builderShellTickets,
+// They are package-domain (gateway-edge: builderShellTickets,
 // builder_shell_sessions, glmGateways; chat-proxy: ocTickets, etc.)
 // Each package's specs define what they need.
 

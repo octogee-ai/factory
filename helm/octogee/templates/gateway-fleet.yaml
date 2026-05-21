@@ -25,7 +25,7 @@
 # Legacy alias Service — selects every gateway pod, round-robins.
 # Remaining callers: chat-proxy gateway-resolver fallback, mattermost
 # allowedInternalConnections. Both fleet-control (this file) and
-# api[-test].octogee.com (workspace-api chart) use per-instance
+# api[-test].octogee.com (gateway-edge chart) use per-instance
 # Services and bypass this alias.
 apiVersion: v1
 kind: Service

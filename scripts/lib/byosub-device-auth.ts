@@ -3,7 +3,7 @@
  * long-lived headless `codex login --device-auth` child per agent, scrapes
  * its prompt via parseCodexDeviceAuth, drives the pure nextFlowState
  * reducer, and on codex's clean exit POSTs the captured credential to
- * workspace-api (R2: workspace-api owns the Secret Manager write). All
+ * gateway-edge (R2: gateway-edge owns the Secret Manager write). All
  * genuine I/O — child spawn, fs read, the capture HTTP — is injected so
  * the orchestration is unit-tested; the real wiring lives at the call
  * site and is exercised in TEST. Design: BYO-SUBSCRIPTION-OAUTH-SPEC §13.
@@ -39,7 +39,7 @@ export interface DeviceAuthDeps {
   spawnDeviceAuth: (agentId: string) => DeviceAuthChild;
   /** The agent's codex auth.json contents, or null when absent. */
   readAuthJson: (agentId: string) => Promise<string | null>;
-  /** Server-mediated R2 capture → workspace-api. */
+  /** Server-mediated R2 capture → gateway-edge. */
   postCapture: (
     flowId: string,
     credential: string,

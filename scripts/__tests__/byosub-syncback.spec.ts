@@ -134,7 +134,7 @@ describe("syncBackSweep", () => {
       prev: new Map(),
       mode: "active",
       pushCredential: async () => {
-        throw new Error("workspace-api 503");
+        throw new Error("gateway-edge 503");
       },
     });
     expect(r.pushed).toBe(0);

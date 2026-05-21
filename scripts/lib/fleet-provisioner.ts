@@ -34,7 +34,7 @@ const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
 /**
  * BYO-sub device-auth (C1b). Guarded by X-Internal-Service-Key (not the
- * fleet signature) — the only caller is workspace-api's
+ * fleet signature) — the only caller is gateway-edge's
  * gatewayDeviceAuthClient over K8s DNS. The codex child runs with the
  * per-agent CODEX_HOME so its auth.json lands where Chunk A/B expect.
  */
@@ -82,7 +82,7 @@ export interface StartFleetOptions {
   /** BYO-sub device-auth (C1b): where per-agent codex-homes live. */
   openclawDir?: string;
   /** Shared internal-service key — guards the device-auth endpoints and
-   * authenticates the in-pod capture POST to workspace-api. */
+   * authenticates the in-pod capture POST to gateway-edge. */
   internalServiceKey?: string;
 }
 

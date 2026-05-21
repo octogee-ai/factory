@@ -8,7 +8,7 @@
 // (`/api/openclaw/ws/<uuid>`, `/api/mattermost/...`, `/api/v4/...`, etc.)
 // don't know about it. `stripGatewayPrefix` peels it off at the entry
 // point so every downstream matcher works unchanged on both
-// `/api/<p>` AND `/g/<gw>/api/<p>` (the workspace-api dual-mount pattern,
+// `/api/<p>` AND `/g/<gw>/api/<p>` (the gateway-edge dual-mount pattern,
 // mirrored here).
 
 import { describe, it, expect } from "vitest";

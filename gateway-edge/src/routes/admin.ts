@@ -20,7 +20,7 @@ router.use(requireAdmin);
 // Customer Customers tab + per-customer drawer. Mounted from a shared
 // factory so glm-controller (Cowboy HTTP) can serve the same surface
 // when no gateway pods are booted. The factory owns route definitions;
-// this wiring layer injects workspace-api's db / logger / CSI compute.
+// this wiring layer injects gateway-edge's db / logger / CSI compute.
 addAdminCustomerRoutes(router, {
   db,
   FieldValue,

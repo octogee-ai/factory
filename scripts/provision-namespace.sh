@@ -43,7 +43,7 @@ set -euo pipefail
 #     9. rollout restart + verify pods running
 #
 # Access is INTERNAL ONLY. Use port-forward:
-#   kubectl port-forward -n NAMESPACE svc/workspace-api 3001:3001
+#   kubectl port-forward -n NAMESPACE svc/gateway-edge 3001:3001
 #   kubectl port-forward -n NAMESPACE svc/mattermost 8065:8065
 #
 # Usage:
@@ -424,7 +424,7 @@ echo -e "${BOLD}  Namespace provisioned — ${NAMESPACE}${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 echo "  Internal access (no public ingress):"
-echo "    kubectl port-forward -n $NAMESPACE svc/workspace-api 3001:3001"
+echo "    kubectl port-forward -n $NAMESPACE svc/gateway-edge 3001:3001"
 echo "    kubectl port-forward -n $NAMESPACE svc/mattermost 8065:8065"
 echo "    kubectl port-forward -n $NAMESPACE svc/octogee-gitea-http 3000:3000"
 echo ""

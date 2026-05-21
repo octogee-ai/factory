@@ -352,7 +352,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
     save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
   else
     info "Cached admin PAT missing or invalid — rotating"
-    # Revoke any stale workspace-api-tagged PATs before minting a new one
+    # Revoke any stale gateway-edge-tagged PATs before minting a new one
     EXISTING_PATS=$(\
       curl -s "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
@@ -360,7 +360,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
 import sys, json
 tokens = json.load(sys.stdin)
 for t in tokens:
-    if 'workspace-api' in t.get('description', ''):
+    if 'gateway-edge' in t.get('description', ''):
         print(t['id'])
 " 2>/dev/null || echo "")
     REVOKED=0
@@ -378,14 +378,14 @@ for t in tokens:
       curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
       -H "Content-Type: application/json" \
-      -d '{"description":"workspace-api admin token"}' 2>/dev/null)
+      -d '{"description":"gateway-edge admin token"}' 2>/dev/null)
     MM_ADMIN_PAT=$(mm_field "$PAT_RESP" token || true)
     if [[ -n "$MM_ADMIN_PAT" ]]; then
       save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
       ok "Admin PAT created"
     else
       warn "Failed to create admin PAT: $PAT_RESP"
-      warn "workspace-api /admin-token route will return 503 without this!"
+      warn "gateway-edge /admin-token route will return 503 without this!"
     fi
   fi
 
@@ -546,20 +546,20 @@ else
     -d "{\"team_id\":\"$MM_TEAM_ID\",\"user_id\":\"$MM_ADMIN_USER_ID\"}" >/dev/null 2>&1
   ok "Admin added to team"
 
-  # Admin personal access token (PAT) for workspace-api
-  # Session tokens expire; PATs don't — workspace-api needs MM_ADMIN_TOKEN env var
-  info "Creating admin personal access token (PAT) for workspace-api..."
+  # Admin personal access token (PAT) for gateway-edge
+  # Session tokens expire; PATs don't — gateway-edge needs MM_ADMIN_TOKEN env var
+  info "Creating admin personal access token (PAT) for gateway-edge..."
   PAT_RESP=$(\
     curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"description":"workspace-api admin token"}' 2>/dev/null)
+    -d '{"description":"gateway-edge admin token"}' 2>/dev/null)
   MM_ADMIN_PAT=$(mm_field "$PAT_RESP" token || true)
   if [[ -n "$MM_ADMIN_PAT" ]]; then
     save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
     ok "Admin PAT created"
   else
-    warn "Failed to create admin PAT — workspace-api /admin-token will 503!"
+    warn "Failed to create admin PAT — gateway-edge /admin-token will 503!"
   fi
 
   # Bot
@@ -610,7 +610,7 @@ done
 
 if [[ "$WRITE_ERRORS" -gt 0 ]]; then
   warn "$WRITE_ERRORS value(s) missing — writing partial secret"
-  warn "chat-proxy and workspace-api may fail to start (MM_ADMIN_TOKEN is required)"
+  warn "chat-proxy and gateway-edge may fail to start (MM_ADMIN_TOKEN is required)"
 fi
 
 # ── 8. Atomic K8s secret write (dry-run + apply) ────────────────────────
@@ -655,7 +655,7 @@ echo -e "${CYAN}Mattermost bootstrap summary${NC}"
 status "MM_ADMIN_USER set" "${MM_ADMIN_USER:-}"
 status "MM_ADMIN_PASS set" "${MM_ADMIN_PASS:-}"
 status "MM_ADMIN_USER_ID set" "${MM_ADMIN_USER_ID:-}"
-status "MM_ADMIN_PAT set (required for workspace-api /admin-token)" "${MM_ADMIN_PAT:-}"
+status "MM_ADMIN_PAT set (required for gateway-edge /admin-token)" "${MM_ADMIN_PAT:-}"
 status "MM_TEAM_ID set" "${MM_TEAM_ID:-}"
 status "MM_BOT_USER_ID set" "${MM_BOT_USER_ID:-}"
 status "MM_BOT_TOKEN set (required for chat-proxy)" "${MM_BOT_TOKEN:-}"
@@ -670,13 +670,13 @@ if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_BOT_USER_ID:-}"
   echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE   # pods pick up new secret env"
   echo ""
   echo "  chat-proxy is a sidecar of octogee-gateway under Option C — restart"
-  echo "  the gateway deployment, not chat-proxy directly. workspace-api is a"
+  echo "  the gateway deployment, not chat-proxy directly. gateway-edge is a"
   echo "  separate deployment that reads the same secret."
 else
   warn "Mattermost bootstrap is still incomplete"
   echo ""
   echo "  Expected healthy state includes:"
-  echo "    - admin PAT for workspace-api"
+  echo "    - admin PAT for gateway-edge"
   echo "    - bot token + bot user id + team id for chat-proxy"
   echo ""
   echo "  Next steps:"

@@ -13,10 +13,10 @@ export default defineConfig({
     exclude: [
       'dist/**',
       'node_modules/**',
-      // Don't run workspace-api's own specs from here — workspace-api
-      // is the owner of those. We pull in workspace-api/src/ for route
+      // Don't run gateway-edge's own specs from here — gateway-edge
+      // is the owner of those. We pull in gateway-edge/src/ for route
       // handler reuse only.
-      '../workspace-api/**',
+      '../gateway-edge/**',
     ],
   },
 });

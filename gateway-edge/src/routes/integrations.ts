@@ -10,11 +10,11 @@ import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validatio
 // (site/firestore.rules:62 — `allow read, write: if false`). But that
 // is not the security boundary for OAuth refresh tokens / IMAP passwords
 // / Twilio auth tokens — a DB leak, a backup-access vector, or a
-// workspace-api SA compromise would expose every Builder's third-party
+// gateway-edge SA compromise would expose every Builder's third-party
 // credentials in the clear. All secret values are KMS-encrypted before
 // write. Field naming convention: `encrypted{Field}` for every
 // ciphertext value, so consumers reading the doc cannot mistake
-// ciphertext for plaintext. See workspace-api/src/lib/kms.ts.
+// ciphertext for plaintext. See gateway-edge/src/lib/kms.ts.
 
 const router = Router();
 const APP_URL = process.env.APP_URL || "https://octogee.com";

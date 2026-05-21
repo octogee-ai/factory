@@ -321,8 +321,8 @@ spec:
             # still runs on cattle pods for MM/OpenClaw, but
             # attachBuilderShellRoute() bails when these envs are unset).
             {{- if eq .Values.profile "operator" }}
-            - name: WORKSPACE_API_INTERNAL_URL
-              value: "http://localhost:{{ .Values.workspaceApi.port }}"
+            - name: GATEWAY_EDGE_INTERNAL_URL
+              value: "http://localhost:{{ .Values.gatewayEdge.port }}"
             - name: INTERNAL_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
@@ -345,19 +345,19 @@ spec:
             periodSeconds: 30
         {{- end }}
 
-        {{- if .Values.workspaceApi.enabled }}
-        - name: workspace-api
-          image: "{{ .Values.workspaceApi.image.repository }}:{{ .Values.workspaceApi.image.tag | default .Values.imageTag }}"
+        {{- if .Values.gatewayEdge.enabled }}
+        - name: gateway-edge
+          image: "{{ .Values.gatewayEdge.image.repository }}:{{ .Values.gatewayEdge.image.tag | default .Values.imageTag }}"
           ports:
-            - containerPort: {{ .Values.workspaceApi.port }}
-              name: workspace-api
+            - containerPort: {{ .Values.gatewayEdge.port }}
+              name: gateway-edge
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
           env:
             - name: PORT
-              value: "{{ .Values.workspaceApi.port }}"
+              value: "{{ .Values.gatewayEdge.port }}"
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -368,13 +368,13 @@ spec:
               value: "http://127.0.0.1:18789"
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
-            {{- range $key, $val := .Values.workspaceApi.env }}
+            {{- range $key, $val := .Values.gatewayEdge.env }}
             {{- if $val }}
             - name: {{ $key }}
               value: {{ $val | quote }}
             {{- end }}
             {{- end }}
-            {{- range .Values.workspaceApi.secrets }}
+            {{- range .Values.gatewayEdge.secrets }}
             - name: {{ .envName }}
               valueFrom:
                 secretKeyRef:
@@ -383,20 +383,20 @@ spec:
                   optional: {{ .optional | default false }}
             {{- end }}
           resources:
-            {{- toYaml .Values.workspaceApi.resources | nindent 12 }}
+            {{- toYaml .Values.gatewayEdge.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /home/node
           readinessProbe:
             httpGet:
               path: /health
-              port: {{ .Values.workspaceApi.port }}
+              port: {{ .Values.gatewayEdge.port }}
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
-              port: {{ .Values.workspaceApi.port }}
+              port: {{ .Values.gatewayEdge.port }}
             initialDelaySeconds: 10
             periodSeconds: 30
         {{- end }}

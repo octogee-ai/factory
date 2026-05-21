@@ -161,9 +161,9 @@ case "$SECRET" in
   list)
     echo "  Rotatable via this script (test + prod only):"
     echo "    anthropic             — ANTHROPIC_API_KEY, consumer: octogee-gateway"
-    echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: workspace-api, octogee-gateway, cron jobs"
-    echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: workspace-api, chat-proxy, octogee-gateway"
-    echo "    gitea-pat             — Gitea API token, consumers: octogee-gateway, workspace-api"
+    echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: gateway-edge, octogee-gateway, cron jobs"
+    echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: gateway-edge, chat-proxy, octogee-gateway"
+    echo "    gitea-pat             — Gitea API token, consumers: octogee-gateway, gateway-edge"
     echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: octogee-gateway"
     echo ""
     echo "  For rarer rotations (Gitea SSH host key, Firebase SA key, DB passwords,"
@@ -216,7 +216,7 @@ case "$SECRET" in
 
   # ── Internal service key ────────────────────────────────────────────────
   internal-service-key)
-    confirm "Rotate INTERNAL_SERVICE_KEY in $FIREBASE_PROJECT (workspace-api + gateway + cron jobs must restart)?" || { info "Cancelled"; exit 0; }
+    confirm "Rotate INTERNAL_SERVICE_KEY in $FIREBASE_PROJECT (gateway-edge + gateway + cron jobs must restart)?" || { info "Cancelled"; exit 0; }
 
     NEW_VALUE=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
 
@@ -235,7 +235,7 @@ case "$SECRET" in
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     ok "K8s secret internal-service-key updated"
 
-    info "Restarting octogee-gateway-default (workspace-api + chat-proxy are sidecars in the same pod)..."
+    info "Restarting octogee-gateway-default (gateway-edge + chat-proxy are sidecars in the same pod)..."
     rollout_restart octogee-gateway-default
 
     info "Cron jobs read the secret on each invocation — no restart needed."
@@ -244,7 +244,7 @@ case "$SECRET" in
 
   # ── MM admin PAT + bot token ────────────────────────────────────────────
   mm-admin-pat)
-    confirm "Rotate MM admin PAT and bot token (workspace-api, chat-proxy, octogee-gateway must restart)?" || { info "Cancelled"; exit 0; }
+    confirm "Rotate MM admin PAT and bot token (gateway-edge, chat-proxy, octogee-gateway must restart)?" || { info "Cancelled"; exit 0; }
 
     info "Clearing cached tokens from mattermost-gateway secret to force rotation..."
     # We overwrite admin_token and bot_token with empty strings, then run
@@ -270,14 +270,14 @@ print(json.dumps(d))
     $YES && local_yes="--yes"
     "$SCRIPT_DIR/setup-mattermost.sh" --env="$ENV" $local_yes
 
-    info "Restarting consumers (workspace-api + chat-proxy are sidecars in the gateway pod)..."
+    info "Restarting consumers (gateway-edge + chat-proxy are sidecars in the gateway pod)..."
     rollout_restart octogee-gateway-default
     ok "Rotation complete"
     ;;
 
   # ── Gitea API token ─────────────────────────────────────────────────────
   gitea-pat)
-    confirm "Rotate Gitea API token (octogee-gateway-default must restart — covers gateway + workspace-api sidecar)?" || { info "Cancelled"; exit 0; }
+    confirm "Rotate Gitea API token (octogee-gateway-default must restart — covers gateway + gateway-edge sidecar)?" || { info "Cancelled"; exit 0; }
 
     info "Clearing cached token from gitea-token secret to force rotation..."
     kubectl create secret generic gitea-token -n "$K8S_NAMESPACE" \

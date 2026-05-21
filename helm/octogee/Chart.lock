@@ -11,8 +11,8 @@ dependencies:
 - name: chat-proxy
   repository: file://charts/chat-proxy
   version: 0.1.0
-- name: workspace-api
-  repository: file://charts/workspace-api
+- name: gateway-edge
+  repository: file://charts/gateway-edge
   version: 0.1.0
 - name: octogee-api
   repository: file://charts/octogee-api
@@ -20,5 +20,5 @@ dependencies:
 - name: glm-controller
   repository: file://charts/glm-controller
   version: 0.1.0
-digest: sha256:79ddacb415ccc360ba1ded946c0b44f060b61e676bf156c9428729dae1cdfcd3
-generated: "2026-05-21T11:15:29.88435-07:00"
+digest: sha256:954da3461678de8ea6cd1b0618bab77a82f5412a47783e1950ac101ea797bab7
+generated: "2026-05-21T12:32:10.857795-07:00"

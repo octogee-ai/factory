@@ -18,7 +18,7 @@
 # matrix runs primarily on 24.x with only partial 22.18 compat. Staying
 # in lockstep with their ship target avoids "works on their CI, not on
 # our pod" surprises and keeps us on the current LTS line. Unrelated
-# services (`workspace-api` on GKE, `functions` on Firebase) stay on
+# services (`gateway-edge` on GKE, `functions` on Firebase) stay on
 # Node 22 — they're separate deploy surfaces with their own runtime
 # constraints (Firebase Functions Node 24 support lags the runtime).
 FROM node:24-bookworm-slim

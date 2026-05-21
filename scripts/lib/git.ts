@@ -182,7 +182,7 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
   if (tokensResp.ok) {
     const tokens = (await tokensResp.json()) as any[];
     for (const t of tokens) {
-      if (t.name === "workspace-api") {
+      if (t.name === "gateway-edge") {
         await fetch(`${GIT_API_URL}/users/${username}/tokens/${t.id}`, {
           method: "DELETE",
           headers: sudoHeaders,
@@ -195,7 +195,7 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
     method: "POST",
     headers: sudoHeaders,
     body: JSON.stringify({
-      name: "workspace-api",
+      name: "gateway-edge",
       scopes: ["write:repository"],
     }),
   });

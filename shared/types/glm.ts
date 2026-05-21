@@ -1,5 +1,5 @@
 /**
- * Gateway Lifecycle Manager — shared types between workspace-api,
+ * Gateway Lifecycle Manager — shared types between gateway-edge,
  * glm-controller, and the admin UI. See
  * docs/architecture/GATEWAY-PLATFORM-SPEC.md §Gateway Lifecycle Manager.
  */

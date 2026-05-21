@@ -11,7 +11,7 @@ spec:
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
 metadata:
-  name: workspace-api-backend
+  name: gateway-edge-backend
 spec:
   healthCheck:
     type: HTTP
@@ -26,7 +26,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: workspace-api-ingress
+  name: gateway-edge-ingress
   annotations:
     kubernetes.io/ingress.class: "gce"
     networking.gke.io/managed-certificates: {{ .Values.ingress.certName }}
@@ -37,21 +37,21 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
-          {{- /* Default to the alias Service `workspace-api` (rendered
+          {{- /* Default to the alias Service `gateway-edge` (rendered
               by this sub-chart, selects every gateway pod via
               app=octogee-gateway). The alias survives fresh clusters
               and any moment between per-instance releases — the
-              per-instance `workspace-api-<instance>` Services from
+              per-instance `gateway-edge-<instance>` Services from
               helm/octogee-gateway/ aren't always present. Override to
               a per-instance Service when an env wants to pin the
               data plane to a specific pod. */}}
-          {{- $svc := .Values.ingress.targetService | default "workspace-api" }}
+          {{- $svc := .Values.ingress.targetService | default "gateway-edge" }}
           {{- $glm := .Values.ingress.glmService | default "glm-controller" }}
           {{- $api := .Values.ingress.octogeeApiService | default "octogee-api" }}
-          {{- /* Cluster prefixes lifted from workspace-api → octogee-api per
+          {{- /* Cluster prefixes lifted from gateway-edge → octogee-api per
               docs/specs/POST-BENDER-CLEANUP-SPEC.md §2. GCE Ingress
               evaluates rules in document order; these must precede the
-              /api/* catch-all that lands on workspace-api. Each prefix
+              /api/* catch-all that lands on gateway-edge. Each prefix
               renders BOTH `/api/<p>/*` and `/api/<p>` because GCE
               `/foo/*` does not match the bare `/foo`.
 
@@ -79,7 +79,7 @@ spec:
           # (no trailing slash) does NOT match — it needs its own rule.
           # The original PR #855 comment claimed /* covered the bare
           # path; turns out it doesn't, and bare /api/admin/gateways
-          # was 502-ing through to workspace-api on no-gateway-pod
+          # was 502-ing through to gateway-edge on no-gateway-pod
           # clusters until both rules were present.
           - path: /api/admin/gateways/*
             pathType: ImplementationSpecific
@@ -109,7 +109,7 @@ spec:
           # `/api/admin/gateways` (PR #855 → 8dd0f709). Without the `/*`
           # rule, the operator's Kick button POSTs to
           # `/api/admin/restore-jobs/<jobId>/kick` and falls through the
-          # catch-all `/api/*` to workspace-api, which 404s if it's
+          # catch-all `/api/*` to gateway-edge, which 404s if it's
           # running an older image without the kick endpoint.
           - path: /api/admin/restore-jobs/*
             pathType: ImplementationSpecific
@@ -212,7 +212,7 @@ spec:
           # Rendered AFTER the glm-controller specifics + workspace/git
           # carve above (so the more-specific rules win) and BEFORE the
           # /api/* catch-all (so cluster routes don't fall through to
-          # workspace-api).
+          # gateway-edge).
           {{- range $prefix := $octogeeApiPrefixes }}
           - path: /api/{{ $prefix }}/*
             pathType: ImplementationSpecific
@@ -229,10 +229,10 @@ spec:
                 port:
                   name: http
           {{- end }}
-          # ── catch-all → workspace-api ──────────────────────────
+          # ── catch-all → gateway-edge ──────────────────────────
           # After PR #1115, /api/workspace/* and /api/projects/* are
           # in the octogee-api migration list above, and the explicit
-          # /api/workspace/git/* carve sends git ops to workspace-api.
+          # /api/workspace/git/* carve sends git ops to gateway-edge.
           # projects/.../deploy-preview cannot be Ingress-carved (GCE
           # doesn't match wildcard middles); the app uses the gateway-
           # scoped /api/g/:gid/projects/.../deploy-preview seam served
@@ -240,7 +240,7 @@ spec:
           # This catch-all now backstops only unrecognized /api/* paths
           # — anything not matched by one of the explicit rules above.
           # Kept as defense in depth so an unknown route 404s on
-          # workspace-api with a familiar error shape rather than
+          # gateway-edge with a familiar error shape rather than
           # GCE's default 404 page.
           - path: /api/*
             pathType: ImplementationSpecific

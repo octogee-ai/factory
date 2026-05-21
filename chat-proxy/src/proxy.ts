@@ -1040,14 +1040,14 @@ export function createServer() {
 
 /** Wire the builder-shell upgrade route onto the chat-proxy HTTP
  *  server. Called from startup (not from createServer) so tests can
- *  build a server without dragging in workspace-api/internal-key env. */
+ *  build a server without dragging in gateway-edge/internal-key env. */
 async function attachBuilderShellRoute(server: ReturnType<typeof createServer>): Promise<void> {
-  const workspaceApiUrl = process.env.WORKSPACE_API_INTERNAL_URL;
+  const gatewayEdgeUrl = process.env.GATEWAY_EDGE_INTERNAL_URL;
   const internalKey = process.env.INTERNAL_SERVICE_KEY;
   const namespace = process.env.K8S_NAMESPACE || "octogee";
-  if (!workspaceApiUrl || !internalKey) {
+  if (!gatewayEdgeUrl || !internalKey) {
     console.warn(
-      "[builder-shell] WORKSPACE_API_INTERNAL_URL or INTERNAL_SERVICE_KEY unset — builder-shell WS disabled",
+      "[builder-shell] GATEWAY_EDGE_INTERNAL_URL or INTERNAL_SERVICE_KEY unset — builder-shell WS disabled",
     );
     return;
   }
@@ -1057,7 +1057,7 @@ async function attachBuilderShellRoute(server: ReturnType<typeof createServer>):
   const router = (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter;
   attachBuilderShellUpgrade(server, {
     router,
-    redeem: buildRedeemFetcher({ baseUrl: workspaceApiUrl, internalServiceKey: internalKey }),
+    redeem: buildRedeemFetcher({ baseUrl: gatewayEdgeUrl, internalServiceKey: internalKey }),
     connectUpstream: buildConnectUpstream({
       namespace,
       internalServiceKey: internalKey,
@@ -1081,7 +1081,7 @@ async function attachBuilderShellRoute(server: ReturnType<typeof createServer>):
       }
     },
   });
-  console.log(`[builder-shell] WS route attached (workspace-api=${workspaceApiUrl}, ns=${namespace})`);
+  console.log(`[builder-shell] WS route attached (gateway-edge=${gatewayEdgeUrl}, ns=${namespace})`);
 }
 
 /**
@@ -1090,7 +1090,7 @@ async function attachBuilderShellRoute(server: ReturnType<typeof createServer>):
  * required env (GITEA_TOKEN, GITEA_URL or K8S_NAMESPACE) is unset — the
  * bridge falls back to nullEditDiffFetcher and posts placeholder bodies.
  *
- * URL convention mirrors workspace-api/src/lib/gitea.ts so the same K8s
+ * URL convention mirrors gateway-edge/src/lib/gitea.ts so the same K8s
  * Service + Secret can serve both surfaces.
  */
 async function buildEditDiffFetcher() {
@@ -1104,7 +1104,7 @@ async function buildEditDiffFetcher() {
   }
   const ns = process.env.K8S_NAMESPACE || 'octogee';
   // Derive in-cluster Gitea URL from the namespace only — matches
-  // workspace-api/src/lib/gitea.ts. We deliberately do NOT honor a
+  // gateway-edge/src/lib/gitea.ts. We deliberately do NOT honor a
   // GITEA_URL override here: a misconfigured override would be silently
   // rejected by the SSRF guard (or worse, send the PAT to the wrong
   // host), and a single derivation point keeps both surfaces in sync.

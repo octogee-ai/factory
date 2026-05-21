@@ -223,7 +223,7 @@ async function flipUnifiedByosSignal(uid: string): Promise<void> {
 }
 
 // Internal: the gateway runner posts the captured credential here on
-// completion. R2 — workspace-api owns the Secret Manager write; the
+// completion. R2 — gateway-edge owns the Secret Manager write; the
 // gateway SA stays read-only. The gateway supplies only the opaque
 // flowId it was handed at /connect plus the credential; uid/agent/
 // gateway are derived from the server-side flow record so a coarse
@@ -308,7 +308,7 @@ router.post(
 
 // Internal: the gateway's periodic detection sweep posts here when openclaw's
 // on-disk auth-state shows the codex profile permanently dead (R8). R2 — the
-// gateway SA never writes glmGateways; workspace-api mediates. No credential
+// gateway SA never writes glmGateways; gateway-edge mediates. No credential
 // crosses. Bounded: only flips an EXISTING ref's status (never creates one),
 // so a coarse internal-key holder can at most surface a spurious Reconnect
 // prompt — it cannot inject a credential (that still needs the flow-bound
@@ -363,7 +363,7 @@ router.post(
 );
 
 // Internal: the gateway's periodic sync-back sweep posts a rotated codex
-// credential here (Chunk B). R2 — workspace-api owns the Secret Manager
+// credential here (Chunk B). R2 — gateway-edge owns the Secret Manager
 // write; the gateway SA stays read-only. Bounded: only an EXISTING
 // connected ref's own secret is overwritten (never creates one), and the
 // blob must be a plausible codex auth.json (validateCodexCredential). It

@@ -191,7 +191,7 @@ MM_BOT_USER_ID="${MM_BOT_USER_ID:-}"
 MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-}"
 set -u
 # Create even if empty — but operationally, empty values are usually a smell.
-# chat-proxy/workspace-api may partially work and then fail in confusing ways.
+# chat-proxy/gateway-edge may partially work and then fail in confusing ways.
 # If bot/admin/team fields are blank, run setup-mattermost.sh to repair app/bootstrap state.
 ksecret mattermost-gateway \
   --from-literal=bot_token="$MM_BOT_TOKEN" \
@@ -307,12 +307,12 @@ fi
 # for customer workspaces, and scripts/lib/collaboration.ts (GitHub org
 # add/remove) was the only deployed consumer — dead in current surfaces.
 # Matching removals: helm/octogee-gateway/values.yaml + deployment.yaml,
-# helm/octogee/charts/workspace-api/values.yaml, and this script's
+# helm/octogee/charts/gateway-edge/values.yaml, and this script's
 # Firebase-function pre-create list.
 
-# ── 9. Internal service key (workspace-api ↔ gateway ↔ CronJob) ─────────
+# ── 9. Internal service key (gateway-edge ↔ gateway ↔ CronJob) ─────────
 # Used by requireInternalServiceAuth() on /internal/billing/* routes.
-# One shared secret across workspace-api, gateway, and the trial-expiry CronJob.
+# One shared secret across gateway-edge, gateway, and the trial-expiry CronJob.
 # Precedence: Secret Manager > existing K8s secret > newly-generated.
 # Rotating this value breaks cron jobs until pods restart, so we only
 # generate a new one on first install (both SM and K8s empty).
@@ -547,7 +547,7 @@ if [[ -n "$FN_SA" ]]; then
 fi
 
 # ── 10. Stripe secrets ────────────────────────────────────────────────────
-# Required by workspace-api at startup (not optional). Use placeholder if not
+# Required by gateway-edge at startup (not optional). Use placeholder if not
 # configured yet — billing is sandbox mode until real keys are set.
 info "stripe-secrets"
 set +u
@@ -563,7 +563,7 @@ ksecret stripe-secrets \
   --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}"
 
 # ── 11. Resend secrets (email digest delivery — P6) ──────────────────────
-# Used by workspace-api for email digest delivery via Resend.
+# Used by gateway-edge for email digest delivery via Resend.
 # Required env vars: RESEND_API_KEY, RESEND_FROM_EMAIL
 # Optional: RESEND_FROM_NAME (defaults to "Octogee" in code)
 #
@@ -609,7 +609,7 @@ else
 fi
 
 # ── 12. GCP Service Account key ───────────────────────────────────────────
-# Used by workspace-api and gateway for GCP API access (Workload Identity
+# Used by gateway-edge and gateway for GCP API access (Workload Identity
 # preferred on prod; SA key is a fallback for services that need it directly).
 info "octogee-sa-key"
 case "$ENV" in

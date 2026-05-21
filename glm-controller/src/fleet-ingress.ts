@@ -63,21 +63,21 @@ export function computeDesiredFleetPaths(opts: {
 }
 
 /**
- * Per-gateway path rules for the api.octogee.com workspace-api seam
+ * Per-gateway path rules for the api.octogee.com gateway-edge seam
  * (FLEET-API-ROUTING-SPEC). One rule per gateway: `/api/g/<gatewayId>/*`
- * → `workspace-api-<instanceName>:3001` (the per-instance Service that
+ * → `gateway-edge-<instanceName>:3001` (the per-instance Service that
  * already pins to the gateway's pod). Helm continues to render the
- * static admin / legacy paths on `workspace-api-ingress`; Cowboy owns
+ * static admin / legacy paths on `gateway-edge-ingress`; Cowboy owns
  * the per-gateway path list on a sibling Ingress shell. Same SSA-with-
  * field-manager pattern as `computeDesiredFleetPaths` above.
  */
 export function computeDesiredApiFleetPaths(opts: {
   gateways: ReadonlyArray<FleetGateway>;
-  workspaceApiPort: number;
+  gatewayEdgePort: number;
   /** Round-robin alias Service for the `/health` fallback path. K8s
    *  Ingress requires every rule to have ≥1 path, so /health doubles as
    *  the always-present minimum AND the LB health check target. */
-  workspaceApiServiceName: string;
+  gatewayEdgeServiceName: string;
 }): IngressPathRule[] {
   const sorted = [...opts.gateways].sort((a, b) =>
     a.gatewayId.localeCompare(b.gatewayId),
@@ -85,14 +85,14 @@ export function computeDesiredApiFleetPaths(opts: {
   const out: IngressPathRule[] = sorted.map((gw) => ({
     path: `/api/g/${gw.gatewayId}/*`,
     pathType: "ImplementationSpecific",
-    serviceName: `workspace-api-${gw.instanceName}`,
-    servicePort: opts.workspaceApiPort,
+    serviceName: `gateway-edge-${gw.instanceName}`,
+    servicePort: opts.gatewayEdgePort,
   }));
   out.push({
     path: "/health",
     pathType: "ImplementationSpecific",
-    serviceName: opts.workspaceApiServiceName,
-    servicePort: opts.workspaceApiPort,
+    serviceName: opts.gatewayEdgeServiceName,
+    servicePort: opts.gatewayEdgePort,
   });
   return out;
 }
@@ -102,12 +102,12 @@ export function computeDesiredApiFleetPaths(opts: {
  * One rule per gateway: `/g/<gatewayId>/*` → `chat-proxy-<instanceName>:8080`
  * (the per-instance Service that pins to the gateway's pod). Same SSA-
  * with-field-manager pattern as `computeDesiredApiFleetPaths` for
- * workspace-api, applied to the chat-proxy WS+HTTP seam.
+ * gateway-edge, applied to the chat-proxy WS+HTTP seam.
  *
  * Why this exists: chat.octogee.com used to be a single ingress LB-
  * fanned across every pod's chat-proxy sidecar. With per-customer
  * cattle gateways each running its own sidecar triplet (openclaw +
- * chat-proxy + workspace-api), a user whose
+ * chat-proxy + gateway-edge), a user whose
  * `provisioning.openclaw.gatewayId = gw-X` must land on the chat-proxy
  * in gw-X's pod — anything else bridges upstream to the wrong gateway
  * sidecar. The per-gateway `/g/<gatewayId>/*` path lets the GCE URL
@@ -316,14 +316,14 @@ export interface SyncApiFleetIngressPathsOpts {
   ingressName: string;
   namespace: string;
   desiredGateways: ReadonlyArray<FleetGateway>;
-  workspaceApiPort: number;
-  workspaceApiServiceName: string;
+  gatewayEdgePort: number;
+  gatewayEdgeServiceName: string;
   log: (msg: string) => void;
 }
 
 /**
  * SSA-reconcile per-gateway `/api/g/<gatewayId>/*` paths on the
- * Cowboy-owned `workspace-api-fleet-ingress` shell. Mirror of
+ * Cowboy-owned `gateway-edge-fleet-ingress` shell. Mirror of
  * `syncFleetIngressPaths` for the api.octogee.com seam — shares
  * `buildAppliableIngress`, `extractIngressPaths`, `pathsEqual`, and the
  * same field manager. Helm renders the Ingress shell (host, cert, IP);
@@ -335,8 +335,8 @@ export async function syncApiFleetIngressPaths(
 ): Promise<SyncFleetIngressPathsResult> {
   const desired = computeDesiredApiFleetPaths({
     gateways: opts.desiredGateways,
-    workspaceApiPort: opts.workspaceApiPort,
-    workspaceApiServiceName: opts.workspaceApiServiceName,
+    gatewayEdgePort: opts.gatewayEdgePort,
+    gatewayEdgeServiceName: opts.gatewayEdgeServiceName,
   });
 
   const getResult = await opts.runKubectl([

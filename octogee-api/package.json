@@ -1,7 +1,7 @@
 {
   "name": "@octogee/octogee-api",
   "version": "1.0.0",
-  "description": "Octogee cluster-singleton API — non-locality routes lifted out of workspace-api (POST-BENDER-CLEANUP-SPEC §2)",
+  "description": "Octogee cluster-singleton API — non-locality routes lifted out of gateway-edge (POST-BENDER-CLEANUP-SPEC §2)",
   "main": "dist/octogee-api/src/index.js",
   "scripts": {
     "build": "tsc && tsc-alias -p tsconfig.json && npm run verify:no-alias-leakage",

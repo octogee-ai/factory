@@ -72,7 +72,7 @@ function resolveProjectRepoName(
 ): string {
   const projData = (projDoc.data() ?? {}) as Record<string, unknown>;
   // Project docs persist `giteaRepoName` (the bare project slug) when
-  // created via the workspace-api project flow — canonical name to delete.
+  // created via the gateway-edge project flow — canonical name to delete.
   // Fallback derives the same bare slug from the doc.
   const persisted = asString(projData.giteaRepoName);
   if (persisted) return persisted;

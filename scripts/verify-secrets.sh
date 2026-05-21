@@ -11,9 +11,9 @@ set -euo pipefail
 #
 # Required secrets are derived from the Helm chart:
 #   - gateway/templates/deployment.yaml  (secretKeyRef without optional: true)
-#   - workspace-api/values.yaml          (optional: false)
+#   - gateway-edge/values.yaml          (optional: false)
 #   - chat-proxy/values.yaml             (optional: false)
-#   - workspace-api/templates/cronjob-*  (secretKeyRef)
+#   - gateway-edge/templates/cronjob-*  (secretKeyRef)
 #
 # Usage:
 #   ./scripts/verify-secrets.sh --env=prod [--context=gke_octogee_us-central1_octogee-gateway]
@@ -66,15 +66,15 @@ esac
 # These cause CreateContainerConfigError if missing (not marked optional).
 # Keep in sync with:
 #   helm/octogee/charts/gateway/templates/deployment.yaml
-#   helm/octogee/charts/workspace-api/values.yaml
+#   helm/octogee/charts/gateway-edge/values.yaml
 #   helm/octogee/charts/chat-proxy/values.yaml
-#   helm/octogee/charts/workspace-api/templates/cronjob-trial-expiry.yaml
+#   helm/octogee/charts/gateway-edge/templates/cronjob-trial-expiry.yaml
 REQUIRED_SECRETS=(
   "octogee-anthropic"       # gateway: ANTHROPIC_API_KEY
-  "internal-service-key"    # gateway + workspace-api + trial-expiry CronJob
-  "mattermost-gateway"      # chat-proxy + workspace-api: MM_ADMIN_TOKEN (no longer optional)
-  "stripe-secrets"          # workspace-api: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-  "gitea-token"             # workspace-api: GITEA_TOKEN (not optional in deployment template)
+  "internal-service-key"    # gateway + gateway-edge + trial-expiry CronJob
+  "mattermost-gateway"      # chat-proxy + gateway-edge: MM_ADMIN_TOKEN (no longer optional)
+  "stripe-secrets"          # gateway-edge: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+  "gitea-token"             # gateway-edge: GITEA_TOKEN (not optional in deployment template)
   "approval-signing"        # chat-proxy: OCTOGEE_APPROVAL_SIGNING_SECRET (HMAC for approval buttons)
 )
 

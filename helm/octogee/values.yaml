@@ -11,7 +11,7 @@ global:
     # Required keys: admin_user, admin_pass, admin_token, admin_user_id,
     #                bot_token, bot_user_id, team_id
     #
-    # Consumed by: chat-proxy, workspace-api, gateway
+    # Consumed by: chat-proxy, gateway-edge, gateway
     adminSecret:
       name: mattermost-gateway
       tokenKey: admin_token
@@ -157,10 +157,10 @@ gitea:
   strategy:
     type: Recreate
 
-# ── workspace-api ────────────────────────────────────────────────────────
-workspace-api:
+# ── gateway-edge ────────────────────────────────────────────────────────
+gateway-edge:
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/workspace-api
+    repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
     tag: latest
   replicas: 1
   port: 3001
