@@ -13,7 +13,7 @@
     "audit-coverage": "tsx audit-coverage.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.97.1",
+    "@anthropic-ai/sdk": "^0.98.0",
     "@google-cloud/secret-manager": "^6.1.2",
     "@types/http-proxy": "^1.17.17",
     "express": "^5.2.1",
