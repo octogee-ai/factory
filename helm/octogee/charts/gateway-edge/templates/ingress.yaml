@@ -17,7 +17,15 @@ spec:
     type: HTTP
     requestPath: {{ .Values.healthCheck.path }}
     port: {{ .Values.healthCheck.port }}
-  timeoutSec: {{ .Values.healthCheck.timeoutSec }}
+  # 3600s + connectionDraining: gateway-edge now serves the long-lived
+  # WebSocket surfaces (MM WS bridge, OpenClaw WS, builder-shell) folded
+  # in from chat-proxy (POST-BENDER-CLEANUP-SPEC §2.7). The per-instance
+  # gateway-edge-<instance> Services (fleet seam) reference this backend,
+  # so the timeout governs WS connections routed via /api/g/<gw>/*. A long
+  # timeout is harmless for the HTTP locality routes (they complete fast).
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 300
   {{- if .Values.cloudArmor.enabled }}
   securityPolicy:
     name: {{ .Values.cloudArmor.policyName }}
@@ -70,7 +78,14 @@ spec:
               The /api/admin/* catch-all is included; the more-specific
               glm-controller admin paths above keep their precedence
               because they appear earlier in the rules list. */}}
-          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "openclaw" "billing" "invites" "integrations" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "admin" }}
+          {{- /* v4 = MM REST proxy (/api/v4/*), auth = credential mint
+              (/api/auth/mattermost) — both relocated from the chat-proxy
+              sidecar to octogee-api (POST-BENDER-CLEANUP-SPEC §2.7). The
+              long-lived MM WebSocket is NOT here: provisioned users reach
+              it via the fleet seam (/api/g/<gw>/api/v4/websocket →
+              gateway-edge home pod), so the bare /api/v4/* → octogee-api
+              is REST-only. */}}
+          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "v4" "auth" "openclaw" "billing" "invites" "integrations" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "admin" }}
           # Cowboy HTTP — fleet routes served from glm-controller so the
           # admin Gateways tab keeps responding when no gateway pods are
           # booted. GCE URL maps prefer most-specific path; these rules

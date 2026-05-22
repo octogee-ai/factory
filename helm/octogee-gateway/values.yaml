@@ -84,7 +84,7 @@ env:
   mmSiteUrl: ""
   mmInteractionsCallbackBaseUrl: ""  # auto-computed per-instance if empty
   mmInteractionsAllowedSourceIps: "10.117.0.0/17"  # GKE pod CIDR
-  chatProxyUrl: "https://chat.octogee.com"
+  chatProxyUrl: "https://api.octogee.com"
   # Comma-separated list of allowed Origin headers on the chat-proxy
   # browser→OpenClaw WebSocket upgrade. Empty = chat-proxy falls back to
   # localhost-only (dev mode). Populate per-env in values.{prod,test}.yaml.
@@ -164,25 +164,6 @@ pdb:
   enabled: true
   minAvailable: 1
 
-# ── chat-proxy sidecar ──────────────────────────────────────────────────────
-chatProxy:
-  enabled: true
-  image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-chat-proxy
-    tag: ""  # inherits from imageTag
-  port: 8080
-  # Prometheus-scrape port (PR-2d). ClusterIP-only via the chat-proxy
-  # Service `metrics` port. Never Ingress-routed. Splitting it off the
-  # public port prevents chat.octogee.com/metrics from leaking counter
-  # cardinality + prom-client default process telemetry.
-  metricsPort: 9092
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
-      memory: 256Mi
 
 # ── gateway-edge sidecar ──────────────────────────────────────────────────
 gatewayEdge:
@@ -199,7 +180,7 @@ gatewayEdge:
     GCLOUD_PROJECT: "octogee"
     GCP_PROJECT_ID: "octogee"
     APP_URL: "https://octogee.com"
-    CHAT_PROXY_URL: "https://chat.octogee.com"
+    CHAT_PROXY_URL: "https://api.octogee.com"
     SITE_URL: "https://octogee.com"
     # Credential-at-rest KMS key (terraform/modules/kms output
     # `kms_creds_key_name`). Set per environment via values.{prod,

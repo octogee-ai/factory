@@ -19,10 +19,6 @@ dependencies:
     version: "12.5.3"
     repository: "https://dl.gitea.com/charts/"
 
-  - name: chat-proxy
-    version: "0.1.0"
-    repository: "file://charts/chat-proxy"
-
   - name: gateway-edge
     version: "0.1.0"
     repository: "file://charts/gateway-edge"

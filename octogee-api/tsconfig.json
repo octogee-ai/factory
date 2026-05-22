@@ -30,6 +30,8 @@
     "node_modules",
     "dist",
     "../shared/**/*.spec.ts",
-    "../gateway-edge/src/**/__tests__/**/*"
+    "../gateway-edge/src/**/__tests__/**/*",
+    "../gateway-edge/src/chat-proxy/**",
+    "../gateway-edge/src/index.ts"
   ]
 }

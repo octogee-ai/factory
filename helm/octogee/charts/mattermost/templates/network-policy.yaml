@@ -19,17 +19,22 @@ spec:
       ports:
         - protocol: TCP
           port: 8065
-    # chat-proxy traffic is covered by the gateway selector below — chat-proxy
-    # runs as a sidecar of the octogee-gateway pod (helm/octogee/charts/gateway
-    # /templates/deployment.yaml), so its source pod label is `app: octogee-gateway`.
-    # Allow from gateway pod (OpenClaw bot, provisioner, site-build-api,
-    # chat-proxy sidecar, AND the gateway-edge sidecar — Phase 6.B
-    # collocation made gateway-edge a sibling container in this pod, so
-    # one selector covers all three).
+    # Gateway pod: OpenClaw bot, provisioner, site-build-api, and the
+    # gateway-edge sidecar (the folded chat-proxy WS bridge + activity
+    # bridge dial MM here). One selector covers every container in the pod.
     - from:
         - podSelector:
             matchLabels:
               app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: 8065
+    # octogee-api cluster singleton: the MM REST proxy (/api/v4/*) +
+    # credential mint forward to MM here (POST-BENDER-CLEANUP-SPEC §2.7).
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
       ports:
         - protocol: TCP
           port: 8065

@@ -67,6 +67,10 @@ import internalEngagementRoutes from "../../gateway-edge/src/routes/internal/eng
 import internalCSIRoutes from "../../gateway-edge/src/routes/internal/csi.js";
 import internalBuilderShellRoutes from "../../gateway-edge/src/routes/internal/builder-shell.js";
 
+// MM REST proxy + credential mint — relocated from the gateway-edge
+// chat-proxy sidecar (POST-BENDER-CLEANUP-SPEC §2.7).
+import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
+
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
 export function createApp() {
@@ -110,6 +114,12 @@ export function createApp() {
   });
 
   app.use(requestLogger);
+
+  // MM REST streaming proxy — mounted BEFORE the body parser so the
+  // request body streams to the upstream Mattermost unbuffered.
+  // /api/v4/websocket is a WS upgrade handled by gateway-edge, never an
+  // HTTP request here, so the bare /api/v4/* HTTP match is safe.
+  app.all("/api/v4/*splat", mmRestProxyHandler);
 
   app.use((req, res, next) => {
     if (req.path === "/api/billing/webhook") {
@@ -159,6 +169,7 @@ export function createApp() {
   app.use(PROJECTS, projectsMembersRoutes);
   // projects/deploy-preview stays on gateway sidecar (calls site-build-api).
 
+  app.use("/api/auth/mattermost", mattermostMintRoutes);
   app.use("/api/sharing", sharingRoutes);
   app.use("/api/entities", entitiesRoutes);
   app.use("/api/mattermost", mattermostRoutes);

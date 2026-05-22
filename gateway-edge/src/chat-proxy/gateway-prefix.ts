@@ -1,35 +1,33 @@
-// Dual-mount URL-prefix stripping for chat-proxy fleet routing.
+// Fleet path-affinity prefix stripping for WS surfaces on gateway-edge.
 //
-// `chat-proxy-fleet-ingress` (chat.octogee.com) routes
-// `/g/<gatewayId>/*` to the per-instance `chat-proxy-<instanceName>`
-// Service. Once the request arrives at this chat-proxy, the
-// `/g/<gatewayId>` segment is purely a routing artifact — downstream
-// route matchers (`/api/openclaw/ws/<uuid>`, `/api/mattermost/...`,
-// `/api/v4/...`, etc.) don't know about it. Strip it here so every
-// matcher works unchanged on both `/api/<p>` AND `/g/<gw>/api/<p>`.
+// The api.octogee.com fleet ingress routes `/api/g/<gatewayId>/*` to the
+// per-instance gateway-edge Service so the request lands on the user's
+// home pod. Once here, the `/api/g/<gatewayId>` segment is a routing
+// artifact — the chat-proxy WS matchers (`/api/openclaw/ws/<uuid>`,
+// `/api/v4/websocket`, builder-shell) don't know about it. Strip it so
+// every matcher works on both `/api/<p>` AND `/api/g/<gw>/api/<p>`.
 //
-// Mirror of the gateway-edge dual-mount helper landed earlier today
-// (FLEET-API-ROUTING-SPEC.md task #14).
+// Unified onto `/api/g/<gw>/` (POST-BENDER-CLEANUP-SPEC §2.7): the old
+// chat-only `/g/<gw>/` scheme is retired now that chat shares the
+// gateway-edge fleet seam used by workspace/git.
 //
-// Implementation note: split-based (no nested-quantifier regex) to
-// avoid ReDoS on adversarial inputs like `/g/aaaa.../`. gatewayId is
-// validated against the same pattern as `resolveBridgeGatewayId` to
-// keep the seam consistent across the codebase.
+// Split-based (no nested-quantifier regex) to avoid ReDoS. gatewayId is
+// validated against the canonical pattern.
 
 const GATEWAY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const FLEET_PREFIX = "/api/g/";
 
 export function stripGatewayPrefix(urlPath: string): string {
-  if (!urlPath.startsWith("/g/")) return urlPath;
-  const rest = urlPath.slice(3); // after "/g/"
+  if (!urlPath.startsWith(FLEET_PREFIX)) return urlPath;
+  const rest = urlPath.slice(FLEET_PREFIX.length); // after "/api/g/"
   const slashIdx = rest.indexOf("/");
   const gwId = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
-  // Validate against the canonical gatewayId pattern. Malformed prefixes
-  // are NOT stripped — they fall through to the original urlPath so
-  // downstream 404 handlers see the same input a non-fleet request would.
+  // Malformed prefixes are NOT stripped — they fall through to the
+  // original urlPath so downstream 404 handlers see the same input a
+  // non-fleet request would.
   if (!GATEWAY_ID_PATTERN.test(gwId)) return urlPath;
-  // `/g/<gw>` with no trailing slash → return `/` so downstream route
-  // matchers that assume a leading slash still find the empty path. Same
-  // semantics as `/g/<gw>/` → `/`.
+  // `/api/g/<gw>` with no trailing path → `/` so matchers that assume a
+  // leading slash still resolve the empty path.
   if (slashIdx === -1) return "/";
   return rest.slice(slashIdx);
 }

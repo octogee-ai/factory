@@ -26,17 +26,14 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
       expiresAt: Date.now() + TICKET_TTL_MS,
     });
 
-    // Return the user's gatewayId so the browser constructs the
-    // gateway-scoped WS URL (`<proxyUrl>/g/<gatewayId>/api/openclaw/ws/<ticket>`).
-    // chat-proxy-fleet-ingress (chat.octogee.com) routes `/g/<gw>/*` to
-    // the per-instance chat-proxy Service so the request lands in the
-    // gateway's own pod and the chat-proxy bridges upstream same-pod.
-    // Empty when the user has no openclaw provisioning yet — the browser
-    // falls back to the bare `/api/openclaw/ws/<ticket>` path (legacy
-    // single-pod default-gateway route still works during migration).
+    // Return the user's gatewayId so the browser builds the fleet-pinned
+    // WS URL (`<proxyUrl>/api/g/<gatewayId>/api/openclaw/ws/<ticket>`).
+    // The api.octogee.com fleet ingress routes `/api/g/<gw>/*` to the
+    // per-instance gateway-edge Service so the WS lands in the user's home
+    // pod where openclaw runs (POST-BENDER-CLEANUP-SPEC §2.7). Empty when
+    // unprovisioned → browser falls back to the bare path.
     //
-    // Source: req.user is already populated by requireAuth (see
-    // gateway-edge/src/middleware/auth.ts) — no second Firestore read.
+    // Source: req.user is populated by requireAuth — no second read.
     const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;
     const gatewayId =
@@ -44,7 +41,8 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
         ? rawGatewayId
         : "";
 
-    const proxyUrl = process.env.CHAT_PROXY_URL || "";
+    // Single host now (api.octogee.com) — REST + WS share it.
+    const proxyUrl = process.env.API_PUBLIC_URL || "";
     res.json({ wsTicket: ticket, proxyUrl, gatewayId });
   } catch (e) {
     next(e);

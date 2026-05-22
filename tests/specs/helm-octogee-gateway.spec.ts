@@ -440,15 +440,17 @@ describe("helm/octogee-gateway/ — operator-profile NetworkPolicy port allowlis
     // Every port the LB / cluster legitimately reaches:
     // fleet-http (Cloud Tasks /restore-customer + LB health check)
     expect(open).toMatch(/port:\s*3003/);
-    // gateway-edge (api.octogee.com /api/g/<gw>/*)
+    // gateway-edge (api.octogee.com /api/g/<gw>/* — HTTP locality + the
+    // folded chat-proxy WS surfaces, all on the single port now).
     expect(open).toMatch(/port:\s*3001/);
-    // chat-proxy (chat.octogee.com /g/<gw>/*)
-    expect(open).toMatch(/port:\s*8080/);
+    // chat-proxy's old 8080/9092 ports are gone after the fold + single-
+    // server collapse (POST-BENDER-CLEANUP-SPEC §2.6/§2.7).
+    expect(open).not.toMatch(/port:\s*8080/);
+    expect(open).not.toMatch(/port:\s*9092/);
     // preview (preview-ingress)
     expect(open).toMatch(/port:\s*9080/);
-    // gateway + chat-proxy metrics (Prometheus scrape)
+    // gateway metrics (Prometheus scrape)
     expect(open).toMatch(/port:\s*9091/);
-    expect(open).toMatch(/port:\s*9092/);
     // openclaw WS — cross-pod Cowboy/fleet-controller RPC + internalUrl
     // dialing the per-instance Service.
     expect(open).toMatch(/port:\s*18789/);

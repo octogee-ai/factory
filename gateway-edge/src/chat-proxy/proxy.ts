@@ -31,7 +31,6 @@ import {
 } from "./openclaw/inbound-gate.js";
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
-import { forwardMmRest } from "./mm-proxy/rest.js";
 import { attachMmWsBridge, createMmWsRegistry, type MmWsRegistry } from "./mm-proxy/ws.js";
 import {
   createChannelMemberResolver,
@@ -50,13 +49,8 @@ if (process.env.NODE_ENV !== "test") {
     console.error("FATAL: MM_INTERNAL_URL is required (in-cluster Mattermost URL, e.g. http://mattermost.<ns>.svc.cluster.local:8065)");
     process.exit(1);
   }
-  if (!process.env.CHAT_PROXY_PUBLIC_URL) {
-    console.error("FATAL: CHAT_PROXY_PUBLIC_URL is required (browser-facing chat-proxy URL returned by the credential mint endpoint, e.g. https://chat.octogee.com)");
-    process.exit(1);
-  }
 }
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid";
-const CHAT_PROXY_PUBLIC_URL = process.env.CHAT_PROXY_PUBLIC_URL || "https://chat-test.invalid";
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
@@ -185,13 +179,6 @@ async function probeGatewayReady(
 // would duplicate-name on Registry.merge.
 export const chatProxyMetricsRegistry = new Registry();
 const metricsRegistry = chatProxyMetricsRegistry;
-
-const mintRequestsTotal = new Counter({
-  name: 'chat_proxy_mint_requests_total',
-  help: 'Mattermost credential-mint requests',
-  labelNames: ['outcome'] as const,
-  registers: [metricsRegistry],
-});
 
 const ocWsConnectionsActive = new Gauge({
   name: 'chat_proxy_openclaw_ws_connections_active',
@@ -476,55 +463,6 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 
-interface CachedMmCreds {
-  mmToken: string;
-  mmUserId: string;
-  expiresAt: number;
-}
-
-const mmCredsCache = new Map<string, CachedMmCreds>();
-const MM_CREDS_CACHE_TTL = 5 * 60 * 1000;
-
-type GetMmCredsResult =
-  | { ok: true; mmToken: string; mmUserId: string }
-  | { ok: false; reason: 'not-provisioned' }
-  | { ok: false; reason: 'lookup-error' };
-
-async function getMmCreds(uid: string): Promise<GetMmCredsResult> {
-  const cached = mmCredsCache.get(uid);
-  if (cached) {
-    if (cached.expiresAt > Date.now()) {
-      return { ok: true, mmToken: cached.mmToken, mmUserId: cached.mmUserId };
-    }
-    mmCredsCache.delete(uid);
-  }
-
-  try {
-    const [userDoc, secretDoc] = await Promise.all([
-      db.doc(`users/${uid}`).get(),
-      db.doc(`users/${uid}/secrets/mattermost`).get(),
-    ]);
-
-    const mmUserId = userDoc.data()?.mattermost?.userId;
-    const mmToken = secretDoc.data()?.personalToken;
-
-    if (!mmUserId || !mmToken) return { ok: false, reason: 'not-provisioned' };
-
-    mmCredsCache.set(uid, {
-      mmToken,
-      mmUserId,
-      expiresAt: Date.now() + MM_CREDS_CACHE_TTL,
-    });
-
-    return { ok: true, mmToken, mmUserId };
-  } catch (e) {
-    console.error(
-      `[proxy] Failed to load MM creds for ${uid}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-    return { ok: false, reason: 'lookup-error' };
-  }
-}
-
 export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
   const authHeader = req.headers.authorization;
 
@@ -578,19 +516,20 @@ export function setCors(req: http.IncomingMessage, res: http.ServerResponse): vo
 }
 
 /**
- * Paths the chat-proxy HTTP handler owns. The gateway-edge single-server
- * dispatcher (gateway-edge/src/index.ts) routes these to
- * chatProxyHandleRequest and everything else to Express. Checked against
- * the gateway-prefix-stripped path. `/health` + `/api/health` + `/metrics`
- * are deliberately NOT here — gateway-edge owns those.
+ * HTTP paths the chat-proxy handler owns on the gateway pod. Only the
+ * pod-pinned surfaces remain here: the bridge health probe and the
+ * OpenClaw approval callback (the in-pod activity bridge registers it).
+ * MM REST (/api/v4/*) + the credential mint (/api/auth/mattermost) are
+ * stateless cluster traffic — they moved to octogee-api per
+ * POST-BENDER-CLEANUP-SPEC §2.7. WS upgrades (/api/v4/websocket,
+ * /api/openclaw/ws/*, builder-shell) are handled by the upgrade listener,
+ * not this predicate. `/health` + `/metrics` belong to Express.
  */
 export function chatProxyOwnsHttpPath(strippedPath: string): boolean {
   return (
     strippedPath === "/healthz" ||
     strippedPath === "/healthz/bridge" ||
-    strippedPath === "/api/auth/mattermost" ||
-    strippedPath === "/api/openclaw/approval/callback" ||
-    strippedPath.startsWith("/api/v4/")
+    strippedPath === "/api/openclaw/approval/callback"
   );
 }
 
@@ -635,10 +574,6 @@ export async function chatProxyHandleRequest(
     return;
   }
 
-  if (urlPath === "/api/auth/mattermost" && req.method === "POST") {
-    return handleMattermostMint(req, res);
-  }
-
   if (urlPath === "/api/openclaw/approval/callback") {
     if (!approvalCallbackHandler) {
       res.writeHead(503, { "Content-Type": "application/json" });
@@ -650,52 +585,9 @@ export async function chatProxyHandleRequest(
     return approvalCallbackHandler(req, res);
   }
 
-  if (urlPath.startsWith("/api/v4/")) {
-    return forwardMmRest(
-      { mmInternalUrl: MM_INTERNAL_URL!, log: (msg) => console.warn(msg) },
-      req,
-      res,
-    );
-  }
-
   req.resume();
   res.writeHead(404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ error: "Not found" }));
-}
-
-async function handleMattermostMint(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-): Promise<void> {
-  const uid = await verifyAuth(req);
-  if (!uid) {
-    mintRequestsTotal.inc({ outcome: 'unauthenticated' });
-    res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Unauthenticated" }));
-    return;
-  }
-
-  const result = await getMmCreds(uid);
-  if (!result.ok) {
-    if (result.reason === 'lookup-error') {
-      mintRequestsTotal.inc({ outcome: 'lookup-error' });
-      res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Credential lookup unavailable" }));
-      return;
-    }
-    mintRequestsTotal.inc({ outcome: 'not-provisioned' });
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Chat not provisioned" }));
-    return;
-  }
-
-  mintRequestsTotal.inc({ outcome: 'ok' });
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({
-    mmUrl: CHAT_PROXY_PUBLIC_URL,
-    mmToken: result.mmToken,
-    mmUserId: result.mmUserId,
-  }));
 }
 
 type UpstreamOutcome =
@@ -966,7 +858,7 @@ function handleOpenClawWsUpgrade(
 }
 
 export function _clearCaches(): void {
-  mmCredsCache.clear();
+  mmUserIdCache.clear();
 }
 
 export function gatewayHealthUrl(
@@ -1122,7 +1014,6 @@ async function buildEditDiffFetcher() {
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
-  console.log(`[chat-proxy] public URL (browser-facing, returned by mint): ${CHAT_PROXY_PUBLIC_URL}`);
 
   const gatewayMetricsUrl = process.env.OPENCLAW_GATEWAY_METRICS_URL
     ?? "http://127.0.0.1:18789/metrics";

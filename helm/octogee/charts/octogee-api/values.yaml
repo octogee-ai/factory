@@ -17,13 +17,13 @@ env:
   MM_URL: ""  # auto-computed from K8S_NAMESPACE
   APP_URL: "https://octogee.com"
   SITE_URL: "https://octogee.com"
-  # chat-proxy has two URL env vars:
-  #   CHAT_PROXY_URL        — generic backend reference (legacy)
-  #   CHAT_PROXY_PUBLIC_URL — public-facing URL returned to browsers by
-  #                            BuilderShell ticket mint (wsUrl field).
-  #                            Missing this = wsUrl: null on every ticket.
-  CHAT_PROXY_URL: "https://chat.octogee.com"
-  CHAT_PROXY_PUBLIC_URL: "https://chat.octogee.com"
+  # Single public host (POST-BENDER-CLEANUP-SPEC §2.7). API_PUBLIC_URL is
+  # returned by the credential mint (mmUrl) + the openclaw/builder-shell
+  # ticket endpoints as the WS base; the browser pins WS to the home pod
+  # via /api/g/<gw>/. MM_INTERNAL_URL is the in-cluster Mattermost the REST
+  # proxy (/api/v4/*) forwards to.
+  API_PUBLIC_URL: "https://api.octogee.com"
+  MM_INTERNAL_URL: "http://mattermost.octogee.svc.cluster.local:8065"
   # GCLOUD_PROJECT / GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT / FIREBASE_PROJECT_ID
   # are NOT set here — the deployment template wires them all from
   # metadata.namespace via downward API. PROD ns "octogee" = PROD project,

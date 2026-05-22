@@ -43,20 +43,6 @@ gitea:
       cpu: 200m
       memory: 256Mi
 
-chat-proxy:
-  cloudArmor:
-    enabled: false
-  image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-chat-proxy
-  env:
-    # Internal-only namespaces have no public MM ingress; the mint endpoint
-    # still returns a URL but custom envs don't drive a real browser flow.
-    # Port-forward to mattermost:8065 directly when testing locally.
-    MM_PUBLIC_URL: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
-    FIREBASE_PROJECT: "octogee-test"
-  ingress:
-    enabled: false
-
 gateway-edge:
   cloudArmor:
     enabled: false
@@ -66,11 +52,20 @@ gateway-edge:
     FIREBASE_PROJECT_ID: "octogee-test"
     GCLOUD_PROJECT: "octogee-test"
     APP_URL: "https://octogee-test.web.app"
-    CHAT_PROXY_URL: "http://chat-proxy.__NAMESPACE__.svc.cluster.local:8080"
     SITE_URL: "https://octogee-test.web.app"
     K8S_NAMESPACE: "__NAMESPACE__"
   ingress:
     enabled: false
+
+# octogee-api defaults to PROD URLs in the subchart values; a custom
+# namespace MUST override them or it would mint prod mmUrl values + proxy
+# to prod Mattermost. MM_INTERNAL_URL is namespace-local; API_PUBLIC_URL
+# has no public ingress here (port-forward for local testing), so the
+# test app URL is the safe non-prod placeholder.
+octogee-api:
+  env:
+    API_PUBLIC_URL: "https://octogee-test.web.app"
+    MM_INTERNAL_URL: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
 
 gateway:
   cloudArmor:
@@ -84,7 +79,6 @@ gateway:
     firebaseProjectId: "octogee-test"
     githubOrg: "octogee-test"
     mmUrl: ""  # auto-computed from release namespace
-    chatProxyUrl: "http://chat-proxy.__NAMESPACE__.svc.cluster.local:8080"
   resources:
     limits:
       ephemeral-storage: "10Gi"

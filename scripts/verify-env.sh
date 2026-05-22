@@ -16,7 +16,7 @@
 #   5b. Ingress / endpoint health
 #   6. Firebase Hosting (site)
 #   7. Cloud Functions / supporting services
-#   8. chat-proxy deployment + route health
+#   8. chat surfaces (gateway-edge sidecar + octogee-api) health
 #
 # Exit codes:
 #   0 — all green
@@ -231,7 +231,7 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   status "mattermost-gateway admin_pass present" "mattermost-gateway admin_pass missing" "$MM_ADMIN_PASS"
   status "mattermost-gateway admin_token present" "mattermost-gateway admin_token missing (gateway-edge /admin-token will fail)" "$MM_ADMIN_TOKEN"
   status "mattermost-gateway admin_user_id present" "mattermost-gateway admin_user_id missing" "$MM_ADMIN_USER_ID"
-  status "mattermost-gateway bot_token present" "mattermost-gateway bot_token missing (chat-proxy will fail)" "$MM_BOT_TOKEN"
+  status "mattermost-gateway bot_token present" "mattermost-gateway bot_token missing (MM WS bridge will fail)" "$MM_BOT_TOKEN"
   status "mattermost-gateway bot_user_id present" "mattermost-gateway bot_user_id missing" "$MM_BOT_USER_ID"
   status "mattermost-gateway team_id present" "mattermost-gateway team_id missing" "$MM_TEAM_ID"
   status "internal-service-key present" "internal-service-key missing" "$INTERNAL_SERVICE_KEY"
@@ -644,14 +644,13 @@ fi
 
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
 # Derive URLs from K8s Ingress resources — no hardcoded env-specific URLs.
-# Post-rollback: chat-proxy-ingress fronts both the credential mint and the
-# MM REST + WS data path (browser only talks to chat-proxy for chat). The
-# mattermost-ingress is the IAP-gated admin path — direct MM access for
-# admin operations only; a 302 to the Google login page is the expected
-# response there.
+# One public host now (api.octogee.com / gateway-edge-ingress) fronts the
+# cluster API, the credential mint, and MM REST; WS pins to the home pod
+# via the fleet seam (POST-BENDER-CLEANUP-SPEC §2.7). The mattermost-ingress
+# is the IAP-gated admin path — a 302 to the Google login page is expected.
 set_section bootstrap
 header "5d. Endpoint Health"
-for INGRESS_NAME in gateway-edge-ingress chat-proxy-ingress mattermost-ingress octogee-gateway-fleet-control-ingress; do
+for INGRESS_NAME in gateway-edge-ingress mattermost-ingress octogee-gateway-fleet-control-ingress; do
   if ! kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
     continue
   fi
@@ -668,14 +667,6 @@ for INGRESS_NAME in gateway-edge-ingress chat-proxy-ingress mattermost-ingress o
       # signal; a 200 here would mean IAP is off.
       HEALTH_PATH="/api/v4/system/ping"
       EXPECT_IAP_REDIRECT=true
-      ;;
-    chat-proxy-ingress)
-      if [[ -n "$GW_DEPLOYMENT" ]]; then
-        HEALTH_PATH=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
-          -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
-      else
-        HEALTH_PATH="/healthz"
-      fi
       ;;
     *)
       DEPLOY_NAME="${INGRESS_NAME%-ingress}"
@@ -701,21 +692,22 @@ for INGRESS_NAME in gateway-edge-ingress chat-proxy-ingress mattermost-ingress o
   done <<< "$HOSTS"
 done
 
-# ── 5d.b Mattermost credential mint (Option C) ────────────────────────────────
-# The mint endpoint on chat[-test].octogee.com is the only path that hands
-# the user's PAT to the browser. Hitting it without auth must return 401 —
-# proves the route exists and the new chat-proxy build is deployed. A
-# 200/404 here means something is mis-deployed.
-CHAT_PROXY_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
-if [[ -n "$CHAT_PROXY_HOST" ]]; then
-  MINT_URL="https://${CHAT_PROXY_HOST}/api/auth/mattermost"
+# ── 5d.b Mattermost credential mint ───────────────────────────────────────────
+# The mint (now on octogee-api, fronted by gateway-edge-ingress /
+# api[-test].octogee.com) is the only path that hands the user's PAT to the
+# browser. Unauthenticated POST must return 401 — proves the route is wired
+# through the Ingress allowlist to octogee-api. A 404 means the
+# /api/auth/* rule is missing or octogee-api isn't deployed.
+API_HOST=$(kubectl get ingress gateway-edge-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+if [[ -n "$API_HOST" ]]; then
+  MINT_URL="https://${API_HOST}/api/auth/mattermost"
   MINT_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 -X POST "$MINT_URL" 2>/dev/null || echo "000")
   if [[ "$MINT_CODE" == "401" ]]; then
     pass "$MINT_URL → 401 (credential mint route present, auth-gated)"
   elif [[ "$MINT_CODE" == "404" ]]; then
-    fail "$MINT_URL → 404 — chat-proxy is running an OLD build (pre-Option-C) or route not deployed"
+    fail "$MINT_URL → 404 — Ingress /api/auth/* rule missing or octogee-api not deployed"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} kubectl rollout restart deployment/${GW_DEPLOYMENT:-octogee-gateway-default} -n $NAMESPACE"
+      echo -e "  ${YELLOW}FIX:${NC} kubectl rollout restart deployment/octogee-api -n $NAMESPACE"
     fi
   elif [[ "$MINT_CODE" == "000" ]]; then
     warn "$MINT_URL → unreachable (TLS or DNS issue)"
@@ -752,48 +744,34 @@ else
   fi
 fi
 
-# ── 8. Chat Proxy ─────────────────────────────────────────────────────────────
-# chat-proxy runs as a sidecar of the octogee-gateway pod (loopback to gateway
-# is required for OpenClaw silent device pairing). The chat-proxy Service +
-# Ingress still exist as standalone resources, just re-pointed at the gateway
-# pod selector. See helm/octogee/charts/gateway/values.yaml for rationale.
-#
-# Option C: chat-proxy is no longer in the MM data path. It owns just two
-# routes — POST /api/auth/mattermost (credential mint) and the OpenClaw
-# WS bridge. The browser talks to MM directly at mm[-test].octogee.com.
+# ── 8. Chat (folded into gateway-edge + octogee-api) ──────────────────────────
+# POST-BENDER-CLEANUP-SPEC §2.7: chat-proxy is gone as a separate container.
+# - MM REST (/api/v4/*) + credential mint (/api/auth/mattermost) → octogee-api
+#   (the mint route was preflighted in 5d.b above).
+# - MM WS bridge + OpenClaw WS + builder-shell → the gateway-edge sidecar of
+#   the gateway pod, reached via the fleet seam (/api/g/<gw>/*).
 set_section infra
-header "8. chat-proxy (Option C: mint + OpenClaw bridge only)"
+header "8. chat (gateway-edge sidecar + octogee-api)"
 if [[ -z "$GW_DEPLOYMENT" ]]; then
-  fail "chat-proxy check skipped — no gateway deployment (chat-proxy is a sidecar of $GW_DEPLOYMENT)"
+  fail "gateway-edge check skipped — no gateway deployment"
 else
   GATEWAY_READY=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-  CHAT_IMAGE=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].image}' 2>/dev/null || echo "unknown")
-  CHAT_ENDPOINTS=$(kubectl get endpoints chat-proxy -n "$NAMESPACE" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || echo "")
-
-  if [[ "${GATEWAY_READY:-0}" -ge 1 && -n "$CHAT_IMAGE" && "$CHAT_IMAGE" != "unknown" ]]; then
-    pass "chat-proxy sidecar ready in $GW_DEPLOYMENT pod (image: $CHAT_IMAGE)"
-    status "chat-proxy service has endpoints" "chat-proxy service has no ready endpoints" "$CHAT_ENDPOINTS"
-  elif [[ -z "$CHAT_IMAGE" || "$CHAT_IMAGE" == "unknown" ]]; then
-    fail "chat-proxy sidecar not found in $GW_DEPLOYMENT deployment (per-instance gateway chart is missing the sidecar)"
+  GE_IMAGE=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="gateway-edge")].image}' 2>/dev/null || echo "unknown")
+  if [[ "${GATEWAY_READY:-0}" -ge 1 && -n "$GE_IMAGE" && "$GE_IMAGE" != "unknown" ]]; then
+    pass "gateway-edge sidecar ready in $GW_DEPLOYMENT pod (image: $GE_IMAGE)"
+  elif [[ -z "$GE_IMAGE" || "$GE_IMAGE" == "unknown" ]]; then
+    fail "gateway-edge sidecar not found in $GW_DEPLOYMENT (per-instance gateway chart is missing the container)"
   else
-    fail "$GW_DEPLOYMENT not ready (readyReplicas=${GATEWAY_READY:-0}) — chat-proxy sidecar unavailable"
+    fail "$GW_DEPLOYMENT not ready (readyReplicas=${GATEWAY_READY:-0}) — gateway-edge sidecar unavailable"
   fi
-
-  # Derive chat-proxy health URL from Ingress host + sidecar readinessProbe path
-  CHAT_HOST=$(kubectl get ingress chat-proxy-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
-  CHAT_HEALTH_PATH=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].readinessProbe.httpGet.path}' 2>/dev/null || echo "/healthz")
-  if [[ -n "$CHAT_HOST" ]]; then
-    CHAT_HEALTH_URL="https://${CHAT_HOST}${CHAT_HEALTH_PATH}"
-    CHAT_HEALTH_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$CHAT_HEALTH_URL" 2>/dev/null || echo "000")
-    if [[ "$CHAT_HEALTH_CODE" == "200" ]]; then
-      pass "$CHAT_HEALTH_URL → $CHAT_HEALTH_CODE"
-    else
-      warn "$CHAT_HEALTH_URL → HTTP $CHAT_HEALTH_CODE"
-      if $FIX; then
-        echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/$GW_DEPLOYMENT -c chat-proxy --since=30m | tail -100"
-      fi
-    fi
+fi
+OA_READY=$(kubectl get deployment octogee-api -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+if [[ "${OA_READY:-0}" -ge 1 ]]; then
+  pass "octogee-api ready (serves MM REST + credential mint)"
+else
+  fail "octogee-api not ready (readyReplicas=${OA_READY:-0}) — MM REST + mint unavailable"
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} kubectl logs -n $NAMESPACE deployment/octogee-api --since=30m | tail -100"
   fi
 fi
 
@@ -839,50 +817,28 @@ else
 fi
 
 set_section bootstrap
-# ── Post-Option-C env contract (2026-05-14 rollback) ──────────────────
-# chat-proxy MUST have:
-#   - MM_INTERNAL_URL (in-cluster MM Service DNS, used for the data path
-#     of /api/v4/* + /api/v4/websocket proxying and the activity-bridge
-#     admin client)
-#   - CHAT_PROXY_PUBLIC_URL (the browser-facing chat-proxy hostname
-#     returned to the app as `mmUrl` from /api/auth/mattermost)
-# The pre-rollback `MM_PUBLIC_URL` value is now a legacy alias for
-# MM_INTERNAL_URL and is kept around for compat with mm-event-listener
-# imports; not browser-visible.
+# ── Env contract (POST-BENDER-CLEANUP-SPEC §2.7) ──────────────────────
+# The gateway-edge sidecar runs the folded MM WS bridge + activity bridge,
+# so it MUST have MM_INTERNAL_URL (in-cluster MM Service DNS). The
+# browser-facing URL is no longer an env on this container — octogee-api's
+# API_PUBLIC_URL (verified via the mint preflight in 5d.b) is the single
+# host the app talks to.
 if [[ -z "$GW_DEPLOYMENT" ]]; then
-  info "Skipping chat-proxy env check — no gateway deployment"
-  CHAT_MM_INTERNAL_URL=""
-  CHAT_PROXY_PUBLIC_URL_VALUE=""
+  info "Skipping gateway-edge env check — no gateway deployment"
+  GE_MM_INTERNAL_URL=""
 else
-  CHAT_MM_INTERNAL_URL=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="MM_INTERNAL_URL")].value}' 2>/dev/null || echo "")
-  CHAT_PROXY_PUBLIC_URL_VALUE=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="chat-proxy")].env[?(@.name=="CHAT_PROXY_PUBLIC_URL")].value}' 2>/dev/null || echo "")
+  GE_MM_INTERNAL_URL=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="gateway-edge")].env[?(@.name=="MM_INTERNAL_URL")].value}' 2>/dev/null || echo "")
 fi
-if [[ -n "$CHAT_MM_INTERNAL_URL" ]]; then
-  pass "chat-proxy MM_INTERNAL_URL=$CHAT_MM_INTERNAL_URL (post-Option-C rollback)"
+if [[ -n "$GE_MM_INTERNAL_URL" ]]; then
+  pass "gateway-edge MM_INTERNAL_URL=$GE_MM_INTERNAL_URL (WS bridge data path)"
 elif [[ -z "$GW_DEPLOYMENT" ]]; then
   : # already informed above
 else
-  fail "chat-proxy missing MM_INTERNAL_URL — MM REST + WS proxy data path will boot-fail. Re-render helm with values.${ENV}.yaml."
+  fail "gateway-edge missing MM_INTERNAL_URL — the WS bridge will boot-fail. Re-render helm with values.${ENV}.yaml."
   if $FIX; then
     echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
-if [[ -n "$CHAT_PROXY_PUBLIC_URL_VALUE" ]]; then
-  pass "chat-proxy CHAT_PROXY_PUBLIC_URL=$CHAT_PROXY_PUBLIC_URL_VALUE (returned to browser as mmUrl)"
-elif [[ -z "$GW_DEPLOYMENT" ]]; then
-  : # already informed above
-else
-  fail "chat-proxy missing CHAT_PROXY_PUBLIC_URL — credential mint can't tell the browser where to send MM REST + WS. Re-render helm."
-fi
-
-# 2026-05-14: ALLOWCORSFROM check removed. After the Option-C rollback
-# the browser talks to chat-proxy (`/api/v4/*`, `/api/v4/websocket`)
-# not Mattermost directly — chat-proxy serves its own CORS headers
-# (chat-proxy/src/proxy.ts `setCors`) for the app-origin allowlist.
-# MM `ServiceSettings.AllowCorsFrom` is only consulted on direct
-# browser→MM requests, which no longer happen. The chat-proxy
-# `CHAT_PROXY_PUBLIC_URL` check above is the new browser-facing
-# preflight contract.
 set_section infra
 
 # ── Summary ───────────────────────────────────────────────────────────────────

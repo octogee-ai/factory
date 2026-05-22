@@ -41,11 +41,25 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
       expiresAt: Date.now() + 30_000,
     });
 
-    const proxyUrl = process.env.CHAT_PROXY_URL || "";
+    // Single host now (api.octogee.com). The app derives MM REST + WS
+    // from its own apiBase; this is kept for back-compat callers.
+    const proxyUrl = process.env.API_PUBLIC_URL || "";
     const coachMmUserId = ctx.coachUserId || null;
     const coachName = userData.onboarding?.coachName || null;
 
-    res.json({ mmUserId, dmChannelId, proxyUrl, wsTicket: ticket, coachMmUserId, coachName });
+    // gatewayId lets the browser pin the MM WebSocket to the home gateway
+    // pod via the fleet seam (`/api/g/<gw>/api/v4/websocket`) — keeping the
+    // long-lived socket off the octogee-api cluster singleton. Same shape +
+    // source as the openclaw mint. Empty when unprovisioned → browser
+    // falls back to the bare path. (MM REST stays unprefixed on octogee-api.)
+    const provisioning = userData.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
+    const rawGatewayId = provisioning?.openclaw?.gatewayId;
+    const gatewayId =
+      typeof rawGatewayId === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(rawGatewayId)
+        ? rawGatewayId
+        : "";
+
+    res.json({ mmUserId, dmChannelId, proxyUrl, gatewayId, wsTicket: ticket, coachMmUserId, coachName });
   } catch (e) { next(e); }
 });
 

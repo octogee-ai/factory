@@ -152,12 +152,15 @@ router.post(
         }
         throw err;
       }
-      const base = process.env.CHAT_PROXY_PUBLIC_URL || "";
+      // Single host (api.octogee.com), fleet-pinned: the builder-shell WS
+      // lands on the user's home gateway pod via /api/g/<gw>/ — that's
+      // where the PTY spawns (POST-BENDER-CLEANUP-SPEC §2.7).
+      const base = process.env.API_PUBLIC_URL || "";
       if (!base) {
-        logger.warn("builder-shell: CHAT_PROXY_PUBLIC_URL not set — returning ticket without wsUrl");
+        logger.warn("builder-shell: API_PUBLIC_URL not set — returning ticket without wsUrl");
       }
       const wsUrl = base
-        ? `${base.replace(/^http/, "ws").replace(/\/$/, "")}${BUILDER_SHELL_WS_PATH_PREFIX}/${ticket.ticket}`
+        ? `${base.replace(/^http/, "ws").replace(/\/$/, "")}/api/g/${gatewayId}${BUILDER_SHELL_WS_PATH_PREFIX}/${ticket.ticket}`
         : null;
 
       const body: BuilderShellTicketMintResponse = {

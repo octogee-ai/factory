@@ -31,6 +31,13 @@ spec:
     {{- end }}
   type: ClusterIP
 ---
+# Per-instance gateway-edge Service — the fleet seam. gateway-edge-fleet-
+# ingress (api.octogee.com) routes /api/g/<gatewayId>/* here so the
+# request lands on this gateway's pod. After the chat-proxy fold
+# (POST-BENDER-CLEANUP-SPEC §2.7) this single port (3001) carries the
+# HTTP locality routes AND the long-lived WS surfaces, so it references
+# the gateway-edge-backend BackendConfig (3600s timeout + draining) and
+# the NEG annotation the GCE Ingress needs.
 apiVersion: v1
 kind: Service
 metadata:
@@ -38,6 +45,9 @@ metadata:
   labels:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/name: gateway-edge
+  annotations:
+    cloud.google.com/neg: '{"ingress":true}'
+    cloud.google.com/backend-config: '{"default":"gateway-edge-backend"}'
 spec:
   selector:
     app: octogee-gateway
@@ -46,32 +56,4 @@ spec:
     - name: http
       port: {{ .Values.gatewayEdge.port }}
       targetPort: {{ .Values.gatewayEdge.port }}
-  type: ClusterIP
----
-# Per-instance chat-proxy Service. Selects ONLY the chat-proxy sidecar
-# in this gateway's pod. Used by chat-proxy-fleet-ingress (chat.octogee.com)
-# to route /g/<gatewayId>/* to the correct gateway pod so the chat-proxy
-# bridges upstream same-pod (127.0.0.1:18789) to the matching openclaw
-# sidecar. Same NEG annotation as the legacy `chat-proxy` Service.
-apiVersion: v1
-kind: Service
-metadata:
-  name: chat-proxy-{{ .Values.instanceName }}
-  labels:
-    {{- include "octogee-gateway.labels" . | nindent 4 }}
-    app.kubernetes.io/name: chat-proxy
-  annotations:
-    cloud.google.com/neg: '{"ingress":true}'
-    cloud.google.com/backend-config: '{"default":"chat-proxy-backend"}'
-spec:
-  selector:
-    app: octogee-gateway
-    gateway-instance: {{ .Values.instanceName }}
-  ports:
-    - name: http
-      port: {{ .Values.chatProxy.port | default 8080 }}
-      targetPort: chat-proxy
-    - name: metrics
-      port: {{ .Values.chatProxy.metricsPort | default 9092 }}
-      targetPort: cp-metrics
   type: ClusterIP
