@@ -109,12 +109,14 @@ ingress:
   # wants to pin the data plane to a specific gateway pod.
   targetService: gateway-edge
 
-# Sibling Ingress on the same host that carries Cowboy-owned per-gateway
-# `/api/g/<gatewayId>/*` routes (FLEET-API-ROUTING-SPEC.md). Shares cert +
-# global static IP with `ingress` above so GCE merges them into one URL
-# map. Helm renders only the /health stub; Cowboy reclaims the path list.
+# RETIRED. This was a sibling Ingress on the same host/IP as `ingress`,
+# betting GCE would merge two Ingresses into one URL map — it does not, so
+# the sibling never provisioned (no address) and all `/api/g/*` 404'd.
+# Cowboy now patches the per-gateway `/api/g/<gatewayId>/*` paths directly
+# onto the single `gateway-edge-ingress` (glm-controller/src/fleet-ingress.ts).
+# Keep disabled; revisit only if GKE ever supports Ingress merging.
 gatewayEdgeFleetIngress:
-  enabled: true
+  enabled: false
 
 # Cloud Armor WAF (policy created by Terraform, referenced by name)
 cloudArmor:

@@ -107,13 +107,13 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 // BackendConfig, IP); this controller writes the per-instance paths.
 const FLEET_INGRESS_NAME = process.env.FLEET_INGRESS_NAME ?? "octogee-gateway-fleet-control-ingress";
 const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway";
-// Cowboy-owned sibling Ingress on api.octogee.com that carries per-
-// gateway `/api/g/<gatewayId>/*` paths to the per-instance gateway-edge
-// Service. The umbrella renders the shell (host, cert, IP, annotations);
-// this controller owns spec.rules[].http.paths via SSA. See
-// FLEET-API-ROUTING-SPEC.md.
-const GATEWAY_EDGE_FLEET_INGRESS_NAME =
-  process.env.GATEWAY_EDGE_FLEET_INGRESS_NAME ?? "gateway-edge-fleet-ingress";
+// The SINGLE api.octogee.com Ingress. Cowboy surgically patches the
+// per-gateway `/api/g/<gatewayId>/*` paths onto it (leaving Helm's static
+// cluster paths untouched) — NOT a sibling Ingress, because GCE can't
+// merge two Ingresses sharing one host/IP (the sibling never provisions).
+// See FLEET-API-ROUTING-SPEC.md.
+const GATEWAY_EDGE_INGRESS_NAME =
+  process.env.GATEWAY_EDGE_INGRESS_NAME ?? "gateway-edge-ingress";
 // Hardcoded, deliberately. K8s injects service-discovery env vars
 // (`<SVC>_PORT=tcp://<ip>:<port>`) into every pod for every Service in
 // the namespace. Reading `process.env.GATEWAY_EDGE_PORT` collides with
@@ -432,7 +432,7 @@ async function main(): Promise<void> {
   const syncApiFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
     syncApiFleetIngressPaths({
       runKubectl,
-      ingressName: GATEWAY_EDGE_FLEET_INGRESS_NAME,
+      ingressName: GATEWAY_EDGE_INGRESS_NAME,
       namespace: NAMESPACE,
       desiredGateways: gateways,
       gatewayEdgePort: GATEWAY_EDGE_PORT,
