@@ -285,12 +285,14 @@ spec:
               value: {{ .Values.env.mmInternalUrl | quote }}
             - name: FIREBASE_PROJECT
               value: {{ .Values.env.firebaseProjectId | quote }}
-            - name: GCP_PROJECT_ID
-              value: {{ .Values.env.gcloudProject | quote }}
+            # NOTE: GCP_PROJECT_ID + GITEA_ORG are NOT set here — the
+            # .Values.gatewayEdge.env range below already provides them
+            # (and GITEA_TOKEN comes from the .Values.gatewayEdge.secrets
+            # range). Setting them explicitly too renders duplicate env
+            # names, which fails `helm upgrade`'s in-place Deployment patch
+            # ("$setElementOrder list mismatch") and blocks the gateway roll.
             - name: OCTOGEE_ALLOWED_WS_ORIGINS
               value: {{ .Values.env.allowedWsOrigins | default "" | quote }}
-            - name: GITEA_ORG
-              value: {{ .Values.env.githubOrg | default "octogee" | quote }}
             {{- if .Values.env.giteaPublicBaseUrl }}
             - name: GITEA_PUBLIC_BASE_URL
               value: {{ .Values.env.giteaPublicBaseUrl | quote }}
@@ -306,12 +308,9 @@ spec:
                 secretKeyRef:
                   name: approval-signing
                   key: secret
-            - name: GITEA_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: gitea-token
-                  key: token
-                  optional: true
+            {{- /* GITEA_TOKEN intentionally omitted here — provided by the
+                .Values.gatewayEdge.secrets range below (avoids a duplicate
+                env entry that breaks the helm upgrade Deployment patch). */}}
             {{- if eq .Values.profile "operator" }}
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"
