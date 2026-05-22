@@ -3,6 +3,7 @@ import type {
   GatewayProfile,
   HelmInstancesMap,
 } from "../../shared/types/glm.js";
+import { resolveGatewayGcpProject } from "./gcp-project.js";
 
 /**
  * Per-release helm interface for the gateway-pod fleet.
@@ -61,6 +62,14 @@ export interface HelmRunner {
      * existing welcome-path env injection.
      */
     profile?: GatewayProfile;
+    /**
+     * GCP project for the gateway-edge sidecar (gateway-token resolution,
+     * Secret Manager, KMS). Threaded as `--set gatewayEdge.env.GCP_PROJECT_ID`
+     * so the value is always present from the live desired-state — immune to
+     * the baked values-file skew that silently dropped it post-#1131. Absent
+     * ⇒ the platform default. BYO-GCP seam: per-Builder project flows here.
+     */
+    gcpProject?: string;
   }): Promise<void>;
 
   /** Uninstall ONE gateway instance's helm release. */
@@ -451,6 +460,7 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       gatewayContainerSecurityContext,
       persistence,
       profile,
+      gcpProject,
     }) {
       const release = releaseNameForInstance(instanceName);
       const args = [
@@ -484,6 +494,24 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       if (persistence) {
         pushSetJson(args, "persistence", persistence);
       }
+      // Always thread GCP_PROJECT_ID from the live render (BYO-GCP-ready)
+      // so it's present regardless of baked values-file skew — the
+      // silent-drop root post-#1131. `--set` overrides the chart's
+      // gatewayEdge.env default without a duplicate (set wins over -f).
+      // Platform default = Cowboy's own project env. `GOOGLE_CLOUD_PROJECT`
+      // is what the chart actually sets (the others are unset in PROD), so
+      // read it first. No hard-coded project fallback: an unset env in a
+      // non-prod namespace must NOT silently pin gateways to the prod
+      // project — resolveGatewayGcpProject throws on empty (fail loud).
+      const platformGcpProject =
+        process.env.GOOGLE_CLOUD_PROJECT ||
+        process.env.GCLOUD_PROJECT ||
+        process.env.GCP_PROJECT_ID ||
+        "";
+      args.push(
+        "--set",
+        `gatewayEdge.env.GCP_PROJECT_ID=${resolveGatewayGcpProject({ gcpProject, platformDefault: platformGcpProject })}`,
+      );
       if (valuesFile) args.push("-f", valuesFile);
       if (takeOwnership) args.push("--take-ownership");
       args.push("--wait", `--timeout=${upgradeTimeout}`);

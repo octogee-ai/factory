@@ -44,6 +44,15 @@ export interface GatewayDesiredState {
   /** Optional per-instance Kubernetes ServiceAccount override. */
   serviceAccountName?: string;
   /**
+   * GCP project the gateway-edge sidecar runs against (gateway-token
+   * resolution, Secret Manager, KMS). Absent ⇒ the platform project
+   * ("octogee" today). BYO-GCP seam: when a Builder brings their own GCP
+   * project, set it here and Cowboy threads it into the gateway-edge env
+   * as a per-gateway `--set` (single source of truth — immune to the
+   * baked-values skew that silently dropped GCP_PROJECT_ID post-#1131).
+   */
+  gcpProject?: string;
+  /**
    * Optional gateway-container securityContext override. Used for
    * personal build gateways that need sudo/elevated exec while shared
    * gateways keep the chart's locked-down default.

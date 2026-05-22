@@ -27,6 +27,7 @@ import {
   chatProxyMetricsRegistry,
 } from "./chat-proxy/proxy.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
+import { validateRequiredEnv } from "./lib/required-env.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
@@ -114,10 +115,18 @@ const app = createApp();
 if (process.env.NODE_ENV !== "test") {
   const env = process.env.K8S_NAMESPACE || process.env.NODE_ENV || "development";
   const isProd = env !== "development" && env !== "local" && env !== "test";
-  if (isProd && !process.env.INTERNAL_SERVICE_KEY) {
+  const { missing } = validateRequiredEnv(process.env, {
+    isProd,
+    profile: process.env.GATEWAY_PROFILE,
+  });
+  if (missing.length > 0) {
     logger.error(
-      "FATAL: INTERNAL_SERVICE_KEY is required in non-development environments. " +
-      "Set it via K8s Secret and restart."
+      `FATAL: required gateway-edge env unset: ${missing.join(", ")}. ` +
+        "Supplied per-gateway via the chart's gatewayEdge.env/.secrets ranges " +
+        "(threaded by Cowboy); a missing one means a skewed render or a " +
+        "dropped-on-apply duplicate. Refusing to boot rather than limp — the " +
+        "openclaw/activity bridges, git locality routes, and builder-shell all " +
+        "depend on these.",
     );
     process.exit(1);
   }
