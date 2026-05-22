@@ -414,13 +414,25 @@ else
   for ING_NAME in $(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['metadata']['name']) for i in d.get('items',[])]" 2>/dev/null); do
     ING_IP=$(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i.get('status',{}).get('loadBalancer',{}).get('ingress',[{}])[0].get('ip','')) for i in d.get('items',[]) if i['metadata']['name']=='$ING_NAME']" 2>/dev/null)
     ING_HOST=$(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['spec']['rules'][0]['host']) for i in d.get('items',[]) if i['metadata']['name']=='$ING_NAME']" 2>/dev/null)
+    ING_STATICIP=$(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i['metadata'].get('annotations',{}).get('kubernetes.io/ingress.global-static-ip-name','')) for i in d.get('items',[]) if i['metadata']['name']=='$ING_NAME']" 2>/dev/null)
     if [[ -n "$ING_IP" && "$ING_IP" != "None" ]]; then
       pass "$ING_NAME → $ING_HOST ($ING_IP)"
     else
-      fail "$ING_NAME → $ING_HOST has NO ADDRESS"
-      if $FIX; then
-        echo -e "  ${YELLOW}FIX:${NC} Verify annotation kubernetes.io/ingress.class: gce exists on ingress"
-        echo -e "  ${YELLOW}     ${NC} kubectl annotate ingress $ING_NAME -n $NAMESPACE kubernetes.io/ingress.class=gce"
+      # A `<none>` address is EXPECTED for a fleet sibling that shares one
+      # static IP with its main ingress (POST-BENDER-CLEANUP-SPEC §2.7:
+      # gateway-edge-fleet-ingress shares workspace-api-ip with
+      # gateway-edge-ingress; GCE merges them into one URL map, only the
+      # main ingress carries the LB address). Pass IFF a sibling ingress
+      # with the same static-ip-name DID get the address; fail otherwise.
+      SIBLING_IP=$(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i.get('status',{}).get('loadBalancer',{}).get('ingress',[{}])[0].get('ip','')) for i in d.get('items',[]) if i['metadata']['name']!='$ING_NAME' and i['metadata'].get('annotations',{}).get('kubernetes.io/ingress.global-static-ip-name','')=='$ING_STATICIP' and i.get('status',{}).get('loadBalancer',{}).get('ingress',[{}])[0].get('ip','')]" 2>/dev/null | head -1)
+      if [[ -n "$ING_STATICIP" && -n "$SIBLING_IP" ]]; then
+        pass "$ING_NAME → $ING_HOST (shared IP $SIBLING_IP via $ING_STATICIP — fleet sibling, expected)"
+      else
+        fail "$ING_NAME → $ING_HOST has NO ADDRESS"
+        if $FIX; then
+          echo -e "  ${YELLOW}FIX:${NC} If this is a fleet sibling, its main ingress must own the shared static IP first."
+          echo -e "  ${YELLOW}     ${NC} Else verify kubernetes.io/ingress.class=gce + the static IP isn't conflicted."
+        fi
       fi
     fi
   done
