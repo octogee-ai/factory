@@ -776,7 +776,7 @@ Per-slot top SHAs (✅ patch mirrored across all three this cycle):
 |---|---|---|
 | current | 2026.5.19 | `5e0d2619` |
 | previous | 2026.5.18 | `96ec3c02` |
-| preview | 2026.5.20-beta.2 | `aeadde4b` |
+| preview | 2026.5.20 (GA) | `9d716e25` |
 
 **Essential:**
 
