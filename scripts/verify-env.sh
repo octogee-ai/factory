@@ -764,18 +764,42 @@ fi
 #   the gateway pod, reached via the fleet seam (/api/g/<gw>/*).
 set_section infra
 header "8. chat (gateway-edge sidecar + octogee-api)"
-if [[ -z "$GW_DEPLOYMENT" ]]; then
-  fail "gateway-edge check skipped — no gateway deployment"
+# Iterate EVERY running gateway pod (cattle fleet: bender, default, …) and
+# assert each is on the post-fold architecture:
+#   - has a gateway-edge container (WS surfaces live here),
+#   - does NOT still carry a chat-proxy sidecar (the fold deleted it — a
+#     lingering one means the pod is a stale pre-#1124 image that never
+#     rolled, the exact failure mode that stalled gw-test/gw-prod),
+#   - gateway + gateway-edge share the same image SHA (a mismatch = a
+#     partial/stuck roll).
+# No running gateways is a WARN, not a failure — the fleet can legitimately
+# be scaled to zero (e.g. an idle TEST env).
+GW_PODS=$(kubectl get pods -l app=octogee-gateway -n "$NAMESPACE" -o json 2>/dev/null)
+GW_POD_NAMES=$(echo "$GW_PODS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(p['metadata']['name']) for p in d.get('items',[])]" 2>/dev/null)
+if [[ -z "$GW_POD_NAMES" ]]; then
+  warn "no running gateway pods in $NAMESPACE — gateway-edge/WS surfaces not serving (OK if the fleet is scaled to zero)"
 else
-  GATEWAY_READY=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-  GE_IMAGE=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="gateway-edge")].image}' 2>/dev/null || echo "unknown")
-  if [[ "${GATEWAY_READY:-0}" -ge 1 && -n "$GE_IMAGE" && "$GE_IMAGE" != "unknown" ]]; then
-    pass "gateway-edge sidecar ready in $GW_DEPLOYMENT pod (image: $GE_IMAGE)"
-  elif [[ -z "$GE_IMAGE" || "$GE_IMAGE" == "unknown" ]]; then
-    fail "gateway-edge sidecar not found in $GW_DEPLOYMENT (per-instance gateway chart is missing the container)"
-  else
-    fail "$GW_DEPLOYMENT not ready (readyReplicas=${GATEWAY_READY:-0}) — gateway-edge sidecar unavailable"
-  fi
+  while IFS= read -r POD; do
+    [[ -z "$POD" ]] && continue
+    CONTAINERS=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{range .spec.containers[*]}{.name}{" "}{end}' 2>/dev/null)
+    GE_IMG=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.spec.containers[?(@.name=="gateway-edge")].image}' 2>/dev/null)
+    GW_IMG=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.spec.containers[?(@.name=="gateway")].image}' 2>/dev/null)
+    GE_SHA="${GE_IMG##*:}"; GE_SHA="${GE_SHA%%-*}"
+    GW_SHA="${GW_IMG##*:}"; GW_SHA="${GW_SHA%%-*}"
+    if [[ -z "$GE_IMG" ]]; then
+      fail "$POD: no gateway-edge container — stale pre-fold pod, needs a Cowboy roll"
+    else
+      pass "$POD: gateway-edge present (${GE_IMG##*/})"
+    fi
+    if echo " $CONTAINERS " | grep -q " chat-proxy "; then
+      fail "$POD: chat-proxy sidecar still present — STALE pre-fold image; Cowboy must roll it to the folded gateway-edge"
+    else
+      pass "$POD: chat-proxy sidecar gone (folded into gateway-edge)"
+    fi
+    if [[ -n "$GE_SHA" && -n "$GW_SHA" && "$GE_SHA" != "$GW_SHA" ]]; then
+      warn "$POD: image SHA drift — gateway=$GW_SHA gateway-edge=$GE_SHA (partial/stuck roll)"
+    fi
+  done <<< "$GW_POD_NAMES"
 fi
 OA_READY=$(kubectl get deployment octogee-api -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
 if [[ "${OA_READY:-0}" -ge 1 ]]; then
