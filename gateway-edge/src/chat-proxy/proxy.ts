@@ -457,14 +457,22 @@ function getOpenClawIdentity(): DeviceIdentity {
   return openclawIdentity;
 }
 
-if (SA_KEY_PATH) {
-  const fs = await import("node:fs");
-  const sa = JSON.parse(fs.readFileSync(SA_KEY_PATH, "utf-8"));
-  admin.initializeApp({ credential: admin.credential.cert(sa), projectId: FIREBASE_PROJECT });
-  console.log(`[chat-proxy] Using SA key: ${SA_KEY_PATH}`);
-} else {
-  admin.initializeApp({ projectId: FIREBASE_PROJECT });
-  console.log(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
+// Guard the init: after the chat-proxy fold (POST-BENDER-CLEANUP-SPEC
+// §2.6) this module shares the gateway-edge process, where lib/db.ts has
+// already called initializeApp. A second unguarded init with a different
+// config throws "Firebase app [DEFAULT] already exists with a different
+// configuration" at boot. Same project (FIREBASE_PROJECT == GCLOUD_PROJECT)
+// either way, so reusing the existing app is correct.
+if (!admin.apps.length) {
+  if (SA_KEY_PATH) {
+    const fs = await import("node:fs");
+    const sa = JSON.parse(fs.readFileSync(SA_KEY_PATH, "utf-8"));
+    admin.initializeApp({ credential: admin.credential.cert(sa), projectId: FIREBASE_PROJECT });
+    console.log(`[chat-proxy] Using SA key: ${SA_KEY_PATH}`);
+  } else {
+    admin.initializeApp({ projectId: FIREBASE_PROJECT });
+    console.log(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
+  }
 }
 const db = admin.firestore();
 
