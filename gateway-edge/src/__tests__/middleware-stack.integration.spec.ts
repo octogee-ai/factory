@@ -92,6 +92,23 @@ describe('gateway-edge middleware stack', () => {
     expect(res.body.service).toBe('gateway-edge');
   });
 
+  // byosub is dual-plane: the app-facing routes (connect/status/connection)
+  // live on octogee-api (cluster), but the in-pod codex modules call the
+  // internal routes (capture/auth-state/sync-back) over localhost:3001 →
+  // gateway-edge. A 404 here is the regression that 404'd every BYOS
+  // capture/sync-back/auth-state sweep on the gw-bender pod.
+  it.each(['capture', 'sync-back', 'auth-state'])(
+    'mounts the in-pod byosub internal route /api/byosub/%s (never 404)',
+    async (path) => {
+      process.env.INTERNAL_SERVICE_KEY = 'byosub-mount-test-key';
+      const app = createApp();
+      const res = await request(app).post(`/api/byosub/${path}`).send({});
+
+      expect(res.status).not.toBe(404);
+      expect(res.status).toBe(401);
+    },
+  );
+
   it('parses JSON bodies on internal routes', async () => {
     process.env.INTERNAL_SERVICE_KEY = 'parses-json-test-key';
     const app = createApp();

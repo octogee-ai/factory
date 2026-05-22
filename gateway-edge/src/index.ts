@@ -18,6 +18,7 @@ import internalBillingRoutes from "./routes/internal/billing.js";
 // octogee-api → localhost redeem 404'd → every shell upgrade closed 4001
 // "session-unavailable" despite a valid (UUID) ticket.
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
+import byosubRoutes from "./routes/byosub.js";
 
 // chat-proxy folded in: it shares this process's single HTTP server
 // (port 3001) rather than running its own. The dispatcher in the boot
@@ -111,6 +112,13 @@ mountApi(app, "/projects", projectsLocality);
 
 app.use("/internal/billing", internalBillingRoutes);
 app.use("/internal/builder-shell", internalBuilderShellRoutes);
+
+// byosub is dual-plane. The app-facing routes (connect/status/connection)
+// live on octogee-api (cluster). The internal routes (capture/auth-state/
+// sync-back) are LOCALITY: the in-pod codex device-auth / sync-back /
+// auth-health sweeps call them same-pod via GATEWAY_EDGE_INTERNAL_URL
+// (localhost:3001), so they must be served here too (like internal/billing).
+app.use("/api/byosub", byosubRoutes);
 
 app.use(errorHandler);
 
