@@ -12,6 +12,12 @@ import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
 import deployPreviewRoutes from "./routes/projects/deploy-preview.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
+// LOCALITY (not cluster): the in-pod builder-shell WS bridge redeems
+// tickets via GATEWAY_EDGE_INTERNAL_URL (localhost:3001), so the redeem
+// endpoint MUST live on this sidecar. #1123's slim wrongly moved it to
+// octogee-api → localhost redeem 404'd → every shell upgrade closed 4001
+// "session-unavailable" despite a valid (UUID) ticket.
+import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
 
 // chat-proxy folded in: it shares this process's single HTTP server
 // (port 3001) rather than running its own. The dispatcher in the boot
@@ -104,6 +110,7 @@ projectsLocality.use(deployPreviewRoutes);
 mountApi(app, "/projects", projectsLocality);
 
 app.use("/internal/billing", internalBillingRoutes);
+app.use("/internal/builder-shell", internalBuilderShellRoutes);
 
 app.use(errorHandler);
 

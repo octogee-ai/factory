@@ -104,6 +104,25 @@ describe('gateway-edge middleware stack', () => {
     expect(res.body).toEqual({ error: 'Missing uid' });
   });
 
+  it('mounts /internal/builder-shell on THIS sidecar (locality) — the in-pod shell bridge redeems via localhost:3001', async () => {
+    // #1123 wrongly classified this as cluster and moved it to octogee-api.
+    // The bridge redeems via GATEWAY_EDGE_INTERNAL_URL (localhost) → it MUST
+    // be here. An UNMOUNTED route 404s at the routing layer — that was the
+    // regression that closed every builder-shell WS with 4001
+    // "session-unavailable". A MOUNTED route reaches the handler, which
+    // deterministically 400s an empty body ("Missing ticket"). Asserting that
+    // 400 proves the handler ran; a bare not-404 would be imprecise (the
+    // redeem handler legitimately 404s invalid/expired/consumed tickets).
+    process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
+    const app = createApp();
+    const res = await request(app)
+      .post('/internal/builder-shell/redeem')
+      .set('X-Internal-Service-Key', 'redeem-mount-test-key')
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Missing ticket' });
+  });
+
   it('sets X-Content-Type-Options: nosniff on all responses', async () => {
     const app = createApp();
     const res = await request(app).get('/api/health');

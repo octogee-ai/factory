@@ -65,7 +65,9 @@ import projectsDeleteRoutes from "../../gateway-edge/src/routes/projects/delete.
 import internalNotificationRoutes from "../../gateway-edge/src/routes/internal/notifications.js";
 import internalEngagementRoutes from "../../gateway-edge/src/routes/internal/engagement.js";
 import internalCSIRoutes from "../../gateway-edge/src/routes/internal/csi.js";
-import internalBuilderShellRoutes from "../../gateway-edge/src/routes/internal/builder-shell.js";
+// NOTE: /internal/builder-shell is LOCALITY, not cluster — the in-pod
+// builder-shell bridge redeems via localhost on gateway-edge. It is
+// mounted there, not here. (#1123 wrongly placed it on octogee-api.)
 
 // MM REST proxy + credential mint — relocated from the gateway-edge
 // chat-proxy sidecar (POST-BENDER-CLEANUP-SPEC §2.7).
@@ -193,7 +195,6 @@ export function createApp() {
   app.use("/internal/notifications", internalNotificationRoutes);
   app.use("/internal/engagement", internalEngagementRoutes);
   app.use("/internal/csi", internalCSIRoutes);
-  app.use("/internal/builder-shell", internalBuilderShellRoutes);
 
   app.use(errorHandler);
 
