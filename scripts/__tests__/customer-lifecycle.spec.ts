@@ -62,7 +62,7 @@ interface MockState {
    *  failure mid-mount. */
   persistGiteaTokenShouldFail: boolean;
   blobSyncShouldFail: boolean;
-  byosubActivated?: boolean;
+  byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
@@ -198,7 +198,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     },
     restoreByosubForAgent: async () => {
       record("restoreByosubForAgent");
-      return state.byosubActivated ?? false;
+      return state.byosub ?? { restored: false, present: false };
     },
 
     listProjectsNeedingClone: async () => state.pendingProjects,
@@ -340,7 +340,7 @@ describe("addCustomerToGateway — first-time provisioning", () => {
   });
 
   it("converges BYOS from the durable ref on mount, BEFORE the config-patch reload (no user-doc signal needed)", async () => {
-    state.byosubActivated = true; // glmGateways.byosub ref present for this agent
+    state.byosub = { restored: true, present: true }; // fresh write: ref present + cold on-disk
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     const restoreIdx = state.calls.indexOf("restoreByosubForAgent");
@@ -353,6 +353,21 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     // The config-patch MUST receive byosActive so it switches the agent's
     // model to the codex runtime (auth-profile alone doesn't — #976 burn).
     expect(state.lastConfigPatchByosActive).toBe(true);
+  });
+
+  // Regression guard for the #22 clobber: a re-mount of an
+  // already-provisioned BYOS customer (cred already healthy on disk)
+  // returns present:true but restored:false (conservative-skip). The
+  // config-patch must STILL flip the model to codex (byosActive=true), but
+  // the event signals — `byosub-restore` step + "BYOS oauth activated"
+  // log — must NOT fire (both gate on `restored`; nothing was activated
+  // this call). Asserting the step also covers the log (same `if` block).
+  it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobber) but no byosub-restore step", async () => {
+    state.byosub = { restored: false, present: true };
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(state.calls).toContain("restoreByosubForAgent");
+    expect(state.lastConfigPatchByosActive).toBe(true);
+    expect(result.steps).not.toContain("byosub-restore");
   });
 
   it("is a self-no-op for non-BYOS customers (called, but no step, default model)", async () => {

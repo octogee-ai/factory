@@ -165,16 +165,17 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     for (const d of tmps.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  it("materializes the per-agent codex-home for a mounted oauth customer (returns true)", async () => {
+  it("materializes the per-agent codex-home for a mounted oauth customer (restored + present)", async () => {
     const oc = mk();
-    const ok = await restoreOauthStoreForSlug("tester-70", {
+    const r = await restoreOauthStoreForSlug("tester-70", {
       fetchGlmByosub: async () => ({
         "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" },
       }),
       fetchSecret: async () => codexBlob(),
       openclawDir: oc,
     });
-    expect(ok).toBe(true);
+    expect(r.restored).toBe(true);
+    expect(r.present).toBe(true);
     expect(
       JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
         .auth_mode,
@@ -197,9 +198,9 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     });
   });
 
-  it("Copilot #2: a FAILED restore does NOT activate (no auth-profiles, routing unchanged)", async () => {
+  it("Copilot #2: a FAILED restore does NOT activate (not restored, not present)", async () => {
     const oc = mk();
-    const ok = await restoreOauthStoreForSlug("tester-70", {
+    const r = await restoreOauthStoreForSlug("tester-70", {
       fetchGlmByosub: async () => ({
         "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" },
       }),
@@ -209,29 +210,63 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       openclawDir: oc,
       logFn: () => {},
     });
-    expect(ok).toBe(false); // gated on r.restored, not r.planned
+    expect(r.restored).toBe(false); // gated on r.restored, not r.planned
+    // present is false on a FAILED restore (failed≠skipped): no usable cred
+    // on disk, so the re-mount must NOT treat BYOS as active.
+    expect(r.present).toBe(false);
     const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
     expect(fs.existsSync(ap)).toBe(false); // never flip routing without the cred on disk
   });
 
-  it("returns false when this customer has no byosub ref (nothing to restore)", async () => {
-    const ok = await restoreOauthStoreForSlug("tester-70", {
+  it("not restored / not present when this customer has no byosub ref (nothing to restore)", async () => {
+    const r = await restoreOauthStoreForSlug("tester-70", {
       fetchGlmByosub: async () => ({}),
       fetchSecret: async () => "x",
       openclawDir: mk(),
     });
-    expect(ok).toBe(false);
+    expect(r.restored).toBe(false);
+    expect(r.present).toBe(false);
   });
 
-  it("never throws — a fetch failure returns false (mount continues)", async () => {
-    const ok = await restoreOauthStoreForSlug("tester-70", {
+  it("never throws — a fetch failure is neither restored nor present (mount continues)", async () => {
+    const r = await restoreOauthStoreForSlug("tester-70", {
       fetchGlmByosub: async () => {
         throw new Error("glmGateways read failed");
       },
       openclawDir: mk(),
       logFn: () => {},
     });
-    expect(ok).toBe(false);
+    expect(r.restored).toBe(false);
+    expect(r.present).toBe(false);
+  });
+
+  // Regression guard for the coach-model clobber (task #22). On the
+  // restore-customer RE-MOUNT of an already-provisioned BYOS customer, the
+  // on-disk credential is healthy → byosub-restore conservatively SKIPS it
+  // (openclaw owns + rotates it in place). That skip used to return
+  // restored=false → byosActive=false → addCustomerToGateway clobbered the
+  // coach model back to the anthropic platform default. `present` must be
+  // TRUE on the skip so the re-mount keeps BYOS active and never clobbers.
+  it("re-mount over a healthy on-disk cred → conservative skip → NOT restored but present", async () => {
+    const oc = mk();
+    const opts = {
+      fetchGlmByosub: async () => ({
+        "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" } as const,
+      }),
+      fetchSecret: async () => codexBlob(),
+      openclawDir: oc,
+      logFn: () => {},
+    };
+    // First mount: cold start, writes the cred to disk.
+    const first = await restoreOauthStoreForSlug("tester-70", opts);
+    expect(first.restored).toBe(true);
+    expect(first.present).toBe(true);
+    // Second mount (restore-customer re-mount): cred already healthy on
+    // disk → conservative skip. restored=false (nothing freshly written)
+    // but present=true (the cred IS there — BYOS is active).
+    const second = await restoreOauthStoreForSlug("tester-70", opts);
+    expect(second.restored).toBe(false);
+    expect(second.present).toBe(true);
   });
 });
 

@@ -69,16 +69,33 @@ export async function triggerSecretsReload(): Promise<void> {
       log("[byot-sync] secrets reload ok");
     }
   } catch (err) {
-    const detail =
-      err instanceof OpenclawWireError
-        ? `${err.code}: ${err.message}`
-        : err instanceof Error
-          ? err.message
-          : String(err);
+    let detail: string;
+    if (err instanceof OpenclawWireError) {
+      detail = `${err.code}: ${err.message}`;
+    } else if (err instanceof Error) {
+      detail = err.message;
+    } else {
+      detail = String(err);
+    }
     log(`⚠ [byot-sync] secrets reload failed: ${detail}`);
   } finally {
     await rpc.close();
   }
+}
+
+/**
+ * `restored` — a credential was freshly written to disk THIS call (cold
+ *   start or a recovery signal). Gates `applyByotState` + `secrets.reload`:
+ *   only a fresh write needs the routing re-asserted / the gateway reloaded.
+ * `present` — a usable BYOS credential is on disk after this call: freshly
+ *   restored OR a conservative-skip over a healthy on-disk cred (openclaw
+ *   owns + rotates it in place). NOT set on a failed/absent restore. Drives
+ *   `byosActive` on the restore-customer re-mount — so an already-provisioned
+ *   BYOS customer is never clobbered back to the platform-default coach model.
+ */
+export interface OauthStoreRestoreResult {
+  restored: boolean;
+  present: boolean;
 }
 
 /**
@@ -97,7 +114,7 @@ export async function restoreOauthStoreForSlug(
     openclawDir?: string;
     logFn?: (m: string) => void;
   },
-): Promise<boolean> {
+): Promise<OauthStoreRestoreResult> {
   const agentId = `octogee-${slug}-coach`;
   const logFn = deps?.logFn ?? log;
   try {
@@ -140,10 +157,14 @@ export async function restoreOauthStoreForSlug(
         path.join(ocDir, "agents"),
       );
     }
-    return r.restored > 0;
+    // present = cred on disk: a fresh write OR a conservative-skip over a
+    // healthy on-disk cred. A skip means BYOS IS active — the re-mount must
+    // not clobber the coach model. failed/absent (restored=0, skipped=0)
+    // stays not-present so we never route to codex without the cred.
+    return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0 };
   } catch (e) {
     logFn(`⚠ [byot-sync] oauth-store restore failed for ${slug}: ${(e as Error).message}`);
-    return false;
+    return { restored: false, present: false };
   }
 }
 
@@ -164,7 +185,7 @@ export async function syncByotForCustomer(userData: {
   const provider = desired.input?.provider;
   const restored =
     provider && isOauthProvider(provider)
-      ? await restoreOauthStoreForSlug(slug)
+      ? (await restoreOauthStoreForSlug(slug)).restored
       : false;
 
   // #1001: point the coach agent at the provider's model (codex → gpt-5.5
