@@ -96,6 +96,14 @@ router.post(
       // namespace (slugs are predictable from public profiles) — a
       // reconnaissance vector for any future shell-related vuln.
       if (!snap.exists) {
+        // Server-side only — the 404 response stays identical for both
+        // "not found" and "not yours" (anti-enumeration above), but ops
+        // needs to tell them apart. A missing doc here means the gateway
+        // id is wrong / never registered.
+        logger.warn("builder-shell: shell-ticket denied — glmGateways doc not found", {
+          uid,
+          gatewayId,
+        });
         res.status(404).json({ error: "Gateway not found" });
         return;
       }
@@ -113,6 +121,15 @@ router.post(
       if (data.ownerUid === uid) via = "owner";
       else if (Array.isArray(data.coOwnerUids) && data.coOwnerUids.includes(uid)) via = "co-owner";
       if (!via) {
+        // Server-side only (client still gets the anti-enumeration 404).
+        // `ownerSet=false` distinguishes "gateway has no owner wired yet"
+        // from "caller is genuinely not the owner".
+        logger.warn("builder-shell: shell-ticket denied — caller not owner/co-owner", {
+          uid,
+          gatewayId,
+          ownerSet: typeof data.ownerUid === "string" && data.ownerUid.length > 0,
+          coOwnerCount: Array.isArray(data.coOwnerUids) ? data.coOwnerUids.length : 0,
+        });
         res.status(404).json({ error: "Gateway not found" });
         return;
       }

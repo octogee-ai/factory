@@ -880,6 +880,8 @@ export function attachChatProxyWsUpgrade(server: http.Server) {
   const wsRouter = new WsUpgradeRouter();
 
   server.on("upgrade", (req, socket, head) => {
+    // Capture the pre-strip URL for diagnostics on the no-match path.
+    const originalUrl = req.url ?? "(none)";
     // Strip the gateway prefix here too: the OC + MM WS upgrade matchers
     // below check the stripped path, AND `handleOpenClawWsUpgrade`
     // re-reads req.url for its UUID extraction.
@@ -912,6 +914,16 @@ export function attachChatProxyWsUpgrade(server: http.Server) {
       return;
     }
     if (wsRouter.dispatch(req, socket, head)) return;
+    // No WS route matched. Log the stripped path dispatch tested + the
+    // original (pre-strip) URL so a 404'd upgrade is debuggable — e.g. a
+    // builder-shell upgrade that should have matched /builder-shell/ but
+    // didn't (strip mismatch, route not registered, ticket-format drift).
+    // Redact long token-like segments (ticket UUIDs are short-lived creds —
+    // never log them verbatim); the route shape is what we need for triage.
+    const redactWsPath = (p: string) => p.replace(/[A-Za-z0-9_-]{16,}/g, "<redacted>");
+    console.warn(
+      `[ws-upgrade] no route matched — 404 strippedPath=${redactWsPath(urlPath)} originalUrl=${redactWsPath(originalUrl)}`,
+    );
     socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
     socket.destroy();
   });
