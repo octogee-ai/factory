@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { FieldValue } from "firebase-admin/firestore";
 import { requireAuth, requireInternalServiceAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import {
@@ -201,6 +202,51 @@ async function flipUnifiedByosSignal(uid: string): Promise<void> {
     .set({ byot: { provider: "openai-codex" } }, { merge: true });
   await db.collection("users").doc(uid).set({ byotActive: true }, { merge: true });
 }
+
+// #1141 — let the Builder clear a connected BYOS credential. The inverse
+// of /capture's unified-signal flip + glmGateways.byosub ref-write. The
+// Secret Manager secret is intentionally NOT destroyed (disconnect-only,
+// not full-wipe); a future re-Connect rewrites a fresh version under the
+// same owner-scoped name, so no orphan secret and no doubled-up cred.
+// Idempotent end-state: clearing already-clear docs is a safe no-op.
+router.post(
+  "/disconnect",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = req.uid!;
+      const resolved = await resolveUserGateway(uid);
+
+      await db.collection("users").doc(uid).set({ byotActive: false }, { merge: true });
+      await db
+        .collection("users")
+        .doc(uid)
+        .collection("system")
+        .doc("config")
+        .set({ byot: null }, { merge: true });
+
+      if (resolved) {
+        const agentId = coachAgentId(resolved.slug);
+        // Single update() — no pre-check. A get() + update() pair has a
+        // TOCTOU window where the gateway doc can be deleted between read
+        // and write, surfacing a 500 even though our intended end-state
+        // (no ref) is already true. Swallow gRPC NOT_FOUND (code 5) and
+        // treat as no-op — same pattern as secret-manager.ts:82.
+        try {
+          await db.collection("glmGateways").doc(resolved.gatewayId).update({
+            [`byosub.${agentId}`]: FieldValue.delete(),
+          });
+        } catch (err) {
+          if ((err as { code?: number } | null)?.code !== 5) throw err;
+        }
+      }
+
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 router.post(
   "/capture",
