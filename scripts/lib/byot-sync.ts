@@ -121,8 +121,7 @@ agentsDir: string = AGENTS_DIR,
 
   let changed = false;
   for (const f of BYOT_FILES) {
-
-if (f === "auth-profiles.json" && isOauthProvider(input.provider)) continue;
+    if (f === "auth-profiles.json" && isOauthProvider(input.provider)) continue;
     const target = filePath(f);
     const want = desired[f];
     const existing = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
@@ -141,7 +140,8 @@ if (f === "auth-profiles.json" && isOauthProvider(input.provider)) continue;
   }
 
   if (changed) {
-    log(`[byot-sync] ${slug}: BYOT config updated (provider=${input.provider}${input.model ? ` model=${input.model}` : ""})`);
+    const modelSuffix = input.model ? ` model=${input.model}` : "";
+    log(`[byot-sync] ${slug}: BYOT config updated (provider=${input.provider}${modelSuffix})`);
   }
   return changed;
 }

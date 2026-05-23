@@ -205,7 +205,8 @@ function sshRemoteUrl(org: string, repoName: string): string {
 
 function httpCloneUrl(org: string, repoName: string): string {
   const gitHost = new URL(GIT_API_URL).origin;
-  return `${gitHost.replace("://", `://octogee-admin:${GIT_API_TOKEN}@`)}/${org}/${repoName}.git`;
+  const authPrefix = `://octogee-admin:${GIT_API_TOKEN}@`;
+  return `${gitHost.replace("://", authPrefix)}/${org}/${repoName}.git`;
 }
 
 export function gitExec(cwd: string, args: string, sshKeyPath?: string): string | null {
