@@ -17,19 +17,14 @@ const GATEWAY_EDGE_AGENTS_SRC = path.resolve(
 describe("coach is a MM bot — creation contract", () => {
   it("provision.ts creates the coach via POST /bots, not POST /users", () => {
     const src = fs.readFileSync(PROVISION_SRC, "utf-8");
-    // The Builder's own MM user is still POST /users — that's correct, the
-    // Builder is a person. Find the coach-creation block and assert it uses
-    // /bots. Look for the coachUsername line and a POST /bots call near it.
-    const coachIdx = src.indexOf("const coachUsername = `${slug}-coach`");
+
+const coachIdx = src.indexOf("const coachUsername = `${slug}-coach`");
     expect(coachIdx).toBeGreaterThan(-1);
 
-    // The coach create call must be `POST /bots` and must appear after the
-    // coachUsername declaration.
-    const botCreateIdx = src.indexOf('mmApiCall("POST", "/bots"', coachIdx);
+const botCreateIdx = src.indexOf('mmApiCall("POST", "/bots"', coachIdx);
     expect(botCreateIdx).toBeGreaterThan(coachIdx);
 
-    // And the coach block must NOT use POST /users (regression guard).
-    const userCreateAfterCoach = src.indexOf('mmApiCall("POST", "/users"', coachIdx);
+const userCreateAfterCoach = src.indexOf('mmApiCall("POST", "/users"', coachIdx);
     expect(userCreateAfterCoach).toBe(-1);
   });
 
@@ -49,7 +44,7 @@ describe("coach is a MM bot — rename contract", () => {
     const src = fs.readFileSync(GATEWAY_EDGE_AGENTS_SRC, "utf-8");
     expect(src).toMatch(/`\/bots\/\$\{coachMmUserId\}`,\s*"PUT"/);
     expect(src).toMatch(/display_name:\s*patch\.name/);
-    // Regression guard: the old user-patch path is gone.
+    
     expect(src).not.toMatch(/\/users\/\$\{coachMmUserId\}\/patch/);
   });
 

@@ -23,8 +23,6 @@ type ByotFile = (typeof BYOT_FILES)[number];
 
 const BYOT_MARKER = ".byot-managed";
 
-// One source of truth for the credential-config shape (was a byte-copy
-// of ByotConfigInput).
 export type ByotInput = ByotConfigInput;
 
 type CodexModelsDef = Record<string, { agentRuntime: { id: "codex" } }>;
@@ -35,22 +33,6 @@ export interface CoachModelPatch {
   };
 }
 
-/**
- * The openclaw config-patch that points a customer's coach agent at the
- * model their BYOT/BYOS provider requires (#1001). `buildByotConfigForProvider`
- * is the single source of truth for the model (`agentModelOverride`):
- * codex/openai → an explicit model; anthropic / tool-only oauth → null
- * (keep the gateway-default model — no per-agent override). codex also
- * needs the `agentRuntime:codex` registry row so the per-agent gpt-5.5
- * override routes through the @openclaw/codex harness (codexRuntimeConfig).
- * Returns null when no per-agent model change is required.
- *
- * Applied from the DURABLE desired state (deriveDesiredByotState) on every
- * sync, so a BYOS Connect actually switches the agent AND every later sync
- * / post-reschedule mount re-asserts it — closing the #1001 gap where only
- * the customer-lifecycle add path set this (gated on a transient caller
- * flag the Connect path never drove), leaving the agent on the default.
- */
 export function byosCoachConfigPatch(
   input: ByotInput | null,
 ): CoachModelPatch | null {
@@ -80,10 +62,8 @@ export function deriveDesiredByotState(userData: {
     return { enabled: false, input: null };
   }
   const cfg = userData.systemConfig?.byot;
-  // Data-driven: any provider in the PROVIDERS registry is recognized
-  // (BYOT api_key + BYOS oauth + future google/github/openrouter rows) —
-  // no per-provider OR-list. Unknown/absent → anthropic (api_key default).
-  const p = cfg?.provider;
+
+const p = cfg?.provider;
   const provider: Provider =
     p && Object.prototype.hasOwnProperty.call(PROVIDERS, p)
       ? (p as Provider)
@@ -109,10 +89,8 @@ function removeIfExists(target: string): boolean {
 export function applyByotState(
   slug: string,
   input: ByotInput | null,
-  // Explicit agents base so a caller that restored the codex-home under a
-  // specific openclawDir writes auth-profiles.json under the SAME base
-  // (else AGENTS_DIR/OPENCLAW_AGENTS_DIR can decouple cred from profile).
-  agentsDir: string = AGENTS_DIR,
+
+agentsDir: string = AGENTS_DIR,
 ): boolean {
   const dir = agentDirForSlug(slug, agentsDir);
   const filePath = (f: string) => path.join(dir, f);
@@ -143,12 +121,8 @@ export function applyByotState(
 
   let changed = false;
   for (const f of BYOT_FILES) {
-    // Plane-1 OAuth (codex/BYOS): byosub-restore is the SOLE writer of
-    // auth-profiles.json — it embeds the live OAuthCredential mapped from
-    // the restored codex auth.json. applyByotState must not stub-write or
-    // null-delete it here: restoreOauthStoreForSlug calls applyByotState
-    // *after* the restore, so touching it would clobber the credential.
-    if (f === "auth-profiles.json" && isOauthProvider(input.provider)) continue;
+
+if (f === "auth-profiles.json" && isOauthProvider(input.provider)) continue;
     const target = filePath(f);
     const want = desired[f];
     const existing = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;

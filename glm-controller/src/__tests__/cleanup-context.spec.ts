@@ -1,6 +1,4 @@
-// Coverage for loadCustomerCleanupContext: the four edge cases the
-// review-agent flagged plus the canonical happy path. Uses an in-memory
-// db stub instead of @google-cloud/firestore mocks for clarity.
+
 
 import { describe, it, expect } from "vitest";
 import { loadCustomerCleanupContext } from "../lib/customer-ops/cleanup-context";
@@ -43,7 +41,7 @@ function buildDb(initialDocs: Record<string, Record<string, unknown> | undefined
           };
         },
         get: async () => {
-          // List all docs that live directly under this path.
+          
           const prefix = `${path}/`;
           const matches = Object.entries(initialDocs)
             .filter(([k, v]) => v !== undefined && k.startsWith(prefix) && !k.slice(prefix.length).includes("/"))
@@ -169,11 +167,8 @@ describe("loadCustomerCleanupContext", () => {
   });
 
   it("surfaces projectSlugs[] directly from project docs (PR #3 — drives Firebase Hosting deletes)", async () => {
-    // Spec PR3-DEPROVISION-WITH-HOSTING: projectSlugs is the source of
-    // truth for hosting site IDs (`octogee-<slug>-<projectSlug>`).
-    // Reverse-engineering from repo names yields "proj-<slug>" not
-    // "<slug>" — see the slice-bug call-out in the spec.
-    const db = buildDb({
+
+const db = buildDb({
       "users/uid-alice": {
         username: "alice",
         provisioning: { openclaw: { slug: "alice" } },
@@ -186,7 +181,7 @@ describe("loadCustomerCleanupContext", () => {
       { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
-    // Sorted for determinism — operator-facing logs read alphabetical.
+    
     expect(ctx?.projectSlugs).toEqual(["blog", "legacy-id", "shop"]);
   });
 

@@ -34,10 +34,6 @@ interface UsageData {
   };
 }
 
-/**
- * Extract role from agent ID.
- * Pattern: octogee-{slug}-{role}  e.g. octogee-swift-harbor-coach → "coach"
- */
 export function extractRole(agentId: string): string {
   const knownRoles = ["coach"];
   for (const role of knownRoles) {
@@ -46,16 +42,11 @@ export function extractRole(agentId: string): string {
   return "coach";
 }
 
-// Paths flow from internal agent directories (constructed under the agents/
-// root by the gateway provisioner), never from user input — the rule's
-// path-traversal concern doesn't apply at this boundary.
 type ReadResult<T> =
   | { kind: "ok"; value: T }
-  | { kind: "missing" }       // ENOENT — file does not exist
-  | { kind: "unreadable" }    // EACCES / EISDIR / other read error
-  | { kind: "corrupt" };       // present + readable but not a JSON object
-                              // (parse error, OR valid JSON of the wrong shape:
-                              // null, scalar, array, etc.)
+  | { kind: "missing" }       
+  | { kind: "unreadable" }    
+  | { kind: "corrupt" };       
 
 function readJson<T>(filePath: string): ReadResult<T> {
   let raw: string;
@@ -79,13 +70,6 @@ function readJson<T>(filePath: string): ReadResult<T> {
   return { kind: "ok", value: parsed as T };
 }
 
-/**
- * Read the workspace slug (workspace ID) from customer-config.json in an agent dir.
- * Returns null if the file cannot be read. Direct file takes precedence — a
- * corrupt, empty, OR unreadable direct file (permission-denied, is-a-directory)
- * does NOT fall through to the shared/ sibling; only an ENOENT (missing) direct
- * file allows the shared/ fallback.
- */
 export function readWorkspaceId(agentDir: string): string | null {
   const direct = readJson<{ slug?: unknown }>(path.join(agentDir, "customer-config.json"));
   if (direct.kind === "ok") {
@@ -130,7 +114,6 @@ function parseLineForUsage(line: string): UsageData | null {
   }
 }
 
-// Firestore doc IDs cannot contain "/"
 function modelKey(model: string): string {
   return model.replace(/\//g, "_").slice(0, 100);
 }
@@ -194,11 +177,6 @@ function buildWindowUpdates(
   };
 }
 
-// Per-bucket token-count increments shared by every doc that aggregates
-// usage by input/output/cache. Appears as the `token_breakdown` sub-object
-// on workspace session + model docs, and (spread) inside `breakdown` on
-// the user-level log. Keep it a flat helper; cost-side increments stay
-// inline at their single user-log call site (not 3-site shared yet).
 function tokenBreakdownIncrements(usage: UsageData): Record<string, ReturnType<typeof FieldValue.increment>> {
   return {
     input:      FieldValue.increment(usage.input),
@@ -232,9 +210,6 @@ function decideThrottle(args: {
   return { level, reason: state.reason };
 }
 
-// Exported for unit testing. Not part of the public module surface — callers
-// should go through startUsageTracking(), which tails session JSONL files
-// and invokes this per parsed usage event.
 export async function reportUsage(input: ReportUsageInput): Promise<void> {
   const { db, agentId, role, agentDir, usage, agentToUid, log, gatewayId } = input;
   const uid = agentToUid.get(agentId);
@@ -298,12 +273,7 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
         "usage.lastUpdated":        FieldValue.serverTimestamp(),
       });
 
-      // `set({}, { merge: true })` does NOT interpret dotted keys as nested
-      // paths (only `.update()` does). Emit nested objects so consumers
-      // reading `log.breakdown.coach` / `log.breakdown.input` get the
-      // values back. Nested merge composes correctly with FieldValue.
-      // increment per-leaf across repeated calls.
-      t.set(logRef, {
+t.set(logRef, {
         date:             today,
         tokensUsed:       FieldValue.increment(usage.totalTokens),
         costUsd:          FieldValue.increment(usage.costUsd),
@@ -319,18 +289,10 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
         },
       }, { merge: true });
 
-      // workspaceId is the slug (e.g. "eckert"); the top-level workspaces
-      // collection is the v3.1 authoritative parent. Three parallel
-      // subcollections keep reads cheap and rules simple. Rollups are
-      // dimensioned by (slug, role, model) — no per-key splits because
-      // the key fingerprint is not knowable from the JSONL session feed
-      // (see module header).
-      if (workspaceId) {
+if (workspaceId) {
         const wsRef = db.collection("workspaces").doc(workspaceId);
 
-        // usage_sessions/{date} — daily rollup for this workspace.
-        // Nested objects (not dotted keys) — see logRef comment above.
-        t.set(wsRef.collection("usage_sessions").doc(today), {
+t.set(wsRef.collection("usage_sessions").doc(today), {
           date:            today,
           tokensUsed:      FieldValue.increment(usage.totalTokens),
           costUsd:         FieldValue.increment(usage.costUsd),
@@ -341,9 +303,7 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
           token_breakdown: tokenBreakdownIncrements(usage),
         }, { merge: true });
 
-        // usage_models/{modelKey}_{date} — per-model per-day granularity,
-        // per role. Nested token_breakdown (not dotted keys).
-        const mk = `${modelKey(usage.model)}_${today}`;
+const mk = `${modelKey(usage.model)}_${today}`;
         t.set(wsRef.collection("usage_models").doc(mk), {
           date:              today,
           model:             usage.model,
@@ -356,10 +316,7 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
           token_breakdown:   tokenBreakdownIncrements(usage),
         }, { merge: true });
 
-        // usage_summary/current — rolling workspace totals (single doc).
-        // Nested modelCosts (not dotted) so consumers reading
-        // `summary.modelCosts[modelKey]` get the value back.
-        t.set(wsRef.collection("usage_summary").doc("current"), {
+t.set(wsRef.collection("usage_summary").doc("current"), {
           workspaceId,
           totalTokens:        FieldValue.increment(usage.totalTokens),
           totalCostUsd:       FieldValue.increment(usage.costUsd),
@@ -379,11 +336,8 @@ export async function reportUsage(input: ReportUsageInput): Promise<void> {
       workspaceId: workspaceId ?? null,
     }));
   } catch (err) {
-    // Include code/stack so systemic write failures (e.g. a new
-    // arrayUnion schema migration colliding with a pre-existing scalar
-    // field, or missing composite index) surface in logs instead of
-    // silently retrying every turn.
-    const e = err as { code?: string; stack?: string };
+
+const e = err as { code?: string; stack?: string };
     const codeTag = e.code ? ` [${e.code}]` : "";
     const stackSuffix = e.stack ? `\n${e.stack}` : "";
     log(`\u2717 usage write failed for ${agentId}${codeTag}: ${err}${stackSuffix}`);
@@ -452,11 +406,6 @@ function findSessionFiles(agentsDir: string, agentPrefix: string): string[] {
   return files;
 }
 
-/**
- * Start the usage tracking loop.
- * Polls session files every POLL_INTERVAL_MS and writes token usage to Firestore.
- * Non-blocking — runs setInterval internally.
- */
 export function startUsageTracking(
   db: Firestore,
   agentPrefix: string,

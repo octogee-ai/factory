@@ -1,11 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveGatewayGcpProject } from "../gcp-project.js";
 
-// BYO-GCP seam: a gateway's GCP project comes from its glmGateways doc
-// (`gcpProject`) when the Builder brings their own, else the platform
-// project. Cowboy threads the result into gateway-edge as a per-gateway
-// `--set` so the value is always present from the live desired-state —
-// not a baked values file that can skew and silently drop it.
 describe("resolveGatewayGcpProject", () => {
   it("uses the per-gateway gcpProject when set (BYO-GCP)", () => {
     expect(

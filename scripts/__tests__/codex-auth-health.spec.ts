@@ -5,14 +5,9 @@ import {
 } from "../lib/codex-auth-health.js";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../lib/byot-multi-provider-config.js";
 
-const P = OPENAI_CODEX_DEFAULT_PROFILE_ID; // "openai-codex:default"
+const P = OPENAI_CODEX_DEFAULT_PROFILE_ID; 
 const NOW = 1_780_000_000_000;
 
-// openclaw persists auth-profile failure state to <agentAuthDir>/<AUTH_STATE_FILENAME>:
-//   { version, order?, lastGood?, usageStats?: Record<profileId, ProfileUsageStats> }
-// ProfileUsageStats.disabledReason is an AuthProfileFailureReason ("auth_permanent"
-// | "billing" | ...) paired with disabledUntil. We treat ONLY an active
-// auth_permanent disable window for the codex profile as "needs_reauth".
 const state = (usageStats: Record<string, unknown>) =>
   JSON.stringify({ version: 1, usageStats });
 

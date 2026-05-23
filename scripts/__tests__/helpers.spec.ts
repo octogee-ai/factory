@@ -38,8 +38,6 @@ describe("slugify", () => {
   });
 });
 
-// ── generatePersonalSlug ────────────────────────────────────────────────────────
-
 describe("generatePersonalSlug", () => {
   it("returns a string", () => {
     const slug = generatePersonalSlug();
@@ -56,8 +54,6 @@ describe("generatePersonalSlug", () => {
     expect(slugs.size).toBeGreaterThan(1);
   });
 });
-
-// ── getTemplateForBusinessType ──────────────────────────────────────────────────
 
 describe("getTemplateForBusinessType", () => {
   it("maps salon to hair-salon", () => {
@@ -91,8 +87,6 @@ describe("getTemplateForBusinessType", () => {
   });
 });
 
-// ── applyTemplatePlaceholders ───────────────────────────────────────────────────
-
 describe("applyTemplatePlaceholders", () => {
   it("replaces {{key}} with values", () => {
     const result = applyTemplatePlaceholders("Hello {{name}}", { name: "World" });
@@ -119,8 +113,6 @@ describe("applyTemplatePlaceholders", () => {
     expect(result).toBe("{{x}}");
   });
 });
-
-// ── copyDirSync ─────────────────────────────────────────────────────────────────
 
 describe("copyDirSync", () => {
   let tmpDir: string;

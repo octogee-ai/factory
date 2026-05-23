@@ -1,10 +1,5 @@
-/**
- * Cowboy HTTP — admin / fleet API surface served from the control
- * plane. Mounts the same `addAdminFleetRoutes` factory gateway-edge
- * uses, so the admin Gateways tab keeps responding even when no
- * gateway pods are booted. See
- * docs/architecture/GATEWAY-PLATFORM-SPEC.md §Gateway Lifecycle Manager.
- */
+
+
 import express, { Router, type Express, type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
@@ -22,12 +17,6 @@ import {
   type RequireAdminDeps,
 } from "./middleware/auth.js";
 
-// Mirrors gateway-edge/src/middleware/cors.ts. PR #865 lifted the
-// admin Customers tab to glm-controller; without this CORS handler
-// the admin UI's fetches from app[-octogee][-test].web.app get blocked
-// by the browser ("No 'Access-Control-Allow-Origin' header"). Hand-
-// rolled instead of pulling in the `cors` npm dep — fewer deps in
-// the glm-controller image and the logic is small enough to inline.
 const ALLOWED_ORIGINS = new Set([
   "https://octogee.web.app",
   "https://octogee-test.web.app",
@@ -114,12 +103,8 @@ export function createHttpServer(deps: HttpServerDeps): Express {
       log: deps.log,
     }),
   );
-  // Customer-detail routes (Customers tab + per-customer drawer) — same
-  // factory gateway-edge uses, so the tab keeps responding even when
-  // no gateway pods are booted. CSI refresh is gateway-edge-only (the
-  // CSI compute pipeline lives there); we stub it with a 503 so the
-  // admin UI can show a friendly "try again later" message.
-  addAdminCustomerRoutes(adminRouter, {
+
+addAdminCustomerRoutes(adminRouter, {
     db: deps.db,
     FieldValue,
     logger: adaptLogger(deps.log),
@@ -145,16 +130,6 @@ export function createHttpServer(deps: HttpServerDeps): Express {
   return app;
 }
 
-/**
- * Firestore-only MM context read used by the customer-detail route.
- * Mirrors gateway-edge's getWorkspaceMmContext but without the
- * extra workspace/agent metadata; the customer drawer only needs the
- * coach DM channel id for the "open chat" link.
- *
- * Takes the user-data hint the factory already loaded so we don't
- * re-fetch users/{uid} on every request — perf parity with the
- * gateway-edge implementation.
- */
 async function readMmContextFromFirestore(
   db: Firestore,
   uid: string,

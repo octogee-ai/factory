@@ -1,11 +1,5 @@
-/**
- * Gateway internal device-auth HTTP endpoints (Chunk C1b). Mounted on the
- * fleet-http Express app (port 3003); the only caller is gateway-edge's
- * `gatewayDeviceAuthClient`, addressed by K8s Service name and
- * authenticated with `X-Internal-Service-Key` (same shape site-build-api
- * uses). Handlers are thin: all flow logic lives in the unit-tested
- * `DeviceAuthManager`. Design: BYO-SUBSCRIPTION-OAUTH-SPEC §13.
- */
+
+
 import { timingSafeEqual } from "crypto";
 import type { Express, Request, RequestHandler, Response } from "express";
 import type { DeviceAuthManager } from "./byosub-device-auth.js";
@@ -17,9 +11,6 @@ export interface DeviceAuthHttpDeps {
   log?: (m: string) => void;
 }
 
-/** Length-checked constant-time compare — mirrors gateway-edge's
- * `requireInternalServiceAuth`; the key is a shared bearer secret and
- * fleet-http binds 0.0.0.0, so the compare must not be byte-timeable. */
 function internalKeyEquals(presented: string, key: string): boolean {
   if (presented.length !== key.length) return false;
   try {
@@ -38,10 +29,8 @@ function denied(
   key: string,
   log: (m: string) => void,
 ): boolean {
-  // Unset key fails *closed* and indistinguishable from a bad key — the
-  // misconfig is logged server-side, never echoed (no env-var-name leak,
-  // no conflation with the start path's transient 503).
-  if (!key) {
+
+if (!key) {
     log(
       "byosub device-auth: refusing request — internal service key not configured",
     );

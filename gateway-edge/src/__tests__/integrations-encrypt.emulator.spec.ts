@@ -1,14 +1,4 @@
-// End-to-end contract test: every route that persists a third-party
-// credential under `users/{uid}/secrets/{provider}` MUST write the
-// secret as KMS ciphertext, never plaintext. The Firestore rule on
-// `secrets/*` (allow read/write: if false) is not the security boundary
-// for OAuth refresh tokens / IMAP passwords / Twilio auth — a DB leak
-// or Admin-SDK compromise must not yield plaintext creds.
-//
-// IMAP + Twilio are exercised via authenticated POST (the auth'd
-// surface). Google + Microsoft OAuth callbacks are exercised by
-// driving the route directly with mocked `fetch` (the same token-
-// exchange shape they hit in production).
+
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
@@ -28,9 +18,6 @@ const PLAINTEXT_GOOGLE_REFRESH = "1//05PLAINTEXT-google-refresh-token";
 const PLAINTEXT_MS_ACCESS = "EwBoA8l6BPLAINTEXT-microsoft-access";
 const PLAINTEXT_MS_REFRESH = "M.R3_BAY.PLAINTEXT-microsoft-refresh";
 
-// Deterministic mock KMS: ciphertext = base64("ENC:" + utf8(plaintext)).
-// Lets the assertions verify (a) plaintext is NOT in the doc and
-// (b) the stored ciphertext decrypts back to the original.
 function deterministicMockKms(): KmsClient {
   return {
     encrypt: vi.fn(async ({ plaintext }) => [
@@ -60,11 +47,8 @@ beforeEach(() => {
 
 afterEach(() => {
   _setKmsClientForTesting(null);
-  // Copilot #1064: per-test fetchSpy.mockRestore() at the end of the
-  // test body leaks the spy into subsequent tests if an assertion
-  // throws first. vi.restoreAllMocks() runs unconditionally between
-  // tests so a flake here can't cascade.
-  vi.restoreAllMocks();
+
+vi.restoreAllMocks();
 });
 
 async function readSecret(provider: string): Promise<Record<string, unknown> | undefined> {
@@ -100,8 +84,7 @@ describe("integrations — IMAP credentials at rest", () => {
     const secret = await readSecret("imap");
     expect(secret).toBeDefined();
 
-    // Plaintext password MUST NOT appear ANYWHERE in the stored doc
-    expect(jsonString(secret)).not.toContain(PLAINTEXT_PASSWORD);
+expect(jsonString(secret)).not.toContain(PLAINTEXT_PASSWORD);
 
     const imapEnc = (secret as Record<string, Record<string, string>>).imap
       ?.encryptedPassword;
@@ -111,13 +94,10 @@ describe("integrations — IMAP credentials at rest", () => {
     expect(typeof smtpEnc).toBe("string");
     expect(imapEnc.length).toBeGreaterThan(0);
     expect(imapEnc).not.toBe(PLAINTEXT_PASSWORD);
-    // Both fields use the same plaintext → same ciphertext (we encrypt
-    // once and reuse — see integrations.ts /imap route)
-    expect(imapEnc).toBe(smtpEnc);
 
-    // The ciphertext we stored matches what the deterministic mock would
-    // produce for this plaintext (proves encryptSecret was actually called)
-    const expected = Buffer.concat([
+expect(imapEnc).toBe(smtpEnc);
+
+const expected = Buffer.concat([
       Buffer.from("ENC:"),
       Buffer.from(PLAINTEXT_PASSWORD),
     ]).toString("base64");
@@ -171,7 +151,7 @@ describe("integrations — Twilio credentials at rest", () => {
     expect((meta.data() as { twilio: { accountSid: string } }).twilio.accountSid).toBe(
       "ACdistinct-sid",
     );
-    // But the secrets doc should NOT leak the authToken plaintext
+    
     const secret = await readSecret("twilio");
     expect(jsonString(secret)).not.toContain("shouldnt-show-here");
   });
@@ -179,7 +159,7 @@ describe("integrations — Twilio credentials at rest", () => {
 
 describe("integrations — Google OAuth callback credentials at rest", () => {
   it("GET /api/integrations/google/callback stores `encryptedAccessToken` + `encryptedRefreshToken` as ciphertext", async () => {
-    // Mock the upstream token-exchange + userinfo fetches the route makes
+    
     vi.spyOn(globalThis, "fetch").mockImplementation((async (
       url: string | URL,
     ) => {
@@ -213,13 +193,12 @@ describe("integrations — Google OAuth callback credentials at rest", () => {
     const res = await request(createApp()).get(
       `/api/integrations/google/callback?code=fake-code&state=${state}`,
     );
-    expect([302, 200]).toContain(res.status); // route redirects on success
+    expect([302, 200]).toContain(res.status); 
 
     const secret = await readSecret("google");
     expect(secret).toBeDefined();
 
-    // Critical: plaintext access + refresh tokens MUST NOT appear in the stored doc
-    expect(jsonString(secret)).not.toContain(PLAINTEXT_GOOGLE_ACCESS);
+expect(jsonString(secret)).not.toContain(PLAINTEXT_GOOGLE_ACCESS);
     expect(jsonString(secret)).not.toContain(PLAINTEXT_GOOGLE_REFRESH);
 
     const tokens = (secret as Record<string, Record<string, unknown>>).tokens;
@@ -227,10 +206,10 @@ describe("integrations — Google OAuth callback credentials at rest", () => {
     expect(tokens.encryptedRefreshToken).toBeTypeOf("string");
     expect(tokens.encryptedAccessToken).not.toBe(PLAINTEXT_GOOGLE_ACCESS);
     expect(tokens.encryptedRefreshToken).not.toBe(PLAINTEXT_GOOGLE_REFRESH);
-    // Non-sensitive metadata stays in clear
+    
     expect(tokens.tokenType).toBe("Bearer");
     expect(typeof tokens.expiresAt).toBe("number");
-    // Legacy plaintext field names must NOT exist
+    
     expect(tokens).not.toHaveProperty("accessToken");
     expect(tokens).not.toHaveProperty("refreshToken");
     // fetchSpy is restored via the file-level afterEach (vi.restoreAllMocks)
@@ -291,7 +270,7 @@ describe("integrations — Microsoft OAuth callback credentials at rest", () => 
 
 describe("integrations — universal invariant (regression guard)", () => {
   it("after exercising every secret-writing route, no `users/{uid}/secrets/*` doc contains the original plaintext", async () => {
-    // Exercise all 4 paths sequentially against fresh emulator state.
+    
     vi.spyOn(globalThis, "fetch").mockImplementation((async (
       url: string | URL,
     ) => {

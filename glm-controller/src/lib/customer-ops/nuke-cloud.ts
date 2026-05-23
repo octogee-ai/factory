@@ -1,11 +1,4 @@
-// Cloud-side nuke orchestrator — runs steps 3..8 + step 9 bookkeeping
-// from the historical scripts/lib/nukeSteps.ts on behalf of the
-// deprovision-customer op handler. Lives in glm-controller so the
-// orphan path (no live gateway) works without any pod RPC.
-//
-// Local-fs steps 1..2 (agents + workspace dir) are not here — they
-// belong to the gateway-side unmount handler, called by the
-// deprovision-customer handler when the customer is currently mounted.
+
 
 import type { GiteaCleanupClient } from "./gitea.js";
 import type { MmCleanupClient } from "./mattermost.js";
@@ -15,25 +8,21 @@ export interface NukeCloudCtx {
   slug: string;
   email: string | null;
   giteaOrg: string;
-  /** workspace + per-project repo names: workspace, <projectSlug>... */
+  
   repoNames: string[];
-  /**
-   * Project slugs (NOT repo names). Drives Firebase Hosting site
-   * deletion via deleteHostingSites — site IDs are
-   * `octogee-<slug>-<projectSlug>` per scripts/lib/projects/create.ts.
-   */
-  projectSlugs: string[];
-  /** workspace MM team — null when team-per-workspace doesn't apply (legacy fallback). */
+
+projectSlugs: string[];
+  
   workspaceTeamId: string | null;
-  /** Builder MM userId — null when never had one (raw signup with slug but no MM bootstrap). */
+  
   mmUserId: string | null;
-  /** Coach MM userId — null when no agent doc. */
+  
   mmCoachUserId: string | null;
-  /** workspaces/{slug}/channels/admin → MM channelId — null when missing. */
+  
   adminChannelId: string | null;
-  /** Skip Firebase Hosting site deletion (TEST builds without hosting). */
+  
   skipHosting?: boolean;
-  /** Skip Firebase Auth user deletion (e.g. operator wants to preserve the auth identity). */
+  
   skipAuth?: boolean;
 }
 
@@ -55,23 +44,16 @@ export interface NukeCloudStepResult {
 export interface NukeCloudDeps {
   gitea: GiteaCleanupClient;
   mattermost: MmCleanupClient;
-  /** Recursive-delete users/{uid}/* + customerStats/{uid} + the user doc. */
+  
   nukeUserFirestore: (uid: string) => Promise<void>;
-  /** Bulk-delete wsTickets where uid == ctx.uid. Returns count. */
+  
   nukeWsTickets: (uid: string) => Promise<{ deleted: number }>;
-  /** Delete avatars/{uid} from Firebase Storage (idempotent). */
+  
   deleteAvatar: (uid: string) => Promise<void>;
-  /**
-   * Delete Firebase Auth account for uid. Implementations should swallow
-   * `auth/user-not-found` (the common idempotent case).
-   */
-  deleteAuthUser: (uid: string) => Promise<void>;
-  /**
-   * Delete Firebase Hosting sites (octogee-{slug}, octogee-{slug}-{proj}…).
-   * Returns the count of sites successfully deleted. Errors per-site are
-   * logged but don't fail the step. Optional — pass undefined to skip.
-   */
-  deleteHostingSites?: (slug: string, projectSlugs: string[]) => Promise<{ deleted: number }>;
+
+deleteAuthUser: (uid: string) => Promise<void>;
+
+deleteHostingSites?: (slug: string, projectSlugs: string[]) => Promise<{ deleted: number }>;
   log?: (msg: string) => void;
 }
 
@@ -82,9 +64,7 @@ export async function nukeUserCloudSide(
   const log = deps.log ?? (() => undefined);
   const results: NukeCloudStepResult[] = [];
 
-  // Step 3: Gitea — repos, then the (now-empty) per-workspace org + its
-  // team, then the per-customer Gitea user.
-  results.push(
+results.push(
     await runStep("gitea", log, async () => {
       for (const repoName of ctx.repoNames) {
         await deps.gitea.deleteRepo(ctx.giteaOrg, repoName);
@@ -94,8 +74,7 @@ export async function nukeUserCloudSide(
     }),
   );
 
-  // Step 4: Mattermost — channels, builder user, coach user, workspace team
-  results.push(
+results.push(
     await runStep("mattermost", log, async () => {
       if (ctx.mmUserId && ctx.workspaceTeamId) {
         const channelIds = await deps.mattermost.getUserChannels(
@@ -119,26 +98,20 @@ export async function nukeUserCloudSide(
     }),
   );
 
-  // Step 5: Firestore — user subtrees, wsTickets
-  results.push(
+results.push(
     await runStep("firestore", log, async () => {
       await deps.nukeUserFirestore(ctx.uid);
       await deps.nukeWsTickets(ctx.uid);
     }),
   );
 
-  // Step 6: Storage avatar
-  results.push(
+results.push(
     await runStep("storage", log, async () => {
       await deps.deleteAvatar(ctx.uid);
     }),
   );
 
-  // Step 7: Firebase Hosting (optional / skippable)
-  // PR #3: drives off ctx.projectSlugs directly — replaces the old
-  // reverse-engineering-from-repo-names slice that yielded
-  // `proj-<slug>` instead of `<slug>` (real bug).
-  if (ctx.skipHosting || !deps.deleteHostingSites) {
+if (ctx.skipHosting || !deps.deleteHostingSites) {
     results.push({ key: "hosting", ok: true, skipped: true });
   } else {
     results.push(
@@ -148,8 +121,7 @@ export async function nukeUserCloudSide(
     );
   }
 
-  // Step 8: Firebase Auth account
-  if (ctx.skipAuth) {
+if (ctx.skipAuth) {
     results.push({ key: "auth", ok: true, skipped: true });
   } else {
     results.push(

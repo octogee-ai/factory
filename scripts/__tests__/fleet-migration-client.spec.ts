@@ -137,13 +137,13 @@ describe("MigrationClient.unmount", () => {
       fetch: fakeFetch,
     });
     const res = await client.unmount({ migrationId: "m1", gatewayId: "gw-source", slug: "alice" });
-    expect(res.unmounted).toBe(false); // not an error — caller can decide
+    expect(res.unmounted).toBe(false); 
   });
 });
 
 describe("MigrationClient.transferState", () => {
   it("pipes the export response body into the import request body and returns the import response", async () => {
-    const tarBytes = new Uint8Array([0x74, 0x65, 0x73, 0x74]); // "test"
+    const tarBytes = new Uint8Array([0x74, 0x65, 0x73, 0x74]); 
     const exportResponse = new Response(tarBytes, {
       status: 200,
       headers: { "content-type": "application/x-tar" },
@@ -168,7 +168,7 @@ describe("MigrationClient.transferState", () => {
           const h = init.headers as Record<string, string>;
           for (const k of Object.keys(h)) headers[k.toLowerCase()] = h[k];
         }
-        // Verify HMAC over `${migrationId}\n${slug}` per the import contract
+        
         const expectedSig = signFleetRequest(SECRET, "m1", "alice");
         expect(headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
         expect(headers[MIGRATION_ID_HEADER.toLowerCase()]).toBe("m1");
@@ -225,14 +225,6 @@ describe("MigrationClient.transferState", () => {
     expect(importCalls).toBe(0);
   });
 });
-
-// ── Per-RPC timeouts ────────────────────────────────────────────────────────
-//
-// Production incident 2026-05-13: undici's default 300s headersTimeout
-// fired silently on slow /import calls and surfaced as opaque `fetch
-// failed`. Each migration RPC now passes an explicit AbortSignal so a
-// hung server-side step throws "import timed out after Ns" with the URL,
-// not raw transport noise.
 
 describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
   function captureSignal(): {

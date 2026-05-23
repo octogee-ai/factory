@@ -199,17 +199,14 @@ describe("POST /api/admin/customer/:uid/delete — has-slug branch", () => {
   });
 
   it("uses provisioning.openclaw.slug as canonical when username is absent", async () => {
-    // Customers created via the app's onboarding flow can have a slug
-    // only at provisioning.openclaw.slug (no username yet). Routing
-    // those through the inline lite-delete branch would leak Gitea/MM
-    // resources. (Copilot review)
-    usersDocs["uid-alice"] = {
+
+usersDocs["uid-alice"] = {
       provisioning: { openclaw: { slug: "alice-via-onboarding" } },
     };
     const res = await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
     expect(res.status).toBe(202);
     expect(res.body.slug).toBe("alice-via-onboarding");
-    // Did NOT take the inline-delete branch
+    
     expect(authDeletedUids).toEqual([]);
   });
 

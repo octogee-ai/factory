@@ -1,21 +1,4 @@
-/**
- * Migration runner — executes the four-step state machine end to end.
- *
- * Drives `nextMigrationStep` from `fleet-migration.ts` until `done`,
- * dispatching each step to the migration HTTP client (or Firestore for
- * cutover). On any forward-step failure, builds the rollback plan for
- * the current phase and dispatches it best-effort. Rollback step
- * failures are logged as warnings — the operator's runbook situation
- * to investigate, not a thrown error from this runner.
- *
- * Caller pattern:
- *
- *   const result = await runMigration(
- *     { migrationId, uid, slug, fromGatewayId, toGatewayId },
- *     { client, cutoverFirestore, log },
- *   );
- *   if (!result.success) { … investigate result.errorAt … }
- */
+
 
 import {
   advancePhase,
@@ -35,16 +18,11 @@ export interface ReportedStep {
 
 export interface MigrationRunnerDeps {
   client: MigrationClient;
-  /** Writes `users/{uid}.provisioning.openclaw.gatewayId = toGatewayId`. */
+  
   cutoverFirestore: (uid: string, toGatewayId: string) => Promise<void>;
   log: (msg: string) => void;
-  /**
-   * Optional progress callback invoked as each step starts (`running`),
-   * succeeds (`done`), or fails (`failed`). Rollback steps are reported
-   * with `rollback:` prefix on the name. Caller persists these to
-   * Firestore so the UI can render live progress.
-   */
-  reportStep?: (step: ReportedStep) => Promise<void> | void;
+
+reportStep?: (step: ReportedStep) => Promise<void> | void;
 }
 
 export interface MigrationRunnerInput {

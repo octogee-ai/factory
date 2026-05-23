@@ -19,8 +19,7 @@ export async function ensureAdminCredentials(): Promise<void> {
     return;
   }
 
-  // Get admin user ID from env or look up by username
-  let adminUserId = process.env.MM_ADMIN_USER_ID;
+let adminUserId = process.env.MM_ADMIN_USER_ID;
   if (!adminUserId) {
     const adminUser = process.env.MM_ADMIN_USER;
     if (adminUser) {
@@ -39,8 +38,7 @@ export async function ensureAdminCredentials(): Promise<void> {
 
   const proxyUrl = process.env.CHAT_PROXY_URL || "";
 
-  // Write token to Secret Manager (not Firestore — it's a credential)
-  const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "octogee";
+const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "octogee";
   const secretName = `projects/${project}/secrets/MM_ADMIN_TOKEN`;
   try {
     await secretClient.addSecretVersion({
@@ -50,7 +48,7 @@ export async function ensureAdminCredentials(): Promise<void> {
     log(`[admin-creds] MM_ADMIN_TOKEN written to Secret Manager`);
   } catch (err: any) {
     if (err?.code === 5) {
-      // Secret doesn't exist yet — create it
+      
       await secretClient.createSecret({
         parent: `projects/${project}`,
         secretId: "MM_ADMIN_TOKEN",
@@ -66,8 +64,7 @@ export async function ensureAdminCredentials(): Promise<void> {
     }
   }
 
-  // Write non-sensitive metadata to Firestore (userId, proxyUrl — no token)
-  await db.doc("system/mattermostAdmin").set({
+await db.doc("system/mattermostAdmin").set({
     userId: adminUserId,
     proxyUrl,
     updatedAt: FieldValue.serverTimestamp(),

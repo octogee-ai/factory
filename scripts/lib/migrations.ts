@@ -24,8 +24,6 @@ export function migrateAgentsMd(): void {
   }
 }
 
-// ── Cleanup Stale LIMITS.md ─────────────────────────────────────────────────────
-
 export function cleanupStaleLimitsMd(): void {
   if (!fs.existsSync(CUSTOMERS_DIR)) return;
   for (const slug of fs.readdirSync(CUSTOMERS_DIR)) {

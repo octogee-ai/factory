@@ -312,18 +312,17 @@ describe("applyGatewayOverrides + applyPreBootPatches — precedence (policy win
       tools: { profile: "coding" },
       channels: { mattermost: { commands: { native: false }, accounts: {} } },
     };
-    // Override attempts to escape gateway policy.
+    
     applyGatewayOverrides(config, {
       tools: { profile: "research" },
       channels: { mattermost: { commands: { native: true } } },
     });
-    // Policy patches run AFTER the merge and must win.
+    
     applyPreBootPatches(config, {});
     expect(config.tools.profile).toBe("coding");
     expect(config.channels.mattermost.commands.native).toBe(false);
   });
 });
-
 
 describe("applyGatewayOverrides — prototype pollution guard (Copilot #960)", () => {
   it("drops __proto__/constructor/prototype keys, never pollutes, keeps safe keys", () => {
@@ -396,14 +395,6 @@ describe("withTimeout (Copilot #960 — Firestore read must not stall boot)", ()
     await expect(withTimeout(slow, 10)).rejects.toThrow(/timeout/i);
   });
 });
-
-// ── Phase 1: gitconfig hydration — first-boot ~/.gitconfig seed ──────────
-// Contract: this MUST NOT FAIL regardless of what Firestore returns or
-// doesn't return about the builder. Smart defaults cascade Firebase Auth
-// displayName/email → slug → generic "Octogee Builder". Idempotent: an
-// existing ~/.gitconfig is left alone (operator customizations win).
-// Boot is never blocked — a Firestore timeout or write failure logs and
-// continues.
 
 describe("slugFromCoachAgentId", () => {
   it("extracts the workspace slug from a canonical coach agent id", () => {
@@ -577,9 +568,7 @@ describe("hydrateGitIdentity — always produces a working gitconfig, never bloc
     expect(logFn.mock.calls.flat().join(" ")).toMatch(/disk full/i);
   });
 
-  // Copilot #1055 P1: a throwing fileExists must not break the never-
-  // throws contract — treat the failure as "absent, attempt write."
-  it("never throws when fileExists itself throws (treats failure as absent + proceeds)", async () => {
+it("never throws when fileExists itself throws (treats failure as absent + proceeds)", async () => {
     const writeFile = vi.fn();
     const logFn = vi.fn();
     const changed = await hydrateGitIdentity(baseDeps({
@@ -594,14 +583,7 @@ describe("hydrateGitIdentity — always produces a working gitconfig, never bloc
     expect(logFn.mock.calls.flat().join(" ")).toMatch(/fileExists.*threw/i);
   });
 
-  // Copilot #1055 P0: a newline in displayName would let the value
-  // inject a new gitconfig section ("Chris\n[user]\nname = Evil").
-  // The structural property: the file always has exactly one [user]
-  // section, exactly one name=, exactly one email=. The literal
-  // substring may still appear *inside* the cleaned name value (e.g.
-  // "name = Chris[user]email = evil...") but it's no longer parsed as
-  // a separate key — section injection is what we're defending against.
-  it("sanitizes newlines in displayName (prevents gitconfig section injection)", async () => {
+it("sanitizes newlines in displayName (prevents gitconfig section injection)", async () => {
     const writeFile = vi.fn();
     await hydrateGitIdentity(baseDeps({
       agentIds: ["octogee-ceckert-coach"],
@@ -612,11 +594,10 @@ describe("hydrateGitIdentity — always produces a working gitconfig, never bloc
       writeFile,
     }));
     const content = writeFile.mock.calls[0][1] as string;
-    // Exactly one [user] header — no injected section
+    
     expect(content.match(/^\[user\]$/gm)?.length).toBe(1);
-    // Exactly one email key, and it's the legitimate value (the injected
-    // "email = evil@attacker.com" got collapsed into the name string).
-    const emailLines = content
+
+const emailLines = content
       .split("\n")
       .filter((l) => /^\s*email\s*=/.test(l));
     expect(emailLines.length).toBe(1);
@@ -653,7 +634,7 @@ describe("hydrateGitIdentity — always produces a working gitconfig, never bloc
       writeFile,
     }));
     const content = writeFile.mock.calls[0][1] as string;
-    // displayName is cleaned to empty → cascade falls to slug
+    
     expect(content).toMatch(/name = ceckert/);
     expect(content).toMatch(/email = c@e\.com/);
   });

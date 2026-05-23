@@ -149,10 +149,8 @@ describe("createRequireAdmin", () => {
     app.get("/probe", (_req, res) => {
       res.json({ ok: true });
     });
-    // Default Express error handler returns 500 for next(err); the
-    // assertion is that we GET 500 rather than the request hanging or
-    // surfacing as an unhandled rejection.
-    const res = await request(app)
+
+const res = await request(app)
       .get("/probe")
       .set("Authorization", "Bearer ok");
     expect(res.status).toBe(500);

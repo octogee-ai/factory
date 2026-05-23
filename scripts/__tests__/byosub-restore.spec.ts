@@ -33,10 +33,6 @@ const OC = "/home/node/.openclaw";
 const codexAuth = (agentId: string) =>
   `${OC}/agents/${agentId}/agent/codex-home/auth.json`;
 
-// A *valid* codex CLI auth.json (the byosub-captured ChatGPT-sub blob).
-// Restore now validate-before-writes: an openai item whose secret can't be
-// mapped to an OAuthCredential fails the item (never half-writes), so every
-// success-path fixture must carry a real `tokens.access_token`.
 const jwt = (claims: Record<string, unknown>) =>
   "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".s";
 const codexBlob = () =>
@@ -54,8 +50,7 @@ const codexBlob = () =>
     },
     last_refresh: "2026-05-18T00:11:06Z",
   });
-// The per-agent auth-profiles.json byosub-restore now embeds (Plane-1 OAuth)
-// — a sibling of codex-home, the SOLE openclaw-read codex credential store.
+
 const apPathFor = (oc: string, agentId: string) =>
   path.join(oc, "agents", agentId, "agent", "auth-profiles.json");
 
@@ -105,16 +100,15 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
     expect(codexAuthStatePath(OC, "octogee-a-coach")).toBe(
       "/home/node/.openclaw/agents/octogee-a-coach/agent/auth-state.json",
     );
-    // exactly the dir restoreByosubCredentials writes auth-profiles.json into
+    
     expect(path.dirname(codexAuthStatePath(OC, "octogee-a-coach"))).toBe(
       codexAgentDir(OC, "octogee-a-coach"),
     );
     expect(path.dirname(codexHomeDir(OC, "octogee-a-coach"))).toBe(
       codexAgentDir(OC, "octogee-a-coach"),
     );
-    // the writer (restore) + reader (R8) now go through these exact atoms —
-    // both siblings in the same agent dir, no recomputed-path drift.
-    expect(codexAuthProfilesPath(OC, "octogee-a-coach")).toBe(
+
+expect(codexAuthProfilesPath(OC, "octogee-a-coach")).toBe(
       "/home/node/.openclaw/agents/octogee-a-coach/agent/auth-profiles.json",
     );
     expect(path.dirname(codexAuthProfilesPath(OC, "octogee-a-coach"))).toBe(
@@ -218,9 +212,8 @@ describe("planByosubRestores", () => {
   it("rejects path-traversal / unsafe agent ids (Firestore-sourced keys)", () => {
     const logs: string[] = [];
     const longId = "x".repeat(200);
-    // Build byosub the way Firestore .data() delivers it — JSON-shaped, so
-    // `__proto__` is an OWN key (an object literal would set the prototype).
-    const byosub = JSON.parse(
+
+const byosub = JSON.parse(
       `{"../../etc":{"provider":"openai","secretName":"s1"},` +
         `"a/b":{"provider":"openai","secretName":"s2"},` +
         `"foo bar":{"provider":"openai","secretName":"s3"},` +
@@ -234,10 +227,10 @@ describe("planByosubRestores", () => {
       openclawDir: OC,
       logFn: (m) => logs.push(m),
     });
-    // every key is unsafe: traversal chars / space / $ / uppercase / >64 / underscore
+    
     expect(plan).toEqual([]);
     expect(logs.join("\n")).toMatch(/unsafe|invalid agent id/i);
-    // and the `__proto__` own key didn't pollute Object.prototype
+    
     expect(({} as Record<string, unknown>).secretName).toBeUndefined();
   });
 });
@@ -259,7 +252,7 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
         now: NOW,
       }),
     ).toBe("write");
-    // even if a stale auth-state lingers, absence of the cred file = cold start
+    
     expect(
       shouldRestoreCodexCredential({
         authProfilesPresent: false,
@@ -335,10 +328,7 @@ describe("restoreByosubCredentials", () => {
     expect(fs.statSync(item.targetPath).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
 
-    // Plane-1: the codex credential openclaw actually reads is the embedded
-    // <agentDir>/auth-profiles.json (envelope v1, openai-codex:default oauth),
-    // written atomically (0600, no leftover .tmp) as a sibling of codex-home.
-    const ap = apPathFor(oc, "octogee-a-coach");
+const ap = apPathFor(oc, "octogee-a-coach");
     expect(fs.existsSync(ap)).toBe(true);
     expect(fs.statSync(ap).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(ap + ".tmp")).toBe(false);
@@ -369,7 +359,7 @@ describe("restoreByosubCredentials", () => {
     const logs: string[] = [];
     const r = await restoreByosubCredentials({
       plan: [item],
-      // tokens present but no access_token → buildCodexAuthProfilesStore throws
+      
       fetchSecret: async () => '{"auth_mode":"chatgpt","tokens":{"refresh_token":"rt"}}',
       logFn: (m) => logs.push(m),
     });
@@ -392,12 +382,8 @@ describe("restoreByosubCredentials", () => {
       targetPath: path.join(oc, "agents", agentId, "agent", "codex-home", "auth.json"),
       openclawDir: oc,
     };
-    // Force the auth-profiles.json staging write to fail deterministically:
-    // pre-create its .tmp path as a *directory* so fs.writeFileSync(apTmp)
-    // throws EISDIR. With both temps staged before either rename, this must
-    // abort with codex-home/auth.json NOT promoted (pre-fix it was renamed
-    // into place first → the partial pair Copilot flagged).
-    const agentDir = path.join(oc, "agents", agentId, "agent");
+
+const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(path.join(agentDir, "auth-profiles.json.tmp"), { recursive: true });
     const logs: string[] = [];
     const r = await restoreByosubCredentials({
@@ -406,10 +392,10 @@ describe("restoreByosubCredentials", () => {
       logFn: (m) => logs.push(m),
     });
     expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
-    // The bug: codex-home/auth.json must not exist (never promoted).
+    
     expect(fs.existsSync(item.targetPath)).toBe(false);
     expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
-    // auth-profiles.json itself was never written (only the .tmp dir blocker).
+    
     expect(fs.existsSync(apPathFor(oc, agentId))).toBe(false);
     expect(logs.join("\n")).toMatch(/octogee-a-coach/);
   });
@@ -443,10 +429,10 @@ describe("restoreByosubCredentials", () => {
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
-    // openclaw owns this — it may hold a freshly-rotated RT we must not touch.
+    
     const liveCred = JSON.stringify({ version: 1, profiles: { rotated: "RT1" } });
     fs.writeFileSync(path.join(agentDir, "auth-profiles.json"), liveCred);
-    // no auth-state.json → openclaw reports no failure → steady state.
+    
     let fetched = false;
     const logs: string[] = [];
     const r = await restoreByosubCredentials({
@@ -466,8 +452,8 @@ describe("restoreByosubCredentials", () => {
       logFn: (m) => logs.push(m),
     });
     expect(r).toEqual({ restored: 0, failed: 0, skipped: 1 });
-    expect(fetched).toBe(false); // conservative: never even read Secret Manager
-    // the live credential is byte-identical — openclaw's rotated token survives
+    expect(fetched).toBe(false); 
+    
     expect(fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf-8")).toBe(
       liveCred,
     );
@@ -509,7 +495,7 @@ describe("restoreByosubCredentials", () => {
     const store = JSON.parse(
       fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf-8"),
     );
-    expect(store.profiles["openai-codex:default"].access).toBe("acc-1"); // replaced
+    expect(store.profiles["openai-codex:default"].access).toBe("acc-1"); 
   });
 });
 
@@ -572,7 +558,7 @@ describe("restoreByosubForAgents (shared plan+restore composition)", () => {
       JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
         .auth_mode,
     ).toBe("chatgpt");
-    // shared composition also embeds the Plane-1 auth-profiles.json
+    
     expect(
       JSON.parse(fs.readFileSync(apPathFor(oc, "octogee-tester-70-coach"), "utf-8")).profiles[
         "openai-codex:default"

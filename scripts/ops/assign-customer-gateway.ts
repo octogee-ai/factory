@@ -1,17 +1,4 @@
-/**
- * Usage:
- *   # Assign one customer by uid (reads config/orchestrator from Firestore):
- *   tsx scripts/ops/assign-customer-gateway.ts --env=test --uid=qv7tA8MmwKYc...
- *
- *   # Assign one customer by slug:
- *   tsx scripts/ops/assign-customer-gateway.ts --env=test --slug=chris-test8
- *
- *   # Assign ALL unassigned-complete customers in one shot:
- *   tsx scripts/ops/assign-customer-gateway.ts --env=test --all
- *
- *   # Dry-run (show what would happen, no writes):
- *   tsx scripts/ops/assign-customer-gateway.ts --env=test --all --dry-run
- */
+
 
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
@@ -26,9 +13,6 @@ interface OrchestratorConfig {
   overrides?: Record<string, string>;
 }
 
-/** Returns null when the doc is missing or `defaultGatewayId` is invalid —
- *  caller surfaces that as "config-missing" so ops fixes the doc instead of
- *  the script silently routing customers at a hardcoded default. */
 async function readOrchestratorConfig(db: Firestore): Promise<OrchestratorConfig | null> {
   const snap = await db.doc(ORCHESTRATOR_CONFIG_DOC).get();
   if (!snap.exists) return null;
@@ -65,11 +49,8 @@ async function assignOne(
   const data = snap.data() ?? {};
   const openclaw = data.provisioning?.openclaw;
   const slug: string = openclaw?.slug ?? "?";
-  // Precondition: user is approved. Deliberately NOT gating on
-  // `status === "complete"` — assignment happens before provisioning
-  // runs so the gateway knows which pod to target. Mirror of the
-  // canonical helper in functions/src/orchestrator/assign.ts.
-  if (data.approved !== true) {
+
+if (data.approved !== true) {
     return { kind: "not-ready", uid, slug, reason: "not-approved" };
   }
   const config = await readOrchestratorConfig(db);
@@ -87,7 +68,6 @@ async function assignOne(
   return { kind: "assigned", uid, slug, gatewayId: target, previous: current };
 }
 
-// ── Argv parsing ─────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
 const opts = {
   env: "",
@@ -117,8 +97,6 @@ for (const arg of argv) {
 const USAGE =
   `Usage: tsx scripts/ops/assign-customer-gateway.ts --env=test|prod (--uid=UID | --slug=SLUG | --all) [--dry-run]`;
 
-// --env is required — no default. PROD and TEST write to different Firestore
-// databases; a default would silently target the wrong env on a typo.
 if (!opts.env) {
    
   console.error(`--env is required (test or prod)\n${USAGE}`);
@@ -167,10 +145,8 @@ async function main(): Promise<void> {
     }
     uids.push(q.docs[0].id);
   } else if (opts.all) {
-    // `approved=true` is the precondition for assignment (see assignOne).
-    // Widening from the prior `status=complete` filter so --all also
-    // catches new signups that are approved but still provisioning.
-    const q = await db
+
+const q = await db
       .collection("users")
       .where("approved", "==", true)
       .get();

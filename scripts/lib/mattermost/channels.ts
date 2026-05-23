@@ -14,12 +14,10 @@ export async function createOrRestoreChannel(
   });
   if (channel) return channel;
 
-  // Name might be claimed by an active channel
-  channel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`);
+channel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`);
   if (channel) return channel;
 
-  // Search for archived channel and restore
-  const search = await mmApiCall("POST", `/teams/${teamId}/channels/search`, {
+const search = await mmApiCall("POST", `/teams/${teamId}/channels/search`, {
     term: name, include_deleted: true,
   });
   const archived = Array.isArray(search)
@@ -34,7 +32,6 @@ export async function createOrRestoreChannel(
   return null;
 }
 
-/** Create a private Mattermost channel for a project. Returns channel ID or null. */
 export async function createProjectChannel(
   teamId: string,         // workspace team ID (Phase 4: team-per-workspace)
   slug: string,
@@ -50,14 +47,7 @@ export async function createProjectChannel(
     return null;
   }
 
-  // Canonical slug: {wsSlug}-proj-{projSlug}-general.
-  // Display name follows the "{ProjectName} {ChannelName}" convention so the
-  // UI sidebar can group channels under their project by a prefix-match-and-
-  // strip rule (no per-channel grouping metadata). Spec:
-  // WORKSPACE-NAMING-CANONICAL-SPEC §"Project channels". Future per-project
-  // channels (Design, Testing, etc.) reuse computeProjectChannelDisplayName
-  // with the same rule — keeps the grouping contract honest.
-  const channelName = projectGeneralChannelName(slug, projectSlug);
+const channelName = projectGeneralChannelName(slug, projectSlug);
   const displayName = computeProjectChannelDisplayName({ projectName, channelName: "General" });
 
   let channel = await mmApiCall("POST", "/channels", {
@@ -77,10 +67,7 @@ export async function createProjectChannel(
     return null;
   }
 
-  // Project channel members: customer + admin. Coach is added by
-  // gateway-edge when the coach user id is known at call time (or on the
-  // next provisioner sweep).
-  for (const memberId of customerChannelMembers("project", {
+for (const memberId of customerChannelMembers("project", {
     customerMmUserId,
     coachMmUserId: null,
     adminMmUserId: MM_ADMIN_USER_ID ?? null,

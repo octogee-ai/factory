@@ -19,9 +19,8 @@ import { logger } from "../../middleware/logging.js";
 const router = Router();
 
 function customersRoot(): string {
-  // Read per-request — tests set this in beforeAll, and operators can
-  // rotate the mount path without a pod restart.
-  return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+
+return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 }
 
 async function resolveTargetDir(
@@ -34,9 +33,6 @@ async function resolveTargetDir(
   return resolveCustomerDir(root, target.slug);
 }
 
-// Workspace writes: workspace-owner only (a project member shouldn't
-// commit at the workspace level on the owner's behalf). Project
-// writes: trust withFileTarget's owner-or-member check upstream.
 function ensureWriteAuth(
   req: import("express").Request,
   res: import("express").Response,
@@ -53,8 +49,6 @@ function ensureWriteAuth(
   return true;
 }
 
-// Cap parallel git ops per slug — one authenticated owner could
-// otherwise fork-bomb the sidecar (each op = process + up to 5s × 4MB).
 const MAX_CONCURRENT_PER_SLUG = 4;
 const concurrencyBySlug = new Map<string, number>();
 
@@ -192,9 +186,8 @@ router.get(
 );
 
 function respondCustomerDirMissing(res: import("express").Response, slug: string): void {
-  // 503 not 404 — the workspace exists; the dir is missing for
-  // operational reasons (volume mount). Detail goes to the log only.
-  logger.warn(`git: working tree not accessible for slug=${slug} — verify sidecar volume mount`);
+
+logger.warn(`git: working tree not accessible for slug=${slug} — verify sidecar volume mount`);
   res.status(503).json({
     error: "Working tree temporarily unavailable; retry in a few seconds.",
     code: "CUSTOMER_DIR_MISSING",
@@ -238,16 +231,12 @@ function isSafeRelativePath(p: string): boolean {
   return true;
 }
 
-// Tight allowlist — leading `-` is a flag injection vector; users pass
-// `main` / `feat/foo` / `v1.2.3`, not arbitrary git revspecs.
 function isSafeRefName(ref: string): boolean {
   if (!ref || ref.length > 250) return false;
   if (ref.startsWith("-")) return false;
   return /^[A-Za-z0-9._/-]+$/.test(ref);
 }
 
-// Reads from the `req.user` doc that `requireAuth` already loaded.
-// Falls back to the slug if profile fields are missing.
 function resolveCommitAuthor(
   user: FirebaseFirestore.DocumentData | undefined,
   slug: string,

@@ -124,9 +124,8 @@ vi.mock("../lib/db", () => {
         if (name === "glmOperations") glmOperationsDocs.unshift({ id, data });
         return { id };
       },
-      // Both `doc()` (auto-ID) and `doc(id)` (explicit) shapes are supported.
-      // Auto-ID is needed for the retire-gateway batched op create path.
-      doc: (docId?: string) => {
+
+doc: (docId?: string) => {
         const id = docId ?? `auto-${calls.length}-${name}`;
         return makeDocRef(name, id);
       },
@@ -154,9 +153,7 @@ vi.mock("../lib/db", () => {
     };
   }
 
-  // db.batch() — pending operations recorded in a closure, applied on
-  // commit() or discarded if commit throws (simulates Firestore atomicity).
-  function makeBatch() {
+function makeBatch() {
     const pending: Array<() => Promise<void>> = [];
     return {
       update(docRef: any, data: Record<string, unknown>) {
@@ -242,11 +239,8 @@ vi.mock("../../../scripts/lib/artifact-registry", () => ({
 }));
 
 vi.mock("../middleware/auth", () => ({
-  // Mirrors the real middleware: requireAdmin populates `req.uid`
-  // (canonical) and `req.user` (Firestore user doc — does NOT carry uid
-  // as a field). Tests that read req.user.uid would silently pass while
-  // production reads "unknown".
-  requireAdmin: (req: any, _res: any, next: any) => {
+
+requireAdmin: (req: any, _res: any, next: any) => {
     req.uid = "admin-user";
     req.user = { email: "admin@octogee.com" };
     next();
@@ -544,9 +538,8 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
     expect(res.status).toBe(202);
-    // Both writes plus the batch commit are recorded; importantly the
-    // commit appears AFTER both writes (proving the batch wrapped them).
-    const updateIdx = calls.findIndex(
+
+const updateIdx = calls.findIndex(
       (c) => c.collection === "glmGateways" && c.op === "doc.update",
     );
     const opIdx = calls.findIndex((c) => c.collection === "glmOperations");
@@ -564,7 +557,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
     expect(res.status).toBe(500);
-    // Neither pending write should have applied to the in-memory store.
+    
     expect(glmGatewaysDocs["gw-test-canary"]).toMatchObject({ desiredStatus: "running" });
     expect(glmOperationsDocs.find((d) => d.data.kind === "retire-gateway")).toBeUndefined();
   });
@@ -1141,7 +1134,7 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/restore-jobs?limit=500");
     expect(res.status).toBe(200);
-    // No fixtures → empty list, but the endpoint succeeds (limit handled internally)
+    
     expect(res.body.jobs).toEqual([]);
   });
 
@@ -1448,10 +1441,8 @@ describe("GET /api/admin/builds — Artifact Registry SHA picker", () => {
   it("accepts the gateway-edge service; rejects the retired chat-proxy image", async () => {
     nextBuildsResult = [];
     const app = buildApp();
-    // chat-proxy folded into gateway-edge (POST-BENDER-CLEANUP-SPEC §2.6)
-    // — octogee-chat-proxy is no longer a build target, so it's off the
-    // allowlist and rejected with 400.
-    const a = await request(app).get("/api/admin/builds?service=octogee-chat-proxy");
+
+const a = await request(app).get("/api/admin/builds?service=octogee-chat-proxy");
     const b = await request(app).get("/api/admin/builds?service=gateway-edge");
     expect(a.status).toBe(400);
     expect(b.status).toBe(200);

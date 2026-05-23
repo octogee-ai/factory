@@ -1,20 +1,5 @@
 #!/usr/bin/env tsx
-/**
- * fleet — Octogee gateway fleet operations CLI.
- *
- * Wraps the existing fleet controller (functions/src/fleet-controller/*) +
- * Firestore + helm + kubectl into one verb surface. Reads/writes the same
- * Firestore docs the controller already watches: writing here is exactly
- * the trigger the controller is waiting for, so the heavy lifting (mount,
- * pick-next, restore-customer task) keeps happening in Cloud Functions.
- *
- * Run `npm run fleet -- --help` for the verb menu, or
- * `npm run fleet -- help <verb>` for per-verb help with examples.
- *
- * Bootstrap mirrors scripts/ops/assign-customer-gateway.ts — same SA key
- * convention (~/.openclaw/secrets/octogee[-test]-sa-key.json), same
- * `--env` precondition, same `cert(JSON.parse(...))` pattern. Don't drift.
- */
+
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
@@ -35,10 +20,6 @@ import {
   describeStep,
 } from "../lib/fleet-migration.js";
 
-// ── Color helpers ───────────────────────────────────────────────────────────
-// ANSI escapes guarded by isTTY so piped output stays clean. NO_COLOR env
-// var (per https://no-color.org) disables colors when set to ANY non-empty
-// value — the spec is "presence is the signal," not a specific value.
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
   (process.env.NO_COLOR === undefined || process.env.NO_COLOR === "");
@@ -63,18 +44,11 @@ const CHECK = COLOR_ENABLED ? "✓" : "[ok]";
 const CROSS = COLOR_ENABLED ? "✗" : "[x]";
 const ARROW = COLOR_ENABLED ? "→" : "->";
 
-// ── Help / version ──────────────────────────────────────────────────────────
 const VERSION = readVersion();
 
 function readVersion(): string {
-  // Read from the scripts/ workspace package.json so a single bump there
-  // updates `--version` everywhere. Falls back gracefully when the file
-  // can't be read (e.g., installed elsewhere).
-  //
-  // `fileURLToPath` is the platform-correct way to convert `import.meta.url`
-  // to a fs path — `new URL(...).pathname` mishandles percent-encoded chars
-  // on macOS/Linux and breaks outright on Windows (`/C:/foo` shape).
-  try {
+
+try {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const pkgPath = path.join(here, "..", "package.json");
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as { version?: string };
@@ -92,7 +66,7 @@ interface VerbHelp {
   args: string;
   description: string;
   examples: readonly string[];
-  /** Whether the verb writes (requires --apply). */
+  
   writes: boolean;
 }
 
@@ -230,16 +204,12 @@ function renderVerbHelp(verb: VerbHelp): string {
   ].join("\n");
 }
 
-// ── Argv parsing ────────────────────────────────────────────────────────────
 interface ParsedArgs {
   env: "test" | "prod" | "";
   positional: string[];
   flags: Record<string, string | true>;
 }
 
-// Flags that take a value (vs. boolean toggles). `--env`, `--to`,
-// `--gateway` accept either form: `--flag=value` or `--flag value`. Boolean
-// flags (`--apply`, `--help`, `--version`) take no value.
 const VALUE_FLAGS = new Set(["env", "to", "gateway"]);
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -259,9 +229,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       continue;
     }
     const k = a.slice(2);
-    // Space-separated form: consume the next argv as the value, but only
-    // for known value-taking flags. Otherwise treat as boolean.
-    if (VALUE_FLAGS.has(k) && i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+
+if (VALUE_FLAGS.has(k) && i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
       const v = argv[++i];
       if (k === "env") out.env = v as "test" | "prod";
       else out.flags[k] = v;
@@ -274,10 +243,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 
 const args = parseArgs(process.argv.slice(2));
 
-// ── Top-level short-circuits ────────────────────────────────────────────────
-// `--version`, `--help`, no-args, and `help [verb]` ALL bypass the --env
-// requirement so users can read help without a SA key on disk.
-
 if (args.flags.version === true) {
   console.log(VERSION);
   process.exit(0);
@@ -289,9 +254,8 @@ if (args.positional.length === 0 || args.flags.help === true) {
 }
 
 if (args.positional[0] === "help") {
-  // `fleet help <verb>` or `fleet help <verb> <subverb>` — look up by
-  // joining the rest of positionals.
-  const target = args.positional.slice(1).join(" ").trim();
+
+const target = args.positional.slice(1).join(" ").trim();
   if (!target) {
     console.log(renderTopHelp());
     process.exit(0);
@@ -317,7 +281,6 @@ if (args.env !== "test" && args.env !== "prod") {
   process.exit(1);
 }
 
-// ── Firestore bootstrap ─────────────────────────────────────────────────────
 const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
 const saPath = path.join(
   process.env.HOME ?? "",
@@ -334,19 +297,9 @@ initializeApp({
 });
 const db = getFirestore();
 
-// K8s context + namespace mirror the bootstrap script convention. PROD =
-// `octogee` namespace; TEST = `octogee-test`. Both live in the same
-// cluster (see memory: kubectl TEST context, namespace naming).
 const KUBE_CONTEXT = "gke_octogee_us-central1_octogee-gateway";
 const KUBE_NS = args.env === "prod" ? "octogee" : "octogee-test";
 
-// ── Local Firestore-narrowed view of canonical types ───────────────────────
-// shared/types/fleet-controller.ts types Timestamps as `unknown` because
-// the shared package doesn't depend on firebase-admin. The CLI does
-// receive admin SDK Timestamps in practice, so we narrow the few fields
-// we actually call `.toMillis()` on. Everything else is unchanged from
-// canonical — silent drift between CLI and controller would re-introduce
-// the bug class this CLI exists to surface.
 type FirestoreTs = { toMillis(): number };
 
 type GatewayDoc =
@@ -376,23 +329,13 @@ interface UserDoc {
   };
 }
 
-// ── kubectl helpers ─────────────────────────────────────────────────────────
 interface PodInfo {
   name: string;
   phase: string;
-  ready: string; // e.g. "2/2"
+  ready: string; 
   ageS: number;
 }
 
-// One kubectl exec per CLI invocation. Phase 1: all gateway pods share
-// the `app=octogee-gateway` label so we get the whole set in one call.
-// Phase 2 (release-per-gateway) will add a `gatewayId` label, at which
-// point this function takes a gatewayId and filters by it. Cached on
-// first call so callers can ask repeatedly without re-execing.
-//
-// `spawnSync` with array args avoids shell parsing — every input is a
-// const so injection isn't possible, but spawnSync makes that obvious to
-// the linter (sonarjs/os-command) and to anyone reading.
 let podsCache: PodInfo[] | null = null;
 function allGatewayPods(): PodInfo[] {
   if (podsCache !== null) return podsCache;
@@ -408,7 +351,7 @@ function allGatewayPods(): PodInfo[] {
     { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
   );
   if (result.status !== 0 || result.error) {
-    // Don't crash on kubectl failure — caller renders "?" for pod state.
+    
     podsCache = [];
     return podsCache;
   }
@@ -434,7 +377,6 @@ function allGatewayPods(): PodInfo[] {
   return podsCache;
 }
 
-// ── Format helpers ──────────────────────────────────────────────────────────
 function ts(t: { toMillis(): number } | number | undefined): string {
   if (t === undefined) return "-";
   const ms = typeof t === "number" ? t : t.toMillis();
@@ -464,10 +406,6 @@ function table(rows: Array<Record<string, string | number>>): string {
   return [header, sep, ...body].join("\n");
 }
 
-// ── User lookup ─────────────────────────────────────────────────────────────
-// Used by every verb that targets a customer. The provisioner's canonical
-// slug field is `provisioning.openclaw.slug`; older docs only have
-// `username`. Try both, in that order.
 async function findUserBySlug(slug: string): Promise<
   { uid: string; data: UserDoc } | null
 > {
@@ -492,8 +430,6 @@ interface RestoreJobDoc {
   error?: { message?: string } | string | null;
 }
 
-// Recent restore jobs for a slug. Sorted newest-first client-side so we
-// don't need a composite Firestore index for one-shot diagnostics.
 async function recentRestoreJobs(
   slug: string,
   limit: number,
@@ -504,17 +440,12 @@ async function recentRestoreJobs(
   return all.slice(0, limit);
 }
 
-// ── Verbs ───────────────────────────────────────────────────────────────────
-
 async function lsGateways(): Promise<void> {
   const snap = await db.collection(GATEWAYS_COLLECTION).get();
   const rows = snap.docs.map((d) => {
     const gw = d.data() as GatewayDoc;
-    // Phase 1: one gateway deployment, no per-gateway label distinction,
-    // so allGatewayPods() returns the single shared set. Phase 2 will
-    // filter by `pod.metadata.labels.gatewayId === d.id` when the chart
-    // adds the label.
-    const pods = allGatewayPods();
+
+const pods = allGatewayPods();
     const podSummary = pods.length === 0
       ? "?"
       : pods.length === 1
@@ -538,18 +469,14 @@ async function lsGateways(): Promise<void> {
 async function lsCustomers(): Promise<void> {
   const filter = typeof args.flags.gateway === "string" ? args.flags.gateway : null;
 
-  // Read all gateways once for the cross-check.
-  const gwSnap = await db.collection(GATEWAYS_COLLECTION).get();
+const gwSnap = await db.collection(GATEWAYS_COLLECTION).get();
   const gwMounted: Record<string, Set<string>> = {};
   for (const d of gwSnap.docs) {
     const gw = d.data() as GatewayDoc;
     gwMounted[d.id] = new Set(gw.mountedCustomers ?? []);
   }
 
-  // Filter user query to assigned customers (provisioning.openclaw.gatewayId
-  // set). Approved=true gate matches assign-customer-gateway.ts so we don't
-  // surface unfinished signups as "stuck."
-  let q: FirebaseFirestore.Query = db.collection("users").where("approved", "==", true);
+let q: FirebaseFirestore.Query = db.collection("users").where("approved", "==", true);
   if (filter) {
     q = q.where("provisioning.openclaw.gatewayId", "==", filter);
   }
@@ -581,12 +508,7 @@ async function lsCustomers(): Promise<void> {
 
   console.log(table(rows));
 
-  // Inverse drift check: customers in mountedCustomers but not assigned
-  // in Firestore. Computed per-gateway WITHOUT the approved=true filter
-  // so unapproved-but-assigned customers (rare but legal) don't false-
-  // positive as orphans. Per-gateway query is one round-trip per gateway
-  // in scope, which is small at our fleet size.
-  const orphans: Array<{ gatewayId: string; slug: string }> = [];
+const orphans: Array<{ gatewayId: string; slug: string }> = [];
   for (const [gwId, mountedSet] of Object.entries(gwMounted)) {
     if (filter && gwId !== filter) continue;
     if (mountedSet.size === 0) continue;
@@ -669,8 +591,7 @@ async function inspectCustomer(slug: string): Promise<void> {
     },
   ]));
 
-  // Drift verdict — combine the user state with the gateway state.
-  console.log("\n" + bold("DRIFT"));
+console.log("\n" + bold("DRIFT"));
   if (oc.status === "complete" && !mounted && !failed) {
     console.log(red(`${CROSS} MISSING`) + " — assigned + complete but gateway hasn't mounted; trigger may be wedged.");
     console.log(dim(`  Try: fleet --env=${args.env} unstick-customer ${slug} --apply`));
@@ -736,9 +657,7 @@ async function inspectGateway(gatewayId: string): Promise<void> {
     }))));
   }
 
-  // Recent restore jobs across the gateway, not just one slug. We bound to
-  // 10 to keep output skimmable.
-  const allJobs = await db
+const allJobs = await db
     .collection("restoreJobs")
     .where("gatewayId", "==", gatewayId)
     .get();
@@ -758,10 +677,7 @@ async function inspectGateway(gatewayId: string): Promise<void> {
         : j.error?.message?.slice(0, 60) ?? "-",
   }))));
 
-  // Pod status (from kubectl) for completeness — same source as `ls gateways`.
-  // Phase 1 has one shared set across all gateway docs; Phase 2 will filter
-  // by `metadata.labels.gatewayId === gatewayId` when the chart adds the label.
-  const pods = allGatewayPods();
+const pods = allGatewayPods();
   console.log(`\n=== PODS (${pods.length}) ===`);
   console.log(pods.length === 0 ? "(none / kubectl unavailable)" : table(pods.map((p) => ({
     name: p.name,
@@ -816,18 +732,12 @@ async function unstickCustomer(slug: string, apply: boolean): Promise<void> {
     return;
   }
 
-  // Clear backoff if present. Never touch mountedCustomers from this verb —
-  // forcing an unmount is a different concern (a future `unmount-customer`
-  // verb that would need a real /unmount RPC, not just a Firestore edit).
-  if (failed) {
+if (failed) {
     await gwRef.update({ [`failedCustomers.${slug}`]: FieldValue.delete() });
     console.log("\n" + green(`${CHECK} gateways/${oc.gatewayId}.failedCustomers.${slug} cleared`));
   }
 
-  // Always nudge — fires `onUserUpdatedForFleet` so the controller re-runs
-  // pick-next for this customer's gateway. Idempotent: a healthy customer
-  // ends in noop-none-pending.
-  await db.collection("users").doc(user.uid).set({
+await db.collection("users").doc(user.uid).set({
     provisioning: {
       openclaw: {
         status: oc.status,
@@ -1026,7 +936,6 @@ async function executeMigration(
   process.exit(1);
 }
 
-// ── Router ──────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const verb = args.positional[0] ?? "";
   const sub = args.positional[1] ?? "";
@@ -1056,20 +965,16 @@ async function main(): Promise<void> {
       }
       return unstickCustomer(args.positional[1], apply);
     case "add-customer": {
-      // Validate `--to` is a string (not boolean true from `--to --apply`
-      // arg-shape). The router falls into missing-args path when invalid,
-      // pointing the user at `fleet help <verb>`.
-      const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
+
+const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       if (!args.positional[1] || !to) {
         return missingArg("add-customer");
       }
       return addCustomer(args.positional[1], to, apply);
     }
     case "migrate-customer": {
-      // Validate `--to` is a string (not boolean true from `--to --apply`
-      // arg-shape). The router falls into missing-args path when invalid,
-      // pointing the user at `fleet help <verb>`.
-      const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
+
+const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       if (!args.positional[1] || !to) {
         return missingArg("migrate-customer");
       }
@@ -1084,9 +989,6 @@ async function main(): Promise<void> {
   process.exit(1);
 }
 
-/** Print the canonical usage block for a verb when its required positional
- *  or flag args are missing. Sources from the VERBS table so the example
- *  shown here matches the help output exactly. */
 function missingArg(verbName: string): never {
   const verb = verbsByName.get(verbName);
   if (!verb) {

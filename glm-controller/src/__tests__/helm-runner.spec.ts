@@ -5,13 +5,6 @@ import {
   type HelmSubprocess,
 } from "../helm-runner";
 
-// `calls` captures every helm invocation the test issued — including
-// the pre-flight `helm status` IF the test wires runHelm directly. To
-// keep existing tests' calls-sequence assertions ergonomic, wrap the
-// returned runHelm with `withPreflightStatusNotFound` at the runner
-// construction site (see the replace_all in every call site below);
-// that wrapper intercepts status BEFORE it reaches the inner mock,
-// so `calls` only captures upgrade/history/rollback/uninstall.
 function mockSubprocess(
   responses: Array<{ stdout?: string; stderr?: string; code?: number }>,
 ): { runHelm: HelmSubprocess; calls: string[][] } {
@@ -30,15 +23,6 @@ function mockSubprocess(
   return { runHelm, calls };
 }
 
-// Wrap a custom runHelm so the new pre-flight `helm status` call (added
-// to upsertInstance) defaults to "release not found" — the fresh-install
-// branch that skips recovery and proceeds to upgrade. The wrapped
-// function never sees status calls (its `calls.push(args)` only captures
-// upgrade/history/rollback/uninstall).
-//
-// Pre-flight-dedicated tests do NOT use this wrapper — they exercise the
-// status branch directly via their own inner runHelm. See the "pre-
-// flight" tests at the bottom of the self-heal describe block.
 function withPreflightStatusNotFound(inner: HelmSubprocess): HelmSubprocess {
   return async (args: string[]) => {
     if (args[0] === "status") {
@@ -53,14 +37,14 @@ const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 describe("createHelmSubprocessRunner — readDeployedInstances", () => {
   it("filters helm list to octogee-gw-* releases and pulls each release's values", async () => {
     const { runHelm, calls } = mockSubprocess([
-      // helm list
+      
       {
         stdout: JSON.stringify([
           { name: "octogee-gw-default", namespace: "octogee-test", status: "deployed" },
           { name: "octogee-gw-canary",  namespace: "octogee-test", status: "deployed" },
         ]),
       },
-      // helm get values octogee-gw-default
+      
       {
         stdout: JSON.stringify({
           gatewayId: "gw-test",
@@ -69,7 +53,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
           image: { repository: REPO },
         }),
       },
-      // helm get values octogee-gw-canary
+      
       {
         stdout: JSON.stringify({
           gatewayId: "gw-test-canary",
@@ -204,7 +188,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
           { name: "octogee-gw-broken", namespace: "octogee-test", status: "deployed" },
         ]),
       },
-      // values missing required identity fields
+      
       { stdout: JSON.stringify({ instanceName: "broken" }) },
     ]);
     const log = vi.fn();
@@ -217,23 +201,14 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
   });
 
   it("accepts numeric imageTag values (helm --set parses unquoted numerics as YAML numbers)", async () => {
-    // Real-world reproducer: a Firestore desired-state doc with
-    // `imageTag: 9778420` (no quotes — Firestore stored as number) flows
-    // through `helm upgrade --set imageTag=9778420` and lands in
-    // user-supplied values as a JSON number, NOT a string. Earlier the
-    // strict `typeof === "string"` check rejected it, the runner logged
-    // a false "missing fields — skipping" warning, and crucially the
-    // retire-gateway handler's poll (which waits for the instance to
-    // disappear from this map) returned true immediately — so the
-    // glmGateways doc got deleted but the helm release lingered as an
-    // invisible orphan.
-    const { runHelm } = mockSubprocess([
+
+const { runHelm } = mockSubprocess([
       {
         stdout: JSON.stringify([
           { name: "octogee-gw-smoke", namespace: "octogee-test", status: "deployed" },
         ]),
       },
-      // imageTag is the JSON number 9778420 (no quotes)
+      
       {
         stdout: JSON.stringify({
           gatewayId: "gw-smoke",
@@ -549,9 +524,8 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     ]);
     const rollback = calls.find((c) => c[0] === "rollback");
     expect(rollback).toBeDefined();
-    // Rolls back to the highest GOOD revision (deployed=3), not the
-    // superseded 2 and not the wedged pending-upgrade 4.
-    expect(rollback).toContain("octogee-gw-default");
+
+expect(rollback).toContain("octogee-gw-default");
     expect(rollback).toContain("3");
     expect(rollback).toContain("-n");
     expect(rollback).toContain("octogee-test");
@@ -639,7 +613,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /timed out/,
     );
-    // Only the single failed upgrade — no history/rollback probing.
+    
     expect(calls.map((c) => c[0])).toEqual(["upgrade"]);
   });
 
@@ -665,7 +639,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /rollback/i,
     );
-    // Recovery failed → do NOT re-run the upgrade.
+    
     expect(calls.map((c) => c[0])).toEqual(["upgrade", "history", "rollback"]);
   });
 
@@ -726,8 +700,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
 
-    // pending-rollback is NOT a good target — roll back to the deployed 2.
-    expect(calls.find((c) => c[0] === "rollback")).toContain("2");
+expect(calls.find((c) => c[0] === "rollback")).toContain("2");
   });
 
   it("rolls back to an old good revision even when many later revisions failed (never destructively uninstalls; no --max cap)", async () => {
@@ -789,7 +762,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /unparseable output during recovery/,
     );
-    // No rollback/uninstall/retry off a release we can't reason about.
+    
     expect(calls.map((c) => c[0])).toEqual(["upgrade", "history"]);
   });
 
@@ -849,24 +822,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     expect(calls.map((c) => c[0])).toEqual(["upgrade", "history"]);
   });
 
-  // ── Pre-flight stuck-state recovery ──────────────────────────────────
-  // The post-flight `IN_PROGRESS_PATTERN` check only triggers when helm
-  // itself reports "another operation in progress". A `helm upgrade
-  // --wait` that times out (pods crash-loop / ImagePullBackOff / OOM)
-  // leaves the release in `pending-upgrade` BUT errors with "context
-  // deadline exceeded" — different error class, doesn't match the
-  // pattern, no recovery fires. Next Cowboy reconcile tick → same
-  // timeout → infinite wedge (reproduced today on gw-bender:
-  // OpenClaw 2026.5.19 OOM → 3-min --wait timeout → pending-upgrade →
-  // 3 more reconcile ticks each hit the same timeout, never recovered).
-  //
-  // Fix: pre-flight `helm status` check inside upsertInstance. If the
-  // release is in any `pending-*` state when Cowboy arrives, run the
-  // existing `recoverStuckRelease` FIRST, then proceed with the new
-  // upgrade. Uses the same recovery primitive — no new code, just
-  // earlier detection.
-
-  it("pre-flight detects pending-upgrade and rolls back BEFORE attempting upgrade (the bender-OOM wedge class)", async () => {
+it("pre-flight detects pending-upgrade and rolls back BEFORE attempting upgrade (the bender-OOM wedge class)", async () => {
     const calls: string[][] = [];
     const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
       calls.push(args);
@@ -896,17 +852,13 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
 
-    // Exactly: status (pre-flight) → history (recovery) → rollback → upgrade.
-    // NO second upgrade attempt — the first one succeeds because pre-flight
-    // already unwedged the release. (Existing post-flight test shows the
-    // 2-upgrade shape; this PR adds the 1-upgrade pre-flight path.)
-    expect(calls.map((c) => c[0])).toEqual([
+expect(calls.map((c) => c[0])).toEqual([
       "status",
       "history",
       "rollback",
       "upgrade",
     ]);
-    // Rolled back to revision 3 (deployed), not 4 (the wedged pending one)
+    
     const rollback = calls.find((c) => c[0] === "rollback")!;
     expect(rollback).toContain("3");
     expect(log).toHaveBeenCalledWith(
@@ -961,9 +913,8 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
       }
       if (args[0] === "history") {
         return {
-          // pending-install with no good revision history → recovery
-          // uninstalls (the existing path).
-          stdout: JSON.stringify([{ revision: 1, status: "pending-install" }]),
+
+stdout: JSON.stringify([{ revision: 1, status: "pending-install" }]),
           stderr: "",
           code: 0,
         };
@@ -1002,8 +953,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
 
-    // status → upgrade. No history/rollback probing.
-    expect(calls.map((c) => c[0])).toEqual(["status", "upgrade"]);
+expect(calls.map((c) => c[0])).toEqual(["status", "upgrade"]);
   });
 
   it("pre-flight on a 'failed' (non-pending) release skips recovery (helm upgrade can override a failed state)", async () => {
@@ -1043,7 +993,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
 
     await expect(runner.upsertInstance({ ...upsertArgs })).resolves.toBeUndefined();
-    // status (not-found) → upgrade (fresh install). No recovery.
+    
     expect(calls.map((c) => c[0])).toEqual(["status", "upgrade"]);
   });
 
@@ -1065,9 +1015,8 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     await expect(runner.upsertInstance({ ...upsertArgs })).rejects.toThrow(
       /helm status.*Kubernetes cluster unreachable/,
     );
-    // No upgrade attempted — fail-loud on the status check (silent
-    // proceed would hide a control-plane outage).
-    expect(calls.map((c) => c[0])).toEqual(["status"]);
+
+expect(calls.map((c) => c[0])).toEqual(["status"]);
   });
 });
 
@@ -1171,10 +1120,10 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
           };
         }
         if (uninstalls === 2) {
-          // recoverStuckRelease's own uninstall (no good revision)
+          
           return { stdout: "uninstalled", stderr: "", code: 0 };
         }
-        // removeInstance's retried uninstall — release already gone
+        
         return { stdout: "", stderr: "Error: release: not found", code: 1 };
       }
       if (args[0] === "history") {

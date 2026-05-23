@@ -1,11 +1,5 @@
-/**
- * Usage:
- *   GOOGLE_APPLICATION_CREDENTIALS=~/.openclaw/secrets/octogee-test-sa-key.json \
- *   npx tsx scripts/seed-typing-phrases.ts
- *
- *   # Overwrite even if an admin has edited the docs since.
- *   npx tsx scripts/seed-typing-phrases.ts --force
- */
+
+
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { readFileSync } from 'fs';
@@ -21,9 +15,8 @@ const DEFAULT_SA_KEY_PATH = resolve(
 );
 
 function loadSa(): Record<string, unknown> {
-  // Honor GOOGLE_APPLICATION_CREDENTIALS first — matches the env-var path
-  // documented in the usage block above. Fall back to the default dev path.
-  const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || DEFAULT_SA_KEY_PATH;
+
+const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || DEFAULT_SA_KEY_PATH;
   try {
     return JSON.parse(readFileSync(keyPath, 'utf-8'));
   } catch (err) {

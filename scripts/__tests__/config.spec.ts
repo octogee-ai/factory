@@ -21,13 +21,12 @@ describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
       agents: { list: [{ id: "test-agent" }] },
       bindings: [],
     };
-    // Write using atomic pattern (same as writeOpenClawConfig)
+    
     const tmp = configPath + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(config, null, 2), "utf-8");
     fs.renameSync(tmp, configPath);
 
-    // Read back
-    const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(result.agents.list[0].id).toBe("test-agent");
     expect(result.bindings).toEqual([]);
   });
@@ -53,7 +52,7 @@ describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
 });
 
 describe("agentExists", () => {
-  // Re-implement locally for testing (avoids importing module that does Firebase init)
+  
   function agentExists(config: any, agentId: string): boolean {
     return config.agents?.list?.some((a: any) => a.id === agentId) ?? false;
   }

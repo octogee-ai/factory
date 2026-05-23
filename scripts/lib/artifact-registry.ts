@@ -118,9 +118,8 @@ export async function listGatewayBuilds(opts: ListOpts): Promise<GatewayBuild[]>
   const location = opts.location ?? process.env.GAR_LOCATION ?? "us-central1";
   const repository = opts.repository ?? process.env.GAR_REPO ?? "octogee";
   const limit = opts.limit ?? DEFAULT_LIMIT;
-  // Read enough deduped builds to absorb multi-arch dupes + a buffer; once
-  // the accumulator passes this, further pages can only push older builds.
-  const enoughDeduped = limit * 3;
+
+const enoughDeduped = limit * 3;
 
   const token = await getAccessToken();
   const accumulated = new Map<string, GatewayBuild>();

@@ -4,7 +4,7 @@ import * as path from "node:path";
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 5_000;
-// First push / large packfiles legitimately exceed the read-side cap.
+
 const GIT_PUSH_TIMEOUT_MS = 60_000;
 const GIT_COMMIT_TIMEOUT_MS = 30_000;
 
@@ -32,9 +32,6 @@ export interface WorkspaceGitLogEntry {
   subject: string;
 }
 
-// Same shape as MM channel slugs / Gitea repo names. Positive
-// allowlist rejects empty, single-dot, leading-dash, oversize, and
-// path-separator-bearing inputs by construction.
 const SAFE_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 
 function isSafeSlug(slug: string): boolean {
@@ -50,9 +47,6 @@ export async function resolveCustomerDir(
   return verifyGitDir(dir);
 }
 
-// Project trees live at `{customersRoot}/{slug}/projects/{projectSlug}/`
-// per docs/specs/PROJECTS-CANVAS-SPEC.md (each project = own git repo;
-// `projects/` is .gitignored from the workspace tree).
 export async function resolveProjectDir(
   customersRoot: string,
   slug: string,
@@ -92,9 +86,8 @@ export async function gitDiff(
   customerDir: string,
   options: { path?: string; ref?: string } = {},
 ): Promise<{ ok: true; diff: string } | { ok: false; error: WorkspaceGitError }> {
-  // --no-ext-diff: neutralize customer-controlled `diff.external` (RCE).
-  // --end-of-options: defense if a `-`-prefixed ref slips past validation.
-  const args = ["diff", "--no-color", "--no-ext-diff", "--end-of-options", options.ref ?? "HEAD"];
+
+const args = ["diff", "--no-color", "--no-ext-diff", "--end-of-options", options.ref ?? "HEAD"];
   if (options.path) {
     args.push("--", options.path);
   }
@@ -108,7 +101,7 @@ export async function gitLog(
   options: { limit?: number; branch?: string } = {},
 ): Promise<{ ok: true; entries: WorkspaceGitLogEntry[] } | { ok: false; error: WorkspaceGitError }> {
   const limit = clampLimit(options.limit ?? 20);
-  // %aN respects mailmap (Builders pick display names independent of git identity).
+  
   const FMT = `%H${UNIT_SEPARATOR}%aN${UNIT_SEPARATOR}%ct${UNIT_SEPARATOR}%s${RECORD_SEPARATOR}`;
   const args = ["log", "--no-ext-diff", `-n${limit}`, `--pretty=format:${FMT}`, "--end-of-options"];
   if (options.branch) args.push(options.branch);
@@ -117,10 +110,6 @@ export async function gitLog(
   return { ok: true, entries: parseLog(r.stdout) };
 }
 
-// Author identity comes from the Firebase profile of the requester,
-// passed through transient `-c user.name=` / `-c user.email=` so the
-// customer-dir's persistent git identity (the agent's) stays intact.
-
 export interface CommitAuthor {
   name: string;
   email: string;
@@ -128,7 +117,7 @@ export interface CommitAuthor {
 
 export interface CommitResult {
   sha: string;
-  /** True when nothing was staged (clean working tree → no-op commit). */
+  
   empty: boolean;
 }
 
@@ -140,23 +129,17 @@ export async function gitCommit(
   if (!message || message.length > 5_000) {
     return { ok: false, error: { code: "INTERNAL", message: "commit message empty or too long" } };
   }
-  // Stage everything in the working tree first. Mirrors what an agent
-  // does internally (`git add -A`). Untracked + modified + deleted all
-  // captured.
-  const addRes = await runGit(customerDir, ["add", "-A"]);
+
+const addRes = await runGit(customerDir, ["add", "-A"]);
   if (!addRes.ok) return addRes;
 
-  // Check if there's anything to commit. `git diff --cached --quiet` exits
-  // 0 if nothing is staged, 1 if something is staged. Emulate via porcelain.
-  const statusRes = await runGit(customerDir, ["status", "--porcelain=v1", "-z"]);
+const statusRes = await runGit(customerDir, ["status", "--porcelain=v1", "-z"]);
   if (!statusRes.ok) return statusRes;
   if (parsePorcelain(statusRes.stdout).length === 0) {
     return { ok: true, result: { sha: "", empty: true } };
   }
 
-  // -c flags before the subcommand → transient (don't write .git/config).
-  // --no-verify is belt-and-suspenders on top of the core.hooksPath pin.
-  const commitRes = await runGit(
+const commitRes = await runGit(
     customerDir,
     [
       "-c", `user.name=${options.author.name}`,
@@ -179,8 +162,6 @@ export interface WorkspaceGitBranchEntry {
   current: boolean;
 }
 
-// Tab is impossible in a git ref name (git-check-ref-format), so it's
-// a safe field separator. HEAD column is "*" for the current branch.
 export async function gitBranches(
   customerDir: string,
 ): Promise<{ ok: true; entries: WorkspaceGitBranchEntry[] } | { ok: false; error: WorkspaceGitError }> {
@@ -204,9 +185,8 @@ export async function gitCheckout(
       error: { code: "INTERNAL", message: "branch name empty, too long, or leading-dash" },
     };
   }
-  // `-b` consumes its arg directly and can't compose with --end-of-options;
-  // the non-create path uses --end-of-options as defense in depth.
-  const args: string[] = options.create
+
+const args: string[] = options.create
     ? ["checkout", "-b", branch]
     : ["checkout", "--end-of-options", branch];
   const r = await runGit(customerDir, args);
@@ -238,18 +218,6 @@ interface GitRunOk {
   stderr: string;
 }
 
-// Customer .git/config is attacker-controlled. Each pin closes one
-// path that turns a routine `git` call into RCE:
-//   core.fsmonitor=           — disables fsmonitor exec
-//   core.pager=cat            — defuses pager (already piped)
-//   core.hooksPath=/dev/null  — neutralizes pre-commit / pre-push / etc.
-//   gpg.program=/bin/false    — neutralizes signature-verify exec
-//   protocol.file.allow=never — blocks file:// recursive-submodule RCE
-//   protocol.ext.allow=never  — blocks ext::sh -c '…' shell-out URLs
-// `--no-verify` on commit is belt-and-suspenders on top of hooksPath.
-// `protocol.allow=never` is intentionally NOT pinned — would block
-// HTTPS/SSH push too. `diff.external=` is neutralized at subcommand
-// level via `--no-ext-diff` (empty `-c` arg makes git error out).
 const HARDENING_PINS: ReadonlyArray<string> = [
   "-c", "core.fsmonitor=",
   "-c", "core.pager=cat",
@@ -272,9 +240,8 @@ async function runGit(
   options: { timeoutMs?: number } = {},
 ): Promise<GitRunOk | { ok: false; error: WorkspaceGitError }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  // Order: hardening `-c` pins must come BEFORE the subcmd; --git-dir /
-  // --work-tree defeat parent-dir repository discovery.
-  const fullArgs = [
+
+const fullArgs = [
     ...HARDENING_PINS,
     "--git-dir",
     path.join(cwd, ".git"),
@@ -293,7 +260,7 @@ async function runGit(
 
     let proc: ReturnType<typeof spawn>;
     try {
-      // PATH fixed by the image build; sonarjs threat model doesn't apply.
+      
       // eslint-disable-next-line sonarjs/no-os-command-from-path
       proc = spawn("git", fullArgs, {
         cwd,

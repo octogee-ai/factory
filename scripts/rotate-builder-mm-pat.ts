@@ -1,17 +1,5 @@
-/**
- * Revoke and re-mint a Builder's Mattermost personal access token. Use this
- * when a Builder's session is suspected of compromise (e.g. a leaked browser
- * memory snapshot, lost device, suspicious MM activity) — the new PAT is
- * persisted to users/{uid}/secrets/mattermost.personalToken and the next app
- * sign-in mints credentials that use it.
- *
- * Usage:
- *   npx tsx scripts/rotate-builder-mm-pat.ts <email-or-uid> --project=octogee-test
- *   npx tsx scripts/rotate-builder-mm-pat.ts <email-or-uid> --project=octogee
- *
- * Requires MM_URL + MM_ADMIN_USER/MM_ADMIN_PASS (or MM_ADMIN_TOKEN) on the
- * environment to talk to Mattermost as admin.
- */
+
+
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";

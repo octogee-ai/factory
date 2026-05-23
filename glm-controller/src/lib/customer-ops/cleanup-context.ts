@@ -1,7 +1,4 @@
-// Resolves the cleanup context for a uid by reading user / workspace /
-// agent / project docs from Firestore. Extracted from the index.ts
-// wiring layer so it's directly testable (review-agent feedback) and
-// each resolution path is a small focused function.
+
 
 import type { Firestore } from "firebase-admin/firestore";
 import type { CustomerCleanupContext } from "../../handlers/deprovision-customer.js";
@@ -71,10 +68,8 @@ function resolveProjectRepoName(
   projDoc: { id: string; data: () => unknown },
 ): string {
   const projData = (projDoc.data() ?? {}) as Record<string, unknown>;
-  // Project docs persist `giteaRepoName` (the bare project slug) when
-  // created via the gateway-edge project flow — canonical name to delete.
-  // Fallback derives the same bare slug from the doc.
-  const persisted = asString(projData.giteaRepoName);
+
+const persisted = asString(projData.giteaRepoName);
   if (persisted) return persisted;
   return (
     asString(projData.slug) ?? asString(projData.projectSlug) ?? projDoc.id
@@ -91,14 +86,6 @@ async function resolveRepoNames(db: Firestore, slug: string): Promise<string[]> 
   return out;
 }
 
-/**
- * Resolve the canonical project slugs for a customer. Single source of
- * truth: the Firestore project doc (`projData.slug`, falling back to
- * `projectSlug`, falling back to `doc.id`). Independent of repo names
- * to avoid the slice-bug that yields `proj-<slug>` instead of `<slug>`.
- *
- * Returned sorted alphabetically for deterministic operator-facing logs.
- */
 async function resolveProjectSlugs(db: Firestore, slug: string): Promise<string[]> {
   if (!slug) return [];
   const projectsSnap = await db.collection(`workspaces/${slug}/projects`).get();

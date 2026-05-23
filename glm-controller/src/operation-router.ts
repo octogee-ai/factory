@@ -7,12 +7,6 @@ export interface OperationResult {
   rolledBack?: boolean;
 }
 
-/**
- * Per-operation handler context. Carries side-effect callbacks the
- * handler needs to publish progress as it runs — most importantly
- * `reportStep`, which writes incremental step records to Firestore so
- * the admin UI can render live progress.
- */
 export interface OperationContext {
   reportStep: (step: OperationStep) => Promise<void> | void;
 }

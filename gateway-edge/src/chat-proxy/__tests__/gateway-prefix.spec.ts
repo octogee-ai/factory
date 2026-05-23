@@ -1,13 +1,4 @@
-// Fleet path-affinity prefix stripping for WS surfaces on gateway-edge.
-//
-// The api.octogee.com fleet ingress routes `/api/g/<gatewayId>/*` to the
-// per-instance gateway-edge Service so a request lands on the user's home
-// pod. Once here, the `/api/g/<gatewayId>` prefix is a routing artifact —
-// the WS matchers (`/api/openclaw/ws/<uuid>`, `/api/v4/websocket`,
-// builder-shell) don't know about it. `stripGatewayPrefix` peels it off so
-// every matcher works on both `/api/<p>` AND `/api/g/<gw>/api/<p>`.
-// Unified onto `/api/g/` (POST-BENDER-CLEANUP-SPEC §2.7) — the old `/g/`
-// chat-only scheme is retired.
+
 
 import { describe, it, expect } from "vitest";
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "../gateway-prefix.js";
@@ -36,14 +27,14 @@ describe("stripGatewayPrefix", () => {
     expect(stripGatewayPrefix("/api/g/UPPER-CASE/api/x")).toBe("/api/g/UPPER-CASE/api/x");
     expect(stripGatewayPrefix("/api/g/-leading-hyphen/api/x")).toBe("/api/g/-leading-hyphen/api/x");
     expect(stripGatewayPrefix("/api/g/has_underscore/api/x")).toBe("/api/g/has_underscore/api/x");
-    // > 63 chars (1 + 62 at-cap) is the upper bound; one over should not strip
+    
     expect(stripGatewayPrefix("/api/g/" + "a".repeat(64) + "/api/x")).toBe(
       "/api/g/" + "a".repeat(64) + "/api/x",
     );
   });
 
   it("only strips /api/g/<gw> as a leading segment — not /g/<gw>/ (legacy) or mid-path", () => {
-    // legacy /g/ scheme is no longer stripped
+    
     expect(stripGatewayPrefix("/g/gw-bender/api/x")).toBe("/g/gw-bender/api/x");
     expect(stripGatewayPrefix("/something/api/g/gw-x/api")).toBe("/something/api/g/gw-x/api");
   });

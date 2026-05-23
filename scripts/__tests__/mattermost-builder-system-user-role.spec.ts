@@ -13,10 +13,8 @@ describe("Builder MM user is created with least-privilege role (#766)", () => {
     const src = fs.readFileSync(PROVISION_SRC, "utf-8");
     const userCreateIdx = src.indexOf('mmApiCall("POST", "/users"');
     expect(userCreateIdx).toBeGreaterThan(-1);
-    // Anchor to the next stable statement after the call, mirroring the
-    // pattern in coach-bot-creation.spec.ts. `});` is fragile under
-    // reformatting if the body grows a nested object literal.
-    const bodyEnd = src.indexOf("if (!mmUser)", userCreateIdx);
+
+const bodyEnd = src.indexOf("if (!mmUser)", userCreateIdx);
     expect(bodyEnd).toBeGreaterThan(userCreateIdx);
     return src.slice(userCreateIdx, bodyEnd);
   }

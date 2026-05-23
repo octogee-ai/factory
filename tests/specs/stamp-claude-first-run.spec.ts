@@ -1,14 +1,5 @@
-// Operator-profile gateways stamp Claude Code's first-run completion
-// flags into ~/.claude.json when a valid OAuth credential is on disk —
-// so a freshly-rescheduled gw-bender pod boots straight into Claude
-// instead of the setup-wizard TUI. The stamper is opt-in by env gate
-// (GATEWAY_PROFILE=operator) and refuses to fake completion when there
-// is no underlying OAuth credential.
-//
-// Why a module + unit tests (not just a shell snippet): the rules around
-// "only stamp when creds exist" and "preserve every other key" are
-// behavior, not config. The auth flow that wedged Bender's PVC the first
-// time was exactly the path these tests pin down.
+
+
 import { describe, expect, it, beforeEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -110,9 +101,8 @@ describe("stamp-claude-first-run — Copilot review hardening", () => {
 
   it("creates the temp file with mode 0600 from the start (no umask window before chmod)", () => {
     writeCreds(home);
-    // Drop a sentinel in HOME so we can sniff the .tmp file's permissions
-    // *before* the rename happens. Easiest way: monkey-patch fs.renameSync.
-    const fs = require("node:fs") as typeof import("node:fs");
+
+const fs = require("node:fs") as typeof import("node:fs");
     const realRename = fs.renameSync;
     let tmpMode: number | null = null;
     fs.renameSync = ((from: string, to: string) => {
@@ -132,10 +122,10 @@ describe("stamp-claude-first-run — Copilot review hardening", () => {
     const configPath = path.join(home, ".claude.json");
     writeFileSync(configPath, "{not json at all");
     stampFirstRun({ home, claudeVersion: "2.1.145" });
-    // Fresh config got written with the flags
+    
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     expect(config.hasCompletedOnboarding).toBe(true);
-    // Bad file got backed up with a .broken.<timestamp> suffix
+    
     const fsLib = require("node:fs") as typeof import("node:fs");
     const broken = fsLib
       .readdirSync(home)
@@ -147,17 +137,17 @@ describe("stamp-claude-first-run — Copilot review hardening", () => {
   });
 
   it("honors CLAUDE_CONFIG_DIR for the credentials lookup (operator-relocated .credentials.json still triggers the stamp)", () => {
-    // Creds live OUTSIDE the default ~/.claude dir, in a relocated dir.
+    
     const relocated = mkdtempSync(path.join(tmpdir(), "claude-config-dir-"));
     writeFileSync(path.join(relocated, ".credentials.json"), JSON.stringify({ oauth: { access_token: "fake" } }));
-    // No ~/.claude/.credentials.json in HOME → the default-path check would skip.
+    
     const result = stampFirstRun({
       home,
       claudeVersion: "2.1.145",
       claudeConfigDir: relocated,
     });
     expect(result.stamped).toBe(true);
-    // ~/.claude.json still gets written at HOME — that's what the TUI reads.
+    
     const config = JSON.parse(readFileSync(path.join(home, ".claude.json"), "utf8"));
     expect(config.hasCompletedOnboarding).toBe(true);
   });
@@ -173,14 +163,12 @@ describe("stamp-claude-first-run — Copilot review hardening", () => {
   });
 
   it("already-stamped fast-path: a second run on identical inputs returns reason='already-stamped' and does NOT rewrite the file", () => {
-    // The claude wrapper invokes the stamper before every `claude` run;
-    // hot-path cost matters. Once the flags are present and the version
-    // matches, the stamper must short-circuit without touching disk.
-    writeCreds(home);
+
+writeCreds(home);
     stampFirstRun({ home, claudeVersion: "2.1.145" });
     const configPath = path.join(home, ".claude.json");
     const mtimeBefore = statSync(configPath).mtimeMs;
-    // Force enough time to detect a rewrite if it happens.
+    
     const result = stampFirstRun({ home, claudeVersion: "2.1.145" });
     expect(result).toEqual({ stamped: false, reason: "already-stamped" });
     const mtimeAfter = statSync(configPath).mtimeMs;
@@ -209,18 +197,15 @@ describe("stamp-claude-first-run — Copilot review hardening", () => {
 
 describe("readClaudeVersion — parses `claude --version` stdout, returns null on failure", () => {
   it("returns the first whitespace-delimited token of stdout (e.g. '2.1.145' from '2.1.145 (Claude Code)')", () => {
-    // Fake `claude` binary via a tiny inline shell. The real binary
-    // prints `<version> (Claude Code)` on a single line; we exercise
-    // that exact shape rather than the synthetic value used elsewhere
-    // in the suite.
-    const fakeBin = path.join(makeHome(), "fake-claude");
+
+const fakeBin = path.join(makeHome(), "fake-claude");
     writeFileSync(fakeBin, "#!/bin/sh\necho '2.1.145 (Claude Code)'\n");
     chmodSync(fakeBin, 0o755);
     expect(readClaudeVersion({ claudeBin: fakeBin })).toBe("2.1.145");
   });
 
   it("returns null when the binary is not executable / missing (cattle image with no `claude` on PATH)", () => {
-    // /bin/false exits non-zero — spawnSync gets a status, not an error.
+    
     expect(readClaudeVersion({ claudeBin: "/bin/false" })).toBeNull();
   });
 
@@ -229,21 +214,14 @@ describe("readClaudeVersion — parses `claude --version` stdout, returns null o
   });
 
   it("defaults claudeBin to process.env.CLAUDE_BIN when set — prevents the operator-image wrapper recursion", () => {
-    // Dockerfile.operator installs /usr/local/bin/claude as a shell wrapper
-    // that runs the stamper before exec'ing the real binary. If the stamper's
-    // own `claude --version` lookup resolves via PATH, it spawns the wrapper
-    // again → infinite recursion → cgroup OOM (root cause of the bender
-    // crash-loop on every post-#1054 operator image). The wrapper sets
-    // CLAUDE_BIN to the moved-aside real binary path; the stamper must honor
-    // it as the default claudeBin so neither the boot-stamper nor the
-    // wrapper-stamper invocation can ever resolve back to the wrapper.
-    const fakeBin = path.join(makeHome(), "fake-claude-real");
+
+const fakeBin = path.join(makeHome(), "fake-claude-real");
     writeFileSync(fakeBin, "#!/bin/sh\necho '2.1.999 (Claude Code)'\n");
     chmodSync(fakeBin, 0o755);
     const prior = process.env.CLAUDE_BIN;
     process.env.CLAUDE_BIN = fakeBin;
     try {
-      // No claudeBin arg → must read CLAUDE_BIN, not fall back to PATH "claude"
+      
       expect(readClaudeVersion()).toBe("2.1.999");
     } finally {
       if (prior === undefined) delete process.env.CLAUDE_BIN;

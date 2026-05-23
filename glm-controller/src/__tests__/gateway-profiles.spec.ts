@@ -33,9 +33,8 @@ describe("resolveGatewayImageRepository", () => {
   });
 
   it("derivation follows the instance's own registry — no hardcoded AR host/project", () => {
-    // Proves resolution is derived from imageRepository, so a future AR
-    // relocation needs no code change here (Copilot #3268109816).
-    expect(
+
+expect(
       resolveGatewayImageRepository(
         mkDesired({ profile: "operator", imageRepository: "europe-docker.pkg.dev/acme/reg/octogee-gateway" }),
       ),

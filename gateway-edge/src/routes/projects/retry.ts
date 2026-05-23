@@ -37,30 +37,18 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
     const channelName = projectGeneralChannelName(wid, pid);
     let mmChannelId: string;
     try {
-      // Look up existing channel by name first so retry is idempotent when
-      // the MM channel was created on a prior attempt but the Firestore
-      // subdoc write was interrupted.
-      let existing: { id?: string; type?: string } | null = null;
+
+let existing: { id?: string; type?: string } | null = null;
       try {
         existing = (await mmApi(`/teams/${teamId}/channels/name/${channelName}`)) as { id?: string; type?: string } | null;
       } catch (lookupErr) {
-        // A 404 here means the channel doesn't exist yet — fall through to
-        // create. Any other status bubbles up as a real failure. `status`
-        // is attached by mmApi so we don't parse the error message.
-        if ((lookupErr as { status?: number } | null)?.status !== 404) throw lookupErr;
+
+if ((lookupErr as { status?: number } | null)?.status !== 404) throw lookupErr;
       }
       if (existing?.id) {
         mmChannelId = existing.id;
-        // Pre-§D4 channels were created as type "O" (open). Project
-        // channels carry an Octo agent and MUST be private — convert
-        // legacy data on retry. PUT is idempotent: P→P returns 200.
-        // A failed conversion is a HARD failure: leaving an open
-        // channel behind would leak agent activity to the whole team,
-        // which violates the "all project channels are private"
-        // invariant. Let it throw to the outer try/catch so the
-        // project flips to provisioningState: 'failed' instead of
-        // being silently marked active with an open channel.
-        if (existing.type === "O") {
+
+if (existing.type === "O") {
           await mmApi(`/channels/${mmChannelId}/privacy`, "PUT", { privacy: "P" });
         }
       } else {
@@ -85,13 +73,7 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
       return;
     }
 
-    // Ensure owner + agent are channel members. The agent in the channel
-    // is the whole point of the channel — without it OpenClaw RPCs land
-    // in a void. Treat missing IDs / add failures as hard errors so the
-    // project flips to `provisioningState: 'failed'` rather than masquerading
-    // as healthy. MM's `POST /channels/{id}/members` is idempotent — a
-    // re-add returns 200 with the existing membership.
-    const memberAdds: Array<{ id: string | null; label: string }> = [
+const memberAdds: Array<{ id: string | null; label: string }> = [
       { id: callerCtx.userId, label: "owner" },
       { id: callerCtx.coachUserId, label: "agent" },
     ];
@@ -119,9 +101,7 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
       return;
     }
 
-    // Activity sibling — idempotent on retry (provisionActivityPair finds
-    // the existing channel by name when MM rejects the second create).
-    try {
+try {
       const { provisionActivityPair } = await import("../../lib/activityPair.js");
       await provisionActivityPair({
         primaryName: channelName,
@@ -157,19 +137,11 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
       createdAt: FieldValue.serverTimestamp(),
     });
 
-    // Restore the caller's originally-requested visibility (captured at
-    // creation in `pendingVisibility`) and backfill `giteaRepoName` if the
-    // doc predates the up-front write. For legacy data without
-    // `pendingVisibility`, leave the current `visibility` untouched.
-    const restoredVisibility =
+const restoredVisibility =
       typeof project.pendingVisibility === "string" ? project.pendingVisibility : project.visibility;
     const deterministicGiteaRepo = projectRepoName(pid);
 
-    // Gitea reconcile (PROJECTS-CANVAS-SPEC §D12): retry drives the repo
-    // to the same ready state a fresh create would produce. Both helpers
-    // below are idempotent — 409 on repo-exists, short-circuit on
-    // README-already-present — so repeated retries don't double-write.
-    try {
+try {
       await ensureProjectGiteaRepo({
         workspaceId: wid,
         slug: pid,

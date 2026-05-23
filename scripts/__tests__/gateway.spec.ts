@@ -36,13 +36,9 @@ describe("advisory mode removal", () => {
   });
 });
 
-// ── ensureGatewayDefaults behavior ──────────────────────────────────────────────
-
 describe("ensureGatewayDefaults — config transformation", () => {
-  // Test the gateway defaults logic by simulating what ensureGatewayDefaults does
-  // without needing to mock readOpenClawConfig/writeOpenClawConfig
 
-  it("sets maxConcurrent to 8 when missing", () => {
+it("sets maxConcurrent to 8 when missing", () => {
     const config: any = { agents: { defaults: {} } };
     config.agents.defaults.maxConcurrent ??= 8;
     expect(config.agents.defaults.maxConcurrent).toBe(8);

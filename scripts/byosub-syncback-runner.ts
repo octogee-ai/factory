@@ -1,13 +1,5 @@
-/**
- * Backgrounded by infra/gateway/entrypoint.sh. Watches each BYO-sub
- * customer-agent's per-agent codex-home/auth.json and, on a content change
- * (codex rotated the token in place), records it. **Observe-only** first
- * ship (spec §8 / Chunk B): zero secret reads, zero writes, zero IAM — it
- * is the detection mechanism AND the natural-rotation data collector. The
- * `active` push (gateway-edge-mediated per R2) is a tested-but-unwired
- * follow-on. Codex access tokens are ~10-day and rotation is lenient, so a
- * slow poll is fine — this is not a hot path.
- */
+
+
 import * as fs from "fs";
 import * as path from "path";
 import { agentIdsFromConfig, planByosubRestores } from "./lib/byosub-restore.js";
@@ -79,7 +71,7 @@ const isEntrypoint =
   (process.argv[1] && process.argv[1].endsWith("byosub-syncback-runner.ts")) ||
   process.argv[1]?.endsWith("byosub-syncback-runner.js");
 if (isEntrypoint) {
-  // Never crash the pod — this is a best-effort observer.
+  
   main().catch((err) => {
     console.error(`[byosub-syncback] fatal: ${err.message}`);
     process.exit(0);

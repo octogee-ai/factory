@@ -10,16 +10,6 @@ export type ReconcileChange =
   | { kind: "update"; instanceName: string; from: HelmInstanceValue; to: HelmInstanceValue }
   | { kind: "drift"; instanceName: string; current: HelmInstanceValue };
 
-/**
- * The fleet-wide gateway image tag — drives sidecars (chat-proxy,
- * gateway-edge) so the whole gateway pod rolls together per #846.
- *
- * Picks the `default` instance's imageTag if present (the canonical primary).
- * Falls back to the first non-retired instance's imageTag for canary-only or
- * smoke-only fleets. Returns undefined when nothing is running — the chart
- * default (`gateway.imageTag: latest` from values.yaml) then takes over,
- * which is the fresh-cluster bootstrap path.
- */
 export function deriveFleetImageTag(
   desired: GatewayDesiredState[],
 ): string | undefined {
@@ -52,19 +42,6 @@ export function buildInstancesMap(
   return out;
 }
 
-/**
- * The instances map to pass to `helm upgrade`. Starts from the currently-
- * deployed (`actual`) map so any instance running in helm is preserved by
- * default — the controller never auto-deletes for "drift" reasons.
- *
- * Non-retired desired docs override matching entries.
- *
- * `retired` docs are removed from the target map only when no customers
- * are mounted on that gateway. Retired-with-customers stays in the map
- * (drained: pod up, no new placements) until migration completes; only
- * when `mountedByGatewayId.get(gatewayId)` is empty does helm uninstall
- * the deployment.
- */
 export function buildHelmTargetMap(
   desired: GatewayDesiredState[],
   actual: HelmInstancesMap,
@@ -75,13 +52,8 @@ export function buildHelmTargetMap(
   for (const d of desired) {
     if (d.desiredStatus === "retired") {
       const mounted = mountedByGatewayId.get(d.gatewayId);
-      // No heartbeat doc → gateway never published, no customers exist,
-      // safe to remove (this is the stranded-crash-loop canary case).
-      // Heartbeat exists with zero customers → safe to remove.
-      // Heartbeat exists with customers → preserve (drain wait); the
-      // retire-gateway operation handler refuses this case before we
-      // ever get here, so reaching it would be operator-set drift.
-      if (mounted === undefined || mounted.length === 0) {
+
+if (mounted === undefined || mounted.length === 0) {
         delete out[d.instanceName];
       }
       continue;
@@ -103,15 +75,8 @@ export function buildHelmTargetMap(
 }
 
 export interface DiffOptions {
-  /**
-   * Whether a chart-fingerprint mismatch counts as an `update`. TEST
-   * auto-rolls on chart drift (the CI shakedown flow). PROD gateway
-   * rollouts are operator-driven, so a glm-controller image bump on a
-   * platform release must NOT re-apply customer releases purely on
-   * chart-fingerprint drift — that churns live customer pods (issue
-   * #997). Defaults to true.
-   */
-  compareChartFingerprint?: boolean;
+
+compareChartFingerprint?: boolean;
 }
 
 export function diffInstancesMap(
@@ -159,11 +124,6 @@ function instanceEqual(
   );
 }
 
-// Deterministic JSON: object keys sorted recursively, array order
-// preserved. `helm get values` round-trips these objects back in a
-// different key order than the desired-state doc; a raw JSON.stringify
-// compare would then report a spurious `update` every reconcile tick
-// and roll the gateway pod forever.
 function stableStringify(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;

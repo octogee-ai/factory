@@ -2,17 +2,12 @@ import type { Request, Response, NextFunction } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 
 export interface RequireAdminDeps {
-  /** Verifies a Firebase ID token; throws on invalid token. */
+  
   verifyIdToken: (token: string) => Promise<{ uid: string }>;
   db: Firestore;
   log: (msg: string) => void;
 }
 
-// Contract: the admin-fleet-router factory only reads `req.uid` (for
-// `createdBy`) and `req.user.email` (for audit fields it doesn't yet
-// emit on glm-controller, but gateway-edge does). Anything else on
-// `req.user` is gateway-edge-specific (e.g. giteaToken) and not
-// surfaced here — glm-controller only needs the auth-identity slice.
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
@@ -48,12 +43,7 @@ export function createRequireAdmin(
     }
     req.uid = uid;
 
-    // Parallel reads — same uid, two docs, no dependency between them.
-    // Saves an RTT on every admin request. Firestore failures bubble
-    // up via next(err) so the Express error pipeline returns 500
-    // instead of leaking an unhandled rejection (Express 4 doesn't
-    // forward thrown async errors to the default error handler).
-    let userSnap: FirebaseFirestore.DocumentSnapshot;
+let userSnap: FirebaseFirestore.DocumentSnapshot;
     let configSnap: FirebaseFirestore.DocumentSnapshot;
     try {
       [userSnap, configSnap] = await Promise.all([

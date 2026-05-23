@@ -1,13 +1,5 @@
-/**
- * Admin Fleet Router — shared Express factory for admin/fleet endpoints.
- *
- * Mounted by both gateway-edge (today) and glm-controller (post-#PR), so
- * the admin Gateways tab keeps responding even when no gateway pods are
- * booted. Dependencies are injected; this file imports nothing from
- * either consumer.
- *
- * Spec: docs/architecture/GATEWAY-PLATFORM-SPEC.md §Gateway Lifecycle Manager.
- */
+
+
 import {
   Router,
   type Request,
@@ -40,11 +32,10 @@ export interface FleetRouterDeps {
     service: string;
     limit: number;
   }) => Promise<unknown[]>;
-  /** Inline lite-delete path. Must tolerate `auth/user-not-found`. */
+  
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
 }
 
-/** Fields gateway-edge / glm-controller auth middleware put on req. */
 type ActorRequest = Request & {
   uid?: string;
   user?: { email?: string | null };
@@ -448,25 +439,6 @@ async function createOperation(
   return ref.id;
 }
 
-/**
- * Mounts every admin /fleet/customer-lifecycle endpoint onto the supplied
- * router. The caller is responsible for `requireAdmin` — this factory is
- * deliberately middleware-agnostic so gateway-edge and glm-controller
- * can each apply their own.
- *
- * Routing reality (Phase 1, this PR):
- *   - Fleet status reads + add/retire/rollout are routed to glm-controller
- *     by the umbrella Ingress so they survive a missing gateway pod.
- *   - Customer-lifecycle writes (`/customer/:uid/delete`,
- *     `/customers/:uid/{assign,migrate}`) are mounted here so glm-controller
- *     can serve them, but the Ingress still routes them to gateway-edge
- *     today (GCE path matching can't disambiguate `/customer/:uid/delete`
- *     from `/customer/:uid` without a wildcard segment). The mount is
- *     forward-compat for the next ingress reshuffle once we collapse the
- *     remaining customer-detail routes onto Cowboy.
- *   - `/customers/by-slug/:slug` is unambiguous and routed to
- *     glm-controller in the umbrella Ingress.
- */
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(
   router: Router,
@@ -474,9 +446,7 @@ export function addAdminFleetRoutes(
 ): Router {
   const { db, logger } = deps;
 
-  // ── Admin delete customer ─────────────────────────────────────────────
-  // Spec: docs/specs/ADMIN-DELETE-CUSTOMER-SPEC.md.
-  router.post(
+router.post(
     "/customer/:uid/delete",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -539,8 +509,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Fleet Controller — list every gateway + restore-job aggregate ────
-  router.get(
+router.get(
     "/gateways",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
@@ -666,8 +635,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Customer distribution + placement ────────────────────────────────
-  router.get(
+router.get(
     "/customer-distribution",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
@@ -761,8 +729,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Gateway drawer details ────────────────────────────────────────────
-  router.get(
+router.get(
     "/gateways/:id/details",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -815,8 +782,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Assign a customer to a gateway ────────────────────────────────────
-  router.post(
+router.post(
     "/customers/:uid/assign",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -881,8 +847,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── GLM API: gateway create / patch / retire / rollout ───────────────
-  router.post(
+router.post(
     "/gateways",
     // eslint-disable-next-line complexity -- linear preflight: validate body, check uniqueness, provision GSA secret, write desired state. Each guard returns its own error response; flattening is clearer than threading.
     async (req: Request, res: Response, next: NextFunction) => {
@@ -1097,11 +1062,8 @@ export function addAdminFleetRoutes(
             return;
           }
         }
-        // Atomic: bind `desiredStatus=retired` and the retire-gateway
-        // operation creation into one batch so a partial failure can't
-        // leave the gateway in "draining-with-no-op" purgatory. Either
-        // both writes land or neither does.
-        const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+
+const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
         const operationId = opRef.id;
         const batch = db.batch();
         batch.update(ref, { desiredStatus: "retired" });
@@ -1227,8 +1189,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Customer lookup + migration ───────────────────────────────────────
-  router.get(
+router.get(
     "/customers/by-slug/:slug",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -1357,22 +1318,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Kick a stuck restore job ──────────────────────────────────────────
-  // Operator escape hatch for the rare case a customer sits in
-  // "Dispatched" / "running" forever (e.g. gateway crashed mid-restore,
-  // or — pre-PR #870 — Cloud Task delivered before app.listen()).
-  // Marks the job as failed with `operator-kicked` and clears the
-  // gateway's inFlightJobId so the controller's next reconcile tick
-  // can claim a fresh job for the same customer.
-  //
-  // Transactional read-check-update: a concurrent gateway ack or
-  // controller reconcile could flip the job to `done` or replace
-  // `inFlightJobId` between our read and write; without a txn we'd
-  // either overwrite a terminal state or stomp a fresh assignment.
-  // Allowlist (not denylist) on state: any future state we don't
-  // explicitly permit is rejected, so we never silently kick a job
-  // we don't understand (e.g. "migrating", "quiescing").
-  const KICKABLE_STATES = new Set(["pending", "dispatched", "running"]);
+const KICKABLE_STATES = new Set(["pending", "dispatched", "running"]);
   router.post(
     "/restore-jobs/:jobId/kick",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -1398,7 +1344,7 @@ export function addAdminFleetRoutes(
             };
 
         const outcome = await db.runTransaction(async (txn) => {
-          // ── READS (must precede all writes per Firestore rules) ──
+          
           const jobSnap = await txn.get(jobRef);
           if (!jobSnap.exists) {
             return {
@@ -1426,11 +1372,7 @@ export function addAdminFleetRoutes(
           const slug =
             typeof snapshot.slug === "string" ? snapshot.slug : "";
 
-          // Read the gateway lock (if any) so we can decide-before-write
-          // whether to clear it. Still inside the same txn, so a
-          // concurrent reconcile can't sneak a fresh inFlightJobId
-          // between our read and our write.
-          let shouldClearGwLock = false;
+let shouldClearGwLock = false;
           const gwRef = gatewayId
             ? db.collection("gateways").doc(gatewayId)
             : null;
@@ -1446,8 +1388,7 @@ export function addAdminFleetRoutes(
             }
           }
 
-          // ── WRITES ──
-          txn.update(jobRef, {
+txn.update(jobRef, {
             state: "failed",
             completedAt: FieldValue.serverTimestamp(),
             error: errorMsg,
@@ -1476,8 +1417,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Restore-job log ───────────────────────────────────────────────────
-  router.get(
+router.get(
     "/restore-jobs",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -1539,8 +1479,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Builds (Artifact Registry) ───────────────────────────────────────
-  router.get(
+router.get(
     "/builds",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -1585,8 +1524,7 @@ export function addAdminFleetRoutes(
     },
   );
 
-  // ── Operations log ────────────────────────────────────────────────────
-  router.get(
+router.get(
     "/operations",
     async (req: Request, res: Response, next: NextFunction) => {
       try {

@@ -14,18 +14,8 @@ const db = admin.firestore();
 const { reportUsage, readWorkspaceId } = await import("../lib/usage-tracking.js");
 
 async function recursiveClear(coll: string): Promise<void> {
-  // listDocuments() (Admin SDK) returns every DocumentReference under the
-  // collection — INCLUDING ghost parents (refs with subcollection data
-  // but no doc body). `.get()` would skip those, leaving subcollection
-  // state alive across tests. reportUsage writes to
-  // `workspaces/{slug}/usage_sessions/{date}` without ever writing
-  // `workspaces/{slug}` itself, so the slug is always a ghost parent.
-  //
-  // Bounded concurrency: an earlier-test crash could leave many docs;
-  // an unbounded Promise.all over recursiveDelete would either flake on
-  // the emulator's RPC pool or starve the next test. 10 in flight is
-  // plenty for the emulator and keeps the helper safe to copy.
-  const refs = await db.collection(coll).listDocuments();
+
+const refs = await db.collection(coll).listDocuments();
   const CHUNK = 10;
   for (let i = 0; i < refs.length; i += CHUNK) {
     await Promise.all(
@@ -105,16 +95,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(deprecatedSnap.empty).toBe(true);
   });
 
-  // The mock→emulator conversion (#1059) surfaced a real production bug:
-  // `t.set({...dotted...}, {merge: true})` does NOT interpret dotted keys
-  // as nested paths (only `.update()` does). The impl writes literal
-  // "roles.brain" / "token_breakdown.input" / "modelCosts.X" / "breakdown.*"
-  // field names instead of nested objects. The previous TODO blamed
-  // "emulator increment-resolution timing" — that was a misread of WHICH
-  // assertion failed (the dump shows `tokensUsed = 35` is fine; what fails
-  // is `session.roles?.brain` because `roles` is undefined). Targeted per-
-  // doc structure tests below pin the contract explicitly.
-  it("session + model + summary docs carry (role, model, slug, gateway, tokens, cost) — no per-turn key fingerprint", async () => {
+it("session + model + summary docs carry (role, model, slug, gateway, tokens, cost) — no per-turn key fingerprint", async () => {
     await seedUser("chris-uid", { selectedTier: "pro", usage: {} });
     const agentDir = makeAgentDir("christopher");
 
@@ -398,13 +379,6 @@ describe("reportUsage — v3.1 workspace paths", () => {
   });
 });
 
-// ── Contract: every nested aggregation is a NESTED object on the doc ───
-// Firestore Admin SDK `t.set({...}, { merge: true })` does NOT interpret
-// dotted keys as nested paths (only `.update()` does). The impl must
-// emit nested objects so consumers reading `doc.roles[role]`,
-// `doc.token_breakdown.input`, `doc.modelCosts[modelKey]`,
-// `doc.breakdown[role]` get the values back — not undefined.
-
 describe("reportUsage — nested-object contract (no dotted-literal field names)", () => {
   function baseUsage(overrides: Partial<{
     input: number; output: number; cacheRead: number; cacheWrite: number;
@@ -449,7 +423,7 @@ describe("reportUsage — nested-object contract (no dotted-literal field names)
     const session = await readDoc(`workspaces/alice/usage_sessions/${today}`);
     expect(session?.roles).toBeTypeOf("object");
     expect((session?.roles as Record<string, number>).coach).toBe(35);
-    // The literal-dotted form must NOT exist on the doc.
+    
     expect(Object.keys(session ?? {})).not.toContain("roles.coach");
   });
 
@@ -497,7 +471,7 @@ describe("reportUsage — nested-object contract (no dotted-literal field names)
     const log = await readDoc(`users/u1/usage_logs/${today}`);
     expect(log?.breakdown).toBeTypeOf("object");
     const bd = log?.breakdown as Record<string, number>;
-    expect(bd.coach).toBe(35);   // role-scoped tokens
+    expect(bd.coach).toBe(35);   
     expect(bd.input).toBe(10);
     expect(bd.output).toBe(20);
     expect(bd.cacheRead).toBe(5);
@@ -510,10 +484,7 @@ describe("reportUsage — nested-object contract (no dotted-literal field names)
     }
   });
 
-  // Universal invariant: any top-level key with a `.` in it is a sign of
-  // the dotted-set/merge bug class. Catches future regressions even if
-  // someone adds a new aggregation we haven't named individually above.
-  it("no doc written by reportUsage has any top-level field name containing `.`", async () => {
+it("no doc written by reportUsage has any top-level field name containing `.`", async () => {
     await callOnce({ uid: "u1", slug: "alice", role: "coach" });
     const docs = await Promise.all([
       readDoc(`users/u1/usage_logs/${today}`),
@@ -528,12 +499,6 @@ describe("reportUsage — nested-object contract (no dotted-literal field names)
     }
   });
 });
-
-// ── Contract: increments accumulate correctly under repeated calls ─────
-// The dotted-literal bug also hides accumulation drift: if `roles.coach`
-// is one key and `roles.brain` is a different key, they accumulate
-// separately by accident. After the fix, they should accumulate into
-// the same nested `roles` object.
 
 describe("reportUsage — accumulation across multiple calls", () => {
   it("two coach calls on the same workspace+date double session totals (FieldValue.increment works)", async () => {
@@ -659,11 +624,6 @@ describe("reportUsage — accumulation across multiple calls", () => {
     expect(tb.cacheWrite).toBe(4);
   });
 });
-
-// ── Contract: privacy — no key-fingerprint fields on any workspace doc ─
-// User log was already covered ("user-level write does NOT carry
-// lastKeyFingerprint"). Adding the symmetric coverage for the workspace
-// docs the existing skipped test was originally trying to assert.
 
 describe("reportUsage — privacy invariants (no key-fingerprint fields)", () => {
   it("workspace session/model/summary docs carry no keyFingerprint / keyFingerprints / lastKeyFingerprint", async () => {

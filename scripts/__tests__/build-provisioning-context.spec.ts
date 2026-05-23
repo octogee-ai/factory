@@ -3,19 +3,11 @@ import * as path from "path";
 import { buildProvisioningContext } from "../lib/provisionSteps.js";
 import { CUSTOMERS_DIR } from "../lib/config.js";
 
-// Pure-shaping characterization for buildProvisioningContext — the single
-// uncovered pure builder in provisionSteps.ts. Pins the contract every
-// other step + the customer-lifecycle-prod-adapter depends on for slug,
-// tier, ownerName, customerDir, templateVars, and the missing-username
-// fail-fast.
-
 describe("buildProvisioningContext", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    // Fixed UTC date for deterministic `today`. Anything that's clearly
-    // not the current real date — the function slices the ISO string
-    // to YYYY-MM-DD, so the time-of-day part doesn't matter.
-    vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
+
+vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
   });
 
   afterEach(() => {

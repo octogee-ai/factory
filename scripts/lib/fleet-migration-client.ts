@@ -1,17 +1,4 @@
-/**
- * HTTP client for the gateway-side migration RPCs (/quiesce, /export,
- * /import, /unmount). Mirrors the request shapes documented in
- * `shared/types/fleet-controller.ts` and signs with the same HMAC
- * primitive the gateway verifies against.
- *
- * The four RPCs together implement the four-step migration state machine
- * in `fleet-migration.ts`:
- *
- *   quiesce-source → transferState (export+import) → cutover-firestore → unmount
- *
- * `cutoverFirestore` lives outside this client — it's a Firestore write,
- * not an HTTP call. Caller composes the four operations.
- */
+
 
 import { signFleetRequest } from "./fleet-signature.js";
 import {
@@ -33,15 +20,15 @@ export interface MigrationClientTimeouts {
 }
 
 export interface MigrationClientDeps {
-  /** Same `FLEET_CONTROLLER_SECRET` the gateway has in its env. */
+  
   secret: string;
-  /** gatewayId → base URL (e.g. "https://fleet-test.octogee.com"). */
+  
   resolveGatewayUrl: (gatewayId: string) => string;
-  /** Injectable for tests; defaults to the global fetch. */
+  
   fetch?: typeof globalThis.fetch;
-  /** Defaults to no-op. */
+  
   log?: (msg: string) => void;
-  /** Per-RPC AbortSignal budgets; defaults come from shared/types. */
+  
   timeouts?: MigrationClientTimeouts;
 }
 
@@ -161,9 +148,8 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     },
 
     async transferState({ migrationId, fromGatewayId, toGatewayId, slug }) {
-      // /export — body sig matches the standard JSON shape; response is a
-      // tarball stream we forward straight into /import.
-      const exportRawBody = JSON.stringify({ migrationId, slug });
+
+const exportRawBody = JSON.stringify({ migrationId, slug });
       const exportSig = signFleetRequest(deps.secret, migrationId, exportRawBody);
       const exportUrl = `${deps.resolveGatewayUrl(fromGatewayId)}/export/${fromGatewayId}`;
       const exportRes = await fetchWithTimeout(
@@ -184,9 +170,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         throw new Error(`export: ${exportRes.status} ${text}`);
       }
 
-      // /import — sig over `${migrationId}\n${slug}` (header pair, not body).
-      // Body is the tar stream from /export piped through.
-      const importSig = signFleetRequest(deps.secret, migrationId, slug);
+const importSig = signFleetRequest(deps.secret, migrationId, slug);
       const importUrl = `${deps.resolveGatewayUrl(toGatewayId)}/import/${toGatewayId}`;
       const importRes = await fetchWithTimeout(
         "import",

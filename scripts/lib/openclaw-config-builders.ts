@@ -29,10 +29,8 @@ export function buildCustomerAgent(
   c: CustomerAgentInput,
 ): Record<string, unknown> {
   const agentId = `octogee-${c.slug}-coach`;
-  // Parenthetical is the workspace slug, intentionally — not a human "business
-  // name." It's the canonical identifier visible in OpenClaw's agent list and
-  // helps disambiguate when an operator has multiple Builders' agents loaded.
-  return {
+
+return {
     id: agentId,
     name: `${c.coach.name} (${c.slug})`,
     workspace: c.customerDir,
@@ -44,7 +42,6 @@ export function buildCustomerAgent(
   };
 }
 
-/** DI-friendly deps so the loop can be tested with a plain object mock. */
 export interface CoachIdentityDeps {
   db: {
     collection: (name: string) => {
@@ -66,15 +63,6 @@ export interface CoachIdentityDefaults {
   emoji: string;
 }
 
-/**
- * Resolve the final `{ name, emoji }` pair for an agent's `identity` block.
- *
- * Contract:
- *   - custom absent  → defaults
- *   - custom.name="" → defaults.name  (empty string is NOT customization)
- *   - custom.emoji=""→ defaults.emoji
- *   - partial        → fill each field independently
- */
 export function resolveCoachIdentity(
   custom: CoachIdentity | undefined,
   defaults: CoachIdentityDefaults,
@@ -85,12 +73,6 @@ export function resolveCoachIdentity(
   };
 }
 
-/**
- * Read each customer's coach identity from `agents/{uid}`. Missing docs /
- * missing fields / per-customer Firestore errors log a structured warning
- * and are omitted from the map — callers fall back to the platform default
- * coach identity. Reads only the public display fields; no secrets involved.
- */
 export async function fetchCoachIdentities(
   deps: CoachIdentityDeps,
   customers: ReadonlyArray<{ uid: string; slug: string }>,
@@ -145,12 +127,6 @@ export interface CoachTokenDeps {
   log: (msg: string) => void;
 }
 
-/**
- * Read each customer's coach PAT from `users/{uid}/secrets/coachMattermost`.
- * Callers MUST skip emitting an OpenClaw account entry for any customer
- * whose token is absent — config with a null/empty botToken would fail
- * OpenClaw's schema validation and brick the gateway for every tenant.
- */
 export async function fetchCoachTokens(
   deps: CoachTokenDeps,
   customers: ReadonlyArray<{ uid: string; slug: string }>,
@@ -198,31 +174,12 @@ export interface MattermostAccountEntry {
   botToken: string;
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
-  /**
-   * We always pin `native: false` because Octogee doesn't use `/commands`
-   * — leaving at OpenClaw's default causes the MM monitor to register
-   * 5+ slash commands across every team on every account mount (+ every
-   * reconnect), stacking 50-100+ serial HTTP calls per cycle and
-   * starving the gateway's WS ping window.
-   */
-  commands?: {
+
+commands?: {
     native: false;
   };
 }
 
-/**
- * Per-customer coach accounts use `groupPolicy: "allowlist"` with
- * `groupAllowFrom` scoped to [customer MM user id, admin MM user id].
- * OpenClaw flags `groupPolicy: "open"` as a CRITICAL security warning
- * and refuses to start the channel.
- *
- * Customers without a PAT are OMITTED — caller must not emit a binding
- * that references a missing account. We intentionally do NOT emit an
- * `admin` account — OpenClaw's env-var `${MM_BOT_TOKEN}` substitution
- * only fires for the account literally named `"default"`, so any other
- * name would get the LITERAL placeholder string as a bearer token →
- * 401 → endless reconnect loop.
- */
 export function buildMattermostAccounts(
   customers: ReadonlyArray<MattermostAccountInput>,
   coachTokens: ReadonlyMap<string, string>,
@@ -236,12 +193,8 @@ export function buildMattermostAccounts(
     const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
-    // Fail loud, not quiet. `groupPolicy: "allowlist"` with an empty
-    // `groupAllowFrom` silently drops every group message. If neither
-    // the workspace owner nor the platform admin is identified, refuse
-    // to emit the account so the missing data surfaces as "coach offline"
-    // (highly visible) rather than "coach silently ignores messages".
-    if (groupAllowFrom.length === 0) {
+
+if (groupAllowFrom.length === 0) {
       warn?.(
         `⚠ skipping ${c.slug}-coach account: no customerMmUserId and no MM_ADMIN_USER_ID — empty allowlist would silently drop every group message. Re-provision with the customer's MM user id to restore.`,
       );
@@ -257,15 +210,6 @@ export function buildMattermostAccounts(
   return accounts;
 }
 
-/**
- * Merge pure-builder coach accounts with existing on-disk accounts, keeping
- * `default` from existing but everything else from the fresh coach list.
- *
- * `accounts.default` — where MM_BOT_TOKEN lives — must be preserved, because
- * OpenClaw's channel-init hangs indefinitely without it. `pre-boot-config.ts`
- * runs before the first customer patch and keeps `accounts.default.botToken`
- * synced with the `MM_BOT_TOKEN` env var.
- */
 export function mergeAccountsPreservingDefault(
   existingAccounts: Record<string, unknown>,
   coachAccounts: Record<string, MattermostAccountEntry>,
@@ -277,7 +221,6 @@ export function mergeAccountsPreservingDefault(
   return merged;
 }
 
-/** Shape of a single channel binding emitted to openclaw.json. */
 export interface OpenClawBinding {
   agentId: string;
   match: {
@@ -287,12 +230,6 @@ export interface OpenClawBinding {
   };
 }
 
-/**
- * Every binding pins `match.accountId` to `{slug}-coach` so OpenClaw
- * delivers events to the right agent based on which MM auth account
- * received the WS push. Without accountId, a channelId collision would
- * fan events out to every agent that binds it — multi-tenant bleed.
- */
 export function buildCustomerBindings(
   customers: ReadonlyArray<{ slug: string; channels: ReadonlyArray<{ channelId: string }> }>,
 ): OpenClawBinding[] {

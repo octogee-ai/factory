@@ -4,8 +4,6 @@ import {
   type DeviceAuthChild,
 } from "../lib/byosub-device-auth.js";
 
-// Exactly what `codex login --device-auth` emits (captured live), so the
-// manager exercises the *real* parseCodexDeviceAuth, not a stub.
 const CODEX_STDOUT = [
   "Follow these steps to sign in with ChatGPT using device code authorization:",
   "1. Open this link in your browser and sign in to your account",
@@ -43,7 +41,7 @@ function makeFakeChild(): FakeChild {
 function harness(over: Partial<Parameters<typeof createDeviceAuthManager>[0]> = {}) {
   const child = makeFakeChild();
   const spawnDeviceAuth = vi.fn((_agentId: string) => {
-    // Feed codex's prompt asynchronously, like a real child's stdout.
+    
     queueMicrotask(() => child.emit(CODEX_STDOUT));
     return child;
   });
@@ -212,7 +210,7 @@ describe("createDeviceAuthManager — lifecycle invariants", () => {
       spawnDeviceAuth: () => {
         n += 1;
         const c = makeFakeChild();
-        // first attempt: codex dies before a prompt; second: normal.
+        
         queueMicrotask(() => (n === 1 ? c.fireExit(1) : c.emit(CODEX_STDOUT)));
         return c;
       },
@@ -283,8 +281,8 @@ describe("createDeviceAuthManager — lifecycle invariants", () => {
     const h = harness({ log: (m: string) => logs.push(m) });
     const r = await h.manager.start("octogee-a-coach");
     h.advance(16 * 60_000);
-    expect(h.manager.status(r.flowId)?.state).toBe("expired"); // killed
-    h.child.fireExit(0); // codex finished + wrote auth.json after expiry
+    expect(h.manager.status(r.flowId)?.state).toBe("expired"); 
+    h.child.fireExit(0); 
     await vi.waitFor(() =>
       expect(logs.some((m) => /post-terminal.*uncaptured/.test(m))).toBe(true),
     );

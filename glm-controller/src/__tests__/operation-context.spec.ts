@@ -110,8 +110,7 @@ describe("createOperationContext", () => {
     const deps = makeDeps();
     const { ctx, steps } = createOperationContext(deps);
 
-    // Edge case: handler emits done without a prior running event.
-    await ctx.reportStep({ name: "quiesce-source", status: "done", completedAt: 200 });
+await ctx.reportStep({ name: "quiesce-source", status: "done", completedAt: 200 });
 
     expect(steps).toEqual([{ name: "quiesce-source", status: "done", completedAt: 200 }]);
   });

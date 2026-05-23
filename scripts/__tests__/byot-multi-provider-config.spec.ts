@@ -30,12 +30,8 @@ describe("buildByotConfigForProvider — provider parity (BYOT api_key cases)", 
 });
 
 describe("buildByotConfigForProvider — openai-codex (BYOS, ChatGPT sub) at parity", () => {
-  // BYOS rides the SAME primitive as BYOT: a per-agent auth profile +
-  // agentModelOverride. The only difference vs api_key BYOT is the profile
-  // is `type:"oauth"` (no keyRef — the credential is the per-agent
-  // CODEX_HOME auth.json that openclaw isolates per agent), and the model
-  // is the codex agentRuntime model. No higher bar than BYOT.
-  const input: ByotConfigInput = { slug: "tester-70", provider: "openai-codex" };
+
+const input: ByotConfigInput = { slug: "tester-70", provider: "openai-codex" };
 
   it("emits an oauth profile (no keyRef) — credential is the per-agent codex-home", () => {
     const out = buildByotConfigForProvider(input);
@@ -64,7 +60,7 @@ describe("buildByotConfigForProvider — openai-codex (BYOS, ChatGPT sub) at par
 });
 
 describe("buildByotConfigForProvider — openai-compatible (custom provider) characterization", () => {
-  // Pins current behavior so the registry refactor stays byte-identical.
+  
   it("emits a custom models.provider (no auth profile) + namespaced model override", () => {
     const out = buildByotConfigForProvider({
       slug: "tester-70",
@@ -173,10 +169,8 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
   });
 
   it("fail-loud when tokens.refresh_token is missing — expires:0 makes a refresh-less blob dead-on-arrival (PR #989)", () => {
-    // access present but no refresh: pre-fix this silently produced an
-    // expires:0 profile with no refresh material → openclaw fails at
-    // runtime AFTER validate-before-write passed (routing already flipped).
-    expect(() =>
+
+expect(() =>
       buildCodexAuthProfilesStore(
         JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "a" } }),
       ),
@@ -190,7 +184,7 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
         tokens: { access_token: jwt({ exp: 1_893_456_000 }), refresh_token: "r" },
       }),
     );
-    // openclaw expires is epoch-ms (proven: `new Date(cred.expires)`).
+    
     expect(out.profiles["openai-codex:default"].expires).toBe(1_893_456_000_000);
   });
 
@@ -202,10 +196,10 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
           tokens: { access_token: accessToken, refresh_token: "r" },
         }),
       ).profiles["openai-codex:default"].expires;
-    expect(exp0("not-a-jwt")).toBe(0); // placeholder/opaque token
-    expect(exp0(jwt({}))).toBe(0); // JWT but no exp claim
-    expect(exp0(jwt({ exp: "soon" }))).toBe(0); // exp not numeric
-    expect(exp0(jwt({ exp: 0 }))).toBe(0); // non-positive
+    expect(exp0("not-a-jwt")).toBe(0); 
+    expect(exp0(jwt({}))).toBe(0); 
+    expect(exp0(jwt({ exp: "soon" }))).toBe(0); 
+    expect(exp0(jwt({ exp: 0 }))).toBe(0); 
   });
 });
 
@@ -229,7 +223,7 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
     const store = buildCodexAuthProfilesStore(original);
     const back = buildCodexAuthJsonFromStore(JSON.stringify(store));
     expect(back).not.toBeNull();
-    // re-mapping the inverse must reproduce the same Plane-1 store
+    
     expect(buildCodexAuthProfilesStore(back as string)).toEqual(store);
     const tokens = JSON.parse(back as string).tokens;
     expect(tokens.access_token).toBe(accessJwt);
@@ -246,7 +240,7 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
     expect(blob.auth_mode).toBe("chatgpt");
     expect(blob.tokens.access_token).toBe("a");
     expect(blob.tokens.refresh_token).toBe("r");
-    expect("account_id" in blob.tokens).toBe(false); // omitted when absent
+    expect("account_id" in blob.tokens).toBe(false); 
   });
 
   it("null when nothing usable to sync (no codex profile / missing access|refresh / garbage)", () => {
@@ -263,13 +257,13 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
           profiles: { "openai-codex:default": { type: "oauth", access: "a" } },
         }),
       ),
-    ).toBeNull(); // no refresh → not round-trippable
+    ).toBeNull(); 
     expect(
       buildCodexAuthJsonFromStore(
         JSON.stringify({
           profiles: { "openai-codex:default": { type: "api_key", access: "a", refresh: "r" } },
         }),
       ),
-    ).toBeNull(); // not an oauth profile
+    ).toBeNull(); 
   });
 });

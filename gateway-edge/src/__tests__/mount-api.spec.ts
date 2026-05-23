@@ -43,10 +43,7 @@ describe("mountApi — fleet path-affinity seam (FLEET-API-ROUTING-SPEC)", () =>
     });
     mountApi(app, "/y", r);
 
-    // /api/y/exists and /api/g/whatever/y/exists hit the router; /api/y/missing
-    // and /api/g/whatever/y/missing hit the router and 404 from inside (the
-    // mount itself is present under both forms).
-    expect((await request(app).get("/api/y/exists")).status).toBe(200);
+expect((await request(app).get("/api/y/exists")).status).toBe(200);
     expect((await request(app).get("/api/g/gw-foo/y/exists")).status).toBe(200);
     expect((await request(app).get("/api/y/missing")).status).toBe(404);
     expect((await request(app).get("/api/g/gw-foo/y/missing")).status).toBe(404);

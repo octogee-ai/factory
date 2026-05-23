@@ -1,16 +1,4 @@
-/**
- * Usage:
- *   tsx scripts/ops/capture-byosub-credential.ts \
- *     --env=prod --gateway=gw-bender --agent=octogee-ceckert-coach \
- *     --provider=openai --uid=<ownerUid> --file=/path/to/auth.json
- *
- * F&F operator bridge for BYO-subscription (Chunk A). Takes a *working*
- * credential file (e.g. a gateway agent's codex-home/auth.json), stores it
- * as an owner-scoped Secret Manager secret, and sets the
- * `glmGateways/{gatewayId}.byosub[agentId]` reference that pre-boot restores
- * into that agent's per-agent codex-home. The credential never lands in
- * Firestore/repo — only the reference. See BYO-SUBSCRIPTION-OAUTH-SPEC.md.
- */
+
 
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
@@ -18,8 +6,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 const ENVS = new Set(["test", "prod"]);
-const SAFE_ID = /^[a-z0-9-]+$/; // gateway + agent: filesystem + secret-id safe
-const SAFE_UID = /^[A-Za-z0-9_-]+$/; // firebase uid → secret-id safe
+const SAFE_ID = /^[a-z0-9-]+$/; 
+const SAFE_UID = /^[A-Za-z0-9_-]+$/; 
 const USAGE =
   "Usage: tsx scripts/ops/capture-byosub-credential.ts --env=test|prod --gateway=<id> --agent=<agentId> --provider=openai --uid=<uid> --file=<path>";
 

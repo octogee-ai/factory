@@ -22,8 +22,6 @@ export function isActiveStatus(status: string): boolean {
   return status === "active" || status === "trialing";
 }
 
-// ── Customer Summary (list view) ────────────────────────────────────────────
-
 export interface TrialSummary {
   startedAt:     string | null;
   endsAt:        string | null;
@@ -83,21 +81,15 @@ export interface CustomerSummary {
   percentUsed:         number;
   revenueUsd:          number;
   marginUsd:           number;
-  // Legacy aliases — kept until app/ migrates fully off the old shape.
+  
   tokensUsed:          number;
   tokensLimit:         number;
   csi:                 CSISummary | null;
   trial:               TrialSummary | null;
-  /**
-   * Lifecycle status of the per-customer provisioning pipeline. Distinct
-   * from subscriptionStatus (billing). `complete` is steady; anything
-   * else surfaces a Provisioning badge in the admin UI so stuck/failed
-   * customers can't hide.
-   */
-  provisioningStatus:  string | null;
+
+provisioningStatus:  string | null;
 }
 
-/** Map a single user doc + (optional) CSI doc to a CustomerSummary. */
 export function buildCustomerSummary(
   uid: string,
   d: Record<string, any>,
@@ -179,10 +171,8 @@ export function buildCustomerSummary(
     tokensLimit: windowSize,
     csi: csiSummary,
     trial,
-    // Prefer the openclaw sub-status (provisioner pipeline state); fall
-    // back to the root status (older docs may not have nested it). Null
-    // when neither is set.
-    provisioningStatus:
+
+provisioningStatus:
       d.provisioning?.openclaw?.status ??
       d.provisioning?.status ??
       null,
@@ -200,8 +190,6 @@ function buildTrialSummary(t: TrialState): TrialSummary {
     flags: { ...t.flags },
   };
 }
-
-// ── Funnel Rollup ───────────────────────────────────────────────────────────
 
 export interface FunnelStageRow {
   stage: TrialFunnelStage;
@@ -234,14 +222,6 @@ const ALL_STAGES: TrialFunnelStage[] = [
   "expired",
 ];
 
-/**
- * Roll up the per-user trial blobs from CSI docs into stage counts +
- * conversion metrics for the dashboard's funnel view.
- *
- * `inputs` is the list of (user, csi) pairs in the rollup window. Users
- * without a `csi.trial` blob are excluded — they're either pre-trial-
- * timestamp-write users or paid-from-the-start customers.
- */
 export function buildFunnelRollup(
   inputs: Array<{ uid: string; user: Record<string, any>; csi: CSIDocument | null }>,
   windowDays: number,
@@ -253,21 +233,12 @@ export function buildFunnelRollup(
 
   const total = trials.length;
 
-  // The funnel is monotonic — each user counts at every rung up to the
-  // highest they reached. So `signed_up` always equals `total`, and lower
-  // stages include users from higher stages.
-  // Each user's `trial.funnelStage` field is the highest rung achieved.
-  // We want a "count at each level" that respects the funnel-ladder
-  // visualization: signed_up shows everyone, activated shows everyone who
-  // got at least to activated, etc. For `expired` we count users whose
-  // FINAL stage is expired (they didn't convert) — it's mutually exclusive
-  // with converted.
-  const reached = new Map<TrialFunnelStage, number>();
+const reached = new Map<TrialFunnelStage, number>();
   for (const stage of ALL_STAGES) reached.set(stage, 0);
 
   for (const t of trials) {
     const stage = t.funnelStage;
-    // Everyone is signed_up. Then count up the ladder by their actual stage.
+    
     reached.set("signed_up", (reached.get("signed_up") ?? 0) + 1);
     if (
       stage === "activated" || stage === "building" ||
@@ -278,9 +249,8 @@ export function buildFunnelRollup(
     if (
       stage === "building" || stage === "converted" || stage === "expired"
     ) {
-      // expired counts here too — users who reached building before expiring
-      // are visible at building. The expiry annotation lives on its own row.
-      reached.set("building", (reached.get("building") ?? 0) + 1);
+
+reached.set("building", (reached.get("building") ?? 0) + 1);
     }
     if (stage === "converted") {
       reached.set("converted", (reached.get("converted") ?? 0) + 1);
@@ -303,8 +273,7 @@ export function buildFunnelRollup(
     return { stage, count, pct };
   });
 
-  // Time-to-convert (days from startedAt → first paid/byot milestone)
-  const convertTimes: number[] = convertedTrials.map((t) => {
+const convertTimes: number[] = convertedTrials.map((t) => {
     const startMs = t.startedAt.toMillis?.() ?? 0;
     const paidMs = t.milestones.paidStartedAt;
     const byotMs = t.milestones.byotConfiguredAt;
@@ -312,8 +281,7 @@ export function buildFunnelRollup(
     return (convertedMs - startMs) / (24 * 60 * 60 * 1000);
   }).filter((d) => isFinite(d) && d >= 0);
 
-  // Time-to-first-project (hours)
-  const projectTimes: number[] = trials
+const projectTimes: number[] = trials
     .map((t) => {
       const startMs = t.startedAt.toMillis?.() ?? 0;
       const projMs = t.milestones.firstProjectCreatedAt;

@@ -65,7 +65,7 @@ describe("parsePorcelain", () => {
   });
 
   it("collapses a renamed pair into one entry on the new path", () => {
-    // Rename records have an old-path companion record.
+    
     const stdout =
       `R  newname.ts${NUL}oldname.ts${NUL}` +
       ` M other.ts${NUL}`;
@@ -217,10 +217,8 @@ describe("gitStatus / gitDiff / gitLog (real git)", () => {
   });
 
   it("hardening: customer-controlled diff.external in .git/config is neutralized (P0-2)", async () => {
-    // Plant a `diff.external` driver that, if invoked, would write a
-    // canary file. Run `git diff` and confirm the canary doesn't exist —
-    // the hardening pin `-c diff.external=` overrides the repo config.
-    const canary = path.join(repo, ".pwned-canary");
+
+const canary = path.join(repo, ".pwned-canary");
     const driver = path.join(repo, "evil-driver.sh");
     await fs.writeFile(driver, `#!/bin/sh\ntouch "${canary}"\n`);
     await fs.chmod(driver, 0o755);
@@ -230,11 +228,9 @@ describe("gitStatus / gitDiff / gitLog (real git)", () => {
     const r = await gitDiff(repo, { path: "README.md" });
     expect(r.ok).toBe(true);
 
-    // Canary must NOT exist — diff.external was suppressed.
-    await expect(fs.access(canary)).rejects.toThrow();
+await expect(fs.access(canary)).rejects.toThrow();
 
-    // Cleanup
-    git(repo, ["config", "--unset", "diff.external"]);
+git(repo, ["config", "--unset", "diff.external"]);
     await fs.rm(driver, { force: true });
     await fs.writeFile(path.join(repo, "README.md"), "hello\n");
   });
@@ -265,11 +261,10 @@ describe("gitCommit (Phase 6.C.2)", () => {
     if (!r.ok) return;
     expect(r.result.empty).toBe(false);
     expect(r.result.sha).toMatch(/^[0-9a-f]{40}$/);
-    // Author override applied for THIS commit only — agent's persisted
-    // user.email in .git/config remains "agent@octogee.local".
-    const cfg = spawnSync("git", ["config", "user.email"], { cwd: repo, encoding: "utf-8" });
+
+const cfg = spawnSync("git", ["config", "user.email"], { cwd: repo, encoding: "utf-8" });
     expect(cfg.stdout.trim()).toBe("agent@octogee.local");
-    // Most recent commit's author email is the override.
+    
     const last = spawnSync("git", ["log", "-1", "--pretty=format:%ae"], {
       cwd: repo,
       encoding: "utf-8",
@@ -314,7 +309,7 @@ describe("gitCommit (Phase 6.C.2)", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.result.empty).toBe(false);
-    // Working tree should be clean after.
+    
     const status = await gitStatus(repo);
     expect(status.ok).toBe(true);
     if (!status.ok) return;
@@ -323,12 +318,8 @@ describe("gitCommit (Phase 6.C.2)", () => {
 });
 
 describe("gitPush (Phase 6.C.2)", () => {
-  // gitPush against a real remote needs HTTPS/SSH. The hardening pin
-  // blocks file:// so we can't fixture a local bare-repo upstream
-  // here. Test the contract — failure modes the helper must surface
-  // structurally — and verify real push at TEST shakedown.
 
-  let repo: string;
+let repo: string;
   beforeAll(async () => {
     repo = await fs.mkdtemp(path.join(os.tmpdir(), "wspush-"));
     git(repo, ["init", "--initial-branch=main"]);
@@ -362,43 +353,30 @@ describe("gitPush (Phase 6.C.2)", () => {
   });
 
   it("--end-of-options keeps a `-`-prefixed branch from being parsed as a flag (no remote-spec injection)", async () => {
-    // Even if the route layer's regex regressed and let "-deletes-everything"
-    // through, --end-of-options ensures git treats it as a positional
-    // (an invalid refspec → error) rather than a flag.
-    const r = await gitPush(repo, { branch: "-deletes-everything" });
+
+const r = await gitPush(repo, { branch: "-deletes-everything" });
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    // GIT_FAILED with a refspec / fatal error message — NOT a successful
-    // weird-flag interpretation.
-    expect(r.error.code).toMatch(/GIT_FAILED|NOT_A_REPO/);
+
+expect(r.error.code).toMatch(/GIT_FAILED|NOT_A_REPO/);
   });
 
   it("hardening: customer-controlled `protocol.ext.allow=always` does NOT enable ext::-as-exec on push (#839 Copilot P0)", async () => {
-    // ext:: is git's "shell out to this command for transport" URL form.
-    // Default git allows ext under attended use ("user"); a customer
-    // .git/config that sets protocol.ext.allow=always would normally
-    // re-enable it. The HARDENING_PINS pin overrides that to `never`,
-    // so any push to an ext::-prefixed remote must fail BEFORE the
-    // shell command runs. Canary file proves the command never executed.
-    const canary = path.join(repo, ".pwned-via-ext-canary");
+
+const canary = path.join(repo, ".pwned-via-ext-canary");
     git(repo, ["config", "protocol.ext.allow", "always"]);
     git(repo, ["remote", "add", "evil", `ext::sh -c "touch ${canary}; exit 1"`]);
     try {
-      // Use the helper for the local-branch case; the helper will use
-      // `origin` but we want `evil`. Drop in via raw spawn semantics:
-      // gitPush's signature only supports origin, so test via a remove
-      // of origin + rename evil → origin to exercise the pinned block.
-      git(repo, ["remote", "rename", "evil", "origin"]);
+
+git(repo, ["remote", "rename", "evil", "origin"]);
       const r = await gitPush(repo);
       expect(r.ok).toBe(false);
       if (r.ok) return;
-      // The canary must NOT exist — protocol.ext.allow=never blocked
-      // the shell-out before it could run.
-      await expect(fs.access(canary)).rejects.toThrow();
+
+await expect(fs.access(canary)).rejects.toThrow();
     } finally {
-      // Cleanup. `git remote remove` ignores missing remotes via `|| true`
-      // semantics — but spawnSync throws on non-zero, so guard.
-      try { git(repo, ["remote", "remove", "origin"]); } catch { /* ok */ }
+
+try { git(repo, ["remote", "remove", "origin"]); } catch { /* ok */ }
       try { git(repo, ["config", "--unset", "protocol.ext.allow"]); } catch { /* ok */ }
       await fs.rm(canary, { force: true });
     }
@@ -406,11 +384,8 @@ describe("gitPush (Phase 6.C.2)", () => {
 });
 
 describe("gitCommit hardening (Phase 6.C.2 — #839 Copilot P0)", () => {
-  // Customer-controlled .git/hooks/* — without the
-  // -c core.hooksPath=/dev/null pin (and the --no-verify defense), a
-  // pre-commit hook would execute arbitrary code inside the
-  // gateway-edge sidecar on every owner commit.
-  let repo: string;
+
+let repo: string;
   beforeAll(async () => {
     repo = await fs.mkdtemp(path.join(os.tmpdir(), "wshooks-"));
     git(repo, ["init", "--initial-branch=main"]);
@@ -436,9 +411,8 @@ describe("gitCommit hardening (Phase 6.C.2 — #839 Copilot P0)", () => {
         author: { name: "Owner", email: "owner@example.com" },
       });
       expect(r.ok).toBe(true);
-      // Canary must NOT exist — core.hooksPath pin + --no-verify both
-      // suppressed pre-commit.
-      await expect(fs.access(canary)).rejects.toThrow();
+
+await expect(fs.access(canary)).rejects.toThrow();
     } finally {
       await fs.rm(hook, { force: true });
       await fs.rm(canary, { force: true });
@@ -447,11 +421,8 @@ describe("gitCommit hardening (Phase 6.C.2 — #839 Copilot P0)", () => {
   });
 
   it("customer-controlled core.hooksPath in .git/config is overridden by HARDENING_PINS", async () => {
-    // The customer can also point hooksPath at an arbitrary directory
-    // (e.g. /tmp). The transient `-c core.hooksPath=/dev/null` flag
-    // takes precedence over .git/config — verify by setting a
-    // canary-touching hook at a custom path and confirming it doesn't fire.
-    const canary = path.join(repo, ".pwned-via-hookspath-canary");
+
+const canary = path.join(repo, ".pwned-via-hookspath-canary");
     const hooksDir = await fs.mkdtemp(path.join(os.tmpdir(), "evil-hooks-"));
     const hook = path.join(hooksDir, "pre-commit");
     await fs.writeFile(hook, `#!/bin/sh\ntouch "${canary}"\nexit 0\n`);
@@ -536,7 +507,7 @@ describe("gitCheckout (Phase 6.C.3)", () => {
     const branches = await gitBranches(repo);
     if (!branches.ok) throw new Error("branch list failed");
     expect(branches.entries.find((e) => e.current)?.name).toBe("feat/work");
-    // Restore for sibling tests.
+    
     await gitCheckout(repo, { branch: "main" });
   });
 
@@ -565,10 +536,8 @@ describe("gitCheckout (Phase 6.C.3)", () => {
   });
 
   it("rejects `-`-prefixed branch names at the helper layer (no flag-injection vector)", async () => {
-    // Belt-and-suspenders: the route's regex already rejects leading
-    // dashes, but the helper rejects too so a future direct caller
-    // can't bypass. `INTERNAL` not GIT_FAILED — never reaches git.
-    const r = await gitCheckout(repo, { branch: "-deletes-everything" });
+
+const r = await gitCheckout(repo, { branch: "-deletes-everything" });
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.code).toBe("INTERNAL");

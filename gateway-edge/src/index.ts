@@ -12,19 +12,10 @@ import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
 import deployPreviewRoutes from "./routes/projects/deploy-preview.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
-// LOCALITY (not cluster): the in-pod builder-shell WS bridge redeems
-// tickets via GATEWAY_EDGE_INTERNAL_URL (localhost:3001), so the redeem
-// endpoint MUST live on this sidecar. #1123's slim wrongly moved it to
-// octogee-api → localhost redeem 404'd → every shell upgrade closed 4001
-// "session-unavailable" despite a valid (UUID) ticket.
+
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
 import byosubRoutes from "./routes/byosub.js";
 
-// chat-proxy folded in: it shares this process's single HTTP server
-// (port 3001) rather than running its own. The dispatcher in the boot
-// block routes chat-proxy-owned HTTP paths to chatProxyHandleRequest and
-// everything else to Express; WS upgrades + the background activity
-// bridge attach the same way.
 import {
   chatProxyHandleRequest,
   chatProxyOwnsHttpPath,
@@ -68,10 +59,8 @@ app.use((req, res, next) => {
   if (req.path === '/metrics') return next();
   const end = httpRequestDuration.startTimer();
   res.on('finish', () => {
-    // Fall back to a constant label for unmatched requests — req.path
-    // would let attacker-controlled URLs explode the Prometheus series
-    // cardinality. Same pattern octogee-api uses.
-    const route = req.route?.path || 'unmatched';
+
+const route = req.route?.path || 'unmatched';
     const labels = { method: req.method, route, status: String(res.statusCode) };
     end(labels);
     httpRequestTotal.inc(labels);
@@ -85,9 +74,8 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/metrics', async (_req, res) => {
-  // Merge gateway-edge's registry (defaults + HTTP metrics) with
-  // chat-proxy's (bridge/frame/WS metrics) — one /metrics, one port.
-  const merged = Registry.merge([metricsRegistry, chatProxyMetricsRegistry]);
+
+const merged = Registry.merge([metricsRegistry, chatProxyMetricsRegistry]);
   res.set('Content-Type', merged.contentType);
   res.end(await merged.metrics());
 });
@@ -98,8 +86,6 @@ const healthHandler = (_req: Request, res: Response) => {
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
-// Locality routes only — these read/write per-gateway-pod state and
-// can't move to the cluster singleton. Everything else is octogee-api.
 const workspaceLocality = Router();
 workspaceLocality.use(requireAuth);
 workspaceLocality.use(gitRoutes);
@@ -113,11 +99,6 @@ mountApi(app, "/projects", projectsLocality);
 app.use("/internal/billing", internalBillingRoutes);
 app.use("/internal/builder-shell", internalBuilderShellRoutes);
 
-// byosub is dual-plane. The app-facing routes (connect/status/connection)
-// live on octogee-api (cluster). The internal routes (capture/auth-state/
-// sync-back) are LOCALITY: the in-pod codex device-auth / sync-back /
-// auth-health sweeps call them same-pod via GATEWAY_EDGE_INTERNAL_URL
-// (localhost:3001), so they must be served here too (like internal/billing).
 app.use("/api/byosub", byosubRoutes);
 
 app.use(errorHandler);
@@ -146,10 +127,7 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
-  // Single HTTP server for both surfaces. chat-proxy-owned paths go to
-  // its raw handler; everything else to Express. WS upgrades + the
-  // builder-shell route attach to the same server.
-  const server = http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
     const rawPath = (req.url || "").split("?")[0];
     if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath))) {
       chatProxyHandleRequest(req, res).catch((err) => {

@@ -18,57 +18,38 @@ interface DiskState {
   sshKey: boolean;
   templatesWritten: boolean;
   customerConfigWritten: boolean;
-  /**
-   * Mirrors `git rev-parse --verify HEAD` — true when the repo has at
-   * least one commit. Used by the contract's empty-Gitea-clone branch
-   * to decide whether to re-write templates after a mid-bootstrap
-   * restore. Must be a git-level check, not a file-presence check
-   * (system files like AGENTS.md are gitignored and never in Gitea).
-   */
-  repoHasCommits: boolean;
+
+repoHasCommits: boolean;
 }
 
 interface MockState {
   user: UserSnapshot | null;
   disk: DiskState;
-  /** Calls in order — proves canonical Firestore writes are paired with the work. */
+  
   calls: string[];
-  /** Firestore field writes captured for assertions. */
+  
   writes: Array<{ field: string; value: unknown }>;
   cloneShouldFail: boolean;
-  /**
-   * Simulates `git clone` of an empty Gitea repo: clone "succeeds" but
-   * leaves no working tree files (no AGENTS.md). Mirrors the
-   * mid-bootstrap restore case where provision time created the Gitea
-   * repo without pushing the first commit.
-   */
-  cloneSimulatesEmptyRepo: boolean;
+
+cloneSimulatesEmptyRepo: boolean;
   initShouldFail: boolean;
   giteaRegisterShouldFail: boolean;
-  /** Pubkey Gitea currently has registered for the customer (matches what
-   *  the verify-and-resync path reads). null = no key registered. */
-  giteaRegisteredPubKey: string | null;
-  /** Simulate transient failure (5xx, network) reading Gitea — distinct
-   *  from "no key registered". The verify-and-resync path must NOT
-   *  conflate the two. */
-  giteaReadShouldThrow: boolean;
-  /** Mirrors `users/{uid}/system/config.gitea.token` so
-   *  `hasPersistedGiteaToken` reflects whether persistGiteaToken has run.
-   *  Tests that exercise the resync-recovers-from-failed-persist case
-   *  start with this null + persistGiteaTokenShouldFail true on first
-   *  attempt, then flip both for the recovery attempt. */
-  persistedGiteaToken: string | null;
-  /** Force persistGiteaToken to throw — simulates a transient Firestore
-   *  failure mid-mount. */
-  persistGiteaTokenShouldFail: boolean;
+
+giteaRegisteredPubKey: string | null;
+
+giteaReadShouldThrow: boolean;
+
+persistedGiteaToken: string | null;
+
+persistGiteaTokenShouldFail: boolean;
   blobSyncShouldFail: boolean;
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
-  /** When set, the most recent scheduleBootGreetingCron call's params. */
+  
   lastGreetingCronParams: unknown;
-  /** Forces the greeting-cron scheduler to throw when true. */
+  
   greetingCronShouldFail: boolean;
 }
 
@@ -109,10 +90,8 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     writeCustomerTemplateFiles: async () => {
       record("writeCustomerTemplateFiles");
       state.disk.templatesWritten = true;
-      // writeCustomerTemplateFiles itself doesn't create commits — only a
-      // subsequent commit/push (or clone of a populated repo) flips
-      // repoHasCommits.
-      return { dataApiKey: "test-data-api-key" };
+
+return { dataApiKey: "test-data-api-key" };
     },
     writeCustomerConfig: () => {
       record("writeCustomerConfig");
@@ -128,17 +107,13 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     cloneWorkspaceRepo: async (_slug, _url) => {
       record("cloneWorkspaceRepo");
       if (state.cloneShouldFail) return false;
-      // Mirror real `git clone` semantics: refuses to land into a
-      // non-empty directory. The orchestrator must NOT pre-create the
-      // customer dir tree before the clone branch runs. (Original P0:
-      // pre-create looped restore on every cattle-pod restart.)
-      if (state.disk.customerDir) return false;
+
+if (state.disk.customerDir) return false;
       state.disk.customerDir = true;
       state.disk.workspaceGitDir = true;
       state.disk.gitRemote = true;
-      // Empty-repo clone has no commits. Otherwise the clone delivered
-      // a populated history (i.e. agent finished bootstrap + pushed).
-      if (!state.cloneSimulatesEmptyRepo) {
+
+if (!state.cloneSimulatesEmptyRepo) {
         state.disk.repoHasCommits = true;
       }
       return true;
@@ -155,24 +130,16 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     generateCustomerSshKey: () => {
       record("generateCustomerSshKey");
       state.disk.sshKey = true;
-      // Deliberately do NOT touch state.giteaRegisteredPubKey here —
-      // generation only writes to disk. Gitea side is updated by
-      // createGiteaUser. This enforces the generate → register → verify
-      // sequence the production code requires; if anything skips
-      // createGiteaUser, the verify step's giteaRegisteredPubKey check
-      // would catch it.
-      return "ssh-pubkey";
+
+return "ssh-pubkey";
     },
     createGiteaUser: async (_slug, pubKey) => {
       record("createGiteaUser");
       if (state.giteaRegisterShouldFail) {
         throw new Error("gitea register failed");
       }
-      // Real `createGiteaUser` is delete-old-then-add-new on the
-      // `octogee-gateway` title. Mirror by replacing whatever's in Gitea
-      // with the freshly-registered pubkey — this is what the verify
-      // step compares against.
-      state.giteaRegisteredPubKey = pubKey;
+
+state.giteaRegisteredPubKey = pubKey;
       return "gitea-pat-token";
     },
     ensureGiteaOrg: async () => {
@@ -309,11 +276,8 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.newCustomer).toBe(true);
-    // verify-channel-ready runs BEFORE the greeting cron is scheduled — the
-    // cron's announce delivery only lands when the MM channel is up, so we
-    // gate the schedule on a real ready signal. Notify-ops is last so a
-    // half-finished mount doesn't ping #ops.
-    expect(result.steps).toEqual([
+
+expect(result.steps).toEqual([
       "claim-slot",
       "ssh-key",
       "write-templates",
@@ -333,36 +297,26 @@ describe("addCustomerToGateway — first-time provisioning", () => {
 
     const orgIdx = state.calls.indexOf("ensureGiteaOrg");
     const repoIdx = state.calls.indexOf("initWorkspaceRepoFromExistingDir");
-    // The repo lives in org `{slug}`; creating the repo before the org
-    // exists is the #963 gateway regression (404 GetOrgByName).
-    expect(orgIdx).toBeGreaterThan(-1);
+
+expect(orgIdx).toBeGreaterThan(-1);
     expect(repoIdx).toBeGreaterThan(orgIdx);
   });
 
   it("converges BYOS from the durable ref on mount, BEFORE the config-patch reload (no user-doc signal needed)", async () => {
-    state.byosub = { restored: true, present: true }; // fresh write: ref present + cold on-disk
+    state.byosub = { restored: true, present: true }; 
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     const restoreIdx = state.calls.indexOf("restoreByosubForAgent");
     const patchIdx = state.calls.indexOf("applyAddCustomerConfigPatch");
-    // Must run before the mount config-patch so openclaw's reload picks
-    // up the freshly-written auth-profiles.json + restored codex-home.
-    expect(restoreIdx).toBeGreaterThan(-1);
+
+expect(restoreIdx).toBeGreaterThan(-1);
     expect(patchIdx).toBeGreaterThan(restoreIdx);
     expect(result.steps).toContain("byosub-restore");
-    // The config-patch MUST receive byosActive so it switches the agent's
-    // model to the codex runtime (auth-profile alone doesn't — #976 burn).
-    expect(state.lastConfigPatchByosActive).toBe(true);
+
+expect(state.lastConfigPatchByosActive).toBe(true);
   });
 
-  // Regression guard for the #22 clobber: a re-mount of an
-  // already-provisioned BYOS customer (cred already healthy on disk)
-  // returns present:true but restored:false (conservative-skip). The
-  // config-patch must STILL flip the model to codex (byosActive=true), but
-  // the event signals — `byosub-restore` step + "BYOS oauth activated"
-  // log — must NOT fire (both gate on `restored`; nothing was activated
-  // this call). Asserting the step also covers the log (same `if` block).
-  it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobber) but no byosub-restore step", async () => {
+it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobber) but no byosub-restore step", async () => {
     state.byosub = { restored: false, present: true };
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
     expect(state.calls).toContain("restoreByosubForAgent");
@@ -374,7 +328,7 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
     expect(state.calls).toContain("restoreByosubForAgent");
     expect(result.steps).not.toContain("byosub-restore");
-    expect(state.lastConfigPatchByosActive).toBe(false); // no model switch
+    expect(state.lastConfigPatchByosActive).toBe(false); 
   });
 
   it("writes provisioning.git.repoUrl IMMEDIATELY after the repo init succeeds", async () => {
@@ -427,24 +381,18 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     );
     expect(state.calls).toContain("waitForAccountHealthy");
     expect(state.calls).not.toContain("scheduleBootGreetingCron");
-    // half-mounts shouldn't ping #ops or flip provisioning status to complete.
+    
     expect(state.writes.find((w) => w.field === "provisioning.openclaw.status" && w.value === "complete")).toBeUndefined();
   });
 
   it("throws on greeting cron failure so the fleet retries the whole mount", async () => {
-    // Cron-schedule is now FATAL: the frontend interstitial gates the
-    // user redirect on the agent having actually posted, so silently
-    // skipping the cron would deadlock the user on the loading screen.
-    // Fleet retry is the right recovery — verify-channel-ready will
-    // pass again on the next attempt and the cron schedule will be retried.
-    state.greetingCronShouldFail = true;
+
+state.greetingCronShouldFail = true;
     await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
       /cron\.add rejected/,
     );
 
-    // Failure reason is persisted before the throw so it's visible in Firestore
-    // even when the mount never completes.
-    const greetWrite = state.writes.find(
+const greetWrite = state.writes.find(
       (w) => w.field === "provisioning.openclaw.greeting",
     );
     expect(greetWrite?.value).toMatchObject({ ok: false });
@@ -461,7 +409,7 @@ describe("addCustomerToGateway — first-time provisioning", () => {
 describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
   let state: MockState;
   beforeEach(() => {
-    // Already-provisioned customer with empty disk (fresh pod).
+    
     state = makeState(
       snap({
         status: "complete",
@@ -499,19 +447,14 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
   });
 
   it("does NOT pre-create the customer dir before the clone (would break git clone)", async () => {
-    // Regression for the P0 in PR #703: previously the orchestrator called
-    // ensureCustomerDirectories before deciding clone-vs-init. Pre-created
-    // subdirs (projects/, memory/, ideas/, .system/) made `git clone` fail
-    // with "destination path 'slug' already exists and is not an empty
-    // directory" on every cattle-gateway restart.
-    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     const ensureIdx = state.calls.indexOf("ensureCustomerDirectories");
     const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
     expect(cloneIdx).toBeGreaterThan(-1);
-    // ensureCustomerDirectories may run after the clone (to fill in subdirs
-    // not in the repo), but never before.
-    if (ensureIdx !== -1) {
+
+if (ensureIdx !== -1) {
       expect(ensureIdx).toBeGreaterThan(cloneIdx);
     }
   });
@@ -527,10 +470,8 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
 
 describe("addCustomerToGateway — recovery from orphan dir (the bug class)", () => {
   it("creates the Gitea repo AND writes Firestore in the same step", async () => {
-    // Workspace dir present but no remote — the state git-sync's recovery
-    // branch used to handle by creating a Gitea repo and discarding the
-    // returned repoUrl. The contract must heal both disk and Firestore.
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         agentIds: ["octogee-test-coach"],
@@ -572,11 +513,8 @@ describe("addCustomerToGateway — recovery from orphan dir (the bug class)", ()
 
 describe("addCustomerToGateway — empty-Gitea restore (mid-bootstrap pod loss)", () => {
   it("re-writes templates when the cloned repo has no working tree", async () => {
-    // Mid-bootstrap restore: provision created the Gitea repo and wrote
-    // repoUrl, but never pushed. Pod cycles, restore enters the clone branch,
-    // clone "succeeds" with an empty working tree. Without the template
-    // restore, the agent wakes up with no AGENTS.md to read.
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         agentIds: ["octogee-test-coach"],
@@ -592,17 +530,15 @@ describe("addCustomerToGateway — empty-Gitea restore (mid-bootstrap pod loss)"
 
     expect(result.steps).toContain("clone-workspace-repo");
     expect(result.steps).toContain("write-templates");
-    // Clone runs before write-templates — we only know the repo is empty
-    // after the clone returns.
-    const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
+
+const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
     const writeIdx = state.calls.indexOf("writeCustomerTemplateFiles");
     expect(writeIdx).toBeGreaterThan(cloneIdx);
   });
 
   it("does NOT re-write templates when the clone delivers a populated working tree", async () => {
-    // Normal restore: clone has AGENTS.md + everything. Re-writing templates
-    // would clobber the customer's actual identity files.
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         agentIds: ["octogee-test-coach"],
@@ -661,13 +597,8 @@ describe("addCustomerToGateway — idempotent re-add", () => {
 
 describe("addCustomerToGateway — partial-state scenarios", () => {
   it("FAILS LOUD when Gitea SSH key registration fails — and rolls back the local key", async () => {
-    // Pre-2026-05-03 this was non-fatal: log + continue. That left the
-    // local key on disk with no matching Gitea registration, then
-    // cloneWorkspaceRepo silently failed forever via the SSH path until
-    // ops manually swapped Gitea's key. Now we throw so the restore-
-    // customer task fails cleanly, exponential backoff kicks in, and
-    // the next attempt regenerates because the local key was deleted.
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
@@ -684,21 +615,16 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
 
     expect(state.calls).toContain("generateCustomerSshKey");
     expect(state.calls).toContain("createGiteaUser");
-    // Rollback: local key was deleted so the next restore attempt
-    // regenerates from scratch instead of seeing the orphaned key and
-    // skipping registration.
-    expect(state.calls).toContain("deleteCustomerSshKey");
+
+expect(state.calls).toContain("deleteCustomerSshKey");
     expect(state.disk.sshKey).toBe(false);
-    // Never reached the verify-channel step because we threw.
+    
     expect(state.writes.find((w) => w.field === "system/config.gitea")).toBeUndefined();
   });
 
   it("rolls back local SSH key when Gitea registration appears to succeed but the key isn't actually persisted", async () => {
-    // Simulates createGiteaUser returning a token (so the surface-level
-    // call looks fine) but the verify step finds Gitea has no matching
-    // key — the real createGiteaUser silently swallows failed key-add
-    // POSTs. Defensive verify catches this and rolls back local state.
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
@@ -706,13 +632,10 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
       emptyDisk(),
     );
 
-    // Custom adapter: createGiteaUser succeeds AND the local-pubkey
-    // setter is bypassed — so the verify step compares
-    // generated-pubkey vs Gitea-side null (or wrong key) and fails.
-    const adapter = makeAdapter(state);
+const adapter = makeAdapter(state);
     const orig = adapter.createGiteaUser;
     adapter.createGiteaUser = async (slug, pubKey) => {
-      // Token granted, but Gitea state intentionally not updated.
+      
       await orig(slug, pubKey);
       state.giteaRegisteredPubKey = null;
       return "gitea-pat-token";
@@ -726,12 +649,8 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
   });
 
   it("self-heals stale Gitea-side key on existing-key path (the ceckert bug)", async () => {
-    // The scenario that hit ceckert twice: gateway pod cycled, fresh
-    // emptyDir generated a new local keypair, but Gitea still has the
-    // previous pod's key registered. addCustomerToGateway sees the
-    // local key, hasCustomerSshKey=true, used to skip registration.
-    // Now the verify step detects drift and re-registers.
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
@@ -747,17 +666,16 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
         repoHasCommits: true,
       },
     );
-    // Gitea has a STALE key from a previous gateway pod's registration.
+    
     state.giteaRegisteredPubKey = "ssh-stale-from-old-pod";
 
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    // Resync ran: createGiteaUser called to re-register the local key.
-    expect(state.calls).toContain("createGiteaUser");
+expect(state.calls).toContain("createGiteaUser");
     expect(result.steps).toContain("ssh-key-resync");
-    // Generation did NOT run — local key was already on disk.
+    
     expect(state.calls).not.toContain("generateCustomerSshKey");
-    // After resync, Gitea has the local pubkey.
+    
     expect(state.giteaRegisteredPubKey).toBe("ssh-pubkey");
   });
 
@@ -778,7 +696,7 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
         repoHasCommits: true,
       },
     );
-    // Healthy state requires both: matching keys AND PAT in Firestore.
+    
     state.giteaRegisteredPubKey = "ssh-pubkey";
     state.persistedGiteaToken = "gitea-pat-token";
 
@@ -790,15 +708,8 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
   });
 
   it("RESYNCS when keys match but PAT is missing in Firestore (mid-flight persist failure recovery)", async () => {
-    // Simulates the failure mode Copilot flagged: previous restore
-    // attempt registered the SSH key in Gitea successfully, then
-    // persistGiteaToken threw mid-flight (transient Firestore blip).
-    // Retry: keys match (SSH is correct), but config.gitea.token is
-    // missing. Without the token-presence check, retry would skip the
-    // whole block and the customer would be left without a PAT
-    // forever. With the check, we re-enter the resync path,
-    // re-register (which mints a fresh PAT), and persist.
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
@@ -814,24 +725,20 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
         repoHasCommits: true,
       },
     );
-    state.giteaRegisteredPubKey = "ssh-pubkey"; // SSH is correct
-    state.persistedGiteaToken = null; // but PAT was never persisted
+    state.giteaRegisteredPubKey = "ssh-pubkey"; 
+    state.persistedGiteaToken = null; 
 
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.steps).toContain("ssh-key-resync");
     expect(state.calls).toContain("createGiteaUser");
-    // PAT now persisted.
+    
     expect(state.persistedGiteaToken).toBe("gitea-pat-token");
   });
 
   it("treats transient Gitea-read failure as ERROR, not as 'key absent' (no spurious resync)", async () => {
-    // The previous swallow-everything-as-null behavior in
-    // readGiteaCustomerPubKey would cause this case to look like
-    // drift → trigger an unnecessary key rotation against an
-    // existing customer. Now it propagates so the restore-customer
-    // task fails cleanly and the controller retries with backoff.
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
@@ -852,17 +759,13 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
     await expect(
       addCustomerToGateway(makeAdapter(state), "uid-test"),
     ).rejects.toThrow(/Gitea key read failed/);
-    // Did NOT call createGiteaUser — no spurious key rotation.
+    
     expect(state.calls).not.toContain("createGiteaUser");
   });
 
   it("rolls back local key when persistGiteaToken fails on first-time mount", async () => {
-    // Atomic block: if persistGiteaToken fails after Gitea registration
-    // succeeded, rollback the local key so the next restore regenerates
-    // everything cleanly. (Without the rollback, the next restore would
-    // see `keysMatch && !tokenPersisted` and enter the resync path —
-    // also valid, but the rollback path is more conservative.)
-    const state = makeState(
+
+const state = makeState(
       snap({
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
@@ -877,7 +780,7 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
 
     expect(state.calls).toContain("deleteCustomerSshKey");
     expect(state.disk.sshKey).toBe(false);
-    // Token was never persisted in Firestore.
+    
     expect(state.persistedGiteaToken).toBeNull();
   });
 
@@ -930,9 +833,8 @@ describe("addCustomerToGateway — partial-state scenarios", () => {
     await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
       /didn't reach running\+connected/,
     );
-    // MM-config patch landed before verify failed, so onMounted still fires
-    // (pod-local bookkeeping tracks the patch).
-    expect(state.calls).toContain("onMounted");
+
+expect(state.calls).toContain("onMounted");
   });
 });
 
@@ -1030,9 +932,8 @@ describe("addCustomerToGateway — same-uid in-flight dedup", () => {
   });
 
   it("throws ConcurrentMountError when a second mount is started for the same uid mid-flight", async () => {
-    // Build an adapter where loadUserSnapshot blocks until we release it,
-    // so we can keep one mount mid-flight while starting a second.
-    const state = makeState(snap({ status: "" }), emptyDisk());
+
+const state = makeState(snap({ status: "" }), emptyDisk());
     const realAdapter = makeAdapter(state);
 
     let releaseFirst!: () => void;
@@ -1048,17 +949,14 @@ describe("addCustomerToGateway — same-uid in-flight dedup", () => {
 
     const firstRun = addCustomerToGateway(dedupAdapter, "uid-test");
 
-    // Yield to let firstRun begin and add uid-test to the in-flight set.
-    await Promise.resolve();
+await Promise.resolve();
     await Promise.resolve();
 
-    // Second mount for SAME uid — must throw before doing any work.
-    await expect(addCustomerToGateway(dedupAdapter, "uid-test")).rejects.toBeInstanceOf(
+await expect(addCustomerToGateway(dedupAdapter, "uid-test")).rejects.toBeInstanceOf(
       ConcurrentMountError,
     );
 
-    // Release the first run; let it complete normally.
-    releaseFirst();
+releaseFirst();
     const result = await firstRun;
     expect(result.steps).toContain("verify-channel-ready");
   });
@@ -1163,10 +1061,8 @@ describe("addCustomerToGateway — same-uid in-flight dedup", () => {
 });
 
 describe("pubKeysMatch", () => {
-  // Compares OpenSSH-format pubkey lines on type + base64 only, ignoring
-  // the trailing comment. Used by the SSH key verify-and-resync path.
 
-  it("matches identical keys", () => {
+it("matches identical keys", () => {
     const k = "ssh-ed25519 AAAAC3Nz...etc octogee-chris@gateway";
     expect(pubKeysMatch(k, k)).toBe(true);
   });
@@ -1197,25 +1093,8 @@ describe("pubKeysMatch", () => {
 });
 
 describe("addCustomerToGateway — org-ensure precedes EVERY repo-touching path (the #963 incomplete-rollout class)", () => {
-  // #963 ("one Gitea org per workspace") moved the workspace/project repos
-  // into a per-workspace org `{slug}`. The org-ensure has to land in front
-  // of EVERY clone/init or Gitea answers 404 (GetOrgByName). #963 shipped
-  // that ensure into one bring-up path and missed a sibling four times
-  // (#963 → #968/#969/#970). #970 pinned a SINGLE path (first-time
-  // init-workspace). This generalizes the guard: ensureGiteaOrg is
-  // unconditional AND precedes the first repo-touching adapter call in
-  // every scenario, and the repo-touching surface is exhaustively
-  // classified so a NEW clone/init method cannot be added without
-  // inheriting the ordering assertion.
 
-  // Every adapter method classified: does calling it touch a repo that
-  // lives in the per-workspace org `{slug}` (so it MUST be preceded by
-  // ensureGiteaOrg)? Keyed off `keyof CustomerLifecycleAdapter` — adding a
-  // method to the PRODUCTION interface is a tsc error here until it is
-  // classified, so a new repo-touching path cannot be introduced without
-  // inheriting the ordering assertion below. The forcing function is the
-  // type, not a name regex on the test mock.
-  const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
+const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     cloneWorkspaceRepo: true,
     initWorkspaceRepoFromExistingDir: true,
     cloneProjectRepo: true,
@@ -1356,20 +1235,13 @@ describe("addCustomerToGateway — org-ensure precedes EVERY repo-touching path 
 
   it.each(scenarios)("$name", async ({ state, expectRepoTouch }) => {
     const st = state();
-    // Default Gitea to a matching registered key unless the scenario set
-    // one. The SSH verify/register block runs BEFORE the org-ensure; an
-    // unset key would make it throw and abort the mount before line 461,
-    // so the ordering assertion would never run — a false GREEN that masks
-    // the very invariant under test.
-    if (st.giteaRegisteredPubKey === null) st.giteaRegisteredPubKey = "ssh-pubkey";
+
+if (st.giteaRegisteredPubKey === null) st.giteaRegisteredPubKey = "ssh-pubkey";
     await addCustomerToGateway(makeAdapter(st), "uid-test");
 
     const orgIdx = st.calls.indexOf("ensureGiteaOrg");
-    // Unconditional: the org-ensure runs in EVERY scenario, including the
-    // idempotent no-op (it self-heals a customer provisioned before the
-    // per-workspace-org scheme existed). Deleting the single call site
-    // makes orgIdx === -1 here for every scenario.
-    expect(orgIdx).toBeGreaterThan(-1);
+
+expect(orgIdx).toBeGreaterThan(-1);
 
     const repoTouchIdxs = REPO_TOUCHING.map((m) => st.calls.indexOf(m)).filter(
       (i) => i !== -1,

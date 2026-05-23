@@ -1,13 +1,5 @@
-/**
- * Tests for the fleet migration state machine.
- *
- * Pure function tests — no mocks, no Firestore, no HTTP. Coverage targets:
- *   1. Forward path: every phase emits the right step, in order.
- *   2. fullPlan from `initial` produces the canonical 4-step sequence.
- *   3. Rollback path: pre-cutover, at-cutover, post-cutover boundaries.
- *   4. The post-source-unmount rollback throws (no recovery).
- *   5. describeStep renders every action variant without crashing.
- */
+
+
 import { describe, it, expect } from "vitest";
 import {
   type MigrationState,
@@ -138,10 +130,8 @@ describe("rollbackPlan — pre-cutover", () => {
   });
 
   it("state-transferred → un-quiesce (target import is leaked, caller prunes lazily)", () => {
-    // Source still owns + customer data dir intact. Target has a partial
-    // copy of the agent state but no Firestore flip — chat-proxy still
-    // routes to source. Safe to leave target's leak for lazy GC.
-    const plan = rollbackPlan(s("state-transferred"));
+
+const plan = rollbackPlan(s("state-transferred"));
     expect(plan.map((p) => p.action)).toEqual(["quiesce-source"]);
   });
 });

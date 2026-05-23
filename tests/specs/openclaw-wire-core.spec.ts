@@ -9,12 +9,6 @@ import {
   type WireSocket,
 } from "../../shared/types/openclaw-wire-core";
 
-/**
- * Pins the one canonical wire layer after collapsing the duplicated
- * copies in scripts/lib/gateway-rpc.ts + chat-proxy/src/openclaw/
- * upstream.ts. Behaviour here IS the contract both clients now inherit;
- * the scripts config-patch retry machine depends on these exact codes.
- */
 class FakeSocket extends EventEmitter implements WireSocket {
   sent: string[] = [];
   terminated = false;

@@ -51,7 +51,7 @@ describe("nukeUserCloudSide — happy path", () => {
       "hosting:true",
       "auth:true",
     ]);
-    // hosting skipped by default (no deleteHostingSites dep)
+    
     expect(results.find((r) => r.key === "hosting")?.skipped).toBe(true);
   });
 
@@ -108,7 +108,7 @@ describe("nukeUserCloudSide — partial failure", () => {
     const gitea = results.find((r) => r.key === "gitea");
     expect(gitea?.ok).toBe(false);
     expect(gitea?.error).toMatch(/gitea down/);
-    // firestore step still ran
+    
     expect(deps.nukeUserFirestore).toHaveBeenCalled();
   });
 
@@ -176,9 +176,8 @@ describe("nukeUserCloudSide — hosting step (PR #3)", () => {
   it("does NOT extract projectSlugs from repoNames anymore (regression: the old slice produced 'proj-<slug>' instead of '<slug>')", async () => {
     const deleteHostingSites = vi.fn(async () => ({ deleted: 1 }));
     const deps = mkDeps({ deleteHostingSites });
-    // repoNames carries the new `proj-` infix; if the old code path
-    // were still active it'd pass `["proj-blog"]` to the helper.
-    await nukeUserCloudSide(
+
+await nukeUserCloudSide(
       mkCtx({
         repoNames: ["workspace", "blog"],
         projectSlugs: ["blog"],

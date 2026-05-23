@@ -81,7 +81,7 @@ describe("validateCredentialPayload", () => {
     expect(validateCredentialPayload("openai", "").ok).toBe(false);
     expect(validateCredentialPayload("openai", "not json").ok).toBe(false);
     expect(validateCredentialPayload("openai", '{"hello":1}').ok).toBe(false);
-    // auth_mode alone is not enough — codex hard-fails without a tokens object
+    
     expect(validateCredentialPayload("openai", '{"auth_mode":"chatgpt"}').ok).toBe(false);
     expect(validateCredentialPayload("openai", '{"tokens":"notobj"}').ok).toBe(false);
   });

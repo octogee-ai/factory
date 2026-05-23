@@ -27,11 +27,6 @@ interface GlmGatewayDoc {
   imageTag?: string;
 }
 
-// Builder-facing projection of the raw glmGateways doc — strips every
-// operator-internal field (byosub, openclawOverrides, image refs apart
-// from tag, serviceAccountName, security context overrides, lastError).
-// The Firestore rule denies client reads on glmGateways; this is the
-// only Builder-visible surface.
 function builderViewOf(
   doc: GlmGatewayDoc,
   via: "owner" | "co-owner",
@@ -91,16 +86,10 @@ router.post(
         return;
       }
       const snap = await db.collection("glmGateways").doc(gatewayId).get();
-      // "Not yours" and "does not exist" return the same 404. Distinct
-      // codes would let an authenticated Builder enumerate the gatewayId
-      // namespace (slugs are predictable from public profiles) — a
-      // reconnaissance vector for any future shell-related vuln.
-      if (!snap.exists) {
-        // Server-side only — the 404 response stays identical for both
-        // "not found" and "not yours" (anti-enumeration above), but ops
-        // needs to tell them apart. A missing doc here means the gateway
-        // id is wrong / never registered.
-        logger.warn("builder-shell: shell-ticket denied — glmGateways doc not found", {
+
+if (!snap.exists) {
+
+logger.warn("builder-shell: shell-ticket denied — glmGateways doc not found", {
           uid,
           gatewayId,
         });
@@ -108,23 +97,13 @@ router.post(
         return;
       }
       const data = snap.data() as GlmGatewayDoc;
-      // `via` is decided here from the Firestore doc — never from a
-      // request-supplied value. The PWA / chat-proxy / gateway must
-      // trust the `via` returned by /redeem; nothing they send is
-      // load-bearing for that decision.
-      //
-      // TOCTOU window: if the owner removes a co-owner during the 30s
-      // ticket lifetime, the already-minted ticket still redeems.
-      // Acceptable for 30s; documented so a future reader doesn't
-      // assume "revocation is immediate."
-      let via: "owner" | "co-owner" | null = null;
+
+let via: "owner" | "co-owner" | null = null;
       if (data.ownerUid === uid) via = "owner";
       else if (Array.isArray(data.coOwnerUids) && data.coOwnerUids.includes(uid)) via = "co-owner";
       if (!via) {
-        // Server-side only (client still gets the anti-enumeration 404).
-        // `ownerSet=false` distinguishes "gateway has no owner wired yet"
-        // from "caller is genuinely not the owner".
-        logger.warn("builder-shell: shell-ticket denied — caller not owner/co-owner", {
+
+logger.warn("builder-shell: shell-ticket denied — caller not owner/co-owner", {
           uid,
           gatewayId,
           ownerSet: typeof data.ownerUid === "string" && data.ownerUid.length > 0,
@@ -156,12 +135,8 @@ router.post(
             quota: err.quota,
             windowMs: err.windowMs,
           });
-          // Retry-After in seconds — conservative: tell the client
-          // to back off ~5 min before retrying, even though the
-          // earliest entry rolls out of the window at some point in
-          // the past hour. 5 min is short enough to feel responsive
-          // and long enough to drain a hot loop.
-          res.set("Retry-After", "300");
+
+res.set("Retry-After", "300");
           res.status(429).json({
             error: `Hourly shell-mint quota exceeded for this user (${err.quota}/hour). Try again later.`,
           });
@@ -169,10 +144,8 @@ router.post(
         }
         throw err;
       }
-      // Single host (api.octogee.com), fleet-pinned: the builder-shell WS
-      // lands on the user's home gateway pod via /api/g/<gw>/ — that's
-      // where the PTY spawns (POST-BENDER-CLEANUP-SPEC §2.7).
-      const base = process.env.API_PUBLIC_URL || "";
+
+const base = process.env.API_PUBLIC_URL || "";
       if (!base) {
         logger.warn("builder-shell: API_PUBLIC_URL not set — returning ticket without wsUrl");
       }

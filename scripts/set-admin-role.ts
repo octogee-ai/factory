@@ -1,8 +1,5 @@
-/**
- * Usage:
- *   npx tsx scripts/set-admin-role.ts <email-or-uid> --project=octogee-test
- *   npx tsx scripts/set-admin-role.ts <email-or-uid> --project=octogee --revoke
- */
+
+
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
@@ -39,15 +36,13 @@ async function main() {
     email = user.email ?? "(no email)";
   }
 
-  // Check user doc exists
-  const userDoc = await db.doc(`users/${uid}`).get();
+const userDoc = await db.doc(`users/${uid}`).get();
   if (!userDoc.exists) {
     console.error(`❌ No user doc found at users/${uid}. Has this user signed up?`);
     process.exit(1);
   }
 
-  // Set/clear role in system/config subcollection
-  const configRef = db.doc(`users/${uid}/system/config`);
+const configRef = db.doc(`users/${uid}/system/config`);
 
   if (revoke) {
     await configRef.set({ role: FieldValue.delete() }, { merge: true });
@@ -55,8 +50,7 @@ async function main() {
     await configRef.set({ role: "admin" }, { merge: true });
   }
 
-  // Clean up legacy top-level role field if present
-  const userData = userDoc.data();
+const userData = userDoc.data();
   if (userData?.role) {
     await db.doc(`users/${uid}`).update({ role: FieldValue.delete() });
     console.log(`   ⚠ Removed legacy top-level role field`);

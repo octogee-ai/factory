@@ -95,7 +95,7 @@ describe("buildAckIfUserPost", () => {
 describe("attachMmWsBridge — buffering + mmUserId race", () => {
   it("buffers browser→upstream frames until upstream emits 'open' (auth_challenge race)", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(0); // not yet open
+    const upstream = makeFakeWs(0); 
     const log = vi.fn();
 
     attachMmWsBridge(
@@ -284,10 +284,7 @@ describe("attachMmWsBridge — frame opcode preservation (MM rejects pre-auth bi
     );
     upstream.emit("open");
 
-    // `ws` v8 delivers the MM client's text auth_challenge as a Buffer
-    // with isBinary=false. If we forward it without {binary:false} the
-    // `ws` lib emits a binary frame and MM closes with UnauthBinary.
-    const auth = Buffer.from(
+const auth = Buffer.from(
       JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token: "t" } }),
     );
     browser.emit("message", auth, false);
@@ -317,7 +314,7 @@ describe("attachMmWsBridge — frame opcode preservation (MM rejects pre-auth bi
 
   it("preserves opcode for frames buffered before upstream 'open' (auth_challenge race)", () => {
     const browser = makeOptWs(1);
-    const upstream = makeOptWs(0); // not yet open → buffered
+    const upstream = makeOptWs(0); 
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
@@ -506,7 +503,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open"); // 1 lifecycle line
+    upstream.emit("open"); 
 
     for (let i = 0; i < 5; i++) {
       browser.emit("message", JSON.stringify({ seq: i, action: "get_statuses" }));
@@ -514,8 +511,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
     }
     await tickN(5);
 
-    // Only the single "upstream open" lifecycle line — no per-frame spam.
-    expect(log).toHaveBeenCalledTimes(1);
+expect(log).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("upstream open"));
   });
 
@@ -535,9 +531,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
     );
     upstream.emit("open");
 
-    // MM drops the upstream; close() then tears down the browser side,
-    // which fires an induced browser 'close' with no peer code/reason.
-    upstream.readyState = 3;
+upstream.readyState = 3;
     upstream.emit("close", 1000, Buffer.from("UnauthBinary"));
 
     const closeLines = log.mock.calls
@@ -632,15 +626,15 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     const sentByPreAuth: string[] = [];
     registry.add((f) => sentByMember.push(f), () => "u-member");
     registry.add((f) => sentByNonMember.push(f), () => "u-other");
-    registry.add((f) => sentByPreAuth.push(f), () => null); // not yet authed
+    registry.add((f) => sentByPreAuth.push(f), () => null); 
 
     const members = new Set(["u-member"]);
     const frame = { event: "octogee.ctx", data: { channelId: "c1", pct: 13 } };
     registry.broadcast(frame, (uid) => uid !== null && members.has(uid));
 
     expect(sentByMember.map(String)).toContain(JSON.stringify(frame));
-    expect(sentByNonMember).toHaveLength(0); // forged/other channel — nothing
-    expect(sentByPreAuth).toHaveLength(0); // fail-closed while mmUserId unresolved
+    expect(sentByNonMember).toHaveLength(0); 
+    expect(sentByPreAuth).toHaveLength(0); 
   });
 
   it("Copilot#5: registry enforces fail-closed for null mmUserId even if the predicate is buggy", async () => {
@@ -648,12 +642,10 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     const registry = createMmWsRegistry();
     const preAuth: string[] = [];
     registry.add((f) => preAuth.push(f), () => null);
-    // A predicate that wrongly green-lights everything must NOT be able
-    // to leak to a pre-auth socket — the registry skips null itself
-    // whenever a predicate is supplied.
-    registry.broadcast({ event: "octogee.ctx", data: { channelId: "c1" } }, () => true);
+
+registry.broadcast({ event: "octogee.ctx", data: { channelId: "c1" } }, () => true);
     expect(preAuth).toHaveLength(0);
-    // No predicate at all (e.g. octogee_ack path) still broadcasts to everyone.
+    
     registry.broadcast({ event: "x" });
     expect(preAuth).toHaveLength(1);
   });

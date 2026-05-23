@@ -10,14 +10,6 @@ export interface ApplyConfigPatchArgs {
   logPrefix?: string;
 }
 
-/**
- * Mutable single-slot cache so a long-running provisioner (e.g. the fleet
- * controller) can chain customer-add patches without paying ~5s of
- * `config.get` round-trip on every call. The cache is updated from the
- * `config.patch` response (which carries the post-write hash + merged
- * config). On hash-mismatch the cache is refreshed via `config.get` and the
- * patch retried.
- */
 export interface ConfigCache {
   current: unknown;
   hash: string;
@@ -29,23 +21,14 @@ export interface ApplyConfigPatchOptions {
   retryBackoffInitialMs?: number;
   retryBackoffMaxMs?: number;
   maxRetries?: number;
-  /**
-   * Hard ceiling on total time across all retries (in ms). Defaults to
-   * `Number.POSITIVE_INFINITY` for back-compat with callers that want
-   * pure `maxRetries`-based behavior. When set, exceeding it throws with
-   * a message that includes `totalDeadlineMs`.
-   */
-  totalDeadlineMs?: number;
+
+totalDeadlineMs?: number;
   sleep?: (ms: number) => Promise<void>;
-  /** Injectable clock for deadline math; defaults to `Date.now`. */
+  
   now?: () => number;
   cache?: ConfigCache;
-  /**
-   * External abort: if signaled, the retry loop stops at the next iteration
-   * boundary and the sleep wakes early. Mid-RPC calls aren't cancelled
-   * because the gateway-rpc layer doesn't accept a signal yet.
-   */
-  signal?: AbortSignal;
+
+signal?: AbortSignal;
 }
 
 const RETRY_AFTER_PATTERN = /\brate limit exceeded\b.*?\bretry after (\d+)s\b/i;
@@ -129,12 +112,8 @@ export async function applyConfigPatch(
   const maxRetries = opts.maxRetries ?? Number.POSITIVE_INFINITY;
   const totalDeadlineMs = opts.totalDeadlineMs ?? Number.POSITIVE_INFINITY;
   const now = opts.now ?? Date.now;
-  // Abort-aware default sleep: if the signal fires mid-wait, wake
-  // immediately so the next `throwIfAborted()` trips this iteration
-  // rather than after the full backoff. Callers who supply their own
-  // `sleep` are expected to be abort-aware themselves (tests pass a
-  // no-op or instrumented version).
-  const signalRef = opts.signal;
+
+const signalRef = opts.signal;
   const sleep =
     opts.sleep ??
     ((ms: number) =>
@@ -265,10 +244,8 @@ export async function applyConfigPatch(
         );
         await sleep(clamped);
         throwIfAborted();
-        // Always advance the exp-backoff curve so the fallback doesn't reset
-        // to retryBackoffInitialMs if the server stops sending retry-after
-        // hints on subsequent failures.
-        currentBackoff = Math.min(currentBackoff * 2, maxBackoff);
+
+currentBackoff = Math.min(currentBackoff * 2, maxBackoff);
       }
     }
   } finally {

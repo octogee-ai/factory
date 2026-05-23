@@ -1,18 +1,5 @@
-/**
- * channel-members.spec.ts — Phase 8.1. Resolves the set of MM user ids
- * that are members of an activity channel, cached with a TTL, so the
- * ephemeral `octogee.ctx` fan-out can be scoped server-side to channel
- * members (closing the cross-user numeric-leak). The fetch is injected
- * so this is pure; proxy.ts supplies the real MM admin-PAT fetch.
- *
- * Tests:
- *   CM1  cache miss fetches; cache hit does not refetch
- *   CM2  concurrent calls for the same channel dedupe to one fetch
- *   CM3  TTL expiry refetches
- *   CM4  invalidate() forces a refetch
- *   CM5  a fetch rejection yields an empty set (fail-closed) and is
- *        not cached (next call retries)
- */
+
+
 import { describe, it, expect, vi } from "vitest";
 import { createChannelMemberResolver } from "../channel-members.js";
 
@@ -45,9 +32,9 @@ describe("createChannelMemberResolver", () => {
     const r = createChannelMemberResolver({ fetchMembers, ttlMs: 100, now: () => t });
     expect(await r.getMembers("c1")).toEqual(new Set(["u0"]));
     t = 50;
-    expect(await r.getMembers("c1")).toEqual(new Set(["u0"])); // still warm
+    expect(await r.getMembers("c1")).toEqual(new Set(["u0"])); 
     t = 201;
-    expect(await r.getMembers("c1")).toEqual(new Set(["u201"])); // refetched
+    expect(await r.getMembers("c1")).toEqual(new Set(["u201"])); 
     expect(fetchMembers).toHaveBeenCalledTimes(2);
   });
 
@@ -66,8 +53,8 @@ describe("createChannelMemberResolver", () => {
       .mockRejectedValueOnce(new Error("MM 500"))
       .mockResolvedValueOnce(new Set(["u1"]));
     const r = createChannelMemberResolver({ fetchMembers, ttlMs: 1000, now: () => 0 });
-    expect(await r.getMembers("c1")).toEqual(new Set()); // fail-closed
-    expect(await r.getMembers("c1")).toEqual(new Set(["u1"])); // retried, not cached
+    expect(await r.getMembers("c1")).toEqual(new Set()); 
+    expect(await r.getMembers("c1")).toEqual(new Set(["u1"])); 
     expect(fetchMembers).toHaveBeenCalledTimes(2);
   });
 

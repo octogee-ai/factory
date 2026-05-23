@@ -126,14 +126,12 @@ describe("runMigration — failures", () => {
     expect(res.success).toBe(false);
     expect(res.errorAt?.phase).toBe("source-quiesced");
     expect(res.rolledBack).toBe(true);
-    // Un-quiesce is modeled as another quiesce call to source (toggle).
-    // We saw quiesce twice: once forward, once during rollback.
-    const quiesceCalls = (client.quiesce as unknown as { mock: { calls: unknown[] } }).mock.calls;
+
+const quiesceCalls = (client.quiesce as unknown as { mock: { calls: unknown[] } }).mock.calls;
     expect(quiesceCalls.length).toBeGreaterThanOrEqual(2);
     expect(deps.cutoverFirestore).not.toHaveBeenCalled();
 
-    // reportStep emits a `failed` event for the transfer + rollback steps prefixed `rollback:`
-    const failed = deps.reportedSteps.find((s) => s.status === "failed");
+const failed = deps.reportedSteps.find((s) => s.status === "failed");
     expect(failed?.name).toBe("transfer-state");
     expect(failed?.error).toMatch(/503/);
     const rollbackNames = deps.reportedSteps
@@ -151,20 +149,16 @@ describe("runMigration — failures", () => {
     const deps = makeDeps(client);
     const res = await runMigration(INPUT, deps);
     expect(res.success).toBe(false);
-    // The state machine is at `cutover-done` when unmount-source throws.
+    
     expect(res.errorAt?.phase).toBe("cutover-done");
     expect(res.rolledBack).toBe(true);
-    // Rollback: cutover-firestore back (gw-green → gw-blue), then unmount target.
+    
     expect(deps.cutoverCalls.at(-1)).toMatchObject({ uid: "uid-alice", toGatewayId: "gw-blue" });
   });
 
   it("does NOT roll back when the rollback would itself destroy data (post source-unmounted)", async () => {
-    // Force the runner to advance past source-unmounted and then fail
-    // somewhere it can't roll back from. We simulate by making the FOURTH
-    // unmount succeed but then rejecting on a hypothetical post-unmount
-    // step (none exists, so this case is structural — we just assert the
-    // happy path doesn't try to invoke rollback after success).
-    const client = happyClient();
+
+const client = happyClient();
     const deps = makeDeps(client);
     const res = await runMigration(INPUT, deps);
     expect(res.success).toBe(true);

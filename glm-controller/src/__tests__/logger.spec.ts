@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createLogger, formatLine, COWBOY } from "../lib/logger.js";
 
-// `formatLine` is the pure formatter — colors disabled in tests so we
-// match the exact text without ANSI noise. The `createLogger` cases below
-// drive the full pipeline through console spies to confirm wiring.
 const NO_COLOR = { color: false } as const;
 
 describe("formatLine", () => {
@@ -100,10 +97,8 @@ describe("createLogger", () => {
     log.legacy("[glm-controller] ⚠ reconcile tick failed: helm boom");
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const out = warnSpy.mock.calls[0]?.[0] as string;
-    // The legacy `[glm-controller]` prefix is stripped (the cowboy badge
-    // already identifies the service); the ⚠ marker is consumed by the
-    // level inference, not duplicated in the body.
-    expect(out).not.toContain("[glm-controller]");
+
+expect(out).not.toContain("[glm-controller]");
     expect(out).toContain(" ⚠  🤠 cowboy  reconcile tick failed: helm boom");
   });
 
@@ -124,37 +119,29 @@ describe("createLogger", () => {
   });
 
   it("legacy() routes [subsystem] ⚠ msg to warn while preserving the [subsystem] tag", () => {
-    // Sub-systems like the reaper, helm-runner, deprovision use their
-    // own prefix tag. The warn glyph appears AFTER the tag, not at the
-    // start. Without this case, those messages would silently route
-    // to info — losing the visual color cue and console.warn routing.
-    const log = createLogger({ color: false });
+
+const log = createLogger({ color: false });
     log.legacy("[reaper] ⚠ orphan heartbeat gw-zombie — deleting");
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(logSpy).not.toHaveBeenCalled();
     const out = warnSpy.mock.calls[0]?.[0] as string;
     expect(out).toContain(" ⚠  🤠 cowboy");
-    // [reaper] tag should still be in the body so operators can still
-    // tell which sub-system emitted the line.
-    expect(out).toContain("[reaper]");
+
+expect(out).toContain("[reaper]");
     expect(out).toContain("orphan heartbeat gw-zombie");
-    // The warn glyph itself should not appear twice (once is via the
-    // level badge, the legacy ⚠ marker should have been consumed).
-    const warnGlyphCount = (out.match(/⚠/g) ?? []).length;
+
+const warnGlyphCount = (out.match(/⚠/g) ?? []).length;
     expect(warnGlyphCount).toBe(1);
   });
 });
 
 describe("color rendering", () => {
-  // ANSI escape (ESC = U+001B) is a control character; ESLint's
-  // `no-control-regex` flags it inside `/\x1b…/` regexes. Plain
-  // strings are exempt, so `toContain("\x1b[…")` is the equivalent
-  // check without the lint noise.
-  const ESC_BRACKET = "\x1b[";
+
+const ESC_BRACKET = "\x1b[";
 
   it("emits ANSI codes when color enabled", () => {
     const out = formatLine("warn", "drift", undefined, { color: true });
-    // Yellow color code for warn level glyph.
+    
     expect(out).toContain(`${ESC_BRACKET}33m`);
     expect(out).toContain(`${ESC_BRACKET}0m`);
   });

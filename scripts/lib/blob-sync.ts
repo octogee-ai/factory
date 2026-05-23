@@ -36,10 +36,6 @@ export interface BlobSyncInputs {
   maxSize?: number;
 }
 
-// Pure decision function. Given the manifest, the local disk state, and the
-// previous sync state, returns what needs to be downloaded / uploaded /
-// deleted / skipped (oversized). No FS or network IO — exercised directly
-// in tests so the side-effecting code below is just a thin runner.
 export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions {
   const { manifest, localFiles, prevSyncedPaths, maxSize = BLOB_SYNC_MAX_SIZE } = inputs;
 
@@ -49,10 +45,7 @@ export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions 
   const skippedDownload: BlobSyncActions["skippedDownload"] = [];
   const skippedUpload: BlobSyncActions["skippedUpload"] = [];
 
-  // Only `type: "blob"` entries count toward the "is this path tracked"
-  // checks below. Non-blob entries (e.g. future "text"/"link" types) must
-  // not block uploads or prevent cleanup of a local file at the same path.
-  const blobEntries = Object.entries(manifest).filter(([, e]) => e.type === "blob");
+const blobEntries = Object.entries(manifest).filter(([, e]) => e.type === "blob");
   const manifestBlobPaths = new Set(blobEntries.map(([p]) => p));
   const prevSet = new Set(prevSyncedPaths);
   const localByPath = new Map(localFiles.map(f => [f.path, f] as const));
@@ -85,12 +78,6 @@ export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions 
 
   return { toDownload, toUpload, toDelete, skippedDownload, skippedUpload };
 }
-
-// All FS paths in this file are constructed from CUSTOMERS_DIR + a server-
-// issued slug + filenames the orchestrator controls — never user input.
-// The path-traversal CWE the rule guards against doesn't apply at this
-// boundary, so the IO helpers absorb the suppressions and the callers stay
-// clean.
 
 function pathExists(p: string): boolean {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header

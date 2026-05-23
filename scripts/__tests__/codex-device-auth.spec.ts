@@ -2,8 +2,7 @@ import { describe, it, expect } from "vitest";
 import { parseCodexDeviceAuth } from "../lib/codex-device-auth.js";
 
 const ESC = "";
-// Exactly what `codex login --device-auth` emits (captured live on gw-bender),
-// ANSI colour codes and all.
+
 const REAL = [
   "Welcome to Codex [v0.130.0]",
   `${ESC}[90mOpenAI's command-line coding agent${ESC}[0m`,
@@ -60,7 +59,7 @@ describe("parseCodexDeviceAuth", () => {
   it("returns null when it is not a device-auth prompt", () => {
     expect(parseCodexDeviceAuth("Logged in using ChatGPT")).toBeNull();
     expect(parseCodexDeviceAuth("")).toBeNull();
-    // url but no code → not actionable → null
+    
     expect(
       parseCodexDeviceAuth("Open https://auth.openai.com/codex/device and wait"),
     ).toBeNull();

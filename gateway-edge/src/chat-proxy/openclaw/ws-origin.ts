@@ -1,5 +1,5 @@
-// Anchored to the start and end of the string so subdomain spoofs like
-// `https://localhost.evil.com` don't match.
+
+
 const LOCALHOST_RE = /^https?:\/\/localhost(:\d+)?$/;
 const ENV_KEY = 'OCTOGEE_ALLOWED_WS_ORIGINS';
 

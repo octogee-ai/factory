@@ -34,8 +34,7 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
       return;
     }
 
-    // Independent membership: MM team membership is required for channel access.
-    const ownerCtx = await getWorkspaceMmContext(project.ownerUid, wid);
+const ownerCtx = await getWorkspaceMmContext(project.ownerUid, wid);
     const teamId = ownerCtx?.teamId;
     const joinerDoc = await db.doc(`users/${uid}`).get();
     const joinerData = joinerDoc.data();
@@ -71,8 +70,7 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    // Add to project MM channel (look up from channels subcollection).
-    const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
+const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
     const mmChannelId = generalChan?.mattermost?.channelId;
     const activityChannelId = generalChan?.mattermost?.activityChannelId;
     if (mmChannelId && joinerMmUserId) {
@@ -87,9 +85,8 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
         }
       }
     }
-    // Mirror membership to the activity sibling channel (Activity Stream
-    // spec §4.1 + G.O — atomic membership across the pair).
-    if (activityChannelId && joinerMmUserId) {
+
+if (activityChannelId && joinerMmUserId) {
       try {
         const { syncActivityMembershipAdd } = await import("../../lib/activityPair.js");
         await syncActivityMembershipAdd(activityChannelId, joinerMmUserId);
@@ -98,8 +95,7 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
       }
     }
 
-    // Grant Gitea project repo read access.
-    const joinerGiteaUser = joinerData?.username ? `ws-${joinerData.username}` : null;
+const joinerGiteaUser = joinerData?.username ? `ws-${joinerData.username}` : null;
     if (project.giteaRepoName && joinerGiteaUser) {
       try {
         await giteaApi(
@@ -159,7 +155,7 @@ router.post("/:wid/:pid/leave", strictRateLimit, async (req: Request, res: Respo
         }
       }
     }
-    // Mirror leave on the activity sibling.
+    
     if (activityChannelId && leaverMmUserId) {
       try {
         const { syncActivityMembershipRemove } = await import("../../lib/activityPair.js");

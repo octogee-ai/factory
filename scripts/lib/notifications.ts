@@ -22,9 +22,6 @@ async function sendDiscordWebhook(content: string, username = "Octogee Ops"): Pr
   }
 }
 
-/**
- * Notify ops of a new user signup.
- */
 export async function notifyNewSignup(data: {
   name: string;
   email: string;
@@ -46,9 +43,6 @@ export async function notifyNewSignup(data: {
   await sendDiscordWebhook(content);
 }
 
-/**
- * Notify ops of a provisioning error.
- */
 export async function notifyProvisioningError(slug: string, error: string): Promise<void> {
   const content = [
     `⚠️ **Provisioning Error**`,

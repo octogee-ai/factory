@@ -14,23 +14,9 @@ import type {
   OperationStep,
 } from "../../../shared/types/glm.js";
 
-/**
- * Choreography integration: drives the full retire-gateway flow with
- * three actors sharing a single in-memory state — admin endpoint,
- * reconciler, op handler. Each actor's role is invoked explicitly
- * (no Firestore listeners, no debounce timers) so the test reads as
- * a step-by-step script of who-does-what.
- *
- * Unit tests cover each piece in isolation; this spec is the safety
- * net for the contract BETWEEN them — that admin's atomic batch
- * triggers the reconciler's drift detection, that the reconciler's
- * helm-uninstall lets the op handler's poll exit, and that the
- * handler's cleanup ends with zero traces in either collection.
- */
-
 interface SharedState {
-  helmReleases: Map<string, HelmInstanceValue>; // keyed by instanceName
-  glmGateways: Map<string, GatewayDesiredState>; // keyed by gatewayId
+  helmReleases: Map<string, HelmInstanceValue>; 
+  glmGateways: Map<string, GatewayDesiredState>; 
   gateways: Map<string, { mountedCustomers: string[]; inFlightJobId: string | null; lastHeartbeatAt: number }>;
   operations: Map<string, Operation>;
 }
@@ -62,13 +48,6 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
   };
 }
 
-/**
- * The reconciler, distilled to its essential responsibility: read state,
- * compute target, apply changes. Mirrors the body of the real tick in
- * index.ts WITHOUT the snapshot/debounce/retry plumbing — the unit
- * tests over there cover those concerns; this is just about whether
- * `desiredStatus=retired` produces a `helm.removeInstance` call.
- */
 async function reconcilerTick(
   state: SharedState,
   helm: ReturnType<typeof makeHelm>,
@@ -87,11 +66,6 @@ async function reconcilerTick(
   return changes;
 }
 
-/**
- * The admin endpoint, distilled: refuse if mounted customers, else
- * commit the batch. Mirrors scripts/lib/admin-fleet-router.ts's
- * DELETE /gateways/:id but in-memory.
- */
 function adminDeleteGateway(
   state: SharedState,
   gatewayId: string,
@@ -105,7 +79,7 @@ function adminDeleteGateway(
   if (hb && hb.inFlightJobId) {
     return { status: 409, error: "in-flight restore job" };
   }
-  // Atomic — both writes succeed or neither.
+  
   const operationId = `op-${state.operations.size + 1}`;
   state.glmGateways.set(gatewayId, { ...glm, desiredStatus: "retired" });
   state.operations.set(operationId, {
@@ -182,15 +156,12 @@ describe("retire-gateway choreography (integration)", () => {
     };
     const helm = makeHelm(state);
 
-    // 1. Admin: DELETE /api/admin/gateways/gw-test
-    const adminRes = adminDeleteGateway(state, "gw-test");
+const adminRes = adminDeleteGateway(state, "gw-test");
     expect(adminRes.status).toBe(202);
     expect(state.glmGateways.get("gw-test")?.desiredStatus).toBe("retired");
     expect(state.operations.size).toBe(1);
 
-    // 2. Reconciler tick — sees desiredStatus=retired with no mounted
-    //    customers, computes drift, calls helm.removeInstance.
-    const changes = await reconcilerTick(state, helm);
+const changes = await reconcilerTick(state, helm);
     expect(changes).toEqual([
       expect.objectContaining({ kind: "drift", instanceName: "default" }),
     ]);
@@ -199,22 +170,18 @@ describe("retire-gateway choreography (integration)", () => {
     );
     expect(state.helmReleases.size).toBe(0);
 
-    // 3. Op handler — polls readDeployedInstances, sees release gone,
-    //    runs cleanup + heartbeat-quiesce + fleet-ingress.
-    const op = state.operations.get(adminRes.operationId!);
+const op = state.operations.get(adminRes.operationId!);
     expect(op).toBeDefined();
     const handler = createRetireGatewayHandler(makeRetireDeps(state, helm));
     const ctx = makeCtx();
     const result = await handler(op!, ctx);
     expect(result.success).toBe(true);
 
-    // 4. End state: no traces.
-    expect(state.helmReleases.size).toBe(0);
+expect(state.helmReleases.size).toBe(0);
     expect(state.glmGateways.size).toBe(0);
     expect(state.gateways.size).toBe(0);
 
-    // 5. Step transitions: every named step reported running → done.
-    const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
+const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
     expect(stepFlow).toEqual([
       "helm-uninstall:running",
       "helm-uninstall:done",
@@ -264,8 +231,7 @@ describe("retire-gateway choreography (integration)", () => {
     expect(state.glmGateways.get("gw-test")?.desiredStatus).toBe("running");
     expect(state.operations.size).toBe(0);
 
-    // Reconciler should still see the gateway as live (not retired).
-    await reconcilerTick(state, helm);
+await reconcilerTick(state, helm);
     expect(helm.removeInstance).not.toHaveBeenCalled();
     expect(state.helmReleases.size).toBe(1);
   });
@@ -295,7 +261,7 @@ describe("retire-gateway choreography (integration)", () => {
           },
         ],
       ]),
-      // No heartbeat doc — gateway never finished provisioning.
+      
       gateways: new Map(),
       operations: new Map(),
     };
@@ -313,15 +279,10 @@ describe("retire-gateway choreography (integration)", () => {
     expect(state.glmGateways.size).toBe(0);
   });
 
-  // Regression for the smoke incident: numeric imageTag in glmGateways
-  // used to make readDeployedInstances skip the release, which made
-  // the reconciler think there was nothing to uninstall AND made the
-  // op handler's poll exit prematurely. With the eb019984 type-narrow
-  // fix, the choreography now completes correctly.
-  it("regression — numeric imageTag does NOT short-circuit either step", async () => {
+it("regression — numeric imageTag does NOT short-circuit either step", async () => {
     const state: SharedState = {
       helmReleases: new Map([
-        // Simulate the smoke shape — the runner's coerce now handles it.
+        
         [
           "smoke",
           {
@@ -338,12 +299,8 @@ describe("retire-gateway choreography (integration)", () => {
             gatewayId: "gw-smoke",
             instanceName: "smoke",
             imageRepository: REPO,
-            // The actual numeric storage shape that broke us. The shared
-            // GatewayDesiredState type is `string` for imageTag, but the
-            // bug was stripping unquoted-numeric values back to a number
-            // through helm's --set parser. We pass a string here — the
-            // helm-runner test covers the numeric branch directly.
-            imageTag: "9778420",
+
+imageTag: "9778420",
             desiredStatus: "running",
             createdBy: "ci",
           },

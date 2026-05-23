@@ -31,19 +31,14 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 
 interface FakeState {
   helmInstances: Set<string>;
-  /** Per-gatewayId live state. `undefined` (Map.get returns undefined) = no heartbeat. */
+  
   live: Map<string, { mounted: string[]; inFlightJobId: string | null }>;
   glmInstanceNames: Map<string, string>;
   deletedGlm: Set<string>;
   deletedHeartbeat: Set<string>;
   archivedSecret: Set<string>;
-  /**
-   * Test seam for the P2 quiesce step: gatewayIds whose heartbeat doc
-   * "comes back" after the cleanup delete (simulating a pod's last
-   * heartbeat write landing post-delete). The handler is expected to
-   * detect this on its re-check and delete again.
-   */
-  heartbeatPresentAfterDelete?: Set<string>;
+
+heartbeatPresentAfterDelete?: Set<string>;
 }
 
 function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}): RetireGatewayDeps {
@@ -160,7 +155,7 @@ describe("createRetireGatewayHandler — happy path", () => {
     const result = await createRetireGatewayHandler(deps)(mkOp(), ctx);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/kubectl apply denied/);
-    // Cleanup must have already succeeded — failure here doesn't roll back the deletes
+    
     expect(state.deletedGlm.has("gw-test-canary")).toBe(true);
     expect(state.deletedHeartbeat.has("gw-test-canary")).toBe(true);
     const failedStep = ctx.reported.find((s) => s.status === "failed");
@@ -323,16 +318,14 @@ describe("createRetireGatewayHandler — P2 heartbeat-quiesce", () => {
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
-      // Pod sent a final heartbeat in its SIGTERM handler that landed
-      // AFTER the cleanup delete — Firestore re-created the doc. The
-      // handler should re-delete on the post-cleanup verification pass.
-      heartbeatPresentAfterDelete: new Set(["gw-test-canary"]),
+
+heartbeatPresentAfterDelete: new Set(["gw-test-canary"]),
     };
     const deps = makeDeps(state);
     const ctx = makeCtx();
     const result = await createRetireGatewayHandler(deps)(mkOp(), ctx);
     expect(result.success).toBe(true);
-    // Two delete calls: cleanup's initial + heartbeat-quiesce's re-delete.
+    
     expect(deps.deleteGatewayHeartbeat).toHaveBeenCalledTimes(2);
     const quiesceFinal = ctx.reported
       .filter((s) => s.name === "heartbeat-quiesce")

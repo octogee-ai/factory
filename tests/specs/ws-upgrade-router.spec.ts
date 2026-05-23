@@ -5,16 +5,6 @@ import type { AddressInfo } from "node:net";
 
 import { WsUpgradeRouter } from "../../shared/ws/upgrade-router";
 
-// Behavior contract for the shared WS upgrade router that all
-// chat-proxy upgrade branches (MM, OpenClaw, builder-shell) route
-// through. Locks in:
-//   - Single 403 / 400 / 401 boilerplate shape
-//   - Origin allowlist semantics (with allow-none fallback for paths
-//     that do their own Origin checks)
-//   - First-match-wins routing
-//   - Frame-size cap pass-through
-//   - Clean teardown
-
 const servers: Server[] = [];
 
 afterEach(async () => {
@@ -44,7 +34,7 @@ function attempt(
     if (opts.origin) headers.origin = opts.origin;
     const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers });
     ws.once("open", () => resolve({ ok: true, ws }));
-    ws.once("error", () => undefined); // expected on rejection
+    ws.once("error", () => undefined); 
     ws.once("unexpected-response", (_req, res) => {
       resolve({ ok: false, status: res.statusCode ?? 0 });
     });
@@ -153,9 +143,8 @@ describe("WsUpgradeRouter", () => {
     const router = new WsUpgradeRouter();
     router.add({
       match: "/dyn",
-      // Function form: lets the route honor an env-driven allowlist
-      // (e.g. OCTOGEE_ALLOWED_WS_ORIGINS) without re-attaching.
-      allowedOrigins: (origin) => {
+
+allowedOrigins: (origin) => {
         seen.push(origin);
         return origin === "https://app.example";
       },
@@ -194,9 +183,8 @@ describe("WsUpgradeRouter", () => {
   });
 
   it("allows `allowedOrigins: 'check-in-handler'` to bypass router-level Origin enforcement", async () => {
-    // Some surfaces (OpenClaw) do Origin checks inside their handler
-    // for metrics/observability reasons. The router must let them.
-    const server = createServer();
+
+const server = createServer();
     servers.push(server);
     let handlerOrigin: string | undefined;
     const router = new WsUpgradeRouter();
@@ -216,13 +204,8 @@ describe("WsUpgradeRouter", () => {
   });
 
   it("requireHeaderKey rejects an oversized header without scanning all of it (length-mismatch fast-fails)", async () => {
-    // Pin the constant-time-compare's "loop length depends ONLY on the
-    // expected key, never the attacker-supplied input" property.
-    // A 64 KiB header would otherwise dominate the loop and leak
-    // "we are still checking" via timing. We can't measure ns timing
-    // reliably in vitest, but we CAN pin that a wildly-longer input
-    // still rejects without exception/hang.
-    const server = createServer();
+
+const server = createServer();
     servers.push(server);
     const router = new WsUpgradeRouter();
     router.add({
@@ -233,10 +216,8 @@ describe("WsUpgradeRouter", () => {
     });
     router.attach(server);
     const port = await listen(server);
-    // 2 KiB — well above the expected "abc" but under Node's default
-    // 16 KiB HTTP header limit so the upgrade reaches our handler
-    // (vs Node 431'ing at the parser layer).
-    const r = await attempt(port, "/k", {
+
+const r = await attempt(port, "/k", {
       headers: { "x-internal-service-key": "a".repeat(2048) },
     });
     expect(r.ok).toBe(false);
@@ -301,7 +282,7 @@ describe("WsUpgradeRouter", () => {
     const port = await listen(server);
     const r = await attempt(port, "/unknown", { origin: "https://app.example" });
     expect(r.ok).toBe(false);
-    // Returns 404 in the HTTP upgrade error path.
+    
     if (!r.ok) expect(r.status).toBe(404);
   });
 

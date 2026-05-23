@@ -2,41 +2,20 @@ import { coachAgentId } from "../../../scripts/lib/byosub-onboarding.js";
 
 export { coachAgentId };
 
-/**
- * Owner-scoped Secret Manager name for a BYO-sub credential. MUST stay in
- * sync with scripts/ops/capture-byosub-credential.ts `secretNameFor` —
- * Chunk A restore reads the name from the glmGateways ref (opaque to it),
- * so the only invariant is that every writer uses this exact shape.
- */
 export function byosubSecretName(uid: string, provider: string): string {
   return `byosub-${uid}-${provider}`;
 }
 
-/**
- * A gateway id that is safe as a Firestore doc id. Gateway-supplied over
- * the internal channel (`/auth-state`), then interpolated into
- * `glmGateways/.doc(id)` — a `/` (or empty/overlong) makes Firestore throw,
- * which would 500 + wedge the sweep instead of a clean 400. Real ids are
- * slug-like (`default`, `gw-bender`, `gw-test`).
- */
 export function isSafeGatewayId(id: unknown): id is string {
   return typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id);
 }
 
-/** A real codex auth.json is a few KB; this is the privileged credential
- * sink, so cap the blob well above that and well below anything abusive. */
 const MAX_CREDENTIAL_BYTES = 32_768;
 
 function nonEmptyString(v: unknown): boolean {
   return typeof v === "string" && v.length > 0;
 }
 
-/**
- * Refuse to persist anything that isn't a plausible codex auth.json. This
- * is a server-mediated write into a path that is later restored into a
- * live runtime credential file, so require the exact fields codex restore
- * needs rather than "some object with a tokens key".
- */
 export function validateCodexCredential(
   raw: string,
 ): { ok: true } | { ok: false; reason: string } {
@@ -77,13 +56,6 @@ export interface ByosubConnectionView {
   status?: ByosubStatus;
 }
 
-/**
- * Honest connection view from the durable `glmGateways/{gw}.byosub[agentId]`
- * ref (R8). `connected` means *working*, NOT merely "a ref exists" — a ref
- * whose openclaw on-disk credential died is reported `status:"needs_reauth"`
- * with `connected:false`, so the UI distinguishes "never connected" (no
- * status) from "was connected, reconnect needed" (→ Reconnect affordance).
- */
 export function byosubConnectionView(
   ref: { provider?: unknown; status?: unknown } | null | undefined,
 ): ByosubConnectionView {
@@ -110,14 +82,6 @@ export interface GatewayDeviceAuthClient {
   status(args: { instanceName: string; flowId: string }): Promise<DeviceAuthStatus>;
 }
 
-/**
- * Default I/O client → the gateway's internal device-auth endpoint (C1b),
- * via K8s DNS + X-Internal-Service-Key. Exercised in TEST; unit specs mock
- * this factory. The gateway Service name is the helm per-instance name
- * (`octogee-gateway-<instanceName>`) resolved from `glmGateways/{gatewayId}`
- * — the same derivation glm-controller uses, never `gatewayId` munging.
- * Env-overridable so TEST can retarget without code.
- */
 export function gatewayDeviceAuthClient(): GatewayDeviceAuthClient {
   const key = process.env.INTERNAL_SERVICE_KEY ?? "";
   const ns = process.env.K8S_NAMESPACE ?? "octogee";

@@ -8,21 +8,15 @@ export interface GatewayHeartbeat {
 
 export interface AddGatewayDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
-  /** Reads the heartbeat doc the gateway pod publishes once it boots; null if no doc yet. */
+  
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeat | null>;
-  /**
-   * Reconciles the fleet-control Ingress paths with the current
-   * desired-state set in glmGateways. Called after helm-render +
-   * heartbeat succeed so external callers (Cloud Tasks) can hit the
-   * new gateway's RPC paths immediately, without waiting for the next
-   * reconciler tick.
-   */
-  syncFleetIngress: () => Promise<void>;
-  /** Max time to wait for helm to render the new instance into its values map. */
+
+syncFleetIngress: () => Promise<void>;
+  
   helmRenderTimeoutMs: number;
-  /** Max time to wait for the gateway pod's first heartbeat after helm renders. */
+  
   heartbeatTimeoutMs: number;
-  /** Poll cadence for both phases. */
+  
   pollIntervalMs: number;
   now: () => number;
   wait: (ms: number) => Promise<void>;

@@ -1,25 +1,5 @@
-/**
- * Gateway-side BYO-sub device-auth runner (Chunk C1b). Holds the
- * long-lived headless `codex login --device-auth` child per agent, scrapes
- * its prompt via parseCodexDeviceAuth, drives the pure nextFlowState
- * reducer, and on codex's clean exit POSTs the captured credential to
- * gateway-edge (R2: gateway-edge owns the Secret Manager write). All
- * genuine I/O — child spawn, fs read, the capture HTTP — is injected so
- * the orchestration is unit-tested; the real wiring lives at the call
- * site and is exercised in TEST. Design: BYO-SUBSCRIPTION-OAUTH-SPEC §13.
- *
- * Lifecycle invariants:
- *  - exactly one in-flight flow per agent (reserved *before* the spawn
- *    await, so concurrent /connect double-clicks share one codex child);
- *  - a terminal/expired flow kills its child immediately (a customer's
- *    delegated OAuth credential is never left being minted by an orphaned
- *    codex process);
- *  - terminal flows are evicted after a short read-grace (the map does not
- *    grow unbounded on a shared multi-customer gateway);
- *  - the child exposes a single one-shot exit — the manager registers it
- *    once and routes by phase, so the unit fake and the real adapter have
- *    identical observable semantics.
- */
+
+
 import { randomUUID } from "crypto";
 import {
   type FlowState,
@@ -30,32 +10,30 @@ import { parseCodexDeviceAuth } from "./codex-device-auth.js";
 
 export interface DeviceAuthChild {
   onStdout(cb: (chunk: string) => void): void;
-  /** Fires at most once (one-shot): the adapter coalesces exit/error. */
+  
   onExit(cb: (code: number) => void): void;
   kill(): void;
 }
 
 export interface DeviceAuthDeps {
   spawnDeviceAuth: (agentId: string) => DeviceAuthChild;
-  /** The agent's codex auth.json contents, or null when absent. */
+  
   readAuthJson: (agentId: string) => Promise<string | null>;
-  /** Server-mediated R2 capture → gateway-edge. */
+  
   postCapture: (
     flowId: string,
     credential: string,
   ) => Promise<{ ok: boolean; reason?: string }>;
-  /** Atomically move the *staged* auth.json into the live per-agent
-   * codex-home — called only after a successful capture, so the live
-   * credential is replaced only by a complete, captured one. */
-  promoteStagedAuth: (
+
+promoteStagedAuth: (
     agentId: string,
   ) => Promise<{ ok: boolean; reason?: string }>;
-  /** Best-effort removal of the staging codex-home (terminal cleanup). */
+  
   discardStaged: (agentId: string) => Promise<void>;
   now: () => number;
   spawnTimeoutMs?: number;
   defaultExpiryMinutes?: number;
-  /** How long a terminal flow stays readable before eviction. */
+  
   terminalGraceMs?: number;
   log?: (m: string) => void;
 }
@@ -137,13 +115,10 @@ export function createDeviceAuthManager(
           `byosub device-auth: kill failed for ${rec.agentId} flow=${rec.flowId} — ${(e as Error).message}`,
         );
       }
-      // Terminal cleanup: the staging codex-home is scratch. On a
-      // non-captured terminal (expired/failed) this is the only place
-      // it's removed, so the live per-agent home is provably untouched.
-      // Fire-and-forget — cleanup must never block or throw.
-      deps.discardStaged(rec.agentId).catch(() => {});
+
+deps.discardStaged(rec.agentId).catch(() => {});
     }
-    // A fresh agent flow must not be blocked by a dead one.
+    
     if (flowByAgent.get(rec.agentId) === rec.flowId) {
       flowByAgent.delete(rec.agentId);
     }
@@ -177,12 +152,8 @@ export function createDeviceAuthManager(
       code,
       authPresent: auth !== null,
     });
-    // No silent failures: codex finished successfully but the flow had
-    // already gone terminal (expired/killed) before the exit landed, so
-    // the reducer never reached `capturing`. The fresh credential is on
-    // disk, uncaptured — surface it so an operator/sync-back can recover
-    // it rather than seeing only a bare `expired`.
-    if (code === 0 && auth !== null && rec.state.phase !== "capturing") {
+
+if (code === 0 && auth !== null && rec.state.phase !== "capturing") {
       log(
         `byosub device-auth: WARN ${rec.agentId} flow=${rec.flowId} codex completed post-terminal (phase=${rec.state.phase}); credential on disk uncaptured — recover via re-Connect / sync-back`,
       );
@@ -199,11 +170,8 @@ export function createDeviceAuthManager(
         ok: result.ok,
         reason: result.reason,
       });
-      // Only a *successfully captured* credential is allowed to replace
-      // the live per-agent codex-home. Secret Manager is the source of
-      // truth (R2): a promote failure still leaves us `connected` — the
-      // next Chunk A restore installs it — but it is surfaced, not silent.
-      if (rec.state.phase === "connected") {
+
+if (rec.state.phase === "connected") {
         const promoted = await deps.promoteStagedAuth(rec.agentId);
         if (!promoted.ok) {
           log(
@@ -241,7 +209,7 @@ export function createDeviceAuthManager(
             resolve(parsed);
           }
         });
-        // Single one-shot exit listener — routes by phase.
+        
         child.onExit((code) => {
           if (!promptSettled) {
             promptSettled = true;

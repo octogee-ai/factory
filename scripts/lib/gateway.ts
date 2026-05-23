@@ -3,7 +3,6 @@ import { db } from "./firebase.js";
 
 export const agentToUid = new Map<string, string>();
 
-/** Build / refresh the shared agentId → UID map from Firestore. */
 export async function loadAgentToUidMapping(): Promise<void> {
   const snap = await db
     .collection("users")
@@ -18,15 +17,10 @@ export async function loadAgentToUidMapping(): Promise<void> {
   log(`agent-map: loaded ${agentToUid.size} entries`);
 }
 
-/** Register newly provisioned agent IDs in the shared map. */
 export function registerAgentIds(uid: string, agentIds: string[]): void {
   agentIds.forEach(id => agentToUid.set(id, uid));
 }
 
-/**
- * Ensure global gateway settings are applied to the config on every startup.
- * Idempotent — safe to run repeatedly.
- */
 export function ensureGatewayDefaults(): void {
   const config = readOpenClawConfig();
   config.channels ??= {};
@@ -80,11 +74,7 @@ export function ensureGatewayDefaults(): void {
         log(`Model: ${agent.id} → ${faceModel} (was ${oldModel})`);
       }
 
-      // Default heartbeat — applied only when the agent has no heartbeat
-      // config at all. Face/Brain (or future subagent work) may set a
-      // specific heartbeat schedule for a specific purpose; reconcile must
-      // not clobber it.
-      if (agent.heartbeat == null) {
+if (agent.heartbeat == null) {
         agent.heartbeat = { every: "60m", target: "last", lightContext: true };
         agentChanged = true;
         log(`${agent.id} → heartbeat default (every=60m, target=last, lightContext=true)`);

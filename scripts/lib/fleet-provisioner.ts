@@ -26,18 +26,8 @@ import { mountByosubDeviceAuth } from "./byosub-device-auth-http.js";
 
 const DRAIN_LOOP_INTERVAL_MS = 15 * 1000;
 
-// Epoch ms of this gateway process boot. Captured once at module load and
-// stable across heartbeats — resets only when the process restarts, so
-// `now − startedAt` is true process uptime / a restart-loop signal.
-// process.uptime() back-references the real start if the module loaded late.
 const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
-/**
- * BYO-sub device-auth (C1b). Guarded by X-Internal-Service-Key (not the
- * fleet signature) — the only caller is gateway-edge's
- * gatewayDeviceAuthClient over K8s DNS. The codex child runs with the
- * per-agent CODEX_HOME so its auth.json lands where Chunk A/B expect.
- */
 function registerByosubDeviceAuth(
   app: express.Express,
   opts: StartFleetOptions,
@@ -61,10 +51,6 @@ export interface BuildAdapterOptions {
   adminMmUserId: string | undefined;
 }
 
-/**
- * @deprecated Use `buildProductionLifecycleAdapter` from
- * `./customer-lifecycle-prod-adapter.js`.
- */
 export function buildProductionAdapter(opts: BuildAdapterOptions): CustomerLifecycleAdapter {
   return buildProductionLifecycleAdapter(opts);
 }
@@ -79,23 +65,16 @@ export interface StartFleetOptions {
   version: string;
   openclawVersion: string;
   adminMmUserId?: string;
-  /** BYO-sub device-auth (C1b): where per-agent codex-homes live. */
+  
   openclawDir?: string;
-  /** Shared internal-service key — guards the device-auth endpoints and
-   * authenticates the in-pod capture POST to gateway-edge. */
-  internalServiceKey?: string;
+
+internalServiceKey?: string;
 }
 
 export interface StartedFleetController {
   stop: () => Promise<void>;
-  /**
-   * Resolves when the gateway first reaches `status=ready` (OpenClaw RPC
-   * up AND our Express server listening). The provisioner uses this to
-   * run a one-shot reconcile sweep the instant the gateway is genuinely
-   * ready — closing the boot race deterministically, with no fixed
-   * sleep. Never rejects (the readiness poller loops on failure).
-   */
-  whenReady: Promise<void>;
+
+whenReady: Promise<void>;
 }
 
 export async function startFleetController(
@@ -134,13 +113,8 @@ export async function startFleetController(
     );
   }
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
-  // GATEWAY_INSTANCE_NAME is set by the Helm chart (instances.{name} key).
-  // The per-instance Service is named `octogee-gateway-{name}`. Pre-refactor
-  // Helm releases didn't set this env; absent → fall back to the legacy
-  // alias Service `octogee-gateway` so an in-place upgrade keeps working
-  // until the chart refactor lands. Once everywhere is on the new chart,
-  // GATEWAY_INSTANCE_NAME is always set and this fallback is dead code.
-  const instanceName = process.env.GATEWAY_INSTANCE_NAME ?? "";
+
+const instanceName = process.env.GATEWAY_INSTANCE_NAME ?? "";
   const serviceName = instanceName ? `octogee-gateway-${instanceName}` : "octogee-gateway";
   const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
 
@@ -163,14 +137,7 @@ export async function startFleetController(
 
   await emitHeartbeat("booting");
 
-  // Define the readiness poller but DON'T fire it yet. Invariant:
-  // `void waitForGatewayReady()` must only run AFTER the express server
-  // is listening (the call site lower in this function fires it once
-  // `app.listen` resolves). `status=ready` must mean BOTH OpenClaw RPC
-  // is up AND our own Express server is accepting connections —
-  // otherwise the fleet-controller can dispatch a Cloud Task into a
-  // still-bootstrapping pod.
-  const waitForGatewayReady = async (): Promise<void> => {
+const waitForGatewayReady = async (): Promise<void> => {
     while (runtime.status !== "ready") {
       try {
         const up = await opts.rpc.isGatewayUp(10_000);
@@ -283,12 +250,8 @@ export async function startFleetController(
         const oc = (data?.provisioning as Record<string, unknown> | undefined)?.openclaw as
           | Record<string, unknown>
           | undefined;
-        // Match the adapter's `loadUserSnapshot` / `uidForSlug` semantics:
-        // `provisioning.openclaw.slug` is canonical, but legacy / partial
-        // user docs may only have `username`. Reading the same way the
-        // rest of the lifecycle code does means a user doc the drain loop
-        // can't see is one no other code can either.
-        const ocSlug = typeof oc?.slug === "string" ? (oc.slug as string) : null;
+
+const ocSlug = typeof oc?.slug === "string" ? (oc.slug as string) : null;
         const fallbackSlug = typeof data?.username === "string" ? (data.username as string) : null;
         const slug = ocSlug ?? fallbackSlug;
         if (slug) slugs.push(slug);
@@ -301,11 +264,8 @@ export async function startFleetController(
         const result = await removeCustomerFromGateway(wrappedAdapter, uid);
         return result.wasMounted ? "drained" : "noop";
       }
-      // No user doc — typically the nuke flow deleted users/{uid} but the
-      // gateway's emptyDir still has on-disk state. Clean up directly via
-      // the adapter primitives (config patch + dir delete) so the orphan
-      // doesn't persist forever.
-      const agentId = `octogee-${slug}-coach`;
+
+const agentId = `octogee-${slug}-coach`;
       try {
         await wrappedAdapter.applyRemoveCustomerConfigPatch(slug, agentId);
         if (wrappedAdapter.hasCustomerDir(slug)) {
@@ -314,9 +274,8 @@ export async function startFleetController(
         wrappedAdapter.onUnmounted?.(slug);
         return "deleted-user";
       } catch (err) {
-        // Surface as a thrown error so the drain loop logs it as a
-        // failure rather than silently swallowing.
-        throw new Error(
+
+throw new Error(
           `slug-only cleanup failed for ${slug} (no user doc): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
@@ -330,17 +289,7 @@ export async function startFleetController(
     `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; drain-loop interval=${DRAIN_LOOP_INTERVAL_MS}ms`,
   );
 
-  // NOW poll for OpenClaw readiness. Sequencing matters: by waiting
-  // until the Express server is listening, `status=ready` becomes an
-  // accurate signal that the pod can serve `/restore-customer`,
-  // `/quiesce`, and `/unmount` traffic from the fleet-control Ingress.
-  // Earlier the readiness poller fired on `void waitForGatewayReady()`
-  // immediately after the booting heartbeat, which could flip
-  // `status=ready` before `app.listen()` ever ran — letting Cloud
-  // Tasks dispatch into a pod whose Express server wasn't accepting
-  // connections yet, hitting a 3+ minute timeout/retry loop on
-  // first-customer-after-add.
-  return {
+return {
     whenReady: waitForGatewayReady(),
     stop: async () => {
       clearInterval(heartbeatTimer);

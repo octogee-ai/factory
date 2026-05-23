@@ -54,9 +54,8 @@ describe("startReconciler — periodic retry after failed tick", () => {
   });
 
   async function flush() {
-    // Drain microtasks so awaited promises in tick() complete after timer
-    // advancement. Two passes covers chained awaits without overshooting.
-    await Promise.resolve();
+
+await Promise.resolve();
     await Promise.resolve();
   }
 
@@ -64,7 +63,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const helm = makeFakeHelm({
-      // First upsert rejects, second resolves.
+      
       upsertInstance: vi
         .fn()
         .mockRejectedValueOnce(new Error("another operation in progress"))
@@ -92,9 +91,8 @@ describe("startReconciler — periodic retry after failed tick", () => {
       reconcileRetryMs: 5_000,
     });
 
-    // Trigger first tick
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000); // debounce
+snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000); 
     await flush();
     await flush();
 
@@ -104,8 +102,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
     );
     expect(failureLog).toBeDefined();
 
-    // Advance the retry interval; the retry tick should run helm.upsertInstance again
-    await vi.advanceTimersByTimeAsync(5_000);
+await vi.advanceTimersByTimeAsync(5_000);
     await flush();
     await flush();
 
@@ -148,8 +145,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
 
     expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
 
-    // No retry should fire even after well past retryMs
-    await vi.advanceTimersByTimeAsync(20_000);
+await vi.advanceTimersByTimeAsync(20_000);
     await flush();
 
     expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
@@ -192,17 +188,15 @@ describe("startReconciler — periodic retry after failed tick", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await flush();
 
-    // Stop the reconciler while the helm.upsertInstance is still in-flight
-    stop();
-    // Now resolve the in-flight helm call with a rejection — the catch must
-    // see `stopped` and skip scheduling a retry.
-    resolveUpgrade(undefined);
+stop();
+
+resolveUpgrade(undefined);
     await flush();
     await flush();
 
     await vi.advanceTimersByTimeAsync(60_000);
     await flush();
-    // Only the original failed call ran; no retry after stop()
+    
     expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
   });
 
@@ -272,7 +266,7 @@ describe("startReconciler — periodic retry after failed tick", () => {
       createdBy: "ci",
     };
     const helm = makeFakeHelm({
-      // already in sync — read returns the desired instance, so diffInstancesMap returns empty
+      
       read: async () => ({
         default: {
           enabled: true,
@@ -398,17 +392,15 @@ describe("startReconciler — periodic retry after failed tick", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await flush();
     await flush();
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1); // failed first tick
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1); 
 
-    // New snapshot fires — debounced tick should run before retry would
-    snapCbs[0]();
+snapCbs[0]();
     await vi.advanceTimersByTimeAsync(1_000);
     await flush();
     await flush();
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(2); // snapshot-triggered tick
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(2); 
 
-    // Long after the original retryMs, no extra retry should have fired
-    await vi.advanceTimersByTimeAsync(120_000);
+await vi.advanceTimersByTimeAsync(120_000);
     await flush();
     expect(helm.upsertInstance).toHaveBeenCalledTimes(2);
     stop();
@@ -416,12 +408,8 @@ describe("startReconciler — periodic retry after failed tick", () => {
 });
 
 describe("startReconciler — issue #997: a PROD platform release must not roll customer gateways", () => {
-  // The test runner leaves K8S_NAMESPACE unset, so index.ts derives
-  // NAMESPACE="octogee" → the PROD policy path. These pin the issue #997
-  // acceptance: a glm-controller image bump (fresh chartFingerprint) on a
-  // platform release leaves the existing customer gateway pod untouched,
-  // while an explicit operator-driven imageTag change still rolls.
-  beforeEach(() => {
+
+beforeEach(() => {
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -465,7 +453,7 @@ describe("startReconciler — issue #997: a PROD platform release must not roll 
       helm,
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
       log,
-      // Fresh Cowboy image baked with a changed gateway chart.
+      
       chartFingerprint: "fp-NEW",
     });
 
@@ -581,11 +569,8 @@ describe("startReconciler — orphan vs drainee drift classification", () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const helm = makeFakeHelm({
-      // helm reports octogee-gw-orphan deployed (e.g. retire-gateway short-
-      // circuited; doc deleted but uninstall never ran). buildInstancesMap
-      // would not include it (no doc). preserve-drift semantic keeps it in
-      // target — but Cowboy should LOUDLY flag it as orphan, not silent.
-      read: async () => ({
+
+read: async () => ({
         orphan: {
           enabled: true,
           image: { repository: "repo", tag: "abc1234" },
@@ -632,9 +617,8 @@ describe("startReconciler — orphan vs drainee drift classification", () => {
         },
       }),
     });
-    // makeFakeDb's "gateways" mock returns []. To simulate mountedCustomers
-    // without rewriting the helper, swap in a richer db that records customers.
-    const db = {
+
+const db = {
       collection: (name: string) => {
         if (name === "glmGateways") {
           return {

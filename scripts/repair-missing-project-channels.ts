@@ -1,12 +1,4 @@
-/**
- * Usage:
- *   GOOGLE_APPLICATION_CREDENTIALS=~/.openclaw/secrets/octogee-test-sa-key.json \
- *   MM_URL=https://chat-test.octogee.com \
- *   MM_ADMIN_TOKEN=<admin-token> \
- *   npx tsx scripts/repair-missing-project-channels.ts [--apply]
- *
- * Default mode is dry-run. Pass --apply to actually write to Firestore + MM.
- */
+
 
 import * as admin from "firebase-admin";
 import * as fs from "fs";
@@ -55,38 +47,25 @@ interface ProjectToRepair {
   projectSlug: string;
   projectName: string;
   teamId: string;
-  /** Owner's MM userId. Empty string when the user doc has no
-   *  `mattermost.userId` yet — `repairOne()` hard-fails (throws) for
-   *  this project so the sweep loop in `main()` logs it as FAILED and
-   *  moves on. The owner membership add is required: a project channel
-   *  without its owner is broken state, not a partial success. */
-  ownerMmUserId: string;
-  /** Agent (Octo) MM userId for the owner. Same hard-fail semantics as
-   *  ownerMmUserId — the agent in the project channel is the whole
-   *  point of the channel. */
-  agentMmUserId: string;
-  /**
-   * Target visibility to apply on success. If the doc has `pendingVisibility`,
-   * use it (hard-fail retry flow). Otherwise preserve the current
-   * `visibility` (legacy dannyboy-TEST shape — created before §D4 existed,
-   * current visibility IS the user's intent).
-   */
-  targetVisibility: string | null;
-  /** Current giteaRepoName, or null if the doc predates the up-front write. */
+
+ownerMmUserId: string;
+
+agentMmUserId: string;
+
+targetVisibility: string | null;
+  
   giteaRepoName: string | null;
 }
 
 async function findProjectsNeedingRepair(): Promise<ProjectToRepair[]> {
   const snap = await db.collectionGroup("projects").get();
   const out: ProjectToRepair[] = [];
-  // Cache by ownerUid: many projects share an owner (one workspace owner
-  // → all their projects). Without caching this loop did 2 extra reads
-  // per project doc — Firestore N+1 + cost on a large sweep.
-  const ownerCache = new Map<string, { ownerMmUserId: string; agentMmUserId: string }>();
-  const teamCache = new Map<string, string>(); // workspaceId → teamId
+
+const ownerCache = new Map<string, { ownerMmUserId: string; agentMmUserId: string }>();
+  const teamCache = new Map<string, string>(); 
 
   for (const doc of snap.docs) {
-    // Skip docs that aren't at workspaces/{wid}/projects/{pid} depth.
+    
     const segments = doc.ref.path.split("/");
     if (segments.length !== 4 || segments[0] !== "workspaces" || segments[2] !== "projects") continue;
 
@@ -97,11 +76,7 @@ async function findProjectsNeedingRepair(): Promise<ProjectToRepair[]> {
     const workspaceId = segments[1];
     const projectSlug = segments[3];
 
-    // Explicit string typing — without it TS doesn't narrow `teamId`
-    // back to string after the cache-miss assignment, since
-    // wsSnap.data()?.mattermost?.teamId widens through `any` and
-    // doesn't carry the narrowing through the union.
-    let teamId: string;
+let teamId: string;
     const cachedTeamId = teamCache.get(workspaceId);
     if (cachedTeamId !== undefined) {
       teamId = cachedTeamId;
@@ -115,11 +90,7 @@ async function findProjectsNeedingRepair(): Promise<ProjectToRepair[]> {
       continue;
     }
 
-    // Project channels carry an Octo agent and must be private. Look up
-    // the owner's MM userId + their agent's MM userId so we can add them
-    // as channel members — without these adds, the owner can't see the
-    // private channel in their sidebar and the agent can't post into it.
-    const ownerUid = data.ownerUid as string | undefined;
+const ownerUid = data.ownerUid as string | undefined;
     let ownerMmUserId = "";
     let agentMmUserId = "";
     if (ownerUid) {
@@ -167,11 +138,8 @@ async function repairOne(p: ProjectToRepair): Promise<void> {
       console.log(`  [DRY] would CREATE MM channel ${channelName} (type=P)`);
       return;
     }
-    // Project channels carry an Octo agent and must be private. The
-    // canonical pattern lives in scripts/lib/mattermost/channels.ts —
-    // mirroring it here keeps the repair output consistent with fresh
-    // creates.
-    const created = await mm("POST", "/channels", {
+
+const created = await mm("POST", "/channels", {
       team_id: p.teamId,
       name: channelName,
       display_name: p.projectName,
@@ -190,26 +158,12 @@ async function repairOne(p: ProjectToRepair): Promise<void> {
     return;
   }
 
-  // Convert legacy "O" channels to private. PUT is idempotent — P→P
-  // returns 200 — so this is safe even if existingType detection drifts.
-  // A failed conversion is a HARD failure: leaving an open channel
-  // behind would leak agent activity to the whole team, violating the
-  // "all project channels are private" invariant. Throw so the per-
-  // project try/catch in main() logs this project as FAILED instead of
-  // proceeding to write channels/general and mark it active.
-  if (existingType === "O") {
+if (existingType === "O") {
     await mm("PUT", `/channels/${channelId}/privacy`, { privacy: "P" });
     console.log(`  CONVERTED ${channelName} O → P`);
   }
 
-  // Ensure owner + agent are channel members. The agent in the project
-  // channel is the whole point of the channel — without it OpenClaw
-  // RPCs land in a void. Throw on missing IDs or add failures so the
-  // sweep loop logs this project as FAILED rather than reporting
-  // success on a half-fixed state. MM's POST /members is idempotent —
-  // re-adding an existing member returns 200 with the existing
-  // membership doc, so re-running the script is safe.
-  for (const m of [
+for (const m of [
     { id: p.ownerMmUserId, label: "owner" },
     { id: p.agentMmUserId, label: "agent" },
   ]) {

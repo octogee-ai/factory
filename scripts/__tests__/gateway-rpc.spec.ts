@@ -26,13 +26,13 @@ interface MockServerHandle {
   port: number;
   url: string;
   setHandler: (method: string, handler: RpcHandler) => void;
-  /** If set, overrides the default connect/hello-ok reply. */
+  
   setConnectHandler: (
     handler: (params: unknown) => { ok: true; payload: unknown } | { ok: false; error: { code: string; message: string } },
   ) => void;
-  /** Reject the very first client message before sending hello-ok. */
+  
   setRejectAllAsAuth: (enabled: boolean) => void;
-  /** Count of RPC calls per method, for hash-mismatch retry assertions. */
+  
   callCount: (method: string) => number;
   close: () => Promise<void>;
 }
@@ -45,10 +45,8 @@ async function startMockGateway(): Promise<MockServerHandle> {
   let rejectAuth = false;
 
   wss.on("connection", (ws: WebSocket) => {
-    // Mirror OpenClaw: push a connect.challenge event with a one-shot nonce
-    // as soon as the socket is open. Real clients read this before sending
-    // their signed connect frame.
-    const nonce = crypto.randomBytes(12).toString("hex");
+
+const nonce = crypto.randomBytes(12).toString("hex");
     ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce } }));
     ws.on("message", (raw) => {
       let frame: any;
@@ -135,7 +133,7 @@ async function startMockGateway(): Promise<MockServerHandle> {
     callCount: (method) => counts.get(method) ?? 0,
     close: () =>
       new Promise<void>((resolve) => {
-        // Force-close any open client sockets so wss.close() doesn't hang.
+        
         for (const c of wss.clients) {
           try {
             c.terminate();
@@ -336,10 +334,7 @@ describe("gateway-rpc", () => {
 
       const result = await client.secretsReload();
 
-      // BYOT prod fix: must call the openclaw fork's RPC method by name —
-      // mismatched method names silently no-op and leave the running gateway
-      // on the platform key (the original symptom).
-      expect(captured).toEqual({});
+expect(captured).toEqual({});
       expect(result.ok).toBe(true);
       expect(result.warningCount).toBe(0);
     });
@@ -390,12 +385,8 @@ describe("gateway-rpc", () => {
     });
 
     it("does NOT call channels.status (or any other RPC) — handshake completion is the liveness signal", async () => {
-      // The handshake itself uses the `connect` frame internally, but
-      // isGatewayUp must NOT follow up with channels.status (or any
-      // other method). On real gateways under load that follow-up RPC
-      // can take seconds, blowing the caller's tight budget and
-      // wedging fleet-provisioner.ts:waitForGatewayReady.
-      expect(await client.isGatewayUp(500)).toBe(true);
+
+expect(await client.isGatewayUp(500)).toBe(true);
       expect(server.callCount("channels.status")).toBe(0);
     });
 
@@ -431,10 +422,9 @@ describe("gateway-rpc", () => {
     });
 
     it("throws OpenclawWireError('timeout') when the connect never completes", async () => {
-      server.setConnectHandler(() => ({ ok: true, payload: {} })); // swallow reply — well, we'll NOT reply
-      // Override: make connect handler never call respond by using a custom server that drops the message.
-      // Simpler — stop the server and retarget to a port that accepts TCP but never speaks WS upgrade.
-      await server.close();
+      server.setConnectHandler(() => ({ ok: true, payload: {} })); 
+
+await server.close();
       const offline = createGatewayRpc({
         url: "ws://127.0.0.1:1",
         token: "t",
@@ -453,11 +443,8 @@ describe("gateway-rpc", () => {
     });
 
     it("throws OpenclawWireError('invalid-response') when the server replies with non-JSON", async () => {
-      // Hijack: point the client at a raw TCP server that speaks the WS upgrade
-      // but sends garbage frames. Simpler: override setHandler to return an
-      // inherently-invalid payload (the client should still tolerate missing
-      // fields by surfacing invalid-response).
-      server.setHandler("config.patch", () => ({ ok: true, payload: null }));
+
+server.setHandler("config.patch", () => ({ ok: true, payload: null }));
       await expect(client.configPatch({}, "h")).rejects.toMatchObject({
         name: "OpenclawWireError",
         code: "invalid-response",
@@ -500,20 +487,17 @@ describe("gateway-rpc", () => {
       expect(captured.scopes).toContain("operator.admin");
       expect(captured.role).toBe("operator");
       expect(captured.client.id).toBe("gateway-client");
-      // User-Agent / displayName identifies the provisioner in gateway `[ws]` log lines.
+      
       expect(captured.client.displayName?.toLowerCase()).toContain("octogee");
 
-      // Device block is present and internally consistent.
-      expect(captured.device).toBeTruthy();
+expect(captured.device).toBeTruthy();
       expect(typeof captured.device.id).toBe("string");
       expect(typeof captured.device.publicKey).toBe("string");
       expect(typeof captured.device.signature).toBe("string");
       expect(typeof captured.device.signedAt).toBe("number");
       expect(typeof captured.device.nonce).toBe("string");
-      // Signature actually verifies over the v3 payload. This is what catches
-      // protocol-drift: if our payload build ever falls out of sync with
-      // OpenClaw's verification, the server would reject us live.
-      const payload = [
+
+const payload = [
         "v3",
         captured.device.id,
         captured.client.id,
@@ -594,13 +578,12 @@ describe("gateway-rpc", () => {
         await offline.close();
       }
 
-      // isGatewayUp swallows errors but still emits a trace.
-      expect(traces.length).toBeGreaterThanOrEqual(1);
+expect(traces.length).toBeGreaterThanOrEqual(1);
       const fail = traces.find((t) => !t.success);
       expect(fail).toBeTruthy();
       expect(fail?.stage).toBe("ws-open");
       expect(fail?.errorCode).toBe("connect-failed");
-      // wsOpenMs was not completed, so it's undefined; challengeMs + connectMs too.
+      
       expect(fail?.wsOpenMs).toBeUndefined();
       expect(fail?.challengeMs).toBeUndefined();
       expect(fail?.connectMs).toBeUndefined();
@@ -627,16 +610,16 @@ describe("gateway-rpc", () => {
       expect(fail).toBeTruthy();
       expect(fail?.stage).toBe("connect");
       expect(fail?.errorCode).toBe("auth-failed");
-      // We got past ws-open and challenge; those timings should be present.
+      
       expect(typeof fail?.wsOpenMs).toBe("number");
       expect(typeof fail?.challengeMs).toBe("number");
-      // connectMs undefined because the connect frame never completed.
+      
       expect(fail?.connectMs).toBeUndefined();
     });
 
     it("is optional — omitting onConnectTrace still works (production default uses config.log)", async () => {
       server.setHandler("channels.status", () => ({ ok: true, payload: {} }));
-      // No onConnectTrace option — uses the default log-based trace.
+      
       const rpc = createGatewayRpc({
         url: server.url,
         token: "t",
@@ -652,11 +635,6 @@ describe("gateway-rpc", () => {
     });
   });
 });
-
-// Production deployments rarely plumb OPENCLAW_GATEWAY_TOKEN into the
-// provisioner's env; the token lives in the gateway's openclaw.json at
-// `gateway.auth.token` instead. Client must fall back to reading that file
-// so stock OpenClaw deployments work without extra config.
 
 describe("token resolution", () => {
   let tmpDir: string;
@@ -803,8 +781,7 @@ describe("token resolution", () => {
       await srv.close();
     }
 
-    // No auth block at all — matches the pre-hotfix behavior for token-less connects.
-    expect(captured?.auth).toBeUndefined();
+expect(captured?.auth).toBeUndefined();
   });
 
   it("silently tolerates a missing/malformed openclaw.json", async () => {
@@ -823,19 +800,6 @@ describe("token resolution", () => {
   });
 });
 
-// Regression for the April 16 TEST-cluster provisioner crash. The original
-// `openAndConnect` timeout path did `cleanup()` (removing the 'error'
-// listener) then `ws.terminate()`. `terminate()` emits an async 'error'
-// event on the still-connecting socket → no listener → Node kills the
-// process. The provisioner pod then restarted, losing the rest of the
-// customer's signup state.
-//
-// This test drives the exact path: a plain TCP server that ACCEPTS
-// connections silently (no WS upgrade), so the client's 'open' never fires
-// and the connect timer is the only exit. If the crash regression returns,
-// this test will either time out (unhandled exception aborts the run) or
-// trip the explicit uncaughtException listener installed below.
-
 describe("crash safety on connect timeout", () => {
   let tcpServer: Server;
   let tcpPort: number;
@@ -851,14 +815,12 @@ describe("crash safety on connect timeout", () => {
     });
     tcpPort = (tcpServer.address() as AddressInfo).port;
 
-    // Snapshot existing uncaughtException listeners so the check below
-    // isn't contaminated by other parts of the test harness.
-    originalHandlers = process.listeners("uncaughtException") as any;
+originalHandlers = process.listeners("uncaughtException") as any;
   });
 
   afterEach(() => {
     tcpServer.close();
-    // Restore listeners to the pre-test set; vitest's own watchdog stays.
+    
     const now = process.listeners("uncaughtException") as any;
     for (const h of now) {
       if (!originalHandlers.includes(h)) process.off("uncaughtException", h);
@@ -883,8 +845,7 @@ describe("crash safety on connect timeout", () => {
       code: "connect-failed",
     });
 
-    // Give any stray async error events a tick to surface.
-    await new Promise((r) => setTimeout(r, 50));
+await new Promise((r) => setTimeout(r, 50));
     process.off("uncaughtException", crashCatcher);
 
     expect(crashes).toEqual([]);

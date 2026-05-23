@@ -21,11 +21,6 @@ export async function destroyMmUser(userId: string): Promise<void> {
   }
 }
 
-/**
- * Archive a Mattermost channel (soft delete — preserves message history in MM admin).
- * DELETE /channels/{channelId} archives by default in MM.
- * Idempotent: 404 treated as success.
- */
 export async function destroyMmChannel(channelId: string): Promise<void> {
   if (!process.env.MM_URL || !channelId) return;
 
@@ -46,14 +41,11 @@ export async function destroyMmChannel(channelId: string): Promise<void> {
   }
 }
 
-/**
- * Get all channel IDs for a user in a team.
- */
 export async function getMmUserChannels(userId: string, teamId: string): Promise<string[]> {
   if (!process.env.MM_URL || !userId || !teamId) return [];
 
   const channels = await mmApiCall("GET", `/users/${userId}/teams/${teamId}/channels`);
   if (!Array.isArray(channels)) return [];
-  // channels is an array of channel objects with id property
+  
   return channels.map((c: { id: string }) => c.id);
 }

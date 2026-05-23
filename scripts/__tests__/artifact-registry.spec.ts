@@ -163,18 +163,15 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
   });
 
   it("requests update_time desc so newest builds dominate the first page", async () => {
-    // Without orderBy, AR returns images in digest-hash order. With 100+
-    // historical SHAs in a busy repo, the accumulator filled with older
-    // builds before today's builds were paged, and newer builds vanished
-    // from the picker.
-    fetchMock.mockResolvedValueOnce(makeArResponse([]));
+
+fetchMock.mockResolvedValueOnce(makeArResponse([]));
     await listGatewayBuilds({ service: "octogee-gateway" });
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain("orderBy=update_time+desc");
   });
 
   it("paginates until enough service-matching builds are found", async () => {
-    // Page 1: only non-matching services (gateway-edge), forcing pagination
+    
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -189,7 +186,7 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
         nextPageToken: "page-2",
       }),
     } as unknown as Response);
-    // Page 2: gateway image — should be picked up
+    
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -208,13 +205,13 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
     expect(builds).toHaveLength(1);
     expect(builds[0].tag).toBe("def5678");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    // Second call must include the pageToken
+    
     const secondUrl = fetchMock.mock.calls[1][0] as string;
     expect(secondUrl).toContain("pageToken=page-2");
   });
 
   it("stops pagination once we have plenty of deduped builds for the service", async () => {
-    // Returns 30 gateway builds in page 1, claims more pages — but caller asks for 5
+    
     const items = Array.from({ length: 30 }, (_, i) => ({
       name: `projects/octogee/locations/us-central1/repositories/octogee/dockerImages/octogee-gateway@sha256:${i.toString(16).padStart(40, "0")}`,
       tags: [i.toString(16).padStart(7, "0")],
@@ -228,7 +225,7 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
 
     const builds = await listGatewayBuilds({ service: "octogee-gateway", limit: 5 });
     expect(builds).toHaveLength(5);
-    // Should stop on page 1 — 30 deduped > limit*3 = 15
+    
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

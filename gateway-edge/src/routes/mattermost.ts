@@ -41,18 +41,11 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
       expiresAt: Date.now() + 30_000,
     });
 
-    // Single host now (api.octogee.com). The app derives MM REST + WS
-    // from its own apiBase; this is kept for back-compat callers.
-    const proxyUrl = process.env.API_PUBLIC_URL || "";
+const proxyUrl = process.env.API_PUBLIC_URL || "";
     const coachMmUserId = ctx.coachUserId || null;
     const coachName = userData.onboarding?.coachName || null;
 
-    // gatewayId lets the browser pin the MM WebSocket to the home gateway
-    // pod via the fleet seam (`/api/g/<gw>/api/v4/websocket`) — keeping the
-    // long-lived socket off the octogee-api cluster singleton. Same shape +
-    // source as the openclaw mint. Empty when unprovisioned → browser
-    // falls back to the bare path. (MM REST stays unprefixed on octogee-api.)
-    const provisioning = userData.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
+const provisioning = userData.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;
     const gatewayId =
       typeof rawGatewayId === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(rawGatewayId)
@@ -62,8 +55,6 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
     res.json({ mmUserId, dmChannelId, proxyUrl, gatewayId, wsTicket: ticket, coachMmUserId, coachName });
   } catch (e) { next(e); }
 });
-
-// ── POST /invite — invite user to channel by email ────────────────────────
 
 router.post("/invite", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -103,8 +94,7 @@ router.post("/invite", requireAuth, async (req: Request, res: Response, next: Ne
       return;
     }
 
-    // Check for duplicate
-    const existing = await db.collection("invites")
+const existing = await db.collection("invites")
       .where("channelId", "==", channelId)
       .where("inviteeUid", "==", inviteeDoc.id)
       .where("status", "in", ["pending", "completed"])
@@ -142,8 +132,6 @@ router.post("/invite", requireAuth, async (req: Request, res: Response, next: Ne
   } catch (e) { next(e); }
 });
 
-// ── GET /invite-status — poll invite status ───────────────────────────────
-
 router.get("/invite-status", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const inviteId = req.query.inviteId as string;
@@ -163,8 +151,6 @@ router.get("/invite-status", requireAuth, async (req: Request, res: Response, ne
     });
   } catch (e) { next(e); }
 });
-
-// ── POST /invite-link — create shareable invite link ──────────────────────
 
 router.post("/invite-link", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -207,8 +193,6 @@ router.post("/invite-link", requireAuth, async (req: Request, res: Response, nex
     });
   } catch (e) { next(e); }
 });
-
-// ── POST /accept-invite-link — join channel via invite link ───────────────
 
 router.post("/accept-invite-link", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {

@@ -6,12 +6,6 @@ export interface AuthFingerprint {
   size: number;
 }
 
-/**
- * Content fingerprint of a credential file, or null if absent/unreadable.
- * Pure-ish (read-only I/O, never throws) — codex rewrites auth.json in
- * place on token rotation; sha256 is the authoritative change signal
- * (mtime is only a cheap poll trigger in the watcher loop).
- */
 export function fingerprintFile(filePath: string): AuthFingerprint | null {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- per-agent codex-home path from SAFE_AGENT_ID-guarded plan
@@ -25,14 +19,6 @@ export function fingerprintFile(filePath: string): AuthFingerprint | null {
   }
 }
 
-/**
- * Pure decision: did the credential change in a way we should sync back?
- * - absent current   → never (don't push a deletion as a rotation)
- * - no prior         → changed (first observation; capture the baseline)
- * - sha differs      → changed (codex rotated the token in place)
- * - otherwise        → unchanged (no churn on every poll)
- * Debounce/timing is the watcher loop's concern, not this decision.
- */
 export function decideSyncBack(
   prev: AuthFingerprint | null,
   cur: AuthFingerprint | null,
@@ -57,16 +43,6 @@ export interface SyncBackResult {
   prev: Map<string, AuthFingerprint | null>;
 }
 
-/**
- * One sweep over the watched per-agent credential files. `observe` logs a
- * change fingerprint and never reads/pushes the secret (the rotation-data
- * collector + zero-risk first ship). `active` reads the rotated payload and
- * hands it to the injected `pushCredential` (gateway-edge-mediated per R2 —
- * the gateway SA stays read-only). Per-item isolation: a push failure counts
- * + does NOT advance `prev` (retried next sweep) and never throws. Returns
- * the advanced `prev` map (caller threads it forward); the input map is not
- * mutated.
- */
 export async function syncBackSweep(opts: {
   targets: SyncBackTarget[];
   prev: Map<string, AuthFingerprint | null>;
@@ -96,7 +72,7 @@ export async function syncBackSweep(opts: {
       const payload = fs.readFileSync(t.authPath, "utf-8");
       if (opts.pushCredential) await opts.pushCredential(t.agentId, payload);
       pushed++;
-      prev.set(t.agentId, cur); // advance only on success → failures retry
+      prev.set(t.agentId, cur); 
       log(`byosub-syncback[active]: pushed ${t.agentId} (${d.reason})`);
     } catch (e) {
       failed++;

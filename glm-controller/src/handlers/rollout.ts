@@ -22,20 +22,20 @@ export interface CurrentGatewaySpec {
 
 export interface RolloutDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
-  /** Reads glmGateways/{id} so we can check current spec + map to instanceName for helm-render poll. */
+  
   readCurrentSpec: (gatewayId: string) => Promise<CurrentGatewaySpec | null>;
-  /** Updates glmGateways/{id}.imageRepository + imageTag + profile. The reconciler picks this up via onSnapshot. */
+  
   updateGlmGatewayImage: (
     gatewayId: string,
     imageRepository: string,
     imageTag: string,
     profile: GatewayProfile,
   ) => Promise<void>;
-  /** Reads gateways/{id} heartbeat: version (image tag the pod published) + lastHeartbeatAt. */
+  
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeatVersion | null>;
-  /** Max time to wait for helm to render the new image into the deployed instance map. */
+  
   helmRenderTimeoutMs: number;
-  /** Max time to wait for the gateway pod to restart and publish a heartbeat with the new version. */
+  
   heartbeatTimeoutMs: number;
   pollIntervalMs: number;
   now: () => number;
@@ -93,15 +93,7 @@ async function resolveRolloutTarget(
     imageRepository: newRepository,
   });
 
-  // The no-op short-circuit checks DESIRED (Firestore) AND ACTUAL
-  // (helm-deployed) — both must match the request to bail. Reason:
-  // an operator's manual `helm rollback` (recovering from a wedged
-  // pending-upgrade — see helm-runner's pre-flight recovery) can put
-  // actual back to an older SHA while Firestore desired still points
-  // at the never-deployed SHA. The operator's next attempt to re-pick
-  // that SHA in the Cowboy UI is real drift to fix, NOT a no-op.
-  // Reproduced today on gw-bender post-recovery.
-  const desiredMatchesRequest =
+const desiredMatchesRequest =
     newRepository === current.imageRepository &&
     imageTag === current.imageTag &&
     newProfile === currentProfile;
@@ -169,13 +161,7 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
       return { steps: [], success: false, error: `failed to update glmGateways spec: ${msg}` };
     }
 
-    // From this point forward the spec write has landed in Firestore;
-    // any failure below leaves glmGateways ahead of helm/pod. The
-    // reconciler will keep trying to converge each tick, so the right
-    // recovery is either a remediating rollout to a known-good tag or
-    // letting the next tick succeed on its own. The op is marked failed
-    // either way so the operator sees the timeout in OperationsHistory.
-    const renderResult = await pollUntil({
+const renderResult = await pollUntil({
       stepName: "helm-render",
       timeoutMs: deps.helmRenderTimeoutMs,
       ctx,

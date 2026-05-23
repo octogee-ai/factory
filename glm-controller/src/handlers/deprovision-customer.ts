@@ -1,8 +1,4 @@
-// Inaugural Cowboy lift — customer deprovision orchestrated by
-// glm-controller, not the gateway. Works for orphans (no live gateway)
-// AND for live-mounted customers (calls the gateway's /unmount RPC
-// before running cloud-side cleanup). See
-// docs/specs/ADMIN-DELETE-CUSTOMER-SPEC.md.
+
 
 import type { Operation, OperationStep, StepStatus } from "../../../shared/types/glm.js";
 import type {
@@ -22,39 +18,33 @@ export interface CustomerCleanupContext {
   slug: string;
   email: string | null;
   giteaOrg: string;
-  /** Repo names to delete: workspace + <projectSlug>... */
+  
   repoNames: string[];
-  /**
-   * Project slugs (NOT repo names). Drives Firebase Hosting site
-   * deletion: each `octogee-<slug>-<projectSlug>` site lines up with
-   * the project slug here. Sourced directly from
-   * `workspaces/{slug}/projects/*` Firestore docs — never reverse-
-   * engineered from repo names (which would yield `proj-<slug>`).
-   */
-  projectSlugs: string[];
+
+projectSlugs: string[];
   workspaceTeamId: string | null;
   mmUserId: string | null;
   mmCoachUserId: string | null;
   adminChannelId: string | null;
-  /** Currently-mounted gateway, or null when orphan. */
+  
   currentGatewayId: string | null;
 }
 
 export interface DeprovisionCustomerDeps {
-  /** Build the cloud-cleanup ctx by reading Firestore + workspace projects. */
+  
   loadCleanupContext: (uid: string) => Promise<CustomerCleanupContext | null>;
-  /** Tell the gateway to unmount the customer (steps 1-2 of nukeSteps). Skipped for orphans. */
+  
   unmountFromGateway: (gatewayId: string, slug: string) => Promise<void>;
-  /** The cloud-cleanup deps the orchestrator needs (gitea + mm clients + Firestore/Storage/Auth callbacks). */
+  
   cloudCleanup: NukeCloudDeps;
-  /** ISO-now for step timestamps. */
+  
   now: () => number;
   log: (msg: string) => void;
 }
 
 interface DeprovisionInput {
   uid?: unknown;
-  /** Optional skips passed by the admin endpoint (e.g. operator wants to keep auth). */
+  
   skipAuth?: unknown;
   skipHosting?: unknown;
 }
@@ -83,9 +73,7 @@ export function createDeprovisionCustomerHandler(
       };
     }
 
-    // Step 1: unmount from gateway (if mounted). Best-effort; the cloud-
-    // cleanup steps below are the source of truth for "gone."
-    if (cleanup.currentGatewayId) {
+if (cleanup.currentGatewayId) {
       const startedAt = deps.now();
       await reportStep(ctx, { name: "unmount-gateway", status: "running", startedAt });
       try {
@@ -98,9 +86,8 @@ export function createDeprovisionCustomerHandler(
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        // Don't abort — orphan-equivalent fallback. Operator gets the
-        // step error in OperationsHistory; cloud cleanup proceeds.
-        deps.log(`[deprovision] unmount RPC failed for ${cleanup.slug} on ${cleanup.currentGatewayId}: ${message}`);
+
+deps.log(`[deprovision] unmount RPC failed for ${cleanup.slug} on ${cleanup.currentGatewayId}: ${message}`);
         await reportStep(ctx, {
           name: "unmount-gateway",
           status: "failed",
@@ -118,8 +105,7 @@ export function createDeprovisionCustomerHandler(
       });
     }
 
-    // Step 2..7: cloud-side nuke (gitea, mm, firestore, storage, hosting, auth)
-    const nukeCtx: NukeCloudCtx = {
+const nukeCtx: NukeCloudCtx = {
       uid: cleanup.uid,
       slug: cleanup.slug,
       email: cleanup.email,

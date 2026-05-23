@@ -38,8 +38,6 @@ async function resolveUserGateway(uid: string): Promise<ResolvedGateway | null> 
   return { slug, gatewayId };
 }
 
-/** Helm Service name for a gateway — the same derivation glm-controller
- * uses (`octogee-gateway-<instanceName>`), never `gatewayId` munging. */
 async function resolveInstanceName(gatewayId: string): Promise<string | null> {
   const snap = await db.collection("glmGateways").doc(gatewayId).get();
   if (!snap.exists) return null;
@@ -53,10 +51,9 @@ interface FlowDoc {
   gatewayId: string;
   agentId: string;
   provider: string;
-  /** Set once on first successful capture — makes /capture single-write
-   * (a replayed flowId never re-writes Secret Manager). */
-  consumedAt?: number;
-  /** Sweep/TTL horizon — a stale, never-completed flow is reapable. */
+
+consumedAt?: number;
+  
   expireAt?: number;
 }
 
@@ -107,10 +104,8 @@ router.post(
           instanceName,
           agentId,
         });
-        // R2/ownership: the (uid, gateway, agent) tuple is minted here
-        // from the authenticated caller and stored server-side. The
-        // gateway never supplies it back — capture binds by flowId alone.
-        await db
+
+await db
           .collection("byosubFlows")
           .doc(out.flowId)
           .set({
@@ -139,9 +134,8 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const flow = await readFlow(req.params.flowId as string);
-      // Owner-bound: a non-owner (or unknown flow) gets an indistinguishable
-      // 404 — no cross-tenant flow-state leak on a shared gateway.
-      if (!flow || flow.uid !== req.uid!) {
+
+if (!flow || flow.uid !== req.uid!) {
         res.status(404).json({ error: "flow not found" });
         return;
       }
@@ -169,10 +163,6 @@ router.get(
   },
 );
 
-// C2: the user-facing "is my subscription connected?" read. Derived
-// from the durable `glmGateways/{gatewayId}.byosub[coachAgentId]` ref —
-// returns only {connected, provider}. Never the secretName or credential
-// (those never cross to the customer surface).
 router.get(
   "/connection",
   requireAuth,
@@ -194,24 +184,14 @@ router.get(
         >;
       };
       const ref = data.byosub?.[coachAgentId(resolved.slug)];
-      // Honest view: "connected" means working, not "a ref exists" — a
-      // needs_reauth ref reports connected:false + status (R8).
-      res.json(byosubConnectionView(ref));
+
+res.json(byosubConnectionView(ref));
     } catch (e) {
       next(e);
     }
   },
 );
 
-/**
- * Flip the unified per-customer credential signal so BYOS rides the SAME
- * watcher as BYOT. ORDER IS LOAD-BEARING: write system/config.byot FIRST,
- * users/{uid}.byotActive LAST. The watcher reacts to users/{uid} and
- * fetches system/config exactly once; byotActive-last guarantees the
- * config subdoc is already visible (else it falls back to anthropic and
- * never re-syncs). Matches BYOT ordering. Idempotent (merge) — safe to
- * re-assert, which also backfills already-consumed pre-unification flows.
- */
 async function flipUnifiedByosSignal(uid: string): Promise<void> {
   await db
     .collection("users")
@@ -222,12 +202,6 @@ async function flipUnifiedByosSignal(uid: string): Promise<void> {
   await db.collection("users").doc(uid).set({ byotActive: true }, { merge: true });
 }
 
-// Internal: the gateway runner posts the captured credential here on
-// completion. R2 — gateway-edge owns the Secret Manager write; the
-// gateway SA stays read-only. The gateway supplies only the opaque
-// flowId it was handed at /connect plus the credential; uid/agent/
-// gateway are derived from the server-side flow record so a coarse
-// internal-key holder cannot bind a credential to another owner.
 router.post(
   "/capture",
   requireInternalServiceAuth,
@@ -250,16 +224,10 @@ router.post(
         return;
       }
       const secretName = byosubSecretName(flow.uid, flow.provider);
-      // Single-write, idempotent response: a replayed (or retried) flowId
-      // never re-writes Secret Manager — and a replay carrying a *different*
-      // credential body is ignored, not honoured. A legit gateway retry
-      // still gets a sane ok.
-      if (flow.consumedAt) {
-        // Backfill / replay-safe: re-assert the unified signal
-        // (idempotent) so flows captured *before* unification — and any
-        // legit retry — still activate. The secret + glmGateways ref
-        // already exist (both precede consumedAt); no secret re-write.
-        await flipUnifiedByosSignal(flow.uid);
+
+if (flow.consumedAt) {
+
+await flipUnifiedByosSignal(flow.uid);
         res.json({ ok: true, secretName, alreadyConsumed: true });
         return;
       }
@@ -282,20 +250,17 @@ router.post(
               [flow.agentId]: {
                 provider: flow.provider,
                 secretName,
-                // Re-Connect clears a prior needs_reauth (merge overwrites).
+                
                 status: "connected",
               },
             },
           },
           { merge: true },
         );
-      // BYOS rides the SAME watcher as BYOT — flip the unified signal
-      // (config-first/byotActive-last; see flipUnifiedByosSignal). The
-      // glmGateways ref above is written first so the restore has it.
-      await flipUnifiedByosSignal(flow.uid);
-      // Consume only after the durable write + ref succeeded, so a failed
-      // capture stays retryable.
-      await db
+
+await flipUnifiedByosSignal(flow.uid);
+
+await db
         .collection("byosubFlows")
         .doc(b.flowId)
         .set({ consumedAt: Date.now() }, { merge: true });
@@ -306,13 +271,6 @@ router.post(
   },
 );
 
-// Internal: the gateway's periodic detection sweep posts here when openclaw's
-// on-disk auth-state shows the codex profile permanently dead (R8). R2 — the
-// gateway SA never writes glmGateways; gateway-edge mediates. No credential
-// crosses. Bounded: only flips an EXISTING ref's status (never creates one),
-// so a coarse internal-key holder can at most surface a spurious Reconnect
-// prompt — it cannot inject a credential (that still needs the flow-bound
-// device-auth /capture).
 router.post(
   "/auth-state",
   requireInternalServiceAuth,
@@ -329,9 +287,8 @@ router.post(
         !isSafeAgentId(b.agentId) ||
         b.state !== "needs_reauth"
       ) {
-        // Reject a path-unsafe gatewayId here so it never reaches
-        // `.doc(gatewayId)` (Firestore would throw → 500 + wedge the sweep).
-        res.status(400).json({
+
+res.status(400).json({
           error: "path-safe gatewayId, path-safe agentId, state:'needs_reauth' required",
         });
         return;
@@ -343,9 +300,8 @@ router.post(
         !byosub ||
         !Object.prototype.hasOwnProperty.call(byosub, b.agentId)
       ) {
-        // Nothing connected for this agent — cannot "need reauth"; no-op
-        // (don't create a ref from an unauthenticated-tuple signal).
-        res.json({ ok: true, noop: true });
+
+res.json({ ok: true, noop: true });
         return;
       }
       await db
@@ -362,16 +318,6 @@ router.post(
   },
 );
 
-// Internal: the gateway's periodic sync-back sweep posts a rotated codex
-// credential here (Chunk B). R2 — gateway-edge owns the Secret Manager
-// write; the gateway SA stays read-only. Bounded: only an EXISTING
-// connected ref's own secret is overwritten (never creates one), and the
-// blob must be a plausible codex auth.json (validateCodexCredential). It
-// is a *token refresh* of an already-connected agent — NOT a connect: no
-// status / byotActive / config flip (those belong to /capture). A coarse
-// internal-key holder can at most overwrite a customer's own stored token
-// (→ a failed restore → R8 → reconnect); no cross-tenant escalation, no
-// credential exfiltration — same trust model as /capture.
 router.post(
   "/sync-back",
   requireInternalServiceAuth,
@@ -410,16 +356,12 @@ router.post(
           ? byosub[b.agentId]
           : undefined;
       if (!ref || typeof ref.secretName !== "string" || !ref.secretName) {
-        // Not connected for this agent — nothing to sync-back into; no-op
-        // (never create a ref/secret from an unauthenticated-tuple signal).
-        res.json({ ok: true, noop: true });
+
+res.json({ ok: true, noop: true });
         return;
       }
-      // Add a new version to the agent's OWN, already-existing secret —
-      // version-only (never create, never relabel): a rotation is not a
-      // (re)connect, and a secret a Disconnect/teardown destroyed must not
-      // be resurrected by a stale lingering ref. Secret gone → no-op.
-      const w = await addSecretVersionIfExists(ref.secretName, b.credential);
+
+const w = await addSecretVersionIfExists(ref.secretName, b.credential);
       if (!w.ok) {
         res.json({ ok: true, noop: true });
         return;

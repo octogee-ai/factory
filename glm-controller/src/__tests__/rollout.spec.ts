@@ -34,11 +34,11 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 }
 
 interface FakeState {
-  /** Per-gatewayId current spec (mirrors glmGateways doc). */
+  
   specs: Map<string, CurrentGatewaySpec>;
-  /** instanceName → image rendered by helm. */
+  
   helmInstances: Map<string, { repository: string; tag: string }>;
-  /** Per-gatewayId heartbeat doc. */
+  
   heartbeats: Map<string, { version: string | null; lastHeartbeatAt: number }>;
 }
 
@@ -118,10 +118,8 @@ describe("createRolloutHandler — happy path", () => {
 
   it("succeeds idempotently when helm already shows the new tag at start (spec-not-yet-updated path)", async () => {
     const state: FakeState = {
-      // glmGateways still says oldSha, but helm has already rendered newSha
-      // (e.g. the previous rollout op's spec write succeeded but the heartbeat
-      // poll timed out — operator re-runs the same rollout to converge).
-      specs: new Map([
+
+specs: new Map([
         ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
       ]),
       helmInstances: new Map([["default", { repository: REPO, tag: "newSha" }]]),
@@ -130,9 +128,8 @@ describe("createRolloutHandler — happy path", () => {
     const deps = makeDeps(state);
     const result = await createRolloutHandler(deps)(mkOp(), makeCtx());
     expect(result.success).toBe(true);
-    // Spec write still happens — the handler doesn't trust pre-existing helm
-    // state without persisting the desired-state record.
-    expect(state.specs.get("gw-test")?.imageTag).toBe("newSha");
+
+expect(state.specs.get("gw-test")?.imageTag).toBe("newSha");
   });
 
   it("accepts an imageRepository override (e.g., switching repos)", async () => {
@@ -194,35 +191,24 @@ describe("createRolloutHandler — refusals + edge cases", () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/no-op|already on/i);
-    // updateGlmGatewayImage should NOT have been called
+    
     expect(state.specs.get("gw-test")?.imageTag).toBe("sameSha");
   });
 
-  // Reproduced today on gw-bender: a manual `helm rollback` (operator
-  // recovery from a wedged pending-upgrade) put the actual deployed
-  // image back to an older SHA, but Firestore's desired-state still
-  // had the never-deployed SHA. The operator then re-picked that same
-  // SHA in the Cowboy UI and got "no-op rollout" — Cowboy compared
-  // ONLY against Firestore desired, not against actual deployed.
-  // The retry was blocked even though there was real drift to fix.
-  it("does NOT refuse no-op when Firestore desired matches request but actual deployed differs (drift)", async () => {
+it("does NOT refuse no-op when Firestore desired matches request but actual deployed differs (drift)", async () => {
     let helmReadCount = 0;
     const state: FakeState = {
       specs: new Map([
-        // Firestore desired already says "newSha" (set by a prior
-        // rollout that wedged in helm and never reached the pod).
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "newSha" }],
+
+["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "newSha" }],
       ]),
-      // Actual deployed is the old SHA (operator rolled back via
-      // helm CLI to unwedge). Drift between desired and actual.
-      helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
+
+helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
       heartbeats: new Map([["gw-test", { version: "oldSha", lastHeartbeatAt: 0 }]]),
     };
     const deps = makeDeps(state, {
-      // First read (the no-op pre-check) sees drift → proceeds.
-      // After update-spec, simulate helm converging (flip the deployed
-      // image to newSha) so helm-render + heartbeat pass.
-      helm: {
+
+helm: {
         readDeployedInstances: vi.fn(async () => {
           helmReadCount++;
           const tag = helmReadCount === 1 ? "oldSha" : "newSha";
@@ -236,7 +222,7 @@ describe("createRolloutHandler — refusals + edge cases", () => {
         }),
       },
       readGatewayHeartbeat: vi.fn(async (gatewayId) =>
-        // simulate heartbeat catching up after the new image deploys
+        
         helmReadCount >= 2
           ? { version: "newSha", lastHeartbeatAt: 0 }
           : state.heartbeats.get(gatewayId) ?? null,
@@ -246,19 +232,14 @@ describe("createRolloutHandler — refusals + edge cases", () => {
       mkOp({ input: { gatewayId: "gw-test", imageTag: "newSha" } }),
       makeCtx(),
     );
-    // The rollout MUST NOT be rejected as no-op. Coalesce to empty
-    // string so the negative match works when result.error is undefined
-    // (the success path).
-    expect(result.error ?? "").not.toMatch(/no-op|already on/i);
+
+expect(result.error ?? "").not.toMatch(/no-op|already on/i);
     expect(result.success).toBe(true);
   });
 
   it("STILL refuses no-op when desired matches request AND actual deployed matches request (true no-op)", async () => {
-    // Belt-and-suspenders: when both desired and actual agree with the
-    // request, the rollout is genuinely a no-op (existing behavior
-    // preserved — drift detection didn't accidentally drop the
-    // legitimate no-op short-circuit).
-    const state: FakeState = {
+
+const state: FakeState = {
       specs: new Map([
         ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "sameSha" }],
       ]),
@@ -300,7 +281,7 @@ describe("createRolloutHandler — failures", () => {
       specs: new Map([
         ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
       ]),
-      // Helm flips fast; heartbeat never updates from oldSha.
+      
       helmInstances: new Map([["default", { repository: REPO, tag: "newSha" }]]),
       heartbeats: new Map([["gw-test", { version: "oldSha", lastHeartbeatAt: 0 }]]),
     };
@@ -318,7 +299,7 @@ describe("createRolloutHandler — capability profile", () => {
   it("a profile flip at the SAME sha is not a no-op: writes profile and waits on the RESOLVED operator repo", async () => {
     const state: FakeState = {
       specs: new Map([
-        // cattle/standard today (no profile field), on sha1
+        
         ["gw-bender", { instanceName: "bender", imageRepository: REPO, imageTag: "sha1" }],
       ]),
       helmInstances: new Map([["bender", { repository: REPO, tag: "sha1" }]]),
@@ -328,10 +309,8 @@ describe("createRolloutHandler — capability profile", () => {
     const deps = makeDeps(state, {
       wait: vi.fn(async (_ms: number) => {
         if (--polls === 0) {
-          // Cowboy reconciles the profile → helm now renders the OPERATOR repo
-          // at the same sha. If the render predicate still compared against
-          // the standard repo it would never converge → timeout.
-          state.helmInstances.set("bender", { repository: OPERATOR_REPO, tag: "sha1" });
+
+state.helmInstances.set("bender", { repository: OPERATOR_REPO, tag: "sha1" });
         }
       }),
     });
@@ -343,9 +322,8 @@ describe("createRolloutHandler — capability profile", () => {
 
     expect(result.success).toBe(true);
     expect(state.specs.get("gw-bender")?.profile).toBe("operator");
-    // desired-state imageRepository stays the standard repo — profile is the
-    // axis, Cowboy derives the operator repo.
-    expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
+
+expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
   });
 
   it("same sha AND same profile is still a no-op (boundary not over-broadened)", async () => {

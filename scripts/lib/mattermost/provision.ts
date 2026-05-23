@@ -31,21 +31,16 @@ export async function provisionMattermostUser(
   }
 
   const generatePassword = (): string => {
-    // crypto.randomInt uses rejection sampling so each char is drawn
-    // uniformly from the 67-char alphabet. The earlier `randomBytes(24)[i]
-    // % chars.length` pattern introduced modulo bias (257 % 67 = 55 got
-    // more representation than indices ≥ 55 % 67) — low-impact for a
-    // 24-char password but CodeQL's js/biased-cryptographic-random flags it.
-    const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%";
+
+const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%";
     let pass = "";
     for (let i = 0; i < 24; i++) pass += chars[crypto.randomInt(chars.length)];
     return pass;
   };
 
   try {
-    // Idempotency check (v3.1): user doc carries only userId+username; the
-    // coach DM channel now lives at workspaces/{slug}/channels/coach-dm.
-    const existingUserDoc = await db.collection("users").doc(uid).get();
+
+const existingUserDoc = await db.collection("users").doc(uid).get();
     const existingData = existingUserDoc.data() || {};
     if (existingData.mattermost?.userId) {
       const coachDmSnap = await db.doc(`workspaces/${slug}/channels/coach-dm`).get();
@@ -53,33 +48,22 @@ export async function provisionMattermostUser(
       if (existingChannelId) {
         log(`[mattermost] user already provisioned (userId=${existingData.mattermost.userId}) — skipping MM creation`);
 
-        // Backfill the coach PAT when the secrets doc is missing. Pre-
-        // MM-COACH-IDENTITY-SPEC workspaces have a coach MM user but no
-        // PAT on disk; the short-circuit used to return without minting
-        // and the coach was stuck with no token forever. Mint on-demand
-        // so re-triggering onboarding for an existing customer self-
-        // heals. Spec D2 / M1.
-        const coachSecretSnap = await db
+const coachSecretSnap = await db
           .collection("users").doc(uid)
           .collection("secrets").doc("coachMattermost")
           .get();
         let backfilledCoachUserId: string | null = null;
         let backfilledCoachPersonalToken: string | null = null;
-        // If the secret already exists, read the token so we still thread it
-        // back through mmUpdate → `wireCoachMattermostAccount`. Otherwise an
-        // existing-customer re-provision would leave `channels.mattermost.
-        // accounts.{slug}-coach` unset and OpenClaw would drop the coach WS.
-        if (coachSecretSnap.exists) {
+
+if (coachSecretSnap.exists) {
           const persisted = coachSecretSnap.data()?.personalToken;
           if (typeof persisted === "string" && persisted.length > 0) {
             backfilledCoachPersonalToken = persisted;
           }
         }
         if (!coachSecretSnap.exists) {
-          // Need the coach MM user id. Prefer agents/{uid}.mattermost.userId
-          // (set during full provisioning); fall back to a MM lookup by the
-          // canonical `{slug}-coach` username.
-          const agentSnap = await db.collection("agents").doc(uid).get();
+
+const agentSnap = await db.collection("agents").doc(uid).get();
           let coachUserId: string | null = agentSnap.data()?.mattermost?.userId ?? null;
           if (!coachUserId) {
             const coachLookup = await mmApiCall("GET", `/users/username/${slug}-coach`);
@@ -109,26 +93,15 @@ export async function provisionMattermostUser(
           "mattermost.channelId": existingChannelId,
           "mattermost.dmChannelId": existingChannelId,
           ...(backfilledCoachUserId ? { "mattermost.coachUserId": backfilledCoachUserId } : {}),
-          // `_coachPersonalToken` (underscore prefix) is an EPHEMERAL field
-          // read in-process by `wireCoachMattermostAccount` and explicitly
-          // NOT written to Firestore — `markProvisioningComplete` filters
-          // the mmUpdate map by `mattermost.*` prefix so the underscore
-          // key falls out. The authoritative token lives at
-          // `users/{uid}/secrets/coachMattermost`; duplicating it into
-          // `users/{uid}/system/config.mattermost.coachPersonalToken`
-          // would just widen its blast radius. Boot-sync reads the
-          // authoritative copy directly (scripts/boot-sync.ts:fetchCoachTokens).
-          ...(backfilledCoachPersonalToken
+
+...(backfilledCoachPersonalToken
             ? { _coachPersonalToken: backfilledCoachPersonalToken }
             : {}),
         };
       }
     }
 
-    // Per DATA-MODEL-REVIEW v3 §2: slug = username. MM username is the same
-    // string, capped at USERNAME_MAX (16) to leave room for `-coach` suffix
-    // inside MM's 22-char username limit.
-    const username = slug;
+const username = slug;
     let mmUser = await mmApiCall("POST", "/users", {
       email: email || `${uid}@octogee.local`,
       username,
@@ -161,13 +134,7 @@ export async function provisionMattermostUser(
       return {};
     }
 
-    // Team name = username (v3 §2 — username is everything).
-    // Team display_name is MM-canonical and computed deterministically from
-    // (slug, firstName, vibe). See shared/types/display-names.ts and the
-    // WORKSPACE-NAMING-CANONICAL-SPEC for the rule. No Firestore read — the
-    // vibe comes in as a function argument, not as a `users/{uid}.workspaceName`
-    // field (that ghost field was removed).
-    const teamName = slug;
+const teamName = slug;
     const teamDisplayName = computeWorkspaceDisplayName({ slug, firstName, vibe });
     let teamId: string | null = null;
 
@@ -177,7 +144,7 @@ export async function provisionMattermostUser(
       type: "I", // invite-only
     });
     if (!team) {
-      // Team may already exist (re-provision)
+      
       team = await mmApiCall("GET", `/teams/name/${teamName}`);
       if (team) log(`[mattermost] team ${teamName} already exists, reusing`);
     }
@@ -192,18 +159,13 @@ export async function provisionMattermostUser(
 
     if (!teamId) return {};
 
-    // Add user as team_admin of workspace team
-    // Note: team_id is required in body for Team Edition (not just the URL)
-    await mmApiCall("POST", `/teams/${teamId}/members`, {
+await mmApiCall("POST", `/teams/${teamId}/members`, {
       team_id: teamId,
       user_id: mmUser.id,
       roles: "team_admin team_user",
     });
 
-    // Archive MM's auto-created default channels (town-square, off-topic, general).
-    // MM creates these on every new team — they clutter the admin sidebar as orphaned
-    // channels since they don't match the {slug}-* naming convention (#228, #229).
-    for (const defaultName of ["town-square", "off-topic", "general"]) {
+for (const defaultName of ["town-square", "off-topic", "general"]) {
       try {
         const ch = await mmApiCall("GET", `/teams/${teamId}/channels/name/${defaultName}`);
         if (ch?.id) {
@@ -236,21 +198,15 @@ export async function provisionMattermostUser(
       const ok = await mmUploadAvatar(mmUser.id, photoURL);
       if (ok) log(`[mattermost] avatar uploaded from OAuth photo`);
     } else if (email && !email.endsWith("@octogee.local")) {
-      // Gravatar protocol REQUIRES md5(email) as the URL identifier — see
-      // https://docs.gravatar.com/api/avatars/. Not a security context;
-      // the hash is just an opaque-to-us avatar key.
-      // eslint-disable-next-line sonarjs/hashing -- Gravatar API spec requires md5(email)
+
+// eslint-disable-next-line sonarjs/hashing -- Gravatar API spec requires md5(email)
       const hash = crypto.createHash("md5").update(email.toLowerCase().trim()).digest("hex");
       const gravatarUrl = `https://gravatar.com/avatar/${hash}?d=identicon&s=200`;
       const ok = await mmUploadAvatar(mmUser.id, gravatarUrl);
       if (ok) log(`[mattermost] avatar uploaded from Gravatar`);
     }
 
-    // Auto-join community channels (legacy — for workspaces using shared
-    // team). Community channels are chat-only — they do NOT get
-    // activity-stream siblings (2026-05-14: only workspace/project
-    // #general + #coach get activity pairs).
-    for (const chId of communityChannelIds) {
+for (const chId of communityChannelIds) {
       await mmApiCall("POST", `/channels/${chId}/members`, {
         user_id: mmUser.id,
       });
@@ -259,11 +215,7 @@ export async function provisionMattermostUser(
       log(`[mattermost] joined ${communityChannelIds.length} community chat channels`);
     }
 
-    // Octo coach channel — MM type "P" (private) so octogee-admin can
-    // observe, but rendered as a DM in the UI by convention. Display name
-    // is the plain word "Coach" — see WORKSPACE-NAMING-CANONICAL-SPEC.
-    // Canonical slug: {wsSlug}-coach.
-    const channelName = workspaceCoachChannelName(slug);
+const channelName = workspaceCoachChannelName(slug);
     const channelDisplayName = WORKSPACE_CHANNEL_DISPLAY_NAMES.coach;
     const channel = await createOrRestoreChannel(
       teamId, channelName, channelDisplayName, "P",
@@ -274,11 +226,7 @@ export async function provisionMattermostUser(
       return {};
     }
 
-    // Coach channel members: customer + (coach later) + admin.
-    // Coach is added below once coachMmUser exists. Under OpenClaw's
-    // multi-account MM plugin, the coach's own PAT drives the WS
-    // subscription — no shared bot needed as a channel member.
-    for (const memberId of customerChannelMembers("coach", {
+for (const memberId of customerChannelMembers("coach", {
       customerMmUserId: mmUser.id,
       coachMmUserId: null, // added below when coach user is created
       adminMmUserId: MM_ADMIN_USER_ID ?? null,
@@ -286,9 +234,7 @@ export async function provisionMattermostUser(
       await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: memberId });
     }
 
-    // #general channel — workspace lobby, visible to all workspace members.
-    // Canonical slug: {wsSlug}-general. Display name from the shared constant.
-    const generalChannelName = workspaceGeneralChannelName(slug);
+const generalChannelName = workspaceGeneralChannelName(slug);
     const generalDisplayName = WORKSPACE_CHANNEL_DISPLAY_NAMES.general;
     const generalChannel = await createOrRestoreChannel(
       teamId, generalChannelName, generalDisplayName, "P",
@@ -297,7 +243,7 @@ export async function provisionMattermostUser(
     let generalChannelId: string | null = null;
     if (generalChannel) {
       generalChannelId = generalChannel.id;
-      // General channel members: customer + (coach added below) + admin.
+      
       for (const memberId of customerChannelMembers("general", {
         customerMmUserId: mmUser.id,
         coachMmUserId: null, // added below when coach user is created
@@ -310,10 +256,7 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ failed to create general channel for ${slug} — non-fatal`);
     }
 
-    // Admin channel — founder-to-agent guidance, Builder NOT invited (#170).
-    // Canonical slug: {wsSlug}-admin. Display name from the shared constant —
-    // plain "Admin", no per-customer suffix.
-    const adminChannelName = workspaceAdminChannelName(slug);
+const adminChannelName = workspaceAdminChannelName(slug);
     const adminDisplayName = WORKSPACE_CHANNEL_DISPLAY_NAMES.admin;
     const adminChannel = await createOrRestoreChannel(
       teamId, adminChannelName, adminDisplayName, "P",
@@ -322,9 +265,8 @@ export async function provisionMattermostUser(
     let adminChannelId: string | null = null;
     if (adminChannel) {
       adminChannelId = adminChannel.id;
-      // Admin channel members: admin + coach. Customer NOT invited (#170).
-      // Coach added below when coach user is created.
-      for (const memberId of customerChannelMembers("admin", {
+
+for (const memberId of customerChannelMembers("admin", {
         customerMmUserId: null, // #170: customer not invited to admin
         coachMmUserId: null,    // added below when coach user is created
         adminMmUserId: MM_ADMIN_USER_ID ?? null,
@@ -351,26 +293,7 @@ export async function provisionMattermostUser(
       log(`[mattermost] ⚠ no personal token created — chat will be read-only until fixed`);
     }
 
-    // Create per-customer coach MM bot. Handle = `{username}-coach` — hyphen
-    // matches the platform-wide identifier convention (mac-gw-prod,
-    // {slug}-general, etc.). Collision-safe because Builder usernames are
-    // auto-derived slugs (`{noun}-{verb}-{hash4}`) and no Builder can pick
-    // `{something}-coach` by hand — usernames come from the slugifier, not
-    // free-form input.
-    //
-    // Created as a Mattermost BOT (POST /bots, not POST /users) so the MM
-    // UI tags it with the BOT badge — the coach IS an agent, not a person,
-    // and the badge makes that honest. Mac (the gateway bot) follows the
-    // same pattern, see scripts/setup-mattermost.sh. Bots have an underlying
-    // user record so PATs, channel/team membership, and avatar upload all
-    // work via the same /users/{id}/* endpoints. The bot create response
-    // returns `{user_id, ...}` (not `{id, ...}`) — normalized below so
-    // downstream code can treat the result like a user object.
-    //
-    // Display name is "Octo" by default; renamed via Settings or milestone,
-    // synced by the gateway-edge PATCH /api/agents/me endpoint + the
-    // gateway sweep, which both call PUT /bots/{id} with `display_name`.
-    const coachUsername = `${slug}-coach`;
+const coachUsername = `${slug}-coach`;
     const createdBot = await mmApiCall("POST", "/bots", {
       username: coachUsername,
       display_name: "Octo",
@@ -388,28 +311,23 @@ export async function provisionMattermostUser(
     let coachPersonalToken: string | null = null;
     if (coachMmUser) {
       coachMmUserId = coachMmUser.id;
-      // Add coach to workspace team (not shared team)
+      
       await mmApiCall("POST", `/teams/${teamId}/members`, {
         team_id: teamId,
         user_id: coachMmUser.id,
       });
       await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: coachMmUser.id });
-      // Coach is a member of general so it can author posts there and
-      // surface as Octo in the Members panel.
-      if (generalChannelId) {
+
+if (generalChannelId) {
         await mmApiCall("POST", `/channels/${generalChannelId}/members`, { user_id: coachMmUser.id });
       }
-      // Admin channel too (#170) — founder-to-agent guidance.
+      
       if (adminChannelId) {
         await mmApiCall("POST", `/channels/${adminChannelId}/members`, { user_id: coachMmUser.id });
       }
       log(`[mattermost] coach bot created: ${coachUsername} (${coachMmUser.id})`);
 
-      // Mint a PAT for the coach and persist to `users/{uid}/secrets/coachMattermost`.
-      // OpenClaw authenticates per-workspace using this token (PR2) so that
-      // Octo posts as {slug}-coach rather than the shared octogee-bot.
-      // MM-COACH-IDENTITY-SPEC D2 / M1.
-      const coachToken = await mintAndPersistCoachToken(
+const coachToken = await mintAndPersistCoachToken(
         { mmApiCall, db, now: () => FieldValue.serverTimestamp() },
         uid,
         coachMmUser.id,
@@ -441,20 +359,8 @@ export async function provisionMattermostUser(
       "mattermost.generalChannelId": generalChannelId || null,
       "mattermost.proxyUrl": process.env.CHAT_PROXY_URL || "",
       ...(coachMmUserId ? { "mattermost.coachUserId": coachMmUserId } : {}),
-      // `_coachPersonalToken` is an EPHEMERAL field threaded through to
-      // `wireCoachMattermostAccount` so the provisioner can upsert
-      // `channels.mattermost.accounts.{slug}-coach` in openclaw.json at
-      // signup time. Without it, the coach's WS never connects and Octo
-      // stays silent until the gateway restarts and boot-sync rebuilds
-      // the accounts map from Firestore.
-      //
-      // Underscore prefix is deliberate: `markProvisioningComplete`
-      // filters mmUpdate by `mattermost.*` prefix when flattening to
-      // `users/{uid}/system/config`, so this key falls out and the token
-      // is NOT duplicated into Firestore. The authoritative copy lives
-      // at `users/{uid}/secrets/coachMattermost` and boot-sync reads it
-      // directly from there.
-      ...(coachPersonalToken ? { _coachPersonalToken: coachPersonalToken } : {}),
+
+...(coachPersonalToken ? { _coachPersonalToken: coachPersonalToken } : {}),
       ...(adminChannelId ? { "mattermost.adminChannelId": adminChannelId } : {}),
       // The boot-greeting outcome key is owned by the customer-lifecycle
       // orchestrator — it schedules the cron AFTER verify-channel-ready

@@ -9,40 +9,20 @@ export interface GatewayLiveState {
 
 export interface RetireGatewayDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
-  /**
-   * Reads the gateway's heartbeat doc — null when it doesn't exist (gateway
-   * never started; safe to retire). Returns the slug list AND the
-   * inFlightJobId so the handler can refuse retire mid-restore.
-   */
-  readGatewayLiveState: (gatewayId: string) => Promise<GatewayLiveState | null>;
-  /** Removes glmGateways/{id} after helm uninstalls. */
+
+readGatewayLiveState: (gatewayId: string) => Promise<GatewayLiveState | null>;
+  
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
-  /** Removes the heartbeat doc gateways/{id}. */
+  
   deleteGatewayHeartbeat: (gatewayId: string) => Promise<void>;
-  /**
-   * Reads `gateways/{id}.exists`. Used by the post-cleanup quiesce step
-   * to detect a pod's late heartbeat write resurrecting the doc seconds
-   * after `deleteGatewayHeartbeat` cleared it. When optional and not
-   * provided, the quiesce step is a no-op (back-compat for older tests).
-   */
-  readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
-  /**
-   * Optional: disables versions on the per-gateway SM auth-token. Skip
-   * to leave the secret resource in place — re-creating the gateway with
-   * the same id will re-use it (idempotent on Add Gateway). The auth
-   * token itself is rotated by the gateway pod on every boot, so a
-   * lingering archived secret is not a security risk.
-   */
-  archiveAuthTokenSecret?: (gatewayId: string) => Promise<void>;
-  /** Reads glmGateways/{id} so we can map gatewayId → instanceName for the helm-uninstall poll. */
+
+readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
+
+archiveAuthTokenSecret?: (gatewayId: string) => Promise<void>;
+  
   readGlmGatewayInstanceName: (gatewayId: string) => Promise<string | null>;
-  /**
-   * Reconciles the fleet-control Ingress paths with the post-retire
-   * desired-state. Called after helm-uninstall + cleanup so the
-   * external Cloud-Tasks RPC paths for the retired gateway disappear
-   * immediately, without waiting for the next reconciler tick.
-   */
-  syncFleetIngress: () => Promise<void>;
+
+syncFleetIngress: () => Promise<void>;
   helmUninstallTimeoutMs: number;
   pollIntervalMs: number;
   now: () => number;
@@ -84,10 +64,8 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
         };
       }
     }
-    // null live state → gateway never started; safe to retire (no pod, no
-    // customers, nothing to drain).
 
-    const instanceName = await deps.readGlmGatewayInstanceName(gatewayId);
+const instanceName = await deps.readGlmGatewayInstanceName(gatewayId);
     if (!instanceName) {
       return {
         steps: [],
@@ -114,11 +92,8 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const cleanupStartedAt = deps.now();
     await reportStep(ctx, { name: "cleanup", status: "running", startedAt: cleanupStartedAt });
     try {
-      // Order matters: glmGateways FIRST so the desired-state record
-      // disappears even if heartbeat delete fails partway. Subsequent
-      // re-add of the same gatewayId would otherwise 409 forever on a
-      // lingering retired desired-state doc.
-      await deps.deleteGlmGateway(gatewayId);
+
+await deps.deleteGlmGateway(gatewayId);
       await deps.deleteGatewayHeartbeat(gatewayId);
       if (deps.archiveAuthTokenSecret) {
         await deps.archiveAuthTokenSecret(gatewayId);
@@ -145,15 +120,7 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
       };
     }
 
-    // P2 audit follow-up: helm uninstall --wait guarantees the pod is
-    // terminated by the time the helm-uninstall poll exits, but a final
-    // heartbeat write fired in the pod's SIGTERM handler can land in
-    // Firestore AFTER the cleanup step deleted the doc — resurrecting
-    // it. One re-check + re-delete pass catches in-flight writes; the
-    // orphan-heartbeat reaper handles anything that slips through (60s
-    // window). Skipped silently when readGatewayHeartbeatExists isn't
-    // wired (back-compat for older tests/callers).
-    if (deps.readGatewayHeartbeatExists) {
+if (deps.readGatewayHeartbeatExists) {
       const quiesceStartedAt = deps.now();
       await reportStep(ctx, { name: "heartbeat-quiesce", status: "running", startedAt: quiesceStartedAt });
       try {
@@ -177,9 +144,8 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
           completedAt: deps.now(),
           error: msg,
         });
-        // Non-fatal: reaper will catch any zombie within 60s. Log loudly
-        // so on-call sees the soft failure but the retire still succeeds.
-        deps.log(
+
+deps.log(
           `[retire-gateway] heartbeat-quiesce failed for ${gatewayId} (reaper will heal within 60s): ${msg}`,
         );
       }
@@ -204,12 +170,8 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
         completedAt: deps.now(),
         error: msg,
       });
-      // Cleanup already committed (helm uninstalled + glmGateways
-      // deleted + heartbeat deleted). The reconciler tick will re-sync
-      // the Ingress within ~30s once whatever broke kubectl recovers.
-      // Operator doesn't need to take action — log loudly so on-call
-      // doesn't think the LB is permanently broken.
-      deps.log(
+
+deps.log(
         `[retire-gateway] cleanup committed but fleet-ingress sync failed; reconciler will heal within 30s — ${msg}`,
       );
       return { steps: [], success: false, error: msg };

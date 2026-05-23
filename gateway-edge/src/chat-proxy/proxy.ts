@@ -41,9 +41,6 @@ import {
   bridgeHealthBody,
 } from "./openclaw/bridge-boot-status.js";
 
-// CHAT_PROXY_PORT not PORT — shares a process with gateway-edge (PORT=3001).
-// Guarded by NODE_ENV: process.exit at module load would kill the test
-// runner now that gateway-edge side-effect-imports this file.
 if (process.env.NODE_ENV !== "test") {
   if (!process.env.MM_INTERNAL_URL) {
     console.error("FATAL: MM_INTERNAL_URL is required (in-cluster Mattermost URL, e.g. http://mattermost.<ns>.svc.cluster.local:8065)");
@@ -91,13 +88,6 @@ async function resolveMmUserId(mmToken: string): Promise<string | null> {
   }
 }
 
-/**
- * Parse an HTTP `Retry-After` header into milliseconds. Per RFC 7231 the
- * value is either delta-seconds (e.g. `"120"`) or an HTTP-date. Anything
- * else (null, garbage, NaN) returns `undefined` so the caller falls back
- * to its default interval — guards the bridge-reconnect probe loop
- * against `NaN * 1000` sleeps that would wedge it.
- */
 function parseRetryAfterMs(raw: string | null): number | undefined {
   if (raw == null) return undefined;
   const trimmed = raw.trim();
@@ -148,10 +138,8 @@ async function fetchMmChannelMemberIds(
       if (typeof m.user_id === "string") ids.add(m.user_id);
     }
     if (batch.length < 200) return ids;
-    // Last allowed page still full → more members exist. Fail closed
-    // (resolver caches nothing, delivers to nobody) rather than silently
-    // dropping legitimate members from the allowlist. No silent failures.
-    if (page === MAX_PAGES - 1) {
+
+if (page === MAX_PAGES - 1) {
       throw new Error(
         `MM channel members ${channelId} exceeded ${MAX_PAGES * 200} — refusing partial set`,
       );
@@ -172,11 +160,6 @@ async function probeGatewayReady(
   }
 }
 
-// Exported so gateway-edge's /metrics endpoint can merge chat-proxy's
-// metrics into the single registry it serves on port 3001 — no separate
-// metrics listener/port after the fold. Default process metrics are
-// collected once by gateway-edge's registry; collecting them here too
-// would duplicate-name on Registry.merge.
 export const chatProxyMetricsRegistry = new Registry();
 const metricsRegistry = chatProxyMetricsRegistry;
 
@@ -186,12 +169,6 @@ const ocWsConnectionsActive = new Gauge({
   registers: [metricsRegistry],
 });
 
-// PR-2c: capacity planning + ops visibility. Each builder-shell
-// session-close emits one inc with the reason label. Backpressure
-// closes (`backpressure-client` / `backpressure-upstream`) are the
-// signal that 4 MiB outbound cap is biting — if these climb, the
-// chat-proxy is either undersized, the client is on a slow link,
-// or the gateway is producing faster than reasonable to drain.
 const builderShellSessionCloseTotal = new Counter({
   name: 'chat_proxy_builder_shell_session_close_total',
   help: 'Builder-shell session close events, by reason (client-disconnect / upstream-disconnect / upstream-unreachable / backpressure-* / invalid-ticket)',
@@ -321,10 +298,6 @@ const memberResolveFailuresTotal = new Counter({
 });
 const lastMemberResolveWarnByChannel = new Map<string, number>();
 
-// Membership-scoped, per-channel-serialized ephemeral frame emitter.
-// Phase 8.1 security (members-only) + Copilot #2 (no stale-after-fresh)
-// hygiene, frame-name-agnostic so `octogee.ctx` (Phase 7.C) and
-// `octogee.phase` (Phase 2 B-P1-2) share one audited path.
 function makeScopedFrameEmitter<P extends object>(
   event: string,
   channelMembers: ChannelMemberResolver,
@@ -393,10 +366,6 @@ const bridgeBootStatusGauge = new Gauge({
   registers: [metricsRegistry],
 });
 
-// Phase 8.2 — anti-recurrence net for the Appendix A silent-bridge
-// failure. Module-scope so /healthz/bridge can read it; heartbeats
-// from t0 while non-connected (incl. a misconfigured-and-skipped
-// bridge — that *should* be loud).
 const bridgeBootStatus = createBridgeBootStatus({
   gauge: bridgeBootStatusGauge,
   log: (msg) => console.warn(msg),
@@ -444,12 +413,6 @@ function getOpenClawIdentity(): DeviceIdentity {
   return openclawIdentity;
 }
 
-// Guard the init: after the chat-proxy fold (POST-BENDER-CLEANUP-SPEC
-// §2.6) this module shares the gateway-edge process, where lib/db.ts has
-// already called initializeApp. A second unguarded init with a different
-// config throws "Firebase app [DEFAULT] already exists with a different
-// configuration" at boot. Same project (FIREBASE_PROJECT == GCLOUD_PROJECT)
-// either way, so reusing the existing app is correct.
 if (!admin.apps.length) {
   if (SA_KEY_PATH) {
     const fs = await import("node:fs");
@@ -515,16 +478,6 @@ export function setCors(req: http.IncomingMessage, res: http.ServerResponse): vo
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-/**
- * HTTP paths the chat-proxy handler owns on the gateway pod. Only the
- * pod-pinned surfaces remain here: the bridge health probe and the
- * OpenClaw approval callback (the in-pod activity bridge registers it).
- * MM REST (/api/v4/*) + the credential mint (/api/auth/mattermost) are
- * stateless cluster traffic — they moved to octogee-api per
- * POST-BENDER-CLEANUP-SPEC §2.7. WS upgrades (/api/v4/websocket,
- * /api/openclaw/ws/*, builder-shell) are handled by the upgrade listener,
- * not this predicate. `/health` + `/metrics` belong to Express.
- */
 export function chatProxyOwnsHttpPath(strippedPath: string): boolean {
   return (
     strippedPath === "/healthz" ||
@@ -545,20 +498,7 @@ export async function chatProxyHandleRequest(
     return;
   }
 
-  // /metrics is intentionally NOT served on the public-Ingress port.
-  // Prometheus scrapes the dedicated metrics listener (port 9092)
-  // via the cluster-internal Service. Falling through to the 404
-  // handler below prevents chat.octogee.com/metrics from exposing
-  // counter cardinality + the default prom-client process telemetry
-  // (CPU, memory, GC, file descriptors) to anonymous external
-  // clients. See createMetricsServer() below + helm/octogee/charts/
-  // chat-proxy. PR-2d production hardening.
-
-  // Strip the gateway prefix from req.url + return the stripped urlPath.
-  // forwardMmRest + approvalCallbackHandler construct upstream URLs from
-  // req.url, so a single mutation point keeps the strip consistent
-  // across every consumer (matcher + proxy target).
-  const urlPath = applyGatewayPrefixStripInPlace(req);
+const urlPath = applyGatewayPrefixStripInPlace(req);
 
   if (urlPath === "/healthz" || urlPath === "/health" || urlPath === "/_health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -567,9 +507,8 @@ export async function chatProxyHandleRequest(
   }
 
   if (urlPath === "/healthz/bridge") {
-    // Always 200 / ready:true — the pod must keep serving chat even when
-    // the activity bridge is degraded. `degraded` is the operator signal.
-    res.writeHead(200, { "Content-Type": "application/json" });
+
+res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(bridgeHealthBody(bridgeBootStatus.snapshot(), Date.now())));
     return;
   }
@@ -594,12 +533,6 @@ type UpstreamOutcome =
   | { ok: true; upstream: WebSocket }
   | { ok: false; httpStatus: string };
 
-// The upstream handshake is its own sub-state-machine: fetch a gateway
-// token, attempt the WS handshake, and on `auth-failed` rotate the token
-// once (invalidate → skip-cache refetch → single retry) before giving up.
-// Pulled out of handleOpenClawWsUpgrade so the upgrade handler reads as a
-// linear pipeline; refusal-status mapping stays with the caller (it owns
-// the raw socket). Pinned by proxy-oc-ws-upgrade.spec.ts.
 async function establishUpstreamWithRotation(
   gatewayId: string,
   gatewayUrl: string,
@@ -762,12 +695,7 @@ function handleOpenClawWsUpgrade(
       wss.handleUpgrade(req, socket, head, (clientWs) => {
         ocWsConnectionsActive.inc();
 
-        // Watch for gatewayId migration mid-session. The WS upstream URL
-        // is captured at upgrade time (above); without this watcher, a
-        // customer migrated A→B keeps talking to A until the WS naturally
-        // dies. On change, close the client WS (1001 = going away) so the
-        // browser reconnects and re-resolves to the new gateway.
-        const stopGatewayWatch = watchGatewayIdChange(
+const stopGatewayWatch = watchGatewayIdChange(
           db,
           uid,
           gatewayId,
@@ -871,21 +799,13 @@ export function attachChatProxyWsUpgrade(server: http.Server) {
   const wss = new WebSocketServer({ noServer: true });
   const mmWss = new WebSocketServer({ noServer: true });
 
-  // Shared router for new WS surfaces (builder-shell, etc.). MM +
-  // OpenClaw branches stay inline because they own specialized
-  // internal handshake/Origin/metric paths that don't pay back the
-  // refactor cost yet. Future WS surfaces register via
-  // `wsRouter.add({...})`; the router's `dispatch` is invoked from
-  // the upgrade handler below when neither MM nor OpenClaw match.
-  const wsRouter = new WsUpgradeRouter();
+const wsRouter = new WsUpgradeRouter();
 
   server.on("upgrade", (req, socket, head) => {
-    // Capture the pre-strip URL for diagnostics on the no-match path.
+    
     const originalUrl = req.url ?? "(none)";
-    // Strip the gateway prefix here too: the OC + MM WS upgrade matchers
-    // below check the stripped path, AND `handleOpenClawWsUpgrade`
-    // re-reads req.url for its UUID extraction.
-    const urlPath = applyGatewayPrefixStripInPlace(req);
+
+const urlPath = applyGatewayPrefixStripInPlace(req);
     if (urlPath.startsWith("/api/openclaw/ws/")) {
       handleOpenClawWsUpgrade(wss, req, socket, head);
       return;
@@ -914,13 +834,8 @@ export function attachChatProxyWsUpgrade(server: http.Server) {
       return;
     }
     if (wsRouter.dispatch(req, socket, head)) return;
-    // No WS route matched. Log the stripped path dispatch tested + the
-    // original (pre-strip) URL so a 404'd upgrade is debuggable — e.g. a
-    // builder-shell upgrade that should have matched /builder-shell/ but
-    // didn't (strip mismatch, route not registered, ticket-format drift).
-    // Redact long token-like segments (ticket UUIDs are short-lived creds —
-    // never log them verbatim); the route shape is what we need for triage.
-    const redactWsPath = (p: string) => p.replace(/[A-Za-z0-9_-]{16,}/g, "<redacted>");
+
+const redactWsPath = (p: string) => p.replace(/[A-Za-z0-9_-]{16,}/g, "<redacted>");
     console.warn(
       `[ws-upgrade] no route matched — 404 strippedPath=${redactWsPath(urlPath)} originalUrl=${redactWsPath(originalUrl)}`,
     );
@@ -928,16 +843,9 @@ export function attachChatProxyWsUpgrade(server: http.Server) {
     socket.destroy();
   });
 
-  // Exposed so attachBuilderShellRoute() can register its route on
-  // the same server without adding a second `server.on('upgrade')`
-  // listener. The router was created above with no routes — only
-  // builder-shell adds one in startup.
-  (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
+(server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
 }
 
-/** Wire the builder-shell upgrade route onto the chat-proxy HTTP
- *  server. Called from startup (not from createServer) so tests can
- *  build a server without dragging in gateway-edge/internal-key env. */
 export async function attachBuilderShellRoute(server: http.Server): Promise<void> {
   const gatewayEdgeUrl = process.env.GATEWAY_EDGE_INTERNAL_URL;
   const internalKey = process.env.INTERNAL_SERVICE_KEY;
@@ -959,16 +867,11 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
       namespace,
       internalServiceKey: internalKey,
     }),
-    // Use the same Origin policy as MM + OpenClaw — reads
-    // OCTOGEE_ALLOWED_WS_ORIGINS env at every call so a helm restart
-    // with new allowlist picks up without re-attaching the route.
-    allowedOrigins: isAllowedWsOrigin,
+
+allowedOrigins: isAllowedWsOrigin,
     onEvent: (e) => {
-      // Single Prometheus counter for capacity planning + paging.
-      // Labels are the BridgeSessionEvent.reason union; if the union
-      // widens (e.g. new backpressure mode) the label set widens
-      // along with it.
-      builderShellSessionCloseTotal.inc({ reason: e.reason });
+
+builderShellSessionCloseTotal.inc({ reason: e.reason });
       if (e.kind === "session-closed") {
         console.warn(
           `[builder-shell] session closed sessionId=${e.sessionId} uid=${e.uid} gatewayId=${e.gatewayId} reason=${e.reason}`,
@@ -981,15 +884,6 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
   console.log(`[builder-shell] WS route attached (gateway-edge=${gatewayEdgeUrl}, ns=${namespace})`);
 }
 
-/**
- * Build a Gitea-backed EditDiffFetcher for Phase 4.5 per-edit thread replies
- * (spec docs/ACTIVITY-STREAM-SPEC.md §10). Returns `undefined` when the
- * required env (GITEA_TOKEN, GITEA_URL or K8S_NAMESPACE) is unset — the
- * bridge falls back to nullEditDiffFetcher and posts placeholder bodies.
- *
- * URL convention mirrors gateway-edge/src/lib/gitea.ts so the same K8s
- * Service + Secret can serve both surfaces.
- */
 async function buildEditDiffFetcher() {
   const giteaToken = process.env.GITEA_TOKEN;
   if (!giteaToken || giteaToken.trim().length === 0) {
@@ -1000,12 +894,8 @@ async function buildEditDiffFetcher() {
     return undefined;
   }
   const ns = process.env.K8S_NAMESPACE || 'octogee';
-  // Derive in-cluster Gitea URL from the namespace only — matches
-  // gateway-edge/src/lib/gitea.ts. We deliberately do NOT honor a
-  // GITEA_URL override here: a misconfigured override would be silently
-  // rejected by the SSRF guard (or worse, send the PAT to the wrong
-  // host), and a single derivation point keeps both surfaces in sync.
-  const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
+
+const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
   const giteaPublicBaseUrl = process.env.GITEA_PUBLIC_BASE_URL || undefined;
   const { createGiteaEditDiffFetcher } = await import('./openclaw/gitea-edit-diff-fetcher.js');
   return createGiteaEditDiffFetcher({
@@ -1016,13 +906,6 @@ async function buildEditDiffFetcher() {
   });
 }
 
-/**
- * Boot the chat-proxy background work — metrics-baseline poller + the
- * MM activity bridge. The HTTP+WS surface itself is attached to
- * gateway-edge's single server (attachChatProxyWsUpgrade + the
- * chatProxyHandleRequest dispatch in gateway-edge/src/index.ts); this
- * function only starts the work that has no inbound socket.
- */
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
@@ -1060,12 +943,7 @@ export async function startChatProxyBackground(): Promise<void> {
       return;
     }
 
-    // Phase 8.1 — scope the ephemeral `octogee.ctx` fan-out to MM users
-    // who are members of the target activity channel (server-side),
-    // closing the cross-user numeric-leak. Membership is resolved with
-    // the admin PAT and TTL-cached; the broadcast predicate is the
-    // member set, so no member list ever crosses the wire.
-    const channelMembers = createChannelMemberResolver({
+const channelMembers = createChannelMemberResolver({
       ttlMs: 60_000,
       fetchMembers: (channelId: string) =>
         fetchMmChannelMemberIds(MM_INTERNAL_URL, mmAdminPat, channelId),
@@ -1199,14 +1077,7 @@ export async function startChatProxyBackground(): Promise<void> {
     });
     console.log('[chat-proxy] MM event listener started (reactions + reply-as-steer)');
 
-    // K8s probes use `tcpSocket`, not this path: `/healthz` can block for
-    // tens of seconds under per-account MM probe load (see
-    // docs/specs/MM-MULTI-ACCOUNT-FOLLOWUP-SPEC.md). The fetch timeout here
-    // caps each probe at 2s; the bridge-reconnect loop's
-    // `probeMaxConsecutiveNotReady` (default 30 ≈ 15s) caps the total probe
-    // budget before falling through to the legacy WS attempt, so a wedged
-    // `/healthz` can't wedge the bridge.
-    const healthUrl = gatewayHealthUrl();
+const healthUrl = gatewayHealthUrl();
     startBridgeUpstreamReconnectLoop({
       probeReady: () => probeGatewayReady(healthUrl),
       probeIntervalMs: 500,

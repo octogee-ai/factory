@@ -15,9 +15,6 @@ import { ensureProjectGiteaRepo } from "./provisioning.js";
 
 const router = Router();
 
-// Reserved project slugs — URL fragments + channel kinds we might add later.
-// Shape validation (charset, length) is delegated to isValidProjectId from
-// the canonical identity module (docs/DATA-MODEL-REVIEW.md §11.3).
 const RESERVED_PROJECT_SLUGS = new Set([
   "channels", "members", "files", "canvas", "chat",
   "settings", "discover", "admin", "new", "create",
@@ -30,8 +27,6 @@ function validateProjectSlug(slug: string): string | null {
   if (RESERVED_PROJECT_SLUGS.has(slug)) return "That slug is reserved.";
   return null;
 }
-
-// ── GET /slug-available?slug=foo — check availability in caller's workspace ──
 
 router.get("/slug-available", async (req: Request, res: Response) => {
   const uid = req.uid!;
@@ -53,8 +48,6 @@ router.get("/slug-available", async (req: Request, res: Response) => {
   const existing = await db.doc(`workspaces/${workspaceId}/projects/${slug}`).get();
   res.json({ available: !existing.exists });
 });
-
-// ── POST / — Create project ─────────────────────────────────────────────────
 
 router.post("/", strictRateLimit, async (req: Request, res: Response) => {
   const uid = req.uid!;
@@ -93,22 +86,14 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       return;
     }
 
-    // Workspace-unique check.
-    const projectRef = db.doc(`workspaces/${workspaceId}/projects/${slug}`);
+const projectRef = db.doc(`workspaces/${workspaceId}/projects/${slug}`);
     const existing = await projectRef.get();
     if (existing.exists) {
       res.status(409).json({ error: "A project with this slug already exists in your workspace" });
       return;
     }
 
-    // Target visibility the caller asked for. `visibility` stays `private`
-    // while `provisioningState` is not yet `active` so half-provisioned docs
-    // never surface in public discovery; `pendingVisibility` preserves the
-    // caller's intent so a failed → retry flow can apply it without the
-    // client re-submitting. `giteaRepoName` is deterministic (the bare
-    // project slug, namespaced by the workspace org), so we persist it
-    // up-front — no reason to defer.
-    const targetVisibility = visibility || "private";
+const targetVisibility = visibility || "private";
     const giteaRepoName = projectRepoName(slug);
 
     await projectRef.set({
@@ -134,19 +119,13 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    // Seed the owner as a member (the subcollection replaces guestUids[]).
-    await projectRef.collection("members").doc(uid).set({
+await projectRef.collection("members").doc(uid).set({
       id: uid,
       role: "owner",
       joinedAt: FieldValue.serverTimestamp(),
     });
 
-    // Provisioning: MM channel + Gitea repo. MM channel creation is a hard
-    // requirement — a project without a chat channel is unusable. Per
-    // docs/PROJECTS-CANVAS-SPEC.md §D4, any MM failure flips the project
-    // to `provisioningState: 'failed'` and surfaces 502 to the client so
-    // the UI can show a retry affordance. No silent swallowing.
-    const callerCtx = await getWorkspaceMmContext(uid, workspaceId, userData);
+const callerCtx = await getWorkspaceMmContext(uid, workspaceId, userData);
     const teamId = callerCtx?.teamId;
     if (!teamId) {
       await projectRef.update({
@@ -170,12 +149,8 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
         team_id: teamId,
         name: channelName,
         display_name: name.trim(),
-        // Project channels carry an Octo agent — they're always private.
-        // (Open channels expose agent activity to anyone on the team and
-        // also don't auto-add the owner, who'd then be missing from
-        // their own project's chat. See scripts/lib/mattermost/channels.ts
-        // — the canonical project channel pattern in the provisioner.)
-        type: "P",
+
+type: "P",
       })) as { id?: string };
       if (!ch?.id) throw new Error("MM returned no channel id");
       mmChannelId = ch.id;
@@ -195,16 +170,7 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       return;
     }
 
-    // Add owner + agent (Octo) as channel members. The MM admin token
-    // creates the channel which makes the admin user the only auto-member;
-    // without explicit adds the owner can't see their own project channel
-    // and — more importantly — the agent isn't there to receive OpenClaw
-    // RPCs. The agent in the channel is the entire reason the channel
-    // exists. Treat missing IDs / add failures as hard errors that flip
-    // the project to `provisioningState: 'failed'` so /retry-provisioning
-    // can reconcile cleanly. Best-effort here would hide a broken state
-    // behind a green "active" flag.
-    const memberAdds: Array<{ id: string | null; label: string }> = [
+const memberAdds: Array<{ id: string | null; label: string }> = [
       { id: callerCtx.userId, label: "owner" },
       { id: callerCtx.coachUserId, label: "agent" },
     ];
@@ -244,11 +210,7 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       createdAt: FieldValue.serverTimestamp(),
     });
 
-    // Activity sibling channel (Activity Stream Phase 1, spec §4.1). Atomic
-    // with primary: if the sibling create or member-add fails, flip the
-    // project's provisioningState to "failed" so /retry-provisioning can
-    // reconcile rather than leaving a half-provisioned pair.
-    try {
+try {
       const { provisionActivityPair } = await import("../../lib/activityPair.js");
       await provisionActivityPair({
         primaryName: channelName,
@@ -280,11 +242,7 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       return;
     }
 
-    // Gitea repo + seeded README (PROJECTS-CANVAS-SPEC §D12).
-    // Failure here flips the project to `failed` so the UI can retry;
-    // the repo is as load-bearing as the MM channel — Canvas has nothing
-    // to render without it.
-    try {
+try {
       await ensureProjectGiteaRepo({
         workspaceId,
         slug,

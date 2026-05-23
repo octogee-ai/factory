@@ -72,13 +72,7 @@ describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulator
     expect(a.body.wsTicket).not.toBe(b.body.wsTicket);
   });
 
-  // Per chat-proxy-fleet-routing fix: the browser uses `gatewayId` to
-  // construct `<proxyUrl>/g/<gatewayId>/api/openclaw/ws/<ticket>` so the
-  // request lands on the chat-proxy in the user's own gateway pod (which
-  // bridges upstream same-pod). chat-proxy-fleet-ingress fans `/g/<gw>/*`
-  // to per-instance `chat-proxy-<instance>` Services. The mint reads the
-  // user doc to discover the user's gatewayId.
-  it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set", async () => {
+it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set", async () => {
     await db.doc("users/caller-uid").set({
       provisioning: { openclaw: { gatewayId: "gw-bender" } },
     });
@@ -91,7 +85,7 @@ describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulator
   });
 
   it("returns gatewayId='' when the user doc has no openclaw provisioning (legacy / pre-provisioning fallback to bare /api path)", async () => {
-    // Different uid than the previous test so the user doc starts empty
+    
     const token = await getIdTokenForUid("no-provisioning-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")

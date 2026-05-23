@@ -1,14 +1,8 @@
-/** MM's hard cap on channel names. Our generator budget fits inside this. */
+
 export const CHANNEL_NAME_MAX_LENGTH = 64;
 
-/** Matches MM's `TeamNameMinLength`. MM rejects 1-char team slugs server-side. */
 export const USERNAME_MIN_LENGTH = 2;
 
-/**
- * Chosen so that the longest generated name exactly fills MM's 64-char cap:
- *   USERNAME_MAX + "-proj-" + PROJECT_ID_MAX + "-" + CUSTOM_CHANNEL_MAX
- *        24     +    6     +       16        +  1  +         17        = 64
- */
 export const USERNAME_MAX_LENGTH = 24;
 
 export const PROJECT_ID_MIN_LENGTH = 1;
@@ -17,33 +11,18 @@ export const PROJECT_ID_MAX_LENGTH = 16;
 export const CUSTOM_CHANNEL_MIN_LENGTH = 1;
 export const CUSTOM_CHANNEL_MAX_LENGTH = 17;
 
-/**
- * Lowercase letters + digits, hyphens as internal separators only. No
- * leading, trailing, or double hyphen. Strict subset of MM's
- * `IsValidAlphaNum` (MM allows repeated hyphens and `__` DM-pair markers
- * — we don't).
- */
 export const USERNAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-/** Project identifiers + custom channel names — no hyphens, keeps the parser unambiguous. */
 export const PROJECT_ID_RE = /^[a-z0-9]+$/;
 export const CUSTOM_CHANNEL_RE = /^[a-z0-9]+$/;
 
 export const PROJECT_DISCRIMINATOR = 'proj' as const;
 export const COMMUNITY_PREFIX = 'community' as const;
 
-/** Reserved channel suffixes for every workspace. Order matters for UI tests. */
 export const RESERVED_WORKSPACE_CHANNELS = ['general', 'coach', 'admin'] as const;
 
-/** MM's default system channels — users never own these. */
 export const MM_SYSTEM_CHANNELS: ReadonlySet<string> = new Set(['town-square', 'off-topic']);
 
-/**
- * Usernames that would collide with a channel suffix, discriminator, or MM
- * system channel. This is our local list; we do NOT mirror MM's
- * `IsReservedTeamName()` — we let MM reject the team-creation call and
- * surface the error at signup, avoiding a second source of truth.
- */
 export const RESERVED_USERNAMES: ReadonlySet<string> = new Set<string>([
   ...MM_SYSTEM_CHANNELS,
   ...RESERVED_WORKSPACE_CHANNELS,
@@ -63,11 +42,6 @@ export function isValidUsername(name: unknown): name is string {
   return true;
 }
 
-/**
- * Returns a UI-ready error message for an invalid username, or `null` if
- * the input is valid. Messages are intentionally terse — they render
- * next to the signup field.
- */
 export function usernameValidationError(name: unknown): string | null {
   if (typeof name !== 'string' || name === '') return 'Username is required.';
   if (name.length < USERNAME_MIN_LENGTH) {
@@ -144,14 +118,6 @@ export type ParsedChannel =
   | { kind: 'foreign'; name: string }
   | { kind: 'unknown'; name: string };
 
-/**
- * Parse a MM channel name in the context of a known username.
- *
- * The parser never guesses — callers supply the username. For
- * cross-workspace attribution (admin unread aggregation, discover feed),
- * use `attributeChannelToUsername(name, knownUsernames)` which iterates
- * with longest-prefix-wins semantics.
- */
 export function parseChannelName(name: string, username: string): ParsedChannel {
   if (typeof name !== 'string' || name === '') return { kind: 'unknown', name: '' };
   if (isMmSystemChannel(name)) return { kind: 'system', name };
@@ -186,14 +152,6 @@ export function parseChannelName(name: string, username: string): ParsedChannel 
   return { kind: 'unknown', name };
 }
 
-/**
- * Attribute a channel to one of a known set of usernames. Returns the
- * owning username, or `null` for system/community/foreign/unknown.
- *
- * Resolves prefix-ambiguous usernames (e.g. `kyle` vs `kyle-x`) by picking
- * the longest match first — critical for admin aggregation where both
- * could plausibly own the same channel name root.
- */
 export function attributeChannelToUsername(
   name: string,
   usernames: readonly string[],
@@ -207,27 +165,6 @@ export function attributeChannelToUsername(
   return null;
 }
 
-/**
- * Derive the set of workspace usernames a user is FULL-MEMBER joined to,
- * based on the MM channel list alone. Signal: presence of
- * `{username}-general|coach|admin` ({@link RESERVED_WORKSPACE_CHANNELS}).
- *
- * **Full-membership only.** Project-only guest collaborations (being in
- * someone's `{owner}-proj-*` without joining their workspace) are
- * deliberately NOT surfaced here. Callers that want both — e.g. the
- * unread aggregator which rolls project-only guest unreads under the
- * owner's key — should use {@link deriveContactedUsernames}.
- *
- * This distinction matters because the return feeds
- * `deriveAppShellWorkspaces` → the MenuBar tile list, and the "bug #3"
- * callout on that function explicitly forbids project-only guests from
- * appearing as workspace tiles.
- *
- * Community channels, MM system channels, DMs, custom workspace
- * channels, and project channels are ignored. Pure — no Firestore,
- * no known-usernames list required. Returns a sorted list with
- * `ownUsername` excluded.
- */
 export function deriveJoinedUsernames(
   channels: ReadonlyArray<{ name: string; type: string }>,
   ownUsername: string | null,
@@ -251,30 +188,6 @@ export function deriveJoinedUsernames(
   return Array.from(usernames).sort();
 }
 
-/**
- * Derive the set of OTHER builder usernames a user has ANY relationship
- * with — full workspace members AND project-only guest collaborators.
- *
- * Two signals, unioned:
- *   1. Full workspace membership (same signal as {@link deriveJoinedUsernames}).
- *   2. Project-only membership — presence of `{username}-proj-{project}-*`
- *      channels marks `{username}` as a builder whose project the user is
- *      in, even when the user hasn't joined the containing workspace.
- *      `-proj-` is a unique delimiter because `proj` is reserved in
- *      {@link RESERVED_USERNAMES} — `isValidUsername` enforces that no
- *      segment of a username equals `proj`, so a real username cannot
- *      embed `-proj-` as a segment break.
- *
- * Callers:
- *   - `aggregateUnreadByContext` → roll project-only unreads under the
- *      owner's `workspace:{slug}` bucket.
- *   - `categorize` / `groupByCategory` callers that want full
- *      `guest-project` bucketing.
- *
- * Do NOT use this for the MenuBar tile list — see deriveJoinedUsernames.
- *
- * Returns a sorted list with `ownUsername` excluded.
- */
 export function deriveContactedUsernames(
   channels: ReadonlyArray<{ name: string; type: string }>,
   ownUsername: string | null,

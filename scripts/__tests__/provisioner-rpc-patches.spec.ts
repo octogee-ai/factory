@@ -163,19 +163,15 @@ describe("buildRemoveCustomerPatch", () => {
   it("deletes the coach MM account via an explicit null sentinel (merge-patch deletion)", () => {
     const patch = buildRemoveCustomerPatch(mkCurrent(), SLUG, AGENT_ID) as any;
     const accounts = patch.channels.mattermost.accounts;
-    // RFC7386 merge-patch: only an explicit `null` deletes a key. An
-    // omitted key is "leave unchanged" — that omission is the BenderEcho
-    // zombie bug (account stayed connected to MM after unmount).
-    expect(Object.prototype.hasOwnProperty.call(accounts, ACCOUNT_ID)).toBe(true);
+
+expect(Object.prototype.hasOwnProperty.call(accounts, ACCOUNT_ID)).toBe(true);
     expect(accounts[ACCOUNT_ID]).toBeNull();
   });
 
   it("does NOT touch sibling accounts (no null, not even present in the fragment)", () => {
     const patch = buildRemoveCustomerPatch(mkCurrent(), SLUG, AGENT_ID) as any;
-    // Siblings must be absent from the patch so merge-patch leaves them
-    // intact; nulling or re-sending them would either delete or churn
-    // other tenants' accounts.
-    expect(Object.keys(patch.channels.mattermost.accounts)).toEqual([ACCOUNT_ID]);
+
+expect(Object.keys(patch.channels.mattermost.accounts)).toEqual([ACCOUNT_ID]);
   });
 
   it("ships bindings as the filtered wholesale array (no id → array-replace), preserving siblings", () => {

@@ -1,26 +1,4 @@
-/**
- * Canonical OpenClaw WS wire layer — the one implementation of the
- * connect-challenge nonce tracker, the WS-open wait, the request/response
- * framing, the response-frame guard, AND the error type. Previously each
- * in-pod client (scripts/lib/gateway-rpc.ts, chat-proxy/src/openclaw/
- * upstream.ts) owned a private copy of all of this plus its own error
- * class — duplicated code on the live gateway handshake path that drifted
- * and bit TEST twice.
- *
- * We own every caller (pre-customer), so rather than preserve the
- * accidental subset/superset split behind a factory indirection, both
- * clients use this single `OpenclawWireError`. Its taxonomy is the
- * superset the provisioner's config-patch retry machine
- * (scripts/lib/apply-config-patch.ts) depends on — kept verbatim, so the
- * scripts side has zero behaviour change. chat-proxy adopts it; its only
- * delta is log text + the `!ok` code on a path its callers don't branch
- * on.
- *
- * Dependency-free (structural socket, no `ws` import, no Buffer/Node
- * globals) so it is safe for the barrel + app's stricter typecheck.
- *
- * Spec: docs/specs/CHAT-PROXY-SHARED-IMPORTS-SPEC.md (Stage 3).
- */
+
 
 export type OpenclawWireErrorCode =
   | "connect-failed"
@@ -42,8 +20,6 @@ export class OpenclawWireError extends Error {
   }
 }
 
-/** Minimal structural view of a `ws` WebSocket — the subset the wire
- * mechanics touch. The real `ws.WebSocket` is structurally assignable. */
 export interface WireSocket {
   on(event: string, listener: (...args: unknown[]) => void): void;
   once(event: string, listener: (...args: unknown[]) => void): void;
@@ -52,8 +28,6 @@ export interface WireSocket {
   terminate(): void;
 }
 
-/** Binary frames arrive as something with `.toString("utf-8")` (a Node
- * Buffer at runtime) — typed structurally so shared/ needs no Buffer. */
 interface Utf8Decodable {
   toString(encoding?: string): string;
 }
@@ -76,13 +50,6 @@ export function isResponseFrame(v: unknown): v is ResponseFrame {
   );
 }
 
-/**
- * `ws` delivers a frame as string | Buffer | ArrayBuffer | Buffer[]
- * (RawData). The original duplicated copies only handled string|Buffer —
- * an ArrayBuffer/fragmented frame silently failed to parse and timed out.
- * Decoded dependency-free (TextDecoder, no Buffer global) so the module
- * stays barrel/app-safe.
- */
 function frameToString(data: unknown): string | undefined {
   if (typeof data === "string") return data;
   if (data instanceof ArrayBuffer) {

@@ -6,9 +6,9 @@ import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-n
 export interface FileTarget {
   slug: string;
   projectSlug: string | null;
-  /** Gitea org — the workspace slug. */
+  
   org: string;
-  /** Bare repo name within the org (`workspace` or the project slug). */
+  
   repoName: string;
   gcsPrefix: string;
 }

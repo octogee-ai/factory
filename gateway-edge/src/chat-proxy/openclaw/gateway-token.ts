@@ -122,7 +122,6 @@ export function invalidateGatewayToken(gatewayId: string): void {
   cache.delete(gatewayId);
 }
 
-/** Test-only: wipe the module-level cache between tests. */
 export function __resetGatewayTokenCacheForTest(): void {
   cache.clear();
 }

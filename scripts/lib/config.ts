@@ -28,9 +28,8 @@ export const GIT_ORG = process.env.GIT_ORG || "octogee";
 export const GIT_SSH_HOST = "gitea";
 export const GIT_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
-/** @deprecated Use GIT_API_TOKEN */
 export const GITHUB_TOKEN = process.env.GIT_API_TOKEN || process.env.GITHUB_TOKEN || "";
-/** @deprecated Use GIT_ORG */
+
 export const GITHUB_ORG = process.env.GIT_ORG || process.env.GITHUB_ORG || "octogee";
 
 export const BLOB_SYNC_MAX_CONCURRENT = 10;
@@ -43,23 +42,14 @@ export function log(msg: string): void {
   console.log(`${ts} [provisioner] ${msg}`);
 }
 
-/** Active log level, read per-call (env is stable in a pod; this keeps
- *  it trivially testable). `info` (default) drops debug/heartbeat
- *  noise; `debug` brings it all back. The PROD verbosity ratchet —
- *  tune via the `LOG_LEVEL` env on the gateway deployment. */
 export function logLevel(): string {
   return (process.env.LOG_LEVEL ?? "info").toLowerCase();
 }
 
-/** Heartbeat / diagnostic detail — silent unless LOG_LEVEL=debug.
- *  Operational state changes + errors stay on `log()` (always on). */
 export function dlog(msg: string): void {
   if (logLevel() === "debug") log(msg);
 }
 
-/** One-line boot banner with the build/runtime identity every app must
- *  log at startup. Env (BUILD_SHA / OPENCLAW_VERSION / OPENCLAW_FORK_SHA)
- *  is baked into the gateway image (infra/gateway/Dockerfile). */
 export function bootBanner(component: string): string {
   return (
     `boot ${component} sha=${process.env.BUILD_SHA ?? "unknown"}` +

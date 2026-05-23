@@ -2,15 +2,6 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
-/**
- * Invariant: every top-level script `infra/gateway/entrypoint.sh` runs must
- * actually ship in the gateway image. The Dockerfile copies entry scripts
- * one-by-one (plus `scripts/lib/` recursively); a script wired into the
- * entrypoint but never added to a `COPY` is a build-passing, CI-passing,
- * boot-time `ERR_MODULE_NOT_FOUND` crash-loop (cf. #962's
- * byosub-syncback-runner.ts). No image build/boot needed to catch it —
- * this is the static entrypoint↔Dockerfile coverage check.
- */
 const repoRoot = path.resolve(__dirname, "../..");
 const entrypoint = readFileSync(
   path.join(repoRoot, "infra/gateway/entrypoint.sh"),
@@ -21,10 +12,6 @@ const dockerfile = readFileSync(
   "utf8",
 );
 
-// Scripts the entrypoint actually invokes from the image, e.g.
-// `… tsx /octogee/scripts/pre-boot-config.ts`. `.bin/tsx` itself has no
-// .ts/.mjs/.js extension so it is not matched; node_modules are npm-
-// installed in-image (RUN npm install), not COPYed, so they're excluded.
 function entrypointScripts(): string[] {
   const re = /\/octogee\/scripts\/([A-Za-z0-9_.\-/]+\.(?:ts|mjs|js))\b/g;
   const out = new Set<string>();
@@ -35,8 +22,6 @@ function entrypointScripts(): string[] {
   return [...out].sort();
 }
 
-// What the Dockerfile stages into the image: explicit file COPYs +
-// directory-prefix COPYs (e.g. `COPY scripts/lib/ /octogee/scripts/lib/`).
 function dockerCoverage(): { files: Set<string>; dirs: string[] } {
   const files = new Set<string>();
   const dirs: string[] = [];
@@ -78,10 +63,7 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
     expect(missing, `entrypoint.sh references nonexistent scripts: ${missing.join(", ")}`).toEqual([]);
   });
 
-  // Regression pin: the unconditional OpenClaw file-log mirror was removed
-  // (CPU/syscall churn + ~2x stdout volume; rich log is on-demand via
-  // `openclaw logs`). Must not silently come back.
-  it("does not reinstate the unconditional openclaw file-log mirror", () => {
+it("does not reinstate the unconditional openclaw file-log mirror", () => {
     expect(entrypoint).not.toContain("tail -F /tmp/openclaw-1000");
     expect(entrypoint).not.toContain("[openclaw-file]");
   });

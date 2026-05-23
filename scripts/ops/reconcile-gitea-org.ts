@@ -1,22 +1,5 @@
-/**
- * In-place, lossless Gitea reconcile (Track 2 / AD6 of
- * docs/specs/GITEA-PER-WORKSPACE-ORGS-SPEC.md).
- *
- *   tsx scripts/ops/reconcile-gitea-org.ts --env=test|prod --slug=<slug> [--apply]
- *
- * Moves a legacy customer (shared `octogee` org, `{slug}-workspace`,
- * project `{ws}-{proj}`) onto the per-#963 scheme (org `{slug}`, repo
- * `workspace`, project `{proj}`) — IN PLACE: per-repo transfer + rename
- * (history/branches/issues/content preserved; nothing created-empty or
- * deleted) + Firestore `.git` re-point. The shared `octogee` org is never
- * renamed/deleted. Default is DRY RUN; `--apply` executes. The
- * `ws-{slug}` user + builders team + membership are NOT this tool's job —
- * the post-#970 gateway mount self-heals them on the next mount (the
- * BenderEcho runbook restarts the gateway right after).
- *
- * Gitea creds from env: GITEA_API_URL (…/api/v1) + GITEA_ADMIN_TOKEN.
- * Firebase project from --env.
- */
+
+
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import {
@@ -57,14 +40,6 @@ export function parseReconcileArgs(argv: string[]): ReconcileArgs {
   return { env: env as "test" | "prod", slug, apply };
 }
 
-/**
- * Re-point an existing repo URL by swapping ONLY the `{owner}/{repo}`
- * segment, preserving scheme/host/embedded-auth/.git suffix exactly —
- * a lossless string replace, not a reconstruction. Handles BOTH the
- * scp-form SSH URL `git@host:{owner}/{repo}.git` (the only shape
- * `initWorkspaceRepo` writes — separator `:`) and HTTP `…/{owner}/{repo}`
- * (separator `/`).
- */
 export function rewriteRepoUrl(
   oldUrl: string,
   oldOwner: string,
@@ -83,7 +58,7 @@ export function rewriteRepoUrl(
       );
     }
   }
-  return oldUrl; // already new / unrecognized — caller verifies
+  return oldUrl; 
 }
 
 const FIREBASE_PROJECT: Record<string, string> = {
@@ -200,9 +175,8 @@ async function loadState(ctx: Ctx): Promise<ReconcileState> {
   const firestoreStale =
     ctx.wsGitea.orgName !== slug ||
     ctx.wsGitea.repoName !== "workspace" ||
-    // scp-form is `host:{slug}/workspace` (no leading slash), HTTP is
-    // `/{slug}/workspace` — match the owner/repo segment in both.
-    !ctx.repoUrl.includes(`${slug}/workspace`) ||
+
+!ctx.repoUrl.includes(`${slug}/workspace`) ||
     ctx.projects.some((p) => p.oldName !== p.projectSlug);
   return {
     slug,
@@ -217,7 +191,7 @@ interface GiteaWrite {
   path: string;
   method: string;
   body: unknown;
-  /** Non-2xx statuses treated as success (idempotent, e.g. 422 org-exists). */
+  
   okStatuses?: number[];
   label: string;
 }
@@ -329,8 +303,7 @@ async function main(): Promise<void> {
 
   for (const action of plan.actions) await applyAction(action, ctx);
 
-  // Post-apply verify: re-gather + re-plan must be empty.
-  const verify = planGiteaReconcile(await loadState(await gatherCtx(db, args.slug, io)));
+const verify = planGiteaReconcile(await loadState(await gatherCtx(db, args.slug, io)));
   if (verify.actions.length > 0 || verify.problems.length > 0) {
     throw new Error(
       `Post-apply verify FAILED: ${JSON.stringify(verify)}`,

@@ -56,13 +56,8 @@ export interface ConfigPatchResult {
   noop?: boolean;
   path?: string;
   config?: unknown;
-  /**
-   * Post-write sha256 of the canonical config bytes. Populated by the octogee
-   * fork patch (see openclaw fork branch) so callers can pipeline subsequent
-   * patches without re-fetching `config.get`. Undefined on stock OpenClaw or
-   * older fork builds.
-   */
-  hash?: string;
+
+hash?: string;
 }
 
 export interface SecretsReloadResult {

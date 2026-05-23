@@ -1,19 +1,4 @@
-/**
- * Cowboy's logger — color-coded, emoji-tagged, human-readable.
- *
- * Streamed through `kubectl logs` / `stern` alongside other services'
- * output, so every line carries the 🤠 cowboy badge so a human eye can
- * scan a multi-pod tail and spot which service emitted what.
- *
- * Three surfaces:
- *   - createLogger().info/warn/error/debug — structured callsites
- *   - createLogger().child(scope, emoji)   — sub-logger with default tag
- *   - createLogger().legacy(msg)           — drop-in for the existing
- *     `(msg: string) => void` shape used everywhere in handlers/.
- *     Detects the legacy `[glm-controller]` prefix and `⚠` warn marker,
- *     normalizes them through the same formatter so every line gets the
- *     timestamp + level glyph + cowboy badge automatically.
- */
+
 
 type Level = "info" | "warn" | "error" | "debug";
 
@@ -24,16 +9,12 @@ export interface ScopeMeta {
 
 export interface FormatOptions {
   color?: boolean;
-  /** Override clock for deterministic tests. */
+  
   now?: () => Date;
 }
 
 export const COWBOY = "🤠 cowboy";
 
-// `Map`s instead of plain objects — keyed lookups via `.get()` aren't
-// flagged by `security/detect-object-injection` the way `obj[key]` is.
-// Both shapes are equally type-safe at the call site (the keys are
-// from a closed union); the Map shape is just lint-quiet.
 type AnsiColor = "reset" | "dim" | "red" | "yellow" | "cyan" | "magenta" | "gray";
 
 const ANSI = new Map<AnsiColor, string>([
@@ -62,9 +43,8 @@ const LEVEL_COLOR = new Map<Level, AnsiColor>([
 
 function paint(text: string, color: AnsiColor, enabled: boolean): string {
   if (!enabled) return text;
-  // Bang-asserts are safe — color is typed to AnsiColor and ANSI is
-  // populated with every variant of the union at module init.
-  return `${ANSI.get(color)!}${text}${ANSI.get("reset")!}`;
+
+return `${ANSI.get(color)!}${text}${ANSI.get("reset")!}`;
 }
 
 export function formatLine(
@@ -93,14 +73,8 @@ export interface Logger {
   error(message: string, meta?: ScopeMeta): void;
   debug(message: string, meta?: ScopeMeta): void;
   child(scope: string, emoji?: string): Logger;
-  /**
-   * Backwards-compatible single-arg log shape. Detects the existing
-   * `[glm-controller]` prefix (strips it — the cowboy badge replaces it)
-   * and the `⚠` warn marker (routes the line through console.warn at the
-   * warn level). Any other prefix (e.g. `[deprovision]`, `[mm]`) passes
-   * through untouched as the message body.
-   */
-  legacy(message: string): void;
+
+legacy(message: string): void;
 }
 
 export interface CreateLoggerOptions extends FormatOptions {
@@ -108,14 +82,7 @@ export interface CreateLoggerOptions extends FormatOptions {
 }
 
 const LEGACY_PREFIX = /^\[glm-controller\]\s*/;
-// Warn marker — split into two anchored patterns instead of one
-// alternation regex. The previous combined pattern triggered a
-// `sonarjs/slow-regex` warning over its alternation + nested
-// quantifiers; two simple anchored regexes are both clearer and
-// linear-time.
-//   - bare:     `⚠ <body>`     — strips the glyph, body becomes the line
-//   - prefixed: `[reaper] ⚠ x` — strips just the glyph + space, keeping
-//                                the sub-system tag for context
+
 const LEGACY_WARN_BARE = /^⚠\s*/;
 const LEGACY_WARN_PREFIXED = /^(\[[^\]]+\]\s*)⚠\s*/;
 
@@ -153,9 +120,8 @@ function makeLogger(
     },
     legacy(message) {
       const stripped = message.replace(LEGACY_PREFIX, "");
-      // Try prefixed first (`[reaper] ⚠ x`) so the sub-system tag is
-      // preserved in the body; fall through to the bare form (`⚠ x`).
-      const prefixedMatch = LEGACY_WARN_PREFIXED.exec(stripped);
+
+const prefixedMatch = LEGACY_WARN_PREFIXED.exec(stripped);
       if (prefixedMatch) {
         const tag = prefixedMatch[1] ?? "";
         const body = tag + stripped.slice(prefixedMatch[0].length);

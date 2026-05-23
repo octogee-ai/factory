@@ -349,13 +349,10 @@ describe("syncFleetIngressPaths", () => {
       "/unmount/gw-test",
       "/health",
     ]);
-    // host + class must round-trip so apply doesn't drop anything else
+    
     expect(applied.spec.rules[0].host).toBe("fleet.example.com");
-    // Cowboy owns ONLY paths (and the host wrapping them, since SSA
-    // can't own paths without the rule). Helm continues to own
-    // ingressClassName, annotations, tls, etc — leave them out of the
-    // apply payload so we don't claim their field ownership.
-    expect(applied.spec.ingressClassName).toBeUndefined();
+
+expect(applied.spec.ingressClassName).toBeUndefined();
     expect(applied.metadata.annotations).toBeUndefined();
     expect(applied.metadata.labels).toBeUndefined();
     expect(applied.spec.tls).toBeUndefined();
@@ -396,7 +393,7 @@ describe("syncFleetIngressPaths", () => {
     expect(calls[1].args).toContain("apply");
     expect(calls[1].args).toContain("--server-side");
     expect(calls[1].args).toContain("--field-manager=cowboy-fleet-controller");
-    // force-conflicts so Cowboy can take ownership of paths from Helm
+    
     expect(calls[1].args).toContain("--force-conflicts");
   });
 
@@ -415,7 +412,7 @@ describe("syncFleetIngressPaths", () => {
       log,
     });
     expect(result.changed).toBe(false);
-    expect(calls).toHaveLength(1); // never tries to apply if the Ingress doesn't exist
+    expect(calls).toHaveLength(1); 
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/not yet present.*deferring/));
   });
 
@@ -463,7 +460,7 @@ describe("computeApiFleetPathOps", () => {
   const STATIC = {
     path: "/api/*",
     pathType: "ImplementationSpecific",
-    // Static Helm path with a NAMED port — must never be read back or touched.
+    
     backend: { service: { name: "gateway-edge", port: { name: "http" } } },
   };
   const fleet = (id: string, instance: string) => ({
@@ -504,20 +501,20 @@ describe("computeApiFleetPathOps", () => {
   });
 
   it("removes a stale /api/g/* entry test-guarded at its index, static path index untouched", () => {
-    // index 0 = static, index 1 = stale fleet entry. No desired gateways.
+    
     const ops = computeApiFleetPathOps([STATIC, fleet("old", "old")], desired([]));
     expect(ops).toEqual([
       { op: "test", path: "/spec/rules/0/http/paths/1/path", value: "/api/g/old/*" },
       { op: "remove", path: "/spec/rules/0/http/paths/1" },
     ]);
-    // index 0 (static) is never referenced.
+    
     expect(ops.some((o) => o.path.includes("paths/0"))).toBe(false);
   });
 
   it("removes descending then re-adds when the fleet set changes (race-safe ordering)", () => {
     const raw = [STATIC, fleet("a", "a"), fleet("b", "b")];
     const ops = computeApiFleetPathOps(raw, desired([{ gatewayId: "c", instanceName: "c" }]));
-    // removes are index-descending (2 before 1) so earlier removes don't shift later indices
+    
     const removeIdx = ops
       .filter((o) => o.op === "remove")
       .map((o) => Number(o.path.split("/").pop()));
@@ -590,7 +587,7 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
     expect(calls).toHaveLength(2);
     expect(calls[1].args).toContain("patch");
     expect(calls[1].args).toContain("--type=json");
-    // never SSA / never owns the whole list
+    
     expect(calls[1].args).not.toContain("--server-side");
     const ops = JSON.parse(calls[1].args[calls[1].args.length - 1]);
     expect(ops).toEqual([

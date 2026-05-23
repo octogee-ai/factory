@@ -61,12 +61,6 @@ import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
 
-// Cowboy's logger writes color + emoji + timestamp to stdout/stderr.
-// `legacy(msg)` is the drop-in shape for the existing handler libs that
-// already produce pre-formatted strings (e.g. `[deprovision] step done ✅`,
-// `[glm-controller] ⚠ reconcile tick failed: ...`). It auto-detects the
-// `⚠` warn marker, strips the redundant `[glm-controller]` prefix, and
-// re-routes through info/warn so every line gets the same shell.
 const logger = createLogger({
   color: process.env.NO_COLOR == null,
   debug: process.env.DEBUG != null,
@@ -75,14 +69,9 @@ const log = (msg: string) => logger.legacy(msg);
 
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
-// Path to the standalone gateway chart baked into the controller image
-// (see glm-controller/Dockerfile). Each gateway instance becomes its
-// own helm release off this chart, named `octogee-gw-<instanceName>`.
+
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
-// Optional per-namespace values overlay (`values.test.yaml` /
-// `values.prod.yaml`). The controller picks the right file based on
-// K8S_NAMESPACE so per-pod env (firebaseProjectId, mmSiteUrl, etc.)
-// follows the cluster.
+
 const GATEWAY_VALUES_FILE = (function () {
   const explicit = process.env.GATEWAY_VALUES_FILE;
   if (explicit) return explicit;
@@ -92,37 +81,17 @@ const GATEWAY_VALUES_FILE = (function () {
     : `${GATEWAY_CHART}/values.test.yaml`;
 })();
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
-// Chart-fingerprint drift auto-rolls gateway pods — rationale on
-// DiffOptions.compareChartFingerprint (issue #997). Derived from the
-// namespace like GATEWAY_VALUES_FILE: any namespace other than
-// `octogee` is treated as TEST and auto-rolls; only `octogee` /
-// `octogee-test` exist today, so a future cluster split must revisit
-// this rather than silently reintroduce the bug.
+
 const AUTO_ROLL_ON_CHART_DRIFT = NAMESPACE !== "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
-// Cowboy-owned Ingress for /restore-customer/<gid>, /quiesce/<gid>,
-// /export/<gid>, /import/<gid>, /unmount/<gid> per gateway plus the
-// static /health rule. The umbrella renders the shell (cert,
-// BackendConfig, IP); this controller writes the per-instance paths.
+
 const FLEET_INGRESS_NAME = process.env.FLEET_INGRESS_NAME ?? "octogee-gateway-fleet-control-ingress";
 const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway";
-// The SINGLE api.octogee.com Ingress. Cowboy surgically patches the
-// per-gateway `/api/g/<gatewayId>/*` paths onto it (leaving Helm's static
-// cluster paths untouched) — NOT a sibling Ingress, because GCE can't
-// merge two Ingresses sharing one host/IP (the sibling never provisions).
-// See FLEET-API-ROUTING-SPEC.md.
+
 const GATEWAY_EDGE_INGRESS_NAME =
   process.env.GATEWAY_EDGE_INGRESS_NAME ?? "gateway-edge-ingress";
-// Hardcoded, deliberately. K8s injects service-discovery env vars
-// (`<SVC>_PORT=tcp://<ip>:<port>`) into every pod for every Service in
-// the namespace. Reading `process.env.GATEWAY_EDGE_PORT` collides with
-// the injected URL form for the `gateway-edge` Service →
-// `parseInt("tcp://…", 10)` = NaN → `port: { number: null }` in the SSA
-// payload → "Required value: port name or number is required" + every
-// reconcile tick fails (in PROD on 2026-05-19). The well-known sidecar
-// port matches the helm/octogee-gateway Service template and never
-// varies per env.
+
 const GATEWAY_EDGE_PORT = 3001;
 
 interface ControllerDeps {
@@ -130,28 +99,14 @@ interface ControllerDeps {
   helm: HelmRunner;
   handlers: OperationHandlers;
   log: (msg: string) => void;
-  /**
-   * Reconciles the umbrella's fleet-control Ingress paths with the
-   * desired-state gateway list. Called every tick (after applyChanges)
-   * so an SSA ownership flip from `helm upgrade --server-side
-   * --force-conflicts` self-heals within one debounce cycle. Optional
-   * — when omitted (e.g. unit tests that don't care), the tick still
-   * runs; only the Ingress sync is skipped.
-   */
-  syncFleetIngress?: (
+
+syncFleetIngress?: (
     gateways: ReadonlyArray<{ gatewayId: string; instanceName: string }>,
   ) => Promise<void>;
-  /** Retry interval after a failed reconcile tick. Defaults to 30s. */
+  
   reconcileRetryMs?: number;
-  /**
-   * SHA-256 of the on-disk gateway chart, threaded into every helm
-   * upsert. Cowboy detects template drift by comparing this against
-   * the value last stored in each release's helm values — a mismatch
-   * triggers re-apply even when image-tag is unchanged. Computed once
-   * at process startup since the chart is baked into the Cowboy image
-   * and only changes via a new glm-controller deployment.
-   */
-  chartFingerprint?: string;
+
+chartFingerprint?: string;
 }
 
 async function applyChanges(
@@ -160,17 +115,14 @@ async function applyChanges(
 ): Promise<void> {
   for (const change of changes) {
     if (change.kind === "drift") {
-      // Drift = a release exists in helm that's not in the target map.
-      // The reconcile-plan upstream of us only adds drift to the target-
-      // vs-actual diff when the release is genuinely surplus (retired
-      // with no mounted customers). Safe to uninstall.
-      await deps.helm.removeInstance({
+
+await deps.helm.removeInstance({
         namespace: NAMESPACE,
         instanceName: change.instanceName,
       });
       continue;
     }
-    // Both create and update carry the new desired state in `to`.
+    
     await deps.helm.upsertInstance({
       namespace: NAMESPACE,
       instanceName: change.instanceName,
@@ -245,16 +197,8 @@ export function startReconciler(deps: ControllerDeps): () => void {
           c.kind === "drift" &&
           Object.prototype.hasOwnProperty.call(targetMap, c.instanceName),
       );
-      // Split preserve-drift into two distinct categories so the operator
-      // can tell the difference at a glance:
-      //   - drainee: glmGateways doc exists with desiredStatus=retired but
-      //     mountedCustomers > 0 — pod intentionally kept up while
-      //     migration drains. Healthy, expected, info-level.
-      //   - orphan: helm release exists but NO matching glmGateways doc.
-      //     Almost always means a retire-gateway op short-circuited
-      //     (deleted the doc but never actually uninstalled), leaving
-      //     a 🧟 zombie that needs operator attention.
-      const desiredGatewayIds = new Set(desired.map((d) => d.gatewayId));
+
+const desiredGatewayIds = new Set(desired.map((d) => d.gatewayId));
       const orphanDrift = preservedDrift.filter(
         (c) => c.kind === "drift" && !desiredGatewayIds.has(c.current.gatewayId),
       );
@@ -300,10 +244,8 @@ export function startReconciler(deps: ControllerDeps): () => void {
         try {
           await deps.syncFleetIngress(fleetGateways);
         } catch (err) {
-          // Re-throw with source tagged so the failure log distinguishes
-          // helm errors from kubectl errors. On-call sees `(source=fleet-ingress)`
-          // and goes straight to the kubectl/SSA path instead of helm releases.
-          const message = err instanceof Error ? err.message : String(err);
+
+const message = err instanceof Error ? err.message : String(err);
           throw new Error(`(source=fleet-ingress) ${message}`);
         }
       }
@@ -361,12 +303,8 @@ async function processOperation(
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
-  // Atomic claim: only this pod transitions pending → running. Two
-  // controller replicas (or a re-fired snapshot listener) racing on the
-  // same op would otherwise both update independently and run the work
-  // twice. The transaction asserts the precondition; the loser's branch
-  // returns claimed=false and bails before doing any work.
-  let claimed = false;
+
+let claimed = false;
   try {
     claimed = await deps.db.runTransaction(async (txn) => {
       const fresh = await txn.get(ref);
@@ -439,19 +377,13 @@ async function main(): Promise<void> {
       gatewayEdgeServiceName: "gateway-edge",
       log,
     }).then(() => undefined);
-  // One fan-out per reconcile/handler tick — both Cowboy-owned Ingresses
-  // (fleet-control on fleet.octogee.com, api-routing on api.octogee.com)
-  // converge from the same gateway list. Sequential to keep log ordering
-  // intuitive; the SSA calls are idempotent so a partial failure is
-  // re-tried on the next tick.
-  const syncAllFleetIngresses = async (gateways: ReadonlyArray<FleetGateway>) => {
+
+const syncAllFleetIngresses = async (gateways: ReadonlyArray<FleetGateway>) => {
     await syncFleetIngressForGateways(gateways);
     await syncApiFleetIngressForGateways(gateways);
   };
-  // Handler-side closure: re-reads desired gateways from Firestore so
-  // it always reflects the post-write state (add-gateway has already
-  // written the new doc; retire-gateway has already deleted it).
-  const handlerSyncFleetIngress = async () => {
+
+const handlerSyncFleetIngress = async () => {
     const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
     const gateways: FleetGateway[] = snap.docs
       .map((d) => d.data() as { gatewayId?: unknown; instanceName?: unknown })
@@ -484,25 +416,16 @@ async function main(): Promise<void> {
 
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
-  // Orphan heartbeat reaper: fires every 60s, deletes `gateways/{id}`
-  // docs that have outlived their `glmGateways/{id}` desired-state and
-  // haven't heartbeated for 5+ min. Without this, a one-off retire
-  // short-circuit (or any cleanup gap) leaves zombie entries in the
-  // Fleet UI forever — e.g. the smoke incident that exposed the helm-
-  // runner type-narrow bug fixed in eb019984.
-  const stopReaper = startOrphanHeartbeatReaper({
+
+const stopReaper = startOrphanHeartbeatReaper({
     db,
     log,
     intervalMs: 60_000,
     stalenessMs: 5 * 60 * 1000,
     now: () => Date.now(),
   });
-  // Stuck-op reaper: fires every 60s, flips `running` glmOperations docs
-  // older than 15 min to `failed`. Without this a controller crash
-  // mid-operation leaves a phantom `running` op forever — incident
-  // 2026-05-13 saw a stuck tester2 → canary op that blocked retries
-  // because the admin UI showed it as still in-progress.
-  const stopStuckOpReaper = startStuckOpReaper({
+
+const stopStuckOpReaper = startStuckOpReaper({
     db,
     log,
     intervalMs: 60_000,
@@ -593,14 +516,7 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
   const orchSnap = await deps.db.doc("config/orchestrator").get();
   let defaultGatewayId = (orchSnap.data() as { defaultGatewayId?: unknown } | undefined)?.defaultGatewayId;
 
-  // Self-seed config/orchestrator when missing. The seed-orchestrator-config.ts
-  // script normally writes this in step 1b of the canonical install sequence,
-  // but it's the easiest step to forget — and forgetting it leaves
-  // bootstrapDefaultGateway with no input and no gateway pod ever installed.
-  // For the recognized prod + test namespaces we can safely derive the
-  // gatewayId from K8S_NAMESPACE and write the doc; custom envs still
-  // require explicit seeding.
-  if (typeof defaultGatewayId !== "string") {
+if (typeof defaultGatewayId !== "string") {
     const derived = deriveDefaultGatewayIdFromNamespace(NAMESPACE);
     if (derived !== null) {
       try {
@@ -750,10 +666,8 @@ async function buildHandlers(
       const doc = await db.collection("gateways").doc(gatewayId).get();
       return doc.exists;
     },
-    // archiveAuthTokenSecret intentionally omitted — leaves the SM
-    // secret in place so re-creating the gateway with the same id is
-    // idempotent. Auth tokens rotate per pod boot anyway.
-    syncFleetIngress,
+
+syncFleetIngress,
     helmUninstallTimeoutMs: 90_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),
@@ -779,10 +693,8 @@ async function buildHandlers(
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({
         imageRepository,
         imageTag,
-        // `standard` is the cattle default — store it as field-absent so the
-        // pooled fleet's desired-state stays byte-identical (and an
-        // operator→standard revert truly restores it).
-        profile: profile === "standard" ? FieldValue.delete() : profile,
+
+profile: profile === "standard" ? FieldValue.delete() : profile,
       });
     },
     readGatewayHeartbeat: async (gatewayId) => {
@@ -861,10 +773,8 @@ function buildDeprovisionCustomerHandler(
         await db.recursiveDelete(db.collection("customerStats").doc(uid));
       },
       nukeWsTickets: async (uid) => {
-        // Firestore batches max out at 500 writes; chunk so a customer
-        // with thousands of historical wsTickets doesn't fail the
-        // firestore step. (Copilot review)
-        const FIRESTORE_BATCH_LIMIT = 500;
+
+const FIRESTORE_BATCH_LIMIT = 500;
         const snap = await db.collection("wsTickets").where("uid", "==", uid).get();
         for (let i = 0; i < snap.docs.length; i += FIRESTORE_BATCH_LIMIT) {
           const batch = db.batch();
@@ -884,28 +794,17 @@ function buildDeprovisionCustomerHandler(
         try {
           await getAuth().deleteUser(uid);
         } catch (err) {
-          // Match on Firebase's structured `.code` rather than message
-          // substring — avoids swallowing unrelated errors. (Review-agent)
-          const code = (err as { code?: string } | null | undefined)?.code;
+
+const code = (err as { code?: string } | null | undefined)?.code;
           if (code === "auth/user-not-found") return;
           throw err;
         }
       },
-      // PR #3: Firebase Hosting site deletion. Sites are
-      // `octogee-<slug>-<projectSlug>` per scripts/lib/projects/create.ts.
-      // The controller pod runs under the gateway GSA via Workload
-      // Identity (helm/octogee/values.yaml:225/236), which already
-      // holds `roles/firebase.admin` in
-      // terraform/modules/iam/main.tf:46-50 — a Firebase-wide role
-      // that covers Hosting site management. No extra IAM grant
-      // required to ship this; least-privilege tightening to
-      // `roles/firebasehosting.admin` is a follow-up.
-      deleteHostingSites: async (slug, projectSlugs) => {
+
+deleteHostingSites: async (slug, projectSlugs) => {
         const auth = new GoogleAuth({
-          // Narrowest scope that covers Hosting site management per
-          // spec §Permissions (P1 review feedback on PR #869 — was
-          // the broader `auth/firebase` before).
-          scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
+
+scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
         });
         const projectId = process.env.GOOGLE_CLOUD_PROJECT ?? "octogee";
         const result = await deleteHostingSitesForCustomer(
@@ -932,9 +831,6 @@ function buildDeprovisionCustomerHandler(
   });
 }
 
-// loadCustomerCleanupContext moved to lib/customer-ops/cleanup-context.ts
-// for direct testability. Wiring layer here just adapts the call shape.
-
 async function callUnmountRpc(
   db: Firestore,
   secret: string,
@@ -942,9 +838,8 @@ async function callUnmountRpc(
   slug: string,
   log: (msg: string) => void,
 ): Promise<void> {
-  // Resolve gateway URL by reading the same Firestore desired-state doc
-  // the migrate-customer handler uses.
-  const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+
+const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
   const migrationId = `deprov-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const body = JSON.stringify({ migrationId, slug });
   const signature = signFleetRequest(secret, migrationId, body);

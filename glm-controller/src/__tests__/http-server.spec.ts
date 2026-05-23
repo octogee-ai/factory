@@ -77,11 +77,8 @@ function makeQuery(
 
 function buildDb(store: FakeStore) {
   return {
-    // Bare-bones transaction stub: real Firestore replays on contention,
-    // here we just route txn.get/update to the underlying ref methods.
-    // Sufficient for verifying the read-before-write order + the
-    // intended writes; doesn't exercise contention/retry semantics.
-    runTransaction: async <T,>(
+
+runTransaction: async <T,>(
       fn: (txn: {
         get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
         update: (
@@ -97,10 +94,8 @@ function buildDb(store: FakeStore) {
           ref: { update: (patch: Record<string, unknown>) => Promise<void> },
           patch: Record<string, unknown>,
         ) => {
-          // Buffer writes till the callback completes — mirrors real
-          // Firestore semantics where writes commit atomically at the
-          // end of the txn callback.
-          queued.push(() => ref.update(patch));
+
+queued.push(() => ref.update(patch));
         },
       };
       const result = await fn(txn);
@@ -346,15 +341,7 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
-  // Customer-detail factory mount (PR #865 lift). The compute-heavy
-  // CSI pipeline lives in gateway-edge so glm-controller's stub
-  // returns 503 with a friendly reason instead of pretending to
-  // refresh. The customer-list / customer-detail GETs are exercised
-  // by the gateway-edge integration suite (admin-csi.integration);
-  // we just verify the route is mounted here so a missing factory
-  // wire-up shows up as a deterministic test failure.
-
-  it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {
+it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
       .get("/api/admin/customer/does-not-exist")
@@ -438,19 +425,16 @@ describe("createHttpServer — admin gateway routes", () => {
         slug: "basim",
       });
 
-      // Job is now failed with operator-kicked error.
-      const job = store.restoreJobs.find((j) => j.id === "job-stuck");
+const job = store.restoreJobs.find((j) => j.id === "job-stuck");
       expect(job?.data.state).toBe("failed");
       expect(job?.data.error).toMatch(/operator-kicked/);
 
-      // Gateway's inFlightJobId is cleared so the next reconcile tick
-      // can claim a new job for the same customer.
-      expect(store.gateways["gw-test"].inFlightJobId).toBeNull();
+expect(store.gateways["gw-test"].inFlightJobId).toBeNull();
     });
 
     it("refuses to kick a job that's already in a terminal state (idempotent / safe)", async () => {
       seedStuckJob();
-      // Pre-complete the job — operator may have raced with the gateway's ack.
+      
       const job = store.restoreJobs.find((j) => j.id === "job-stuck")!;
       job.data.state = "done";
       job.data.completedAt = { toMillis: () => 2_500 };
@@ -459,17 +443,14 @@ describe("createHttpServer — admin gateway routes", () => {
         .post("/api/admin/restore-jobs/job-stuck/kick")
         .set("Authorization", "Bearer admin-token");
       expect(res.status).toBe(409);
-      // Error message uses the new allowlist phrasing — `done` isn't in
-      // {pending, dispatched, running} so it's not kickable.
-      expect(res.body.error).toMatch(/not kickable|allowed/i);
+
+expect(res.body.error).toMatch(/not kickable|allowed/i);
       expect(res.body.state).toBe("done");
     });
 
     it("preserves inFlightJobId when it points at a different (newer) job — only clears when it matches the kicked job", async () => {
-      // Operator hits kick on jobA, but the gateway doc still has jobB.
-      // We mark jobA failed for the audit trail; we MUST NOT clear the
-      // gateway's lock since that would stomp the fresh assignment.
-      seedStuckJob();
+
+seedStuckJob();
       store.gateways["gw-test"].inFlightJobId = "different-job";
       const app = createHttpServer(buildDeps(store));
       const res = await request(app)
@@ -478,13 +459,13 @@ describe("createHttpServer — admin gateway routes", () => {
       expect(res.status).toBe(200);
       const job = store.restoreJobs.find((j) => j.id === "job-stuck");
       expect(job?.data.state).toBe("failed");
-      // Lock NOT cleared — it points at a different (presumably newer) job.
+      
       expect(store.gateways["gw-test"].inFlightJobId).toBe("different-job");
     });
 
     it("rejects (409) when the job state isn't in the kickable allowlist (defense against unknown future states)", async () => {
       seedStuckJob();
-      // Hypothetical future state we don't explicitly permit.
+      
       const job = store.restoreJobs.find((j) => j.id === "job-stuck")!;
       job.data.state = "migrating";
       const app = createHttpServer(buildDeps(store));
@@ -493,7 +474,7 @@ describe("createHttpServer — admin gateway routes", () => {
         .set("Authorization", "Bearer admin-token");
       expect(res.status).toBe(409);
       expect(res.body.error).toMatch(/not kickable|allowed/i);
-      // State should be unchanged — we refused to write.
+      
       expect(job.data.state).toBe("migrating");
     });
   });

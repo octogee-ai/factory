@@ -1,7 +1,5 @@
-// Tests the helm/octogee-gateway/ standalone chart — one helm release
-// per gateway instance, owned by Cowboy. Replaces the old helm-gateway-
-// instances + helm-multi-instance-routing + helm-gateway-edge-sidecar
-// suites that rendered the now-deleted gateway sub-chart of the umbrella.
+
+
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
@@ -14,12 +12,8 @@ beforeAll(() => {
   if (!fs.existsSync(CHART_PATH)) {
     throw new Error(`octogee-gateway chart not found at ${CHART_PATH}`);
   }
-  // Warm helm's CRD cache + binary load before the first `it` runs. On CI's
-  // cold runner the first `helm template` invocation has taken ~11s, which
-  // blew past Vitest's 5s default test timeout. Subsequent calls in the
-  // same process complete in <100ms, so a single warm-up here removes the
-  // flake without raising every test's timeout budget.
-  spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "instanceName=warmup", "--set", "imageTag=warmup", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example", "--set", "env.chatProxyPublicUrl=https://example.com"], { encoding: "utf-8" });
+
+spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "instanceName=warmup", "--set", "imageTag=warmup", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example", "--set", "env.chatProxyPublicUrl=https://example.com"], { encoding: "utf-8" });
 }, 60_000);
 
 const REQUIRED_VALUES: Record<string, string> = {
@@ -75,24 +69,16 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
     expect(dep).toMatch(/name:\s*OPENCLAW_BROADCAST_ALL_AGENT_RUNS/);
-    // Hunks A+B (B-P1-1/2/3) are dormant without this — same failure
-    // class as the Appendix A.5 silent bridge.
-    expect(dep).toMatch(/name:\s*OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS/);
+
+expect(dep).toMatch(/name:\s*OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS/);
   });
 
   it("every doc starts with `apiVersion:` (regression: requireIdentity helper used to leak its values onto the first line)", () => {
-    // The `octogee-gateway.requireIdentity` helper used to call
-    // `required ...` directly, which returns the validated value;
-    // because the helper was included with `{{- ... -}}` trims, that
-    // value got concatenated onto the next line of the rendered doc,
-    // producing things like `gw-blueblueapiVersion: apps/v1` and the
-    // helm validation error `apiVersion not set`. Cowboy's
-    // `helm upgrade --install` then crash-looped on first add-gateway
-    // exercise. Fix in _helpers.tpl: discard the return via `$_ :=`.
-    const out = helmTemplate();
+
+const out = helmTemplate();
     const docs = out.split(/^---\s*$/m).map((d) => d.trim()).filter(Boolean);
     for (const doc of docs) {
-      // Skip helm comment-only sections.
+      
       const firstNonComment = doc
         .split("\n")
         .find((line) => line.trim() && !line.trim().startsWith("#"));
@@ -145,10 +131,8 @@ describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
   it("inherits gateway + gateway-edge images from one imageTag field by default", () => {
     const out = helmTemplate("octogee-gw-default", { imageTag: "cafef00d" });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    // Find each container block and assert the resolved image tag.
-    // chat-proxy folded into gateway-edge (POST-BENDER-CLEANUP-SPEC §2.6)
-    // — no separate chat-proxy container/image.
-    const gatewayBlock = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
+
+const gatewayBlock = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     const wsApiBlock = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(gatewayBlock?.[0]).toMatch(/image:\s*"[^"]*octogee-gateway:cafef00d"/);
     expect(wsApiBlock?.[0]).toMatch(/image:\s*"[^"]*gateway-edge:cafef00d"/);
@@ -163,7 +147,7 @@ describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const ge = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(ge?.[0]).toMatch(/image:\s*"[^"]*gateway-edge:hotfix-ge-99"/);
-    // gateway still uses bundle SHA
+    
     const gw = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(gw?.[0]).toMatch(/image:\s*"[^"]*octogee-gateway:abc1234"/);
   });
@@ -183,9 +167,8 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const ge = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
     expect(ge?.[0]).toMatch(/name:\s*gateway-edge/);
-    // chat-proxy + metrics now share the single gateway-edge port (3001);
-    // the old 8080/9092 named ports are gone after the single-server merge.
-    expect(ge?.[0]).not.toMatch(/name:\s*chat-proxy/);
+
+expect(ge?.[0]).not.toMatch(/name:\s*chat-proxy/);
     expect(ge?.[0]).not.toMatch(/name:\s*cp-metrics/);
   });
 
@@ -203,9 +186,8 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const wsBlock =
       dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
-    // Spot-check a sample of required + optional secrets that the
-    // factory (admin-fleet-router) and BYOT routes need.
-    expect(wsBlock).toMatch(/INTERNAL_SERVICE_KEY/);
+
+expect(wsBlock).toMatch(/INTERNAL_SERVICE_KEY/);
     expect(wsBlock).toMatch(/STRIPE_SECRET_KEY/);
     expect(wsBlock).toMatch(/MM_ADMIN_TOKEN/);
     expect(wsBlock).toMatch(/GITEA_TOKEN/);
@@ -242,11 +224,8 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/initContainers:[\s\S]*?- name:\s*fix-perms/);
     expect(dep).toMatch(/runAsUser:\s*0[\s\S]*?runAsNonRoot:\s*false/);
-    // PVC scope is the whole home, not just .openclaw. The init seeds
-    // shell defaults from /etc/skel idempotently (cp -an = no-clobber)
-    // so a fresh PVC boots with .bashrc/.profile + operator
-    // customizations on subsequent boots survive untouched.
-    expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
+
+expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     expect(dep).toMatch(/chown -R 1000:1000 \/home\/node\b/);
     expect(dep).not.toMatch(/chown -R 1000:1000 \/home\/node\/\.openclaw\b/);
   });
@@ -254,9 +233,8 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
   it("mounts the data PVC at /home/node (the whole operator home, not just .openclaw)", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    // gateway + gateway-edge containers + the fix-perms init container
-    // all share the same PVC at /home/node. chat-proxy stays stateless.
-    const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
+
+const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
     expect(dataMounts.length).toBe(3);
     expect(dep).not.toMatch(/mountPath:\s*\/home\/node\/\.openclaw\b/);
   });
@@ -275,10 +253,8 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     const gw =
       dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ??
       "";
-    // openclaw 2026.5.x serves /healthz; any unrouted path falls through
-    // to the Control-UI static handler, which 503s (image skips ui:build)
-    // — a 503 startup probe never lets the gateway container go Ready.
-    expect(gw).toMatch(
+
+expect(gw).toMatch(
       /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/,
     );
     expect(gw).toMatch(/livenessProbe:\s+tcpSocket:\s+port:\s*18789/);
@@ -287,14 +263,6 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
   });
 });
 
-// ── profile-aware credential injection ──────────────────────────────────
-// Operator-profile gateways (BenderEcho today, future Builder-operators)
-// authenticate to external LLM providers via per-account login
-// (`claude auth login`, `codex login`) — tokens persist on the PVC at
-// the CLIs' standard paths, so a platform-injected ANTHROPIC_API_KEY
-// env var would shadow the operator's OAuth credential at runtime
-// (Claude Code reads env first). Standard/cattle gateways keep the
-// platform-injected key (the shared-pool model).
 describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
   it("injects ANTHROPIC_API_KEY on the gateway container for the standard profile (default, zero-regression)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
@@ -343,10 +311,8 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(operatorDep).toMatch(
       /- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"operator"/,
     );
-    // Default/cattle rendering: env var still present but empty —
-    // entrypoint's `[ "$GATEWAY_PROFILE" = "operator" ]` falls through,
-    // no operator-only code runs.
-    const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+
+const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     expect(cattleDep).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*""/);
   });
 });
@@ -399,11 +365,6 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
   });
 });
 
-// Structural split: NetworkPolicy has TWO ingress rules. First rule has
-// `- from:` (backstop, same-instance-only). Second rule has only `- ports:`
-// (allow any source). Split the rendered NP at the second-rule marker so
-// each test can assert against the right scope — port-presence alone would
-// pass even if a regression accidentally put :3003 inside the from-rule.
 function splitNetworkPolicyRules(np: string): { restricted: string; open: string } {
   const fromIdx = np.indexOf("- from:");
   const openIdx = np.indexOf("\n    - ports:", fromIdx);
@@ -435,25 +396,21 @@ describe("helm/octogee-gateway/ — operator-profile NetworkPolicy port allowlis
     );
     expect(np).not.toBeNull();
     const { open } = splitNetworkPolicyRules(np!);
-    // The open rule must NOT carry a from: selector — that's the whole point.
+    
     expect(open).not.toMatch(/from:/);
-    // Every port the LB / cluster legitimately reaches:
-    // fleet-http (Cloud Tasks /restore-customer + LB health check)
-    expect(open).toMatch(/port:\s*3003/);
-    // gateway-edge (api.octogee.com /api/g/<gw>/* — HTTP locality + the
-    // folded chat-proxy WS surfaces, all on the single port now).
-    expect(open).toMatch(/port:\s*3001/);
-    // chat-proxy's old 8080/9092 ports are gone after the fold + single-
-    // server collapse (POST-BENDER-CLEANUP-SPEC §2.6/§2.7).
-    expect(open).not.toMatch(/port:\s*8080/);
+
+expect(open).toMatch(/port:\s*3003/);
+
+expect(open).toMatch(/port:\s*3001/);
+
+expect(open).not.toMatch(/port:\s*8080/);
     expect(open).not.toMatch(/port:\s*9092/);
-    // preview (preview-ingress)
+    
     expect(open).toMatch(/port:\s*9080/);
-    // gateway metrics (Prometheus scrape)
+    
     expect(open).toMatch(/port:\s*9091/);
-    // openclaw WS — cross-pod Cowboy/fleet-controller RPC + internalUrl
-    // dialing the per-instance Service.
-    expect(open).toMatch(/port:\s*18789/);
+
+expect(open).toMatch(/port:\s*18789/);
   });
 
   it("is NOT rendered for standard-profile gateways (cattle don't expose :3005 so no backstop needed)", () => {

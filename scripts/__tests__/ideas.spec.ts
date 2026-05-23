@@ -55,13 +55,11 @@ describe("validateIdeaSlug", () => {
   });
 
   it("accepts a slug at exactly 60 characters", () => {
-    // 60 chars: "a" repeated 60 times
+    
     const slug = "a".repeat(60);
     expect(validateIdeaSlug(slug)).toBe(true);
   });
 });
-
-// ── ideaExists ──────────────────────────────────────────────────────────────────
 
 describe("ideaExists", () => {
   let tmpDir: string;
@@ -92,8 +90,6 @@ describe("ideaExists", () => {
     }
   });
 });
-
-// ── listIdeas ───────────────────────────────────────────────────────────────────
 
 describe("listIdeas", () => {
   let tmpDir: string;

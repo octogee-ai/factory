@@ -17,12 +17,11 @@ function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClien
   };
 }
 
-/** Default opts every test uses: silenced log + no-wait sleep + finite retries. */
 function baseOpts(extra: Record<string, unknown> = {}) {
   return {
     log: () => {},
     sleep: vi.fn(async () => {}),
-    // Tests pin a small maxRetries so exhaustion-path assertions don't hang.
+    
     maxRetries: 3,
     ...extra,
   };
@@ -37,8 +36,6 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
-
-// ── Happy path ──────────────────────────────────────────────────────────────
 
 describe("applyConfigPatch — RPC happy path", () => {
   it("calls configGet then configPatch with the hash returned by the server", async () => {
@@ -82,8 +79,6 @@ describe("applyConfigPatch — RPC happy path", () => {
     expect(seen).toEqual(current);
   });
 });
-
-// ── Hash-mismatch retries ───────────────────────────────────────────────────
 
 describe("applyConfigPatch — hash-mismatch", () => {
   it("retries on hash-mismatch (refetches hash, re-builds, re-submits)", async () => {
@@ -137,8 +132,6 @@ describe("applyConfigPatch — hash-mismatch", () => {
     ).rejects.toMatchObject({ code: "hash-mismatch" });
   });
 });
-
-// ── Transient retry with backoff ────────────────────────────────────────────
 
 describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
   it("retries a connect-failed on the next backoff slot and succeeds", async () => {
@@ -199,8 +192,7 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
       ),
     ).rejects.toBeInstanceOf(OpenclawWireError);
 
-    // maxRetries=5 → 4 sleeps between 5 attempts: 100, 200, 400 (capped), 400.
-    expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200, 400, 400]);
+expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200, 400, 400]);
   });
 
   it("throws the OpenclawWireError when maxRetries is exhausted (no file-write fallback)", async () => {
@@ -217,8 +209,6 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
     expect(configGet).toHaveBeenCalledTimes(2);
   });
 });
-
-// ── Permanent errors throw immediately ──────────────────────────────────────
 
 describe("applyConfigPatch — permanent RPC errors throw without retry", () => {
   it("throws auth-failed without retry", async () => {
@@ -269,8 +259,6 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
   });
 });
 
-// ── Error bubbling for non-RPC exceptions ───────────────────────────────────
-
 describe("applyConfigPatch — caller error bubbling", () => {
   it("propagates unknown (non-OpenclawWireError) errors without touching retry", async () => {
     const rpc = makeFakeRpc({
@@ -284,8 +272,6 @@ describe("applyConfigPatch — caller error bubbling", () => {
     ).rejects.toThrow("bug in caller");
   });
 });
-
-// ── Timing instrumentation ──────────────────────────────────────────────────
 
 describe("applyConfigPatch — timing instrumentation", () => {
   it("logs a single-line timing trace on happy-path RPC success", async () => {
@@ -327,15 +313,6 @@ describe("applyConfigPatch — timing instrumentation", () => {
     expect(lines.some((l) => /OK attempt=2/.test(l))).toBe(true);
   });
 });
-
-// ── Deadline + retry-after parsing ──────────────────────────────────────────
-//
-// Production incident 2026-05-13: 4 concurrent migrations hammered OpenClaw's
-// config.patch RPC. Server returned `rate limit exceeded for config.patch;
-// retry after 44s` but the client ignored that hint and used local exponential
-// backoff (2s→4s→8s…30s, indefinitely). With Infinity maxRetries (the prod
-// default), christopher's patch took 605s across 13 attempts. The deadline
-// caps total time and the retry-after parser uses the server's hint when given.
 
 describe("applyConfigPatch — totalDeadlineMs", () => {
   it("throws once cumulative time exceeds totalDeadlineMs", async () => {
@@ -475,13 +452,6 @@ describe("applyConfigPatch — server retry-after hint", () => {
   });
 });
 
-// ── AbortSignal cancellation ───────────────────────────────────────────────
-//
-// Production hang scenario: addCustomerToGateway's outer deadline trips,
-// aborts a signal it passes into applyConfigPatch. The retry loop should
-// stop before the next attempt rather than running for 90s of CONFIG_PATCH_
-// DEADLINE_MS while the caller has already given up.
-
 describe("applyConfigPatch — abort signal", () => {
   it("throws immediately if the signal is already aborted", async () => {
     const ctrl = new AbortController();
@@ -520,10 +490,8 @@ describe("applyConfigPatch — abort signal", () => {
   });
 
   it("default sleep wakes early when the signal fires mid-wait (no caller-supplied sleep)", async () => {
-    // Don't override `sleep` so the production default runs. Set a 5s
-    // backoff, abort after 30ms, and assert the whole call settles in
-    // well under 5s.
-    const ctrl = new AbortController();
+
+const ctrl = new AbortController();
     const configGet = vi.fn(async () => {
       throw new OpenclawWireError("connect-failed", "ECONNRESET");
     });
@@ -545,15 +513,6 @@ describe("applyConfigPatch — abort signal", () => {
     expect(elapsed).toBeLessThan(1_000);
   });
 });
-
-// ── Config cache (skip configGet between successive patches) ────────────────
-//
-// Each customer-add costs ~5-6s in configGet round-trip even when the
-// provisioner already knows the current config (it just patched). Threading a
-// small mutable `{ current, hash }` cache through applyConfigPatch lets the
-// adapter skip configGet entirely after the first successful patch. The
-// gateway's config.patch response carries the new hash and merged config —
-// updating the cache from that response is a one-liner.
 
 describe("applyConfigPatch — config cache", () => {
   it("uses cached current+hash on first attempt instead of calling configGet", async () => {
@@ -646,7 +605,6 @@ describe("applyConfigPatch — config cache", () => {
       { ...baseOpts({ cache }), rpc: makeFakeRpc({ configPatch }) },
     );
 
-    // No fresh hash returned ⇒ next call must refetch
-    expect(cache.hash).toBe("");
+expect(cache.hash).toBe("");
   });
 });

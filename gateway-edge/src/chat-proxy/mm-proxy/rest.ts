@@ -28,11 +28,7 @@ export function forwardMmRest(
   const isHttps = target.protocol === "https:";
   const transport = isHttps ? https : http;
 
-  // Header keys come from Node's parsed HTTP request — already
-  // lowercased + validated as RFC 7230 tokens by Node itself; safe
-  // to assign through. The hop-by-hop check above is the only
-  // filtering we need here.
-  const forwardedHeaders: http.OutgoingHttpHeaders = {};
+const forwardedHeaders: http.OutgoingHttpHeaders = {};
   for (const [key, value] of Object.entries(req.headers)) {
     if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
     // eslint-disable-next-line security/detect-object-injection
@@ -64,12 +60,8 @@ export function forwardMmRest(
 
   upstream.on("error", (err) => {
     deps.log(`[mm-proxy/rest] upstream error: ${err.message} for ${req.method} ${req.url}`);
-    // Unpipe + resume runs UNCONDITIONALLY before the headersSent branch:
-    // for a chunked POST whose upstream errored mid-body, the inbound
-    // request stream must be drained so the keep-alive socket isn't left
-    // in an inconsistent state. The headersSent branch only changes how
-    // the response is closed.
-    req.unpipe(upstream);
+
+req.unpipe(upstream);
     req.resume();
     if (!res.headersSent) {
       res.writeHead(502, { "Content-Type": "application/json" });

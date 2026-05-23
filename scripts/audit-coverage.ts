@@ -1,21 +1,5 @@
-/**
- * Coverage-risk audit CLI. Ranks source modules by churn × size and flags
- * which have NO test importing them — across BOTH `*.spec.ts` and
- * `*.test.ts`, by import graph, never by filename.
- *
- * The next "what should I characterize next?" decision must come from this
- * tool, not a `*.spec.ts` glob (that heuristic produced 3 false "no
- * coverage" calls in one session: proxy.ts, glm-controller, functions/).
- *
- * Usage:
- *   npm run --prefix scripts audit-coverage              # whole repo, 120d
- *   tsx scripts/audit-coverage.ts --since=90d --top=30 app gateway-edge
- *   tsx scripts/audit-coverage.ts scripts                # one package
- *
- * Per repo policy `scripts/` carries no test gate — self-verifying:
- * proxy.ts / orchestrator assign / glm-controller must NOT show as
- * uncovered in the output.
- */
+
+
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";

@@ -1,12 +1,4 @@
-/**
- * Unified customer-credential config builder. One primitive for every
- * customer-provided credential — BYOT (api_key) and BYOS (oauth) are the
- * same thing, differing only by `mode`. Provider behaviour is DATA in the
- * `PROVIDERS` registry, not control flow: adding google / github /
- * openrouter is a row, never a new branch. The per-agent sandbox is
- * OpenClaw's `auth.profiles` primitive (proven by BYOT); nothing here
- * adds isolation — it only emits the per-agent config OpenClaw consumes.
- */
+
 
 export type Provider =
   | "anthropic"
@@ -54,26 +46,15 @@ export interface ByotConfigOutput {
   agentModelOverride: string | null;
 }
 
-/**
- * Declarative per-provider behaviour. New providers = a row here.
- *  - shape:"profile"  → emits a per-agent `auth.profiles` entry
- *      (api_key → SecretRef→Secret Manager; oauth → no keyRef, the
- *       credential is the per-agent oauth store openclaw isolates).
- *  - shape:"customProvider" → emits a `models.providers` entry
- *      (openai-completions); `baseUrl` preset = a named endpoint
- *      (e.g. openrouter); absent = caller supplies the endpoint.
- * `defaultModel`: null → never overrides the agent model (anthropic;
- *  future tool-only oauth like google/github). string → `input.model ||`.
- */
 export interface ProviderSpec {
   mode: CredentialMode;
   shape: "profile" | "customProvider";
-  /** auth.profiles key (shape:"profile" only). */
+  
   profileKey?: string;
-  /** provider name recorded in the profile / custom-provider entry. */
+  
   authProvider: string;
   defaultModel: string | null;
-  /** customProvider: preset endpoint; absent → caller must supply baseUrl. */
+  
   baseUrl?: string;
 }
 
@@ -93,7 +74,7 @@ export const PROVIDERS: Record<Provider, ProviderSpec> = {
     defaultModel: "openai/gpt-5",
   },
   "openai-codex": {
-    // BYOS — ChatGPT subscription. Same primitive as BYOT, oauth mode.
+    
     mode: "oauth",
     shape: "profile",
     profileKey: "openai-codex",
@@ -218,23 +199,11 @@ export function secretNameFor(slug: string, provider: Provider): string {
   return `byok-${slug}-${provider}`;
 }
 
-/** Credential mode for a provider — the single seam consumers use instead
- *  of reaching into the PROVIDERS registry directly. */
 export function isOauthProvider(provider: Provider): boolean {
   // eslint-disable-next-line security/detect-object-injection -- typed Provider key into the closed PROVIDERS Record (no injection)
   return PROVIDERS[provider].mode === "oauth";
 }
 
-/**
- * BYOS coach model + its `agents.defaults.models` registry entry. The
- * entry pins `agentRuntime:{id:"codex"}` so the model is explicitly routed
- * through the `@openclaw/codex` harness (+ the per-agent codex-home OAuth)
- * — required when openai/gpt-5.5 is a per-agent override on a Sonnet-
- * default gateway, not the gateway default (proven against the Mac
- * 2026.5.12 codex env; the plain `{}` form silently fell back to the
- * direct OpenAI API → "No API key for provider openai"). Single source:
- * the PROVIDERS registry. Consumed by the per-customer config-patch.
- */
 export function codexRuntimeConfig(): {
   model: string;
   modelsDef: Record<string, { agentRuntime: { id: "codex" } }>;
@@ -243,12 +212,6 @@ export function codexRuntimeConfig(): {
   return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
 }
 
-/**
- * Plane-1 (per-agent `<agentDir>/auth-profiles.json`) OAuth credential —
- * openclaw's normalized shape. codex is the first row; future model-auth
- * rows (e.g. github-copilot `type:"token"`) extend the same store by a
- * registry row, not a rewrite.
- */
 export interface OAuthCredential {
   type: "oauth";
   provider: string;
@@ -262,27 +225,13 @@ export interface OAuthCredential {
   copyToAgents?: boolean;
 }
 
-/** On-disk auth-profiles.json envelope (openclaw AUTH_STORE_VERSION = 1). */
 export interface AuthProfilesStoreV1 {
   version: 1;
   profiles: Record<string, OAuthCredential>;
 }
 
-/** Resolved default profile id for the codex provider on beta.6. */
 export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 
-/**
- * Map a codex CLI `auth.json` (the byosub-captured ChatGPT-sub blob) into
- * the per-agent auth-profiles store openclaw beta.6's @openclaw/codex reads
- * (provider "openai-codex"). `expires:0` makes openclaw mint a fresh access
- * token from `refresh` on first use — so both `tokens.access_token` AND
- * `tokens.refresh_token` are required: a refresh-less blob plus `expires:0`
- * is a dead-on-arrival credential (openclaw would have no refresh material
- * and a token it believes already expired). Fail loud on either missing —
- * symmetric with the §13 capture-callback's required fields, so
- * validate-before-write keeps its "never flip routing without a usable
- * cred on disk" guarantee.
- */
 function codexStr(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
@@ -296,21 +245,10 @@ function codexJwtClaims(
       Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
     ) as Record<string, unknown>;
   } catch {
-    return undefined; // not a decodable JWT → caller falls back
+    return undefined; 
   }
 }
 
-/**
- * Claims derived from the codex JWTs. Real-expiry (secondary durability
- * optimization; composes with the conservative-restore keystone): the
- * access_token is a JWT — use its `exp` (RFC 7519 seconds) as openclaw's
- * `expires` (epoch ms; proven from openclaw source: `new Date(cred.expires)`).
- * openclaw then uses the restored token directly and refreshes only near
- * *real* expiry instead of on every mount → fewer refresh rotations → less
- * sync-back pressure. Fail-safe: not a decodable JWT / no positive numeric
- * exp → `expires:0` (force refresh — prior behavior; never worse, and a
- * still-healthy on-disk cred is protected by the keystone anyway).
- */
 function codexJwtDerived(
   access: string,
   idToken: string | undefined,
@@ -376,19 +314,6 @@ export function buildCodexAuthProfilesStore(
   };
 }
 
-/**
- * Inverse of buildCodexAuthProfilesStore — Chunk B sync-back. openclaw
- * rotates the codex refresh token in place inside the per-agent
- * auth-profiles.json; this maps that rotated OAuthCredential back into the
- * codex auth.json *blob shape* Secret Manager stores (what
- * validateCodexCredential accepts and the next restore re-maps). Returns
- * null when there is nothing usable to sync (no openai-codex:default oauth
- * profile, or missing access/refresh) — caller skips, never persists a
- * non-round-trippable blob. Pure: `last_refresh` is informational,
- * codex-regenerated and not validation-required, so it is omitted to keep
- * this deterministic (round-trips through buildCodexAuthProfilesStore,
- * which reads only `tokens.*`).
- */
 export function buildCodexAuthJsonFromStore(
   authProfilesStoreText: string,
 ): string | null {
@@ -408,7 +333,7 @@ export function buildCodexAuthJsonFromStore(
   if (!p || p.type !== "oauth") return null;
   const access = codexStr(p.access);
   const refresh = codexStr(p.refresh);
-  if (!access || !refresh) return null; // not round-trippable → skip
+  if (!access || !refresh) return null; 
   const accountId = codexStr(p.accountId);
   const idToken = codexStr(p.idToken);
   return JSON.stringify({

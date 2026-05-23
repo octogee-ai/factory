@@ -1,11 +1,4 @@
-/**
- * Server-side BYO-sub onboarding flow (Chunk C1). Pure state machine for
- * the gateway-held headless `codex login --device-auth` flow — codex
- * self-completes (it polls OpenAI); we react to its exit + the async
- * human approval window. Design: BYO-SUBSCRIPTION-OAUTH-SPEC.md §13.
- * I/O (child spawn, HTTP, capture-callback) lives in the gateway runner /
- * gateway-edge handlers and is exercised in TEST.
- */
+
 
 export type FlowState =
   | { phase: "awaiting_user"; url: string; code: string; expiresAt: number }
@@ -19,7 +12,6 @@ export type FlowEvent =
   | { type: "tick"; now: number }
   | { type: "captureResult"; ok: boolean; reason?: string };
 
-/** The coach agent id for a workspace slug (per platform naming). */
 export function coachAgentId(slug: string): string {
   return `octogee-${slug}-coach`;
 }
@@ -37,12 +29,6 @@ export function startFlow(p: {
   };
 }
 
-/**
- * Total, pure reducer. Events invalid for the current phase return the
- * state unchanged (defined reducer behaviour, test-pinned — not a
- * defensive guard). Terminal phases (connected/expired/failed) are
- * idempotent.
- */
 export function nextFlowState(state: FlowState, event: FlowEvent): FlowState {
   switch (state.phase) {
     case "awaiting_user":
@@ -74,6 +60,6 @@ export function nextFlowState(state: FlowState, event: FlowEvent): FlowState {
       }
       return state;
     default:
-      return state; // connected / expired / failed — terminal + idempotent
+      return state; 
   }
 }

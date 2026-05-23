@@ -16,28 +16,9 @@ export {
   type OpenclawWireErrorCode,
 } from "../../../../shared/types/openclaw-wire-core.js";
 
-// Wire-surface depended on by Phase 7 (ACTIVITY-STREAM-SPEC §Phase 7
-// R7-C): the `session.message` / `sessions.changed` payload spread
-// (`totalTokens`, `contextTokens`, `totalTokensFresh`) and per-message
-// `usage` / `cost` / `model` are parsed by `session-telemetry.ts`. On
-// every OC base-image roll, re-verify these field names alongside the
-// shared OPENCLAW_PROTOCOL_VERSION bump — a silent rename degrades the
-// context meter, not the handshake.
 const PROTOCOL_VERSION = OPENCLAW_PROTOCOL_VERSION;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
-/**
- * The full operator scope set used by OpenClaw's control UI
- * (`ui/src/ui/gateway.ts:154` CONTROL_UI_OPERATOR_SCOPES). Mirroring it here
- * because asking for just `operator.admin` left the bridge unable to receive
- * `agent` broadcast frames in TEST — `agent` events have READ_SCOPE in
- * `server-broadcast.ts:22 EVENT_SCOPE_GUARDS`, and the connect handshake's
- * `scope-upgrade` gate (`message-handler.ts:1194-1215`) will downgrade scopes
- * to empty when the persisted device's `approvedScopes` doesn't satisfy
- * `roleScopesAllow`. Once empty, `hasEventScope` rejects every broadcast.
- * The control UI works because it requests all five up front so the device
- * pairing record is approved with the full set.
- */
 const DEFAULT_OPERATOR_SCOPES = [
   "operator.admin",
   "operator.read",

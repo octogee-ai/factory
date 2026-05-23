@@ -1,18 +1,5 @@
-/**
- * Canonical OpenClaw device-identity crypto — the single source of truth
- * for the Ed25519 keypair, the v3 device-auth payload, and the connect
- * signature. Both in-pod clients sign the connect device for the *same*
- * gateway, so this MUST be one implementation (it was duplicated in
- * chat-proxy + scripts; the copies had drifted only cosmetically — same
- * signature output — which is exactly how a real handshake-breaking drift
- * would start). Pure node:crypto, no deps — safe for the dependency-light
- * shared/ surface and importable from every package.
- *
- * scripts/lib/gateway-device-identity.ts composes this with on-disk
- * persistence (the provisioner's `loadOrCreateDeviceIdentity`).
- *
- * Spec: docs/specs/CHAT-PROXY-SHARED-IMPORTS-SPEC.md (Stage 2).
- */
+
+
 import * as crypto from "node:crypto";
 
 export interface DeviceIdentity {

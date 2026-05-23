@@ -103,12 +103,6 @@ export {
 
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 
-// Types only on the common barrel — device-identity.ts imports
-// node:crypto, so a *value* re-export here would drag a Node-only
-// module into the browser/RN bundlers (Vite/Metro) that also consume
-// `@shared/types`. The value functions are deep-imported directly by
-// the only consumers (scripts, chat-proxy); this type-only re-export
-// still keeps the file knip-reachable.
 export type {
   DeviceIdentity,
   DeviceAuthPayloadV3Params,

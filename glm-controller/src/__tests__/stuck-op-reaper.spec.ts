@@ -110,11 +110,7 @@ describe("runStuckOpReaperTick", () => {
     expect(ops[0].updated).toBeDefined();
   });
 
-  // Defensive: Operation.createdAt is required in the type, so this case
-  // should never appear from controller-written docs. The test guards
-  // against schema drift / malformed external writes — if such a doc ever
-  // lands, we want the reaper to skip it rather than throw or NaN-compare.
-  it("skips ops with no anchor timestamp (defensively — log noise only)", async () => {
+it("skips ops with no anchor timestamp (defensively — log noise only)", async () => {
     const ops: FakeOpDoc[] = [
       { id: "op-no-anchor", data: { status: "running", kind: "rollout" } },
     ];

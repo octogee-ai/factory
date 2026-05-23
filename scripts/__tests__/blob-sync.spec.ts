@@ -108,11 +108,8 @@ test.describe("computeBlobSyncActions — download decisions", () => {
   });
 
   test("non-blob manifest entries are ignored across all decisions", () => {
-    // A non-blob manifest entry at the same path as a local file must NOT
-    // block the local file's upload, nor prevent its cleanup. The original
-    // code used `Object.keys(manifest)` for those checks; this asserts the
-    // post-fix behavior that only blob-typed entries influence tracking.
-    const manifest = {
+
+const manifest = {
       "weird-entry": { type: "text", size: 100, uploadedAt: "2026-01-01T00:00:00Z" } as unknown as Manifest[string],
     };
 

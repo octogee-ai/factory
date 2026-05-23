@@ -1,9 +1,5 @@
-// Modular firebase-admin API — required under NodeNext ESM. The legacy
-// `import * as admin from "firebase-admin"` namespace import lands the
-// CJS surface under `.default` at runtime, so `admin.apps` is undefined
-// and the process crashes at boot (`Cannot read properties of undefined
-// (reading 'length')`). vitest's transpile hid it; the Node ESM loader
-// is stricter. Same pattern functions/ uses for its ESM migration.
+
+
 import { getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth, type Auth } from "firebase-admin/auth";

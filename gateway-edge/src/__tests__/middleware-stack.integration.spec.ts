@@ -92,12 +92,7 @@ describe('gateway-edge middleware stack', () => {
     expect(res.body.service).toBe('gateway-edge');
   });
 
-  // byosub is dual-plane: the app-facing routes (connect/status/connection)
-  // live on octogee-api (cluster), but the in-pod codex modules call the
-  // internal routes (capture/auth-state/sync-back) over localhost:3001 →
-  // gateway-edge. A 404 here is the regression that 404'd every BYOS
-  // capture/sync-back/auth-state sweep on the gw-bender pod.
-  it.each(['capture', 'sync-back', 'auth-state'])(
+it.each(['capture', 'sync-back', 'auth-state'])(
     'mounts the in-pod byosub internal route /api/byosub/%s (never 404)',
     async (path) => {
       process.env.INTERNAL_SERVICE_KEY = 'byosub-mount-test-key';
@@ -122,15 +117,8 @@ describe('gateway-edge middleware stack', () => {
   });
 
   it('mounts /internal/builder-shell on THIS sidecar (locality) — the in-pod shell bridge redeems via localhost:3001', async () => {
-    // #1123 wrongly classified this as cluster and moved it to octogee-api.
-    // The bridge redeems via GATEWAY_EDGE_INTERNAL_URL (localhost) → it MUST
-    // be here. An UNMOUNTED route 404s at the routing layer — that was the
-    // regression that closed every builder-shell WS with 4001
-    // "session-unavailable". A MOUNTED route reaches the handler, which
-    // deterministically 400s an empty body ("Missing ticket"). Asserting that
-    // 400 proves the handler ran; a bare not-404 would be imprecise (the
-    // redeem handler legitimately 404s invalid/expired/consumed tickets).
-    process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
+
+process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
     const app = createApp();
     const res = await request(app)
       .post('/internal/builder-shell/redeem')

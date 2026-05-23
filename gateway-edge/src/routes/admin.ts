@@ -17,10 +17,6 @@ import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "../../../s
 const router = Router();
 router.use(requireAdmin);
 
-// Customer Customers tab + per-customer drawer. Mounted from a shared
-// factory so glm-controller (Cowboy HTTP) can serve the same surface
-// when no gateway pods are booted. The factory owns route definitions;
-// this wiring layer injects gateway-edge's db / logger / CSI compute.
 addAdminCustomerRoutes(router, {
   db,
   FieldValue,
@@ -36,7 +32,6 @@ addAdminCustomerRoutes(router, {
   },
 });
 
-// Fleet / customer-lifecycle endpoints — also via shared factory (#855).
 addAdminFleetRoutes(router, {
   db,
   logger,

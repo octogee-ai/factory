@@ -24,12 +24,8 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
       baseUrl?: string;
       model?: string;
     };
-    // Default to anthropic only when `provider` is omitted entirely
-    // (Phase 1 client contract). If the field is present but unknown,
-    // 400 with explicit reason — no silent fallback that misclassifies
-    // a typo'd "groq" as anthropic and rejects the key for the wrong
-    // format reason.
-    let provider: Provider;
+
+let provider: Provider;
     if (body.provider === undefined || body.provider === null) {
       provider = "anthropic";
     } else if (isSupportedProvider(body.provider)) {
@@ -42,18 +38,14 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
       return;
     }
 
-    // (1) Format check — fast-reject without spending an upstream call.
-    const fmt = validateProviderKey(provider, body.apiKey);
+const fmt = validateProviderKey(provider, body.apiKey);
     if (!fmt.valid || !fmt.normalized) {
       res.status(400).json({ error: fmt.reason || "Invalid API key format" });
       return;
     }
     const key = fmt.normalized;
 
-    // (1b) Validate baseUrl + model BEFORE the probe. Bad input must
-    // never reach the network call or Secret Manager. Same grammar as
-    // scripts/lib/byot-multi-provider-config.ts — keep them in sync.
-    if (body.baseUrl) {
+if (body.baseUrl) {
       try {
         const u = new URL(body.baseUrl);
         if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("scheme");
@@ -74,11 +66,7 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
       }
     }
 
-    // (2) Provider probe — confirms the key is alive. Distinguishes
-    // user-fault (401/403/4xx → 400) from upstream-transient
-    // (429/5xx/network → 503) so we never tell a customer their key is
-    // bad because the upstream is unavailable.
-    const probe = await probeProviderKey({ provider, apiKey: key, baseUrl: body.baseUrl });
+const probe = await probeProviderKey({ provider, apiKey: key, baseUrl: body.baseUrl });
     if (!probe.ok) {
       const transient = probe.classification === "transient";
       const status = transient ? 503 : 400;
@@ -94,9 +82,7 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
       return;
     }
 
-    // Resolve the customer's slug so we can name the Secret Manager entry
-    // consistently with what the provisioner will reference.
-    const userDoc = await db.collection("users").doc(uid).get();
+const userDoc = await db.collection("users").doc(uid).get();
     const userData = userDoc.data() || {};
     const slug = primaryWorkspaceSlug(userData);
     if (!slug) {
@@ -108,12 +94,7 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
     const fingerprint = keyFingerprintFor(key);
     const keyHash = keyHashFor(key);
 
-    // (2.5) If the customer is SWITCHING providers, archive the old
-    // provider's Secret Manager secret first. Otherwise it'd orphan in
-    // SM with an active version forever (we'd lose the ability to
-    // archive it later because Firestore's byot.provider is about to
-    // be overwritten).
-    const cfgSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
+const cfgSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
     const previousProvider = cfgSnap.data()?.byot?.provider;
     if (
       isSupportedProvider(previousProvider) &&
@@ -124,26 +105,18 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
         const { disabledCount } = await archiveSecret(oldSecretName);
         logger.info(`[billing] BYOT provider switch — archived old ${previousProvider} secret ${oldSecretName} (${disabledCount} version(s))`);
       } catch (err) {
-        // Don't block the new write if the old archive fails — the
-        // customer's intent is to set the new key. Operator can clean up
-        // the orphan via gcloud later. Surface in logs so we know.
-        logger.warn(`[billing] BYOT provider switch — failed to archive old ${oldSecretName}: ${err}`);
+
+logger.warn(`[billing] BYOT provider switch — failed to archive old ${oldSecretName}: ${err}`);
       }
     }
 
-    // (3) Write to Secret Manager. Handles create-if-not-exists + new version.
-    // GCP label values must match [\p{Ll}\p{Lo}\p{N}_-]{0,63} — lowercase
-    // only. Firebase UIDs are mixed-case, so lowercase before stamping.
-    const { versionName } = await writeSecret({
+const { versionName } = await writeSecret({
       name: secretName,
       value: key,
       labels: { slug, provider, uid: uid.toLowerCase().slice(0, 63) },
     });
 
-    // (4) Firestore metadata only. NEVER plaintext apiKey.
-    // Phase 2: provider, optional baseUrl + model also persisted so the
-    // provisioner can render the right per-agent config.
-    const byotMetadata: Record<string, unknown> = {
+const byotMetadata: Record<string, unknown> = {
       provider,
       secretName,
       fingerprint,
@@ -160,8 +133,7 @@ router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: 
       { merge: true },
     );
 
-    // (5) Flip the flag the provisioner polls for.
-    await db.collection("users").doc(uid).update({
+await db.collection("users").doc(uid).update({
       byotActive: true,
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -188,20 +160,14 @@ router.delete("/byot-key", requireAuth, async (req: Request, res: Response, next
       return;
     }
 
-    // Phase 2: read the active provider from Firestore metadata so we
-    // archive the right Secret Manager entry. Falls back to anthropic
-    // for pre-Phase-2 customers whose metadata pre-dated the field.
-    const cfgSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
+const cfgSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
     const cfgProvider = cfgSnap.data()?.byot?.provider;
     const provider: Provider = isSupportedProvider(cfgProvider) ? cfgProvider : "anthropic";
     const secretName = byotSecretName(slug, provider);
 
-    // Disable all Secret Manager versions. Not destructive — Cloud Audit
-    // Logs retain full history for incident response.
-    const { disabledCount } = await archiveSecret(secretName);
+const { disabledCount } = await archiveSecret(secretName);
 
-    // Clear Firestore metadata and flip byotActive off.
-    await db.collection("users").doc(uid).collection("system").doc("config").set(
+await db.collection("users").doc(uid).collection("system").doc("config").set(
       {
         byot: FieldValue.delete(),
       },

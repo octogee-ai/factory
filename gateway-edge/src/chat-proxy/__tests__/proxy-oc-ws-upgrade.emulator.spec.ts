@@ -10,23 +10,6 @@ import {
 } from '../../../../shared/test-helpers/firestore-emulator.js';
 import { TICKETS_COLLECTION } from './helpers/collections.js';
 
-// What this spec pins
-// ───────────────────
-// `handleOpenClawWsUpgrade` is the single most security-critical function in
-// chat-proxy: it is the only path that turns a browser ticket into a live,
-// bidirectional pipe to a customer's OpenClaw gateway. Its job is a decision
-// table — for every way the handshake can be illegitimate or the backend can
-// be unavailable, it must refuse with a *specific, observable* HTTP status on
-// the raw socket and open no upstream; for the one legitimate path it must
-// proxy frames through the inbound gate (browser→gateway) and the per-user
-// frame filter (gateway→browser), and tear both sides down together.
-//
-// These are intentionally behavioral, not structural: the helper modules
-// (gateway-resolver, frame-filter, inbound-gate, …) own their own unit specs.
-// Here we mock them to controllable seams and assert ONLY the orchestration
-// contract, so this file stays green through a refactor that splits the
-// 250-line handler apart — which is the whole point.
-
 process.env.NODE_ENV = 'test';
 process.env.FIREBASE_PROJECT ??= 'octogee-test';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
@@ -36,7 +19,6 @@ requireEmulator();
 
 const TICKET = '11111111-2222-3333-4444-555555555555';
 
-// ─── Controllable seams (hoisted so the vi.mock factories can close over them) ─
 const h = vi.hoisted(() => {
   class OpenclawWireError extends Error {
     code: string;
@@ -61,8 +43,7 @@ const h = vi.hoisted(() => {
   }
   class ExpectedAgentIdError extends Error {}
 
-  // Mutable per-test control surface.
-  const ctl: {
+const ctl: {
     originAllowed: boolean;
     resolve: () => { url: string; gatewayId: string; userData: Record<string, unknown> };
     deriveAgentId: () => string;
@@ -86,9 +67,7 @@ const h = vi.hoisted(() => {
     lastUpstream: null,
   };
 
-  // A fake upstream WS — EventEmitter with the surface proxy.ts touches.
-  // readyState defaults to 1 (ws.OPEN) so inbound frames forward.
-  function makeFakeUpstream() {
+function makeFakeUpstream() {
     const ee = new EventEmitter() as EventEmitter & {
       readyState: number;
       send: ReturnType<typeof vi.fn>;
@@ -97,7 +76,7 @@ const h = vi.hoisted(() => {
     ee.readyState = 1;
     ee.send = vi.fn();
     ee.close = vi.fn(() => ee.emit('close'));
-    ctl.lastUpstream = ee; // closed over; only invoked after ctl is assigned
+    ctl.lastUpstream = ee; 
     return ee;
   }
 
@@ -180,9 +159,8 @@ beforeAll(async () => {
   server = createServer();
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   port = (server.address() as AddressInfo).port;
-  // PR-2d: /metrics moved to a dedicated listener. Spin it up so the
-  // existing `readMetrics()` helper can scrape counter values.
-  metricsServer = createMetricsServer();
+
+metricsServer = createMetricsServer();
   await new Promise<void>((resolve) =>
     metricsServer.listen(0, '127.0.0.1', resolve),
   );
@@ -226,8 +204,6 @@ beforeEach(async () => {
   h.ctl.lastUpstream = null;
 });
 
-// Connect a real ws client and resolve with how the handshake ended:
-// either the rejection HTTP status, or an open socket for the happy path.
 function connect(opts: { ticketPath?: string; origin?: string } = {}): Promise<
   | { kind: 'rejected'; status: number }
   | { kind: 'open'; ws: WsClient }
@@ -254,11 +230,6 @@ function connect(opts: { ticketPath?: string; origin?: string } = {}): Promise<
   });
 }
 
-// Prometheus text scrape. The metric label is itself an observable
-// contract a future split of establishUpstreamWithRotation could silently
-// drop, so the rotation tests assert it. The registry is module-global and
-// cumulative across the shared server, so we assert *deltas*, never
-// absolute values.
 async function readMetrics(): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${metricsPort}/metrics`);
   return res.text();
@@ -270,9 +241,6 @@ function metricValue(text: string, linePrefix: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-// Close the browser side and wait for the server to tear the upstream
-// down, so a shared-server happy-path test never leaks an active
-// connection or a live gatewayId watcher into the next test.
 async function settle(
   r: { kind: 'open'; ws: WsClient } | { kind: 'rejected'; status: number },
 ): Promise<void> {
@@ -349,9 +317,8 @@ describe('OC WS upgrade — refusal decision table (security boundary)', () => {
     const r = await connect();
     expect(r).toEqual({ kind: 'rejected', status: 502 });
     expect(h.ctl.invalidatedGateways).toEqual([]);
-    // The labelled outcome is the operator-visible contract; pin it so a
-    // future split can't silently relabel or drop the increment.
-    expect(metricValue(await readMetrics(), label)).toBe(before + 1);
+
+expect(metricValue(await readMetrics(), label)).toBe(before + 1);
   });
 });
 
@@ -378,9 +345,8 @@ describe('OC WS upgrade — auth-failed token rotation recovery', () => {
 
     expect(h.ctl.invalidatedGateways).toEqual(['gw-1']);
     expect(tokens).toEqual(['cached', 'fresh']);
-    // Recovery is only meaningful if it is *observable* as a recovery, not
-    // as an ordinary success — the dedicated counter must tick exactly once.
-    expect(metricValue(await readMetrics(), recoveredLabel)).toBe(before + 1);
+
+expect(metricValue(await readMetrics(), recoveredLabel)).toBe(before + 1);
     await settle(r);
   });
 
@@ -487,7 +453,7 @@ describe('OC WS upgrade — happy path frame proxying & teardown', () => {
     const closed = new Promise<number>((res) => r.ws.once('close', (code) => res(code)));
     await vi.waitFor(() => expect(h.ctl.gatewayIdChangeCb).not.toBeNull());
     h.ctl.gatewayIdChangeCb!('gw-2');
-    expect(await closed).toBe(1001); // 1001 = going away → browser re-resolves
+    expect(await closed).toBe(1001); 
     await settle(r);
   });
 

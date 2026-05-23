@@ -62,13 +62,6 @@ export async function writeSecret(params: {
   return { versionName: version.name };
 }
 
-/**
- * Add a new version to an *existing* secret only — never create it, never
- * touch labels. On NOT_FOUND (gRPC code 5) returns `{ok:false}` instead of
- * throwing, so a caller (Chunk B sync-back) treats a secret a
- * disconnect/teardown destroyed as a no-op rather than **resurrecting** a
- * credential the customer revoked. Atomic (no get-then-write TOCTOU).
- */
 export async function addSecretVersionIfExists(
   name: string,
   value: string,
@@ -93,10 +86,6 @@ export async function addSecretVersionIfExists(
   }
 }
 
-/**
- * Read the payload of a Secret Manager secret version (default `latest`)
- * as a UTF-8 string. Thin SDK wrapper (I/O boundary), peer of writeSecret.
- */
 export async function readSecret(
   name: string,
   version = "latest",
@@ -135,18 +124,6 @@ const GATEWAY_AUTH_TOKEN_SECRET_ROLES = [
   "roles/secretmanager.secretVersionManager",
 ];
 
-/**
- * Provisions the per-gateway auth-token Secret Manager secret +
- * IAM grants required for a new gateway pod to publish its token.
- * Idempotent: re-creating an existing secret is a no-op; re-applying
- * the same IAM bindings doesn't fail.
- *
- * `gatewayId` matches the suffix used by entrypoint.sh in the gateway
- * pod (`gateway-auth-token-${GATEWAY_ID}`). The gateway GSA needs all
- * three roles: read its own token (accessor), publish a new version
- * (versionAdder), and manage version state on rotation
- * (versionManager).
- */
 export async function provisionGatewayAuthSecret(params: {
   gatewayId: string;
   gatewayServiceAccount: string;

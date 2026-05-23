@@ -122,7 +122,7 @@ describe("GET /api/workspace/git/status", () => {
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.body.entries).toEqual([{ path: "README.md", change: "modified" }]);
-    // restore for other tests
+    
     await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "hello\n");
   });
 
@@ -212,10 +212,8 @@ describe("GET /api/workspace/git/log", () => {
 });
 
 describe("project working tree (Phase 6.C.3 — ?project=)", () => {
-  // Phase 6.C.3 turns project targets ON. The repo lives at
-  // {customersRoot}/{slug}/projects/{projectSlug} per
-  // PROJECTS-CANVAS-SPEC.md (each project = own git repo).
-  const PROJECT = "myproj";
+
+const PROJECT = "myproj";
   beforeAll(async () => {
     const projectsParent = path.join(customersRoot, SLUG, "projects");
     await fs.mkdir(projectsParent, { recursive: true });
@@ -243,7 +241,7 @@ describe("project working tree (Phase 6.C.3 — ?project=)", () => {
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.body.entries).toEqual([{ path: "PROJECT.md", change: "modified" }]);
-    // Restore for siblings.
+    
     await fs.writeFile(
       path.join(customersRoot, SLUG, "projects", PROJECT, "PROJECT.md"),
       "project init\n",
@@ -296,7 +294,7 @@ describe("project working tree (Phase 6.C.3 — ?project=)", () => {
       .send({ branch: "feat/proj-work", create: true });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, branch: "feat/proj-work" });
-    // Restore main for siblings.
+    
     await request(app)
       .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken")
@@ -304,7 +302,7 @@ describe("project working tree (Phase 6.C.3 — ?project=)", () => {
   });
 
   it("project-member who is NOT the workspace owner can read the project tree", async () => {
-    // Re-seed: caller is a project member but NOT the workspace owner.
+    
     firestoreData[`users/caller-uid`] = {
       uid: "caller-uid",
       username: "ghost",
@@ -334,7 +332,7 @@ describe("project working tree (Phase 6.C.3 — ?project=)", () => {
       slug: PROJECT,
       ownerUid: "different-uid",
     };
-    // No member doc seeded.
+    
     const app = createApp();
     const res = await request(app)
       .get(`/api/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
@@ -345,7 +343,7 @@ describe("project working tree (Phase 6.C.3 — ?project=)", () => {
 
 describe("POST /api/workspace/git/commit (Phase 6.C.2)", () => {
   it("commits a real working-tree change with the requesting user as author", async () => {
-    // Modify the seeded repo so there's something to commit.
+    
     await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "owner change\n");
     firestoreData[`users/caller-uid`] = {
       uid: "caller-uid",
@@ -363,15 +361,13 @@ describe("POST /api/workspace/git/commit (Phase 6.C.2)", () => {
     expect(res.body.empty).toBe(false);
     expect(res.body.sha).toMatch(/^[0-9a-f]{40}$/);
 
-    // Verify the commit's author email matches the Firestore profile.
-    const last = spawnSync("git", ["log", "-1", "--pretty=format:%ae"], {
+const last = spawnSync("git", ["log", "-1", "--pretty=format:%ae"], {
       cwd: path.join(customersRoot, SLUG),
       encoding: "utf-8",
     });
     expect(last.stdout.trim()).toBe("bob@example.com");
 
-    // Restore for subsequent tests.
-    await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "hello\n");
+await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "hello\n");
     spawnSync("git", ["add", "."], { cwd: path.join(customersRoot, SLUG) });
     spawnSync("git", ["commit", "-m", "restore"], { cwd: path.join(customersRoot, SLUG) });
   });
@@ -421,12 +417,8 @@ describe("POST /api/workspace/git/commit (Phase 6.C.2)", () => {
   });
 
   it("project member of workspace A cannot write the WORKSPACE tree of A (#840 auth-bypass guard, retained under 6.C.3)", async () => {
-    // The pre-#841 reject of `?project=` defended this implicitly. The
-    // new path-targeted resolver could regress the guarantee silently.
-    // Caller is a project MEMBER (not workspace owner) and submits
-    // workspace-target write — must still 403 via withFileTarget's
-    // workspace-slug-mismatch gate.
-    firestoreData[`users/caller-uid`] = {
+
+firestoreData[`users/caller-uid`] = {
       uid: "caller-uid",
       username: "ghost",
       workspaceId: "ghost",
@@ -511,7 +503,7 @@ describe("POST /api/workspace/git/branch/checkout (Phase 6.C.3)", () => {
 describe("concurrency cap (P1-1)", () => {
   it("returns 429 CONCURRENCY_LIMIT when more than 4 in-flight git ops for the same slug", async () => {
     const app = createApp();
-    // Fire 6 in parallel (cap is 4). At least one must 429.
+    
     const responses = await Promise.all(
       Array.from({ length: 6 }, () =>
         request(app)

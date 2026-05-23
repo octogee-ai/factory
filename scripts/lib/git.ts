@@ -51,39 +51,16 @@ export function generateCustomerSshKey(slug: string): string {
   return fs.readFileSync(pubPath, "utf-8").trim();
 }
 
-
-/**
- * Read the public key currently registered in Gitea for ws-{slug} under
- * the canonical `octogee-gateway` title.
- *
- * Returns null ONLY for the two well-defined "no such key" cases:
- *   - 404 from Gitea (user doesn't exist)
- *   - 200 with a key list that has no `octogee-gateway`-titled entry
- *
- * Throws on transient errors (5xx, network failures, auth failures,
- * non-OK that isn't 404). The caller in addCustomerToGateway distinguishes
- * "Gitea has no key" (resync needed) from "Gitea is currently unhealthy"
- * (don't trigger spurious resync, don't claim first-time registration
- * failed). The previous null-on-everything behavior would silently
- * convert a transient Gitea blip into a key rotation.
- *
- * Used by the verify-and-resync path: drift between local + Gitea state
- * is the bug class that hit ceckert twice on 2026-05-01 / -02. Drift
- * happens when the gateway pod cycles (emptyDir → fresh keypair) but
- * Gitea still has the previous pod's key.
- */
 export async function readGiteaCustomerPubKey(slug: string): Promise<string | null> {
   if (!GIT_API_TOKEN) return null;
   const username = giteaUsername(slug);
   const resp = await fetch(`${GIT_API_URL}/users/${username}/keys`, {
     headers: adminHeaders(false),
   });
-  if (resp.status === 404) return null; // user not registered yet
+  if (resp.status === 404) return null; 
   if (!resp.ok) {
-    // 5xx, 401/403 (auth misconfig), etc. — propagate so caller can
-    // distinguish from "no key registered". Caller's catch wraps with
-    // context.
-    const body = await resp.text().catch(() => "<no body>");
+
+const body = await resp.text().catch(() => "<no body>");
     throw new Error(
       `Gitea key read for ${username} returned ${resp.status}: ${body.slice(0, 200)}`,
     );
@@ -97,21 +74,11 @@ export async function readGiteaCustomerPubKey(slug: string): Promise<string | nu
   return null;
 }
 
-/**
- * Recursively delete the customer's local SSH key directory. Used as a
- * rollback step when Gitea registration fails so the next restore attempt
- * regenerates from a clean slate (rather than seeing the orphaned local
- * key, deciding "set up already," and skipping registration entirely).
- */
 export async function deleteCustomerSshKey(slug: string): Promise<void> {
   const keyDir = path.join(CUSTOMER_KEYS_DIR, slug);
   await fs.promises.rm(keyDir, { recursive: true, force: true });
 }
 
-/**
- * Read the customer's local SSH public key (OpenSSH-format, single line).
- * Returns null if the .pub file doesn't exist or can't be read.
- */
 export function readLocalCustomerPubKey(slug: string): string | null {
   const pubPath = path.join(CUSTOMER_KEYS_DIR, slug, "id_ed25519.pub");
   try {
@@ -316,7 +283,7 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 
   gitExec(dest, `config user.email "${slug}@octogee.com"`);
   gitExec(dest, `config user.name "Octo (${slug})"`);
-  // ssh-cmd: cloneCustomerRepo
+  
   setRepoSshCommand(dest, slug);
 
   log(`[git] ✅ Cloned ${org}/${repoName} → customers/${slug}/`);
@@ -378,7 +345,7 @@ export async function cloneProjectRepo(
 
   gitExec(dest, `config user.email "${slug}@octogee.com"`);
   gitExec(dest, `config user.name "Octo (${slug})"`);
-  // ssh-cmd: initWorkspaceRepo
+  
   setRepoSshCommand(dest, slug);
 
   log(`[git] ✅ Cloned ${org}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
@@ -437,7 +404,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   log(`[git] init: ${initResult}`);
   gitExec(coachDir, `config user.email "${slug}@octogee.com"`);
   gitExec(coachDir, `config user.name "Octo (${slug})"`);
-  // ssh-cmd: initCoachRepo
+  
   setRepoSshCommand(coachDir, slug);
 
   try {
@@ -512,7 +479,7 @@ export async function initProjectRepo(
   gitExec(projectDir, "init -b main");
   gitExec(projectDir, `config user.email "${committerEmail}"`);
   gitExec(projectDir, `config user.name "${committerName}"`);
-  // ssh-cmd: initProjectRepo
+  
   setRepoSshCommand(projectDir, slug);
   gitExec(projectDir, "add -A");
   const commitResult = gitExec(projectDir, `commit -m "initial: ${projectName} project created"`);
@@ -617,8 +584,7 @@ export async function syncAllWorkspaces(): Promise<void> {
     const gitDir = path.join(coachDir, ".git");
     if (!fs.existsSync(gitDir)) continue;
 
-    // ssh-cmd: refreshAllCoachRepos
-    setRepoSshCommand(coachDir, slug);
+setRepoSshCommand(coachDir, slug);
 
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;

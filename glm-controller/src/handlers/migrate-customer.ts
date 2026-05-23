@@ -6,23 +6,8 @@ import {
   type ReportedStep,
 } from "../../../scripts/lib/fleet-migration-runner.js";
 
-/**
- * Max concurrent migrations targeting the same destination gateway. The
- * gateway's OpenClaw `config.patch` RPC rate-limits to ~1 patch per 60s
- * window; N concurrent imports thrash the rate limit and each customer's
- * mount drags to 6-12 minutes (incident 2026-05-13). Serialize per-target
- * so each gateway processes its imports cleanly. Different targets still
- * run in parallel — the cap is per-gateway, not global.
- */
 export const MAX_CONCURRENT_MIGRATIONS_PER_TARGET = 1;
 
-/**
- * Per-process counter. Correct as long as glm-controller runs with
- * `replicas: 1` (see helm/octogee/charts/glm-controller). Scaling out
- * would degrade this to "N per replica" and the incident reproduces; in
- * that case move the lock to a Firestore transaction on the target
- * gateway's `glmGateways/{id}` doc.
- */
 const inFlightPerTarget = new Map<string, number>();
 
 export function _resetMigrationConcurrencyForTests(): void {
@@ -48,26 +33,17 @@ export interface UserGatewayInfo {
 }
 
 export interface MigrateCustomerDeps {
-  /** Reads users/{uid}; returns null if the doc doesn't exist or is missing required fields. */
+  
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
-  /** Writes users/{uid}.provisioning.openclaw.gatewayId = toGatewayId. */
+  
   cutoverFirestore: (uid: string, toGatewayId: string) => Promise<void>;
-  /**
-   * Resolves a gatewayId to its in-cluster URL by reading authoritative
-   * glmGateways state. Throws on missing/incomplete docs — refuses to
-   * route via guesswork. Async because Firestore.
-   */
-  resolveGatewayUrl: (gatewayId: string) => Promise<string>;
-  /**
-   * Builds a per-op MigrationClient. Caller passes a sync URL resolver
-   * pre-populated for the (from, to) pair this op needs; the handler
-   * pre-resolves before invoking. Tests can ignore the resolver and
-   * return a mock.
-   */
-  buildClient: (resolveSync: (gatewayId: string) => string) => MigrationClient;
-  /** Migration id (correlates the four RPCs in logs); injected for tests. */
+
+resolveGatewayUrl: (gatewayId: string) => Promise<string>;
+
+buildClient: (resolveSync: (gatewayId: string) => string) => MigrationClient;
+  
   genMigrationId: () => string;
-  /** Wall clock; injected for tests. */
+  
   now: () => number;
   log: (msg: string) => void;
 }

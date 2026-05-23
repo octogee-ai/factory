@@ -22,8 +22,6 @@ vi.mock("../lib/gateway-rpc", () => ({
   }),
 }));
 
-// Block ALL subprocess primitives so a regression that re-introduces ANY
-// process boundary fails loudly (token would leak via argv).
 const SUBPROCESS_GUARD = (name: string) => () => {
   throw new Error(
     `byot-sync must not shell out (called ${name}) — use the in-process gateway-rpc client.`,
@@ -60,9 +58,6 @@ const ON = {
   provisioning: { openclaw: { status: "complete" } },
 };
 
-// A valid codex CLI auth.json — byosub-restore now validate-before-writes,
-// so an oauth-store materialization fixture must carry tokens.access_token
-// (a placeholder blob would fail the item and never embed auth-profiles).
 const jwt = (claims: Record<string, unknown>) =>
   "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".s";
 const codexBlob = () =>
@@ -180,12 +175,8 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
         .auth_mode,
     ).toBe("chatgpt");
-    // Copilot #1: auth-profiles.json lands under the SAME agents base as
-    // the restored codex-home (not a divergent AGENTS_DIR/OPENCLAW_AGENTS_DIR).
-    // Strengthened: it carries the EMBEDDED live OAuthCredential (envelope
-    // v1, openai-codex:default, real access token) — not a routing stub.
-    // applyByotState runs last and must NOT clobber this (oauth-skip guard).
-    const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
+
+const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
     const prof = JSON.parse(fs.readFileSync(ap, "utf-8"));
     expect(prof.version).toBe(1);
     expect(prof.profiles["openai-codex:default"]).toMatchObject({
@@ -210,12 +201,11 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       openclawDir: oc,
       logFn: () => {},
     });
-    expect(r.restored).toBe(false); // gated on r.restored, not r.planned
-    // present is false on a FAILED restore (failed≠skipped): no usable cred
-    // on disk, so the re-mount must NOT treat BYOS as active.
-    expect(r.present).toBe(false);
+    expect(r.restored).toBe(false); 
+
+expect(r.present).toBe(false);
     const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
-    expect(fs.existsSync(ap)).toBe(false); // never flip routing without the cred on disk
+    expect(fs.existsSync(ap)).toBe(false); 
   });
 
   it("not restored / not present when this customer has no byosub ref (nothing to restore)", async () => {
@@ -240,14 +230,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     expect(r.present).toBe(false);
   });
 
-  // Regression guard for the coach-model clobber (task #22). On the
-  // restore-customer RE-MOUNT of an already-provisioned BYOS customer, the
-  // on-disk credential is healthy → byosub-restore conservatively SKIPS it
-  // (openclaw owns + rotates it in place). That skip used to return
-  // restored=false → byosActive=false → addCustomerToGateway clobbered the
-  // coach model back to the anthropic platform default. `present` must be
-  // TRUE on the skip so the re-mount keeps BYOS active and never clobbers.
-  it("re-mount over a healthy on-disk cred → conservative skip → NOT restored but present", async () => {
+it("re-mount over a healthy on-disk cred → conservative skip → NOT restored but present", async () => {
     const oc = mk();
     const opts = {
       fetchGlmByosub: async () => ({
@@ -257,14 +240,12 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       openclawDir: oc,
       logFn: () => {},
     };
-    // First mount: cold start, writes the cred to disk.
+    
     const first = await restoreOauthStoreForSlug("tester-70", opts);
     expect(first.restored).toBe(true);
     expect(first.present).toBe(true);
-    // Second mount (restore-customer re-mount): cred already healthy on
-    // disk → conservative skip. restored=false (nothing freshly written)
-    // but present=true (the cred IS there — BYOS is active).
-    const second = await restoreOauthStoreForSlug("tester-70", opts);
+
+const second = await restoreOauthStoreForSlug("tester-70", opts);
     expect(second.restored).toBe(false);
     expect(second.present).toBe(true);
   });

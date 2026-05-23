@@ -9,8 +9,6 @@ const router = Router();
 
 const ALLOWED_COACH_PATCH_FIELDS = ["name", "persona"] as const;
 type CoachPatchField = (typeof ALLOWED_COACH_PATCH_FIELDS)[number];
-// Settings UI writes here. Updates agents/{uid} and patches the coach MM
-// bot's display_name when `name` changes.
 
 router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -31,17 +29,12 @@ router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextF
       return;
     }
 
-    // Update Firestore first so the doc is the source of truth even if the
-    // MM patch below fails.
-    await db.doc(`agents/${uid}`).set(
+await db.doc(`agents/${uid}`).set(
       { id: uid, ...patch, updatedAt: FieldValue.serverTimestamp() },
       { merge: true },
     );
 
-    // Sync display name to MM when `name` changed. MM username stays stable.
-    // Coach is a MM bot — uses PUT /bots/{id} with `display_name`, not the
-    // user `/users/{id}/patch` endpoint with first_name/nickname.
-    if (typeof patch.name === "string" && patch.name) {
+if (typeof patch.name === "string" && patch.name) {
       try {
         const agent = await readAgent(uid);
         const coachMmUserId = agent?.mattermost.userId;
@@ -51,9 +44,8 @@ router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextF
           });
         }
       } catch (err) {
-        // MM patch is best-effort. The next milestone sweep or a retry will
-        // reconcile if this fails.
-        logger.warn("coach MM patch failed (non-fatal)", {
+
+logger.warn("coach MM patch failed (non-fatal)", {
           uid,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -63,8 +55,6 @@ router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextF
     res.json({ ok: true, updated: Object.keys(patch) as CoachPatchField[] });
   } catch (e) { next(e); }
 });
-
-// ── Types ──────────────────────────────────────────────────────────────────
 
 type SpecialistRole = "alex" | "morgan" | "riley" | "robert";
 const SPECIALIST_ROLES: SpecialistRole[] = ["alex", "morgan", "riley", "robert"];
@@ -81,16 +71,11 @@ const AGENT_ID_RE = /^octogee-([a-z0-9-]+)-(coach|alex|morgan|riley|robert)$/;
 const SLUG_PREFIX_RE = /^octogee-([a-z0-9-]+)$/;
 const ALL_ROLES = ["coach", "alex", "morgan", "riley", "robert"] as const;
 
-// ── POST /activate — activate a specialist agent ──────────────────────────
-
-// Auth: requireAgentKeyForUser validates X-Agent-Key against users/{uid}/settings/api
-// (presence + constant-time value compare). Handler sees `req.agentUid` on success.
 router.post("/activate", requireAgentKeyForUser((req) => (req.body as { uid?: string })?.uid), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { uid, role, requestedBy } = req.body as { uid?: string; role?: string; requestedBy?: string };
 
-    // uid is guaranteed present + auth'd by middleware; re-read from body for handler use.
-    if (!role) {
+if (!role) {
       res.status(400).json({ error: "missing_fields", required: ["role"] });
       return;
     }
@@ -131,9 +116,6 @@ router.post("/activate", requireAgentKeyForUser((req) => (req.body as { uid?: st
   } catch (e) { next(e); }
 });
 
-// ── POST /deprovision — queue agent cleanup job ───────────────────────────
-// Auth: requireAdmin (was Cloud Run IAM — now public via GKE Ingress)
-
 router.post("/deprovision", requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { slugPrefix, agentId, deleteWorkspace = false } = req.body as {
@@ -171,8 +153,7 @@ router.post("/deprovision", requireAdmin, async (req: Request, res: Response, ne
       targetAgentIds = [agentId!];
     }
 
-    // Look up Discord IDs (best-effort)
-    let discordChannelId: string | null = null;
+let discordChannelId: string | null = null;
     let discordAdminChannelId: string | null = null;
     let uid: string | null = null;
 

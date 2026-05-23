@@ -119,7 +119,7 @@ describe("createDeprovisionCustomerHandler — orphan path (no gateway)", () => 
     expect(result.success).toBe(true);
     expect(deps.unmountFromGateway).not.toHaveBeenCalled();
     expect(ctx.reported[0]).toMatchObject({ name: "unmount-gateway", status: "skipped" });
-    // Cloud cleanup still runs
+    
     expect(deps.cloudCleanup.gitea.deleteRepo).toHaveBeenCalled();
   });
 });
@@ -136,13 +136,12 @@ describe("createDeprovisionCustomerHandler — unmount RPC failure", () => {
 
     const result = await handler(mkOp({}), ctx);
 
-    // Cloud cleanup ran despite unmount failure
-    expect(deps.cloudCleanup.nukeUserFirestore).toHaveBeenCalled();
-    // Unmount step recorded as failed (skip the "running" emit)
+expect(deps.cloudCleanup.nukeUserFirestore).toHaveBeenCalled();
+    
     const unmountSteps = ctx.reported.filter((s) => s.name === "unmount-gateway");
     expect(unmountSteps.map((s) => s.status)).toEqual(["running", "failed"]);
     expect(unmountSteps[1].error).toMatch(/gateway unreachable/);
-    // But operation still succeeds because cloud cleanup is the source of truth
+    
     expect(result.success).toBe(true);
   });
 });

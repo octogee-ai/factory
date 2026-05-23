@@ -90,7 +90,7 @@ describe("syncBackSweep", () => {
     expect(r.observed).toBe(1);
     expect(r.pushed).toBe(0);
     expect(logs.join("\n")).toMatch(/octogee-a-coach/);
-    // prev advanced so a steady file doesn't re-log every sweep
+    
     const r2 = await syncBackSweep({
       targets: [t],
       prev: r.prev,
@@ -113,7 +113,7 @@ describe("syncBackSweep", () => {
     expect(r.pushed).toBe(1);
     expect(seen[0].agentId).toBe("octogee-a-coach");
     expect(JSON.parse(seen[0].payload).tokens.refresh_token).toBe("v1");
-    // rotate the file; next sweep pushes the new payload
+    
     fs.writeFileSync(t.authPath, '{"tokens":{"refresh_token":"v2"}}');
     const r2 = await syncBackSweep({
       targets: [t],
@@ -139,7 +139,7 @@ describe("syncBackSweep", () => {
     });
     expect(r.pushed).toBe(0);
     expect(r.failed).toBe(1);
-    // prev NOT advanced → next sweep retries
+    
     let retried = 0;
     const r2 = await syncBackSweep({
       targets: [t],

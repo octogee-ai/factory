@@ -1,32 +1,15 @@
-// C1b — emulator-backed integration net for markProvisioningComplete.
-// Same playbook as customer-lifecycle-prod-adapter.emulator.spec (B1b):
-// real firebase-admin against the real Firestore emulator. Pins the
-// cascading writes — system/config snapshot, user-doc mirror (per-
-// dot-path so orchestrator-set fields like gatewayId survive), the
-// workspace doc + channels + members subcollections, the agents/{uid}
-// doc, and the per-user workspaces subcollection update.
-//
-// Excluded from the default `npm test`; run via `npm run test:emulator`
-// (firebase emulators:exec) — same CI job introduced for B1b.
+
+
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 process.env.FIRESTORE_EMULATOR_HOST ??= "127.0.0.1:8088";
 process.env.FIREBASE_PROJECT_ID ??= "octogee-test";
 
-// Bring up the admin app BEFORE provisionSteps.ts is imported — its
-// transitive `./firebase.js` does `if (!getApps().length) initializeApp(...)`,
-// so claiming the default app here makes the emulator routing stick and
-// avoids the SA_KEY_PATH branch in test env.
 const adminMod = await import("firebase-admin");
 const admin = adminMod.default;
 if (admin.apps.length === 0) admin.initializeApp({ projectId: "octogee-test" });
 const db = admin.firestore();
 
-// Activity-pair persistence makes real MM API calls inside markProvisioning-
-// Complete when teamId + customerMmUserId + coachMmUserId are all present.
-// Stub it at the boundary so the emulator net stays focused on the
-// Firestore cascade. The unit suite already covers the activity-pair shape
-// in provisionWorkspaceActivityPairs.spec.ts.
 vi.mock("../lib/mattermost/provisionWorkspaceActivityPairs.js", () => ({
   persistWorkspaceChannelsWithActivityPairs: vi
     .fn()
@@ -200,9 +183,8 @@ describe("markProvisioningComplete — user-doc mirror (per-dot-path writes)", (
     await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
 
     const user = await readDoc(`users/${uid}`);
-    // status stays "provisioning" — the orchestrator's later
-    // setProvisioningStatus("complete") owns the racing-on signal flip.
-    expect(user?.provisioning?.openclaw?.status).toBe("provisioning");
+
+expect(user?.provisioning?.openclaw?.status).toBe("provisioning");
   });
 
   it("mirrors agentIds + customerDir + provisionedAt + slug onto the user doc", async () => {
@@ -238,7 +220,7 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
   it("creates workspaces/{slug} with ownerUid + mattermost + gitea (merge: true)", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
-    // Pre-existing field that onboarding wrote — must survive the merge.
+    
     await db.doc(`workspaces/${slug}`).set({ vibe: "calm", createdAt: "earlier" });
 
     await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
@@ -277,8 +259,7 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
-    // Only general — no coach-dm, no admin.
-    await markProvisioningComplete(
+await markProvisioningComplete(
       baseCtx(uid, slug),
       {
         "mattermost.teamId": `mm-team-${slug}`,
@@ -361,7 +342,7 @@ describe("markProvisioningComplete — per-user workspaces subcollection", () =>
       `octogee-${slug}-coach`,
     ]);
     expect(wsEntry?.updatedAt).toBeDefined();
-    expect(wsEntry?.createdAt).toBe("earlier"); // survives the update
+    expect(wsEntry?.createdAt).toBe("earlier"); 
   });
 
   it("does NOT create a stray workspaces subcollection entry when none exists for the slug", async () => {

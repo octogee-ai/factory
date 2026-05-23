@@ -6,12 +6,6 @@ import {
   mapProjectChannelDoc,
 } from "../lib/customer-snapshot-mapping.js";
 
-// The PROD customer-provisioning schema contract, both sides with zero
-// fiction: producer = the users/{uid} + workspaces/{slug} document
-// shapes we own; consumer = the UserSnapshot the fleet orchestrator
-// drives. Pure → plain objects, no Firestore in the path. Persistence
-// round-trips (real write↔read semantics) are the emulator follow-up.
-
 describe("deriveSlug", () => {
   it("prefers provisioning.openclaw.slug, falls back to username", () => {
     expect(deriveSlug("u", { provisioning: { openclaw: { slug: "fromOC" } }, username: "fromName" })).toBe("fromOC");
@@ -109,7 +103,7 @@ describe("channel-doc shaping (workspaces/{slug} producer → UserSnapshot.chann
       kind: "general",
       channelId: "C2",
     });
-    expect(mapWorkspaceChannelDoc({ kind: "files" })).toBeNull(); // no channelId → skipped
+    expect(mapWorkspaceChannelDoc({ kind: "files" })).toBeNull(); 
   });
 
   it("project channel: requires mattermost.channelId; carries projectId; kind defaults to 'default'", () => {

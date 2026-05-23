@@ -95,10 +95,7 @@ describe("buildInstancesMap", () => {
     expect(map).toEqual({});
   });
 
-  // Profile flows through the helm value so the chart can render the
-  // operator-vs-cattle credential split (helm/octogee-gateway gates
-  // ANTHROPIC_API_KEY env on profile != operator — operator uses BYOS/login).
-  it("propagates the operator profile onto the helm instance value (so the chart can gate env injection)", () => {
+it("propagates the operator profile onto the helm instance value (so the chart can gate env injection)", () => {
     const map = buildInstancesMap([
       mkDesired({ instanceName: "bender", profile: "operator" }),
     ]);
@@ -230,12 +227,8 @@ describe("diffInstancesMap", () => {
         persistence: { enabled: true, size: "20Gi", storageClassName: "premium-rwo" },
       },
     };
-    // Same content, keys re-ordered — this is exactly what
-    // `helm get values` round-trips back vs. the desired-state doc.
-    // A raw JSON.stringify compare sees two different strings and
-    // reports a spurious `update` every reconcile tick, rolling the
-    // gateway pod forever.
-    const desired: HelmInstancesMap = {
+
+const desired: HelmInstancesMap = {
       bender: {
         enabled: true,
         gatewayId: "gw-bender",

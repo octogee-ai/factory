@@ -1,22 +1,5 @@
-/**
- * octogee-api — cluster-singleton HTTP service for non-locality routes.
- *
- * Lifted from gateway-edge per `docs/specs/POST-BENDER-CLEANUP-SPEC.md`.
- * Mounts the 43 of 46 gateway-edge routes that have no per-gateway-pod
- * locality dependency. Stable hostname + stable connection pools unblock
- * Astro SSR on octogee.com (was previously round-robined across every
- * gateway pod's gateway-edge sidecar).
- *
- * Locality routes that stay on the gateway-pod sidecar:
- *   - workspace/git          (local /home/node/.openclaw/customers FS)
- *   - internal/billing       (calls localhost OpenClaw RPC for usage)
- *   - projects/deploy-preview (calls localhost site-build-api sidecar)
- *
- * Route handlers are imported as-is from gateway-edge/src/routes/* —
- * no code movement, both packages compile the same sources independently.
- * When gateway-edge is later slimmed to just its 3 locality routes, this
- * import path becomes the single source-of-truth location.
- */
+
+
 import express, { Request, Response } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 
@@ -25,7 +8,6 @@ import { requestLogger, logger } from "../../gateway-edge/src/middleware/logging
 import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
 import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middleware/security.js";
 
-// ── Cluster routes (43 of 46) ────────────────────────────────────────────
 import mattermostRoutes from "../../gateway-edge/src/routes/mattermost.js";
 import openclawRoutes from "../../gateway-edge/src/routes/openclaw.js";
 import billingRoutes from "../../gateway-edge/src/routes/billing/index.js";
@@ -43,7 +25,6 @@ import postsRoutes from "../../gateway-edge/src/routes/posts.js";
 import agentRoutes from "../../gateway-edge/src/routes/agents.js";
 import builderGatewaysRoutes from "../../gateway-edge/src/routes/builder/gateways.js";
 
-// workspace/* sub-routers mounted individually so locality `git` is skipped.
 import workspaceDisplayNameRoutes from "../../gateway-edge/src/routes/workspace/display-name.js";
 import workspaceFilesRoutes from "../../gateway-edge/src/routes/workspace/files.js";
 import workspaceUploadRoutes from "../../gateway-edge/src/routes/workspace/upload.js";
@@ -52,7 +33,6 @@ import workspaceExtractZipRoutes from "../../gateway-edge/src/routes/workspace/e
 import workspaceImportRepoRoutes from "../../gateway-edge/src/routes/workspace/import-repo.js";
 import { requireAuth } from "../../gateway-edge/src/middleware/auth.js";
 
-// projects/* sub-routers mounted individually so locality `deploy-preview` is skipped.
 import projectsReadmeRoutes from "../../gateway-edge/src/routes/projects/readme.js";
 import projectsCreateRoutes from "../../gateway-edge/src/routes/projects/create.js";
 import projectsRetryRoutes from "../../gateway-edge/src/routes/projects/retry.js";
@@ -61,16 +41,10 @@ import projectsStarRoutes from "../../gateway-edge/src/routes/projects/star.js";
 import projectsMembersRoutes from "../../gateway-edge/src/routes/projects/members.js";
 import projectsDeleteRoutes from "../../gateway-edge/src/routes/projects/delete.js";
 
-// Internal (service-to-service, requireInternalServiceAuth).
 import internalNotificationRoutes from "../../gateway-edge/src/routes/internal/notifications.js";
 import internalEngagementRoutes from "../../gateway-edge/src/routes/internal/engagement.js";
 import internalCSIRoutes from "../../gateway-edge/src/routes/internal/csi.js";
-// NOTE: /internal/builder-shell is LOCALITY, not cluster — the in-pod
-// builder-shell bridge redeems via localhost on gateway-edge. It is
-// mounted there, not here. (#1123 wrongly placed it on octogee-api.)
 
-// MM REST proxy + credential mint — relocated from the gateway-edge
-// chat-proxy sidecar (POST-BENDER-CLEANUP-SPEC §2.7).
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
@@ -104,10 +78,8 @@ export function createApp() {
     if (req.path === "/metrics") return next();
     const end = httpRequestDuration.startTimer();
     res.on("finish", () => {
-      // Fall back to a constant label for unmatched requests — using
-      // req.path here would let attacker-controlled URLs explode the
-      // Prometheus series cardinality (Copilot review of #1112).
-      const route = req.route?.path || "unmatched";
+
+const route = req.route?.path || "unmatched";
       const labels = { method: req.method, route, status: String(res.statusCode) };
       end(labels);
       httpRequestTotal.inc(labels);
@@ -117,11 +89,7 @@ export function createApp() {
 
   app.use(requestLogger);
 
-  // MM REST streaming proxy — mounted BEFORE the body parser so the
-  // request body streams to the upstream Mattermost unbuffered.
-  // /api/v4/websocket is a WS upgrade handled by gateway-edge, never an
-  // HTTP request here, so the bare /api/v4/* HTTP match is safe.
-  app.all("/api/v4/*splat", mmRestProxyHandler);
+app.all("/api/v4/*splat", mmRestProxyHandler);
 
   app.use((req, res, next) => {
     if (req.path === "/api/billing/webhook") {
@@ -147,10 +115,7 @@ export function createApp() {
   app.get("/health", healthHandler);
   app.get("/api/health", healthHandler);
 
-  // ── Cluster routes — single mount at /api/<path>. Unlike gateway-edge,
-  // octogee-api does NOT dual-mount at /api/g/:gatewayId/* — that path is
-  // the per-gateway-pod affinity seam, served only by the gateway sidecar.
-  const WORKSPACE = "/api/workspace";
+const WORKSPACE = "/api/workspace";
   app.use(WORKSPACE, requireAuth);
   app.use(WORKSPACE, workspaceDisplayNameRoutes);
   app.use(WORKSPACE, workspaceFilesRoutes);
@@ -158,9 +123,8 @@ export function createApp() {
   app.use(WORKSPACE, workspaceDeleteBlobRoutes);
   app.use(WORKSPACE, workspaceExtractZipRoutes);
   app.use(WORKSPACE, workspaceImportRepoRoutes);
-  // workspace/git stays on gateway sidecar (local FS).
 
-  const PROJECTS = "/api/projects";
+const PROJECTS = "/api/projects";
   app.use(PROJECTS, projectsReadmeRoutes);
   app.use(PROJECTS, projectsDeleteRoutes);
   app.use(PROJECTS, requireAuth);
@@ -169,9 +133,8 @@ export function createApp() {
   app.use(PROJECTS, projectsJoinLeaveRoutes);
   app.use(PROJECTS, projectsStarRoutes);
   app.use(PROJECTS, projectsMembersRoutes);
-  // projects/deploy-preview stays on gateway sidecar (calls site-build-api).
 
-  app.use("/api/auth/mattermost", mattermostMintRoutes);
+app.use("/api/auth/mattermost", mattermostMintRoutes);
   app.use("/api/sharing", sharingRoutes);
   app.use("/api/entities", entitiesRoutes);
   app.use("/api/mattermost", mattermostRoutes);
@@ -189,8 +152,7 @@ export function createApp() {
   app.use("/api/agents", agentRoutes);
   app.use("/api/builder", builderGatewaysRoutes);
 
-  // Internal endpoints — internal/billing (locality) stays on gateway sidecar.
-  app.use("/internal/agents", agentRoutes);
+app.use("/internal/agents", agentRoutes);
   app.use("/internal/notifications", notificationRoutes);
   app.use("/internal/notifications", internalNotificationRoutes);
   app.use("/internal/engagement", internalEngagementRoutes);

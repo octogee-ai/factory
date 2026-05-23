@@ -1,14 +1,5 @@
-/**
- * Tests for the gateway-side migration HTTP handlers.
- *
- *   - /quiesce + /unmount: full request → response cycle. JSON in, JSON out,
- *     no streaming. We exercise auth, slug validation, body parsing, and
- *     the delegate calls into the adapter.
- *   - /export + /import: request validation only (auth, slug, headers).
- *     The streaming tar plumbing involves real subprocess piping and is
- *     covered by an integration smoke test path inside startFleetController
- *     (out of scope for unit tests; would require fixture state directories).
- */
+
+
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
@@ -32,9 +23,6 @@ import {
 } from "../../shared/types/fleet-controller.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 
-// ── Spawn mock — tar handlers shell out, but we only want to verify the
-// invocation shape, not actually tar files. Mock at module scope so all
-// handler tests share it; per-test reset in beforeEach.
 const spawnMock = vi.fn();
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
@@ -59,8 +47,6 @@ const SAMPLE_EXPORT: MigrationRequestBody = {
   slug: "chris",
 };
 
-// ── Test doubles ────────────────────────────────────────────────────────────
-
 function mkRequest<T>(body: T, opts: { signature?: string; rawBody?: string } = {}): Request {
   const rawBody = opts.rawBody ?? JSON.stringify(body);
   const headers: Record<string, string> = {};
@@ -81,9 +67,8 @@ function mkImportRequest(opts: {
   if (opts.migrationId !== undefined) headers[MIGRATION_ID_HEADER.toLowerCase()] = opts.migrationId;
   if (opts.slug !== undefined) headers[MIGRATION_SLUG_HEADER.toLowerCase()] = opts.slug;
   if (opts.signature !== undefined) headers[SIGNATURE_HEADER.toLowerCase()] = opts.signature;
-  // EventEmitter-shaped pipe target so we can assert the import handler
-  // wires req → tar.stdin without going through real network buffers.
-  const body = opts.body ?? Readable.from(["dummy-tar-bytes"]);
+
+const body = opts.body ?? Readable.from(["dummy-tar-bytes"]);
   return Object.assign(body, {
     header: (name: string) => headers[name.toLowerCase()],
   }) as unknown as Request;
@@ -100,13 +85,8 @@ function mkResponse(): {
   let payload: unknown;
   const headers: Record<string, string> = {};
   let destroyError: Error | null = null;
-  // Real Writable so the export handler's `child.stdout.pipe(res)` doesn't
-  // throw EBADF — sink that swallows bytes. Express adds `status`/`json`/
-  // `setHeader`/`destroy` shims on top of the underlying socket writable;
-  // we mirror that shape here. Without this the export test's pipe would
-  // crash and the handler would go down its error path while still
-  // satisfying the surface-level assertions.
-  const sink = new Writable({
+
+const sink = new Writable({
     write(_chunk, _enc, cb) {
       cb();
     },
@@ -147,9 +127,8 @@ function mkResponse(): {
 }
 
 function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerLifecycleAdapter {
-  // Minimal adapter — only the methods migration handlers call. Other
-  // methods are vi.fn() stubs that throw if accidentally invoked.
-  const everythingElseThrows = new Proxy(
+
+const everythingElseThrows = new Proxy(
     {},
     {
       get: (_t, prop: string) =>
@@ -169,9 +148,8 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     ]),
     prepareImportDir: vi.fn(async () => "/tmp/import"),
     activateImportedCustomer: vi.fn(async () => {}),
-    // removeCustomerFromGateway flow: needs hasCustomerDir + applyRemove +
-    // deleteCustomerDir (snapshot.status === "complete" → wasMounted=true).
-    hasCustomerDir: vi.fn(() => true),
+
+hasCustomerDir: vi.fn(() => true),
     applyRemoveCustomerConfigPatch: vi.fn(async () => {}),
     deleteCustomerDir: vi.fn(async () => {}),
     loadUserSnapshot: vi.fn(async () => ({
@@ -206,14 +184,6 @@ beforeEach(() => {
   spawnMock.mockReset();
 });
 
-/**
- * Build a fake child_process for spawnMock. Defaults: empty stdout/stderr
- * + writable stdin sink. `exitCode` arms the child to emit `close` ONCE
- * a listener is attached (avoids races when the handler awaits I/O before
- * spawning — emitting `close` synchronously into a pre-listener EE drops
- * the event). Caller can omit `exitCode` to leave the child unarmed and
- * handle close manually.
- */
 function mkFakeChild(opts: {
   stdout?: string[];
   stderr?: string[];
@@ -238,10 +208,8 @@ function mkFakeChild(opts: {
   });
   if (opts.exitCode !== undefined) {
     const code = opts.exitCode;
-    // Wait for the FIRST `close` listener — handlers attach `error` and
-    // possibly `data` listeners before `close`, so we can't use `once` (it
-    // would fire on the wrong event and never see `close`).
-    const armOnClose = (event: string | symbol) => {
+
+const armOnClose = (event: string | symbol) => {
       if (event === "close") {
         child.removeListener("newListener", armOnClose);
         setImmediate(() => child.emit("close", code));
@@ -251,8 +219,6 @@ function mkFakeChild(opts: {
   }
   return child;
 }
-
-// ── /quiesce ────────────────────────────────────────────────────────────────
 
 describe("createQuiesceHandler", () => {
   it("rejects bad signature with 401", async () => {
@@ -355,8 +321,6 @@ describe("createQuiesceHandler", () => {
   });
 });
 
-// ── /unmount ────────────────────────────────────────────────────────────────
-
 describe("createUnmountHandler", () => {
   it("rejects bad signature with 401", async () => {
     const handler = createUnmountHandler(mkDeps());
@@ -385,11 +349,8 @@ describe("createUnmountHandler", () => {
   });
 
   it("returns 200 + unmounted:true when removeCustomerFromGateway succeeded", async () => {
-    // The handler delegates to removeCustomerFromGateway, which in turn
-    // calls applyRemoveCustomerConfigPatch + deleteCustomerDir. We assert
-    // those got called via the adapter spies — confirms the flow without
-    // re-testing customer-lifecycle internals.
-    const adapter = mkAdapter();
+
+const adapter = mkAdapter();
     const handler = createUnmountHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
     const sig = signFleetRequest(SECRET, SAMPLE_UNMOUNT.migrationId, rawBody);
@@ -402,8 +363,6 @@ describe("createUnmountHandler", () => {
     expect(adapter.deleteCustomerDir).toHaveBeenCalled();
   });
 });
-
-// ── /export ─────────────────────────────────────────────────────────────────
 
 describe("createExportHandler", () => {
   it("rejects bad signature with 401", async () => {
@@ -436,8 +395,7 @@ describe("createExportHandler", () => {
       ]),
     });
 
-    // Stub spawn to a no-op child that emits exit=0 immediately.
-    const fakeChild = new EventEmitter() as EventEmitter & {
+const fakeChild = new EventEmitter() as EventEmitter & {
       stdout: Readable;
       stderr: Readable;
     };
@@ -455,7 +413,7 @@ describe("createExportHandler", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [bin, args] = spawnMock.mock.calls[0];
     expect(bin).toBe("tar");
-    // Expect: -cf - -C /state agents/octogee-chris-coach -C /openclaw customer-keys/chris
+    
     expect(args).toEqual([
       "-cf", "-",
       "-C", "/state", "agents/octogee-chris-coach",
@@ -466,12 +424,10 @@ describe("createExportHandler", () => {
   });
 });
 
-// ── /import ─────────────────────────────────────────────────────────────────
-
 describe("createImportHandler", () => {
   it("rejects missing migration headers with 400", async () => {
     const handler = createImportHandler(mkDeps());
-    const req = mkImportRequest({}); // no headers at all
+    const req = mkImportRequest({}); 
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
     expect(getStatus()).toBe(400);
@@ -500,13 +456,8 @@ describe("createImportHandler", () => {
   });
 
   it("returns 200 and calls activateImportedCustomer on full success", async () => {
-    // The new import flow has THREE stages with two spawn calls:
-    //   1. streamRequestToFile (no spawn — pure fs)
-    //   2. listTarEntries → spawn("tar", ["-tf", tarPath])
-    //   3. extractTarToDir → spawn("tar", ["-xf", tarPath, "-C", dest])
-    // Mock both spawn calls in order: first returns a clean entry list on
-    // stdout, second exits 0.
-    const adapter = mkAdapter();
+
+const adapter = mkAdapter();
     const fakeListChild = mkFakeChild({
       stdout: ["agents/octogee-chris-coach/sessions/sessions.json\ncustomers/chris/.git/HEAD\n"],
       exitCode: 0,
@@ -535,18 +486,15 @@ describe("createImportHandler", () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
 
-    // Both spawn invocations were tar with the right verbs.
-    expect(spawnMock.mock.calls.length).toBe(2);
+expect(spawnMock.mock.calls.length).toBe(2);
     expect(spawnMock.mock.calls[0][0]).toBe("tar");
-    expect(spawnMock.mock.calls[0][1][0]).toBe("-tf"); // list pass
-    expect(spawnMock.mock.calls[1][1][0]).toBe("-xf"); // extract pass
+    expect(spawnMock.mock.calls[0][1][0]).toBe("-tf"); 
+    expect(spawnMock.mock.calls[1][1][0]).toBe("-xf"); 
   });
 
   it("returns 400 when the tarball contains a path-traversal entry (no extract attempted)", async () => {
-    // listTarEntries returns one safe entry + one absolute-path entry.
-    // findPathTraversalViolation rejects → handler 400s, NEVER spawns the
-    // extract pass, NEVER calls activateImportedCustomer.
-    const adapter = mkAdapter();
+
+const adapter = mkAdapter();
     const fakeListChild = mkFakeChild({
       stdout: ["customers/chris/ok.txt\n/etc/passwd\n"],
       exitCode: 0,
@@ -561,7 +509,7 @@ describe("createImportHandler", () => {
     expect(getStatus()).toBe(400);
     expect((getBody() as { error?: string }).error).toBe("tarball failed validation");
     expect((getBody() as { message?: string }).message).toContain("absolute path");
-    expect(spawnMock.mock.calls.length).toBe(1); // only the list pass
+    expect(spawnMock.mock.calls.length).toBe(1); 
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
@@ -623,9 +571,7 @@ describe("createImportHandler", () => {
 
     const handlerPromise = handler(req, res, vi.fn());
 
-    // Wait for the handler to reach activate before simulating disconnect —
-    // deterministic gate, not a wall-clock guess.
-    await activateStarted;
+await activateStarted;
     (res as unknown as { emit: (e: string) => void }).emit("close");
 
     await handlerPromise;
@@ -653,12 +599,6 @@ describe("createImportHandler", () => {
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 });
-
-// ── findPathTraversalViolation ──────────────────────────────────────────────
-//
-// Pure-function validation against the per-slug allowlist. The HMAC-on-
-// headers shape of /import means body bytes aren't signed, so this is the
-// last line of defense against a crafted tarball escaping importDir.
 
 describe("findPathTraversalViolation", () => {
   const slug = "chris";
@@ -693,9 +633,8 @@ describe("findPathTraversalViolation", () => {
   });
 
   it("does NOT false-positive on legitimate names containing `..`", () => {
-    // A filename like `foo..bar` is fine — only `..` as a path SEGMENT
-    // is traversal-shaped. Plain string includes("..") would reject this.
-    expect(findPathTraversalViolation([
+
+expect(findPathTraversalViolation([
       "customers/chris/notes/foo..bar.txt",
     ], slug)).toBeNull();
   });

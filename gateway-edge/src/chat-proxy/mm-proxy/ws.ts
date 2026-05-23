@@ -1,36 +1,22 @@
 import type { RawData, WebSocket } from "ws";
 
 export interface MmWsProxyDeps {
-  /** Internal MM WS URL (e.g. ws://mattermost.octogee-test.svc.cluster.local:8065/api/v4/websocket). */
+  
   mmInternalWsUrl: string;
   log: (msg: string) => void;
-  /**
-   * Resolve the MM user id for a given MM personal access / session token.
-   * Used to gate the octogee_ack injection: only the user's own `posted`
-   * events should trigger an ack frame.
-   *
-   * Implementations may cache by token. Returning null disables ack
-   * injection for this connection (other frames still forward unchanged).
-   */
-  resolveMmUserId: (mmToken: string) => Promise<string | null>;
-  /** Factory for the upstream WS — injected so tests can supply a fake. */
+
+resolveMmUserId: (mmToken: string) => Promise<string | null>;
+  
   openUpstream: (url: string) => WebSocket;
-  /**
-   * Phase 7.C — when supplied, this bridge registers itself so the
-   * activity bridge can fan an ephemeral `octogee.ctx` frame onto every
-   * live browser WS without an MM round-trip. Auto-unregisters on close.
-   */
-  registry?: MmWsRegistry;
+
+registry?: MmWsRegistry;
   now?: () => number;
-  /**
-   * Max time to wait for the mmUserId resolution before forwarding an
-   * inbound `posted` event without ack injection. Defaults to 2_000.
-   */
-  ackResolutionTimeoutMs?: number;
+
+ackResolutionTimeoutMs?: number;
 }
 
 export interface MmWsBridge {
-  /** Detach + close both sides. */
+  
   close: () => void;
 }
 
@@ -41,15 +27,8 @@ interface RegistryConn {
 
 export interface MmWsRegistry {
   add: (send: (frame: string) => void, getMmUserId: () => string | null) => () => void;
-  /**
-   * Fan `frame` to live browser connections. When `isAllowed` is given,
-   * a connection only receives the frame if `isAllowed(itsMmUserId)`
-   * returns true — this is how Phase 8.1 scopes `octogee.ctx` to
-   * connections whose user is a member of the target activity channel,
-   * server-side. A connection whose `mmUserId` is still unresolved
-   * (pre-auth) is treated as not-allowed (fail-closed).
-   */
-  broadcast: (frame: unknown, isAllowed?: (mmUserId: string | null) => boolean) => void;
+
+broadcast: (frame: unknown, isAllowed?: (mmUserId: string | null) => boolean) => void;
 }
 
 export function createMmWsRegistry(): MmWsRegistry {
@@ -65,10 +44,8 @@ export function createMmWsRegistry(): MmWsRegistry {
       for (const conn of conns) {
         if (isAllowed) {
           const uid = conn.getMmUserId();
-          // Fail closed in the registry itself: a pre-auth socket
-          // (uid===null) never receives a scoped frame, regardless of
-          // what the caller's predicate returns for null.
-          if (uid === null || !isAllowed(uid)) continue;
+
+if (uid === null || !isAllowed(uid)) continue;
         }
         try {
           conn.send(json);
@@ -89,14 +66,6 @@ export interface AckFrame {
   };
 }
 
-/**
- * Wires up a single browser ↔ MM WS bridge. Raw byte forward in both
- * directions, with one tap on the MM → browser side: when a `posted` event
- * arrives whose author matches the connected user's MM id, inject a
- * synthetic `octogee_ack` frame on the same WS *before* forwarding the
- * original. The app subscribes to `event === "octogee_ack"` to drive its
- * thinking-state UI.
- */
 export function attachMmWsBridge(
   deps: MmWsProxyDeps,
   browserWs: WebSocket,
@@ -127,13 +96,7 @@ export function attachMmWsBridge(
     safeClose(upstream);
   };
 
-  // Only the side that actually closed logs. close() tears down BOTH
-  // sockets, so the other side then fires an *induced* close carrying no
-  // peer code/reason — logging that too would emit a misleading phantom
-  // line per teardown and double the volume this path keeps deliberately
-  // low. `closed` is still false on the initiating handler (we log before
-  // close()); the induced handler sees it true and stays quiet.
-  const logClose = (side: "browser" | "upstream", code: number, reason: unknown) => {
+const logClose = (side: "browser" | "upstream", code: number, reason: unknown) => {
     if (closed) return;
     deps.log(
       `[mm-proxy/ws] ${side} close code=${code ?? "?"} reason=${reasonToStr(reason)} mmUserId=${mmUserId ?? "unknown"}`,
@@ -160,13 +123,7 @@ export function attachMmWsBridge(
     flushOutbox();
   });
 
-  // `isBinary` MUST be preserved end to end. `ws` delivers every message
-  // as a Buffer; `ws.send(Buffer)` defaults to a binary frame. The MM
-  // client sends its `authentication_challenge` (and all actions) as
-  // text — forwarding them as binary makes Mattermost close the socket
-  // with `UnauthBinary: binary frames require authentication`, which the
-  // app sees as a 1 Hz connect/close reconnect loop.
-  browserWs.on("message", (data: RawData, isBinary: boolean) => {
+browserWs.on("message", (data: RawData, isBinary: boolean) => {
     if (!mmUserId && !pendingMmUserId) {
       pendingMmUserId = maybeCaptureMmTokenForAuth(data, deps.resolveMmUserId)
         .then((resolvedId) => {
@@ -184,7 +141,7 @@ export function attachMmWsBridge(
           pendingMmUserId = null;
         });
     }
-    if (upstreamOpen && upstream.readyState === 1 /* OPEN */) {
+    if (upstreamOpen && upstream.readyState === 1 ) {
       upstream.send(data, { binary: isBinary });
     } else {
       browserOutbox.push({ frame: data, binary: isBinary });
@@ -241,11 +198,6 @@ export function attachMmWsBridge(
   return { close };
 }
 
-/**
- * Inspects an outbound (browser → MM) frame. If it's the
- * `authentication_challenge` action, extracts the token and resolves the
- * MM user id via the supplied lookup. Returns the resolved user id or null.
- */
 export async function maybeCaptureMmTokenForAuth(
   data: RawData | string,
   resolveMmUserId: (token: string) => Promise<string | null>,
@@ -261,11 +213,6 @@ export async function maybeCaptureMmTokenForAuth(
   return resolveMmUserId(token);
 }
 
-/**
- * Inspects an inbound (MM → browser) frame. If it's a `posted` event whose
- * author matches the connected user's MM id, returns the synthetic ack
- * frame to send first. Otherwise returns null.
- */
 export function buildAckIfUserPost(
   data: RawData | string,
   mmUserId: string | null,
@@ -318,8 +265,6 @@ function rawDataToString(data: RawData | string): string {
   return Buffer.from(data as ArrayBuffer).toString("utf-8");
 }
 
-// `ws` delivers the WS close reason as a Buffer; normalize for a single
-// concise log line (empty when MM/the client sent no reason).
 function reasonToStr(reason: unknown): string {
   if (reason == null) return "";
   const str = Buffer.isBuffer(reason) ? reason.toString("utf-8") : String(reason);
@@ -347,7 +292,7 @@ function parsePostField(eventData: unknown): MmPostShape | null {
 
 function safeClose(ws: WebSocket): void {
   try {
-    if (ws.readyState !== 3 /* CLOSED */) ws.close();
+    if (ws.readyState !== 3 ) ws.close();
   } catch {
     /* ignore */
   }

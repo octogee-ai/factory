@@ -227,13 +227,6 @@ describe("createMigrateCustomerHandler — input validation", () => {
   });
 });
 
-// ── Per-target concurrency cap ─────────────────────────────────────────────
-//
-// Production incident 2026-05-13: 4 concurrent migrations to the same target
-// gateway thrashed OpenClaw's `config.patch` RPC (rate-limited to ~1 per 60s).
-// The handler now serializes per-target so each gateway gets its capacity
-// budget back. Different target gateways still run in parallel.
-
 describe("createMigrateCustomerHandler — per-target concurrency cap", () => {
   function deferredClient(): {
     client: MigrationClient;

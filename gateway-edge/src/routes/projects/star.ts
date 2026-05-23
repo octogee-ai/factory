@@ -27,13 +27,12 @@ router.post("/:wid/:pid/star", async (req: Request, res: Response) => {
     const starDoc = await starRef.get();
 
     if (starDoc.exists) {
-      // CF onStarDeleted decrements starCount via starDeltas.
+      
       await starRef.delete();
       res.json({ starred: false });
     } else {
-      // CF onStarCreated bumps project.starCount + owner profile.starCount
-      // via starDeltas — endpoint does NOT update either counter directly.
-      await starRef.set({
+
+await starRef.set({
         actorUid: uid,
         target,
         createdAt: FieldValue.serverTimestamp(),

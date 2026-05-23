@@ -1,45 +1,33 @@
 export interface StarTargetBuilder {
   type: 'builder';
-  /** Firebase UID of the Builder being starred. */
+  
   ownerUid: string;
-  /** Username (= workspace slug) — denormed for cheap UI lookups. */
+  
   username: string;
 }
 
 export interface StarTargetProject {
   type: 'project';
-  /** Workspace slug = the owner's username. Same as `workspaceId` in v3.1 — the URL slug. */
+  
   workspaceSlug: string;
-  /** Project slug — unique within the workspace. */
+  
   projectSlug: string;
-  /** Firebase UID of the project's owner — denormed for owner-attribution + notifications. */
+  
   ownerUid: string;
 }
 
 export interface StarTargetPost {
   type: 'post';
-  /** Post doc id — `posts/{postId}`. */
+  
   postId: string;
-  /** Firebase UID of the post author. */
+  
   ownerUid: string;
 }
 
 export type StarTarget = StarTargetBuilder | StarTargetProject | StarTargetPost;
 
-/** Follow targets are a subset — Posts are not Followable (use Star instead). */
 export type FollowTarget = StarTargetBuilder | StarTargetProject;
 
-/**
- * Stable doc id for a star edge. Deterministic over (actor, target) so the
- * optimistic toggle can read/write `stars/{starDocId(...)}` directly.
- *
- * Format: `{actorUid}_{shortType}_{targetSlug}`
- *   - shortType: 'b' (builder), 'p' (project), 'post' (post)
- *   - targetSlug: builder → ownerUid; project → `${workspaceSlug}_${projectSlug}`; post → postId
- *
- * The id is opaque — don't round-trip it back into a target shape; the
- * canonical shape is the doc fields.
- */
 export function starDocId(actorUid: string, target: StarTarget): string {
   switch (target.type) {
     case 'builder':
@@ -51,7 +39,6 @@ export function starDocId(actorUid: string, target: StarTarget): string {
   }
 }
 
-/** Same shape as star (Posts excluded — type system enforces). */
 export function followDocId(actorUid: string, target: FollowTarget): string {
   switch (target.type) {
     case 'builder':
