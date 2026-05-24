@@ -314,11 +314,12 @@ spec:
             {{- if eq .Values.profile "operator" }}
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"
-            - name: INTERNAL_SERVICE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: internal-service-key
-                  key: key
+            {{- /* INTERNAL_SERVICE_KEY intentionally omitted here — provided
+                 by the .Values.gatewayEdge.secrets range below (same dedup
+                 fix as #1131 did for GCP_PROJECT_ID/GITEA_ORG/GITEA_TOKEN).
+                 Duplicating it broke `helm upgrade`'s in-place patch and
+                 surfaced today as a kubectl-set-env "hides previous
+                 definition" warning. */}}
             {{- end }}
             {{- range $key, $val := .Values.gatewayEdge.env }}
             {{- if $val }}

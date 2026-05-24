@@ -455,4 +455,48 @@ describe("helm/octogee-gateway/ — required value validation", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/instanceName/);
   });
+
+  // #1131 follow-up: the operator-profile gateway-edge container has an
+  // explicit INTERNAL_SERVICE_KEY entry AND the same name comes through the
+  // .Values.gatewayEdge.secrets range loop — duplicate that breaks the
+  // strategic-merge-patch on `helm upgrade` and surfaces today as a
+  // kubectl-set-env warning. Same fix shape as #1131 (which dropped the
+  // same class of duplicate for GCP_PROJECT_ID / GITEA_ORG / GITEA_TOKEN).
+  describe("env dedup — operator profile must not add extra INTERNAL_SERVICE_KEY entries beyond the baseline range loop", () => {
+    it("operator profile renders the same INTERNAL_SERVICE_KEY count as the baseline (no extras)", () => {
+      const operatorOut = helmTemplate("octogee-gw-bender", {
+        gatewayId: "gw-bender",
+        instanceName: "bender",
+        profile: "operator",
+      });
+      const baselineOut = helmTemplate();
+      const operatorDep = findDoc(
+        operatorOut,
+        "Deployment",
+        "octogee-gateway-bender",
+      );
+      const baselineDep = findDoc(
+        baselineOut,
+        "Deployment",
+        "octogee-gateway-default",
+      );
+      expect(operatorDep).not.toBeNull();
+      expect(baselineDep).not.toBeNull();
+      const count = (s: string): number =>
+        (s.match(/name:\s*INTERNAL_SERVICE_KEY/g) ?? []).length;
+      expect(count(operatorDep!)).toBe(count(baselineDep!));
+    });
+
+    it("INTERNAL_SERVICE_KEY appears exactly twice in the rendered operator-profile Deployment (gateway + gateway-edge containers, one each)", () => {
+      const out = helmTemplate("octogee-gw-bender", {
+        gatewayId: "gw-bender",
+        instanceName: "bender",
+        profile: "operator",
+      });
+      const dep = findDoc(out, "Deployment", "octogee-gateway-bender");
+      expect(dep).not.toBeNull();
+      const count = (dep!.match(/name:\s*INTERNAL_SERVICE_KEY/g) ?? []).length;
+      expect(count).toBe(2);
+    });
+  });
 });

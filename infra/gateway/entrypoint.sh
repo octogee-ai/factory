@@ -28,11 +28,15 @@ export MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
 export MM_URL="${MM_URL:-}"
 export MM_INTERACTIONS_CALLBACK_BASE_URL="${MM_INTERACTIONS_CALLBACK_BASE_URL:-}"
 export MM_INTERACTIONS_ALLOWED_SOURCE_IPS="${MM_INTERACTIONS_ALLOWED_SOURCE_IPS:-}"
-# Gateway auth token — generated per pod boot. NEVER written to the JSON
-# config on disk. OpenClaw reads it from $OPENCLAW_GATEWAY_TOKEN natively
-# (openclaw/src/gateway/startup-auth.ts:111). chat-proxy fetches the live
-# token from Secret Manager (published below) when it opens upstream WS.
-export OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 48)}"
+# Gateway auth token — priority env > openclaw.json gateway.auth.token >
+# fresh random. The on-disk fallback preserves operator-set tokens (e.g.,
+# external Discord bridge, remote Mac Studio driver) across reboots; without
+# it, a random per-boot value drifts from openclaw.json and breaks the
+# in-pod provisioner→openclaw RPC with token_mismatch on every restart.
+# OpenClaw reads OPENCLAW_GATEWAY_TOKEN natively (openclaw/src/gateway/
+# startup-auth.ts:111); chat-proxy fetches the live token from Secret
+# Manager (published below) when it opens upstream WS.
+OPENCLAW_DIR="$OPENCLAW_DIR" . /octogee/infra/gateway/resolve-gateway-token.sh
 # GATEWAY_ID is set by the deployment's env block; `export` makes it visible
 # to envsubst below. Fail fast if it's missing — the template references it
 # and a silently-empty substitution would yield `octogee-ops-` as the agent
