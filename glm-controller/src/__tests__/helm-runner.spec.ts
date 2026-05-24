@@ -469,6 +469,111 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       }),
     ).rejects.toThrow(/timed out/);
   });
+
+  it("calls ensureAuthSecret({namespace, gatewayId}) BEFORE helm upgrade (auth secret must exist when the chart's secretKeyRef resolves)", async () => {
+    // Capture invocation order in a shared events[] array so a regression that
+    // reorders ensureAuthSecret to AFTER upgrade actually fails the test
+    // (Copilot C2 on PR #1160 — the prior version only asserted both happened).
+    const events: string[] = [];
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      events.push(args[0]); // "status" then "upgrade"
+      return { stdout: "ok", stderr: "", code: 0 };
+    });
+    const ensureAuthSecret = vi.fn(async () => {
+      events.push("ensure");
+    });
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm),
+      log: vi.fn(),
+      ensureAuthSecret,
+    });
+
+    await runner.upsertInstance({
+      namespace: "octogee",
+      instanceName: "bender",
+      gatewayId: "gw-bender",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(ensureAuthSecret).toHaveBeenCalledWith({
+      namespace: "octogee",
+      gatewayId: "gw-bender",
+    });
+    const ensureIdx = events.indexOf("ensure");
+    const upgradeIdx = events.indexOf("upgrade");
+    expect(ensureIdx).toBeGreaterThanOrEqual(0);
+    expect(upgradeIdx).toBeGreaterThanOrEqual(0);
+    expect(ensureIdx).toBeLessThan(upgradeIdx);
+  });
+
+  it("propagates ensureAuthSecret failures and does NOT call helm upgrade (fail-loud: don't apply a chart that can't resolve its token secret)", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const ensureAuthSecret = vi
+      .fn()
+      .mockRejectedValue(new Error("kubectl create secret failed: permission denied"));
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm),
+      log: vi.fn(),
+      ensureAuthSecret,
+    });
+
+    await expect(
+      runner.upsertInstance({
+        namespace: "octogee",
+        instanceName: "bender",
+        gatewayId: "gw-bender",
+        imageRepository: REPO,
+        imageTag: "abc1234",
+        chartPath: "/charts/octogee-gateway",
+      }),
+    ).rejects.toThrow(/permission denied/);
+    expect(calls.find((c) => c[0] === "upgrade")).toBeUndefined();
+  });
+
+  it("does NOT pass --set gatewayEdge.env.GCP_PROJECT_ID by default (chart values.yaml + values.{prod,test}.yaml are SSOT — no kubectl-set field-manager collision)", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm),
+      log: vi.fn(),
+    });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test",
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    const upgrade = calls.find((c) => c[0] === "upgrade") ?? [];
+    expect(upgrade.some((a) => a.startsWith("gatewayEdge.env.GCP_PROJECT_ID="))).toBe(
+      false,
+    );
+  });
+
+  it("DOES pass --set gatewayEdge.env.GCP_PROJECT_ID=<value> when gcpProject is explicitly set (BYO-GCP escape hatch)", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm),
+      log: vi.fn(),
+    });
+
+    await runner.upsertInstance({
+      namespace: "octogee",
+      instanceName: "acme",
+      gatewayId: "gw-acme",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+      gcpProject: "builder-acme-prod",
+    });
+
+    const upgrade = calls.find((c) => c[0] === "upgrade") ?? [];
+    expect(upgrade).toContain("gatewayEdge.env.GCP_PROJECT_ID=builder-acme-prod");
+  });
 });
 
 describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pending release", () => {

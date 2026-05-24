@@ -28,4 +28,30 @@ error that broke add-gateway end-to-end on first real exercise.
 {{- define "octogee-gateway.requireIdentity" -}}
 {{- $_ := required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId -}}
 {{- $_ := required "instanceName is required (Cowboy must pass --set instanceName=<name>)" .Values.instanceName -}}
+{{- include "octogee-gateway.requireGatewayEdgeSecret" (dict "Values" .Values "envName" "INTERNAL_SERVICE_KEY" "purpose" "cross-service auth (chat-proxy → openclaw, gateway-edge admin endpoints)") -}}
+{{- end }}
+
+{{/*
+Render-time assertion: an envName MUST appear in `.Values.gatewayEdge.secrets`.
+
+Replaces the prose-only "intentionally omitted here — provided by the
+.Values.gatewayEdge.secrets range" comments that #1159 collapsed wrong on
+gw-bender. A future trim of the secrets list now fails `helm template`
+with a named error instead of silently rendering a gateway-edge that
+crash-loops at boot.
+
+Caller passes `Values`, `envName`, and a short `purpose` string used in
+the error message. Returns no text.
+*/}}
+{{- define "octogee-gateway.requireGatewayEdgeSecret" -}}
+{{- $envName := .envName -}}
+{{- $found := false -}}
+{{- range .Values.gatewayEdge.secrets -}}
+  {{- if eq .envName $envName -}}
+    {{- $found = true -}}
+  {{- end -}}
+{{- end -}}
+{{- if not $found -}}
+  {{- fail (printf "gatewayEdge.secrets must include an entry with envName=%s — platform-required for %s. Add it back to values.yaml (or your override values file)." $envName .purpose) -}}
+{{- end -}}
 {{- end }}

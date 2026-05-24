@@ -3,7 +3,6 @@ import type {
   GatewayProfile,
   HelmInstancesMap,
 } from "../../shared/types/glm.js";
-import { resolveGatewayGcpProject } from "./gcp-project.js";
 
 export interface HelmRunner {
 
@@ -46,10 +45,22 @@ export type HelmSubprocess = (args: string[]) => Promise<HelmSubprocessResult>;
 export interface HelmSubprocessRunnerDeps {
   runHelm: HelmSubprocess;
   log: (msg: string) => void;
-  
+
   upgradeTimeout?: string;
-  
+
   uninstallTimeout?: string;
+
+  /**
+   * Idempotent pre-install hook: ensure the per-gateway K8s auth-token
+   * secret exists before `helm upgrade` runs (the chart references it via
+   * secretKeyRef on init/gateway/gateway-edge — missing secret = pod boot
+   * fails). Wired in production via `createAuthSecretEnsurer`. Tests that
+   * don't care about this hook can leave it undefined.
+   */
+  ensureAuthSecret?: (opts: {
+    namespace: string;
+    gatewayId: string;
+  }) => Promise<void>;
 }
 
 const RELEASE_PREFIX = "octogee-gw-";
@@ -182,6 +193,67 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 function pushSetJson(args: string[], key: string, value: unknown): void {
   args.push("--set-json", `${key}=${JSON.stringify(value)}`);
+}
+
+interface BuildUpgradeArgsOpts {
+  release: string;
+  chartPath: string;
+  namespace: string;
+  instanceName: string;
+  gatewayId: string;
+  imageTag: string;
+  imageRepository: string;
+  upgradeTimeout: string;
+  chartFingerprint?: string;
+  profile?: string;
+  serviceAccountName?: string;
+  gatewayContainerSecurityContext?: Record<string, unknown>;
+  persistence?: HelmInstancesMap[string]["persistence"];
+  gcpProject?: string;
+  valuesFile?: string;
+  takeOwnership?: boolean;
+}
+
+/**
+ * Builds the `helm upgrade --install` argv. Extracted from upsertInstance
+ * so the per-knob conditionals don't push the orchestrator over the
+ * complexity-15 threshold.
+ *
+ * Note: gcpProject is the BYO-GCP escape hatch — when set, overrides the
+ * chart's gatewayEdge.env.GCP_PROJECT_ID. Otherwise the chart's
+ * values.yaml + values.{prod,test}.yaml are the single source of truth
+ * (no Cowboy --set, no kubectl-set-env field-manager collision risk on
+ * the next upgrade — see post-mortem in PR #TBD).
+ */
+function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
+  const args: string[] = [
+    "upgrade",
+    "--install",
+    opts.release,
+    opts.chartPath,
+    "-n",
+    opts.namespace,
+    "--set",
+    `instanceName=${opts.instanceName}`,
+    "--set",
+    `gatewayId=${opts.gatewayId}`,
+    "--set",
+    `imageTag=${opts.imageTag}`,
+    "--set",
+    `image.repository=${opts.imageRepository}`,
+  ];
+  if (opts.chartFingerprint) args.push("--set", `chartFingerprint=${opts.chartFingerprint}`);
+  if (opts.profile) args.push("--set", `profile=${opts.profile}`);
+  if (opts.serviceAccountName) args.push("--set", `serviceAccountName=${opts.serviceAccountName}`);
+  if (opts.gatewayContainerSecurityContext) {
+    pushSetJson(args, "gatewayContainerSecurityContext", opts.gatewayContainerSecurityContext);
+  }
+  if (opts.persistence) pushSetJson(args, "persistence", opts.persistence);
+  if (opts.gcpProject) args.push("--set", `gatewayEdge.env.GCP_PROJECT_ID=${opts.gcpProject}`);
+  if (opts.valuesFile) args.push("-f", opts.valuesFile);
+  if (opts.takeOwnership) args.push("--take-ownership");
+  args.push("--wait", `--timeout=${opts.upgradeTimeout}`);
+  return args;
 }
 
 const IN_PROGRESS_PATTERN =
@@ -332,69 +404,21 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       return Object.fromEntries(entries);
     },
 
-    async upsertInstance({
-      namespace,
-      instanceName,
-      gatewayId,
-      imageRepository,
-      imageTag,
-      chartPath,
-      valuesFile,
-      takeOwnership,
-      chartFingerprint,
-      serviceAccountName,
-      gatewayContainerSecurityContext,
-      persistence,
-      profile,
-      gcpProject,
-    }) {
+    async upsertInstance(opts) {
+      const { namespace, instanceName, gatewayId, imageTag, chartFingerprint, takeOwnership } =
+        opts;
       const release = releaseNameForInstance(instanceName);
-      const args = [
-        "upgrade",
-        "--install",
+      const args = buildUpgradeArgs({
+        ...opts,
         release,
-        chartPath,
-        "-n",
-        namespace,
-        "--set",
-        `instanceName=${instanceName}`,
-        "--set",
-        `gatewayId=${gatewayId}`,
-        "--set",
-        `imageTag=${imageTag}`,
-        "--set",
-        `image.repository=${imageRepository}`,
-      ];
-      if (chartFingerprint) {
-        args.push("--set", `chartFingerprint=${chartFingerprint}`);
-      }
-      if (profile) {
-        args.push("--set", `profile=${profile}`);
-      }
-      if (serviceAccountName) {
-        args.push("--set", `serviceAccountName=${serviceAccountName}`);
-      }
-      if (gatewayContainerSecurityContext) {
-        pushSetJson(args, "gatewayContainerSecurityContext", gatewayContainerSecurityContext);
-      }
-      if (persistence) {
-        pushSetJson(args, "persistence", persistence);
+        upgradeTimeout,
+      });
+
+      if (deps.ensureAuthSecret) {
+        await deps.ensureAuthSecret({ namespace, gatewayId });
       }
 
-const platformGcpProject =
-        process.env.GOOGLE_CLOUD_PROJECT ||
-        process.env.GCLOUD_PROJECT ||
-        process.env.GCP_PROJECT_ID ||
-        "";
-      args.push(
-        "--set",
-        `gatewayEdge.env.GCP_PROJECT_ID=${resolveGatewayGcpProject({ gcpProject, platformDefault: platformGcpProject })}`,
-      );
-      if (valuesFile) args.push("-f", valuesFile);
-      if (takeOwnership) args.push("--take-ownership");
-      args.push("--wait", `--timeout=${upgradeTimeout}`);
-
-const preFlightStatus = await getReleaseStatus(deps, namespace, release);
+      const preFlightStatus = await getReleaseStatus(deps, namespace, release);
       if (preFlightStatus !== null && PENDING_STATUSES.has(preFlightStatus)) {
         deps.log(
           `[helm-runner] ⚠ ${release} pre-flight detected stuck state '${preFlightStatus}' — running recovery before upgrade`,

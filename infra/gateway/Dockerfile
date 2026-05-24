@@ -110,7 +110,6 @@ RUN chmod 1777 /tmp \
 
 # ── Entrypoint + config template ───────────────────────────────────────────
 COPY --chown=node:node infra/gateway/openclaw.template.json /octogee/infra/gateway/openclaw.template.json
-COPY --chown=node:node infra/gateway/resolve-gateway-token.sh /octogee/infra/gateway/resolve-gateway-token.sh
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh
 

@@ -20,6 +20,10 @@ import {
   type HelmRunner,
 } from "./helm-runner.js";
 import {
+  createAuthSecretEnsurer,
+  defaultRandomTokenHex,
+} from "./auth-secret-ensurer.js";
+import {
   spawnKubectl,
   syncApiFleetIngressPaths,
   syncFleetIngressPaths,
@@ -352,11 +356,20 @@ let claimed = false;
 async function main(): Promise<void> {
   initializeApp({ credential: applicationDefault() });
   const db = getFirestore();
+  const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
+  const authSecretEnsurer = createAuthSecretEnsurer({
+    runKubectl,
+    randomTokenHex: defaultRandomTokenHex,
+    log,
+  });
   const helm =
     process.env.HELM_RUNNER_MODE === "stub"
       ? createLoggingHelmRunner(log)
-      : createHelmSubprocessRunner({ runHelm: spawnHelm, log });
-  const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
+      : createHelmSubprocessRunner({
+          runHelm: spawnHelm,
+          log,
+          ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
+        });
   const syncFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
     syncFleetIngressPaths({
       runKubectl,
@@ -498,6 +511,31 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
   }
 }
 
+async function resolveDefaultGatewayId(deps: ControllerDeps): Promise<string | null> {
+  const orchSnap = await deps.db.doc("config/orchestrator").get();
+  const existing = (orchSnap.data() as { defaultGatewayId?: unknown } | undefined)
+    ?.defaultGatewayId;
+  if (typeof existing === "string") return existing;
+
+  const derived = deriveDefaultGatewayIdFromNamespace(NAMESPACE);
+  if (derived === null) return null;
+
+  try {
+    await deps.db
+      .doc("config/orchestrator")
+      .set({ defaultGatewayId: derived }, { merge: true });
+    deps.log(
+      `[glm-controller] default-gateway bootstrap: self-seeded config/orchestrator.defaultGatewayId=${derived} (derived from namespace=${NAMESPACE})`,
+    );
+    return derived;
+  } catch (err) {
+    deps.log(
+      `[glm-controller] ⚠ default-gateway bootstrap: self-seed failed (namespace=${NAMESPACE}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
 export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<void> {
   if (process.env.BOOTSTRAP_DEFAULT_GATEWAY !== "true") {
     return;
@@ -513,33 +551,12 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
   }
   const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
   const existingGatewayIds = new Set(snap.docs.map((d) => d.id));
-  const orchSnap = await deps.db.doc("config/orchestrator").get();
-  let defaultGatewayId = (orchSnap.data() as { defaultGatewayId?: unknown } | undefined)?.defaultGatewayId;
-
-if (typeof defaultGatewayId !== "string") {
-    const derived = deriveDefaultGatewayIdFromNamespace(NAMESPACE);
-    if (derived !== null) {
-      try {
-        await deps.db.doc("config/orchestrator").set(
-          { defaultGatewayId: derived },
-          { merge: true },
-        );
-        defaultGatewayId = derived;
-        deps.log(
-          `[glm-controller] default-gateway bootstrap: self-seeded config/orchestrator.defaultGatewayId=${derived} (derived from namespace=${NAMESPACE})`,
-        );
-      } catch (err) {
-        deps.log(
-          `[glm-controller] ⚠ default-gateway bootstrap: self-seed failed (namespace=${NAMESPACE}): ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-  }
+  const defaultGatewayId = await resolveDefaultGatewayId(deps);
 
   const decision = computeDefaultGatewayBootstrap({
     actualMap,
     existingGatewayIds,
-    defaultGatewayId: typeof defaultGatewayId === "string" ? defaultGatewayId : null,
+    defaultGatewayId,
     instanceName: process.env.BOOTSTRAP_INSTANCE_NAME ?? "default",
     imageRepository:
       process.env.BOOTSTRAP_IMAGE_REPOSITORY ??

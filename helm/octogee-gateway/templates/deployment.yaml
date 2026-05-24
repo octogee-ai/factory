@@ -48,6 +48,19 @@ spec:
               cp -an /etc/skel/. /home/node/ 2>/dev/null || true
               chown -R 1000:1000 /home/node || true
               mkdir -p /home/node/.npm-cache && chown -R 1000:1000 /home/node/.npm-cache || true
+          env:
+            # OPENCLAW_GATEWAY_TOKEN is platform-owned: Cowboy creates the
+            # per-gateway K8s secret `gateway-auth-token-<gatewayId>` with a
+            # random hex value before this chart installs, and the same
+            # secretKeyRef appears on all three containers (init / gateway /
+            # gateway-edge) so they agree on the token without any in-pod
+            # generation. Init seeds the PVC and the template that envsubst's
+            # OPENCLAW_GATEWAY_TOKEN into openclaw.json reads it from this env.
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: token
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
@@ -214,6 +227,15 @@ spec:
                 secretKeyRef:
                   name: internal-service-key
                   key: key
+            # Same per-gateway K8s secret as init + gateway-edge (see init
+            # container env block for the rationale). Pinned via the chart
+            # so kubectl-set-env side-channels can't drift the value out
+            # from under helm again.
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: token
           volumeMounts:
             - name: data
               mountPath: /home/node
@@ -308,18 +330,26 @@ spec:
                 secretKeyRef:
                   name: approval-signing
                   key: secret
-            {{- /* GITEA_TOKEN intentionally omitted here — provided by the
-                .Values.gatewayEdge.secrets range below (avoids a duplicate
-                env entry that breaks the helm upgrade Deployment patch). */}}
+            # Same per-gateway K8s secret as init + gateway container (see
+            # init container env block for the rationale). chat-proxy is
+            # folded into this container and needs the same token openclaw
+            # uses for its in-pod RPC.
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: token
+            {{- /* INTERNAL_SERVICE_KEY, GITEA_TOKEN, and GCP_PROJECT_ID are
+                NOT set here — the .Values.gatewayEdge.{env,secrets} ranges
+                below provide them. _helpers.tpl's requireGatewayEdgeSecret
+                helper asserts INTERNAL_SERVICE_KEY at render time so a
+                future trim of the secrets list fails loud instead of
+                producing a half-broken gateway-edge. Adding them here
+                creates duplicate env entries that break the helm-upgrade
+                strategic-merge patch (root cause of #1131 / gw-bender). */}}
             {{- if eq .Values.profile "operator" }}
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"
-            {{- /* INTERNAL_SERVICE_KEY intentionally omitted here — provided
-                 by the .Values.gatewayEdge.secrets range below (same dedup
-                 fix as #1131 did for GCP_PROJECT_ID/GITEA_ORG/GITEA_TOKEN).
-                 Duplicating it broke `helm upgrade`'s in-place patch and
-                 surfaced today as a kubectl-set-env "hides previous
-                 definition" warning. */}}
             {{- end }}
             {{- range $key, $val := .Values.gatewayEdge.env }}
             {{- if $val }}

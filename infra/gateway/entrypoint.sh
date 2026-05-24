@@ -28,15 +28,34 @@ export MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
 export MM_URL="${MM_URL:-}"
 export MM_INTERACTIONS_CALLBACK_BASE_URL="${MM_INTERACTIONS_CALLBACK_BASE_URL:-}"
 export MM_INTERACTIONS_ALLOWED_SOURCE_IPS="${MM_INTERACTIONS_ALLOWED_SOURCE_IPS:-}"
-# Gateway auth token — priority env > openclaw.json gateway.auth.token >
-# fresh random. The on-disk fallback preserves operator-set tokens (e.g.,
-# external Discord bridge, remote Mac Studio driver) across reboots; without
-# it, a random per-boot value drifts from openclaw.json and breaks the
-# in-pod provisioner→openclaw RPC with token_mismatch on every restart.
-# OpenClaw reads OPENCLAW_GATEWAY_TOKEN natively (openclaw/src/gateway/
-# startup-auth.ts:111); chat-proxy fetches the live token from Secret
-# Manager (published below) when it opens upstream WS.
-OPENCLAW_DIR="$OPENCLAW_DIR" . /octogee/infra/gateway/resolve-gateway-token.sh
+
+# ── Require OPENCLAW_GATEWAY_TOKEN from the K8s secret ─────────────────────
+# Platform-owned: Cowboy ensures the per-gateway K8s secret
+# `gateway-auth-token-<gatewayId>` exists before `helm upgrade`; the chart
+# threads it via secretKeyRef on init/gateway/gateway-edge. No fallback —
+# absent env means the secretKeyRef binding broke or someone trimmed the
+# chart's env block. Crash-loop loudly so the failure shows up in
+# `kubectl describe pod` instead of silently producing a gateway that
+# nobody can authenticate against.
+#
+# (Bender 2026-05-24 post-mortem: the previous three-tier resolver — env >
+# openclaw.json > fresh random per boot — drifted on operator gateways
+# where openclaw.json was edited out-of-band, and the kubectl-set-env
+# workaround filling the gateway-edge gap caused field-manager collision
+# that silently dropped INTERNAL_SERVICE_KEY when #1159's dedup landed.)
+if [ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
+  echo "████████████████████████████████████████████████████████████████" >&2
+  echo "FATAL: OPENCLAW_GATEWAY_TOKEN is empty or unset." >&2
+  echo "The chart's secretKeyRef → gateway-auth-token-<gatewayId> didn't" >&2
+  echo "resolve. Likely causes:" >&2
+  echo "  - Cowboy hasn't created the K8s secret yet (check glmGateways/<id>)" >&2
+  echo "  - The chart's env block was edited to omit OPENCLAW_GATEWAY_TOKEN" >&2
+  echo "  - The K8s secret was deleted out-of-band" >&2
+  echo "████████████████████████████████████████████████████████████████" >&2
+  exit 1
+fi
+export OPENCLAW_GATEWAY_TOKEN
+# ── End require ────────────────────────────────────────────────────────────
 # GATEWAY_ID is set by the deployment's env block; `export` makes it visible
 # to envsubst below. Fail fast if it's missing — the template references it
 # and a silently-empty substitution would yield `octogee-ops-` as the agent

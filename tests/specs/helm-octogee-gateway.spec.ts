@@ -500,3 +500,238 @@ describe("helm/octogee-gateway/ — required value validation", () => {
     });
   });
 });
+
+// ── Platform-owned OPENCLAW_GATEWAY_TOKEN ──────────────────────────────────
+// Pre-#TBD the token was generated inside the pod by entrypoint.sh and
+// mirrored to GCP Secret Manager. That left K8s/helm blind to it, so an
+// agent's openclaw.json edit + a kubectl-set-env workaround for the gap on
+// gateway-edge produced field-manager drift that silently dropped
+// INTERNAL_SERVICE_KEY when #1159's dedup landed. New model: Cowboy creates
+// a per-gateway K8s secret `gateway-auth-token-{gatewayId}` with a random
+// value; the chart threads it via secretKeyRef on every container that
+// needs it. Token is stable across reboots, helm-owned end to end.
+describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () => {
+  const SECRET_NAME = "gateway-auth-token-gw-test";
+
+  function envBlock(dep: string, containerName: "gateway" | "gateway-edge"): string {
+    return (
+      dep.match(
+        new RegExp(`- name:\\s*${containerName}[\\s\\S]*?(?=\\n {8}- name:|\\n {6}volumes:)`),
+      )?.[0] ?? ""
+    );
+  }
+
+  function initContainerBlock(dep: string): string {
+    return dep.match(/initContainers:[\s\S]*?(?=\n {6}containers:)/)?.[0] ?? "";
+  }
+
+  function tokenEntry(block: string): string {
+    // Slice the 8 lines starting at the OPENCLAW_GATEWAY_TOKEN env entry —
+    // covers the entire `valueFrom: secretKeyRef: { name, key }` sub-block
+    // without resorting to a wide-lookahead regex.
+    const lines = block.split("\n");
+    const idx = lines.findIndex((l) =>
+      /- name:\s*OPENCLAW_GATEWAY_TOKEN\b/.test(l),
+    );
+    if (idx === -1) return "";
+    return lines.slice(idx, idx + 8).join("\n");
+  }
+
+  it("renders OPENCLAW_GATEWAY_TOKEN via secretKeyRef on the gateway container (not a plain value)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gw = envBlock(dep, "gateway");
+    const entry = tokenEntry(gw);
+    expect(entry).toMatch(/secretKeyRef:/);
+    expect(entry).toMatch(new RegExp(`name:\\s*${SECRET_NAME}\\b`));
+    expect(entry).toMatch(/key:\s*token\b/);
+  });
+
+  it("renders OPENCLAW_GATEWAY_TOKEN via secretKeyRef on the gateway-edge container (same secret — single source of truth)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const ge = envBlock(dep, "gateway-edge");
+    const entry = tokenEntry(ge);
+    expect(entry).toMatch(/secretKeyRef:/);
+    expect(entry).toMatch(new RegExp(`name:\\s*${SECRET_NAME}\\b`));
+    expect(entry).toMatch(/key:\s*token\b/);
+  });
+
+  it("renders OPENCLAW_GATEWAY_TOKEN via secretKeyRef on the fix-perms init container (so the PVC seed sees the same token the gateway will use)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const init = initContainerBlock(dep);
+    const entry = tokenEntry(init);
+    expect(entry).toMatch(/secretKeyRef:/);
+    expect(entry).toMatch(new RegExp(`name:\\s*${SECRET_NAME}\\b`));
+    expect(entry).toMatch(/key:\s*token\b/);
+  });
+
+  it("does NOT render OPENCLAW_GATEWAY_TOKEN as a plain `value:` anywhere (proves platform owns it via secretKeyRef, not entrypoint-generated)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(dep).not.toMatch(/name:\s*OPENCLAW_GATEWAY_TOKEN[\s\S]{0,80}\n\s+value:\s*[^\n]+/);
+  });
+
+  it("derives the secret name from gatewayId so operator and cattle gateways get distinct secrets", () => {
+    const benderOut = helmTemplate("octogee-gw-bender", {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      profile: "operator",
+    });
+    const benderDep = findDoc(benderOut, "Deployment", "octogee-gateway-bender") ?? "";
+    expect(benderDep).toMatch(/name:\s*gateway-auth-token-gw-bender\b/);
+    expect(benderDep).not.toMatch(/name:\s*gateway-auth-token-gw-test\b/);
+  });
+
+  it("operator profile threads the same secret on the same three containers (no profile-specific drift)", () => {
+    const dep =
+      findDoc(
+        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    const count = (dep.match(/name:\s*OPENCLAW_GATEWAY_TOKEN\b/g) ?? []).length;
+    expect(count).toBe(3);
+  });
+
+  it("cattle profile threads the same secret on the same three containers (no profile-specific drift)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const count = (dep.match(/name:\s*OPENCLAW_GATEWAY_TOKEN\b/g) ?? []).length;
+    expect(count).toBe(3);
+  });
+});
+
+// ── GCP_PROJECT_ID on gateway-edge ─────────────────────────────────────────
+// Pre-#TBD GCP_PROJECT_ID was only rendered on the `gateway` container; for
+// gateway-edge an operator had to `kubectl set env` it in by hand, which
+// created the kubectl-set field-manager ownership that broke #1159's dedup
+// merge. The chart already has `gatewayEdge.env.GCP_PROJECT_ID` in
+// defaults — pin that as a contract so a future trim doesn't silently
+// remove it.
+describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
+  it("renders GCP_PROJECT_ID on the gateway-edge container for cattle profile (no kubectl-set workaround needed)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const ge =
+      dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
+    expect(ge).toMatch(/- name:\s*GCP_PROJECT_ID[\s\S]*?value:\s*"octogee"/);
+  });
+
+  it("renders GCP_PROJECT_ID on the gateway-edge container for operator profile", () => {
+    const dep =
+      findDoc(
+        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    const ge =
+      dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
+    expect(ge).toMatch(/- name:\s*GCP_PROJECT_ID/);
+  });
+});
+
+// ── Profile-aware render-time assertions ───────────────────────────────────
+// The #1159 dedup removed an explicit INTERNAL_SERVICE_KEY block from the
+// operator-profile gateway-edge env on the assumption that
+// `.Values.gatewayEdge.secrets` would always include it. That assumption was
+// expressed only as a prose comment — there was no render-time guard. Lock
+// it in: if anyone deletes INTERNAL_SERVICE_KEY from gatewayEdge.secrets,
+// `helm template` fails loud with a named error rather than silently
+// rendering a half-broken gateway-edge.
+describe("helm/octogee-gateway/ — required-env render assertions", () => {
+  function templateWithSecretsListReplaced(extra: Record<string, string> = {}): {
+    status: number | null;
+    stderr: string;
+  } {
+    const args = [
+      "template",
+      "octogee-gw-default",
+      CHART_PATH,
+      "--namespace=octogee-test",
+      "--set",
+      "gatewayId=gw-test",
+      "--set",
+      "instanceName=default",
+      "--set",
+      "imageTag=abc",
+      "--set",
+      "env.mmInternalUrl=http://x",
+      "--set",
+      "env.mmSiteUrl=https://x",
+      "--set",
+      "env.chatProxyPublicUrl=https://x",
+      // Replace gatewayEdge.secrets with a one-entry list missing INTERNAL_SERVICE_KEY.
+      "--set-json",
+      'gatewayEdge.secrets=[{"envName":"STRIPE_SECRET_KEY","secretName":"stripe-secrets","secretKey":"secret_key","optional":true}]',
+    ];
+    for (const [k, v] of Object.entries(extra)) args.push("--set", `${k}=${v}`);
+    const result = spawnSync("helm", args, { encoding: "utf-8" });
+    return { status: result.status, stderr: result.stderr };
+  }
+
+  it("fails to render when gatewayEdge.secrets omits INTERNAL_SERVICE_KEY (operator profile)", () => {
+    const result = templateWithSecretsListReplaced({ profile: "operator" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/INTERNAL_SERVICE_KEY/);
+    expect(result.stderr).toMatch(/gatewayEdge\.secrets/);
+  });
+
+  it("fails to render when gatewayEdge.secrets omits INTERNAL_SERVICE_KEY (cattle profile — same contract)", () => {
+    const result = templateWithSecretsListReplaced();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/INTERNAL_SERVICE_KEY/);
+  });
+});
+
+// ── values.schema.json defense-in-depth ────────────────────────────────────
+// Helm validates values.schema.json before rendering — so structurally bad
+// inputs (missing required top-level keys, wrong types) fail BEFORE template
+// logic runs. This is layered defense alongside the render-time `required`
+// helpers above: the schema catches shape errors, the helpers catch semantic
+// ones.
+describe("helm/octogee-gateway/ — values.schema.json", () => {
+  it("rejects a values file with gatewayEdge.secrets as the wrong type", () => {
+    const args = [
+      "template",
+      "octogee-gw-default",
+      CHART_PATH,
+      "--namespace=octogee-test",
+      "--set",
+      "gatewayId=gw-test",
+      "--set",
+      "instanceName=default",
+      "--set",
+      "imageTag=abc",
+      "--set",
+      "env.mmInternalUrl=http://x",
+      "--set",
+      "env.mmSiteUrl=https://x",
+      "--set-json",
+      'gatewayEdge.secrets="not-an-array"',
+    ];
+    const result = spawnSync("helm", args, { encoding: "utf-8" });
+    expect(result.status).not.toBe(0);
+    // helm's schema-validation error wording varies by version; tolerate either.
+    expect(result.stderr).toMatch(/schema|values don't meet|validation/i);
+  });
+
+  it("rejects an empty profile when set to an unknown enum value (operator gateways have an explicit set of profiles)", () => {
+    const args = [
+      "template",
+      "octogee-gw-default",
+      CHART_PATH,
+      "--namespace=octogee-test",
+      "--set",
+      "gatewayId=gw-test",
+      "--set",
+      "instanceName=default",
+      "--set",
+      "imageTag=abc",
+      "--set",
+      "env.mmInternalUrl=http://x",
+      "--set",
+      "env.mmSiteUrl=https://x",
+      "--set",
+      "profile=bogus-profile-name",
+    ];
+    const result = spawnSync("helm", args, { encoding: "utf-8" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/schema|profile|enum/i);
+  });
+});

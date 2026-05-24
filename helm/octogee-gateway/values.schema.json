@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "title": "octogee-gateway values",
+  "description": "Defense-in-depth schema for the per-gateway chart. Catches shape errors (wrong type, missing required key, unknown profile) BEFORE template logic runs. Semantic contracts (e.g. INTERNAL_SERVICE_KEY must be in gatewayEdge.secrets) live in _helpers.tpl `requireGatewayEdgeSecret` instead — the schema can't express list-member predicates.",
+  "type": "object",
+  "required": ["gatewayId", "instanceName", "imageTag", "image", "gatewayEdge"],
+  "properties": {
+    "gatewayId": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "minLength": 1,
+      "description": "Logical gateway identity used in Firestore heartbeats + the per-gateway K8s auth-token secret name."
+    },
+    "instanceName": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "minLength": 1,
+      "description": "DNS-friendly suffix for per-instance K8s resource names (Deployment, Service, PVC)."
+    },
+    "imageTag": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile": {
+      "type": "string",
+      "enum": ["", "standard", "operator"],
+      "description": "Capability profile. Empty + 'standard' are equivalent cattle behavior; 'operator' enables pet-home (PVC), builder-shell, and skips the platform ANTHROPIC_API_KEY injection."
+    },
+    "chartFingerprint": {
+      "type": "string"
+    },
+    "serviceAccountName": {
+      "type": "string"
+    },
+    "computeClass": {
+      "type": "string"
+    },
+    "machineFamily": {
+      "type": "string"
+    },
+    "gatewayContainerSecurityContext": {
+      "type": "object"
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "existingClaim": { "type": "string" },
+        "storageClassName": { "type": "string" },
+        "accessModes": { "type": "array", "items": { "type": "string" } },
+        "size": { "type": "string" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "probes": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "pdb": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" }
+      }
+    },
+    "gatewayEdge": {
+      "type": "object",
+      "required": ["enabled", "port", "image", "env", "secrets"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "type": ["integer", "string"] },
+        "image": {
+          "type": "object",
+          "required": ["repository"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" }
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "null"] }
+        },
+        "secrets": {
+          "type": "array",
+          "description": "List of K8s secrets to thread as env. Must include INTERNAL_SERVICE_KEY (asserted at render time by _helpers.tpl).",
+          "items": {
+            "type": "object",
+            "required": ["envName", "secretName", "secretKey"],
+            "properties": {
+              "envName": { "type": "string", "minLength": 1 },
+              "secretName": { "type": "string", "minLength": 1 },
+              "secretKey": { "type": "string", "minLength": 1 },
+              "optional": { "type": "boolean" }
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}
