@@ -221,17 +221,52 @@ git log ${PREV_TAG}..${NEW_TAG} --oneline --regexp-ignore-case --grep \
   -E 'broadcast|agent.?event|tool.?progress|thinking|reasoning|session_(start|end|status)|control.?ui|steer|draft|preamble|interrupt|abort|elicit'
 ```
 
+▸ For every non-trivial feat() hit, check whether upstream also wired
+it through to the **Control UI** (the OC production web interface at
+`ui/`). The UI-landing answer is the tripwire for default action — see
+the action mapping below.
+
+```bash
+# Per candidate commit, list ui/ touches:
+git show --name-only --pretty=format: <commit-sha> | grep -E '^ui/'
+# Or sweep the whole range for ui/ commits that mention the feature's keywords:
+git log ${PREV_TAG}..${NEW_TAG} --oneline --regexp-ignore-case \
+  --grep='<feature-keyword>' -- ui/
+# Or fastest — grep ui/src/ for the new field/type name:
+grep -rln '<NewTypeOrField>' ui/src/
+```
+
+The rule (validated on 2026-05-24 promotion cycle, 5.20→5.24-beta.1):
+upstream itself follows a *harness-signal-first, UI-consumer-second*
+pattern — adding a session-entry field or diagnostic event type
+several releases before wiring it into the OC Web UI. So "is this
+new surface user-meaningful enough that upstream consumes it
+themselves" is a stronger adoption signal than "did upstream merge
+the feat()." If even upstream hasn't dogfooded a new surface in their
+own UI yet, our PWA absolutely shouldn't be racing them to it.
+
 ▸ For every non-trivial hit, add a row to the cycle's triage table:
 
-| Surface | New/changed this release | Consumed by chat-proxy/PWA today? | Steering vs. observability value | Action |
-|---|---|---|---|---|
+| Surface | New/changed this release | UI-landed in `ui/`? | Consumed by chat-proxy/PWA today? | Steering vs. observability value | Action |
+|---|---|---|---|---|---|
 
-✓ **Action** is one of: `adopt-now` (rare — only a regression-class gap),
-`backlog` (the default — file it against `docs/ACTIVITY-STREAM-SPEC.md`,
-which is the canonical home; do **not** spin a new spec), or `N/A`
-(internal-only, nothing to ride). The filed table + any backlog entries
-are the deliverable. Paste the table into the roll-forward commit / PR
-body so the decision trail lives with the bump.
+✓ **Action** is one of (default mapping by UI-landed status):
+
+| Kind | UI-landed? | Default action |
+|---|---|---|
+| Observability feat | ❌ no | **watch** — re-check next cycle; file in backlog if persistent |
+| Observability feat | ✅ yes | **adopt** — file against `docs/ACTIVITY-STREAM-SPEC.md`, wire consumer |
+| Steering feat | ❌ no | **watch** |
+| Steering feat | ✅ yes | **adopt-now candidate** if it's a capability we want |
+| Internal tracing / infra-only | (either) | **N/A** — nothing to ride |
+
+Override the default freely when context justifies it — a
+regression-class gap is `adopt-now` regardless, a capability we'll
+never use is `N/A` even with UI adoption. The default just keeps the
+audit honest under churn. Do **not** spin a new spec; the
+`ACTIVITY-STREAM-SPEC.md` is the canonical backlog home. Paste the
+table into the roll-forward commit / PR body so the decision trail
+lives with the bump.
 
 ### Step 6 — Build OpenClaw
 
@@ -760,23 +795,24 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.20 GA (current) the fork carries **five logical essential patches across six commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits). Top is the mattermost connect-log ✅ marker (operator-visibility patch — mirrored across all three slots so the marker shows up regardless of which OC version a gateway runs).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.22 GA (current) the fork carries **five logical essential patches across seven commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-specific allowlist extension that adopts upstream's new message-lifecycle / turn-start diagnostic event types under the same env gate). Top is the Hunk A allowlist extension; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all three slots so the marker shows up regardless of which OC version a gateway runs.
 
-Live short SHAs at v2026.5.20 GA (top of current's integration branch is `9d716e25`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
-- `9d716e25` — mattermost connect log: ✅ marker for operator visibility on GW startup
-- `963e6334` — activity harness-signal Hunk B: session-correlated execution-phase
-- `34a36795` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
-- `2bbe6df3` — env-gated isControlUiVisible override
-- `7273641a` — config.patch returns post-write hash
-- `439cba7d` — per-account surgical channel reload
+Live short SHAs at v2026.5.22 GA (top of current's integration branch is `f3bd8194`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `f3bd8194` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
+- `7b536cfb` — mattermost connect log: ✅ marker for operator visibility on GW startup
+- `0f8dd8c5` — activity harness-signal Hunk B: session-correlated execution-phase
+- `401d42d1` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+- `e3a2004f` — env-gated isControlUiVisible override
+- `4cba493f` — config.patch returns post-write hash
+- `da6c0aad` — per-account surgical channel reload
 
 Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.5.20 (GA) | `9d716e25` |
-| previous | 2026.5.19 | `5e0d2619` |
-| preview | 2026.5.22 (GA) | `f3bd8194` (5-patch baseline + Hunk A allowlist extension for 5.22 upstream events) |
+| current | 2026.5.22 (GA) | `f3bd8194` |
+| previous | 2026.5.20 (GA) | `9d716e25` |
+| preview | 2026.5.24-beta.1 | `ab7899b7` (7-commit stack inherited verbatim from 5.22 current; zero patches dropped, zero new) |
 
 **Essential:**
 
