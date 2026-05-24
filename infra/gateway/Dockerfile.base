@@ -87,14 +87,25 @@ RUN groupadd -r node 2>/dev/null || true && \
 
 ENV HOME=/home/node
 
-# ── Heavy extension deps — pre-installed in base (1.2GB, changes rarely) ────
-# octogee-router needs @huggingface/transformers for the NN classifier.
-# Installing here means gateway builds skip this entirely.
+# ── Heavy extension deps — extracted from GCS-cached tarball ────────────────
+# octogee-router needs @huggingface/transformers (~1.2GB) for the NN
+# classifier. We don't `npm install` here — the resolved node_modules tree
+# is packed once per lockfile by `scripts/pack-router-deps.sh` and stored
+# at gs://octogee-openclaw-fork/router-deps-<sha8>.tgz, keyed by
+# sha256(package-lock.json)[:8]. The fetch-router-deps Cloud Build step
+# stages it into the build context as node_modules.tgz before this layer
+# runs. Eliminates ~177 npm-registry fetches + the onnxruntime-node native
+# binary download per base build → no upstream rate-limit exposure on the
+# heaviest dep tree. Cache miss = build fails fast (no implicit npm
+# install fallback); operator runs the pack script to populate.
 # Entrypoint symlinks /octogee/extensions/octogee-router/node_modules → here.
 COPY infra/gateway/extensions/octogee-router/package.json \
-     infra/gateway/extensions/octogee-router/package-lock.json* \
+     infra/gateway/extensions/octogee-router/package-lock.json \
      /opt/octogee-router-deps/
-RUN cd /opt/octogee-router-deps && npm install --production 2>&1 | tail -50 \
+COPY infra/gateway/extensions/octogee-router/node_modules.tgz /tmp/router-deps.tgz
+RUN tar -xzf /tmp/router-deps.tgz -C /opt/octogee-router-deps \
+    && rm /tmp/router-deps.tgz \
+    && test -d /opt/octogee-router-deps/node_modules/@huggingface/transformers \
     && chown -R node:node /opt/octogee-router-deps
 
 # ── Pre-bake classifier ONNX model into image ──────────────────────────────

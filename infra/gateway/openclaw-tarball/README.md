@@ -1045,4 +1045,18 @@ When the patches all land upstream and we no longer need a fork:
 2. Delete the `fetch-fork-tarball` step and `_OPENCLAW_FORK_*`
    substitutions from `cloudbuild-base.yaml` *and* `cloudbuild.yaml`.
 3. Drop the boot-banner `fork=` field in `infra/gateway/entrypoint.sh`.
-4. Delete this directory + the GCS bucket.
+4. Delete this directory + the GCS bucket (note: the bucket also holds
+   `router-deps-*.tgz` objects — see the cross-link below).
+
+---
+
+## See also
+
+The same `gs://octogee-openclaw-fork/` bucket also holds the
+**octogee-router dep tree cache** — `router-deps-<sha8>.tgz`, keyed by
+`sha256(package-lock.json)[:8]`. Same fetch pattern (parallel step in
+`cloudbuild-base.yaml`), separate bump ritual at
+[../extensions/octogee-router/README.md](../extensions/octogee-router/README.md).
+Whenever you `npm install` something in that package, run
+`scripts/pack-router-deps.sh` before pushing or the next base build
+404s on the new cache key.
