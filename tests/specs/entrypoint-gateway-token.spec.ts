@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 // Pins the contract of the OPENCLAW_GATEWAY_TOKEN require block in
@@ -64,5 +66,97 @@ describe("infra/gateway/entrypoint.sh — OPENCLAW_GATEWAY_TOKEN platform-owned 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
     expect(result.stderr).toMatch(/FATAL/i);
+  });
+});
+
+// ── PVC operator-env seam ──────────────────────────────────────────────────
+// Per GATEWAY-PLATFORM-SPEC.md §Operator-class customization surface:
+// operator-class gateways (PVC home) get a single shell-sourceable env
+// file at ~/.openclaw/secrets/operator.env for additional credentials/
+// integrations the platform doesn't manage. Sourced by entrypoint.sh
+// AFTER the platform require block so the operator can override their
+// own gateway (but the intent is additive — personal Discord bots,
+// custom MCP credentials, personal API keys). Survives every reschedule
+// via PVC; helm-invisible. First proven on gw-bender 2026-05-24 when
+// the Discord bot token rehome needed a place to live that didn't
+// require a platform-wide K8s Secret edit.
+
+function runOperatorEnvBlock(opts: {
+  envFile?: string; // contents to write to operator.env (undefined = file absent)
+  envFilePerm?: number;
+}): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "operator-env-"));
+  try {
+    fs.mkdirSync(path.join(tmp, "secrets"), { recursive: true });
+    if (opts.envFile !== undefined) {
+      const filePath = path.join(tmp, "secrets", "operator.env");
+      fs.writeFileSync(filePath, opts.envFile);
+      if (opts.envFilePerm !== undefined) fs.chmodSync(filePath, opts.envFilePerm);
+    }
+    // Provide OPENCLAW_GATEWAY_TOKEN (required by the preceding block) so
+    // the script doesn't fail-loud before reaching the operator-env block.
+    // `eval` rather than `sed | sh` so the sourced env propagates into the
+    // current shell where we can echo it back for assertion.
+    const script = `
+      set -e
+      log() { echo "$*" >&2; }
+      export OPENCLAW_GATEWAY_TOKEN=token-for-test
+      export OPENCLAW_DIR="${tmp}"
+      eval "$(sed -n '/^# ── Source operator-customization env/,/^# ── End operator-env/p' "${ENTRYPOINT}")"
+      echo "DISCORD_BENDER_TOKEN=\${DISCORD_BENDER_TOKEN:-_unset_}"
+      echo "PERSONAL_OPENAI_API_KEY=\${PERSONAL_OPENAI_API_KEY:-_unset_}"
+    `;
+    const r = spawnSync("sh", ["-c", script], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+describe("infra/gateway/entrypoint.sh — PVC operator.env seam", () => {
+  it("sources operator.env from $OPENCLAW_DIR/secrets/operator.env and exports its vars (the bender Discord rehome path)", () => {
+    const result = runOperatorEnvBlock({
+      envFile: "DISCORD_BENDER_TOKEN=test-bender-token-value\n",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("DISCORD_BENDER_TOKEN=test-bender-token-value");
+  });
+
+  it("supports multiple operator-defined vars in one file (additive secrets pattern, not just Discord)", () => {
+    const result = runOperatorEnvBlock({
+      envFile: [
+        "DISCORD_BENDER_TOKEN=token-1",
+        "PERSONAL_OPENAI_API_KEY=key-2",
+      ].join("\n"),
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("DISCORD_BENDER_TOKEN=token-1");
+    expect(result.stdout).toContain("PERSONAL_OPENAI_API_KEY=key-2");
+  });
+
+  it("no-ops cleanly when operator.env is absent (cattle gateways without operator overrides)", () => {
+    const result = runOperatorEnvBlock({ envFile: undefined });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("DISCORD_BENDER_TOKEN=_unset_");
+  });
+
+  it("ignores blank lines and # comments (standard shell env-file convention)", () => {
+    const result = runOperatorEnvBlock({
+      envFile: [
+        "# Operator's personal credentials",
+        "",
+        "DISCORD_BENDER_TOKEN=token-with-comments-around",
+        "# trailing comment",
+      ].join("\n"),
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("DISCORD_BENDER_TOKEN=token-with-comments-around");
   });
 });

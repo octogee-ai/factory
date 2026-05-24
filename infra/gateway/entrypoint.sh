@@ -56,6 +56,35 @@ if [ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
 fi
 export OPENCLAW_GATEWAY_TOKEN
 # ── End require ────────────────────────────────────────────────────────────
+
+# ── Source operator-customization env (PVC-resident, additive) ─────────────
+# Per docs/architecture/GATEWAY-PLATFORM-SPEC.md §Operator-class customization
+# surface: operator-class gateways (PVC home) get a single shell-sourceable
+# env file at ~/.openclaw/secrets/operator.env for additional credentials /
+# integrations the platform doesn't manage (personal Discord bots, custom
+# MCP credentials, personal API keys). Helm-invisible, survives every
+# reschedule via PVC. First proven on gw-bender 2026-05-24 when the Discord
+# bot token rehome needed a place to live that didn't require a platform-
+# wide K8s Secret edit.
+#
+# Sourced AFTER the platform require block but BEFORE envsubst on
+# openclaw.template.json, so operator-defined values can populate the
+# template on a first-boot gateway. Position is also AFTER kubelet's K8s
+# env injection — operators can override their own gateway if they really
+# want, though the design intent is additive-only.
+#
+# See infra/gateway/operator-env.example for format + the kubectl debug-pod
+# recipe for editing the file on a running gateway's PVC.
+OPERATOR_ENV="${OPENCLAW_DIR}/secrets/operator.env"
+if [ -f "$OPERATOR_ENV" ]; then
+  log "Sourcing operator env: $OPERATOR_ENV"
+  set -a
+  # shellcheck disable=SC1090
+  . "$OPERATOR_ENV"
+  set +a
+fi
+# ── End operator-env ───────────────────────────────────────────────────────
+
 # GATEWAY_ID is set by the deployment's env block; `export` makes it visible
 # to envsubst below. Fail fast if it's missing — the template references it
 # and a silently-empty substitution would yield `octogee-ops-` as the agent
