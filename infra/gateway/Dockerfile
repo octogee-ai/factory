@@ -1,6 +1,8 @@
 ARG OPENCLAW_BASE_IMAGE=openclaw:local
 FROM ${OPENCLAW_BASE_IMAGE}
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # ── Octogee gateway image ────────────────────────────────────────────────────
 # Base image (octogee-gateway-base) already contains:
 #   - OpenClaw npm install
@@ -92,7 +94,7 @@ COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
 
 # octogee-mattermost-tools runtime deps
 WORKDIR /octogee/extensions/octogee-mattermost-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -3 \
+RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-mattermost-tools/node_modules
 
 # ── Config template (for ephemeral bootstrap) ──────────────────────────────

@@ -23,6 +23,8 @@
 # constraints (Firebase Functions Node 24 support lags the runtime).
 FROM node:24-bookworm-slim
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # ── All system packages in one layer ────────────────────────────────────────
 # Combining apt runs avoids duplicate update overhead and saves ~30s per build.
 # "Storage is cheap" — ship everything the agent needs to be productive.
@@ -72,7 +74,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # ── ACP coding agents (Claude Code + Codex) ──────────────────────────────────
 # Pre-installed so they're available for ACP runtime sessions without
 # per-boot npm install delays or network dependency.
-RUN npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -5
+RUN npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -50
 
 # ── Python essentials ────────────────────────────────────────────────────────
 # Common packages for data work, scraping, and config parsing.
@@ -92,7 +94,7 @@ ENV HOME=/home/node
 COPY infra/gateway/extensions/octogee-router/package.json \
      infra/gateway/extensions/octogee-router/package-lock.json* \
      /opt/octogee-router-deps/
-RUN cd /opt/octogee-router-deps && npm install --production 2>&1 | tail -5 \
+RUN cd /opt/octogee-router-deps && npm install --production 2>&1 | tail -50 \
     && chown -R node:node /opt/octogee-router-deps
 
 # ── Pre-bake classifier ONNX model into image ──────────────────────────────
