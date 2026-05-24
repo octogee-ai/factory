@@ -760,23 +760,23 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.19 the fork carries **five essential patches, zero diagnostics**. The newest is the mattermost connect-log ✅ marker (operator-visibility patch) — mirrored across all three slots so the marker shows up regardless of which OC version a gateway runs.
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.20 GA (current) the fork carries **five logical essential patches across six commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits). Top is the mattermost connect-log ✅ marker (operator-visibility patch — mirrored across all three slots so the marker shows up regardless of which OC version a gateway runs).
 
-Short SHAs at v2026.5.19 (top of branch is `5e0d2619`):
-- `5e0d2619` — mattermost connect log: ✅ marker for operator visibility on GW startup
-- `2984d843` — activity harness-signal Hunk B: session-correlated execution-phase
-- `ab1c50d0` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
-- `08bce6a0` — env-gated isControlUiVisible override
-- `fd5133e5` — config.patch returns post-write hash
-- `de54651a` — per-account surgical channel reload
+Live short SHAs at v2026.5.20 GA (top of current's integration branch is `9d716e25`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `9d716e25` — mattermost connect log: ✅ marker for operator visibility on GW startup
+- `963e6334` — activity harness-signal Hunk B: session-correlated execution-phase
+- `34a36795` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+- `2bbe6df3` — env-gated isControlUiVisible override
+- `7273641a` — config.patch returns post-write hash
+- `439cba7d` — per-account surgical channel reload
 
-Per-slot top SHAs (✅ patch mirrored across all three this cycle):
+Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.5.19 | `5e0d2619` |
-| previous | 2026.5.18 | `96ec3c02` |
-| preview | 2026.5.20 (GA) | `9d716e25` |
+| current | 2026.5.20 (GA) | `9d716e25` |
+| previous | 2026.5.19 | `5e0d2619` |
+| preview | 2026.5.22 (GA) | `f3bd8194` (5-patch baseline + Hunk A allowlist extension for 5.22 upstream events) |
 
 **Essential:**
 
@@ -788,7 +788,7 @@ Per-slot top SHAs (✅ patch mirrored across all three this cycle):
   class/justification as `isControlUiVisible`; **not** diagnostic-only,
   **not** subject to the carry-then-drop policy. Contract:
   `docs/specs/ACTIVITY-HARNESS-SIGNAL-SPEC.md` §1.
-  - **Hunk A — env-gated diagnostic broadcast** (`f1ae7fe8`):
+  - **Hunk A — env-gated diagnostic broadcast** (originally introduced as `f1ae7fe8` on the 2026.5.18 integration branch; live SHA on the current branch is in the short list above):
     `src/gateway/server-runtime-subscriptions.ts` (+ `server-broadcast.ts`
     scope guard; `diagnosticUnsub` threaded through the shutdown bundle in
     `server-runtime-handles.ts` / `server.impl.ts` / `server-close.ts`,
@@ -801,7 +801,7 @@ Per-slot top SHAs (✅ patch mirrored across all three this cycle):
     keeps this taxonomy in-process with no WS surface; the chat-proxy
     sidecar is the intended consumer (the "is the agent stuck / what's it
     waiting on" feed). Default-off → no listener registered.
-  - **Hunk B — session-correlated execution-phase** (`6ed39d7e`):
+  - **Hunk B — session-correlated execution-phase** (originally introduced as `6ed39d7e` on the 2026.5.18 integration branch; live SHA on the current branch is in the short list above):
     OC's native `diagnostic.phase.completed` has no `sessionKey` and its
     trace context is OTel-only — uncorrelatable from the sidecar. Adds an
     additive `DiagnosticSessionExecutionPhaseEvent` (type
