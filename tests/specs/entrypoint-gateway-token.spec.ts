@@ -120,6 +120,119 @@ function runOperatorEnvBlock(opts: {
   }
 }
 
+// ── PVC openclaw.json token re-sync ────────────────────────────────────────
+// Closes the chicken-and-egg gap discovered on gw-bender 2026-05-24:
+//   K8s secret gateway-auth-token-<id> → env (new)         ← rotated
+//   openclaw.json gateway.auth.token   (stale)              ← persisted by
+//                                                            openclaw's own
+//                                                            AJV-defaults
+//                                                            round-trip
+// Per #1160 the K8s secret is the source of truth; this re-syncs the
+// PVC field from env on every boot so a rotation never leaves openclaw
+// auth-stale forever. Runs in the `else` branch (openclaw.json already
+// exists) — the fresh-template branch already gets the right token via
+// envsubst. python3 (always in the image) avoids a jq dependency.
+
+function runTokenResyncBlock(opts: {
+  initialJson: unknown;
+  envToken: string;
+}): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  finalJson: unknown;
+} {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "token-resync-"));
+  try {
+    const jsonPath = path.join(tmp, "openclaw.json");
+    fs.writeFileSync(jsonPath, JSON.stringify(opts.initialJson, null, 2));
+    const script = `
+      set -e
+      log() { echo "$*" >&2; }
+      export OPENCLAW_DIR="${tmp}"
+      export OPENCLAW_GATEWAY_TOKEN="${opts.envToken}"
+      export GATEWAY_ID=gw-test
+      # The branch we're testing is the \`else\` arm — openclaw.json EXISTS.
+      # Anchors are indented (inside else); allow leading whitespace in the sed pattern.
+      eval "$(sed -n '/^[[:space:]]*# ── Re-sync openclaw.json gateway.auth.token/,/^[[:space:]]*# ── End re-sync/p' "${ENTRYPOINT}")"
+    `;
+    const r = spawnSync("sh", ["-c", script], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    const finalJson = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, finalJson };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+describe("infra/gateway/entrypoint.sh — shell var export contract (subprocess visibility)", () => {
+  // The re-sync block + publish-gateway-token.mjs + openclaw all run as
+  // subprocesses and read OPENCLAW_DIR from their environment. If the
+  // top-level OPENCLAW_DIR assignment isn't `export`ed, every subprocess
+  // gets KeyError → `set -e` → crashloop. Caught by independent audit on
+  // PR #1166 (the test harness happened to export OPENCLAW_DIR itself,
+  // masking the production gap). Pin the contract structurally so the
+  // export can never be removed without failing this test.
+  it("exports OPENCLAW_DIR (visible to subprocesses; not just a shell-local var)", () => {
+    const entrypoint = fs.readFileSync(ENTRYPOINT, "utf8");
+    expect(entrypoint).toMatch(/^export\s+OPENCLAW_DIR=/m);
+  });
+
+  it("exports OPENCLAW_GATEWAY_TOKEN (regression guard — same class as OPENCLAW_DIR)", () => {
+    const entrypoint = fs.readFileSync(ENTRYPOINT, "utf8");
+    expect(entrypoint).toMatch(/^export\s+OPENCLAW_GATEWAY_TOKEN\b/m);
+  });
+
+  it("exports GATEWAY_ID (regression guard — referenced by envsubst child process)", () => {
+    const entrypoint = fs.readFileSync(ENTRYPOINT, "utf8");
+    expect(entrypoint).toMatch(/^export\s+GATEWAY_ID=/m);
+  });
+});
+
+describe("infra/gateway/entrypoint.sh — openclaw.json token re-sync (PVC drift fix)", () => {
+  it("overwrites a stale gateway.auth.token with the env value", () => {
+    const result = runTokenResyncBlock({
+      initialJson: {
+        gateway: { auth: { token: "stale-token-from-prior-boot" } },
+        agents: { list: [{ id: "test" }] },
+      },
+      envToken: "fresh-env-token",
+    });
+    expect(result.status).toBe(0);
+    const j = result.finalJson as { gateway: { auth: { token: string } } };
+    expect(j.gateway.auth.token).toBe("fresh-env-token");
+  });
+
+  it("preserves every other field in openclaw.json (only touches gateway.auth.token)", () => {
+    const initial = {
+      gateway: { auth: { token: "stale" }, other: "preserve me" },
+      agents: { list: [{ id: "octogee-ops-gw-bender", identity: { name: "Bender" } }] },
+      channels: { discord: { enabled: true } },
+    };
+    const result = runTokenResyncBlock({ initialJson: initial, envToken: "fresh" });
+    expect(result.status).toBe(0);
+    const j = result.finalJson as Record<string, unknown> & {
+      gateway: { auth: { token: string }; other: string };
+    };
+    expect(j.gateway.auth.token).toBe("fresh");
+    expect(j.gateway.other).toBe("preserve me");
+    expect(j.agents).toEqual(initial.agents);
+    expect(j.channels).toEqual(initial.channels);
+  });
+
+  it("creates gateway.auth.token if absent (defensive: legacy openclaw.json without that field)", () => {
+    const result = runTokenResyncBlock({
+      initialJson: { agents: { list: [] } },
+      envToken: "newly-seeded",
+    });
+    expect(result.status).toBe(0);
+    const j = result.finalJson as { gateway?: { auth?: { token?: string } } };
+    expect(j.gateway?.auth?.token).toBe("newly-seeded");
+  });
+});
+
 describe("infra/gateway/entrypoint.sh — PVC operator.env seam", () => {
   it("sources operator.env from $OPENCLAW_DIR/secrets/operator.env and exports its vars (the bender Discord rehome path)", () => {
     const result = runOperatorEnvBlock({

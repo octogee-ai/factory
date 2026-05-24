@@ -1,7 +1,13 @@
 #!/bin/sh
 set -e
 
-OPENCLAW_DIR=/home/node/.openclaw
+# OPENCLAW_DIR must be `export`ed: subprocesses (python in the openclaw.json
+# re-sync block below, publish-gateway-token.mjs, openclaw itself) read it
+# from their environment. Caught by independent audit on PR #1166 — the
+# unexported assignment would have crash-looped every operator gateway boot
+# (KeyError in the re-sync block → `set -e` exit). Same pattern as
+# OPENCLAW_GATEWAY_TOKEN (L57) and GATEWAY_ID (L92).
+export OPENCLAW_DIR=/home/node/.openclaw
 TEMPLATES_DIR="${OCTOGEE_TEMPLATES_DIR:-/octogee/templates}"
 
 # Consistent ISO timestamp logging (matches OpenClaw gateway format)
@@ -99,6 +105,36 @@ if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
   log "openclaw.json generated from template (gatewayId=${GATEWAY_ID})"
 else
   log "openclaw.json already exists — preserving (provisioner is source of truth)"
+
+  # ── Re-sync openclaw.json gateway.auth.token from env (PVC drift fix) ──
+  # Closes the chicken-and-egg gap discovered on gw-bender 2026-05-24:
+  # the K8s secret gateway-auth-token-<id> can rotate, the env var picks
+  # up the new value, but openclaw's own AJV-defaults round-trip
+  # periodically re-persists openclaw.json's gateway.auth.token field.
+  # On first boot openclaw reads OPENCLAW_GATEWAY_TOKEN env directly
+  # (openclaw.template.json has no token placeholder for envsubst — the
+  # template only sets gateway.auth.mode) and AJV persists it. Once
+  # that persisted field goes stale relative to env, openclaw
+  # authenticates with the old token while provisioner + chat-proxy use
+  # the new one — auth fails forever, and the only fix path
+  # (config.patch) itself requires valid auth. The K8s secret is the
+  # source of truth (#1160); make the PVC field follow it on every
+  # boot. python3 is always in the gateway image; avoids a jq dep.
+  # Inline -c with single quotes so the script eval-substitutes cleanly
+  # (heredoc inside eval "$(...)" parses oddly across sh implementations).
+  python3 -c 'import json, os
+p = os.environ["OPENCLAW_DIR"] + "/openclaw.json"
+with open(p) as f:
+    c = json.load(f)
+c.setdefault("gateway", {}).setdefault("auth", {})["token"] = os.environ["OPENCLAW_GATEWAY_TOKEN"]
+tmp = p + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(c, f, indent=2)
+os.replace(tmp, p)
+'
+  chmod 600 "$OPENCLAW_DIR/openclaw.json"
+  log "openclaw.json gateway.auth.token re-synced from env"
+  # ── End re-sync ────────────────────────────────────────────────────────
 fi
 # Secret rotation / reconciliation (env-sync) happens later via pre-boot-config.ts
 # — nothing else fixed up here. The template is canonical; don't re-derive.
