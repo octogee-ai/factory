@@ -298,6 +298,44 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(args.some((a) => a.startsWith("--timeout="))).toBe(true);
   });
 
+  it("uses server-side apply with --force-conflicts so kubectl-set / other field-manager ownership doesn't poison helm upgrades (gw-bender 2026-05-24 root cause; matches umbrella path bumped in #913 / pinned in #1056)", async () => {
+    // Bender's helm rev 33 was rejected by K8s because the live Deployment
+    // had `kubectl-set`-owned env entries with `value:` for OPENCLAW_GATEWAY_TOKEN
+    // that strategic-merged with helm's new `valueFrom:` on the same name
+    // into a single entry with BOTH fields — which K8s schema-validation
+    // rejects. Server-side apply with --force-conflicts lets helm
+    // unconditionally reclaim ownership of fields it manages, preventing
+    // any future kubectl-set / kubectl-patch / kubectl-rollout side-channel
+    // from poisoning the next upgrade.
+    //
+    // Syntax matters: helm 4 treats --server-side as a STRING flag taking
+    // "true"/"false"/"auto", not boolean. `--server-side --force-conflicts`
+    // (no `=true`) parses as `--server-side="--force-conflicts"` — invalid
+    // value silently defaulting to "auto", and the literal `--force-conflicts`
+    // flag is never applied (commit 10f30573 post-mortem on the umbrella path).
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm),
+      log: vi.fn(),
+    });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test",
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    const upgrade = calls.find((c) => c[0] === "upgrade") ?? [];
+    expect(upgrade).toContain("--server-side=true");
+    expect(upgrade).toContain("--force-conflicts");
+    // Defensive: catch a regression where someone "simplifies" to the
+    // boolean-style `--server-side` (which v4 silently misparses).
+    expect(upgrade).not.toContain("--server-side");
+  });
+
   it("passes --take-ownership when set (cutover from umbrella-managed pods)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });

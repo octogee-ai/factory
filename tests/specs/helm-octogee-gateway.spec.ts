@@ -735,3 +735,114 @@ describe("helm/octogee-gateway/ — values.schema.json", () => {
     expect(result.stderr).toMatch(/schema|profile|enum/i);
   });
 });
+
+// ── Class-wide K8s schema invariant: env entries are EITHER value OR valueFrom ─
+// K8s rejects any env entry with both `value` and `valueFrom` set:
+//   "valueFrom: Invalid value: ...: may not be specified when value is not empty"
+// A live PROD apply on 2026-05-24 (octogee-gw-bender helm rev 33) was
+// rejected by K8s because a chart-render-vs-live-state strategic-merge
+// collision combined kubectl-set-managed `value:` with helm-managed
+// `valueFrom:` for the same env name. The chart itself rendered clean
+// — the collision was in the apply, not the manifest. But the failure
+// mode is easy to recreate from the chart side too (e.g. a future `if`
+// branch that adds `valueFrom:` without unconditionally suppressing a
+// sibling `value:` line). This guard walks every env entry across every
+// container in every profile and fails loud at chart-render time,
+// before anything reaches a cluster.
+//
+// Parse via real YAML rather than regex — env blocks are deeply nested
+// and regex-walking miscounts (the original reproduce attempt did).
+import { parseAllDocuments } from "yaml";
+
+interface ContainerEnv {
+  name?: string;
+  value?: unknown;
+  valueFrom?: unknown;
+}
+
+function collectAllEnvEntries(
+  dep: string,
+): Array<{ container: string; index: number; entry: ContainerEnv }> {
+  const docs = parseAllDocuments(dep);
+  const deployment = docs[0]?.toJS() as
+    | { spec?: { template?: { spec?: Record<string, unknown> } } }
+    | undefined;
+  const podSpec = deployment?.spec?.template?.spec;
+  if (!podSpec) throw new Error("findDoc returned a non-Deployment doc");
+
+  const out: Array<{ container: string; index: number; entry: ContainerEnv }> = [];
+  const sections: Array<[string, unknown]> = [
+    ["initContainers", podSpec.initContainers],
+    ["containers", podSpec.containers],
+  ];
+  for (const [section, rawContainers] of sections) {
+    const containers = Array.isArray(rawContainers) ? rawContainers : [];
+    for (const c of containers) {
+      const cont = c as { name?: string; env?: unknown };
+      const env = Array.isArray(cont.env) ? (cont.env as ContainerEnv[]) : [];
+      env.forEach((entry, index) => {
+        out.push({ container: `${section}/${cont.name ?? "?"}`, index, entry });
+      });
+    }
+  }
+  return out;
+}
+
+function findDoubleSetEntries(
+  entries: ReturnType<typeof collectAllEnvEntries>,
+): typeof entries {
+  return entries.filter(
+    ({ entry }) =>
+      entry.value !== undefined &&
+      entry.value !== null &&
+      entry.valueFrom !== undefined &&
+      entry.valueFrom !== null,
+  );
+}
+
+describe("helm/octogee-gateway/ — env entries pass K8s schema (no value+valueFrom)", () => {
+  it("cattle profile: no env entry sets both `value` and `valueFrom` (K8s rejects with 'may not be specified when value is not empty')", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const bad = findDoubleSetEntries(collectAllEnvEntries(dep));
+    if (bad.length > 0) {
+      // Detailed diagnostic so a regression points at the exact entries.
+      const summary = bad
+        .map(
+          (b) =>
+            `  ${b.container}[${b.index}] name=${b.entry.name} value=${JSON.stringify(b.entry.value)} valueFrom=${JSON.stringify(b.entry.valueFrom)}`,
+        )
+        .join("\n");
+      throw new Error(`Double-set env entries (K8s will reject):\n${summary}`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("operator profile: no env entry sets both `value` and `valueFrom`", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      profile: "operator",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
+    const bad = findDoubleSetEntries(collectAllEnvEntries(dep));
+    if (bad.length > 0) {
+      const summary = bad
+        .map(
+          (b) =>
+            `  ${b.container}[${b.index}] name=${b.entry.name} value=${JSON.stringify(b.entry.value)} valueFrom=${JSON.stringify(b.entry.valueFrom)}`,
+        )
+        .join("\n");
+      throw new Error(`Double-set env entries (K8s will reject):\n${summary}`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("every env entry has a non-empty `name` (sanity guard: an entry without a name is silently dropped by K8s)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const entries = collectAllEnvEntries(dep);
+    const nameless = entries.filter(
+      ({ entry }) => typeof entry.name !== "string" || entry.name.length === 0,
+    );
+    expect(nameless).toEqual([]);
+  });
+});

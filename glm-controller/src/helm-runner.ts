@@ -252,6 +252,23 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   if (opts.gcpProject) args.push("--set", `gatewayEdge.env.GCP_PROJECT_ID=${opts.gcpProject}`);
   if (opts.valuesFile) args.push("-f", opts.valuesFile);
   if (opts.takeOwnership) args.push("--take-ownership");
+  // Server-side apply + force-conflicts: matches the umbrella install path
+  // that the CI deploy job has used since #913 + #1056. Cowboy was left
+  // behind on strategic-merge through v3.16.4 of helm in glm-controller's
+  // image, which is what caused gw-bender's helm rev 33 to fail K8s
+  // schema validation on 2026-05-24 — strategic-merge collided the
+  // live kubectl-set `OPENCLAW_GATEWAY_TOKEN: value=<hex>` with the new
+  // chart's `OPENCLAW_GATEWAY_TOKEN: valueFrom={secretKeyRef}` into one
+  // env entry with both fields. SSA + force-conflicts lets helm
+  // unconditionally reclaim ownership of fields it manages from any
+  // earlier kubectl-set / kubectl-patch / kubectl-rollout side-channel.
+  //
+  // Syntax matters: helm v4 treats --server-side as a STRING flag taking
+  // "true"/"false"/"auto". Writing `--server-side --force-conflicts`
+  // (no `=true`) parses as `--server-side="--force-conflicts"` — invalid
+  // value silently defaulting to "auto", and the literal `--force-conflicts`
+  // is never applied (#1054 post-mortem). Always `--server-side=true`.
+  args.push("--server-side=true", "--force-conflicts");
   args.push("--wait", `--timeout=${opts.upgradeTimeout}`);
   return args;
 }
