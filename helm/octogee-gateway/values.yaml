@@ -27,6 +27,12 @@ image:
 
 serviceAccountName: octogee-gateway
 
+# Replica count — Cowboy passes `--set replicas=0` for desiredStatus=paused.
+# values.test.yaml defaults to 0 so TEST stays scaled-to-zero across release
+# pushes (the manual `kubectl scale --replicas=0 --all` workaround is no longer
+# needed — TEST is always paused unless an operator explicitly resumes).
+replicas: 1
+
 # Capability profile — Cowboy passes `--set profile=<id>` for non-default
 # profiles (`operator` today). Empty default preserves cattle behavior
 # (welcome path for new Builders + L3-throttle platform fallback). The
@@ -116,30 +122,94 @@ persistence:
     - ReadWriteOnce
   size: 20Gi
 
-resources:
-  requests:
-    cpu: "2000m"
-    memory: "4Gi"
-    ephemeral-storage: "5Gi"
-  limits:
-    cpu: "3000m"
-    memory: "6Gi"
-    ephemeral-storage: "5Gi"
+# Per-pod sizing tier. Operator-facing enum that maps to the matching
+# .Values.tiers entry below — drives resources + node-runtime tuning
+# together. Cowboy passes `--set sizingTier=<tier>` per gateway; when
+# empty the chart falls back to .Values.profileDefaults[profile]. See
+# docs/specs/GATEWAY-SIZING-AND-CHARGEBACK-SPEC.md.
+sizingTier: ""
 
-# Node.js runtime tuning. Sized to match the resources block above — bump
-# both in lockstep. Cattle floor here; operator-tier overrides in
-# values.prod.yaml. With cores below 4 vCPU the gateway main thread
-# contends with codex-app-server (Rust child), classifier worker_thread,
-# libuv pool, V8 GC, and the gateway-edge sidecar — that contention is
-# what wedges the event loop (148s auth pre-warm, 13s p99 loop delay,
-# observed on c2d-standard-2). UV_THREADPOOL_SIZE defaults to 4 in Node;
-# bumping it lets parallel fs/crypto/dns operations actually parallelize.
-# nodeMaxOldSpaceSizeMb sets the V8 heap ceiling (default ~4 GiB); raise
-# proportional to memory request so V8 GC doesn't thrash before the
-# container OOM-kills.
-nodejs:
-  uvThreadpoolSize: "8"
-  maxOldSpaceSizeMb: "3072"
+# Profile → default tier mapping. Used when sizingTier is unset.
+#
+# `standard` defaults to `cattle-heavy` to match today's PROD-floor sizing
+# (12 vCPU / 32 GiB, the F&F BYOS-codex cattle baseline). This keeps the
+# first-reconcile-after-merge a no-op for any existing pod that doesn't
+# carry an explicit sizingTier yet. Tighten to `cattle-light` in a
+# follow-up once every pod has been stamp-migrated and verified.
+profileDefaults:
+  standard: "cattle-heavy"
+  operator: "operator"
+
+# Tier presets — the canonical sizing matrix. Mirrored in
+# shared/types/sizing.ts (TS SSOT for cost-estimator + admin API);
+# tests/specs/helm-octogee-gateway-sizing.spec.ts asserts the two stay
+# in lockstep. Edit both sides together.
+tiers:
+  cattle-light:
+    resources:
+      requests:
+        cpu: "4000m"
+        memory: "12Gi"
+        ephemeral-storage: "5Gi"
+      limits:
+        cpu: "6000m"
+        memory: "16Gi"
+        ephemeral-storage: "10Gi"
+    nodejs:
+      uvThreadpoolSize: "8"
+      maxOldSpaceSizeMb: "8192"
+  cattle-shared:
+    resources:
+      requests:
+        cpu: "8000m"
+        memory: "20Gi"
+        ephemeral-storage: "5Gi"
+      limits:
+        cpu: "12000m"
+        memory: "28Gi"
+        ephemeral-storage: "10Gi"
+    nodejs:
+      uvThreadpoolSize: "12"
+      maxOldSpaceSizeMb: "14336"
+  cattle-heavy:
+    resources:
+      requests:
+        cpu: "12000m"
+        memory: "32Gi"
+        ephemeral-storage: "5Gi"
+      limits:
+        cpu: "16000m"
+        memory: "48Gi"
+        ephemeral-storage: "10Gi"
+    nodejs:
+      uvThreadpoolSize: "16"
+      maxOldSpaceSizeMb: "22528"
+  operator:
+    resources:
+      requests:
+        cpu: "16000m"
+        memory: "48Gi"
+        ephemeral-storage: "5Gi"
+      limits:
+        cpu: "24000m"
+        memory: "64Gi"
+        ephemeral-storage: "10Gi"
+    nodejs:
+      uvThreadpoolSize: "16"
+      maxOldSpaceSizeMb: "33792"
+  operator-plus:
+    resources:
+      requests:
+        cpu: "24000m"
+        memory: "64Gi"
+        ephemeral-storage: "5Gi"
+      limits:
+        cpu: "32000m"
+        memory: "96Gi"
+        ephemeral-storage: "10Gi"
+    nodejs:
+      uvThreadpoolSize: "24"
+      maxOldSpaceSizeMb: "45056"
 
 probes:
   # Startup uses an HTTP GET against `/healthz` — proves openclaw is

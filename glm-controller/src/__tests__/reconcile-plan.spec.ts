@@ -32,8 +32,16 @@ describe("buildInstancesMap", () => {
         enabled: true,
         image: { repository: REPO, tag: "abc" },
         gatewayId: "gw-test",
+        replicas: 1,
       },
     });
+  });
+
+  it("paused desired-status renders replicas=0 (release stays, pod scales to zero)", () => {
+    const map = buildInstancesMap([
+      mkDesired({ instanceName: "default", desiredStatus: "paused" }),
+    ]);
+    expect(map.default).toMatchObject({ enabled: true, replicas: 0 });
   });
 
   it("keeps enabled=true for desiredStatus=draining — pod stays up; new placements are blocked elsewhere", () => {
@@ -191,6 +199,32 @@ describe("diffInstancesMap", () => {
     expect(changes).toEqual<ReconcileChange[]>([
       { kind: "update", instanceName: "default", from: actual.default, to: desired.default },
     ]);
+  });
+
+  it("reports an update when replicas flips (pause/resume path)", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), replicas: 1 } };
+    const desired: HelmInstancesMap = { default: { ...baseInstance("abc"), replicas: 0 } };
+    const changes = diffInstancesMap(actual, desired);
+    expect(changes).toEqual<ReconcileChange[]>([
+      { kind: "update", instanceName: "default", from: actual.default, to: desired.default },
+    ]);
+  });
+
+  it("reports an update when sizingTier flips (change-tier path)", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "cattle-heavy" } };
+    const desired: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "operator" } };
+    const changes = diffInstancesMap(actual, desired);
+    expect(changes).toEqual<ReconcileChange[]>([
+      { kind: "update", instanceName: "default", from: actual.default, to: desired.default },
+    ]);
+  });
+
+  it("reports exactly one update when image, sizingTier, and replicas all differ (no double-counting)", () => {
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "cattle-heavy", replicas: 1 } };
+    const desired: HelmInstancesMap = { default: { ...baseInstance("def"), sizingTier: "operator", replicas: 0 } };
+    const changes = diffInstancesMap(actual, desired);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ kind: "update", instanceName: "default" });
   });
 
   it("reports an update when personal gateway helm knobs change", () => {

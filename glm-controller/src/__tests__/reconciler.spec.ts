@@ -272,6 +272,7 @@ resolveUpgrade(undefined);
           enabled: true,
           image: { repository: "repo", tag: "abc" },
           gatewayId: "gw-test",
+          replicas: 1,
         },
       }),
     });
@@ -431,6 +432,7 @@ beforeEach(() => {
           image: { repository: "repo", tag: "sha-prod" },
           gatewayId: "gw-prod",
           chartFingerprint: "fp-OLD",
+          replicas: 1,
         },
       }),
     });

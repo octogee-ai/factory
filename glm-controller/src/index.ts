@@ -137,6 +137,8 @@ await deps.helm.removeInstance({
       gatewayContainerSecurityContext: change.to.gatewayContainerSecurityContext,
       persistence: change.to.persistence,
       profile: change.to.profile,
+      sizingTier: change.to.sizingTier,
+      replicas: change.to.replicas,
       chartPath: GATEWAY_CHART,
       valuesFile: GATEWAY_VALUES_FILE,
       chartFingerprint: deps.chartFingerprint,

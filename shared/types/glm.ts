@@ -1,6 +1,6 @@
+import type { SizingTier } from "./sizing.js";
 
-
-export type GatewayDesiredStatus = "running" | "draining" | "retired";
+export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 
 export const GATEWAY_PROFILES = ["standard", "operator"] as const;
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
@@ -39,8 +39,8 @@ ownerUid?: string;
 coOwnerUids?: string[];
 
 builderSlug?: string;
-  
-  tier?: string;
+
+sizingTier?: SizingTier;
 }
 
 export interface BuilderShellSession {
@@ -122,6 +122,10 @@ chartFingerprint?: string;
   persistence?: GatewayPersistenceSpec;
 
 profile?: GatewayProfile;
+
+sizingTier?: SizingTier;
+
+replicas?: number;
 }
 
 export type HelmInstancesMap = Record<string, HelmInstanceValue>;

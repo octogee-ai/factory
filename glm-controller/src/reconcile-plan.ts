@@ -30,6 +30,7 @@ export function buildInstancesMap(
       enabled: true,
       image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
       gatewayId: d.gatewayId,
+      replicas: d.desiredStatus === "paused" ? 0 : 1,
       ...(chartFingerprint ? { chartFingerprint } : {}),
       ...(d.serviceAccountName ? { serviceAccountName: d.serviceAccountName } : {}),
       ...(d.gatewayContainerSecurityContext
@@ -37,6 +38,7 @@ export function buildInstancesMap(
         : {}),
       ...(d.persistence ? { persistence: d.persistence } : {}),
       ...(d.profile ? { profile: d.profile } : {}),
+      ...(d.sizingTier ? { sizingTier: d.sizingTier } : {}),
     };
   }
   return out;
@@ -62,6 +64,7 @@ if (mounted === undefined || mounted.length === 0) {
       enabled: true,
       image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
       gatewayId: d.gatewayId,
+      replicas: d.desiredStatus === "paused" ? 0 : 1,
       ...(chartFingerprint ? { chartFingerprint } : {}),
       ...(d.serviceAccountName ? { serviceAccountName: d.serviceAccountName } : {}),
       ...(d.gatewayContainerSecurityContext
@@ -69,6 +72,7 @@ if (mounted === undefined || mounted.length === 0) {
         : {}),
       ...(d.persistence ? { persistence: d.persistence } : {}),
       ...(d.profile ? { profile: d.profile } : {}),
+      ...(d.sizingTier ? { sizingTier: d.sizingTier } : {}),
     };
   }
   return out;
@@ -111,17 +115,22 @@ function instanceEqual(
   b: HelmInstanceValue,
   compareChartFingerprint: boolean,
 ): boolean {
-  return (
-    a.enabled === b.enabled &&
-    a.image.repository === b.image.repository &&
-    a.image.tag === b.image.tag &&
-    a.gatewayId === b.gatewayId &&
-    (!compareChartFingerprint || a.chartFingerprint === b.chartFingerprint) &&
-    a.serviceAccountName === b.serviceAccountName &&
-    stableStringify(a.gatewayContainerSecurityContext ?? null) ===
-      stableStringify(b.gatewayContainerSecurityContext ?? null) &&
-    stableStringify(a.persistence ?? null) === stableStringify(b.persistence ?? null)
-  );
+  const scalars: ReadonlyArray<[unknown, unknown]> = [
+    [a.enabled, b.enabled],
+    [a.image.repository, b.image.repository],
+    [a.image.tag, b.image.tag],
+    [a.gatewayId, b.gatewayId],
+    [a.serviceAccountName, b.serviceAccountName],
+    [a.profile, b.profile],
+    [a.sizingTier, b.sizingTier],
+    [a.replicas, b.replicas],
+  ];
+  for (const [x, y] of scalars) if (x !== y) return false;
+  if (compareChartFingerprint && a.chartFingerprint !== b.chartFingerprint) return false;
+  if (stableStringify(a.gatewayContainerSecurityContext ?? null) !==
+      stableStringify(b.gatewayContainerSecurityContext ?? null)) return false;
+  if (stableStringify(a.persistence ?? null) !== stableStringify(b.persistence ?? null)) return false;
+  return true;
 }
 
 function stableStringify(v: unknown): string {

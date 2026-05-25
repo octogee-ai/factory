@@ -26,6 +26,54 @@
       "enum": ["", "standard", "operator"],
       "description": "Capability profile. Empty + 'standard' are equivalent cattle behavior; 'operator' enables pet-home (PVC), builder-shell, and skips the platform ANTHROPIC_API_KEY injection."
     },
+    "replicas": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Replica count for the gateway Deployment. 0 = paused (Cowboy sets this for desiredStatus=paused); 1 = running. HPA / multi-replica is GATEWAY-PLATFORM-SPEC §Phase 6, out of scope here."
+    },
+    "sizingTier": {
+      "type": "string",
+      "enum": ["", "cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"],
+      "description": "Per-pod sizing tier. Empty = fall back to profileDefaults[profile]. See GATEWAY-SIZING-AND-CHARGEBACK-SPEC.md."
+    },
+    "profileDefaults": {
+      "type": "object",
+      "description": "Profile → default tier mapping. Used when sizingTier is unset. `standard` is required — the effectiveTier helper falls back to it as the last-resort default.",
+      "required": ["standard"],
+      "properties": {
+        "standard": { "type": "string", "enum": ["cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"] },
+        "operator": { "type": "string", "enum": ["cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"] }
+      },
+      "additionalProperties": { "type": "string" }
+    },
+    "tiers": {
+      "type": "object",
+      "description": "Tier preset matrix — resources + Node runtime tuning per tier. Mirrored in shared/types/sizing.ts. All five tier keys are required so a typo or trim doesn't leave effectiveTier pointing at a missing preset.",
+      "required": ["cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"],
+      "additionalProperties": {
+        "type": "object",
+        "required": ["resources", "nodejs"],
+        "properties": {
+          "resources": {
+            "type": "object",
+            "required": ["requests", "limits"],
+            "properties": {
+              "requests": { "type": "object", "additionalProperties": true },
+              "limits": { "type": "object", "additionalProperties": true }
+            }
+          },
+          "nodejs": {
+            "type": "object",
+            "required": ["uvThreadpoolSize", "maxOldSpaceSizeMb"],
+            "properties": {
+              "uvThreadpoolSize": { "type": "string" },
+              "maxOldSpaceSizeMb": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "chartFingerprint": {
       "type": "string"
     },
@@ -58,10 +106,6 @@
         "accessModes": { "type": "array", "items": { "type": "string" } },
         "size": { "type": "string" }
       }
-    },
-    "resources": {
-      "type": "object",
-      "additionalProperties": true
     },
     "probes": {
       "type": "object",

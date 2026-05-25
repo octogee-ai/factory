@@ -474,6 +474,39 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(calls[0].some((a) => a.startsWith("profile="))).toBe(false);
   });
 
+  it("passes --set sizingTier=<tier> when provided", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee",
+      instanceName: "bender",
+      gatewayId: "gw-bender",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+      sizingTier: "cattle-heavy",
+    });
+
+    expect(calls[0]).toContain("sizingTier=cattle-heavy");
+  });
+
+  it("omits --set sizingTier when undefined (chart falls back to profile default)", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test",
+      instanceName: "default",
+      gatewayId: "gw-test",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(calls[0].some((a) => a.startsWith("sizingTier="))).toBe(false);
+  });
+
   it("omits chartFingerprint --set when not provided (operator-driven helm calls)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });

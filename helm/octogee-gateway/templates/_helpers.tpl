@@ -43,6 +43,43 @@ crash-loops at boot.
 Caller passes `Values`, `envName`, and a short `purpose` string used in
 the error message. Returns no text.
 */}}
+{{/*
+Resolve the effective sizing tier for this gateway instance.
+
+Precedence:
+  1. `.Values.sizingTier` if set (Cowboy passed it explicitly).
+  2. `.Values.profileDefaults[<profile>]` if profile is set.
+  3. `.Values.profileDefaults.standard` as the last-resort default.
+
+The result is a string — one of "cattle-light", "cattle-shared",
+"cattle-heavy", "operator", "operator-plus". The schema rejects any
+other value before this helper runs, so callers can trust the lookup
+into `.Values.tiers` will succeed.
+*/}}
+{{- define "octogee-gateway.effectiveTier" -}}
+{{- if .Values.sizingTier -}}
+{{- .Values.sizingTier -}}
+{{- else if and .Values.profile (index .Values.profileDefaults .Values.profile) -}}
+{{- index .Values.profileDefaults .Values.profile -}}
+{{- else -}}
+{{- .Values.profileDefaults.standard -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Return the resolved tier preset dict — has `.resources` (requests/limits)
+and `.nodejs` (uvThreadpoolSize, maxOldSpaceSizeMb). Fails loud if the
+tier isn't declared in `.Values.tiers`.
+*/}}
+{{- define "octogee-gateway.tierPreset" -}}
+{{- $tier := include "octogee-gateway.effectiveTier" . -}}
+{{- $preset := index .Values.tiers $tier -}}
+{{- if not $preset -}}
+{{- fail (printf "no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
+{{- end -}}
+{{- $preset | toYaml -}}
+{{- end }}
+
 {{- define "octogee-gateway.requireGatewayEdgeSecret" -}}
 {{- $envName := .envName -}}
 {{- $found := false -}}

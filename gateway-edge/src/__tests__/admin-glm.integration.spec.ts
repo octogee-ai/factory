@@ -59,6 +59,10 @@ vi.mock("../lib/db", () => {
             .map(([id, data]) => ({ id, data: () => data }));
           return { docs: matches, size: matches.length };
         }
+        if (collectionName === "glmGateways" && !filter) {
+          const docs = Object.entries(glmGatewaysDocs).map(([id, data]) => ({ id, data: () => data }));
+          return { docs, size: docs.length };
+        }
         if (collectionName === "restoreJobs") {
           return {
             docs: restoreJobsDocs.map((d) => ({ id: d.id, data: () => d.data })),
@@ -143,6 +147,13 @@ doc: (docId?: string) => {
         }
         if (name === "users") {
           const docs = Object.entries(usersDocs).map(([id, data]) => ({
+            id,
+            data: () => data,
+          }));
+          return { docs, size: docs.length };
+        }
+        if (name === "glmGateways") {
+          const docs = Object.entries(glmGatewaysDocs).map(([id, data]) => ({
             id,
             data: () => data,
           }));
@@ -319,6 +330,43 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(res.status).toBe(400);
   });
 
+  it("persists sizingTier and profile when supplied in the body", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-canary",
+      instanceName: "canary",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      profile: "operator",
+      sizingTier: "operator",
+    });
+    expect(res.status).toBe(202);
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite?.data).toMatchObject({
+      profile: "operator",
+      sizingTier: "operator",
+    });
+  });
+
+  it("rejects unknown sizingTier values on create with 400", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-canary",
+      instanceName: "canary",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      sizingTier: "bogus-tier",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/sizingTier/);
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite).toBeUndefined();
+  });
+
   it("provisions the gateway-auth-token Secret Manager shell (+ IAM) before writing the glmGateways doc", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
@@ -408,6 +456,66 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   });
 });
 
+describe("GET /api/admin/gateways — sizing enrichment", () => {
+  it("attaches sizing.tier from glmGateways.sizingTier (explicit) and sizing.resolvedFrom='explicit'", async () => {
+    gatewaysDocs["gw-test-bender"] = { gatewayId: "gw-test-bender", status: "ready", mountedCustomers: ["alice"] };
+    glmGatewaysDocs["gw-test-bender"] = { gatewayId: "gw-test-bender", sizingTier: "operator", profile: "operator", desiredStatus: "running" };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways");
+    expect(res.status).toBe(200);
+    const bender = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-bender");
+    expect(bender.sizing.tier).toBe("operator");
+    expect(bender.sizing.resolvedFrom).toBe("explicit");
+    expect(bender.sizing.resources.requests.cpu).toBe("16000m");
+    expect(bender.sizing.monthlyCostUsd.compute).toBeGreaterThan(0);
+    expect(bender.desiredStatus).toBe("running");
+  });
+
+  it("falls back to profile-default tier when sizingTier is unset (resolvedFrom='profile-default')", async () => {
+    gatewaysDocs["gw-test-default"] = { gatewayId: "gw-test-default", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["gw-test-default"] = { gatewayId: "gw-test-default", profile: "operator", desiredStatus: "running" };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways");
+    const g = res.body.gateways.find((x: any) => x.gatewayId === "gw-test-default");
+    expect(g.sizing.tier).toBe("operator");
+    expect(g.sizing.resolvedFrom).toBe("profile-default");
+  });
+
+  it("reports compute=0 for paused gateways (no replicas → no node consumption)", async () => {
+    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
+    gatewaysDocs["gw-test-paused"] = { gatewayId: "gw-test-paused", status: "ready", mountedCustomers: [] };
+    gatewaysDocs["gw-test-running"] = { gatewayId: "gw-test-running", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["gw-test-paused"] = { gatewayId: "gw-test-paused", sizingTier: "operator", desiredStatus: "paused" };
+    glmGatewaysDocs["gw-test-running"] = { gatewayId: "gw-test-running", sizingTier: "operator", desiredStatus: "running" };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways");
+    const paused = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-paused");
+    const running = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-running");
+    expect(paused.sizing.tier).toBe("operator"); // tier preserved for nameplate display
+    expect(paused.sizing.monthlyCostUsd.compute).toBe(0);
+    expect(paused.sizing.monthlyCostUsd.perBuilderAtTarget).toBe(0);
+    expect(running.sizing.monthlyCostUsd.compute).toBeGreaterThan(0);
+    // Fleet roll-up only counts the running gateway's compute.
+    expect(res.body.stats.fleetCost.monthlyUsd).toBe(running.sizing.monthlyCostUsd.compute);
+  });
+
+  it("rolls up stats.fleetCost.byTier and stats.fleetCost.monthlyUsd across the fleet", async () => {
+    // Reset the beforeEach seed so we exercise exactly the two fixtures we set up below.
+    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
+    gatewaysDocs["gw-test-bender"] = { gatewayId: "gw-test-bender", status: "ready", mountedCustomers: [] };
+    gatewaysDocs["gw-test-default"] = { gatewayId: "gw-test-default", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["gw-test-bender"] = { gatewayId: "gw-test-bender", sizingTier: "operator", desiredStatus: "running" };
+    glmGatewaysDocs["gw-test-default"] = { gatewayId: "gw-test-default", sizingTier: "cattle-heavy", desiredStatus: "running" };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways");
+    const fc = res.body.stats.fleetCost;
+    expect(fc).toBeDefined();
+    expect(fc.byTier.operator?.count).toBe(1);
+    expect(fc.byTier["cattle-heavy"]?.count).toBe(1);
+    expect(fc.monthlyUsd).toBe(fc.byTier.operator.subtotalUsd + fc.byTier["cattle-heavy"].subtotalUsd);
+  });
+});
+
 describe("PATCH /api/admin/gateways/:id — update desired state", () => {
   it("updates the imageTag field on an existing desired state doc", async () => {
     glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
@@ -438,6 +546,46 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
       .send({ desiredStatus: "burning" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/desiredStatus/);
+    const update = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    expect(update).toBeUndefined();
+  });
+
+  it("accepts desiredStatus=paused for the pause/resume flow", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    const app = buildApp();
+    const res = await request(app)
+      .patch("/api/admin/gateways/gw-test-canary")
+      .send({ desiredStatus: "paused" });
+    expect(res.status).toBe(202);
+    const update = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    expect(update?.data).toMatchObject({ desiredStatus: "paused" });
+  });
+
+  it("updates the sizingTier field when a valid tier is supplied", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    const app = buildApp();
+    const res = await request(app)
+      .patch("/api/admin/gateways/gw-test-canary")
+      .send({ sizingTier: "operator" });
+    expect(res.status).toBe(202);
+    const update = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    expect(update?.data).toMatchObject({ sizingTier: "operator" });
+  });
+
+  it("rejects unknown sizingTier values with 400 (does not write garbage to Firestore)", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    const app = buildApp();
+    const res = await request(app)
+      .patch("/api/admin/gateways/gw-test-canary")
+      .send({ sizingTier: "bogus-tier" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/sizingTier/);
     const update = calls.find(
       (c) => c.collection === "glmGateways" && c.op === "doc.update",
     );

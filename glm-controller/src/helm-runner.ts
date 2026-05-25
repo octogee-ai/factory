@@ -3,6 +3,8 @@ import type {
   GatewayProfile,
   HelmInstancesMap,
 } from "../../shared/types/glm.js";
+import type { SizingTier } from "../../shared/types/sizing.js";
+import { SIZING_TIERS } from "../../shared/types/sizing.js";
 
 export interface HelmRunner {
 
@@ -24,6 +26,10 @@ upsertInstance(opts: {
 chartFingerprint?: string;
 
 profile?: GatewayProfile;
+
+sizingTier?: SizingTier;
+
+replicas?: number;
 
 gcpProject?: string;
   }): Promise<void>;
@@ -99,6 +105,9 @@ interface PerReleaseValues {
   serviceAccountName?: unknown;
   gatewayContainerSecurityContext?: unknown;
   persistence?: unknown;
+  profile?: unknown;
+  sizingTier?: unknown;
+  replicas?: unknown;
 }
 
 function coerceIdentityField(v: unknown): string | null {
@@ -184,6 +193,15 @@ function readPersonalKnobs(
   if (isPlainObject(v.persistence)) {
     out.persistence = v.persistence as unknown as HelmInstancesMap[string]["persistence"];
   }
+  if (typeof v.profile === "string" && (v.profile === "standard" || v.profile === "operator")) {
+    out.profile = v.profile;
+  }
+  if (typeof v.sizingTier === "string" && (SIZING_TIERS as readonly string[]).includes(v.sizingTier)) {
+    out.sizingTier = v.sizingTier as SizingTier;
+  }
+  if (typeof v.replicas === "number" && Number.isInteger(v.replicas) && v.replicas >= 0) {
+    out.replicas = v.replicas;
+  }
   return out;
 }
 
@@ -206,6 +224,8 @@ interface BuildUpgradeArgsOpts {
   upgradeTimeout: string;
   chartFingerprint?: string;
   profile?: string;
+  sizingTier?: SizingTier;
+  replicas?: number;
   serviceAccountName?: string;
   gatewayContainerSecurityContext?: Record<string, unknown>;
   persistence?: HelmInstancesMap[string]["persistence"];
@@ -244,6 +264,8 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   ];
   if (opts.chartFingerprint) args.push("--set", `chartFingerprint=${opts.chartFingerprint}`);
   if (opts.profile) args.push("--set", `profile=${opts.profile}`);
+  if (opts.sizingTier) args.push("--set", `sizingTier=${opts.sizingTier}`);
+  if (opts.replicas !== undefined) args.push("--set", `replicas=${opts.replicas}`);
   if (opts.serviceAccountName) args.push("--set", `serviceAccountName=${opts.serviceAccountName}`);
   if (opts.gatewayContainerSecurityContext) {
     pushSetJson(args, "gatewayContainerSecurityContext", opts.gatewayContainerSecurityContext);

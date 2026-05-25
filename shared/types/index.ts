@@ -101,6 +101,33 @@ export {
   GLM_OPERATIONS_COLLECTION,
 } from './glm.js';
 
+export type {
+  SizingTier,
+  SizingTierPreset,
+  TierResources,
+  TierNodeRuntime,
+  TierCapacity,
+  TierResolvedFrom,
+  ResolveSizingTierInput,
+  ResolvedSizingTier,
+} from './sizing.js';
+export {
+  SIZING_TIERS,
+  TIER_PRESETS,
+  PROFILE_DEFAULT_TIER,
+  FALLBACK_DEFAULT_TIER,
+  resolveSizingTier,
+} from './sizing.js';
+
+export type { GatewayMonthlyCost, FleetMonthlyCost } from './cost-estimator.js';
+export {
+  C2D_AUTOPILOT_VCPU_USD_PER_HR,
+  C2D_AUTOPILOT_GIB_USD_PER_HR,
+  HOURS_PER_MONTH,
+  estimateGatewayMonthlyCost,
+  estimateFleetMonthlyCost,
+} from './cost-estimator.js';
+
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 
 export type {

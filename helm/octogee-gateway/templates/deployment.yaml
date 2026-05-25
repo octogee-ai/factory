@@ -1,4 +1,9 @@
 {{- include "octogee-gateway.requireIdentity" . -}}
+{{- $tier := include "octogee-gateway.effectiveTier" . -}}
+{{- $preset := index .Values.tiers $tier -}}
+{{- if not $preset -}}
+{{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,7 +12,9 @@ metadata:
     app: octogee-gateway
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  # Use kindIs to distinguish "explicit 0 (paused)" from "unset (default to 1)" —
+  # helm's `default` treats 0 as falsy and would replace it with the fallback.
+  replicas: {{ if kindIs "invalid" .Values.replicas }}1{{ else }}{{ .Values.replicas }}{{ end }}
   strategy:
     type: Recreate
   selector:
@@ -19,6 +26,11 @@ spec:
       labels:
         app: octogee-gateway
         gateway-instance: {{ .Values.instanceName }}
+        # Per-pod sizing tier — also stamped onto the rendered pod so
+        # K8s + GCP Billing Export can roll up cost by tier (Phase D
+        # of GATEWAY-SIZING-AND-CHARGEBACK-SPEC.md, foundation for
+        # GATEWAY-PLATFORM-SPEC §Phase 5a chargeback).
+        tier: {{ $tier | quote }}
     spec:
       nodeSelector:
         cloud.google.com/compute-class: {{ .Values.computeClass | default "Performance" | quote }}
@@ -119,16 +131,16 @@ spec:
               value: "1"
             - name: OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS
               value: "1"
-            # Node.js runtime tuning sized per .Values.resources — see
-            # values.yaml `nodejs:` block. UV pool default of 4 leaves
-            # parallel fs/crypto/dns serialized; V8 default ~4 GiB heap
-            # caps the gateway at a fraction of available pod memory.
-            # NODE_OPTIONS prepends Dockerfile's --no-deprecation; Node
-            # honors the env var unioned over CLI args.
+            # Node.js runtime tuning sized per the resolved sizing tier
+            # ($preset.nodejs). UV pool default of 4 leaves parallel
+            # fs/crypto/dns serialized; V8 default ~4 GiB heap caps the
+            # gateway at a fraction of available pod memory. NODE_OPTIONS
+            # prepends Dockerfile's --no-deprecation; Node honors the env
+            # var unioned over CLI args.
             - name: UV_THREADPOOL_SIZE
-              value: {{ .Values.nodejs.uvThreadpoolSize | quote }}
+              value: {{ $preset.nodejs.uvThreadpoolSize | quote }}
             - name: NODE_OPTIONS
-              value: "--no-deprecation --max-old-space-size={{ .Values.nodejs.maxOldSpaceSizeMb }}"
+              value: "--no-deprecation --max-old-space-size={{ $preset.nodejs.maxOldSpaceSizeMb }}"
             - name: MM_BOT_USERNAME
               value: "mac-{{ .Values.gatewayId }}"
             - name: GITHUB_ORG
@@ -284,7 +296,7 @@ spec:
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
             successThreshold: {{ .Values.probes.readiness.successThreshold | default 1 }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- toYaml $preset.resources | nindent 12 }}
 
         {{- if .Values.gatewayEdge.enabled }}
         # chat-proxy folded in — one container, one port (3001) serves the

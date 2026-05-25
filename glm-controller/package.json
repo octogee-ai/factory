@@ -29,6 +29,7 @@
   },
   "overrides": {
     "@tootallnate/once": "^3.0.1",
-    "fast-xml-builder": "^1.1.7"
+    "fast-xml-builder": "^1.1.7",
+    "glob": "^13.0.0"
   }
 }

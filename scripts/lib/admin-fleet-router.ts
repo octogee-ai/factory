@@ -13,6 +13,12 @@ import {
   GATEWAY_PROFILES,
   type GatewayProfile,
 } from "../../shared/types/glm.js";
+import {
+  SIZING_TIERS,
+  resolveSizingTier,
+  type SizingTier,
+} from "../../shared/types/sizing.js";
+import { estimateGatewayMonthlyCost } from "../../shared/types/cost-estimator.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 
 export interface FleetLogger {
@@ -40,6 +46,186 @@ type ActorRequest = Request & {
   uid?: string;
   user?: { email?: string | null };
 };
+
+function resolveSizingForResponse(
+  glmDoc: Record<string, unknown> | undefined,
+): {
+  tier: SizingTier;
+  resolvedFrom: "explicit" | "profile-default";
+  resources: { requests: { cpu: string; memory: string }; limits: { cpu: string; memory: string } };
+  capacity: { targetActiveBuilders: number; typicalBuilders: number };
+  monthlyCostUsd: { compute: number; perBuilderAtTarget: number; perBuilderAtTypical: number };
+} {
+  const sizingTier =
+    typeof glmDoc?.sizingTier === "string" && (SIZING_TIERS as readonly string[]).includes(glmDoc.sizingTier)
+      ? (glmDoc.sizingTier as SizingTier)
+      : undefined;
+  const profile =
+    typeof glmDoc?.profile === "string" && (GATEWAY_PROFILES as readonly string[]).includes(glmDoc.profile)
+      ? (glmDoc.profile as GatewayProfile)
+      : undefined;
+  const resolved = resolveSizingTier({ sizingTier, profile });
+  // Paused pods are scaled to 0 replicas → no node consumption → no compute
+  // bill. Reflect that in both the per-gateway surface and the fleet roll-up
+  // so the operator sees real cost, not nameplate.
+  const isPaused = glmDoc?.desiredStatus === "paused";
+  const cost = isPaused
+    ? { computeUsd: 0, perBuilderAtTarget: 0, perBuilderAtTypical: 0 }
+    : estimateGatewayMonthlyCost(resolved.tier);
+  return {
+    tier: resolved.tier,
+    resolvedFrom: resolved.resolvedFrom,
+    resources: {
+      requests: {
+        cpu: resolved.preset.resources.requests.cpu,
+        memory: resolved.preset.resources.requests.memory,
+      },
+      limits: {
+        cpu: resolved.preset.resources.limits.cpu,
+        memory: resolved.preset.resources.limits.memory,
+      },
+    },
+    capacity: resolved.preset.capacity,
+    monthlyCostUsd: {
+      compute: cost.computeUsd,
+      perBuilderAtTarget: cost.perBuilderAtTarget,
+      perBuilderAtTypical: cost.perBuilderAtTypical,
+    },
+  };
+}
+
+type GlmDoc = Record<string, unknown>;
+interface FirestoreDocLike { id: string; data(): GlmDoc }
+interface JobsByGateway { jobsByGateway: Map<string, Array<{ id: string; data: GlmDoc }>>; mounting: number; staleJobs: number; pending: number }
+interface JobsTotals { mounting: number; staleJobs: number; pending: number }
+
+function indexGlmDocs(docs: ReadonlyArray<FirestoreDocLike>): Map<string, GlmDoc> {
+  const out = new Map<string, GlmDoc>();
+  for (const doc of docs) out.set(doc.id, doc.data());
+  return out;
+}
+
+function aggregateJobs(docs: ReadonlyArray<FirestoreDocLike>, now: number): JobsByGateway {
+  const jobsByGateway = new Map<string, Array<{ id: string; data: GlmDoc }>>();
+  let mounting = 0, staleJobs = 0, pending = 0;
+  for (const doc of docs) {
+    const data = doc.data();
+    const gid = typeof data.gatewayId === "string" ? data.gatewayId : "";
+    const arr = jobsByGateway.get(gid) ?? [];
+    arr.push({ id: doc.id, data });
+    jobsByGateway.set(gid, arr);
+    const state = data.state;
+    if (state === "pending") pending++;
+    if (state === "dispatched" || state === "running") {
+      const ageMs = toMillis(data.dispatchedAt) ?? toMillis(data.createdAt);
+      if (ageMs != null && now - ageMs > JOB_TTL_MS) staleJobs++;
+      else mounting++;
+    }
+  }
+  return { jobsByGateway, mounting, staleJobs, pending };
+}
+
+function projectInFlightJob(
+  inFlightJobId: string | null,
+  ownJobs: ReadonlyArray<{ id: string; data: GlmDoc }>,
+  now: number,
+): { jobId: string; slug: unknown; state: unknown; ageMs: number } | null {
+  const raw = inFlightJobId ? ownJobs.find((j) => j.id === inFlightJobId) : null;
+  if (!raw) return null;
+  const dispatchedMs = toMillis(raw.data.dispatchedAt) ?? toMillis(raw.data.createdAt);
+  return {
+    jobId: raw.id,
+    slug: raw.data.slug,
+    state: raw.data.state,
+    ageMs: dispatchedMs == null ? 0 : now - dispatchedMs,
+  };
+}
+
+function projectLastError(raw: unknown):
+  | { jobId?: string; slug?: string; message?: string; at: string | null }
+  | null {
+  if (!raw || typeof raw !== "object") return null;
+  const e = raw as { jobId?: string; slug?: string; message?: string; at?: unknown };
+  return { jobId: e.jobId, slug: e.slug, message: e.message, at: toIso(e.at) };
+}
+
+function projectDesiredStatus(glmDoc: GlmDoc | undefined):
+  | "running" | "paused" | "draining" | "retired" | null {
+  const v = glmDoc?.desiredStatus;
+  if (typeof v !== "string") return null;
+  if (v === "running" || v === "paused" || v === "draining" || v === "retired") return v;
+  return null;
+}
+
+function projectGatewaySummary(
+  doc: FirestoreDocLike,
+  ownJobs: ReadonlyArray<{ id: string; data: GlmDoc }>,
+  glmDoc: GlmDoc | undefined,
+  now: number,
+): {
+  gatewayId: string; status: string;
+  desiredStatus: "running" | "paused" | "draining" | "retired" | null;
+  imageTag: string | null; openclawVersion: string | null;
+  mountedCustomers: unknown[];
+  lastHeartbeatAt: string | null; heartbeatAgeMs: number | null;
+  startedAt: string | null; uptimeMs: number | null;
+  inFlightJobId: string | null;
+  inFlightJob: ReturnType<typeof projectInFlightJob>;
+  lastError: ReturnType<typeof projectLastError>;
+  sizing: ReturnType<typeof resolveSizingForResponse>;
+} {
+  const data = doc.data();
+  const inFlightJobId = typeof data.inFlightJobId === "string" ? data.inFlightJobId : null;
+  return {
+    gatewayId: typeof data.gatewayId === "string" ? data.gatewayId : doc.id,
+    status: typeof data.status === "string" ? data.status : "unknown",
+    desiredStatus: projectDesiredStatus(glmDoc),
+    imageTag: typeof data.version === "string" ? data.version : null,
+    openclawVersion: typeof data.openclawVersion === "string" ? data.openclawVersion : null,
+    mountedCustomers: Array.isArray(data.mountedCustomers) ? data.mountedCustomers : [],
+    lastHeartbeatAt: toIso(data.lastHeartbeatAt),
+    heartbeatAgeMs: ageMsOrNull(toMillis(data.lastHeartbeatAt), now),
+    startedAt: toIso(data.startedAt),
+    uptimeMs: ageMsOrNull(toMillis(data.startedAt), now),
+    inFlightJobId,
+    inFlightJob: projectInFlightJob(inFlightJobId, ownJobs, now),
+    lastError: projectLastError(data.lastError),
+    sizing: resolveSizingForResponse(glmDoc),
+  };
+}
+
+function rollupFleetStats(
+  gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>,
+  jobs: JobsTotals,
+): {
+  gateways: { total: number; ready: number; unreachable: number };
+  customersMounted: number;
+  inFlight: { mounting: number; unmounting: number; total: number };
+  staleJobs: number;
+  pendingPlacements: number;
+  fleetCost: { monthlyUsd: number; byTier: Record<string, { count: number; subtotalUsd: number }> };
+} {
+  let ready = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0;
+  const byTier: Record<string, { count: number; subtotalUsd: number }> = {};
+  for (const g of gateways) {
+    if (g.status === "ready") ready++;
+    if (g.status === "unreachable") unreachable++;
+    customersMounted += g.mountedCustomers.length;
+    fleetMonthlyUsd += g.sizing.monthlyCostUsd.compute;
+    const entry = byTier[g.sizing.tier] ?? { count: 0, subtotalUsd: 0 };
+    entry.count += 1;
+    entry.subtotalUsd += g.sizing.monthlyCostUsd.compute;
+    byTier[g.sizing.tier] = entry;
+  }
+  return {
+    gateways: { total: gateways.length, ready, unreachable },
+    customersMounted,
+    inFlight: { mounting: jobs.mounting, unmounting: 0, total: jobs.mounting },
+    staleJobs: jobs.staleJobs,
+    pendingPlacements: jobs.pending,
+    fleetCost: { monthlyUsd: fleetMonthlyUsd, byTier },
+  };
+}
 
 const JOB_TTL_MS = 10 * 60_000;
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
@@ -513,120 +699,23 @@ router.get(
     "/gateways",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const [gwSnap, jobsSnap] = await Promise.all([
+        const [gwSnap, jobsSnap, glmSnap] = await Promise.all([
           db.collection("gateways").get(),
           db
             .collection("restoreJobs")
             .where("state", "in", ["pending", "dispatched", "running"])
             .get(),
+          db.collection(GLM_GATEWAYS_COLLECTION).get(),
         ]);
-
+        const glmByGatewayId = indexGlmDocs(glmSnap.docs);
         const now = Date.now();
-        const jobsByGateway = new Map<
-          string,
-          Array<{ id: string; data: Record<string, unknown> }>
-        >();
-        let mounting = 0;
-        let staleJobs = 0;
-        let pending = 0;
-
-        for (const doc of jobsSnap.docs) {
-          const data = doc.data() as Record<string, unknown>;
-          const gid = typeof data.gatewayId === "string" ? data.gatewayId : "";
-          const arr = jobsByGateway.get(gid) ?? [];
-          arr.push({ id: doc.id, data });
-          jobsByGateway.set(gid, arr);
-
-          const state = data.state;
-          if (state === "pending") pending++;
-          if (state === "dispatched" || state === "running") {
-            const ageMs =
-              toMillis(data.dispatchedAt) ?? toMillis(data.createdAt);
-            const isStale = ageMs != null && now - ageMs > JOB_TTL_MS;
-            if (isStale) staleJobs++;
-            else mounting++;
-          }
-        }
-
-        const gateways = gwSnap.docs.map((doc) => {
-          const data = doc.data() as Record<string, unknown>;
-          const heartbeatAgeMs = ageMsOrNull(toMillis(data.lastHeartbeatAt), now);
-          const uptimeMs = ageMsOrNull(toMillis(data.startedAt), now);
-          const inFlightJobId =
-            typeof data.inFlightJobId === "string" ? data.inFlightJobId : null;
-          const ownJobs = jobsByGateway.get(doc.id) ?? [];
-          const inFlightRaw = inFlightJobId
-            ? ownJobs.find((j) => j.id === inFlightJobId)
-            : null;
-          const inFlightJob = inFlightRaw
-            ? {
-                jobId: inFlightRaw.id,
-                slug: inFlightRaw.data.slug,
-                state: inFlightRaw.data.state,
-                ageMs: (() => {
-                  const dispatchedMs =
-                    toMillis(inFlightRaw.data.dispatchedAt) ??
-                    toMillis(inFlightRaw.data.createdAt);
-                  return dispatchedMs == null ? 0 : now - dispatchedMs;
-                })(),
-              }
-            : null;
-          const lastErrorRaw = data.lastError as
-            | {
-                jobId?: string;
-                slug?: string;
-                message?: string;
-                at?: unknown;
-              }
-            | undefined;
-          const lastError = lastErrorRaw
-            ? {
-                jobId: lastErrorRaw.jobId,
-                slug: lastErrorRaw.slug,
-                message: lastErrorRaw.message,
-                at: toIso(lastErrorRaw.at),
-              }
-            : null;
-          return {
-            gatewayId:
-              typeof data.gatewayId === "string" ? data.gatewayId : doc.id,
-            status: typeof data.status === "string" ? data.status : "unknown",
-            imageTag: typeof data.version === "string" ? data.version : null,
-            openclawVersion:
-              typeof data.openclawVersion === "string"
-                ? data.openclawVersion
-                : null,
-            mountedCustomers: Array.isArray(data.mountedCustomers)
-              ? data.mountedCustomers
-              : [],
-            lastHeartbeatAt: toIso(data.lastHeartbeatAt),
-            heartbeatAgeMs,
-            startedAt: toIso(data.startedAt),
-            uptimeMs,
-            inFlightJobId,
-            inFlightJob,
-            lastError,
-          };
-        });
-
-        let ready = 0;
-        let unreachable = 0;
-        let customersMounted = 0;
-        for (const g of gateways) {
-          if (g.status === "ready") ready++;
-          if (g.status === "unreachable") unreachable++;
-          customersMounted += g.mountedCustomers.length;
-        }
-
+        const { jobsByGateway, mounting, staleJobs, pending } = aggregateJobs(jobsSnap.docs, now);
+        const gateways = gwSnap.docs.map((doc) =>
+          projectGatewaySummary(doc, jobsByGateway.get(doc.id) ?? [], glmByGatewayId.get(doc.id), now),
+        );
         res.json({
           gateways,
-          stats: {
-            gateways: { total: gateways.length, ready, unreachable },
-            customersMounted,
-            inFlight: { mounting, unmounting: 0, total: mounting },
-            staleJobs,
-            pendingPlacements: pending,
-          },
+          stats: rollupFleetStats(gateways, { mounting, staleJobs, pending }),
           generatedAt: new Date().toISOString(),
         });
       } catch (e) {
@@ -857,6 +946,8 @@ router.post(
           instanceName: string;
           imageRepository: string;
           imageTag: string;
+          profile: string;
+          sizingTier: string;
         }>;
         if (
           typeof body.gatewayId !== "string" || body.gatewayId.length === 0 ||
@@ -872,6 +963,20 @@ router.post(
               "imageRepository",
               "imageTag",
             ],
+          });
+          return;
+        }
+        if (body.profile !== undefined && !(GATEWAY_PROFILES as readonly string[]).includes(body.profile)) {
+          res.status(400).json({
+            error: `profile must be one of: ${GATEWAY_PROFILES.join(", ")}`,
+            got: body.profile,
+          });
+          return;
+        }
+        if (body.sizingTier !== undefined && !(SIZING_TIERS as readonly string[]).includes(body.sizingTier)) {
+          res.status(400).json({
+            error: `sizingTier must be one of: ${SIZING_TIERS.join(", ")}`,
+            got: body.sizingTier,
           });
           return;
         }
@@ -944,6 +1049,8 @@ router.post(
             desiredStatus: "running",
             createdBy,
             createdAt: Date.now(),
+            ...(body.profile ? { profile: body.profile as GatewayProfile } : {}),
+            ...(body.sizingTier ? { sizingTier: body.sizingTier as SizingTier } : {}),
           });
         const operationId = await createOperation(db, {
           kind: "add-gateway",
@@ -970,7 +1077,8 @@ router.post(
         const id = req.params.id as string;
         const body = req.body as Partial<{
           imageTag: string;
-          desiredStatus: "running" | "draining" | "retired";
+          desiredStatus: "running" | "paused" | "draining" | "retired";
+          sizingTier: string;
         }>;
         const update: Record<string, unknown> = {};
         if (typeof body.imageTag === "string" && body.imageTag.length > 0) {
@@ -979,17 +1087,28 @@ router.post(
         if (body.desiredStatus !== undefined) {
           if (
             body.desiredStatus !== "running" &&
+            body.desiredStatus !== "paused" &&
             body.desiredStatus !== "draining" &&
             body.desiredStatus !== "retired"
           ) {
             res.status(400).json({
               error:
-                "desiredStatus must be one of: running, draining, retired",
+                "desiredStatus must be one of: running, paused, draining, retired",
               got: body.desiredStatus,
             });
             return;
           }
           update.desiredStatus = body.desiredStatus;
+        }
+        if (body.sizingTier !== undefined) {
+          if (!(SIZING_TIERS as readonly string[]).includes(body.sizingTier)) {
+            res.status(400).json({
+              error: `sizingTier must be one of: ${SIZING_TIERS.join(", ")}`,
+              got: body.sizingTier,
+            });
+            return;
+          }
+          update.sizingTier = body.sizingTier;
         }
         if (Object.keys(update).length === 0) {
           res.status(400).json({ error: "no updatable fields provided" });
