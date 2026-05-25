@@ -1,0 +1,163 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { Request, Response } from "express";
+import { logger, requestLogger } from "../logging.js";
+
+// Two concerns under test:
+//
+//   1) `logger.debug()` is a new level gated by the standard LOG_LEVEL
+//      env knob — same shape as scripts/lib/config.ts's `dlog()`, just
+//      structured-JSON output matching this package's existing logger.
+//      Default LOG_LEVEL is `info`, so debug is a no-op; setting
+//      LOG_LEVEL=debug enables it.
+//
+//   2) `requestLogger` routes /health-style kubelet-probe paths through
+//      `debug` when status<400 (probe success is pure noise — the line
+//      that triggered this work fired every 10s on gw-bender). Status
+//      >=400 still goes to warn/error so probe failures stay loud.
+//      Non-probe paths are unchanged.
+
+describe("middleware/logging — logger.debug + LOG_LEVEL gate", () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  const origLevel = process.env.LOG_LEVEL;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+    if (origLevel === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = origLevel;
+  });
+
+  it("logger.debug() no-ops when LOG_LEVEL is unset (defaults to info)", () => {
+    delete process.env.LOG_LEVEL;
+    logger.debug("ignored");
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("logger.debug() no-ops when LOG_LEVEL=info", () => {
+    process.env.LOG_LEVEL = "info";
+    logger.debug("ignored");
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("logger.debug() emits structured DEBUG when LOG_LEVEL=debug (case-insensitive)", () => {
+    process.env.LOG_LEVEL = "DEBUG";
+    logger.debug("hello", { tag: "x" });
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(JSON.parse(logSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "DEBUG",
+      message: "hello",
+      tag: "x",
+    });
+  });
+});
+
+describe("middleware/logging — requestLogger probe-path noise gating", () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  const origLevel = process.env.LOG_LEVEL;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+    errSpy.mockRestore();
+    if (origLevel === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = origLevel;
+  });
+
+  function fakeReqRes(method: string, urlPath: string, statusCode: number) {
+    const listeners: Record<string, () => void> = {};
+    const req = { method, path: urlPath } as Request;
+    const res = {
+      statusCode,
+      on: (event: string, cb: () => void) => {
+        listeners[event] = cb;
+        return res as unknown;
+      },
+    } as unknown as Response;
+    return { req, res, fire: (event: string) => listeners[event]?.() };
+  }
+
+  it("GET /health 200 is silent at default LOG_LEVEL", () => {
+    delete process.env.LOG_LEVEL;
+    const { req, res, fire } = fakeReqRes("GET", "/health", 200);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+
+  it("GET /health 200 emits at DEBUG when LOG_LEVEL=debug", () => {
+    process.env.LOG_LEVEL = "debug";
+    const { req, res, fire } = fakeReqRes("GET", "/health", 200);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(JSON.parse(logSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "DEBUG",
+      path: "/health",
+      status: 200,
+    });
+  });
+
+  it("non-probe path still logs at INFO regardless of LOG_LEVEL", () => {
+    delete process.env.LOG_LEVEL;
+    const { req, res, fire } = fakeReqRes("GET", "/api/foo", 200);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(JSON.parse(logSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "INFO",
+      path: "/api/foo",
+    });
+  });
+
+  it("/health 500 logs at ERROR regardless of LOG_LEVEL (failure signal preserved)", () => {
+    delete process.env.LOG_LEVEL;
+    const { req, res, fire } = fakeReqRes("GET", "/health", 500);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(errSpy).toHaveBeenCalledOnce();
+    expect(JSON.parse(errSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "ERROR",
+      path: "/health",
+      status: 500,
+    });
+  });
+
+  it("/healthz, /ready, /readyz, /api/health are also gated as probe paths", () => {
+    delete process.env.LOG_LEVEL;
+    for (const p of ["/healthz", "/ready", "/readyz", "/api/health"]) {
+      const { req, res, fire } = fakeReqRes("GET", p, 200);
+      requestLogger(req, res, vi.fn());
+      fire("finish");
+    }
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("/health 404 logs at WARN (probe failure on 4xx preserved, not silenced)", () => {
+    // Pins the `>=400 → warn` branch in the ternary in front of the
+    // PROBE_PATHS check. A future refactor that reorders the ternary
+    // to `PROBE_PATHS.has(path) ? "debug" : statusCode >= 400 ? ...`
+    // would silently flip 4xx probe failures to DEBUG; this guard
+    // fails loud in that case.
+    delete process.env.LOG_LEVEL;
+    const { req, res, fire } = fakeReqRes("GET", "/health", 404);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(JSON.parse(warnSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "WARNING",
+      path: "/health",
+      status: 404,
+    });
+  });
+});
