@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
-import { startMetricsBaseline } from "./openclaw/metrics-baseline.js";
+import { buildGatewayMetricsFetcher, startMetricsBaseline } from "./openclaw/metrics-baseline.js";
 import { generateIdentity, type DeviceIdentity } from "../../../shared/types/device-identity.js";
 import { WsUpgradeRouter } from "../../../shared/ws/upgrade-router.js";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
@@ -910,16 +910,8 @@ export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
 
-  const gatewayMetricsUrl = process.env.OPENCLAW_GATEWAY_METRICS_URL
-    ?? "http://127.0.0.1:18789/metrics";
   startMetricsBaseline({
-    fetchGatewayMetrics: async () => {
-      const res = await fetch(gatewayMetricsUrl);
-      if (!res.ok) {
-        throw new Error(`gateway /metrics returned ${res.status}`);
-      }
-      return res.text();
-    },
+    fetchGatewayMetrics: buildGatewayMetricsFetcher(process.env),
     intervalMs: 30_000,
     log: (msg) => console.warn(msg),
     onSample: (sample) => {
