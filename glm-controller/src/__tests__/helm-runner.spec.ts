@@ -289,7 +289,10 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(args).toContain("/charts/octogee-gateway");
     expect(args).toContain("-n");
     expect(args).toContain("octogee-test");
-    expect(args).toContain("--set");
+    // String-typed fields use --set-string so digit-only values (e.g.
+    // imageTag="3280519") don't get coerced to a number and rejected
+    // by the chart schema. Numeric fields (replicas) still use --set.
+    expect(args).toContain("--set-string");
     expect(args).toContain("instanceName=default");
     expect(args).toContain("gatewayId=gw-test");
     expect(args).toContain("imageTag=abc1234");
@@ -472,6 +475,40 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     });
 
     expect(calls[0].some((a) => a.startsWith("profile="))).toBe(false);
+  });
+
+  it("passes string-typed fields via --set-string so a digit-only imageTag isn't coerced to a number (gw-bender 2026-05-25 root cause)", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee",
+      instanceName: "bender",
+      gatewayId: "gw-bender",
+      imageRepository: REPO,
+      imageTag: "3280519", // digits only — would be coerced to number by plain --set
+      chartPath: "/charts/octogee-gateway",
+      profile: "operator",
+      sizingTier: "operator",
+      replicas: 1,
+    });
+
+    const args = calls[0];
+    // Locate each string-typed --set-string pair and confirm value follows.
+    const stringPair = (key: string): string | undefined => {
+      const idx = args.findIndex((a, i) => a === "--set-string" && args[i + 1]?.startsWith(`${key}=`));
+      return idx === -1 ? undefined : args[idx + 1];
+    };
+    expect(stringPair("imageTag")).toBe("imageTag=3280519");
+    expect(stringPair("gatewayId")).toBe("gatewayId=gw-bender");
+    expect(stringPair("instanceName")).toBe("instanceName=bender");
+    expect(stringPair("profile")).toBe("profile=operator");
+    expect(stringPair("sizingTier")).toBe("sizingTier=operator");
+    // replicas stays on --set because it's number-typed.
+    const replicasIdx = args.findIndex((a, i) => a === "--set" && args[i + 1] === "replicas=1");
+    expect(replicasIdx).toBeGreaterThanOrEqual(0);
+    // And string-typed fields MUST NOT appear under plain --set.
+    expect(args.some((a, i) => a === "--set" && args[i + 1]?.startsWith("imageTag="))).toBe(false);
   });
 
   it("passes --set sizingTier=<tier> when provided", async () => {

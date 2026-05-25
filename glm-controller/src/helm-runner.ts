@@ -246,6 +246,13 @@ interface BuildUpgradeArgsOpts {
  * the next upgrade — see post-mortem in PR #TBD).
  */
 function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
+  // String-typed fields use `--set-string` so a digit-only value (e.g.
+  // imageTag="3280519" from a CI build-number tag without a SHA suffix)
+  // doesn't get coerced to a number by helm's `--set` parser and rejected
+  // by the chart schema. Discovered the hard way 2026-05-25 when gw-bender's
+  // imageTag carried just digits and every reconcile failed with
+  // "at '/imageTag': got number, want string". Numeric fields (replicas)
+  // still use `--set` — they want number semantics.
   const args: string[] = [
     "upgrade",
     "--install",
@@ -253,25 +260,25 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     opts.chartPath,
     "-n",
     opts.namespace,
-    "--set",
+    "--set-string",
     `instanceName=${opts.instanceName}`,
-    "--set",
+    "--set-string",
     `gatewayId=${opts.gatewayId}`,
-    "--set",
+    "--set-string",
     `imageTag=${opts.imageTag}`,
-    "--set",
+    "--set-string",
     `image.repository=${opts.imageRepository}`,
   ];
-  if (opts.chartFingerprint) args.push("--set", `chartFingerprint=${opts.chartFingerprint}`);
-  if (opts.profile) args.push("--set", `profile=${opts.profile}`);
-  if (opts.sizingTier) args.push("--set", `sizingTier=${opts.sizingTier}`);
+  if (opts.chartFingerprint) args.push("--set-string", `chartFingerprint=${opts.chartFingerprint}`);
+  if (opts.profile) args.push("--set-string", `profile=${opts.profile}`);
+  if (opts.sizingTier) args.push("--set-string", `sizingTier=${opts.sizingTier}`);
   if (opts.replicas !== undefined) args.push("--set", `replicas=${opts.replicas}`);
-  if (opts.serviceAccountName) args.push("--set", `serviceAccountName=${opts.serviceAccountName}`);
+  if (opts.serviceAccountName) args.push("--set-string", `serviceAccountName=${opts.serviceAccountName}`);
   if (opts.gatewayContainerSecurityContext) {
     pushSetJson(args, "gatewayContainerSecurityContext", opts.gatewayContainerSecurityContext);
   }
   if (opts.persistence) pushSetJson(args, "persistence", opts.persistence);
-  if (opts.gcpProject) args.push("--set", `gatewayEdge.env.GCP_PROJECT_ID=${opts.gcpProject}`);
+  if (opts.gcpProject) args.push("--set-string", `gatewayEdge.env.GCP_PROJECT_ID=${opts.gcpProject}`);
   if (opts.valuesFile) args.push("-f", opts.valuesFile);
   if (opts.takeOwnership) args.push("--take-ownership");
   // Server-side apply + force-conflicts: matches the umbrella install path
