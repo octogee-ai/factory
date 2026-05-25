@@ -53,9 +53,9 @@ describe('sizing-tier SSOT', () => {
     }
   });
 
-  it('operator profile defaults to operator tier; standard to cattle-heavy (PROD-floor migration safety)', () => {
+  it('operator profile defaults to operator tier; standard to cattle-light', () => {
     expect(PROFILE_DEFAULT_TIER.operator).toBe('operator');
-    expect(PROFILE_DEFAULT_TIER.standard).toBe('cattle-heavy');
+    expect(PROFILE_DEFAULT_TIER.standard).toBe('cattle-light');
   });
 });
 
@@ -72,9 +72,9 @@ describe('resolveSizingTier', () => {
     expect(result.resolvedFrom).toBe('profile-default');
   });
 
-  it('falls back to cattle-heavy when both sizingTier and profile are missing (PROD-floor migration safety)', () => {
+  it('falls back to cattle-light when both sizingTier and profile are missing', () => {
     const result = resolveSizingTier({ sizingTier: undefined, profile: undefined });
-    expect(result.tier).toBe('cattle-heavy');
+    expect(result.tier).toBe('cattle-light');
     expect(result.resolvedFrom).toBe('profile-default');
   });
 

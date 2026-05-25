@@ -115,14 +115,14 @@ describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () =>
     expectResourcesMatchTier(out, "operator");
   });
 
-  it("standard profile without sizingTier renders cattle-heavy resources (PROD-floor migration safety)", () => {
+  it("standard profile without sizingTier renders cattle-light resources", () => {
     const out = helmTemplate({ profile: "standard" });
-    expectResourcesMatchTier(out, "cattle-heavy");
+    expectResourcesMatchTier(out, "cattle-light");
   });
 
-  it("empty profile without sizingTier falls back to cattle-heavy (PROD-floor migration safety)", () => {
+  it("empty profile without sizingTier falls back to cattle-light", () => {
     const out = helmTemplate({});
-    expectResourcesMatchTier(out, "cattle-heavy");
+    expectResourcesMatchTier(out, "cattle-light");
   });
 
   it("operator-profile pod label is the resolved tier, not the bare profile string", () => {
@@ -131,10 +131,10 @@ describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () =>
     expect(c.podLabels.tier).toBe("operator");
   });
 
-  it("standard-profile pod label resolves to cattle-heavy (PROD-floor migration safety)", () => {
+  it("standard-profile pod label resolves to cattle-light", () => {
     const out = helmTemplate({ profile: "standard" });
     const c = gatewayContainer(out);
-    expect(c.podLabels.tier).toBe("cattle-heavy");
+    expect(c.podLabels.tier).toBe("cattle-light");
   });
 });
 

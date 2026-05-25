@@ -80,16 +80,12 @@ export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
   },
 };
 
-// `standard` defaults to `cattle-heavy` (PROD floor) so the first reconcile
-// after this PR lands is a no-op for any existing pod that doesn't carry
-// an explicit sizingTier — matches helm/octogee-gateway/values.yaml. Flip
-// to `cattle-light` in a follow-up after every pod has been stamp-migrated.
 export const PROFILE_DEFAULT_TIER: Record<GatewayProfile, SizingTier> = {
-  standard: 'cattle-heavy',
+  standard: 'cattle-light',
   operator: 'operator',
 };
 
-export const FALLBACK_DEFAULT_TIER: SizingTier = 'cattle-heavy';
+export const FALLBACK_DEFAULT_TIER: SizingTier = 'cattle-light';
 
 export type TierResolvedFrom = 'explicit' | 'profile-default';
 

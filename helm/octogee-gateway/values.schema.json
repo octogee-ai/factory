@@ -35,7 +35,7 @@
     "sizingTier": {
       "type": "string",
       "enum": ["", "cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"],
-      "description": "Per-pod sizing tier. Empty = fall back to profileDefaults[profile]. See GATEWAY-SIZING-AND-CHARGEBACK-SPEC.md."
+      "description": "Per-pod sizing tier. Empty = fall back to profileDefaults[profile]."
     },
     "profileDefaults": {
       "type": "object",

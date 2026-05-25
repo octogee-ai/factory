@@ -26,10 +26,9 @@ spec:
       labels:
         app: octogee-gateway
         gateway-instance: {{ .Values.instanceName }}
-        # Per-pod sizing tier — also stamped onto the rendered pod so
-        # K8s + GCP Billing Export can roll up cost by tier (Phase D
-        # of GATEWAY-SIZING-AND-CHARGEBACK-SPEC.md, foundation for
-        # GATEWAY-PLATFORM-SPEC §Phase 5a chargeback).
+        # Per-pod sizing tier — stamped on the pod (and matching PVC) so
+        # GCP Billing Export can roll up cost by tier for the chargeback
+        # surface (GATEWAY-PLATFORM-SPEC §Phase 5a).
         tier: {{ $tier | quote }}
     spec:
       nodeSelector:
