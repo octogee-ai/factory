@@ -118,13 +118,28 @@ persistence:
 
 resources:
   requests:
-    cpu: "1000m"
-    memory: "2560Mi"
-    ephemeral-storage: "5Gi"
-  limits:
-    cpu: "4000m"
+    cpu: "2000m"
     memory: "4Gi"
     ephemeral-storage: "5Gi"
+  limits:
+    cpu: "3000m"
+    memory: "6Gi"
+    ephemeral-storage: "5Gi"
+
+# Node.js runtime tuning. Sized to match the resources block above — bump
+# both in lockstep. Cattle floor here; operator-tier overrides in
+# values.prod.yaml. With cores below 4 vCPU the gateway main thread
+# contends with codex-app-server (Rust child), classifier worker_thread,
+# libuv pool, V8 GC, and the gateway-edge sidecar — that contention is
+# what wedges the event loop (148s auth pre-warm, 13s p99 loop delay,
+# observed on c2d-standard-2). UV_THREADPOOL_SIZE defaults to 4 in Node;
+# bumping it lets parallel fs/crypto/dns operations actually parallelize.
+# nodeMaxOldSpaceSizeMb sets the V8 heap ceiling (default ~4 GiB); raise
+# proportional to memory request so V8 GC doesn't thrash before the
+# container OOM-kills.
+nodejs:
+  uvThreadpoolSize: "8"
+  maxOldSpaceSizeMb: "3072"
 
 probes:
   # Startup uses an HTTP GET against `/healthz` — proves openclaw is

@@ -119,6 +119,16 @@ spec:
               value: "1"
             - name: OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS
               value: "1"
+            # Node.js runtime tuning sized per .Values.resources — see
+            # values.yaml `nodejs:` block. UV pool default of 4 leaves
+            # parallel fs/crypto/dns serialized; V8 default ~4 GiB heap
+            # caps the gateway at a fraction of available pod memory.
+            # NODE_OPTIONS prepends Dockerfile's --no-deprecation; Node
+            # honors the env var unioned over CLI args.
+            - name: UV_THREADPOOL_SIZE
+              value: {{ .Values.nodejs.uvThreadpoolSize | quote }}
+            - name: NODE_OPTIONS
+              value: "--no-deprecation --max-old-space-size={{ .Values.nodejs.maxOldSpaceSizeMb }}"
             - name: MM_BOT_USERNAME
               value: "mac-{{ .Values.gatewayId }}"
             - name: GITHUB_ORG
