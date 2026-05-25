@@ -18,8 +18,12 @@ log() {
 # ── Boot banner ─────────────────────────────────────────────────────────────
 # One grep-able line so operators can confirm what's running without
 # exec'ing in to read package.json. BUILD_SHA + OPENCLAW_VERSION +
-# OPENCLAW_FORK_SHA are baked in by Cloud Build.
+# OPENCLAW_FORK_SHA are baked in by Cloud Build. Second line proves
+# runtime tuning (UV pool, V8 heap limit) actually took effect — kubectl
+# sometimes shows env vars set but the Node process inherits something
+# else; the heap_limit value is from V8 itself, not the env var.
 log "boot: gateway-image=${BUILD_SHA:-unknown} openclaw=${OPENCLAW_VERSION:-unknown} fork=${OPENCLAW_FORK_SHA:-unknown}"
+log "runtime: node=$(node -v) uv_pool=${UV_THREADPOOL_SIZE:-4-default} node_options=${NODE_OPTIONS:-unset} heap_limit=$(node -e 'console.log(Math.round(require("v8").getHeapStatistics().heap_size_limit/1024/1024)+"MB")' 2>/dev/null || echo unknown)"
 
 # ── Ensure workspace structure exists (idempotent) ──────────────────────────
 mkdir -p "$OPENCLAW_DIR/customers"
