@@ -46,6 +46,7 @@ import {
   triggerSecretsReload,
   restoreOauthStoreForSlug,
   applyCoachModelPatch,
+  syncByotForCustomer,
 } from "../lib/byot-sync-runtime";
 import { codexAuthJsonPath } from "../lib/byosub-restore.js";
 import * as fs from "fs";
@@ -327,5 +328,60 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       },
     );
     expect(r).toBe(false);
+  });
+
+  it("operator gateway: never applies the patch (operator owns openclaw.json on PVC)", async () => {
+    const applyPatch = vi.fn(async () => {});
+    const r = await applyCoachModelPatch(
+      { slug: "tester-70", provider: "openai-codex" },
+      { applyPatch, isOperatorGateway: () => true },
+    );
+    expect(r).toBe(false);
+    expect(applyPatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("operator gateway — provisioner does not touch auth or openclaw.json", () => {
+  it("restoreOauthStoreForSlug: returns {restored:false, present:false} without fetching", async () => {
+    const fetchGlmByosub = vi.fn(async () => ({}));
+    const fetchSecret = vi.fn(async () => "x");
+    const r = await restoreOauthStoreForSlug("tester-70", {
+      fetchGlmByosub,
+      fetchSecret,
+      openclawDir: fs.mkdtempSync(path.join(os.tmpdir(), "operator-skip-")),
+      isOperatorGateway: () => true,
+      logFn: () => {},
+    });
+    expect(r).toEqual({ restored: false, present: false });
+    expect(fetchGlmByosub).not.toHaveBeenCalled();
+    expect(fetchSecret).not.toHaveBeenCalled();
+  });
+
+  it("syncByotForCustomer: no internal call fires — applyByotState, restore, patch, reload all skipped", async () => {
+    const applyByotStateFn = vi.fn(() => true);
+    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "openai-codex" } },
+      },
+      {
+        isOperatorGateway: () => true,
+        applyByotState: applyByotStateFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(applyByotStateFn).not.toHaveBeenCalled();
+    expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 });

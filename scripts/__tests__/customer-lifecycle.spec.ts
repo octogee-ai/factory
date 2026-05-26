@@ -557,6 +557,139 @@ const state = makeState(
   });
 });
 
+describe("addCustomerToGateway — operator gateway short-circuits when status=complete", () => {
+  it("skips SSH-resync + Gitea ensure + blob-sync + byosub-restore + config-patch; only verify-channel-ready fires", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        customerConfigWritten: true,
+        repoHasCommits: true,
+      },
+    );
+
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.agentRegisteredInOpenclawConfig = () => true; // openclaw.json has the agent
+
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    expect(result.newCustomer).toBe(false);
+    expect(result.steps).toEqual(["verify-channel-ready"]);
+    // Heavy / network-touching calls MUST NOT fire on an operator pod with a hot PVC
+    expect(state.calls).not.toContain("ensureGiteaOrg");
+    expect(state.calls).not.toContain("createGiteaUser");
+    expect(state.calls).not.toContain("readGiteaCustomerPubKey");
+    expect(state.calls).not.toContain("blobSyncForSlug");
+    expect(state.calls).not.toContain("restoreByosubForAgent");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    // The one thing operator-mode MUST keep — MM-side liveness verification
+    expect(state.calls).toContain("waitForAccountHealthy");
+    // Fleet heartbeat MUST register this customer as mounted, even on the
+    // short-circuit path — Copilot review on PR #1182 caught a regression
+    // here. Without it, fleet/heartbeat reports no mounted customers.
+    expect(state.calls).toContain("onMounted");
+  });
+
+  it("does not short-circuit for a brand-new customer (status='')", async () => {
+    // Even on an operator gateway, first-time onboarding must run the full
+    // flow — the short-circuit only applies to status=complete (the PVC
+    // already has the durable state we'd otherwise re-create).
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test");
+    expect(result.newCustomer).toBe(true);
+    expect(result.steps).toContain("ssh-key");
+    expect(result.steps).toContain("mattermost-provision");
+    expect(result.steps).toContain("config-patch");
+  });
+
+  it("does NOT short-circuit when status=complete but openclaw.json has no agent yet (customer-move TO operator)", async () => {
+    // Cowboy moves a customer from a cattle gateway to an operator. Their
+    // Firestore status="complete" (from the cattle mount) but the new
+    // operator's PVC has none of their state. Must run the full flow to
+    // generate SSH key, register with Gitea, clone workspace, register the
+    // agent in openclaw.json, provision MM, and verify.
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      emptyDisk(), // fresh PVC — no SSH key, no workspace, nothing
+    );
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.agentRegisteredInOpenclawConfig = () => false; // openclaw.json on this PVC doesn't know the agent
+
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    // hasGitDir=false + repoUrl set → cloneWorkspaceRepo path
+    expect(state.calls).toContain("generateCustomerSshKey");
+    expect(state.calls).toContain("createGiteaUser");
+    expect(state.calls).toContain("cloneWorkspaceRepo");
+    expect(state.calls).toContain("ensureGiteaOrg");
+    expect(state.calls).toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(result.steps).toContain("ssh-key");
+    expect(result.steps).toContain("config-patch");
+    expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("crash-mid-flow recovery: SSH key on disk but openclaw.json missing agent → falls through to full flow", async () => {
+    // Copilot review on PR #1182 surfaced this scenario: a previous mount
+    // crashed AFTER generateCustomerSshKey but BEFORE applyAddCustomerConfigPatch
+    // landed the agent into openclaw.json. The SSH key check alone would
+    // short-circuit forever and verify would hang on an unregistered
+    // agent. The agent-in-openclaw-config check fixes it by re-running
+    // the full flow until config.patch lands.
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true, // ← SSH key on disk from prior interrupted run
+        templatesWritten: true,
+        customerConfigWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.agentRegisteredInOpenclawConfig = () => false; // ← but config.patch never finished
+    state.giteaRegisteredPubKey = "ssh-pubkey"; // matches what readLocalCustomerPubKey returns
+
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    // The flow must run far enough to land the agent.
+    expect(state.calls).toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(result.steps).toContain("config-patch");
+    expect(result.steps).toContain("verify-channel-ready");
+  });
+});
+
 describe("addCustomerToGateway — idempotent re-add", () => {
   it("is a near-no-op on a fully-mounted customer (only patch + verify fire)", async () => {
     const state = makeState(

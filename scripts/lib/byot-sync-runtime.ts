@@ -9,19 +9,22 @@ import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { isOauthProvider } from "./byot-multi-provider-config.js";
 import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
-import { OPENCLAW_DIR, log } from "./config.js";
+import { OPENCLAW_DIR, isOperatorGateway, log } from "./config.js";
 
 export async function applyCoachModelPatch(
   input: ByotInput | null,
   deps?: {
     applyPatch?: (patch: object) => Promise<void>;
     logFn?: (m: string) => void;
+    isOperatorGateway?: () => boolean;
   },
 ): Promise<boolean> {
   const logFn = deps?.logFn ?? log;
+  const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
+  if (isOp()) return false;
   if (!input) return false;
   const patch = byosCoachConfigPatch(input);
-  if (!patch) return false; 
+  if (!patch) return false;
   const applyPatch =
     deps?.applyPatch ??
     (async (p: object) => {
@@ -84,10 +87,13 @@ export async function restoreOauthStoreForSlug(
     fetchSecret?: (name: string) => Promise<string>;
     openclawDir?: string;
     logFn?: (m: string) => void;
+    isOperatorGateway?: () => boolean;
   },
 ): Promise<OauthStoreRestoreResult> {
   const agentId = `octogee-${slug}-coach`;
   const logFn = deps?.logFn ?? log;
+  const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
+  if (isOp()) return { restored: false, present: false };
   try {
     const fetchGlmByosub =
       deps?.fetchGlmByosub ??
@@ -130,25 +136,44 @@ return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0 };
   }
 }
 
-export async function syncByotForCustomer(userData: {
-  byotActive?: boolean;
-  username?: string;
-  provisioning?: { openclaw?: { status?: string } };
-  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
-}): Promise<void> {
+export interface SyncByotForCustomerDeps {
+  isOperatorGateway?: () => boolean;
+  applyByotState?: typeof applyByotState;
+  restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
+  applyCoachModelPatch?: typeof applyCoachModelPatch;
+  triggerSecretsReload?: typeof triggerSecretsReload;
+}
+
+export async function syncByotForCustomer(
+  userData: {
+    byotActive?: boolean;
+    username?: string;
+    provisioning?: { openclaw?: { status?: string } };
+    systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
+  },
+  deps?: SyncByotForCustomerDeps,
+): Promise<void> {
+  const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
+  if (isOp()) return;
+
+  const applyByotStateFn = deps?.applyByotState ?? applyByotState;
+  const restoreOauthFn = deps?.restoreOauthStoreForSlug ?? restoreOauthStoreForSlug;
+  const applyCoachModelPatchFn = deps?.applyCoachModelPatch ?? applyCoachModelPatch;
+  const triggerSecretsReloadFn = deps?.triggerSecretsReload ?? triggerSecretsReload;
+
   const desired = deriveDesiredByotState(userData);
   const slug = userData.username;
   if (!slug) return;
 
-  const changed = applyByotState(slug, desired.input);
+  const changed = applyByotStateFn(slug, desired.input);
 
-const provider = desired.input?.provider;
+  const provider = desired.input?.provider;
   const restored =
     provider && isOauthProvider(provider)
-      ? (await restoreOauthStoreForSlug(slug)).restored
+      ? (await restoreOauthFn(slug)).restored
       : false;
 
-const patched = await applyCoachModelPatch(desired.input);
+  const patched = await applyCoachModelPatchFn(desired.input);
 
-  if (changed || restored || patched) await triggerSecretsReload();
+  if (changed || restored || patched) await triggerSecretsReloadFn();
 }
