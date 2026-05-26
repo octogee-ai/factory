@@ -43,10 +43,6 @@ builderSlug?: string;
 sizingTier?: SizingTier;
 }
 
-// BuilderShellSession + BUILDER_SHELL_SESSIONS_COLLECTION moved to
-// shared/types/shells.ts (Phase 4.3 convergence) as ShellAttachAudit +
-// SHELL_ATTACH_AUDIT_COLLECTION.
-
 export interface GatewayPersistenceSpec {
   enabled: boolean;
   existingClaim?: string;

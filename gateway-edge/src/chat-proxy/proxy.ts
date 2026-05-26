@@ -879,9 +879,9 @@ allowedOrigins: isAllowedWsOrigin,
     onEvent: (e) => {
       if (e.kind === "session-attached") {
         // Presence flip happens HERE, not at redeem-time — the upstream
-        // WS is confirmed live, so flipping currentAttacherUid won't
-        // kick the prior user via Firestore subscription only to leave
-        // them disconnected if dial fails (Phase 4 P0 fix).
+        // WS is confirmed live (ATTACHED received), so flipping
+        // currentAttacherUid can't kick the prior user only to strand
+        // them when the new dial later fails.
         import("../lib/shell-presence.js")
           .then(({ recordShellAttach }) =>
             recordShellAttach({
@@ -948,7 +948,7 @@ async function buildEditDiffFetcher() {
   const giteaToken = process.env.GITEA_TOKEN;
   if (!giteaToken || giteaToken.trim().length === 0) {
     console.warn(
-      '[chat-proxy] GITEA_TOKEN not set — Phase 4.5 edit diffs will render as placeholders. ' +
+      '[chat-proxy] GITEA_TOKEN not set — edit diffs will render as placeholders. ' +
       'Mount K8s secret `gitea-token/token` on chat-proxy to enable.',
     );
     return undefined;
