@@ -268,6 +268,61 @@ audit honest under churn. Do **not** spin a new spec; the
 table into the roll-forward commit / PR body so the decision trail
 lives with the bump.
 
+### Step 5c — Cross-channel feature-hoist sweep
+
+**Why this exists:** Step 5 (defensive: did our patches become
+redundant) and Step 5b (harness-surface adoption) both look at
+*core* gateway code. They are blind to the channel-plugin layer
+upstream owns end-to-end. Telegram, Discord, Slack, iMessage, Signal,
+WhatsApp, WebChat each get their own `extensions/<name>/` directory
+that iterates fast on UX features — typing indicators, reaction-based
+approvals, forum topics, progress drafts, model-picker pagination,
+attachment commands. Mattermost is the integration **Octogee owns
+end-to-end** (the `mattermost-tools` plugin lives in our repo, not
+upstream's `extensions/mattermost/`). So when upstream lands a UX
+feature in Telegram or Signal that has a MM-primitive analog, we want
+to know — that's the "hoist candidate" backlog the PWA Activity
+Stream and the MM ergonomics roadmap both feed off.
+
+**Cadence:** every cycle (preview refresh + preview-to-current
+promotion alike). Channel plugins iterate independently of OC version
+semantics; even a beta-to-beta delta has signal here.
+**Teeth:** purely advisory, same as Step 5b — produce the triage
+table, file findings, never gates the roll.
+
+▸ Sweep `${PREV_TAG}..${NEW_TAG}` for top-tier channel commits:
+
+```bash
+git log ${PREV_TAG}..${NEW_TAG} --oneline | grep -E \
+  '^[a-f0-9]+ (feat|fix)\((telegram|discord|slack|imessage|signal|whatsapp|webchat)'
+# Plus the cross-channel-pattern keyword sweep (catches things tagged
+# under feat(gateway) / feat(agents) that still surface chat-UX):
+git log ${PREV_TAG}..${NEW_TAG} --oneline --regexp-ignore-case --grep \
+  -E 'typing|progress.?draft|reaction.?approv|forum.?topic|threading|presence|talk.?voice'
+```
+
+▸ For every non-trivial hit, add a row to the cycle's triage table:
+
+| Commit | Channel | What it does | MM has primitive? | Hoist value | Action |
+|---|---|---|---|---|---|
+
+✓ **Hoist value rubric** (default mapping; override freely):
+
+| Kind | MM has primitive? | Default action |
+|---|---|---|
+| Chat-feed UX (typing, reactions, progress drafts, presence) | yes → user_typing WS, reactions API, threads | **HIGH** — file against `docs/ACTIVITY-STREAM-SPEC.md` (or its Appendix B for live-signal additions) |
+| Approval / tool-gating UX (reaction approvals, slash-command confirms) | yes → reactions API | **HIGH** — file as tool-approval backlog item (currently in `ACTIVITY-STREAM-SPEC.md`; spin a dedicated `MM-HOIST-BACKLOG.md` only if items accumulate that don't fit) |
+| Channel-shape feature (forum topics, channel-of-channels) | partial → MM channels/threads | **MEDIUM** — watch; file only if upstream pattern compounds across multiple plugins |
+| Setup / auth / paywall tier (owner-auth gating, native plugin install UX) | likely no analog | **N/A** — operator-tier concern, not chat UX |
+| Channel-specific quirks (Telegram bot-command aliases, iMessage tapbacks without MM analog) | no | **N/A** |
+
+Do **not** spin a new spec preemptively — `ACTIVITY-STREAM-SPEC.md` is
+the canonical backlog home for chat-feed signal stuff. Create
+`docs/specs/MM-HOIST-BACKLOG.md` only if signals accumulate that
+genuinely don't fit there (e.g. multi-cycle pattern of channel-shape
+features). Paste the table into the roll-forward commit / PR body so
+the decision trail lives with the bump.
+
 ### Step 6 — Build OpenClaw
 
 ▸
