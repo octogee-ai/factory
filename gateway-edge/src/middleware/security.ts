@@ -31,6 +31,11 @@ export const globalRateLimit = rateLimit({
   },
 });
 
+// Shared-state foot-gun: this is ONE instance — every route that uses
+// it shares the same 30/min/IP counter. If you need per-route limits,
+// call `rateLimit({ ...DEFAULT_RATE_LIMIT_OPTIONS, ... })` inline at
+// the route. Don't sprinkle `strictRateLimit` across 5 endpoints and
+// expect 5 × 30 — you'll get 30 total and tests will flake.
 export const strictRateLimit = rateLimit({
   ...DEFAULT_RATE_LIMIT_OPTIONS,
   windowMs: 60 * 1000,

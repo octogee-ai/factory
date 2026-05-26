@@ -69,7 +69,7 @@ describe("integrations — IMAP credentials at rest", () => {
   it("POST /api/integrations/imap stores `encryptedPassword` as ciphertext, never plaintext", async () => {
     const res = await request(createApp())
       .post("/api/integrations/imap")
-      .set("Authorization", `Bearer ${auth.bearer()}`)
+      .set("Authorization", auth.bearer())
       .send({
         email: "user@example.com",
         imapHost: "imap.example.com",
@@ -109,7 +109,7 @@ describe("integrations — Twilio credentials at rest", () => {
   it("POST /api/integrations/twilio stores `encryptedAuthToken` as ciphertext, never plaintext", async () => {
     const res = await request(createApp())
       .post("/api/integrations/twilio")
-      .set("Authorization", `Bearer ${auth.bearer()}`)
+      .set("Authorization", auth.bearer())
       .send({
         accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         authToken: PLAINTEXT_TWILIO_TOKEN,
@@ -136,7 +136,7 @@ describe("integrations — Twilio credentials at rest", () => {
   it("Twilio integrations/ metadata doc carries accountSid in CLEAR (semi-public identifier, not a secret)", async () => {
     await request(createApp())
       .post("/api/integrations/twilio")
-      .set("Authorization", `Bearer ${auth.bearer()}`)
+      .set("Authorization", auth.bearer())
       .send({
         accountSid: "ACdistinct-sid",
         authToken: "shouldnt-show-here",
@@ -317,7 +317,7 @@ describe("integrations — universal invariant (regression guard)", () => {
 
     await request(createApp())
       .post("/api/integrations/imap")
-      .set("Authorization", `Bearer ${auth.bearer()}`)
+      .set("Authorization", auth.bearer())
       .send({
         email: "u@x.com",
         imapHost: "imap.x.com",
@@ -326,7 +326,7 @@ describe("integrations — universal invariant (regression guard)", () => {
       });
     await request(createApp())
       .post("/api/integrations/twilio")
-      .set("Authorization", `Bearer ${auth.bearer()}`)
+      .set("Authorization", auth.bearer())
       .send({
         accountSid: "ACxxxx",
         authToken: PLAINTEXT_TWILIO_TOKEN,

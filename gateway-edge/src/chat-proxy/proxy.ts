@@ -171,7 +171,14 @@ const ocWsConnectionsActive = new Gauge({
 
 const builderShellSessionCloseTotal = new Counter({
   name: 'chat_proxy_builder_shell_session_close_total',
-  help: 'Builder-shell session close events, by reason (client-disconnect / upstream-disconnect / upstream-unreachable / backpressure-* / invalid-ticket)',
+  help: 'Builder-shell session close events, by reason (client-disconnect / upstream-disconnect / upstream-unreachable / backpressure-*). Does NOT include invalid-ticket rejections — those are counted separately on chat_proxy_builder_shell_rejected_total.',
+  labelNames: ['reason'] as const,
+  registers: [metricsRegistry],
+});
+
+const builderShellRejectedTotal = new Counter({
+  name: 'chat_proxy_builder_shell_rejected_total',
+  help: 'Builder-shell ticket rejections (invalid/expired/replayed). Separate from session_close_total so session-close alerting is not muddled by ticket-mint/redeem mismatch.',
   labelNames: ['reason'] as const,
   registers: [metricsRegistry],
 });
@@ -870,15 +877,68 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
 
 allowedOrigins: isAllowedWsOrigin,
     onEvent: (e) => {
-
-builderShellSessionCloseTotal.inc({ reason: e.reason });
+      if (e.kind === "session-attached") {
+        // Presence flip happens HERE, not at redeem-time — the upstream
+        // WS is confirmed live, so flipping currentAttacherUid won't
+        // kick the prior user via Firestore subscription only to leave
+        // them disconnected if dial fails (Phase 4 P0 fix).
+        import("../lib/shell-presence.js")
+          .then(({ recordShellAttach }) =>
+            recordShellAttach({
+              containerSlug: e.containerSlug,
+              shellId: e.shellId,
+              attacherUid: e.uid,
+              sessionId: e.sessionId,
+            }),
+          )
+          .catch((err) => {
+            console.error("[builder-shell] presence attach failed", {
+              sessionId: e.sessionId,
+              shellId: e.shellId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          });
+        return;
+      }
       if (e.kind === "session-closed") {
+        builderShellSessionCloseTotal.inc({ reason: e.reason });
         console.warn(
           `[builder-shell] session closed sessionId=${e.sessionId} uid=${e.uid} gatewayId=${e.gatewayId} reason=${e.reason}`,
         );
-      } else {
-        console.warn(`[builder-shell] ticket rejected reason=${e.reason}`);
+        // Clear shell-doc presence + close the audit row in parallel.
+        // recordShellDetach is guarded against stale closes after a
+        // takeover (it only clears if currentAttacherUid still matches
+        // the detacher). closeAuditRow is idempotent — won't overwrite
+        // a 'taken-over' status that recordShellAttach set already.
+        import("../lib/shell-presence.js")
+          .then(async ({ recordShellDetach, closeAuditRow }) => {
+            const isError = e.reason === "upstream-unreachable";
+            await Promise.allSettled([
+              recordShellDetach({
+                containerSlug: e.containerSlug,
+                shellId: e.shellId,
+                detacherUid: e.uid,
+              }),
+              closeAuditRow({
+                sessionId: e.sessionId,
+                status: isError ? "errored" : "closed",
+                error: isError ? e.reason : undefined,
+              }),
+            ]);
+          })
+          .catch((err) => {
+            console.error("[builder-shell] presence/audit close failed", {
+              sessionId: e.sessionId,
+              shellId: e.shellId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          });
+        return;
       }
+      // 'rejected' — counted separately so session-close baselines
+      // aren't polluted by invalid-ticket events.
+      builderShellRejectedTotal.inc({ reason: e.reason });
+      console.warn(`[builder-shell] ticket rejected reason=${e.reason}`);
     },
   });
   console.log(`[builder-shell] WS route attached (gateway-edge=${gatewayEdgeUrl}, ns=${namespace})`);

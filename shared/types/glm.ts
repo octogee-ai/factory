@@ -43,19 +43,9 @@ builderSlug?: string;
 sizingTier?: SizingTier;
 }
 
-export interface BuilderShellSession {
-  sessionId: string;
-  gatewayId: string;
-  uid: string;
-  via: "owner" | "co-owner";
-  startedAt: number;
-  endedAt: number | null;
-  durationMs: number | null;
-  status: "active" | "closed" | "timed-out" | "errored";
-  error?: string;
-}
-
-export const BUILDER_SHELL_SESSIONS_COLLECTION = "builder_shell_sessions" as const;
+// BuilderShellSession + BUILDER_SHELL_SESSIONS_COLLECTION moved to
+// shared/types/shells.ts (Phase 4.3 convergence) as ShellAttachAudit +
+// SHELL_ATTACH_AUDIT_COLLECTION.
 
 export interface GatewayPersistenceSpec {
   enabled: boolean;

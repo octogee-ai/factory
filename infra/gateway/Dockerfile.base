@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlite3 xxd rsync \
     ca-certificates openssh-client \
     # Developer experience (available in running pod)
-    bash-completion git vim less \
+    bash-completion git vim less tmux \
     # Code search & analysis
     ripgrep tree cloc \
     # Build tools

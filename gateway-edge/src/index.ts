@@ -14,7 +14,7 @@ import deployPreviewRoutes from "./routes/projects/deploy-preview.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
-import byosubRoutes from "./routes/byosub.js";
+import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 
 import {
   chatProxyHandleRequest,
@@ -70,7 +70,17 @@ const route = req.route?.path || 'unmatched';
 
 app.use(requestLogger);
 
-app.use(express.json({ limit: "10mb" }));
+app.use((req, res, next) => {
+  if (req.path === "/api/billing/webhook") {
+    express.raw({ type: "application/json" })(req, res, (err) => {
+      if (err) return next(err);
+      (req as Request & { rawBody?: Buffer }).rawBody = req.body;
+      next();
+    });
+  } else {
+    express.json({ limit: "10mb" })(req, res, next);
+  }
+});
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/metrics', async (_req, res) => {
@@ -86,6 +96,17 @@ const healthHandler = (_req: Request, res: Response) => {
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
+app.use("/internal/billing", internalBillingRoutes);
+app.use("/internal/builder-shell", internalBuilderShellRoutes);
+
+// mountClusterRoutes goes FIRST so its public /api/projects routes
+// (readme) and explicit-auth sequencing aren't shadowed by the locality
+// routers' blanket `Router.use(requireAuth)`. Express tries handlers in
+// mount order; locality routers are gateway-edge-only and only match
+// their specific paths (git, deploy-preview), so falling through to them
+// AFTER the cluster mount is correct.
+mountClusterRoutes(app);
+
 const workspaceLocality = Router();
 workspaceLocality.use(requireAuth);
 workspaceLocality.use(gitRoutes);
@@ -95,11 +116,6 @@ const projectsLocality = Router();
 projectsLocality.use(requireAuth);
 projectsLocality.use(deployPreviewRoutes);
 mountApi(app, "/projects", projectsLocality);
-
-app.use("/internal/billing", internalBillingRoutes);
-app.use("/internal/builder-shell", internalBuilderShellRoutes);
-
-app.use("/api/byosub", byosubRoutes);
 
 app.use(errorHandler);
 

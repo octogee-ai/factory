@@ -10,7 +10,10 @@ import {
 } from "@shared/test-helpers/firestore-emulator.js";
 
 setupEmulatorTest({
-  env: { CHAT_PROXY_URL: "https://chat-proxy.test.octogee.com" },
+  // Route reads API_PUBLIC_URL (was renamed from CHAT_PROXY_URL — the
+  // env var rename that motivated adding the gateway-edge-emulator CI
+  // job in the first place; this test was missing the migration).
+  env: { API_PUBLIC_URL: "https://chat-proxy.test.octogee.com" },
 });
 
 function buildApp() {
