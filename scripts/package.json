@@ -24,7 +24,7 @@
     "node-pty": "^1.1.0",
     "tsx": "^4.22.3",
     "unique-names-generator": "^4.7.1",
-    "ws": "^8.20.1"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
