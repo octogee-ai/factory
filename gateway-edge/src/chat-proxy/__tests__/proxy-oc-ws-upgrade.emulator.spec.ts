@@ -13,7 +13,6 @@ import { TICKETS_COLLECTION } from './helpers/collections.js';
 process.env.NODE_ENV = 'test';
 process.env.FIREBASE_PROJECT ??= 'octogee-test';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
-process.env.CHAT_PROXY_PUBLIC_URL = 'https://chat-test.octogee.com';
 
 requireEmulator();
 

@@ -20,7 +20,6 @@ const REQUIRED_VALUES: Record<string, string> = {
   imageTag: "abc1234",
   "env.mmSiteUrl": "https://mm-test.example.com",
   "env.mmInternalUrl": "http://mattermost.octogee-test.svc.cluster.local:8065",
-  "env.chatProxyPublicUrl": "https://chat-test.octogee.com",
 };
 
 function helmTemplate(setValues: Record<string, string> = {}): string {

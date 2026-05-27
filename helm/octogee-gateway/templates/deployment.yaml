@@ -156,8 +156,8 @@ spec:
               value: {{ .Values.env.gitApiUrl | default (printf "http://octogee-gitea-http.%s.svc.cluster.local:3000/api/v1" .Release.Namespace) | quote }}
             - name: GIT_SSH_HOST
               value: {{ .Values.env.gitSshHost | default (printf "octogee-gitea-ssh.%s.svc.cluster.local" .Release.Namespace) | quote }}
-            - name: CHAT_PROXY_URL
-              value: {{ .Values.env.chatProxyUrl | quote }}
+            - name: API_PUBLIC_URL
+              value: {{ .Values.env.apiPublicUrl | quote }}
             - name: OCTOGEE_ROUTER_ENABLED
               value: {{ .Values.env.octogeeRouterEnabled | quote }}
             - name: OPENCLAW_LOG_LEVEL

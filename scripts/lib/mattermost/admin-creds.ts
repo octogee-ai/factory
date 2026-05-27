@@ -36,7 +36,7 @@ let adminUserId = process.env.MM_ADMIN_USER_ID;
     return;
   }
 
-  const proxyUrl = process.env.CHAT_PROXY_URL || "";
+  const proxyUrl = process.env.API_PUBLIC_URL || "";
 
 const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "octogee";
   const secretName = `projects/${project}/secrets/MM_ADMIN_TOKEN`;

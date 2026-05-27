@@ -357,7 +357,7 @@ const coachToken = await mintAndPersistCoachToken(
       "mattermost.channelName": channelName,
       "mattermost.dmChannelId": channel.id,
       "mattermost.generalChannelId": generalChannelId || null,
-      "mattermost.proxyUrl": process.env.CHAT_PROXY_URL || "",
+      "mattermost.proxyUrl": process.env.API_PUBLIC_URL || "",
       ...(coachMmUserId ? { "mattermost.coachUserId": coachMmUserId } : {}),
 
 ...(coachPersonalToken ? { _coachPersonalToken: coachPersonalToken } : {}),

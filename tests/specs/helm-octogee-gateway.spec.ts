@@ -13,7 +13,7 @@ beforeAll(() => {
     throw new Error(`octogee-gateway chart not found at ${CHART_PATH}`);
   }
 
-spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "instanceName=warmup", "--set", "imageTag=warmup", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example", "--set", "env.chatProxyPublicUrl=https://example.com"], { encoding: "utf-8" });
+spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "instanceName=warmup", "--set", "imageTag=warmup", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example"], { encoding: "utf-8" });
 }, 60_000);
 
 const REQUIRED_VALUES: Record<string, string> = {
@@ -22,7 +22,6 @@ const REQUIRED_VALUES: Record<string, string> = {
   imageTag: "abc1234",
   "env.mmSiteUrl": "https://mm-test.example.com",
   "env.mmInternalUrl": "http://mattermost.octogee-test.svc.cluster.local:8065",
-  "env.chatProxyPublicUrl": "https://chat-test.octogee.com",
 };
 
 function helmTemplate(
@@ -654,8 +653,6 @@ describe("helm/octogee-gateway/ — required-env render assertions", () => {
       "env.mmInternalUrl=http://x",
       "--set",
       "env.mmSiteUrl=https://x",
-      "--set",
-      "env.chatProxyPublicUrl=https://x",
       // Replace gatewayEdge.secrets with a one-entry list missing INTERNAL_SERVICE_KEY.
       "--set-json",
       'gatewayEdge.secrets=[{"envName":"STRIPE_SECRET_KEY","secretName":"stripe-secrets","secretKey":"secret_key","optional":true}]',

@@ -15,7 +15,7 @@ env:
   FIREBASE_PROJECT_ID: "octogee"
   GCLOUD_PROJECT: "octogee"
   APP_URL: "https://octogee.com"
-  CHAT_PROXY_URL: "https://api.octogee.com"
+  API_PUBLIC_URL: "https://api.octogee.com"
   SITE_URL: "https://octogee.com"
   K8S_NAMESPACE: "octogee"
 

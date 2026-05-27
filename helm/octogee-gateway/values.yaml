@@ -90,7 +90,7 @@ env:
   mmSiteUrl: ""
   mmInteractionsCallbackBaseUrl: ""  # auto-computed per-instance if empty
   mmInteractionsAllowedSourceIps: "10.117.0.0/17"  # GKE pod CIDR
-  chatProxyUrl: "https://api.octogee.com"
+  apiPublicUrl: "https://api.octogee.com"
   # Comma-separated list of allowed Origin headers on the chat-proxy
   # browser→OpenClaw WebSocket upgrade. Empty = chat-proxy falls back to
   # localhost-only (dev mode). Populate per-env in values.{prod,test}.yaml.
@@ -258,7 +258,7 @@ gatewayEdge:
     GCLOUD_PROJECT: "octogee"
     GCP_PROJECT_ID: "octogee"
     APP_URL: "https://octogee.com"
-    CHAT_PROXY_URL: "https://api.octogee.com"
+    API_PUBLIC_URL: "https://api.octogee.com"
     SITE_URL: "https://octogee.com"
     # Credential-at-rest KMS key (terraform/modules/kms output
     # `kms_creds_key_name`). Set per environment via values.{prod,
