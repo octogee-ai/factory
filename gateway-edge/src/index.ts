@@ -7,6 +7,7 @@ import { errorHandler } from "./middleware/errors.js";
 import { logger } from "./middleware/logging.js";
 import { helmetMiddleware, globalRateLimit } from "./middleware/security.js";
 import { requireAuth } from "./middleware/auth.js";
+import { installBodyParsers } from "./middleware/body-parsers.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
@@ -70,18 +71,7 @@ const route = req.route?.path || 'unmatched';
 
 app.use(requestLogger);
 
-app.use((req, res, next) => {
-  if (req.path === "/api/billing/webhook") {
-    express.raw({ type: "application/json" })(req, res, (err) => {
-      if (err) return next(err);
-      (req as Request & { rawBody?: Buffer }).rawBody = req.body;
-      next();
-    });
-  } else {
-    express.json({ limit: "10mb" })(req, res, next);
-  }
-});
-app.use(express.urlencoded({ extended: true }));
+installBodyParsers(app);
 
 app.get('/metrics', async (_req, res) => {
 

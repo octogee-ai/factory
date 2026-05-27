@@ -9,6 +9,7 @@ import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
 import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middleware/security.js";
 
 import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
+import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
@@ -53,18 +54,7 @@ const route = req.route?.path || "unmatched";
 
   app.use(requestLogger);
 
-  app.use((req, res, next) => {
-    if (req.path === "/api/billing/webhook") {
-      express.raw({ type: "application/json" })(req, res, (err) => {
-        if (err) return next(err);
-        (req as Request & { rawBody?: Buffer }).rawBody = req.body;
-        next();
-      });
-    } else {
-      express.json({ limit: "10mb" })(req, res, next);
-    }
-  });
-  app.use(express.urlencoded({ extended: true }));
+  installBodyParsers(app);
 
   app.get("/metrics", async (_req, res) => {
     res.set("Content-Type", metricsRegistry.contentType);
