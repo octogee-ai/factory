@@ -580,7 +580,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
 
     const adapter = makeAdapter(state);
     adapter.isOperatorGateway = () => true;
-    adapter.agentRegisteredInOpenclawConfig = () => true; // openclaw.json has the agent
+    adapter.customerCoachWiredInOpenclawConfig = () => true; // openclaw.json has the agent
 
     const result = await addCustomerToGateway(adapter, "uid-test");
 
@@ -634,7 +634,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     );
     const adapter = makeAdapter(state);
     adapter.isOperatorGateway = () => true;
-    adapter.agentRegisteredInOpenclawConfig = () => false; // openclaw.json on this PVC doesn't know the agent
+    adapter.customerCoachWiredInOpenclawConfig = () => false; // openclaw.json on this PVC doesn't know the agent
 
     const result = await addCustomerToGateway(adapter, "uid-test");
 
@@ -677,7 +677,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     );
     const adapter = makeAdapter(state);
     adapter.isOperatorGateway = () => true;
-    adapter.agentRegisteredInOpenclawConfig = () => false; // ← but config.patch never finished
+    adapter.customerCoachWiredInOpenclawConfig = () => false; // ← but config.patch never finished
     state.giteaRegisteredPubKey = "ssh-pubkey"; // matches what readLocalCustomerPubKey returns
 
     const result = await addCustomerToGateway(adapter, "uid-test");
