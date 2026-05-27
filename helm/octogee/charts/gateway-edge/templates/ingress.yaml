@@ -85,7 +85,7 @@ spec:
               it via the fleet seam (/api/g/<gw>/api/v4/websocket →
               gateway-edge home pod), so the bare /api/v4/* → octogee-api
               is REST-only. */}}
-          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "v4" "auth" "openclaw" "billing" "invites" "integrations" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "admin" }}
+          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "v4" "auth" "openclaw" "billing" "invites" "integrations" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "shells" "admin" }}
           # Cowboy HTTP — fleet routes served from glm-controller so the
           # admin Gateways tab keeps responding when no gateway pods are
           # booted. GCE URL maps prefer most-specific path; these rules

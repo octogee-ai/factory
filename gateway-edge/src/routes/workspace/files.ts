@@ -3,11 +3,12 @@ import { storage } from "../../lib/db.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 import { withFileTarget } from "../../lib/fileTarget.js";
 import { getManifest } from "../../lib/manifest.js";
-import { customerGiteaApi, getCustomerGiteaToken, HIDDEN, pathHasReservedOrHiddenSegment } from "./helpers.js";
+import { customerGiteaApi, getCustomerGiteaToken, HIDDEN, pathHasReservedOrHiddenSegment, requireGiteaToken } from "./helpers.js";
 
 const router = Router();
 
 router.get("/files", withFileTarget(async (req, res, _next, target) => {
+  if (!requireGiteaToken(req, res)) return;
   const path = (req.query.path as string) ?? "";
   const bustCache = req.query.nocache === "1";
 
@@ -86,6 +87,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
 }));
 
 router.get("/file", withFileTarget(async (req, res, _next, target) => {
+  if (!requireGiteaToken(req, res)) return;
   const path = req.query.path as string;
   if (!path) { res.status(400).json({ error: "Missing path" }); return; }
 

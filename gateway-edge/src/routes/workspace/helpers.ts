@@ -7,6 +7,17 @@ export function getCustomerGiteaToken(req: Request): string {
   throw new Error("Gitea access not configured for this user");
 }
 
+export function requireGiteaToken(req: Request, res: Response): string | null {
+  if (req.giteaToken) return req.giteaToken;
+  if (!res.headersSent) {
+    res.status(422).json({
+      error: "Workspace files unavailable",
+      reason: "gitea_not_provisioned",
+    });
+  }
+  return null;
+}
+
 export async function customerGiteaApi(
   req: Request,
   org: string,
