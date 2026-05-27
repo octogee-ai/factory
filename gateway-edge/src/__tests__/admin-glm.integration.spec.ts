@@ -924,6 +924,104 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 });
 
+describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl rollout restart", () => {
+  const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+
+  it("creates a restart-gateway operation (kind + instanceName carried in input)", async () => {
+    glmGatewaysDocs["gw-bender"] = {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      imageRepository: REPO,
+      imageTag: "abcdef1",
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-bender/restart")
+      .send({});
+    expect(res.status).toBe(202);
+    const op = calls.find((c) => c.collection === "glmOperations");
+    expect(op?.data).toMatchObject({
+      kind: "restart-gateway",
+      input: { gatewayId: "gw-bender", instanceName: "bender" },
+      createdBy: "admin-user",
+    });
+  });
+
+  it("returns 404 when the gateway is not registered", async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-missing/restart")
+      .send({});
+    expect(res.status).toBe(404);
+    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
+  });
+
+  it("does NOT gate on mountedCustomers — restart is operator intent", async () => {
+    glmGatewaysDocs["gw-bender"] = {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      imageRepository: REPO,
+      imageTag: "abcdef1",
+    };
+    gatewaysDocs["gw-bender"] = {
+      gatewayId: "gw-bender",
+      status: "ready",
+      mountedCustomers: ["alice", "bob"],
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-bender/restart")
+      .send({});
+    expect(res.status).toBe(202);
+  });
+
+  it("returns 409 when another op is already pending or running for this gateway", async () => {
+    glmGatewaysDocs["gw-bender"] = {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      imageRepository: REPO,
+      imageTag: "abcdef1",
+    };
+    glmOperationsDocs.push({
+      id: "op-running-99",
+      data: {
+        kind: "rollout",
+        status: "running",
+        input: { gatewayId: "gw-bender", imageTag: "feedbee" },
+      },
+    });
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-bender/restart")
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already pending or running/);
+    expect(res.body.operationId).toBe("op-running-99");
+  });
+
+  it("returns 409 when an in-flight customer restore job is set on the heartbeat (would kill the restore)", async () => {
+    glmGatewaysDocs["gw-bender"] = {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      imageRepository: REPO,
+      imageTag: "abcdef1",
+    };
+    gatewaysDocs["gw-bender"] = {
+      gatewayId: "gw-bender",
+      status: "ready",
+      inFlightJobId: "job-restore-7",
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/gateways/gw-bender/restart")
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/in-flight restore job/i);
+    expect(res.body.inFlightJobId).toBe("job-restore-7");
+    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
+  });
+});
+
 describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
   it("creates a migrate-customer operation", async () => {
     const app = buildApp();

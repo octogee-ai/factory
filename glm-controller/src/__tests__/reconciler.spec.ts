@@ -685,3 +685,234 @@ const db = {
     stop();
   });
 });
+
+function makeFakeKubeOps(behavior: {
+  scale?: () => Promise<void>;
+  restart?: () => Promise<void>;
+  readReplicas?: () => Promise<number | null>;
+} = {}) {
+  return {
+    scaleDeployment: vi.fn(behavior.scale ?? (async () => undefined)),
+    restartDeployment: vi.fn(behavior.restart ?? (async () => undefined)),
+    readDeployedReplicas: vi.fn(behavior.readReplicas ?? (async () => null)),
+  } as unknown as Parameters<typeof startReconciler>[0]["kubeOps"];
+}
+
+describe("startReconciler — kubectl scale shortcut for replicas-only diffs", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function flush() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("paused desired-state on a running release calls kubeOps.scaleDeployment(replicas=0), not helm.upsertInstance", async () => {
+    const snapCbs: Array<() => void> = [];
+    const helm = makeFakeHelm({
+      read: async () => ({
+        default: {
+          enabled: true,
+          image: { repository: "repo", tag: "abc" },
+          gatewayId: "gw-test",
+          replicas: 1,
+        },
+      }),
+    });
+    const kubeOps = makeFakeKubeOps({
+      readReplicas: async () => 1,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-test",
+          instanceName: "default",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "paused",
+          createdBy: "ci",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      kubeOps,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log: vi.fn(),
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(kubeOps!.scaleDeployment).toHaveBeenCalledTimes(1);
+    expect(kubeOps!.scaleDeployment).toHaveBeenCalledWith({
+      namespace: expect.any(String),
+      name: "octogee-gateway-default",
+      replicas: 0,
+    });
+    expect(helm.upsertInstance).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("resume (paused → running) calls kubeOps.scaleDeployment(replicas=1), not helm.upsertInstance", async () => {
+    const snapCbs: Array<() => void> = [];
+    const helm = makeFakeHelm({
+      read: async () => ({
+        bender: {
+          enabled: true,
+          image: { repository: "repo", tag: "abc" },
+          gatewayId: "gw-bender",
+          replicas: 0,
+        },
+      }),
+    });
+    const kubeOps = makeFakeKubeOps({
+      readReplicas: async () => 0,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-bender",
+          instanceName: "bender",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      kubeOps,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log: vi.fn(),
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(kubeOps!.scaleDeployment).toHaveBeenCalledWith({
+      namespace: expect.any(String),
+      name: "octogee-gateway-bender",
+      replicas: 1,
+    });
+    expect(helm.upsertInstance).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("chart-shape change (image tag + replicas flip) still goes through helm.upsertInstance, NOT kubectl scale", async () => {
+    const snapCbs: Array<() => void> = [];
+    const helm = makeFakeHelm({
+      read: async () => ({
+        default: {
+          enabled: true,
+          image: { repository: "repo", tag: "old-tag" },
+          gatewayId: "gw-test",
+          replicas: 1,
+        },
+      }),
+    });
+    const kubeOps = makeFakeKubeOps({
+      readReplicas: async () => 1,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-test",
+          instanceName: "default",
+          imageRepository: "repo",
+          imageTag: "new-tag",
+          desiredStatus: "paused",
+          createdBy: "ci",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      kubeOps,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log: vi.fn(),
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+    expect(kubeOps!.scaleDeployment).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("reads live replicas from kube to compute actual.replicas (helm-stored value is overridden)", async () => {
+    const snapCbs: Array<() => void> = [];
+    const helm = makeFakeHelm({
+      read: async () => ({
+        default: {
+          enabled: true,
+          image: { repository: "repo", tag: "abc" },
+          gatewayId: "gw-test",
+          replicas: 1,
+        },
+      }),
+    });
+    const kubeOps = makeFakeKubeOps({
+      readReplicas: async () => 0,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-test",
+          instanceName: "default",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "paused",
+          createdBy: "ci",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      kubeOps,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log: vi.fn(),
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(kubeOps!.readDeployedReplicas).toHaveBeenCalledWith({
+      namespace: expect.any(String),
+      name: "octogee-gateway-default",
+    });
+    expect(helm.upsertInstance).not.toHaveBeenCalled();
+    expect(kubeOps!.scaleDeployment).not.toHaveBeenCalled();
+    stop();
+  });
+});

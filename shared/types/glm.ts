@@ -63,6 +63,7 @@ export type OperationKind =
   | "add-gateway"
   | "migrate-customer"
   | "retire-gateway"
+  | "restart-gateway"
   | "rollout"
   | "deprovision-customer";
 

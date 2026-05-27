@@ -4,6 +4,7 @@ import {
   buildInstancesMap,
   deriveFleetImageTag,
   diffInstancesMap,
+  isReplicasOnlyUpdate,
   type ReconcileChange,
 } from "../reconcile-plan";
 import type { GatewayDesiredState, HelmInstancesMap } from "../../../shared/types/glm";
@@ -502,5 +503,103 @@ describe("chart-drift comparison is caller-gated (issue #997 — PROD must not a
     const changes = diffInstancesMap(actual, desiredMap);
     expect(changes).toHaveLength(1);
     expect(changes[0].kind).toBe("update");
+  });
+});
+
+describe("isReplicasOnlyUpdate", () => {
+  const REPO2 = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+  const base = () => ({
+    enabled: true as const,
+    image: { repository: REPO2, tag: "abc" },
+    gatewayId: "gw-test",
+  });
+
+  it("returns true when only replicas differs (paused: 1 → 0)", () => {
+    const change: ReconcileChange = {
+      kind: "update",
+      instanceName: "default",
+      from: { ...base(), replicas: 1 },
+      to: { ...base(), replicas: 0 },
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(true);
+  });
+
+  it("returns true when only replicas differs (resume: 0 → 1)", () => {
+    const change: ReconcileChange = {
+      kind: "update",
+      instanceName: "default",
+      from: { ...base(), replicas: 0 },
+      to: { ...base(), replicas: 1 },
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(true);
+  });
+
+  it("returns false when replicas AND image tag differ (chart-shape change → helm)", () => {
+    const change: ReconcileChange = {
+      kind: "update",
+      instanceName: "default",
+      from: { ...base(), image: { repository: REPO2, tag: "abc" }, replicas: 1 },
+      to: { ...base(), image: { repository: REPO2, tag: "def" }, replicas: 0 },
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(false);
+  });
+
+  it("returns false when replicas AND sizingTier differ", () => {
+    const change: ReconcileChange = {
+      kind: "update",
+      instanceName: "default",
+      from: { ...base(), sizingTier: "cattle-light", replicas: 1 },
+      to: { ...base(), sizingTier: "operator", replicas: 0 },
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(false);
+  });
+
+  it("returns false when persistence differs (object diff)", () => {
+    const change: ReconcileChange = {
+      kind: "update",
+      instanceName: "bender",
+      from: { ...base(), persistence: { enabled: true, size: "20Gi" }, replicas: 1 },
+      to: { ...base(), persistence: { enabled: true, size: "40Gi" }, replicas: 0 },
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(false);
+  });
+
+  it("returns false on `create` kind", () => {
+    const change: ReconcileChange = {
+      kind: "create",
+      instanceName: "default",
+      to: { ...base(), replicas: 1 },
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(false);
+  });
+
+  it("returns false on `drift` kind", () => {
+    const change: ReconcileChange = {
+      kind: "drift",
+      instanceName: "default",
+      current: { ...base(), replicas: 0 },
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(false);
+  });
+
+  it("returns false when chartFingerprint differs", () => {
+    const change: ReconcileChange = {
+      kind: "update",
+      instanceName: "default",
+      from: { ...base(), chartFingerprint: "fp-old", replicas: 1 },
+      to: { ...base(), chartFingerprint: "fp-new", replicas: 0 },
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(false);
+  });
+
+  it("returns false when nothing actually differs (defensive — diffInstancesMap wouldn't emit this, but the predicate must be honest)", () => {
+    const inst = { ...base(), replicas: 1 };
+    const change: ReconcileChange = {
+      kind: "update",
+      instanceName: "default",
+      from: inst,
+      to: inst,
+    };
+    expect(isReplicasOnlyUpdate(change)).toBe(false);
   });
 });

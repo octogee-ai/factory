@@ -11,6 +11,7 @@ import {
   buildHelmTargetMap,
   buildInstancesMap,
   diffInstancesMap,
+  isReplicasOnlyUpdate,
   type ReconcileChange,
 } from "./reconcile-plan.js";
 import {
@@ -19,6 +20,11 @@ import {
   spawnHelm,
   type HelmRunner,
 } from "./helm-runner.js";
+import {
+  createKubeSubprocessRunner,
+  createLoggingKubeOps,
+  type KubeOps,
+} from "./lib/kube-ops.js";
 import {
   createAuthSecretEnsurer,
   defaultRandomTokenHex,
@@ -43,6 +49,7 @@ import {
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
+import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
 import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
@@ -101,22 +108,28 @@ const GATEWAY_EDGE_PORT = 3001;
 interface ControllerDeps {
   db: Firestore;
   helm: HelmRunner;
+  kubeOps?: KubeOps;
   handlers: OperationHandlers;
   log: (msg: string) => void;
 
 syncFleetIngress?: (
     gateways: ReadonlyArray<{ gatewayId: string; instanceName: string }>,
   ) => Promise<void>;
-  
+
   reconcileRetryMs?: number;
 
 chartFingerprint?: string;
+}
+
+function deploymentNameForInstance(instanceName: string): string {
+  return `octogee-gateway-${instanceName}`;
 }
 
 async function applyChanges(
   changes: ReconcileChange[],
   deps: ControllerDeps,
 ): Promise<void> {
+  const kubeOps = deps.kubeOps ?? createLoggingKubeOps(deps.log);
   for (const change of changes) {
     if (change.kind === "drift") {
 
@@ -126,7 +139,16 @@ await deps.helm.removeInstance({
       });
       continue;
     }
-    
+    if (isReplicasOnlyUpdate(change)) {
+      const replicas = change.to.replicas ?? 1;
+      await kubeOps.scaleDeployment({
+        namespace: NAMESPACE,
+        name: deploymentNameForInstance(change.instanceName),
+        replicas,
+      });
+      continue;
+    }
+
     await deps.helm.upsertInstance({
       namespace: NAMESPACE,
       instanceName: change.instanceName,
@@ -144,6 +166,32 @@ await deps.helm.removeInstance({
       chartFingerprint: deps.chartFingerprint,
     });
   }
+}
+
+async function readLiveReplicasInto(
+  actualMap: Record<string, { replicas?: number }>,
+  kubeOps: KubeOps,
+  log: (msg: string) => void,
+): Promise<void> {
+  const names = Object.keys(actualMap);
+  await Promise.all(
+    names.map(async (instanceName) => {
+      try {
+        const live = await kubeOps.readDeployedReplicas({
+          namespace: NAMESPACE,
+          name: deploymentNameForInstance(instanceName),
+        });
+        if (live !== null) {
+          actualMap[instanceName] = { ...actualMap[instanceName], replicas: live };
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(
+          `[glm-controller] ⚠ kube readReplicas failed for ${instanceName}: ${msg} — keeping helm-stored value`,
+        );
+      }
+    }),
+  );
 }
 
 async function readMountedByGatewayId(
@@ -187,6 +235,8 @@ export function startReconciler(deps: ControllerDeps): () => void {
       const actualMap = await deps.helm.readDeployedInstances({
         namespace: NAMESPACE,
       });
+      const kubeOpsForRead = deps.kubeOps ?? createLoggingKubeOps(deps.log);
+      await readLiveReplicasInto(actualMap, kubeOpsForRead, deps.log);
       const mountedByGatewayId = await readMountedByGatewayId(deps.db);
       const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
       const changes = diffInstancesMap(actualMap, desiredMap, {
@@ -372,6 +422,10 @@ async function main(): Promise<void> {
           log,
           ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
         });
+  const kubeOps =
+    process.env.KUBE_OPS_MODE === "stub"
+      ? createLoggingKubeOps(log)
+      : createKubeSubprocessRunner({ runKubectl, log });
   const syncFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
     syncFleetIngressPaths({
       runKubectl,
@@ -409,13 +463,14 @@ const handlerSyncFleetIngress = async () => {
     await syncAllFleetIngresses(gateways);
   };
 
-  const handlers = await buildHandlers(db, log, helm, handlerSyncFleetIngress);
+  const handlers = await buildHandlers(db, log, helm, kubeOps, handlerSyncFleetIngress);
 
   const chartFingerprint = computeChartFingerprint(GATEWAY_CHART);
 
   const deps: ControllerDeps = {
     db,
     helm,
+    kubeOps,
     handlers,
     log,
     syncFleetIngress: syncAllFleetIngresses,
@@ -589,6 +644,7 @@ async function buildHandlers(
   db: Firestore,
   logFn: (msg: string) => void,
   helm: HelmRunner,
+  kubeOps: KubeOps,
   syncFleetIngress: () => Promise<void>,
 ): Promise<OperationHandlers> {
   const secret = process.env.FLEET_CONTROLLER_SECRET;
@@ -742,10 +798,18 @@ profile: profile === "standard" ? FieldValue.delete() : profile,
 
   const deprovisionCustomer = buildDeprovisionCustomerHandler(db, secret, logFn);
 
+  const restartGateway = createRestartGatewayHandler({
+    kubeOps,
+    namespace: NAMESPACE,
+    now: () => Date.now(),
+    log: logFn,
+  });
+
   return {
     "add-gateway": addGateway,
     "migrate-customer": migrateCustomer,
     "retire-gateway": retireGateway,
+    "restart-gateway": restartGateway,
     rollout,
     "deprovision-customer": deprovisionCustomer,
   };

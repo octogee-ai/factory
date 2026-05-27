@@ -249,6 +249,7 @@ const OP_KINDS = new Set([
   "add-gateway",
   "migrate-customer",
   "retire-gateway",
+  "restart-gateway",
   "rollout",
   "deprovision-customer",
 ]);
@@ -294,6 +295,7 @@ interface NewOperationInput {
     | "add-gateway"
     | "migrate-customer"
     | "retire-gateway"
+    | "restart-gateway"
     | "rollout"
     | "deprovision-customer";
   createdBy: string;
@@ -1198,6 +1200,76 @@ const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
           gatewayId: id,
         });
         await batch.commit();
+        res.status(202).json({ gatewayId: id, operationId });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  router.post(
+    "/gateways/:id/restart",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const id = req.params.id as string;
+        const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
+        const snap = await ref.get();
+        if (!snap.exists) {
+          res
+            .status(404)
+            .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+          return;
+        }
+        const data = snap.data() as { instanceName?: string } | undefined;
+        const instanceName = data?.instanceName;
+        if (typeof instanceName !== "string" || instanceName.length === 0) {
+          res.status(500).json({
+            error: "gateway missing instanceName — corrupt glmGateways doc",
+            gatewayId: id,
+          });
+          return;
+        }
+
+        const inFlightJobId = await findInFlightJobId(db, id);
+        if (inFlightJobId) {
+          res.status(409).json({
+            error:
+              "gateway has an in-flight restore job; let it finish before restarting",
+            gatewayId: id,
+            inFlightJobId,
+          });
+          return;
+        }
+
+        const pendingOps = await db
+          .collection(GLM_OPERATIONS_COLLECTION)
+          .where("status", "in", ["pending", "running"])
+          .get();
+        const conflicting = pendingOps.docs.find((d) => {
+          const opData = d.data() as
+            | { input?: { gatewayId?: string } }
+            | undefined;
+          return opData?.input?.gatewayId === id;
+        });
+        if (conflicting) {
+          res.status(409).json({
+            error:
+              "another operation is already pending or running for this gateway",
+            gatewayId: id,
+            operationId: conflicting.id,
+            kind:
+              (conflicting.data() as { kind?: string } | undefined)?.kind ??
+              null,
+          });
+          return;
+        }
+
+        const actor = req as ActorRequest;
+        const operationId = await createOperation(db, {
+          kind: "restart-gateway",
+          createdBy: actor.uid ?? "unknown",
+          input: { gatewayId: id, instanceName },
+        });
         res.status(202).json({ gatewayId: id, operationId });
       } catch (e) {
         next(e);

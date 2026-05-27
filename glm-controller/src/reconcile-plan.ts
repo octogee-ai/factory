@@ -133,6 +133,29 @@ function instanceEqual(
   return true;
 }
 
+export function isReplicasOnlyUpdate(c: ReconcileChange): boolean {
+  if (c.kind !== "update") return false;
+  if (c.from.replicas === c.to.replicas) return false;
+  if (c.from.enabled !== c.to.enabled) return false;
+  if (c.from.image.repository !== c.to.image.repository) return false;
+  if (c.from.image.tag !== c.to.image.tag) return false;
+  if (c.from.gatewayId !== c.to.gatewayId) return false;
+  if (c.from.serviceAccountName !== c.to.serviceAccountName) return false;
+  if (c.from.profile !== c.to.profile) return false;
+  if (c.from.sizingTier !== c.to.sizingTier) return false;
+  if (c.from.chartFingerprint !== c.to.chartFingerprint) return false;
+  if (
+    stableStringify(c.from.gatewayContainerSecurityContext ?? null) !==
+    stableStringify(c.to.gatewayContainerSecurityContext ?? null)
+  ) {
+    return false;
+  }
+  if (stableStringify(c.from.persistence ?? null) !== stableStringify(c.to.persistence ?? null)) {
+    return false;
+  }
+  return true;
+}
+
 function stableStringify(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
