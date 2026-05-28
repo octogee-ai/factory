@@ -10,21 +10,21 @@ import { TIER_PRESETS, SIZING_TIERS } from "./sizing.js";
 
 describe("estimateGatewayMonthlyCost", () => {
   it("computes compute cost from request CPU + memory at c2d Autopilot rates", () => {
-    // cattle-light: 4 vCPU / 12 GiB
-    const result = estimateGatewayMonthlyCost("cattle-light");
+    // small: 4 vCPU / 16 GiB
+    const result = estimateGatewayMonthlyCost("small");
     const expected = Math.round(
       4 * C2D_AUTOPILOT_VCPU_USD_PER_HR * HOURS_PER_MONTH +
-        12 * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH,
+        16 * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH,
     );
     expect(result.computeUsd).toBe(expected);
   });
 
   it("derives perBuilderAtTarget and perBuilderAtTypical from raw compute and tier capacity", () => {
-    const preset = TIER_PRESETS["cattle-light"];
+    const preset = TIER_PRESETS["small"];
     const rawCompute =
       4 * C2D_AUTOPILOT_VCPU_USD_PER_HR * HOURS_PER_MONTH +
-      12 * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH;
-    const result = estimateGatewayMonthlyCost("cattle-light");
+      16 * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH;
+    const result = estimateGatewayMonthlyCost("small");
     expect(result.perBuilderAtTarget).toBe(Math.round(rawCompute / preset.capacity.targetActiveBuilders));
     expect(result.perBuilderAtTypical).toBe(Math.round(rawCompute / preset.capacity.typicalBuilders));
   });
@@ -47,45 +47,45 @@ describe("estimateGatewayMonthlyCost", () => {
     }
   });
 
-  it("operator-plus is the most expensive tier", () => {
-    const top = estimateGatewayMonthlyCost("operator-plus").computeUsd;
+  it("2xlarge is the most expensive tier", () => {
+    const top = estimateGatewayMonthlyCost("2xlarge").computeUsd;
     for (const tier of SIZING_TIERS) {
-      if (tier === "operator-plus") continue;
+      if (tier === "2xlarge") continue;
       expect(top).toBeGreaterThanOrEqual(estimateGatewayMonthlyCost(tier).computeUsd);
     }
   });
 
-  it("cattle-heavy lands in a sane range for the current PROD floor (≤ $1000/mo)", () => {
-    // cattle-heavy = 12 vCPU / 32 GiB, the current PROD pod floor.
-    // Anchor sanity: should be well under $1000/mo at c2d Autopilot rates.
-    const c = estimateGatewayMonthlyCost("cattle-heavy").computeUsd;
-    expect(c).toBeGreaterThan(300);
-    expect(c).toBeLessThan(1000);
+  it("small (the default tier) lands in a sane low range for F&F", () => {
+    // small = 4 vCPU / 16 GiB, the default tier most gateways start on.
+    // Anchor sanity: a cheap F&F floor, comfortably under $300/mo.
+    const c = estimateGatewayMonthlyCost("small").computeUsd;
+    expect(c).toBeGreaterThan(100);
+    expect(c).toBeLessThan(300);
   });
 });
 
 describe("estimateFleetMonthlyCost", () => {
   it("sums per-pod compute across all input tiers", () => {
-    const result = estimateFleetMonthlyCost(["cattle-heavy", "operator"]);
+    const result = estimateFleetMonthlyCost(["medium", "large"]);
     expect(result.totalUsd).toBe(
-      estimateGatewayMonthlyCost("cattle-heavy").computeUsd +
-        estimateGatewayMonthlyCost("operator").computeUsd,
+      estimateGatewayMonthlyCost("medium").computeUsd +
+        estimateGatewayMonthlyCost("large").computeUsd,
     );
   });
 
   it("returns per-tier breakdown counts and subtotals", () => {
     const result = estimateFleetMonthlyCost([
-      "cattle-heavy",
-      "cattle-heavy",
-      "operator",
+      "medium",
+      "medium",
+      "large",
     ]);
-    expect(result.byTier["cattle-heavy"]).toEqual({
+    expect(result.byTier["medium"]).toEqual({
       count: 2,
-      subtotalUsd: 2 * estimateGatewayMonthlyCost("cattle-heavy").computeUsd,
+      subtotalUsd: 2 * estimateGatewayMonthlyCost("medium").computeUsd,
     });
-    expect(result.byTier.operator).toEqual({
+    expect(result.byTier.large).toEqual({
       count: 1,
-      subtotalUsd: estimateGatewayMonthlyCost("operator").computeUsd,
+      subtotalUsd: estimateGatewayMonthlyCost("large").computeUsd,
     });
   });
 

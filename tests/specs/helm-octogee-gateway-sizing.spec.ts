@@ -102,45 +102,45 @@ describe("helm/octogee-gateway/ — sizing tier explicit override", () => {
   }
 
   it("explicit sizingTier beats profile-default", () => {
-    // operator profile would default to operator-tier; force cattle-shared.
-    const out = helmTemplate({ profile: "operator", sizingTier: "cattle-shared" });
-    expectResourcesMatchTier(out, "cattle-shared");
+    // both profiles default to small; force medium to prove explicit wins.
+    const out = helmTemplate({ profile: "operator", sizingTier: "medium" });
+    expectResourcesMatchTier(out, "medium");
   });
 });
 
 describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () => {
-  it("operator profile without sizingTier renders operator-tier resources", () => {
+  it("operator profile without sizingTier renders small (profile default)", () => {
     const out = helmTemplate({ profile: "operator" });
-    expectResourcesMatchTier(out, "operator");
+    expectResourcesMatchTier(out, "small");
   });
 
-  it("standard profile without sizingTier renders cattle-light resources", () => {
+  it("standard profile without sizingTier renders small resources", () => {
     const out = helmTemplate({ profile: "standard" });
-    expectResourcesMatchTier(out, "cattle-light");
+    expectResourcesMatchTier(out, "small");
   });
 
-  it("empty profile without sizingTier falls back to cattle-light", () => {
+  it("empty profile without sizingTier falls back to small", () => {
     const out = helmTemplate({});
-    expectResourcesMatchTier(out, "cattle-light");
+    expectResourcesMatchTier(out, "small");
   });
 
   it("operator-profile pod label is the resolved tier, not the bare profile string", () => {
     const out = helmTemplate({ profile: "operator" });
     const c = gatewayContainer(out);
-    expect(c.podLabels.tier).toBe("operator");
+    expect(c.podLabels.tier).toBe("small");
   });
 
-  it("standard-profile pod label resolves to cattle-light", () => {
+  it("standard-profile pod label resolves to small", () => {
     const out = helmTemplate({ profile: "standard" });
     const c = gatewayContainer(out);
-    expect(c.podLabels.tier).toBe("cattle-light");
+    expect(c.podLabels.tier).toBe("small");
   });
 });
 
 describe("helm/octogee-gateway/ — Phase D tier label on PVC", () => {
   it("stamps the resolved tier on PersistentVolumeClaim when persistence is enabled (storage chargeback hand-off)", () => {
     const out = helmTemplate({
-      sizingTier: "operator",
+      sizingTier: "large",
       "persistence.enabled": "true",
     });
     const docs = parseAllDocuments(out);
@@ -148,7 +148,7 @@ describe("helm/octogee-gateway/ — Phase D tier label on PVC", () => {
       .map((d) => d.toJS() as { kind?: string; metadata?: { name?: string; labels?: Record<string, string> } })
       .find((d) => d.kind === "PersistentVolumeClaim" && d.metadata?.name === "octogee-gateway-default-data");
     expect(pvc, "expected PVC to render when persistence.enabled=true").toBeDefined();
-    expect(pvc!.metadata!.labels!.tier).toBe("operator");
+    expect(pvc!.metadata!.labels!.tier).toBe("large");
   });
 
   it("PVC tier label matches the gateway pod label (same effectiveTier source)", () => {

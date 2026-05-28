@@ -9,13 +9,14 @@ import {
 import { GATEWAY_PROFILES } from './glm.js';
 
 describe('sizing-tier SSOT', () => {
-  it('declares exactly five tiers in operator-facing order', () => {
+  it('declares exactly six tiers in ascending size order', () => {
     expect(SIZING_TIERS).toEqual([
-      'cattle-light',
-      'cattle-shared',
-      'cattle-heavy',
-      'operator',
-      'operator-plus',
+      'nano',
+      'small',
+      'medium',
+      'large',
+      'xlarge',
+      '2xlarge',
     ]);
   });
 
@@ -53,34 +54,34 @@ describe('sizing-tier SSOT', () => {
     }
   });
 
-  it('operator profile defaults to operator tier; standard to cattle-light', () => {
-    expect(PROFILE_DEFAULT_TIER.operator).toBe('operator');
-    expect(PROFILE_DEFAULT_TIER.standard).toBe('cattle-light');
+  it('both profiles default to small', () => {
+    expect(PROFILE_DEFAULT_TIER.operator).toBe('small');
+    expect(PROFILE_DEFAULT_TIER.standard).toBe('small');
   });
 });
 
 describe('resolveSizingTier', () => {
   it('returns the explicit tier when set, regardless of profile', () => {
-    const result = resolveSizingTier({ sizingTier: 'cattle-heavy', profile: 'operator' });
-    expect(result.tier).toBe('cattle-heavy');
+    const result = resolveSizingTier({ sizingTier: 'medium', profile: 'operator' });
+    expect(result.tier).toBe('medium');
     expect(result.resolvedFrom).toBe('explicit');
   });
 
-  it('falls back to the profile default when sizingTier is missing', () => {
+  it('falls back to the profile default (small) when sizingTier is missing', () => {
     const result = resolveSizingTier({ sizingTier: undefined, profile: 'operator' });
-    expect(result.tier).toBe('operator');
+    expect(result.tier).toBe('small');
     expect(result.resolvedFrom).toBe('profile-default');
   });
 
-  it('falls back to cattle-light when both sizingTier and profile are missing', () => {
+  it('falls back to small when both sizingTier and profile are missing', () => {
     const result = resolveSizingTier({ sizingTier: undefined, profile: undefined });
-    expect(result.tier).toBe('cattle-light');
+    expect(result.tier).toBe('small');
     expect(result.resolvedFrom).toBe('profile-default');
   });
 
   it('narrows to SizingTier (compile-time guard)', () => {
-    const result = resolveSizingTier({ sizingTier: 'operator-plus', profile: undefined });
+    const result = resolveSizingTier({ sizingTier: '2xlarge', profile: undefined });
     const tier: SizingTier = result.tier;
-    expect(tier).toBe('operator-plus');
+    expect(tier).toBe('2xlarge');
   });
 });

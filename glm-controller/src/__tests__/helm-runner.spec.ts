@@ -489,7 +489,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageTag: "3280519", // digits only — would be coerced to number by plain --set
       chartPath: "/charts/octogee-gateway",
       profile: "operator",
-      sizingTier: "operator",
+      sizingTier: "large",
       replicas: 1,
     });
 
@@ -503,7 +503,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(stringPair("gatewayId")).toBe("gatewayId=gw-bender");
     expect(stringPair("instanceName")).toBe("instanceName=bender");
     expect(stringPair("profile")).toBe("profile=operator");
-    expect(stringPair("sizingTier")).toBe("sizingTier=operator");
+    expect(stringPair("sizingTier")).toBe("sizingTier=large");
     // replicas stays on --set because it's number-typed.
     const replicasIdx = args.findIndex((a, i) => a === "--set" && args[i + 1] === "replicas=1");
     expect(replicasIdx).toBeGreaterThanOrEqual(0);
@@ -522,10 +522,10 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
-      sizingTier: "cattle-heavy",
+      sizingTier: "medium",
     });
 
-    expect(calls[0]).toContain("sizingTier=cattle-heavy");
+    expect(calls[0]).toContain("sizingTier=medium");
   });
 
   it("omits --set sizingTier when undefined (chart falls back to profile default)", async () => {

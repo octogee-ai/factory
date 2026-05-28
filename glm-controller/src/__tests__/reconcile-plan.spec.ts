@@ -212,8 +212,8 @@ describe("diffInstancesMap", () => {
   });
 
   it("reports an update when sizingTier flips (change-tier path)", () => {
-    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "cattle-heavy" } };
-    const desired: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "operator" } };
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "medium" } };
+    const desired: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "large" } };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
       { kind: "update", instanceName: "default", from: actual.default, to: desired.default },
@@ -221,8 +221,8 @@ describe("diffInstancesMap", () => {
   });
 
   it("reports exactly one update when image, sizingTier, and replicas all differ (no double-counting)", () => {
-    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "cattle-heavy", replicas: 1 } };
-    const desired: HelmInstancesMap = { default: { ...baseInstance("def"), sizingTier: "operator", replicas: 0 } };
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "medium", replicas: 1 } };
+    const desired: HelmInstancesMap = { default: { ...baseInstance("def"), sizingTier: "large", replicas: 0 } };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ kind: "update", instanceName: "default" });
@@ -548,8 +548,8 @@ describe("isReplicasOnlyUpdate", () => {
     const change: ReconcileChange = {
       kind: "update",
       instanceName: "default",
-      from: { ...base(), sizingTier: "cattle-light", replicas: 1 },
-      to: { ...base(), sizingTier: "operator", replicas: 0 },
+      from: { ...base(), sizingTier: "small", replicas: 1 },
+      to: { ...base(), sizingTier: "large", replicas: 0 },
     };
     expect(isReplicasOnlyUpdate(change)).toBe(false);
   });

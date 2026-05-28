@@ -34,7 +34,7 @@
     },
     "sizingTier": {
       "type": "string",
-      "enum": ["", "cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"],
+      "enum": ["", "nano", "small", "medium", "large", "xlarge", "2xlarge"],
       "description": "Per-pod sizing tier. Empty = fall back to profileDefaults[profile]."
     },
     "profileDefaults": {
@@ -42,15 +42,15 @@
       "description": "Profile → default tier mapping. Used when sizingTier is unset. `standard` is required — the effectiveTier helper falls back to it as the last-resort default.",
       "required": ["standard"],
       "properties": {
-        "standard": { "type": "string", "enum": ["cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"] },
-        "operator": { "type": "string", "enum": ["cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"] }
+        "standard": { "type": "string", "enum": ["nano", "small", "medium", "large", "xlarge", "2xlarge"] },
+        "operator": { "type": "string", "enum": ["nano", "small", "medium", "large", "xlarge", "2xlarge"] }
       },
       "additionalProperties": { "type": "string" }
     },
     "tiers": {
       "type": "object",
-      "description": "Tier preset matrix — resources + Node runtime tuning per tier. Mirrored in shared/types/sizing.ts. All five tier keys are required so a typo or trim doesn't leave effectiveTier pointing at a missing preset.",
-      "required": ["cattle-light", "cattle-shared", "cattle-heavy", "operator", "operator-plus"],
+      "description": "Tier preset matrix — resources + Node runtime tuning per tier. Mirrored in shared/types/sizing.ts. All six tier keys are required so a typo or trim doesn't leave effectiveTier pointing at a missing preset.",
+      "required": ["nano", "small", "medium", "large", "xlarge", "2xlarge"],
       "additionalProperties": {
         "type": "object",
         "required": ["resources", "nodejs"],

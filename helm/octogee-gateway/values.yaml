@@ -130,79 +130,92 @@ sizingTier: ""
 
 # Profile → default tier mapping. Used when sizingTier is unset.
 profileDefaults:
-  standard: "cattle-light"
-  operator: "operator"
+  standard: "small"
+  operator: "small"
 
 # Tier presets — the canonical sizing matrix. Mirrored in
 # shared/types/sizing.ts (TS SSOT for cost-estimator + admin API);
 # tests/specs/helm-octogee-gateway-sizing.spec.ts asserts the two stay
 # in lockstep. Edit both sides together.
 tiers:
-  cattle-light:
+  nano:
+    resources:
+      requests:
+        cpu: "2000m"
+        memory: "8Gi"
+        ephemeral-storage: "5Gi"
+      limits:
+        cpu: "2000m"
+        memory: "8Gi"
+        ephemeral-storage: "10Gi"
+    nodejs:
+      uvThreadpoolSize: "4"
+      maxOldSpaceSizeMb: "4096"
+  small:
     resources:
       requests:
         cpu: "4000m"
-        memory: "12Gi"
+        memory: "16Gi"
         ephemeral-storage: "5Gi"
       limits:
-        cpu: "6000m"
+        cpu: "4000m"
         memory: "16Gi"
         ephemeral-storage: "10Gi"
     nodejs:
-      uvThreadpoolSize: "8"
-      maxOldSpaceSizeMb: "8192"
-  cattle-shared:
+      uvThreadpoolSize: "6"
+      maxOldSpaceSizeMb: "10240"
+  medium:
     resources:
       requests:
         cpu: "8000m"
-        memory: "20Gi"
-        ephemeral-storage: "5Gi"
-      limits:
-        cpu: "12000m"
-        memory: "28Gi"
-        ephemeral-storage: "10Gi"
-    nodejs:
-      uvThreadpoolSize: "12"
-      maxOldSpaceSizeMb: "14336"
-  cattle-heavy:
-    resources:
-      requests:
-        cpu: "12000m"
         memory: "32Gi"
         ephemeral-storage: "5Gi"
       limits:
-        cpu: "16000m"
-        memory: "48Gi"
+        cpu: "8000m"
+        memory: "32Gi"
         ephemeral-storage: "10Gi"
     nodejs:
-      uvThreadpoolSize: "16"
-      maxOldSpaceSizeMb: "22528"
-  operator:
+      uvThreadpoolSize: "8"
+      maxOldSpaceSizeMb: "20480"
+  large:
     resources:
       requests:
         cpu: "16000m"
-        memory: "48Gi"
+        memory: "64Gi"
         ephemeral-storage: "5Gi"
       limits:
-        cpu: "24000m"
+        cpu: "16000m"
         memory: "64Gi"
         ephemeral-storage: "10Gi"
     nodejs:
-      uvThreadpoolSize: "16"
-      maxOldSpaceSizeMb: "33792"
-  operator-plus:
+      uvThreadpoolSize: "12"
+      maxOldSpaceSizeMb: "40960"
+  xlarge:
     resources:
       requests:
-        cpu: "24000m"
-        memory: "64Gi"
+        cpu: "32000m"
+        memory: "128Gi"
         ephemeral-storage: "5Gi"
       limits:
         cpu: "32000m"
-        memory: "96Gi"
+        memory: "128Gi"
         ephemeral-storage: "10Gi"
     nodejs:
-      uvThreadpoolSize: "24"
-      maxOldSpaceSizeMb: "45056"
+      uvThreadpoolSize: "16"
+      maxOldSpaceSizeMb: "81920"
+  "2xlarge":
+    resources:
+      requests:
+        cpu: "56000m"
+        memory: "224Gi"
+        ephemeral-storage: "5Gi"
+      limits:
+        cpu: "56000m"
+        memory: "224Gi"
+        ephemeral-storage: "10Gi"
+    nodejs:
+      uvThreadpoolSize: "16"
+      maxOldSpaceSizeMb: "147456"
 
 probes:
   # Startup uses an HTTP GET against `/healthz` — proves openclaw is

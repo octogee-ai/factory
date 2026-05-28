@@ -1,11 +1,12 @@
 import type { GatewayProfile } from './glm.js';
 
 export const SIZING_TIERS = [
-  'cattle-light',
-  'cattle-shared',
-  'cattle-heavy',
-  'operator',
-  'operator-plus',
+  'nano',
+  'small',
+  'medium',
+  'large',
+  'xlarge',
+  '2xlarge',
 ] as const;
 
 export type SizingTier = (typeof SIZING_TIERS)[number];
@@ -33,59 +34,68 @@ export interface SizingTierPreset {
 }
 
 export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
-  'cattle-light': {
-    description: 'F&F light-agent users (memory, cron, occasional codex)',
+  nano: {
+    description: 'F&F floor — light shared use',
     resources: {
-      requests: { cpu: '4000m', memory: '12Gi', 'ephemeral-storage': '5Gi' },
-      limits: { cpu: '6000m', memory: '16Gi', 'ephemeral-storage': '10Gi' },
+      requests: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '5Gi' },
+      limits: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '10Gi' },
     },
-    nodejs: { uvThreadpoolSize: '8', maxOldSpaceSizeMb: '8192' },
-    capacity: { targetActiveBuilders: 30, typicalBuilders: 50 },
+    nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '4096' },
+    capacity: { targetActiveBuilders: 2, typicalBuilders: 3 },
   },
-  'cattle-shared': {
-    description: 'Mixed-tier F&F with occasional BYOS codex',
+  small: {
+    description: 'Default — small teams and shared F&F',
     resources: {
-      requests: { cpu: '8000m', memory: '20Gi', 'ephemeral-storage': '5Gi' },
-      limits: { cpu: '12000m', memory: '28Gi', 'ephemeral-storage': '10Gi' },
+      requests: { cpu: '4000m', memory: '16Gi', 'ephemeral-storage': '5Gi' },
+      limits: { cpu: '4000m', memory: '16Gi', 'ephemeral-storage': '10Gi' },
     },
-    nodejs: { uvThreadpoolSize: '12', maxOldSpaceSizeMb: '14336' },
-    capacity: { targetActiveBuilders: 15, typicalBuilders: 25 },
+    nodejs: { uvThreadpoolSize: '6', maxOldSpaceSizeMb: '10240' },
+    capacity: { targetActiveBuilders: 4, typicalBuilders: 6 },
   },
-  'cattle-heavy': {
-    description: 'F&F builders with always-on BYOS codex per user',
+  medium: {
+    description: 'Mac-Mini class — solo operator or busy shared',
     resources: {
-      requests: { cpu: '12000m', memory: '32Gi', 'ephemeral-storage': '5Gi' },
-      limits: { cpu: '16000m', memory: '48Gi', 'ephemeral-storage': '10Gi' },
+      requests: { cpu: '8000m', memory: '32Gi', 'ephemeral-storage': '5Gi' },
+      limits: { cpu: '8000m', memory: '32Gi', 'ephemeral-storage': '10Gi' },
     },
-    nodejs: { uvThreadpoolSize: '16', maxOldSpaceSizeMb: '22528' },
-    capacity: { targetActiveBuilders: 10, typicalBuilders: 15 },
+    nodejs: { uvThreadpoolSize: '8', maxOldSpaceSizeMb: '20480' },
+    capacity: { targetActiveBuilders: 8, typicalBuilders: 12 },
   },
-  operator: {
-    description: 'Dedicated to one Builder (Bender-class, gw-jack, etc.)',
+  large: {
+    description: 'Mac-Studio class — dedicated operator',
     resources: {
-      requests: { cpu: '16000m', memory: '48Gi', 'ephemeral-storage': '5Gi' },
-      limits: { cpu: '24000m', memory: '64Gi', 'ephemeral-storage': '10Gi' },
+      requests: { cpu: '16000m', memory: '64Gi', 'ephemeral-storage': '5Gi' },
+      limits: { cpu: '16000m', memory: '64Gi', 'ephemeral-storage': '10Gi' },
     },
-    nodejs: { uvThreadpoolSize: '16', maxOldSpaceSizeMb: '33792' },
-    capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },
+    nodejs: { uvThreadpoolSize: '12', maxOldSpaceSizeMb: '40960' },
+    capacity: { targetActiveBuilders: 16, typicalBuilders: 24 },
   },
-  'operator-plus': {
-    description: 'Heavy operator (multi-codex, MCP-heavy, local LLM, etc.)',
+  xlarge: {
+    description: 'Heavy operator — multi-codex / MCP-heavy',
     resources: {
-      requests: { cpu: '24000m', memory: '64Gi', 'ephemeral-storage': '5Gi' },
-      limits: { cpu: '32000m', memory: '96Gi', 'ephemeral-storage': '10Gi' },
+      requests: { cpu: '32000m', memory: '128Gi', 'ephemeral-storage': '5Gi' },
+      limits: { cpu: '32000m', memory: '128Gi', 'ephemeral-storage': '10Gi' },
     },
-    nodejs: { uvThreadpoolSize: '24', maxOldSpaceSizeMb: '45056' },
-    capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },
+    nodejs: { uvThreadpoolSize: '16', maxOldSpaceSizeMb: '81920' },
+    capacity: { targetActiveBuilders: 30, typicalBuilders: 45 },
+  },
+  '2xlarge': {
+    description: 'Max — rarely needed, headroom ceiling',
+    resources: {
+      requests: { cpu: '56000m', memory: '224Gi', 'ephemeral-storage': '5Gi' },
+      limits: { cpu: '56000m', memory: '224Gi', 'ephemeral-storage': '10Gi' },
+    },
+    nodejs: { uvThreadpoolSize: '16', maxOldSpaceSizeMb: '147456' },
+    capacity: { targetActiveBuilders: 50, typicalBuilders: 80 },
   },
 };
 
 export const PROFILE_DEFAULT_TIER: Record<GatewayProfile, SizingTier> = {
-  standard: 'cattle-light',
-  operator: 'operator',
+  standard: 'small',
+  operator: 'small',
 };
 
-export const FALLBACK_DEFAULT_TIER: SizingTier = 'cattle-light';
+export const FALLBACK_DEFAULT_TIER: SizingTier = 'small';
 
 export type TierResolvedFrom = 'explicit' | 'profile-default';
 
