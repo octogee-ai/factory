@@ -395,6 +395,28 @@ if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
   ) &
 fi
 
+# ── Start builder-shell tmux reconciler (operator profile only) ────────────
+# Per docs/specs/SHELL-RECONNECT-DURABILITY-SPEC.md. Flips Firestore shell
+# docs to `dead` once their tmux session is gone (process exit, or a pod
+# roll took the in-memory tmux server with it), so the sidebar tells the
+# truth and a click can't silently resurrect a fresh empty session. The
+# boot tick runs immediately — catching a rolled pod before the owner can
+# re-attach — then it sweeps every SHELL_RECONCILE_INTERVAL_MS. Operator
+# only: cattle gateways own no shells. Co-located with the PTY server so it
+# reads the same in-pod tmux server.
+if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
+  (
+    while true; do
+      log "Starting builder-shell reconciler..."
+      /octogee/scripts/node_modules/.bin/tsx \
+        /octogee/scripts/entrypoints/reconcile-shells-runner.ts \
+        || true
+      log "Builder-shell reconciler exited — restarting in 30s..."
+      sleep 30
+    done
+  ) &
+fi
+
 # ── Start BYO-sub credential sync-back watcher (observe-only) ───────────────
 (
   while true; do
