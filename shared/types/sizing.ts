@@ -11,6 +11,15 @@ export const SIZING_TIERS = [
 
 export type SizingTier = (typeof SIZING_TIERS)[number];
 
+// Runtime guard for tiers sourced from outside the type system (Firestore
+// desired state, persisted helm values). A stale pre-rename tier must read as
+// "not a tier" so callers fall back to the profile default rather than
+// forwarding an unknown value to the chart — which rejects it and loops the
+// reconciler.
+export function isSizingTier(value: unknown): value is SizingTier {
+  return typeof value === 'string' && (SIZING_TIERS as readonly string[]).includes(value);
+}
+
 export interface TierResources {
   requests: { cpu: string; memory: string; 'ephemeral-storage'?: string };
   limits: { cpu: string; memory: string; 'ephemeral-storage'?: string };

@@ -8,6 +8,7 @@ import {
   type ReconcileChange,
 } from "../reconcile-plan";
 import type { GatewayDesiredState, HelmInstancesMap } from "../../../shared/types/glm";
+import type { SizingTier } from "../../../shared/types/sizing";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 
@@ -22,6 +23,31 @@ function mkDesired(overrides: Partial<GatewayDesiredState>): GatewayDesiredState
     ...overrides,
   };
 }
+
+describe("sizingTier transition safety (stale Firestore values)", () => {
+  // A pre-rename tier like "operator" can still sit in glmGateways desired
+  // state. The actual-state reader (readPersonalKnobs) drops unknown tiers, so
+  // forwarding a stale value here would get schema-rejected by the chart and
+  // the gateway would diff + retry forever. Both sides must treat an unknown
+  // tier as unset → profile default.
+  const STALE = "operator" as unknown as SizingTier;
+
+  it("buildInstancesMap omits a stale/legacy sizingTier", () => {
+    const map = buildInstancesMap([mkDesired({ sizingTier: STALE })]);
+    expect(map.default.sizingTier).toBeUndefined();
+  });
+
+  it("still forwards a valid sizingTier", () => {
+    const map = buildInstancesMap([mkDesired({ sizingTier: "large" })]);
+    expect(map.default.sizingTier).toBe("large");
+  });
+
+  it("no perpetual update when desired holds a stale tier that actual already dropped", () => {
+    const actual = buildInstancesMap([mkDesired({})]);
+    const desired = buildHelmTargetMap([mkDesired({ sizingTier: STALE })], actual);
+    expect(diffInstancesMap(actual, desired)).toEqual([]);
+  });
+});
 
 describe("buildInstancesMap", () => {
   it("renders one instance entry per `running` desired-state doc", () => {

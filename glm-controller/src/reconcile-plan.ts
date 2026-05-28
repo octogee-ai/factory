@@ -4,6 +4,7 @@ import type {
   HelmInstancesMap,
 } from "../../shared/types/glm.js";
 import { resolveGatewayImageRepository } from "./gateway-profiles.js";
+import { isSizingTier } from "../../shared/types/sizing.js";
 
 export type ReconcileChange =
   | { kind: "create"; instanceName: string; to: HelmInstanceValue }
@@ -38,7 +39,7 @@ export function buildInstancesMap(
         : {}),
       ...(d.persistence ? { persistence: d.persistence } : {}),
       ...(d.profile ? { profile: d.profile } : {}),
-      ...(d.sizingTier ? { sizingTier: d.sizingTier } : {}),
+      ...(isSizingTier(d.sizingTier) ? { sizingTier: d.sizingTier } : {}),
     };
   }
   return out;
@@ -72,7 +73,7 @@ if (mounted === undefined || mounted.length === 0) {
         : {}),
       ...(d.persistence ? { persistence: d.persistence } : {}),
       ...(d.profile ? { profile: d.profile } : {}),
-      ...(d.sizingTier ? { sizingTier: d.sizingTier } : {}),
+      ...(isSizingTier(d.sizingTier) ? { sizingTier: d.sizingTier } : {}),
     };
   }
   return out;
