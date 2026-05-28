@@ -74,7 +74,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # ── ACP coding agents (Claude Code + Codex) ──────────────────────────────────
 # Pre-installed so they're available for ACP runtime sessions without
 # per-boot npm install delays or network dependency.
-RUN npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -50
+# Refresh stamp: bump this to force a standard-base refresh of unpinned
+# ACP CLIs without adding new packages to cattle gateways.
+ARG ACP_TOOLCHAIN_REFRESH=2026-05-28
+RUN echo "ACP toolchain refresh=${ACP_TOOLCHAIN_REFRESH}" \
+    && npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -50
 
 # ── Python essentials ────────────────────────────────────────────────────────
 # Common packages for data work, scraping, and config parsing.
