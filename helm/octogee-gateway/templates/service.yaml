@@ -18,6 +18,9 @@ spec:
     - name: metrics
       port: 9091
       targetPort: 9091
+    - name: runner-metrics
+      port: 9092
+      targetPort: 9092
     - name: preview
       port: 9080
       targetPort: 9080

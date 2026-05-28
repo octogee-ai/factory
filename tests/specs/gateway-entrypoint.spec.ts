@@ -62,3 +62,44 @@ const stamperRegion = entrypoint.match(
 expect(stamperRegion).toMatch(/\[\s*-f\s+/);
   });
 });
+
+describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", () => {
+  it("routes the all-profile runners through supervise-runner", () => {
+    const runners: Record<string, string> = {
+      provisioner: "5000",
+      "site-build": "5000",
+      "preview-proxy": "5000",
+      "byosub-syncback": "30000",
+    };
+    for (const [runner, restartDelayMs] of Object.entries(runners)) {
+      expect(entrypoint).toMatch(
+        new RegExp(`supervise_runner\\s+${runner}\\s+${restartDelayMs}\\b`),
+      );
+    }
+  });
+
+  it("gates the builder-shell + reconciler runners behind the operator profile + keeps BUILDER_SHELL_REQUIRE_KEY", () => {
+    expect(entrypoint).toMatch(/supervise_runner\s+builder-shell\s+5000\b/);
+    expect(entrypoint).toMatch(/supervise_runner\s+shell-reconciler\s+30000\b/);
+    const builderIdx = entrypoint.indexOf("supervise_runner builder-shell");
+    const guardIdx = entrypoint.lastIndexOf('= "operator" ]; then', builderIdx);
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(guardIdx).toBeLessThan(builderIdx);
+    expect(entrypoint).toMatch(/export BUILDER_SHELL_REQUIRE_KEY/);
+  });
+
+  it("starts the always-on runner-metrics-exporter", () => {
+    expect(entrypoint).toMatch(/runner-metrics-exporter\.ts/);
+  });
+
+  it("supervise_runner keeps a thin shell guard so a dead supervisor restarts", () => {
+    const fnRegion = entrypoint.slice(
+      entrypoint.indexOf("supervise_runner() {"),
+      entrypoint.indexOf("supervise_runner provisioner"),
+    );
+    expect(fnRegion).toMatch(/while true/);
+    expect(fnRegion).toMatch(/\$SUPERVISE/);
+    expect(fnRegion).toMatch(/--restart-delay-ms=\$\{_restart_delay_ms\}/);
+    expect(entrypoint).toMatch(/SUPERVISE=[^\n]*supervise-runner\.ts/);
+  });
+});

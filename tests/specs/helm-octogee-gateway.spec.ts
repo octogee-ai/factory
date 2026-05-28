@@ -100,6 +100,14 @@ const out = helmTemplate();
     expect(svc).toMatch(/gateway-instance:\s*default/);
   });
 
+  it("exposes the runner-metrics port (9092) on the gateway container + Service (scraped by the octogee-gateway ServiceMonitor)", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    expect(dep).toMatch(/containerPort:\s*9092\s*\n\s*name:\s*runner-metrics/);
+    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    expect(svc).toMatch(/name:\s*runner-metrics\s*\n\s*port:\s*9092\s*\n\s*targetPort:\s*9092/);
+  });
+
   it("renders a PodDisruptionBudget keyed by gateway-instance", () => {
     const out = helmTemplate();
     const pdb = findDoc(out, "PodDisruptionBudget", "octogee-gateway-default");

@@ -329,103 +329,55 @@ fi
 # the HTTP endpoint exposed by local-provisioner.
 # See docs/GATEWAY-FLEET-CONTROLLER-SPEC.md
 
-# ── Start provisioner in background with auto-restart ───────────────────────
-(
-  while true; do
-    log "Starting Octogee provisioner..."
-    /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/entrypoints/local-provisioner.ts \
-      || true
-    log "Provisioner exited — restarting in 5s..."
-    sleep 5
-  done
-) &
-
-# ── Start site build API in background with auto-restart ───────────────────
-(
-  while true; do
-    log "Starting site build API..."
-    /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/entrypoints/site-build-api.ts \
-      || true
-    log "Site build API exited — restarting in 5s..."
-    sleep 5
-  done
-) &
-
-# ── Start preview proxy in background with auto-restart ────────────────────
-(
-  while true; do
-    log "Starting preview proxy..."
-    /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/entrypoints/preview-proxy.ts \
-      || true
-    log "Preview proxy exited — restarting in 5s..."
-    sleep 5
-  done
-) &
-
-# ── Start builder-shell PTY server (operator profile only) ─────────────────
-# Per docs/specs/DEV-CONTINUITY-BRIDGE-SPEC.md §2.4 Proof Spike #1 +
-# docs/architecture/GATEWAY-PLATFORM-SPEC.md §Operator Shell Access.
-# Listens on :3005 for in-pod chat-proxy → BuilderShellPty traffic.
-# Cattle gateways DO NOT expose a builder shell; the Helm Service for
-# them omits the builder-shell port, and the entrypoint skips this
-# loop entirely.
-#
-# Auth: defense-in-depth via INTERNAL_SERVICE_KEY in addition to
-# K8s-namespace Service isolation. The shared secret is the same one
-# the platform uses for service-to-service (chat-proxy → gateway-edge,
-# gateway → gateway-edge). Setting BUILDER_SHELL_REQUIRE_KEY=true
-# here means any in-cluster pod that lands on the gateway's :3005
-# without the header is 401'd. Without this, a compromised pod in the
-# same namespace (cattle, etc.) could connect directly and bypass
-# chat-proxy's Origin allowlist + redeem-ticket discipline.
-if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
-  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
+# ── In-pod runners: supervised + observable ─────────────────────────────────
+# Each runner is wrapped by supervise-runner.ts, which owns respawn AND writes
+# a heartbeat that runner-metrics-exporter publishes (octogee_runner_up /
+# _restart_total / _last_start). The thin shell `while true` guard here only
+# re-runs the supervisor itself if IT ever dies; the supervisor handles the
+# child's crash-loop. Replaces the bare per-runner respawn loops, which were
+# invisible to monitoring (PID 1 stays alive, so a crash-looping child never
+# showed as a container restart). See GATEWAY-RUNNER-OBSERVABILITY-SPEC.md.
+TSX=/octogee/scripts/node_modules/.bin/tsx
+SUPERVISE="$TSX /octogee/scripts/entrypoints/supervise-runner.ts"
+supervise_runner() {
+  _name="$1"; shift
+  _restart_delay_ms="$1"; shift
   (
     while true; do
-      log "Starting builder-shell PTY server (require_key=${BUILDER_SHELL_REQUIRE_KEY})..."
-      /octogee/scripts/node_modules/.bin/tsx \
-        /octogee/scripts/entrypoints/builder-shell-server.ts \
-        || true
-      log "Builder-shell server exited — restarting in 5s..."
+      $SUPERVISE "$_name" "--restart-delay-ms=${_restart_delay_ms}" "$@" || true
+      log "supervise-runner[$_name] exited — restarting in 5s..."
       sleep 5
     done
   ) &
-fi
+}
 
-# ── Start builder-shell tmux reconciler (operator profile only) ────────────
-# Per docs/specs/SHELL-RECONNECT-DURABILITY-SPEC.md. Flips Firestore shell
-# docs to `dead` once their tmux session is gone (process exit, or a pod
-# roll took the in-memory tmux server with it), so the sidebar tells the
-# truth and a click can't silently resurrect a fresh empty session. The
-# boot tick runs immediately — catching a rolled pod before the owner can
-# re-attach — then it sweeps every SHELL_RECONCILE_INTERVAL_MS. Operator
-# only: cattle gateways own no shells. Co-located with the PTY server so it
-# reads the same in-pod tmux server.
+supervise_runner provisioner 5000 "$TSX" /octogee/scripts/entrypoints/local-provisioner.ts
+supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
+supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
+supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
+
+# Builder-shell PTY server + tmux reconciler — operator profile only (cattle
+# gateways own no shells; their Helm Service omits the builder-shell port).
+# BUILDER_SHELL_REQUIRE_KEY enforces the INTERNAL_SERVICE_KEY header on :3005
+# (defense-in-depth over K8s-namespace isolation) so a compromised same-
+# namespace pod can't bypass chat-proxy's Origin allowlist + ticket discipline.
+# The reconciler flips Firestore shell docs to `dead` once their tmux session
+# is gone (process exit / pod roll), co-located so it reads the same tmux.
 if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
-  (
-    while true; do
-      log "Starting builder-shell reconciler..."
-      /octogee/scripts/node_modules/.bin/tsx \
-        /octogee/scripts/entrypoints/reconcile-shells-runner.ts \
-        || true
-      log "Builder-shell reconciler exited — restarting in 30s..."
-      sleep 30
-    done
-  ) &
+  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
+  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
+  supervise_runner shell-reconciler 30000 "$TSX" /octogee/scripts/entrypoints/reconcile-shells-runner.ts
 fi
 
-# ── Start BYO-sub credential sync-back watcher (observe-only) ───────────────
+# ── Runner metrics exporter (all profiles) ──────────────────────────────────
+# Serves /metrics on :9092 from the runner heartbeat files; one ServiceMonitor
+# scrapes it. Its own thin guard — if the exporter dies, runner liveness goes
+# dark, so keep it up.
 (
   while true; do
-    log "Starting BYO-sub sync-back watcher..."
-    /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/entrypoints/byosub-syncback-runner.ts \
-      || true
-    log "BYO-sub sync-back watcher exited — restarting in 30s..."
-    sleep 30
+    "$TSX" /octogee/scripts/entrypoints/runner-metrics-exporter.ts || true
+    log "runner-metrics-exporter exited — restarting in 5s..."
+    sleep 5
   done
 ) &
 

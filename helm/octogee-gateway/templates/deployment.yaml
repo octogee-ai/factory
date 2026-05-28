@@ -89,6 +89,8 @@ spec:
             - containerPort: 18789
             - containerPort: 9091
               name: metrics
+            - containerPort: 9092
+              name: runner-metrics
             - containerPort: 9080
               name: preview
             - containerPort: {{ .Values.env.fleetControllerPort | default "3003" }}
