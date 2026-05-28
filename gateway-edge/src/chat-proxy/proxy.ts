@@ -171,7 +171,7 @@ const ocWsConnectionsActive = new Gauge({
 
 const builderShellSessionCloseTotal = new Counter({
   name: 'chat_proxy_builder_shell_session_close_total',
-  help: 'Builder-shell session close events, by reason (client-disconnect / upstream-disconnect / upstream-unreachable / backpressure-*). Does NOT include invalid-ticket rejections — those are counted separately on chat_proxy_builder_shell_rejected_total.',
+  help: 'Builder-shell session close events, by reason (client-disconnect / upstream-disconnect / upstream-error / upstream-unreachable / backpressure-*). Does NOT include invalid-ticket rejections — those are counted separately on chat_proxy_builder_shell_rejected_total.',
   labelNames: ['reason'] as const,
   registers: [metricsRegistry],
 });
@@ -912,7 +912,8 @@ allowedOrigins: isAllowedWsOrigin,
         // a 'taken-over' status that recordShellAttach set already.
         import("../lib/shell-presence.js")
           .then(async ({ recordShellDetach, closeAuditRow }) => {
-            const isError = e.reason === "upstream-unreachable";
+            const isError =
+              e.reason === "upstream-unreachable" || e.reason === "upstream-error";
             await Promise.allSettled([
               recordShellDetach({
                 containerSlug: e.containerSlug,
