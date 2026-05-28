@@ -20,6 +20,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Repo root, for referencing helm/monitoring/* manifests (Step 5). Was used
+# (line for grafana-ingress.yaml) but never defined → `unbound variable` under
+# `set -u`. Same derivation as setup-monitoring.sh.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+
 PROJECT="octogee"
 REGION="us-central1"
 CLUSTER="octogee-gateway"
