@@ -107,3 +107,41 @@ spec:
           annotations:
             summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
             description: "PVC in {{ $labels.namespace }} is above 85% capacity. Expand or clean up."
+
+    # ── In-pod runners + shell reconciler ─────────────────────────────────────
+    # Metrics from runner-metrics-exporter on the gateway pod (:9092). These
+    # catch failures that container-level alerts can't see: the runners are
+    # children of PID 1 (entrypoint.sh), so a crash-looping runner never shows
+    # as a container restart. See docs/specs/GATEWAY-RUNNER-OBSERVABILITY-SPEC.md.
+    #
+    # NOTE: there is deliberately no octogee_tmux_server_up alert — the tmux
+    # server self-terminates when its last shell session closes, so up=0 is the
+    # normal idle state. The gauge exists for dashboards only.
+    - name: octogee.runners
+      rules:
+        - alert: RunnerDown
+          expr: octogee_runner_up == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "In-pod runner {{ $labels.runner }} is down"
+            description: "Runner {{ $labels.runner }} on {{ $labels.pod }} has reported down (or its supervisor's heartbeat went stale) for 5m."
+
+        - alert: RunnerCrashLooping
+          expr: increase(octogee_runner_restart_total[10m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "In-pod runner {{ $labels.runner }} is crash-looping"
+            description: "Runner {{ $labels.runner }} on {{ $labels.pod }} restarted {{ $value }} times in 10m. Check its structured restart logs."
+
+        - alert: ShellReconcilerStalled
+          expr: (time() - octogee_shell_reconcile_last_success_timestamp_seconds) > 600
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Shell reconciler has not completed a sweep in {{ $value | humanizeDuration }}"
+            description: "octogee_shell_reconcile on {{ $labels.pod }} last succeeded >10m ago — stale shell docs won't flip to dead. Check octogee_shell_reconcile_errors_total + the reconciler logs."
