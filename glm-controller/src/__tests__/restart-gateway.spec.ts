@@ -33,7 +33,7 @@ function mkDeps(overrides: Partial<RestartGatewayDeps> = {}): RestartGatewayDeps
   return {
     kubeOps: {
       scaleDeployment: vi.fn(async () => undefined),
-      restartDeployment: vi.fn(async () => undefined),
+      restartOpenClawInPlace: vi.fn(async () => undefined),
       readDeployedReplicas: vi.fn(async () => 1),
     },
     namespace: "octogee-test",
@@ -44,22 +44,22 @@ function mkDeps(overrides: Partial<RestartGatewayDeps> = {}): RestartGatewayDeps
 }
 
 describe("createRestartGatewayHandler", () => {
-  it("calls kubeOps.restartDeployment with the deployment derived from instanceName", async () => {
+  it("calls kubeOps.restartOpenClawInPlace with the deployment derived from instanceName", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);
     const { ctx } = mkCtx();
 
     const result = await handler(mkOp(), ctx);
 
-    expect(deps.kubeOps.restartDeployment).toHaveBeenCalledTimes(1);
-    expect(deps.kubeOps.restartDeployment).toHaveBeenCalledWith({
+    expect(deps.kubeOps.restartOpenClawInPlace).toHaveBeenCalledTimes(1);
+    expect(deps.kubeOps.restartOpenClawInPlace).toHaveBeenCalledWith({
       namespace: "octogee-test",
       name: "octogee-gateway-bender",
     });
     expect(result.success).toBe(true);
   });
 
-  it("reports a single `rollout-restart` step that transitions running → done", async () => {
+  it("reports a single `openclaw-restart` step that transitions running → done", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);
     const { ctx, reported } = mkCtx();
@@ -67,8 +67,8 @@ describe("createRestartGatewayHandler", () => {
     await handler(mkOp(), ctx);
 
     expect(reported.map((s) => `${s.name}:${s.status}`)).toEqual([
-      "rollout-restart:running",
-      "rollout-restart:done",
+      "openclaw-restart:running",
+      "openclaw-restart:done",
     ]);
   });
 
@@ -84,7 +84,7 @@ describe("createRestartGatewayHandler", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/instanceName/);
-    expect(deps.kubeOps.restartDeployment).not.toHaveBeenCalled();
+    expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
   });
 
   it("returns failure when gatewayId is missing from op.input (defensive — admin route always provides)", async () => {
@@ -101,11 +101,11 @@ describe("createRestartGatewayHandler", () => {
     expect(result.error).toMatch(/gatewayId/);
   });
 
-  it("reports the rollout-restart step failed when kubeOps throws, surfacing the error message", async () => {
+  it("reports the openclaw-restart step failed when kubeOps throws, surfacing the error message", async () => {
     const deps = mkDeps({
       kubeOps: {
         scaleDeployment: vi.fn(async () => undefined),
-        restartDeployment: vi.fn(async () => {
+        restartOpenClawInPlace: vi.fn(async () => {
           throw new Error("kubectl: connection refused");
         }),
         readDeployedReplicas: vi.fn(async () => 1),
@@ -119,7 +119,7 @@ describe("createRestartGatewayHandler", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/connection refused/);
     const failed = reported.find((s) => s.status === "failed");
-    expect(failed?.name).toBe("rollout-restart");
+    expect(failed?.name).toBe("openclaw-restart");
     expect(failed?.error).toMatch(/connection refused/);
   });
 
@@ -145,6 +145,6 @@ describe("createRestartGatewayHandler", () => {
     );
 
     expect(result.success).toBe(true);
-    expect(deps.kubeOps.restartDeployment).toHaveBeenCalledTimes(1);
+    expect(deps.kubeOps.restartOpenClawInPlace).toHaveBeenCalledTimes(1);
   });
 });

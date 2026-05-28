@@ -693,7 +693,7 @@ function makeFakeKubeOps(behavior: {
 } = {}) {
   return {
     scaleDeployment: vi.fn(behavior.scale ?? (async () => undefined)),
-    restartDeployment: vi.fn(behavior.restart ?? (async () => undefined)),
+    restartOpenClawInPlace: vi.fn(behavior.restart ?? (async () => undefined)),
     readDeployedReplicas: vi.fn(behavior.readReplicas ?? (async () => null)),
   } as unknown as Parameters<typeof startReconciler>[0]["kubeOps"];
 }

@@ -41,20 +41,20 @@ export function createRestartGatewayHandler(
 
     const startedAt = deps.now();
     await reportStep(ctx, {
-      name: "rollout-restart",
+      name: "openclaw-restart",
       status: "running",
       startedAt,
     });
 
     try {
-      await deps.kubeOps.restartDeployment({
+      await deps.kubeOps.restartOpenClawInPlace({
         namespace: deps.namespace,
         name: deploymentNameForInstance(instanceName),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await reportStep(ctx, {
-        name: "rollout-restart",
+        name: "openclaw-restart",
         status: "failed",
         startedAt,
         completedAt: deps.now(),
@@ -64,7 +64,7 @@ export function createRestartGatewayHandler(
     }
 
     await reportStep(ctx, {
-      name: "rollout-restart",
+      name: "openclaw-restart",
       status: "done",
       startedAt,
       completedAt: deps.now(),

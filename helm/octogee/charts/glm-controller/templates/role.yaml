@@ -72,6 +72,18 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "events"]
     verbs: ["get", "list", "watch"]
+  # The restart-gateway op runs `kubectl exec deploy/octogee-gateway-<inst>
+  # -c gateway -- openclaw gateway restart` (restart-gateway.ts via
+  # kube-ops.ts restartOpenClawInPlace) — an in-process OpenClaw restart, not
+  # a pod reroll. `kubectl exec` opens a connection to the pods/exec
+  # subresource, which is a distinct create-only RBAC grant NOT covered by the
+  # bare `pods` get/list/watch above. Without this the SA 403s with "cannot
+  # create resource pods/exec". (The prior `kubectl rollout restart` path
+  # needed only the apps `deployments` patch grant — switching to exec is
+  # what makes this load-bearing.)
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

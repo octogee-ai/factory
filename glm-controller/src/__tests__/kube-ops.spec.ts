@@ -109,30 +109,42 @@ describe("createKubeSubprocessRunner — scaleDeployment", () => {
   });
 });
 
-describe("createKubeSubprocessRunner — restartDeployment", () => {
-  it("builds correct kubectl rollout restart argv", async () => {
+describe("createKubeSubprocessRunner — restartOpenClawInPlace", () => {
+  it("execs `openclaw gateway restart --safe --skip-deferral` in the gateway container", async () => {
     const { runKubectl, calls } = mockSubprocess([
-      { stdout: "deployment.apps/octogee-gateway-bender restarted" },
+      { stdout: "safe restart requested; gateway bypassing active-work deferral" },
     ]);
     const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
 
-    await kube.restartDeployment({
+    await kube.restartOpenClawInPlace({
       namespace: "octogee-test",
       name: "octogee-gateway-bender",
     });
 
+    // In-process OpenClaw restart via the local gateway RPC (self-authorizing,
+    // --skip-deferral bypasses the idle-drain wait). The container/pod is NOT
+    // rolled — only the OpenClaw process restarts. Targets `deploy/<name>` so
+    // kubectl selects the (single-replica) gateway pod; `-c gateway` because
+    // the openclaw CLI + process live in that container, not gateway-edge.
     expect(calls).toEqual([
       [
         "-n",
         "octogee-test",
-        "rollout",
-        "restart",
+        "exec",
         "deploy/octogee-gateway-bender",
+        "-c",
+        "gateway",
+        "--",
+        "openclaw",
+        "gateway",
+        "restart",
+        "--safe",
+        "--skip-deferral",
       ],
     ]);
   });
 
-  it("throws on NotFound during restart (restart against nothing is a real mistake)", async () => {
+  it("throws on NotFound (restart against a gateway that isn't there is a real mistake)", async () => {
     const { runKubectl } = mockSubprocess([
       {
         stderr: 'Error from server (NotFound): deployments.apps "octogee-gateway-bender" not found',
@@ -142,25 +154,29 @@ describe("createKubeSubprocessRunner — restartDeployment", () => {
     const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
 
     await expect(
-      kube.restartDeployment({
+      kube.restartOpenClawInPlace({
         namespace: "octogee-test",
         name: "octogee-gateway-bender",
       }),
     ).rejects.toThrow(/NotFound/);
   });
 
-  it("throws on non-NotFound restart failures", async () => {
+  it("throws when the in-pod restart command fails, surfacing stderr (e.g. commands.restart=false)", async () => {
     const { runKubectl } = mockSubprocess([
-      { stderr: "Error: unauthorized", code: 1 },
+      {
+        stderr:
+          "Gateway restart is disabled in the running gateway config (commands.restart=false)",
+        code: 1,
+      },
     ]);
     const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
 
     await expect(
-      kube.restartDeployment({
+      kube.restartOpenClawInPlace({
         namespace: "octogee-test",
         name: "octogee-gateway-bender",
       }),
-    ).rejects.toThrow(/unauthorized/);
+    ).rejects.toThrow(/commands\.restart=false/);
   });
 });
 
