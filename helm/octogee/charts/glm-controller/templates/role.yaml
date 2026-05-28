@@ -14,8 +14,16 @@ rules:
   # to keep this least-privilege via read-only on cronjobs / serviceaccounts
   # / configmaps was tried and reverted in TEST when helm patched all
   # three on a routine reconcile and the controller couldn't proceed.
+  # deployments/scale is a distinct RBAC subresource — the bare `deployments`
+  # grant does NOT cover it. Cowboy's pause/resume path runs `kubectl scale
+  # deploy/octogee-gateway-<inst>` (kube-ops.ts), which patches
+  # deployments/scale; without this the SA 403s with "cannot patch resource
+  # deployments/scale" (TEST, 2026-05-28, after the helm→kubectl pause switch
+  # in #1197). `rollout restart` patches the Deployment's pod-template
+  # annotations — covered by the bare `deployments` patch grant — so only
+  # the scale subresource needs calling out.
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "replicasets", "controllerrevisions"]
+    resources: ["deployments", "deployments/scale", "statefulsets", "replicasets", "controllerrevisions"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]
