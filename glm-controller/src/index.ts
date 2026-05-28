@@ -67,6 +67,7 @@ import { deleteAuthUserTolerantOfMissing } from "../../scripts/lib/firebase-auth
 import { deleteHostingSitesForCustomer } from "../../scripts/lib/firebase-hosting.js";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer } from "./http-server.js";
+import { recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
@@ -305,7 +306,9 @@ const message = err instanceof Error ? err.message : String(err);
           throw new Error(`(source=fleet-ingress) ${message}`);
         }
       }
+      recordReconcile("ok");
     } catch (err) {
+      recordReconcile("fail");
       const message = err instanceof Error ? err.message : String(err);
       const source = message.startsWith("(source=") ? "" : "(source=helm) ";
       deps.log(

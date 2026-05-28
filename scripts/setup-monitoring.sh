@@ -107,6 +107,23 @@ else
 fi
 set -u
 
+# ── Alertmanager webhook secret (must exist BEFORE the AM pod mounts it) ──
+# prometheus-values enables Alertmanager with alertmanagerSpec.secrets:
+# [discord-ops-webhook]; the operator adds a secret volume, so the AM pod is
+# stuck ContainerCreating (and `helm --wait` times out) if the secret is
+# absent. Seed it with the real webhook if the env file provided one, else a
+# placeholder so the pod starts — delivery no-ops until the real URL lands via
+# `setup-secrets.sh` / `rotate-secret.sh discord-ops-webhook`.
+info "Ensuring discord-ops-webhook secret (Alertmanager mount)..."
+set +u
+AM_DISCORD_URL="${DISCORD_OPS_WEBHOOK_URL:-}"
+set -u
+[[ "$AM_DISCORD_URL" == https://discord*/api/webhooks/* ]] || AM_DISCORD_URL="https://discord.invalid/not-configured"
+kubectl create secret generic discord-ops-webhook -n monitoring \
+  --from-literal=url="$AM_DISCORD_URL" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+ok "discord-ops-webhook present in monitoring"
+
 # ── Prometheus ────────────────────────────────────────────────────────────
 info "Deploying Prometheus (kube-prometheus-stack)..."
 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \

@@ -2,6 +2,7 @@
 
 import express, { Router, type Express, type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
+import { renderMetrics } from "./metrics.js";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
   addAdminFleetRoutes,
@@ -93,6 +94,13 @@ export function createHttpServer(deps: HttpServerDeps): Express {
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, service: "glm-controller" });
+  });
+
+  // Unauthenticated Prometheus scrape endpoint (ClusterIP-only). See the
+  // glm-controller ServiceMonitor in helm/monitoring/service-monitors.yaml.
+  app.get("/metrics", (_req, res) => {
+    res.set("Content-Type", "text/plain; version=0.0.4");
+    res.end(renderMetrics());
   });
 
   const adminRouter = Router();

@@ -602,10 +602,20 @@ set +u
 DISCORD_OPS_WEBHOOK_URL="${DISCORD_OPS_WEBHOOK_URL:-}"
 set -u
 [[ -z "$DISCORD_OPS_WEBHOOK_URL" ]] && DISCORD_OPS_WEBHOOK_URL=$(sm_get DISCORD_OPS_WEBHOOK_URL "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-if [[ -n "$DISCORD_OPS_WEBHOOK_URL" ]]; then
+# The SM secret is pre-created with the literal "placeholder" (so firebase
+# deploy doesn't prompt). Only materialize the K8s secrets when it's a REAL
+# Discord webhook — otherwise onSignup + Alertmanager would consume junk.
+if [[ "$DISCORD_OPS_WEBHOOK_URL" == https://discord*/api/webhooks/* ]]; then
   ksecret discord-ops-webhook --from-literal=url="$DISCORD_OPS_WEBHOOK_URL"
+  # Alertmanager runs in the shared `monitoring` namespace and reads the same
+  # webhook (mounted via alertmanagerSpec.secrets). Mirror it there. Idempotent.
+  kubectl create secret generic discord-ops-webhook -n monitoring \
+    --from-literal=url="$DISCORD_OPS_WEBHOOK_URL" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null \
+    && info "  mirrored discord-ops-webhook → monitoring ns (Alertmanager)" \
+    || info "  WARN: failed to mirror discord-ops-webhook to monitoring ns"
 else
-  info "  DISCORD_OPS_WEBHOOK_URL not configured — skipping (gateway will no-op Discord posts)"
+  info "  DISCORD_OPS_WEBHOOK_URL unset/placeholder — skipping (signup + Alertmanager no-op until a real webhook is set)"
 fi
 
 # ── 12. GCP Service Account key ───────────────────────────────────────────
