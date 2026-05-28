@@ -252,6 +252,16 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.headers["access-control-allow-methods"]).toContain("GET");
   });
 
+  it("allows PATCH in the preflight — pause/resume + change-tier hit PATCH /api/admin/gateways/:id; omitting it makes the browser block them", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .options("/api/admin/gateways/gw-test")
+      .set("Origin", "https://app-octogee-test.web.app")
+      .set("Access-Control-Request-Method", "PATCH");
+    expect(res.status).toBe(204);
+    expect(res.headers["access-control-allow-methods"]).toContain("PATCH");
+  });
+
   it("does not set CORS headers for disallowed origins", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)

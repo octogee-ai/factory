@@ -26,7 +26,7 @@ export const corsMiddleware = cors({
     }
     callback(null, isAllowedOrigin(origin));
   },
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Agent-Key", "X-Internal-Service-Key"],
   credentials: true,
 });
