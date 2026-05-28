@@ -13,6 +13,6 @@
       "@shared/*": ["shared/*"]
     }
   },
-  "include": ["*.ts", "lib/**/*.ts", "ops/**/*.ts", "../shared/types/identity.ts"],
-  "exclude": ["node_modules", "dist", "seed-*.ts", "generate-*.ts", "setup-*.ts", "../shared/**/*.spec.ts"]
+  "include": ["*.ts", "entrypoints/**/*.ts", "lib/**/*.ts", "ops/**/*.ts", "../shared/types/identity.ts"],
+  "exclude": ["node_modules", "dist", "**/seed-*.ts", "**/generate-*.ts", "**/setup-*.ts", "../shared/**/*.spec.ts"]
 }

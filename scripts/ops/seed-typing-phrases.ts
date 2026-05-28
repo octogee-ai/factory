@@ -7,7 +7,7 @@ import { resolve } from 'path';
 import {
   TYPING_PHRASES_BY_VIBE,
   WORKSPACE_VIBE_PRESETS,
-} from '../shared/types/display-names';
+} from '../../shared/types/display-names';
 
 const DEFAULT_SA_KEY_PATH = resolve(
   process.env.HOME || '~',

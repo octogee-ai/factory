@@ -3,7 +3,7 @@ import * as path from "path";
 import {
   restoreByosubForAgents,
   agentIdsFromConfig,
-} from "./lib/byosub-restore.js";
+} from "../lib/byosub-restore.js";
 
 const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
@@ -319,7 +319,7 @@ async function applyGlmDesiredState(
   if (!gatewayId) return false;
   let overridesChanged = false;
   try {
-    const { db } = await import("./lib/firebase.js");
+    const { db } = await import("../lib/firebase.js");
     const snap = await withTimeout(
       db.collection("glmGateways").doc(gatewayId).get(),
       4000,
@@ -345,7 +345,7 @@ async function applyGlmDesiredState(
         logFn(`applied openclawOverrides from glmGateways/${gatewayId}`);
       }
     }
-    const { readSecret } = await import("./lib/secret-manager.js");
+    const { readSecret } = await import("../lib/secret-manager.js");
 
 const r = await restoreByosubForAgents({
       agentIds: agentIdsFromConfig(config),
@@ -395,7 +395,7 @@ let configRaw: string;
 try {
     const homeDir = process.env.HOME ?? "/home/node";
     const gitconfigPath = path.join(homeDir, ".gitconfig");
-    const { db } = await import("./lib/firebase.js");
+    const { db } = await import("../lib/firebase.js");
     await hydrateGitIdentity({
       gitconfigPath,
       agentIds: agentIdsFromConfig(config),

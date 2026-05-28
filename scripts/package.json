@@ -5,12 +5,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "provision": "tsx local-provisioner.ts",
+    "provision": "tsx entrypoints/local-provisioner.ts",
     "fleet": "tsx ops/fleet.ts",
-    "bump-gateway-imagetag": "tsx bump-gateway-imagetag.ts",
+    "bump-gateway-imagetag": "tsx ops/bump-gateway-imagetag.ts",
     "test": "npx vitest run __tests__",
     "test:emulator": "firebase emulators:exec --only firestore --project=octogee-test 'npx vitest run --config vitest.emulator.config.ts'",
-    "audit-coverage": "tsx audit-coverage.ts"
+    "audit-coverage": "tsx ops/audit-coverage.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",

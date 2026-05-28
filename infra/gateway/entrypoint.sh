@@ -305,7 +305,7 @@ fi
 # so the gateway boots with complete plugin config (no post-boot SIGUSR1).
 if [ -f "$OPENCLAW_DIR/openclaw.json" ] && [ -f "${SA_KEY_PATH:-$OPENCLAW_DIR/secrets/octogee-test-sa-key.json}" ]; then
   log "Pre-boot: seeding plugin config from Firestore..."
-  /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
+  /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 
 # ── Pre-boot: per-gateway Mac ops MM identity (#998) ────────────────────
@@ -334,7 +334,7 @@ fi
   while true; do
     log "Starting Octogee provisioner..."
     /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/local-provisioner.ts \
+      /octogee/scripts/entrypoints/local-provisioner.ts \
       || true
     log "Provisioner exited — restarting in 5s..."
     sleep 5
@@ -346,7 +346,7 @@ fi
   while true; do
     log "Starting site build API..."
     /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/site-build-api.ts \
+      /octogee/scripts/entrypoints/site-build-api.ts \
       || true
     log "Site build API exited — restarting in 5s..."
     sleep 5
@@ -358,7 +358,7 @@ fi
   while true; do
     log "Starting preview proxy..."
     /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/preview-proxy.ts \
+      /octogee/scripts/entrypoints/preview-proxy.ts \
       || true
     log "Preview proxy exited — restarting in 5s..."
     sleep 5
@@ -387,7 +387,7 @@ if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
     while true; do
       log "Starting builder-shell PTY server (require_key=${BUILDER_SHELL_REQUIRE_KEY})..."
       /octogee/scripts/node_modules/.bin/tsx \
-        /octogee/scripts/builder-shell-server.ts \
+        /octogee/scripts/entrypoints/builder-shell-server.ts \
         || true
       log "Builder-shell server exited — restarting in 5s..."
       sleep 5
@@ -400,7 +400,7 @@ fi
   while true; do
     log "Starting BYO-sub sync-back watcher..."
     /octogee/scripts/node_modules/.bin/tsx \
-      /octogee/scripts/byosub-syncback-runner.ts \
+      /octogee/scripts/entrypoints/byosub-syncback-runner.ts \
       || true
     log "BYO-sub sync-back watcher exited — restarting in 30s..."
     sleep 30

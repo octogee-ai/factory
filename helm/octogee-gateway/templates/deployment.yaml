@@ -176,7 +176,7 @@ spec:
             # Public-facing host the gateway's preview-proxy returns in
             # URLs to the app. Must match the umbrella's
             # gatewayFleet.previewIngress.host for this env. Empty
-            # value falls back to scripts/preview-proxy.ts's hardcoded
+            # value falls back to scripts/entrypoints/preview-proxy.ts's hardcoded
             # `preview.octogee.com` — fine for prod, wrong for test.
             - name: PREVIEW_HOST
               value: {{ .Values.preview.host | quote }}

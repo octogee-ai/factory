@@ -4,7 +4,7 @@ import * as admin from "firebase-admin";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { projectGeneralChannelName } from "../shared/types/identity.js";
+import { projectGeneralChannelName } from "../../shared/types/identity.js";
 
 const APPLY = process.argv.includes("--apply");
 const SA_KEY = process.env.GOOGLE_APPLICATION_CREDENTIALS ||

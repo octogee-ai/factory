@@ -26,13 +26,7 @@ WORKDIR /octogee/scripts
 # via `npm prune --omit=dev` after the typecheck.
 RUN npm install --no-audit --no-fund
 
-COPY --chown=node:node scripts/local-provisioner.ts /octogee/scripts/
-COPY --chown=node:node scripts/site-build-api.ts /octogee/scripts/
-COPY --chown=node:node scripts/preview-proxy.ts /octogee/scripts/
-COPY --chown=node:node scripts/get-customer-uid.ts /octogee/scripts/
-COPY --chown=node:node scripts/pre-boot-config.ts /octogee/scripts/
-COPY --chown=node:node scripts/byosub-syncback-runner.ts /octogee/scripts/
-COPY --chown=node:node scripts/builder-shell-server.ts /octogee/scripts/
+COPY --chown=node:node scripts/entrypoints/ /octogee/scripts/entrypoints/
 COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/bootstrap-mac-ops.mjs /octogee/scripts/

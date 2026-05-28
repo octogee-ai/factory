@@ -7,7 +7,7 @@ import {
   computeTestedModules,
   rankCoverageRisk,
   type CoverageEntry,
-} from "./lib/coverage-audit.js";
+} from "../lib/coverage-audit.js";
 
 const SKIP_DIRS = new Set([
   "node_modules",

@@ -2,12 +2,12 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { agentIdsFromConfig, planByosubRestores } from "./lib/byosub-restore.js";
+import { agentIdsFromConfig, planByosubRestores } from "../lib/byosub-restore.js";
 import {
   syncBackSweep,
   type AuthFingerprint,
   type SyncBackTarget,
-} from "./lib/byosub-syncback.js";
+} from "../lib/byosub-syncback.js";
 
 const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
@@ -32,7 +32,7 @@ async function loadTargets(): Promise<SyncBackTarget[]> {
   if (!gatewayId) return [];
   let byosub: Record<string, { provider: "openai" | "anthropic"; secretName: string }> | undefined;
   try {
-    const { db } = await import("./lib/firebase.js");
+    const { db } = await import("../lib/firebase.js");
     const snap = await db.collection("glmGateways").doc(gatewayId).get();
     byosub = snap.exists
       ? (snap.data() as { byosub?: typeof byosub } | undefined)?.byosub

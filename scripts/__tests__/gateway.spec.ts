@@ -29,7 +29,7 @@ describe("advisory mode removal", () => {
   });
 
   it("no isAdvisoryMode in orchestrator", () => {
-    const orchestratorPath = path.resolve(__dirname, "..", "local-provisioner.ts");
+    const orchestratorPath = path.resolve(__dirname, "..", "entrypoints", "local-provisioner.ts");
     const content = fs.readFileSync(orchestratorPath, "utf-8");
     expect(content).not.toContain("isAdvisoryMode");
     expect(content).not.toContain("syncAdvisorySlugs");

@@ -7,7 +7,7 @@ import {
   pickSoleTenantSlug,
   slugFromCoachAgentId,
   withTimeout,
-} from "../pre-boot-config.js";
+} from "../entrypoints/pre-boot-config.js";
 
 function emptyConfig(): any {
   return {};

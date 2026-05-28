@@ -3,7 +3,7 @@
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { mmApiCall, revokeAndMintBuilderPat } from "./lib/mattermost.js";
+import { mmApiCall, revokeAndMintBuilderPat } from "../lib/mattermost.js";
 
 const args = process.argv.slice(2);
 const projectArg = args.find((a) => a.startsWith("--project="));
