@@ -74,6 +74,7 @@ if $UNINSTALL; then
   info "Deleting ServiceMonitors + alert rules..."
   kubectl delete -f "$REPO_DIR/helm/monitoring/service-monitors.yaml" 2>/dev/null || true
   kubectl delete -f "$REPO_DIR/helm/monitoring/alert-rules.yaml" 2>/dev/null || true
+  kubectl delete -f "$REPO_DIR/helm/monitoring/alertmanager-config.yaml" 2>/dev/null || true
   info "Deleting monitoring namespace..."
   kubectl delete namespace monitoring 2>/dev/null && ok "Namespace deleted" || warn "Not found"
   echo ""
@@ -150,6 +151,11 @@ ok "ServiceMonitors applied"
 info "Applying alert rules..."
 kubectl apply -f "$REPO_DIR/helm/monitoring/alert-rules.yaml"
 ok "Alert rules applied"
+
+# ── Alertmanager routing (Discord) ────────────────────────────────────────
+info "Applying AlertmanagerConfig (Discord ops routing)..."
+kubectl apply -f "$REPO_DIR/helm/monitoring/alertmanager-config.yaml"
+ok "AlertmanagerConfig applied"
 
 # ── Done ──────────────────────────────────────────────────────────────────
 echo ""
