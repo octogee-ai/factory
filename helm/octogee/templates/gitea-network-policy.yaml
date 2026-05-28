@@ -32,4 +32,12 @@ spec:
           port: 3000
         - protocol: TCP
           port: 2222
+    # Allow from octogee-api (workspace git FS routes now hosted centrally)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - protocol: TCP
+          port: 3000
 {{- end }}
