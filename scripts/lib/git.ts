@@ -1,11 +1,56 @@
+// All fs.* call sites here take paths rooted at CUSTOMERS_DIR/<slug>
+// or CUSTOMER_KEYS_DIR/<slug>. Slugs reach this module already
+// validated by isValidUsername() at the only entry point that produces
+// a slug from user input — buildProvisioningContext in
+// scripts/lib/provisionSteps.ts. The remaining slug sources here are
+// either operator-supplied (deleteCustomerSshKey, archive*) which the
+// operator owns, or on-disk listings of already-provisioned customer
+// directories (syncAllWorkspaces). The non-literal-fs rule can't see
+// the cross-module invariant; isValidUsername() IS the defense.
+/* eslint-disable security/detect-non-literal-fs-filename */
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { log, dlog, GIT_API_URL, GIT_API_TOKEN, GIT_SSH_HOST, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } from "./config.js";
-import { workspaceGiteaOrg, workspaceRepoName, projectRepoName, giteaUsername } from "./gitea-naming.js";
+import {
+  log, dlog, GIT_API_URL, GIT_API_TOKEN, GIT_SSH_HOST,
+  CUSTOMERS_DIR, CUSTOMER_KEYS_DIR,
+} from "./config.js";
+import {
+  workspaceGiteaOrg, workspaceRepoName, projectRepoName, giteaUsername,
+} from "./gitea-naming.js";
 
 export { giteaUsername };
+
+interface GiteaKey {
+  id?: number;
+  title?: string;
+  key?: string;
+}
+
+interface GiteaToken {
+  id?: number;
+  name?: string;
+  sha1?: string;
+  token?: string;
+}
+
+export function errMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+export function execErrStderr(err: unknown): string {
+  if (
+    err &&
+    typeof err === "object" &&
+    "stderr" in err &&
+    typeof (err as { stderr?: { toString?: () => string } }).stderr?.toString === "function"
+  ) {
+    return (err as { stderr: { toString: () => string } }).stderr.toString().trim();
+  }
+  return "";
+}
 
 function adminHeaders(includeContentType = true): Record<string, string> {
   return {
@@ -57,15 +102,14 @@ export async function readGiteaCustomerPubKey(slug: string): Promise<string | nu
   const resp = await fetch(`${GIT_API_URL}/users/${username}/keys`, {
     headers: adminHeaders(false),
   });
-  if (resp.status === 404) return null; 
+  if (resp.status === 404) return null;
   if (!resp.ok) {
-
-const body = await resp.text().catch(() => "<no body>");
+    const body = await resp.text().catch(() => "<no body>");
     throw new Error(
       `Gitea key read for ${username} returned ${resp.status}: ${body.slice(0, 200)}`,
     );
   }
-  const keys = (await resp.json()) as Array<{ title?: string; key?: string }>;
+  const keys = (await resp.json()) as GiteaKey[];
   for (const k of keys) {
     if (k.title === "octogee-gateway" && typeof k.key === "string") {
       return k.key.trim();
@@ -95,6 +139,21 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
   const password = crypto.randomBytes(32).toString("hex");
   const headers = adminHeaders();
 
+  const userOk = await createGiteaUserRequest(username, slug, password, headers);
+  if (!userOk) return null;
+
+  await replaceExistingGitKey(username, headers);
+  await registerGitKey(username, pubKey, headers);
+
+  return await mintGatewayPat(username, headers);
+}
+
+async function createGiteaUserRequest(
+  username: string,
+  slug: string,
+  password: string,
+  headers: Record<string, string>,
+): Promise<boolean> {
   const createResp = await fetch(`${GIT_API_URL}/admin/users`, {
     method: "POST",
     headers,
@@ -108,27 +167,38 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
   });
   if (createResp.ok) {
     log(`[git] Gitea user created: ${username}`);
-  } else if (createResp.status === 422) {
+    return true;
+  }
+  if (createResp.status === 422) {
     log(`[git] Gitea user already exists: ${username}`);
-  } else {
-    const body = await createResp.text();
-    log(`⚠ [git] Failed to create Gitea user ${username}: ${createResp.status} ${body}`);
-    return null;
+    return true;
   }
+  const body = await createResp.text();
+  log(`⚠ [git] Failed to create Gitea user ${username}: ${createResp.status} ${body}`);
+  return false;
+}
 
+async function replaceExistingGitKey(
+  username: string,
+  headers: Record<string, string>,
+): Promise<void> {
   const keysResp = await fetch(`${GIT_API_URL}/users/${username}/keys`, { headers });
-  if (keysResp.ok) {
-    const keys = (await keysResp.json()) as any[];
-    for (const key of keys) {
-      if (key.title === "octogee-gateway") {
-        await fetch(`${GIT_API_URL}/admin/users/${username}/keys/${key.id}`, {
-          method: "DELETE",
-          headers,
-        });
-      }
-    }
+  if (!keysResp.ok) return;
+  const keys = (await keysResp.json()) as GiteaKey[];
+  for (const key of keys) {
+    if (key.title !== "octogee-gateway" || typeof key.id !== "number") continue;
+    await fetch(`${GIT_API_URL}/admin/users/${username}/keys/${key.id}`, {
+      method: "DELETE",
+      headers,
+    });
   }
+}
 
+async function registerGitKey(
+  username: string,
+  pubKey: string,
+  headers: Record<string, string>,
+): Promise<void> {
   const keyResp = await fetch(`${GIT_API_URL}/admin/users/${username}/keys`, {
     method: "POST",
     headers,
@@ -136,25 +206,30 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
   });
   if (keyResp.ok) {
     log(`[git] SSH key registered for ${username}`);
-  } else {
-    const body = await keyResp.text();
-    log(`⚠ [git] Failed to register SSH key for ${username}: ${keyResp.status} ${body}`);
+    return;
   }
+  const body = await keyResp.text();
+  log(`⚠ [git] Failed to register SSH key for ${username}: ${keyResp.status} ${body}`);
+}
 
+async function mintGatewayPat(
+  username: string,
+  headers: Record<string, string>,
+): Promise<string | null> {
   const sudoHeaders = { ...headers, Sudo: username };
+
   const tokensResp = await fetch(`${GIT_API_URL}/users/${username}/tokens`, {
     method: "GET",
     headers: sudoHeaders,
   });
   if (tokensResp.ok) {
-    const tokens = (await tokensResp.json()) as any[];
+    const tokens = (await tokensResp.json()) as GiteaToken[];
     for (const t of tokens) {
-      if (t.name === "gateway-edge") {
-        await fetch(`${GIT_API_URL}/users/${username}/tokens/${t.id}`, {
-          method: "DELETE",
-          headers: sudoHeaders,
-        });
-      }
+      if (t.name !== "gateway-edge" || typeof t.id !== "number") continue;
+      await fetch(`${GIT_API_URL}/users/${username}/tokens/${t.id}`, {
+        method: "DELETE",
+        headers: sudoHeaders,
+      });
     }
   }
 
@@ -171,7 +246,7 @@ export async function createGiteaUser(slug: string, pubKey: string): Promise<str
     return null;
   }
 
-  const tokenData = (await tokenResp.json()) as any;
+  const tokenData = (await tokenResp.json()) as GiteaToken;
   const token = tokenData.sha1 || tokenData.token || "";
   if (!token) {
     log(`⚠ [git] Token created but no value returned for ${username}`);
@@ -225,10 +300,10 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
       stdio: ["pipe", "pipe", "pipe"],
       env,
     }).trim();
-  } catch (err: any) {
-    const stderr = err.stderr?.toString?.()?.trim() ?? "";
+  } catch (err: unknown) {
+    const stderr = execErrStderr(err);
     const safeArgs = args.replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
-    const safeErr  = (stderr || err.message).replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
+    const safeErr = (stderr || errMessage(err)).replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
     log(`⚠ [git] exec failed: git ${safeArgs} → ${safeErr}`);
     return null;
   }
@@ -258,8 +333,8 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
       log(`[git] Repo ${org}/${repoName} not found on Gitea (${resp.status}) — skipping clone`);
       return false;
     }
-  } catch (err: any) {
-    log(`⚠ [git] Gitea API check failed for ${org}/${repoName}: ${err.message}`);
+  } catch (err: unknown) {
+    log(`⚠ [git] Gitea API check failed for ${org}/${repoName}: ${errMessage(err)}`);
     return false;
   }
 
@@ -284,7 +359,7 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 
   gitExec(dest, `config user.email "${slug}@octogee.com"`);
   gitExec(dest, `config user.name "Octo (${slug})"`);
-  
+
   setRepoSshCommand(dest, slug);
 
   log(`[git] ✅ Cloned ${org}/${repoName} → customers/${slug}/`);
@@ -318,8 +393,8 @@ export async function cloneProjectRepo(
       log(`[git] Project repo ${org}/${giteaRepoName} not found on Gitea (${resp.status}) — skipping clone`);
       return false;
     }
-  } catch (err: any) {
-    log(`⚠ [git] Gitea API check failed for ${org}/${giteaRepoName}: ${err.message}`);
+  } catch (err: unknown) {
+    log(`⚠ [git] Gitea API check failed for ${org}/${giteaRepoName}: ${errMessage(err)}`);
     return false;
   }
 
@@ -346,7 +421,7 @@ export async function cloneProjectRepo(
 
   gitExec(dest, `config user.email "${slug}@octogee.com"`);
   gitExec(dest, `config user.name "Octo (${slug})"`);
-  
+
   setRepoSshCommand(dest, slug);
 
   log(`[git] ✅ Cloned ${org}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
@@ -362,39 +437,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
 
-  const gitignore = [
-    "# Octogee workspace — track user-visible files, exclude system/build artifacts",
-    "",
-    "# System files (provisioner-managed, not user-visible)",
-    "AGENTS.md",
-    "TOOLS.md",
-    "PROJECTS.md",
-    "HEARTBEAT.md",
-    "_throttle.json",
-    "customer-config.json",
-    "crew-webhooks.json",
-    "_pending_*.json",
-    ".byot-managed",
-    ".system/",
-    ".openclaw/",
-    ".ssh/",
-    "brain/",
-    "",
-    "# Blob cache (provisioner-managed, synced from GCS)",
-    ".blobs/",
-    "",
-    "# Inbound media (ephemeral, 7-day retention)",
-    "media/",
-    "",
-    "# Build artifacts",
-    "projects/*/preview/",
-    "projects/*/src/node_modules/",
-    "node_modules/",
-    "",
-    "# User-visible files are tracked:",
-    "# SOUL.md, USER.md, MEMORY.md, memory/*, projects/*/src/",
-  ].join("\n") + "\n";
-  fs.writeFileSync(path.join(coachDir, ".gitignore"), gitignore, "utf-8");
+  fs.writeFileSync(path.join(coachDir, ".gitignore"), workspaceGitignore(), "utf-8");
 
   log(`[git] Initializing repo in ${coachDir}`);
   const initResult = gitExec(coachDir, "init -b main");
@@ -405,7 +448,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   log(`[git] init: ${initResult}`);
   gitExec(coachDir, `config user.email "${slug}@octogee.com"`);
   gitExec(coachDir, `config user.name "Octo (${slug})"`);
-  
+
   setRepoSshCommand(coachDir, slug);
 
   try {
@@ -448,6 +491,53 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   return repoUrlDisplay;
 }
 
+function workspaceGitignore(): string {
+  return [
+    "# Octogee workspace — track user-visible files, exclude system/build artifacts",
+    "",
+    "# System files (provisioner-managed, not user-visible)",
+    "AGENTS.md",
+    "TOOLS.md",
+    "PROJECTS.md",
+    "HEARTBEAT.md",
+    "_throttle.json",
+    "customer-config.json",
+    "crew-webhooks.json",
+    "_pending_*.json",
+    ".byot-managed",
+    ".system/",
+    ".openclaw/",
+    ".ssh/",
+    "brain/",
+    "",
+    "# Blob cache (provisioner-managed, synced from GCS)",
+    ".blobs/",
+    "",
+    "# Inbound media (ephemeral, 7-day retention)",
+    "media/",
+    "",
+    "# Build artifacts",
+    "projects/*/preview/",
+    "projects/*/src/node_modules/",
+    "node_modules/",
+    "",
+    "# User-visible files are tracked:",
+    "# SOUL.md, USER.md, MEMORY.md, memory/*, projects/*/src/",
+  ].join("\n") + "\n";
+}
+
+function projectGitignore(): string {
+  return [
+    "# Build artifacts",
+    "node_modules/",
+    ".astro/",
+    "dist/",
+    "",
+    "# OS files",
+    ".DS_Store",
+  ].join("\n") + "\n";
+}
+
 export async function initProjectRepo(
   projectDir: string,
   slug: string,
@@ -465,22 +555,13 @@ export async function initProjectRepo(
   const sshKey = customerSshKeyPath(slug);
   const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-  const gitignore = [
-    "# Build artifacts",
-    "node_modules/",
-    ".astro/",
-    "dist/",
-    "",
-    "# OS files",
-    ".DS_Store",
-  ].join("\n") + "\n";
-  fs.writeFileSync(path.join(projectDir, ".gitignore"), gitignore, "utf-8");
+  fs.writeFileSync(path.join(projectDir, ".gitignore"), projectGitignore(), "utf-8");
 
   log(`[git] Initializing project repo: ${slug}/${projectName}`);
   gitExec(projectDir, "init -b main");
   gitExec(projectDir, `config user.email "${committerEmail}"`);
   gitExec(projectDir, `config user.name "${committerName}"`);
-  
+
   setRepoSshCommand(projectDir, slug);
   gitExec(projectDir, "add -A");
   const commitResult = gitExec(projectDir, `commit -m "initial: ${projectName} project created"`);
@@ -572,69 +653,93 @@ export async function commitAndPush(repoDir: string, message: string): Promise<b
   return true;
 }
 
+export function listOnDiskCustomerSlugs(): string[] {
+  if (!fs.existsSync(CUSTOMERS_DIR)) return [];
+  return fs.readdirSync(CUSTOMERS_DIR).filter((d) => {
+    try {
+      return fs.statSync(path.join(CUSTOMERS_DIR, d)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function getOriginRemoteSilent(coachDir: string): string | null {
+  try {
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- frozen literal, no input; silent probe (gitExec would log every no-origin as ⚠ at default level)
+    return execSync("git remote get-url origin", {
+      cwd: coachDir,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function migrateHttpRemoteToSsh(coachDir: string, slug: string): void {
+  gitExec(
+    coachDir,
+    `remote set-url origin ${sshRemoteUrl(workspaceGiteaOrg(slug), workspaceRepoName())}`,
+  );
+  log(`[git-sync] ${slug}: migrated remote to SSH`);
+}
+
+function commitLocalChanges(coachDir: string): boolean {
+  const status = gitExec(coachDir, "status --porcelain");
+  if (!status) return false;
+  gitExec(coachDir, "add -A");
+  return gitExec(coachDir, `commit -m "auto: ${new Date().toISOString()}"`) !== null;
+}
+
+function rebaseFromOriginIfPresent(coachDir: string, keyArg: string | undefined): void {
+  const remoteMain = gitExec(coachDir, "ls-remote --heads origin main", keyArg);
+  if (remoteMain) {
+    gitExec(coachDir, "pull --rebase origin main", keyArg);
+  }
+}
+
+function pushAndLog(coachDir: string, slug: string, keyArg: string | undefined): void {
+  const pushResult = gitExec(coachDir, "push origin main", keyArg);
+  if (pushResult !== null) {
+    log(`[git-sync] ${slug}: pushed changes`);
+  } else {
+    log(`⚠ [git-sync] ${slug}: push failed`);
+  }
+}
+
+function syncOneWorkspace(slug: string): void {
+  const coachDir = path.join(CUSTOMERS_DIR, slug);
+  const gitDir = path.join(coachDir, ".git");
+  if (!fs.existsSync(gitDir)) return;
+
+  setRepoSshCommand(coachDir, slug);
+
+  const sshKey = customerSshKeyPath(slug);
+  const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
+
+  const remoteCheck = getOriginRemoteSilent(coachDir);
+  if (remoteCheck === null) {
+    dlog(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
+    return;
+  }
+
+  if (remoteCheck.startsWith("http")) {
+    migrateHttpRemoteToSsh(coachDir, slug);
+  }
+
+  const committed = commitLocalChanges(coachDir);
+  rebaseFromOriginIfPresent(coachDir, keyArg);
+
+  if (committed) {
+    pushAndLog(coachDir, slug, keyArg);
+  }
+}
+
 export async function syncAllWorkspaces(): Promise<void> {
   if (!GIT_API_TOKEN) return;
-  if (!fs.existsSync(CUSTOMERS_DIR)) return;
-
-  const slugs = fs.readdirSync(CUSTOMERS_DIR).filter(d =>
-    fs.statSync(path.join(CUSTOMERS_DIR, d)).isDirectory()
-  );
-
-  for (const slug of slugs) {
-    const coachDir = path.join(CUSTOMERS_DIR, slug);
-    const gitDir = path.join(coachDir, ".git");
-    if (!fs.existsSync(gitDir)) continue;
-
-setRepoSshCommand(coachDir, slug);
-
-    const sshKey = customerSshKeyPath(slug);
-    const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
-
-    const remoteCheck = ((): string | null => {
-      try {
-        // eslint-disable-next-line sonarjs/no-os-command-from-path -- frozen literal, no input; silent probe (gitExec would log every no-origin as ⚠ at default level)
-        return execSync("git remote get-url origin", {
-          cwd: coachDir,
-          encoding: "utf8",
-          stdio: ["pipe", "pipe", "pipe"],
-        }).trim();
-      } catch {
-        return null;
-      }
-    })();
-    if (remoteCheck === null) {
-      dlog(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
-      continue;
-    }
-
-    if (remoteCheck.startsWith("http")) {
-      gitExec(
-        coachDir,
-        `remote set-url origin ${sshRemoteUrl(workspaceGiteaOrg(slug), workspaceRepoName())}`,
-      );
-      log(`[git-sync] ${slug}: migrated remote to SSH`);
-    }
-
-    const status = gitExec(coachDir, "status --porcelain");
-    let committed = false;
-    if (status) {
-      gitExec(coachDir, "add -A");
-      committed = gitExec(coachDir, `commit -m "auto: ${new Date().toISOString()}"`) !== null;
-    }
-
-    const remoteMain = gitExec(coachDir, "ls-remote --heads origin main", keyArg);
-    if (remoteMain) {
-      gitExec(coachDir, "pull --rebase origin main", keyArg);
-    }
-
-    if (committed) {
-      const pushResult = gitExec(coachDir, "push origin main", keyArg);
-      if (pushResult !== null) {
-        log(`[git-sync] ${slug}: pushed changes`);
-      } else {
-        log(`⚠ [git-sync] ${slug}: push failed`);
-      }
-    }
+  for (const slug of listOnDiskCustomerSlugs()) {
+    syncOneWorkspace(slug);
   }
 }
 
