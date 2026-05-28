@@ -850,24 +850,24 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.26 GA (current) the fork carries **five logical essential patches across seven commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the Hunk A allowlist extension; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all three slots so the marker shows up regardless of which OC version a gateway runs.
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.5.27 GA (current) the fork carries **five logical essential patches across seven commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the Hunk A allowlist extension; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs.
 
-Live short SHAs at v2026.5.26 GA (top of current's integration branch is `c7bd3f95`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
-- `c7bd3f95` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
-- `ca0e6566` — mattermost connect log: ✅ marker for operator visibility on GW startup
-- `5c53a1b4` — activity harness-signal Hunk B: session-correlated execution-phase
-- `53a88bb1` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
-- `9eab990b` — env-gated isControlUiVisible override
-- `55677dce` — config.patch returns post-write hash
-- `d32661f6` — per-account surgical channel reload (adopts upstream async sidecar sig)
+Live short SHAs at v2026.5.27 GA (top of current's integration branch is `4c98bb96`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `4c98bb96` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
+- `eecd9faa` — mattermost connect log: ✅ marker for operator visibility on GW startup
+- `cb706ac4` — activity harness-signal Hunk B: session-correlated execution-phase
+- `aa1ef048` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+- `46082187` — env-gated isControlUiVisible override
+- `4b081f4e` — config.patch returns post-write hash
+- `b19ec201` — per-account surgical channel reload
 
 Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.5.26 (GA) | `c7bd3f95` |
-| previous | 2026.5.22 (GA) | `f3bd8194` |
-| preview | (empty) | — — no preview tracked until upstream cuts the next release version tag |
+| current | 2026.5.27 (GA) | `4c98bb96` |
+| previous | 2026.5.26 (GA) | `c7bd3f95` |
+| preview | (empty) | — — no preview tracked until upstream cuts the first 5.28 pre-stable tag |
 
 **Essential:**
 
