@@ -73,6 +73,10 @@ secrets:
     secretName: internal-service-key
     secretKey: key
     optional: false
+  - envName: INVITE_SECRET
+    secretName: invite-secret
+    secretKey: secret
+    optional: true
   # Resend — email digest delivery (P6)
   - envName: RESEND_API_KEY
     secretName: resend-secrets

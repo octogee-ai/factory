@@ -332,6 +332,10 @@ gatewayEdge:
       secretName: internal-service-key
       secretKey: key
       optional: false
+    - envName: INVITE_SECRET
+      secretName: invite-secret
+      secretKey: secret
+      optional: true
     - envName: RESEND_API_KEY
       secretName: resend-secrets
       secretKey: api_key

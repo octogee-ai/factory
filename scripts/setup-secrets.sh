@@ -575,16 +575,28 @@ info "resend-secrets"
 set +u
 RESEND_API_KEY="${RESEND_API_KEY:-}"
 RESEND_FROM_EMAIL="${RESEND_FROM_EMAIL:-}"
-RESEND_FROM_NAME="${RESEND_FROM_NAME:-Octogee}"
+RESEND_FROM_NAME="${RESEND_FROM_NAME:-Octo}"
 set -u
 [[ -z "$RESEND_API_KEY" ]]   && RESEND_API_KEY=$(sm_get RESEND_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$RESEND_FROM_EMAIL" ]] && RESEND_FROM_EMAIL=$(sm_get RESEND_FROM_EMAIL "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$RESEND_API_KEY" ]]   && warn "RESEND_API_KEY not found — digest emails will fail until configured"
+[[ -z "$RESEND_API_KEY" ]]   && warn "RESEND_API_KEY not found — emails will fail until configured"
 [[ -z "$RESEND_FROM_EMAIL" ]] && warn "RESEND_FROM_EMAIL not found — using placeholder"
 ksecret resend-secrets \
   --from-literal=api_key="${RESEND_API_KEY:-placeholder}" \
-  --from-literal=from_email="${RESEND_FROM_EMAIL:-notifications@octogee.com}" \
+  --from-literal=from_email="${RESEND_FROM_EMAIL:-octo@octogee.com}" \
   --from-literal=from_name="${RESEND_FROM_NAME}"
+
+# ── 11c. Invite token signing secret ─────────────────────────────────────
+# HMAC key for signed invite tokens (gateway-edge/octogee-api inviteTokens.ts).
+# Required for Builder invites; the route 500s without it. K8s Secret:
+# invite-secret { secret → INVITE_SECRET }.
+info "invite-secret"
+set +u
+INVITE_SECRET="${INVITE_SECRET:-}"
+set -u
+[[ -z "$INVITE_SECRET" ]] && INVITE_SECRET=$(sm_get INVITE_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$INVITE_SECRET" ]] && warn "INVITE_SECRET not found — invite links will fail until configured"
+ksecret invite-secret --from-literal=secret="${INVITE_SECRET:-placeholder}"
 
 # ── 11b. Discord ops webhook (optional) ──────────────────────────────────
 # Used by gateway to post operational events (agent provisioning, errors,
