@@ -146,19 +146,30 @@ RUN rm /opt/octogee-router-deps/prebake-model.mjs \
 # ── OpenClaw Codex plugin ────────────────────────────────────────────────────
 # Registers the `codex` agent harness for BYO-subscription (ChatGPT OAuth)
 # coaches running openai/gpt-5.5 via codex. `openclaw plugins install`
-# writes to $HOME/.openclaw/npm — but /home/node/.openclaw is an emptyDir
+# writes under $HOME/.openclaw/npm — but /home/node/.openclaw is an emptyDir
 # at runtime (no PVC) that shadows the image copy on every boot. So install
 # at build, then STAGE the tree to /opt/openclaw-codex-deps (non-shadowed);
 # entrypoint.sh restores it into the emptyDir at boot — the same
 # stage→runtime pattern as /opt/octogee-router-deps. Fail-loud on both the
 # install and the staging (no `| tail`: sh has no pipefail).
+#
+# The package's location WITHIN ~/.openclaw/npm is an upstream impl detail
+# that moves between releases: ≤5.27 placed it flat at
+# `npm/node_modules/@openclaw/codex`; the 5.28 plugin-subsystem refactor
+# moved it to a per-plugin project dir
+# `npm/projects/openclaw-codex-<hash>/node_modules/@openclaw/codex`. We stage
+# the WHOLE `npm` tree (so whatever layout comes along) and assert presence
+# with a layout-agnostic find — robust to the next reshuffle. Loading at
+# runtime is driven by openclaw.json (plugins.entries.codex.enabled) resolving
+# the package from the managed npm root, NOT by the plugins/installs.json
+# cache, so only the npm tree needs to survive to the emptyDir.
 RUN openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     tail -n 3 /tmp/oc-plugin.log; rm -f /tmp/oc-plugin.log; \
     mkdir -p /opt/openclaw-codex-deps \
       && cp -a /home/node/.openclaw/npm /opt/openclaw-codex-deps/npm \
       && chown -R node:node /opt/openclaw-codex-deps \
-      && test -d /opt/openclaw-codex-deps/npm/node_modules/@openclaw/codex \
+      && find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/codex' 2>/dev/null | grep -q . \
       || { echo "FATAL: @openclaw/codex missing from staged /opt tree"; exit 1; }
 
 # ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────

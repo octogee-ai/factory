@@ -285,12 +285,19 @@ if [ -d /octogee/extensions ]; then
 fi
 
 # ── Restore staged @openclaw/codex into the emptyDir ────────────────────────
-# `openclaw plugins install` writes to ~/.openclaw/npm, which is an emptyDir
+# `openclaw plugins install` writes under ~/.openclaw/npm, which is an emptyDir
 # at runtime (no PVC) — so the build-time install is shadowed every boot.
 # The plugin tree is staged in the base image at /opt/openclaw-codex-deps;
-# symlink it into place so the `codex` harness loads. Same /opt→emptyDir
-# pattern as the extension node_modules symlinks above.
-if [ -d /opt/openclaw-codex-deps/npm/node_modules/@openclaw/codex ]; then
+# symlink the whole `npm` dir into place so the `codex` harness loads. Same
+# /opt→emptyDir pattern as the extension node_modules symlinks above.
+#
+# The codex package's path within npm moves between OpenClaw releases (flat
+# `node_modules/@openclaw/codex` ≤5.27; `projects/openclaw-codex-<hash>/...`
+# in the 5.28 plugin refactor), so the presence check is layout-agnostic.
+# We symlink the whole `npm` tree regardless of layout; loading is driven by
+# openclaw.json (plugins.entries.codex.enabled) resolving the package from the
+# managed npm root, not by the plugins/installs.json cache.
+if find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/codex' 2>/dev/null | grep -q .; then
   if [ -e "$OPENCLAW_DIR/npm" ] || [ -L "$OPENCLAW_DIR/npm" ]; then
     rm -rf "$OPENCLAW_DIR/npm"
   fi
