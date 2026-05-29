@@ -142,6 +142,39 @@ helm upgrade --install grafana grafana/grafana \
   --wait --timeout=3m
 ok "Grafana deployed"
 
+# ── Dashboards (sidecar ConfigMaps) ─────────────────────────────────────────
+# Each JSON under helm/monitoring/dashboards/<group>/ becomes a ConfigMap that
+# the Grafana dashboard sidecar loads into the folder named after <group>.
+info "Applying Grafana dashboards..."
+desired=""
+for sub in platform gateways tracing; do
+  case "$sub" in
+    platform) folder="Platform" ;;
+    gateways) folder="Gateways" ;;
+    tracing)  folder="Tracing" ;;
+  esac
+  for json in "$REPO_DIR/helm/monitoring/dashboards/$sub"/*.json; do
+    [ -e "$json" ] || continue
+    base="$(basename "$json")"
+    name="grafana-dash-${base%.json}"
+    desired="$desired $name"
+    kubectl create configmap "$name" -n monitoring \
+      --from-file="$base=$json" --dry-run=client -o yaml \
+      | kubectl label  --local -f - grafana_dashboard=1 -o yaml \
+      | kubectl annotate --local -f - "grafana_folder=$folder" -o yaml \
+      | kubectl apply -f - >/dev/null
+  done
+done
+# Prune dashboards removed from the repo: delete any grafana-dash-* ConfigMap we
+# manage that's no longer in the desired set, so live Grafana never drifts ahead
+# of the repo (the prefix scopes the prune to our generated boards only).
+for cm in $(kubectl get configmap -n monitoring -l grafana_dashboard=1 \
+              -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+  case "$cm" in grafana-dash-*) ;; *) continue ;; esac
+  case " $desired " in *" $cm "*) ;; *) kubectl delete configmap "$cm" -n monitoring >/dev/null && info "pruned stale dashboard $cm" ;; esac
+done
+ok "Dashboards applied"
+
 # ── ServiceMonitors ───────────────────────────────────────────────────────
 info "Applying ServiceMonitors..."
 kubectl apply -f "$REPO_DIR/helm/monitoring/service-monitors.yaml"

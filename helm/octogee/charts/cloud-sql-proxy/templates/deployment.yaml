@@ -29,6 +29,16 @@ spec:
             - {{ .Values.connectionName | quote }}
           ports:
             - containerPort: 5432
+          # Catch the zombie-proxy failure mode: the process stays alive but stops
+          # accepting connections (connection-pool hang / unrecovered Cloud SQL
+          # blip), so K8s otherwise never restarts it. A TCP probe on 5432 forces
+          # a restart in ~90s instead of a multi-minute outage.
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false

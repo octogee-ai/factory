@@ -420,6 +420,19 @@ expect(open).not.toMatch(/port:\s*8080/);
 expect(open).toMatch(/port:\s*18789/);
   });
 
+  it("scopes runner-metrics (:9092) to the monitoring namespace only — never the open any-source rule", () => {
+    const np = findDoc(
+      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      "NetworkPolicy",
+      "octogee-gateway-builder-shell-default",
+    );
+    expect(np).not.toBeNull();
+    const { restricted, open } = splitNetworkPolicyRules(np!);
+    expect(restricted).toMatch(/namespaceSelector:[\s\S]*?kubernetes\.io\/metadata\.name:\s*monitoring/);
+    expect(restricted).toMatch(/port:\s*9092/);
+    expect(open).not.toMatch(/port:\s*9092/);
+  });
+
   it("is NOT rendered for standard-profile gateways (cattle don't expose :3005 so no backstop needed)", () => {
     const out = helmTemplate();
     expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();

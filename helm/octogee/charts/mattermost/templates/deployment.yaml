@@ -98,6 +98,24 @@ spec:
               value: "true"
             - name: MM_METRICSSETTINGS_LISTENADDRESS
               value: ":8067"
+          # Self-healing: Mattermost had no probes, so a wedged-but-alive server
+          # (DB hang, deadlock) would never be restarted. Ping is the cheap health
+          # endpoint; liveness uses a long initial delay so slow DB migrations on
+          # boot don't trigger a restart loop.
+          readinessProbe:
+            httpGet:
+              path: /api/v4/system/ping
+              port: 8065
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/v4/system/ping
+              port: 8065
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            failureThreshold: 3
           volumeMounts:
             - name: data
               mountPath: /mattermost/data
