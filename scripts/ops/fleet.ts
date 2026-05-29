@@ -19,6 +19,10 @@ import {
   rollbackPlan,
   describeStep,
 } from "../lib/fleet-migration.js";
+import {
+  cutoverUserGatewayAndMarkMounted,
+  type FleetStateFirestore,
+} from "../lib/fleet-state.js";
 
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
@@ -906,11 +910,15 @@ async function executeMigration(
     { migrationId, uid, slug, fromGatewayId, toGatewayId },
     {
       client,
-      cutoverFirestore: async (cutoverUid, target) => {
-        await db
-          .collection("users")
-          .doc(cutoverUid)
-          .update({ "provisioning.openclaw.gatewayId": target });
+      cutoverFirestore: async (cutoverUid, target, cutoverSlug) => {
+        await cutoverUserGatewayAndMarkMounted(
+          {
+            db: db as unknown as FleetStateFirestore,
+            serverTimestamp: () => FieldValue.serverTimestamp(),
+            log: (msg) => console.log(dim(`  ${msg}`)),
+          },
+          { uid: cutoverUid, slug: cutoverSlug, toGatewayId: target },
+        );
       },
       log: (msg) => console.log(dim(`  ${msg}`)),
     },

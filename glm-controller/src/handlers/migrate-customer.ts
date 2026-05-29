@@ -36,7 +36,7 @@ export interface MigrateCustomerDeps {
   
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
   
-  cutoverFirestore: (uid: string, toGatewayId: string) => Promise<void>;
+  cutoverFirestore: (uid: string, toGatewayId: string, slug: string) => Promise<void>;
 
 resolveGatewayUrl: (gatewayId: string) => Promise<string>;
 

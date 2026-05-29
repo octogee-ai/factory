@@ -57,7 +57,7 @@ function makeDeps(
       slug: "alice",
       currentGatewayId: "gw-blue",
     })),
-    cutoverFirestore: vi.fn(async (_uid: string, _to: string) => undefined),
+    cutoverFirestore: vi.fn(async (_uid: string, _to: string, _slug: string) => undefined),
     resolveGatewayUrl: vi.fn(async (gw: string) => `http://test/${gw}`),
     buildClient: vi.fn((_resolveSync: (gw: string) => string) => client),
     genMigrationId: () => "mig-test-1",
@@ -120,12 +120,12 @@ describe("createMigrateCustomerHandler — happy path", () => {
     );
   });
 
-  it("invokes cutoverFirestore with the resolved uid + toGatewayId from op.input", async () => {
+  it("invokes cutoverFirestore with the resolved uid, target gateway, and user slug", async () => {
     const { deps } = makeDeps();
     const handler = createMigrateCustomerHandler(deps);
     await handler(mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green" } }), makeCtx());
 
-    expect(deps.cutoverFirestore).toHaveBeenCalledWith("uid-alice", "gw-green");
+    expect(deps.cutoverFirestore).toHaveBeenCalledWith("uid-alice", "gw-green", "alice");
   });
 
   it("pre-resolves both gateway URLs via deps.resolveGatewayUrl before building the client", async () => {

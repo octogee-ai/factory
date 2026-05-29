@@ -28,14 +28,14 @@ interface ReportedStep {
 }
 
 function makeDeps(client: MigrationClient & { calls: string[] }) {
-  const cutoverCalls: Array<{ uid: string; toGatewayId: string }> = [];
+  const cutoverCalls: Array<{ uid: string; toGatewayId: string; slug: string }> = [];
   const logCalls: string[] = [];
   const reportedSteps: ReportedStep[] = [];
   return {
     client,
-    cutoverFirestore: vi.fn(async (uid: string, toGatewayId: string) => {
+    cutoverFirestore: vi.fn(async (uid: string, toGatewayId: string, slug: string) => {
       client.calls.push(`cutover:${uid}->${toGatewayId}`);
-      cutoverCalls.push({ uid, toGatewayId });
+      cutoverCalls.push({ uid, toGatewayId, slug });
     }),
     log: (msg: string) => logCalls.push(msg),
     reportStep: vi.fn(async (step: ReportedStep) => {
@@ -153,7 +153,11 @@ const failed = deps.reportedSteps.find((s) => s.status === "failed");
     expect(res.errorAt?.phase).toBe("cutover-done");
     expect(res.rolledBack).toBe(true);
     
-    expect(deps.cutoverCalls.at(-1)).toMatchObject({ uid: "uid-alice", toGatewayId: "gw-blue" });
+    expect(deps.cutoverCalls.at(-1)).toMatchObject({
+      uid: "uid-alice",
+      toGatewayId: "gw-blue",
+      slug: "alice",
+    });
   });
 
   it("does NOT roll back when the rollback would itself destroy data (post source-unmounted)", async () => {

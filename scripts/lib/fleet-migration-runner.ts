@@ -19,7 +19,7 @@ export interface ReportedStep {
 export interface MigrationRunnerDeps {
   client: MigrationClient;
   
-  cutoverFirestore: (uid: string, toGatewayId: string) => Promise<void>;
+  cutoverFirestore: (uid: string, toGatewayId: string, slug: string) => Promise<void>;
   log: (msg: string) => void;
 
 reportStep?: (step: ReportedStep) => Promise<void> | void;
@@ -44,6 +44,7 @@ async function executeStep(
   step: MigrationStep,
   deps: MigrationRunnerDeps,
   migrationId: string,
+  slug: string,
 ): Promise<void> {
   switch (step.action) {
     case "quiesce-source":
@@ -62,7 +63,7 @@ async function executeStep(
       });
       return;
     case "cutover-firestore":
-      await deps.cutoverFirestore(step.uid, step.to);
+      await deps.cutoverFirestore(step.uid, step.to, slug);
       return;
     case "unmount-source":
       await deps.client.unmount({
@@ -95,7 +96,7 @@ export async function runMigration(
     const phaseAtStart = state.phase;
     await report(deps, { name: step.action, status: "running" });
     try {
-      await executeStep(step, deps, input.migrationId);
+      await executeStep(step, deps, input.migrationId, input.slug);
       await report(deps, { name: step.action, status: "done" });
       deps.log(
         `[migration-runner] ${step.action} ok migrationId=${input.migrationId} slug=${input.slug} (phase ${phaseAtStart} → ${advancePhase(state.phase)})`,
@@ -148,7 +149,7 @@ async function tryRollback(
     const rbName = `rollback:${step.action}`;
     await report(deps, { name: rbName, status: "running" });
     try {
-      await executeStep(step, deps, migrationId);
+      await executeStep(step, deps, migrationId, state.slug);
       await report(deps, { name: rbName, status: "done" });
       deps.log(`[migration-runner] rollback ${step.action} ok`);
     } catch (rbErr) {

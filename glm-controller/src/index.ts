@@ -60,6 +60,10 @@ import { SIGNATURE_HEADER } from "../../shared/types/fleet-controller.js";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
 import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
+import {
+  cutoverUserGatewayAndMarkMounted,
+  type FleetStateFirestore,
+} from "../../scripts/lib/fleet-state.js";
 import { provisionGatewayAuthSecret } from "../../scripts/lib/secret-manager.js";
 import { listGatewayBuilds } from "../../scripts/lib/artifact-registry.js";
 import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
@@ -697,11 +701,15 @@ async function buildHandlers(
       if (!slug || !currentGatewayId) return null;
       return { slug, currentGatewayId };
     },
-    cutoverFirestore: async (uid, toGatewayId) => {
-      await db
-        .collection("users")
-        .doc(uid)
-        .update({ "provisioning.openclaw.gatewayId": toGatewayId });
+    cutoverFirestore: async (uid, toGatewayId, slug) => {
+      await cutoverUserGatewayAndMarkMounted(
+        {
+          db: db as unknown as FleetStateFirestore,
+          serverTimestamp: () => FieldValue.serverTimestamp(),
+          log: logFn,
+        },
+        { uid, slug, toGatewayId },
+      );
     },
     resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
     buildClient: (resolveSync) =>
