@@ -10,9 +10,18 @@ import {
 import { probeProviderKey } from "../../billing/provider-probe.js";
 import { writeSecret, archiveSecret } from "../../../../scripts/lib/secret-manager.js";
 import { primaryWorkspaceSlug } from "../../../../scripts/lib/workspace-slugs.js";
+import { triggerSecretsReload } from "../../../../scripts/lib/byot-sync-runtime.js";
 import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers.js";
 
 const router = Router();
+
+function triggerByotSecretsReload(action: "save" | "remove"): void {
+  triggerSecretsReload().catch((err: unknown) => {
+    logger.warn(
+      `[billing] BYOT post-${action} secrets reload failed (will self-correct via provisioner): ${err}`,
+    );
+  });
+}
 
 // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- BYOT-key submission flow: validates provider, dedupes against existing, probes the upstream, persists secret + Firestore state in one atomic-feeling sequence. Splitting it would scatter the flow across files.
 router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
@@ -139,12 +148,15 @@ await db.collection("users").doc(uid).update({
     });
 
     logger.info(`[billing] BYOT key saved for ${uid} provider=${provider} (${fingerprint}) version=${versionName}`);
+    // Fire-and-forget: signal the gateway to reload secrets immediately rather than
+    // waiting for the async Firestore-watcher → provisioner path to catch up.
+    triggerByotSecretsReload("save");
     res.json({
       success: true,
       provider,
       fingerprint,
       status: "active",
-      message: "Key validated and stored. It takes effect within 30 seconds.",
+      message: "Key validated and stored.",
     });
   } catch (e) { next(e); }
 });
@@ -179,9 +191,10 @@ await db.collection("users").doc(uid).collection("system").doc("config").set(
     });
 
     logger.info(`[billing] BYOT key removed for ${uid} provider=${provider} (disabled ${disabledCount} SM version(s))`);
+    triggerByotSecretsReload("remove");
     res.json({
       success: true,
-      message: "BYOT key removed. Reverting to platform billing within 30 seconds.",
+      message: "BYOT key removed. Reverting to platform billing.",
     });
   } catch (e) { next(e); }
 });
