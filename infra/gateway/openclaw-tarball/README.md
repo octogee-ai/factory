@@ -629,7 +629,27 @@ progress — retry in 30000ms` repeatedly, see
 
 Send a coach a real message in TEST and verify the agent responds with
 fresh-build markers. If you've changed any plugin-related patch (e.g.
-mattermost-tools tool dispatch), now's when you confirm.
+mattermost-tools tool dispatch), now's when you confirm. If you touched
+codex staging (`Dockerfile.base`/`entrypoint.sh`), confirm the entrypoint
+logged `Codex plugin: symlinked …` (not the `⚠ … absent` branch) and
+`openclaw plugins doctor` is clean in the pod.
+
+⚠ **Distrust a bad *build*, not the version.** A gateway image that
+crash-loops is almost always a build-specific delta (a transitive npm
+dep, the fork SHA, base-image drift) — not the OpenClaw version itself.
+The boot banner is the authoritative version check; a sibling registry
+tag can lie. The historical crash-mode was the SIGUSR1 config-reload race
+(a pod that booted clean still crash-looped *after* a reload-triggered
+restart); 5.27+ defers that restart until idle, which largely de-fanged
+it, but the stance is unchanged: watch the pod stay up under real
+workload, and *minimize* reloads rather than manufacturing one to
+certify. If it does crash-loop, capture the process title before rolling
+back:
+```bash
+kubectl --context gke_octogee_us-central1_octogee-gateway -n octogee-test \
+  exec deploy/octogee-gateway-default -c gateway -- \
+  sh -c 'cat /proc/*/cmdline 2>/dev/null | tr "\0" " " | grep -i openclaw'
+```
 
 ✓ Operator decides this passes.
 
@@ -822,6 +842,69 @@ the fork checkout), the registry install is dead weight — remove that
 status before removing; a genuinely-unbundled plugin still needs a
 working (compiled) install. Upstream #82425 ("repair source-only
 official plugin installs") is the broader fix landing in 5.16+.
+
+### Base build fails at codex staging (`@openclaw/codex missing from staged /opt tree`)
+
+**Symptom:** `octogee-gateway-base` build dies at the codex step with
+`FATAL: @openclaw/codex missing from staged /opt tree` — but the line
+just above shows `Installed plugin: codex` (the install itself
+*succeeded*). Distinct from the source-only failure above: here the
+install works, the *staging assertion* fails.
+
+**Cause:** `openclaw plugins install`'s on-disk layout is an upstream
+impl detail that **moves between releases**. ≤5.27 placed the package
+flat at `~/.openclaw/npm/node_modules/@openclaw/codex`; the 5.28
+plugin-subsystem refactor (84 files / +5302 LOC) moved it to a per-plugin
+project dir `~/.openclaw/npm/projects/openclaw-codex-<hash>/node_modules/@openclaw/codex`
+and added a generated `~/.openclaw/plugins/installs.json` registry. A
+staging assertion (or entrypoint restore guard) hard-coded to the old
+path breaks the moment upstream reshuffles. Caught on the 5.28-beta.2
+preview (2026-05-29); alpha.1 had built fine days earlier on the same
+Dockerfile — pure upstream drift.
+
+**Fix (already in place — `Dockerfile.base` + `entrypoint.sh`):** both
+the staging assertion and the runtime restore guard use a
+**layout-agnostic** check — `find <staged-npm> -type d -path
+'*/node_modules/@openclaw/codex' | grep -q .` — and stage/symlink the
+**whole** `~/.openclaw/npm` tree, so whatever layout comes along is
+carried. If this fails *again* it's a package rename/scope change, not a
+path-depth change (the `find` already handles arbitrary nesting). The
+base build's codex step is now self-validating: a green base build proves
+the staging.
+
+**Runtime fact — don't re-derive:** codex loads at runtime from
+`openclaw.json` (`plugins.entries.codex.enabled: true`) resolving the
+package from the npm managed-root — **NOT** from `plugins/installs.json`.
+That registry is a lazy cache (regenerated on demand; absolute-path +
+content-hash specific); it is **not staged, not restored, and not
+required** for the harness to load. Only the `npm` tree needs to survive
+the runtime emptyDir, which the existing whole-`npm` symlink already does.
+
+**Verify a staging change cheaply (no full gateway build needed):**
+`kubectl run` a throwaway pod on the freshly-built base image in
+`octogee-test`, run the entrypoint's `find` guard + the symlink into a
+fake `$HOME/.openclaw` + a minimal `openclaw.json` that enables codex,
+then `openclaw plugins doctor` / `openclaw plugins list | grep codex`
+(expect "No plugin issues detected" + codex `enabled`, resolving from the
+`projects/` path). Use `--restart=Never` + poll + `logs`, **not**
+`-i --rm` — the attach times out during the large base-image pull and
+kills the pod before it runs.
+
+### Base build times out (~10m cliff)
+
+**Symptom:** `octogee-gateway-base` (or the gateway image) build fails
+with a Cloud Build timeout right around 10 minutes.
+
+**Cause:** The OpenClaw runtime build grew over time (the 5.28 plugin
+refactor + added deps); base builds drifted from comfortably-under-10m to
+landing right at the old `timeout: "600s"` cliff.
+
+**Fix (already in place):** all three build configs carry `timeout:
+"1800s"` (30m headroom) — `cloudbuild-base.yaml`, `cloudbuild-base-beta.yaml`,
+`cloudbuild.yaml`. This is a legitimate "the build got bigger" bump, not a
+threshold-dodge (the builds succeed, they just need wall-clock). If you
+see timeouts again, the build grew further — bump the headroom, don't
+shave the build.
 
 ---
 
