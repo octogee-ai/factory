@@ -348,6 +348,10 @@ gatewayEdge:
       secretName: resend-secrets
       secretKey: from_name
       optional: true
+    - envName: RESEND_WEBHOOK_SECRET
+      secretName: resend-secrets
+      secretKey: webhook_secret
+      optional: true
   resources:
     requests:
       cpu: 100m

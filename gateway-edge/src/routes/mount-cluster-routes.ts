@@ -10,6 +10,7 @@ import integrationRoutes from "./integrations.js";
 import discordRoutes from "./discord.js";
 import notificationRoutes from "./notifications.js";
 import sharingRoutes from "./sharing.js";
+import emailWebhookRoutes from "./email-webhook.js";
 import entitiesRoutes from "./entities.js";
 import profileRoutes from "./profile.js";
 import onboardingRoutes from "./onboarding.js";
@@ -72,6 +73,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
     app.use("/api/auth/mattermost", opts.mattermostMintRoutes);
   }
   app.use("/api/sharing", sharingRoutes);
+  app.use("/api/email", emailWebhookRoutes);
   app.use("/api/entities", entitiesRoutes);
   app.use("/api/mattermost", mattermostRoutes);
   app.use("/api/openclaw", openclawRoutes);
