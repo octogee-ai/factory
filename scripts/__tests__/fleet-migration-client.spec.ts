@@ -2,8 +2,6 @@ import { describe, it, expect } from "vitest";
 import { signFleetRequest } from "../lib/fleet-signature";
 import {
   SIGNATURE_HEADER,
-  MIGRATION_ID_HEADER,
-  MIGRATION_SLUG_HEADER,
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
@@ -142,41 +140,13 @@ describe("MigrationClient.unmount", () => {
 });
 
 describe("MigrationClient.transferState", () => {
-  it("pipes the export response body into the import request body and returns the import response", async () => {
-    const tarBytes = new Uint8Array([0x74, 0x65, 0x73, 0x74]); 
-    const exportResponse = new Response(tarBytes, {
-      status: 200,
-      headers: { "content-type": "application/x-tar" },
-    });
-    const importResponse = new Response(
-      JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
-      { status: 200, headers: { "content-type": "application/json" } },
+  it("tells the source gateway to push directly to the target gateway", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
     );
-
-    let exportCallSeen = false;
-    let importCallSeen = false;
-    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/export/")) {
-        exportCallSeen = true;
-        return exportResponse;
-      }
-      if (url.includes("/import/")) {
-        importCallSeen = true;
-        const headers: Record<string, string> = {};
-        if (init?.headers) {
-          const h = init.headers as Record<string, string>;
-          for (const k of Object.keys(h)) headers[k.toLowerCase()] = h[k];
-        }
-        
-        const expectedSig = signFleetRequest(SECRET, "m1", "alice");
-        expect(headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
-        expect(headers[MIGRATION_ID_HEADER.toLowerCase()]).toBe("m1");
-        expect(headers[MIGRATION_SLUG_HEADER.toLowerCase()]).toBe("alice");
-        return importResponse;
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    }) as typeof fetch;
 
     const client = createMigrationClient({
       secret: SECRET,
@@ -190,24 +160,25 @@ describe("MigrationClient.transferState", () => {
       toGatewayId: "gw-to",
       slug: "alice",
     });
-    expect(exportCallSeen).toBe(true);
-    expect(importCallSeen).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://fleet-from.example.com/push-state/gw-from");
+    expect(calls[0].method).toBe("POST");
+    const parsed = JSON.parse(calls[0].body!);
+    expect(parsed).toEqual({
+      migrationId: "m1",
+      slug: "alice",
+      targetGatewayId: "gw-to",
+      targetUrl: "https://fleet-to.example.com",
+    });
+    const expectedSig = signFleetRequest(SECRET, "m1", calls[0].body!);
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
     expect(res.imported).toBe(true);
   });
 
-  it("throws if export returns non-2xx (no import attempt)", async () => {
-    let importCalls = 0;
-    const fakeFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/export/")) {
-        return new Response("upstream gateway is draining", { status: 503 });
-      }
-      if (url.includes("/import/")) {
-        importCalls++;
-        return new Response(JSON.stringify({}), { status: 200 });
-      }
-      throw new Error(`unexpected ${url}`);
-    }) as typeof fetch;
+  it("throws if push-state returns non-2xx", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response("source gateway is draining", { status: 503 }),
+    );
 
     const client = createMigrationClient({
       secret: SECRET,
@@ -221,8 +192,8 @@ describe("MigrationClient.transferState", () => {
         toGatewayId: "gw-to",
         slug: "alice",
       }),
-    ).rejects.toThrow(/export.*503/i);
-    expect(importCalls).toBe(0);
+    ).rejects.toThrow(/push-state.*503.*source gateway is draining/i);
+    expect(calls).toHaveLength(1);
   });
 });
 
@@ -284,14 +255,10 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     ).rejects.toThrow(/unmount.*timed out.*25ms/i);
   });
 
-  it("passes the AbortSignal on both /export and /import inside transferState", async () => {
+  it("passes the AbortSignal on /push-state inside transferState", async () => {
     const signals: Array<AbortSignal | undefined> = [];
-    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fakeFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       signals.push(init?.signal ?? undefined);
-      const url = String(input);
-      if (url.includes("/export/")) {
-        return new Response("tarbytes", { status: 200 });
-      }
       return new Response(JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -310,9 +277,8 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
       slug: "alice",
     });
 
-    expect(signals).toHaveLength(2);
+    expect(signals).toHaveLength(1);
     expect(signals[0]).toBeInstanceOf(AbortSignal);
-    expect(signals[1]).toBeInstanceOf(AbortSignal);
     expect(MIGRATION_TRANSFER_TIMEOUT_MS).toBeGreaterThan(MIGRATION_UNMOUNT_TIMEOUT_MS);
   });
 });

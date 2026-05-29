@@ -103,6 +103,11 @@ migrationId: string;
   slug: string;
 }
 
+export interface PushStateRequestBody extends MigrationRequestBody {
+  targetGatewayId: string;
+  targetUrl: string;
+}
+
 export interface QuiesceRequestBody extends MigrationRequestBody {
 
 timeoutMs?: number;

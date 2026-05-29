@@ -121,7 +121,7 @@ export function describeStep(step: MigrationStep): string {
     case "quiesce-source":
       return `quiesce ${step.slug} on ${step.gateway} (stop accepting new prompts; let in-flight runs settle)`;
     case "transfer-state":
-      return `stream ~/.openclaw/agents/${step.slug} from ${step.from} → ${step.to}`;
+      return `push ~/.openclaw/agents/${step.slug} directly from ${step.from} → ${step.to}`;
     case "cutover-firestore":
       return `Firestore: users/{uid=${step.uid}}.provisioning.openclaw.gatewayId = ${step.to} (was ${step.from})`;
     case "unmount-source":

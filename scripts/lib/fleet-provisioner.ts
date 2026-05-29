@@ -6,6 +6,7 @@ import { ActiveRestoreSet, createRestoreCustomerHandler, IdempotencyCache } from
 import {
   createExportHandler,
   createImportHandler,
+  createPushStateHandler,
   createQuiesceHandler,
   createUnmountHandler,
 } from "./fleet-http-migration.js";
@@ -228,6 +229,7 @@ const waitForGatewayReady = async (): Promise<void> => {
   };
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
+  app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
 

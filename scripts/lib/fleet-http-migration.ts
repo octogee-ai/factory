@@ -9,16 +9,18 @@ import * as path from "node:path";
 import {
   type ImportResponse,
   type MigrationRequestBody,
+  type PushStateRequestBody,
   type QuiesceRequestBody,
   type QuiesceResponse,
   type UnmountRequestBody,
   type UnmountResponse,
+  MIGRATION_TRANSFER_TIMEOUT_MS,
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
   MIGRATION_SLUG_HEADER,
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername } from "../../shared/types/identity.js";
-import { verifyFleetRequest } from "./fleet-signature.js";
+import { signFleetRequest, verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { removeCustomerFromGateway } from "./customer-lifecycle.js";
 
@@ -30,6 +32,10 @@ export interface MigrationHandlerDeps {
   log?: (msg: string) => void;
 
 getMountedCustomers?: () => readonly string[];
+
+fetch?: typeof globalThis.fetch;
+
+pushStateTimeoutMs?: number;
 }
 
 function rejectInvalidSlug(slug: string, res: Response): boolean {
@@ -81,6 +87,47 @@ function verifyHeaderSignature(
 return verifyFleetRequest(secret, migrationId, slug, sigHeader);
 }
 
+function tarArgsForSources(sources: Array<{ cwd: string; path: string }>): string[] {
+  return [
+    "-cf", "-",
+    ...sources.flatMap((s) => ["-C", s.cwd, s.path]),
+  ];
+}
+
+interface TarStream {
+  child: ReturnType<typeof spawn>;
+  stdout: NonNullable<ReturnType<typeof spawn>["stdout"]>;
+  done: Promise<void>;
+}
+
+function markPromiseHandled(promise: Promise<unknown>): void {
+  promise.catch(() => undefined);
+}
+
+function spawnTarStream(sources: Array<{ cwd: string; path: string }>): TarStream {
+  const child = spawn("tar", tarArgsForSources(sources), { stdio: ["ignore", "pipe", "pipe"] }); // eslint-disable-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
+  const stdout = child.stdout;
+  const stderr = child.stderr;
+  if (!stdout || !stderr) {
+    child.kill();
+    throw new Error("tar spawned without stdout/stderr pipes");
+  }
+
+  let stderrBuf = "";
+  stderr.on("data", (d) => {
+    stderrBuf += d.toString();
+  });
+  const done = new Promise<void>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`tar exit ${code}: ${stderrBuf.trim()}`));
+    });
+  });
+  markPromiseHandled(done);
+  return { child, stdout, done };
+}
+
 export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -124,27 +171,22 @@ res.status(404).json({ error: "no export paths", message: `nothing to export for
         `[migration-http] export migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s)`,
       );
 
-const tarArgs = [
-
-"-cf", "-",
-        ...sources.flatMap((s) => ["-C", s.cwd, s.path]),
-      ];
-      const child = spawn("tar", tarArgs, { stdio: ["ignore", "pipe", "pipe"] }); // eslint-disable-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
-
-let stderrBuf = "";
-      let errored = false;
-      child.on("error", (err) => {
-        errored = true;
-        log(`[migration-http] ❌ export spawn migrationId=${body.migrationId} slug=${body.slug}: ${err.message}`);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "tar spawn failed", message: err.message });
-        } else {
-          res.destroy(err);
-        }
-      });
-      child.stderr.on("data", (d) => {
-        stderrBuf += d.toString();
-      });
+      const tar = spawnTarStream(sources);
+      tar.done
+        .then(() => {
+          log(`[migration-http] ✅ export migrationId=${body.migrationId} slug=${body.slug} done`);
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log(
+            `[migration-http] ❌ export migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+          );
+          if (!res.headersSent) {
+            res.status(500).json({ error: "tar failed", message });
+            return;
+          }
+          res.destroy(err instanceof Error ? err : new Error(message));
+        });
 
       res.status(200);
       res.setHeader("Content-Type", "application/x-tar");
@@ -152,19 +194,7 @@ let stderrBuf = "";
         "Content-Disposition",
         `attachment; filename="${body.slug}.tar"`,
       );
-      child.stdout.pipe(res);
-      child.on("close", (code) => {
-        if (errored) return; 
-        if (code !== 0) {
-
-log(
-            `[migration-http] ❌ export migrationId=${body.migrationId} slug=${body.slug} tar exit=${code} stderr=${stderrBuf.trim()}`,
-          );
-          res.destroy(new Error(`tar exit ${code}`));
-        } else {
-          log(`[migration-http] ✅ export migrationId=${body.migrationId} slug=${body.slug} done`);
-        }
-      });
+      tar.stdout.pipe(res);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ export setup migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
@@ -174,6 +204,210 @@ log(
       } else {
         res.destroy(err instanceof Error ? err : new Error(message));
       }
+    }
+  };
+}
+
+function isValidGatewayRouteId(gatewayId: string): boolean {
+  if (gatewayId.length === 0 || gatewayId.length > 128) return false;
+  for (let i = 0; i < gatewayId.length; i++) {
+    const code = gatewayId.charCodeAt(i);
+    const alpha = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    const digit = code >= 48 && code <= 57;
+    const routePunctuation = code === 45 || code === 46 || code === 95;
+    if (!(alpha || digit || (i > 0 && routePunctuation))) return false;
+  }
+  return true;
+}
+
+function resolveTargetImportUrl(targetUrl: string, targetGatewayId: string): string {
+  const url = new URL(targetUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`targetUrl must use http or https`);
+  }
+  let basePath = url.pathname;
+  while (basePath.endsWith("/")) {
+    basePath = basePath.slice(0, -1);
+  }
+  url.pathname = `${basePath}/import/${encodeURIComponent(targetGatewayId)}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function validatePushStateBody(
+  body: PushStateRequestBody,
+  res: Response,
+): { targetGatewayId: string; importUrl: string } | null {
+  if (typeof body.targetGatewayId !== "string" || body.targetGatewayId.length === 0) {
+    res.status(400).json({ error: "missing targetGatewayId" });
+    return null;
+  }
+  if (!isValidGatewayRouteId(body.targetGatewayId)) {
+    res.status(400).json({ error: "invalid targetGatewayId" });
+    return null;
+  }
+  if (typeof body.targetUrl !== "string" || body.targetUrl.length === 0) {
+    res.status(400).json({ error: "missing targetUrl" });
+    return null;
+  }
+  try {
+    return {
+      targetGatewayId: body.targetGatewayId,
+      importUrl: resolveTargetImportUrl(body.targetUrl, body.targetGatewayId),
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(400).json({ error: "invalid targetUrl", message });
+    return null;
+  }
+}
+
+function attachPushStateAbortHandlers(
+  res: Response,
+  params: { migrationId: string; slug: string; timeoutMs: number },
+  log: (msg: string) => void,
+): {
+  controller: AbortController;
+  didTimeout: () => boolean;
+  detach: () => void;
+} {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error(`push-state timed out after ${params.timeoutMs}ms`));
+  }, params.timeoutMs);
+  const onResClose = () => {
+    if (res.writableEnded || controller.signal.aborted) return;
+    log(
+      `[migration-http] controller closed push-state connection migrationId=${params.migrationId} slug=${params.slug} — aborting target import`,
+    );
+    controller.abort(new Error("controller disconnected mid-push-state"));
+  };
+  res.on("close", onResClose);
+  return {
+    controller,
+    didTimeout: () => timedOut,
+    detach: () => {
+      clearTimeout(timeout);
+      res.removeListener("close", onResClose);
+    },
+  };
+}
+
+function pushStateFailureStatus(
+  didTimeout: boolean,
+  signal: AbortSignal,
+): { status: number; error: string } {
+  if (didTimeout) return { status: 504, error: "push-state timed out" };
+  if (signal.aborted) return { status: 499, error: "controller disconnected" };
+  return { status: 500, error: "push-state failed" };
+}
+
+async function finishPushStateAlreadyMounted(
+  tar: TarStream,
+  res: Response,
+  parsed: ImportResponse,
+  targetGatewayId: string,
+  log: (msg: string) => void,
+): Promise<void> {
+  tar.child.kill();
+  await tar.done.catch(() => undefined);
+  log(
+    `[migration-http] ✅ push-state migrationId=${parsed.migrationId} slug=${parsed.slug} target=${targetGatewayId} already mounted`,
+  );
+  res.status(200).json(parsed);
+}
+
+export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const timeoutMs = deps.pushStateTimeoutMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<PushStateRequestBody>(req, res, deps.secret, log);
+    if (!body) return;
+    const target = validatePushStateBody(body, res);
+    if (!target) return;
+
+    const abort = attachPushStateAbortHandlers(
+      res,
+      { migrationId: body.migrationId, slug: body.slug, timeoutMs },
+      log,
+    );
+
+    let tar: TarStream | null = null;
+    try {
+      const sources = await deps.adapter.listExportPaths(body.slug);
+      if (sources.length === 0) {
+        res
+          .status(404)
+          .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
+        return;
+      }
+      log(
+        `[migration-http] push-state migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s) directly to ${target.targetGatewayId}`,
+      );
+
+      tar = spawnTarStream(sources);
+
+      const importSig = signFleetRequest(deps.secret, body.migrationId, body.slug);
+      const importRes = await fetchImpl(
+        target.importUrl,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-tar",
+            [SIGNATURE_HEADER]: importSig,
+            [MIGRATION_ID_HEADER]: body.migrationId,
+            [MIGRATION_SLUG_HEADER]: body.slug,
+          },
+          body: tar.stdout,
+          duplex: "half",
+          signal: abort.controller.signal,
+        } as unknown as RequestInit & { duplex: "half" },
+      );
+
+      if (!importRes.ok) {
+        const text = await importRes.text().catch(() => "<no body>");
+        tar.child.kill();
+        await tar.done.catch(() => undefined);
+        log(
+          `[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug} target import failed status=${importRes.status}: ${text}`,
+        );
+        res
+          .status(502)
+          .json({ error: "target import failed", status: importRes.status, message: text });
+        return;
+      }
+
+      const parsed = (await importRes.json()) as ImportResponse;
+      if (parsed.alreadyMounted) {
+        await finishPushStateAlreadyMounted(tar, res, parsed, target.targetGatewayId, log);
+        return;
+      }
+
+      await tar.done;
+      log(
+        `[migration-http] ✅ push-state migrationId=${body.migrationId} slug=${body.slug} target=${target.targetGatewayId} done`,
+      );
+      res.status(200).json(parsed);
+    } catch (err) {
+      tar?.child.kill();
+      await tar?.done.catch(() => undefined);
+      const message = err instanceof Error ? err.message : String(err);
+      log(`[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      if (!res.headersSent) {
+        const { status, error } = pushStateFailureStatus(
+          abort.didTimeout(),
+          abort.controller.signal,
+        );
+        res.status(status).json({ error, message });
+      } else {
+        res.destroy(err instanceof Error ? err : new Error(message));
+      }
+    } finally {
+      abort.detach();
     }
   };
 }
@@ -331,6 +565,7 @@ if (tmpDir) {
 
 async function streamRequestToFile(req: Request, dest: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest is a fixed import.tar path under an fs.mkdtemp-created migration dir.
     const writeStream = createWriteStream(dest);
     let settled = false;
     const settle = (action: () => void) => {
@@ -465,6 +700,7 @@ export async function readAgentSessions(
 ): Promise<SessionsJson["sessions"]> {
   const sessionsPath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
   try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- stateDir is gateway-owned OpenClaw state and agentId is derived from a validated slug.
     const raw = await fs.readFile(sessionsPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<SessionsJson>;
     return parsed.sessions ?? [];

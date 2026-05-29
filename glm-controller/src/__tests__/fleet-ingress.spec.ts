@@ -29,7 +29,7 @@ describe("computeDesiredFleetPaths", () => {
     ]);
   });
 
-  it("emits 5 RPC paths per gateway routed to the per-instance Service plus /health at the end", () => {
+  it("emits 6 RPC paths per gateway routed to the per-instance Service plus /health at the end", () => {
     const gateways: FleetGateway[] = [
       { gatewayId: "gw-test", instanceName: "default" },
     ];
@@ -42,6 +42,7 @@ describe("computeDesiredFleetPaths", () => {
       "/restore-customer/gw-test",
       "/quiesce/gw-test",
       "/export/gw-test",
+      "/push-state/gw-test",
       "/import/gw-test",
       "/unmount/gw-test",
       "/health",
@@ -345,6 +346,7 @@ describe("syncFleetIngressPaths", () => {
       "/restore-customer/gw-test",
       "/quiesce/gw-test",
       "/export/gw-test",
+      "/push-state/gw-test",
       "/import/gw-test",
       "/unmount/gw-test",
       "/health",
@@ -634,4 +636,3 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
     expect(log).toHaveBeenCalledWith(expect.stringContaining("deferring"));
   });
 });
-

@@ -3,8 +3,6 @@
 import { signFleetRequest } from "./fleet-signature.js";
 import {
   SIGNATURE_HEADER,
-  MIGRATION_ID_HEADER,
-  MIGRATION_SLUG_HEADER,
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
@@ -148,51 +146,14 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     },
 
     async transferState({ migrationId, fromGatewayId, toGatewayId, slug }) {
-
-const exportRawBody = JSON.stringify({ migrationId, slug });
-      const exportSig = signFleetRequest(deps.secret, migrationId, exportRawBody);
-      const exportUrl = `${deps.resolveGatewayUrl(fromGatewayId)}/export/${fromGatewayId}`;
-      const exportRes = await fetchWithTimeout(
-        "export",
-        exportUrl,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            [SIGNATURE_HEADER]: exportSig,
-          },
-          body: exportRawBody,
-        },
+      const targetUrl = deps.resolveGatewayUrl(toGatewayId);
+      const parsed = await postSignedJson<ImportResponse>(
+        fromGatewayId,
+        `/push-state/${fromGatewayId}`,
+        migrationId,
+        { migrationId, slug, targetGatewayId: toGatewayId, targetUrl },
         transferMs,
       );
-      if (!exportRes.ok) {
-        const text = await exportRes.text().catch(() => "<no body>");
-        throw new Error(`export: ${exportRes.status} ${text}`);
-      }
-
-const importSig = signFleetRequest(deps.secret, migrationId, slug);
-      const importUrl = `${deps.resolveGatewayUrl(toGatewayId)}/import/${toGatewayId}`;
-      const importRes = await fetchWithTimeout(
-        "import",
-        importUrl,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-tar",
-            [SIGNATURE_HEADER]: importSig,
-            [MIGRATION_ID_HEADER]: migrationId,
-            [MIGRATION_SLUG_HEADER]: slug,
-          },
-          body: exportRes.body,
-          duplex: "half",
-        } as RequestInit & { duplex: "half" },
-        transferMs,
-      );
-      if (!importRes.ok) {
-        const text = await importRes.text().catch(() => "<no body>");
-        throw new Error(`import: ${importRes.status} ${text}`);
-      }
-      const parsed = (await importRes.json()) as ImportResponse;
       log(
         `[migration-client] ✅ transferState migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`,
       );
