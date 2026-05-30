@@ -22,12 +22,15 @@ export function generatePersonalSlug(): string {
   });
 }
 
-export async function generateDataApiKey(uid: string): Promise<string> {
+export async function ensureDataApiKey(uid: string): Promise<string> {
+  const ref = db.doc(`users/${uid}/settings/api`);
+  const snap = await ref.get();
+  const existing = snap.exists
+    ? (snap.data() as { apiKey?: unknown } | undefined)?.apiKey
+    : undefined;
+  if (typeof existing === "string" && existing.length > 0) return existing;
   const apiKey = crypto.randomBytes(32).toString("hex");
-  await db.doc(`users/${uid}/settings/api`).set({
-    apiKey,
-    createdAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+  await ref.set({ apiKey, createdAt: FieldValue.serverTimestamp() }, { merge: true });
   return apiKey;
 }
 

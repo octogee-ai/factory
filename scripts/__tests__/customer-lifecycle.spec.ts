@@ -82,7 +82,6 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     hasCustomerDir: () => state.disk.customerDir,
     hasWorkspaceGitDir: () => state.disk.workspaceGitDir,
     hasGitRemote: () => state.disk.gitRemote,
-    repoHasCommits: () => state.disk.repoHasCommits,
     ensureCustomerDirectories: () => {
       record("ensureCustomerDirectories");
       state.disk.customerDir = true;
@@ -428,7 +427,14 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
     expect(result.newCustomer).toBe(false);
     expect(result.steps).toContain("clone-workspace-repo");
     expect(result.steps).not.toContain("init-workspace-repo");
-    expect(result.steps).not.toContain("write-templates");
+  });
+
+  it("ensures gitignored system files after the clone (AGENTS.md etc. are never in the repo)", async () => {
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).toContain("write-templates");
+    expect(state.calls).toContain("writeCustomerTemplateFiles");
+    expect(state.calls).toContain("writeCustomerConfig");
   });
 
   it("does NOT re-provision Mattermost or re-schedule the greeting cron", async () => {
@@ -536,25 +542,6 @@ const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
     expect(writeIdx).toBeGreaterThan(cloneIdx);
   });
 
-  it("does NOT re-write templates when the clone delivers a populated working tree", async () => {
-
-const state = makeState(
-      snap({
-        status: "complete",
-        agentIds: ["octogee-test-coach"],
-        repoUrl: "http://gitea/octogee/test-workspace",
-        mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
-      }),
-      emptyDisk(),
-    );
-
-    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
-
-    expect(result.steps).toContain("clone-workspace-repo");
-    expect(result.steps).not.toContain("write-templates");
-    expect(state.calls).not.toContain("writeCustomerTemplateFiles");
-  });
 });
 
 describe("addCustomerToGateway — operator gateway short-circuits when status=complete", () => {
