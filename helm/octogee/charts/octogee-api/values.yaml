@@ -106,6 +106,10 @@ secrets:
     secretName: resend-secrets
     secretKey: webhook_secret
     optional: true
+  - envName: EMAIL_UNSUBSCRIBE_SECRET
+    secretName: resend-secrets
+    secretKey: unsubscribe_secret
+    optional: true
 
 resources:
   requests:

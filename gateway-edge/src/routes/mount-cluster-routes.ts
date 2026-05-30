@@ -11,6 +11,7 @@ import discordRoutes from "./discord.js";
 import notificationRoutes from "./notifications.js";
 import sharingRoutes from "./sharing.js";
 import emailWebhookRoutes from "./email-webhook.js";
+import emailUnsubscribeRoutes from "./email-unsubscribe.js";
 import entitiesRoutes from "./entities.js";
 import profileRoutes from "./profile.js";
 import onboardingRoutes from "./onboarding.js";
@@ -73,10 +74,11 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
     app.use("/api/auth/mattermost", opts.mattermostMintRoutes);
   }
   app.use("/api/sharing", sharingRoutes);
-  // /api/email is RESERVED for raw-body webhooks (see body-parsers.ts). Any
-  // future endpoint under /api/email/* MUST be added to RAW_BODY_WEBHOOK_PATHS
-  // OR mounted under a different prefix — JSON parsing would break signature
-  // verification on this surface.
+  // Raw-body endpoints under /api/email/* (the Resend webhook) MUST be listed
+  // in RAW_BODY_WEBHOOK_PATHS (see body-parsers.ts) or signature verification
+  // breaks. Non-raw-body sub-routes (e.g. urlencoded one-click unsubscribe)
+  // fall through to normal parsing and are fine alongside.
+  app.use("/api/email/unsubscribe", emailUnsubscribeRoutes);
   app.use("/api/email", emailWebhookRoutes);
   app.use("/api/entities", entitiesRoutes);
   app.use("/api/mattermost", mattermostRoutes);

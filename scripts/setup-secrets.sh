@@ -577,18 +577,22 @@ RESEND_API_KEY="${RESEND_API_KEY:-}"
 RESEND_FROM_EMAIL="${RESEND_FROM_EMAIL:-}"
 RESEND_FROM_NAME="${RESEND_FROM_NAME:-Octo}"
 RESEND_WEBHOOK_SECRET="${RESEND_WEBHOOK_SECRET:-}"
+EMAIL_UNSUBSCRIBE_SECRET="${EMAIL_UNSUBSCRIBE_SECRET:-}"
 set -u
 [[ -z "$RESEND_API_KEY" ]]   && RESEND_API_KEY=$(sm_get RESEND_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$RESEND_FROM_EMAIL" ]] && RESEND_FROM_EMAIL=$(sm_get RESEND_FROM_EMAIL "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$RESEND_WEBHOOK_SECRET" ]] && RESEND_WEBHOOK_SECRET=$(sm_get RESEND_WEBHOOK_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$EMAIL_UNSUBSCRIBE_SECRET" ]] && EMAIL_UNSUBSCRIBE_SECRET=$(sm_get EMAIL_UNSUBSCRIBE_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$RESEND_API_KEY" ]]   && warn "RESEND_API_KEY not found — emails will fail until configured"
 [[ -z "$RESEND_FROM_EMAIL" ]] && warn "RESEND_FROM_EMAIL not found — using placeholder"
 [[ -z "$RESEND_WEBHOOK_SECRET" ]] && warn "RESEND_WEBHOOK_SECRET not found — webhook will 503 until configured (Resend dashboard → Webhooks → signing secret)"
+[[ -z "$EMAIL_UNSUBSCRIBE_SECRET" ]] && warn "EMAIL_UNSUBSCRIBE_SECRET not found — one-click unsubscribe routes will 500 until configured (generate with: openssl rand -base64 48)"
 ksecret resend-secrets \
   --from-literal=api_key="${RESEND_API_KEY:-placeholder}" \
   --from-literal=from_email="${RESEND_FROM_EMAIL:-octo@octogee.com}" \
   --from-literal=from_name="${RESEND_FROM_NAME}" \
-  --from-literal=webhook_secret="${RESEND_WEBHOOK_SECRET:-placeholder}"
+  --from-literal=webhook_secret="${RESEND_WEBHOOK_SECRET:-placeholder}" \
+  --from-literal=unsubscribe_secret="${EMAIL_UNSUBSCRIBE_SECRET:-placeholder}"
 
 # ── 11c. Invite token signing secret ─────────────────────────────────────
 # HMAC key for signed invite tokens (gateway-edge/octogee-api inviteTokens.ts).
