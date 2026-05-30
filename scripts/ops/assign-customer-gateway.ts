@@ -4,6 +4,10 @@ import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
+import {
+  GLM_GATEWAYS_COLLECTION,
+  type GatewayProfile,
+} from "../../shared/types/glm.js";
 
 const ORCHESTRATOR_CONFIG_DOC = "config/orchestrator";
 const GATEWAY_ID_PATTERN = /^[a-z0-9-]+$/;
@@ -32,9 +36,18 @@ async function readOrchestratorConfig(db: Firestore): Promise<OrchestratorConfig
 }
 
 type AssignResult =
-  | { kind: "assigned"; uid: string; slug: string; gatewayId: string; previous: string | null }
-  | { kind: "already-assigned"; uid: string; slug: string; gatewayId: string }
+  | { kind: "assigned"; uid: string; slug: string; gatewayId: string; gatewayProfile: GatewayProfile; previous: string | null }
+  | { kind: "already-assigned"; uid: string; slug: string; gatewayId: string; gatewayProfile: GatewayProfile }
   | { kind: "not-ready"; uid: string; slug: string; reason: string };
+
+function normalizeGatewayProfile(profile: unknown): GatewayProfile {
+  return profile === "operator" ? "operator" : "standard";
+}
+
+async function readGatewayProfile(db: Firestore, gatewayId: string): Promise<GatewayProfile> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
+}
 
 async function assignOne(
   db: Firestore,
@@ -58,14 +71,22 @@ if (data.approved !== true) {
     return { kind: "not-ready", uid, slug, reason: "config-missing" };
   }
   const target = config.overrides?.[uid] ?? config.defaultGatewayId;
+  const targetProfile = await readGatewayProfile(db, target);
   const current: string | null = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;
+  const currentProfile = normalizeGatewayProfile(openclaw?.gatewayProfile);
   if (current === target) {
-    return { kind: "already-assigned", uid, slug, gatewayId: current };
+    if (!opts.dryRun && currentProfile !== targetProfile) {
+      await userRef.update({ "provisioning.openclaw.gatewayProfile": targetProfile });
+    }
+    return { kind: "already-assigned", uid, slug, gatewayId: current, gatewayProfile: targetProfile };
   }
   if (!opts.dryRun) {
-    await userRef.update({ "provisioning.openclaw.gatewayId": target });
+    await userRef.update({
+      "provisioning.openclaw.gatewayId": target,
+      "provisioning.openclaw.gatewayProfile": targetProfile,
+    });
   }
-  return { kind: "assigned", uid, slug, gatewayId: target, previous: current };
+  return { kind: "assigned", uid, slug, gatewayId: target, gatewayProfile: targetProfile, previous: current };
 }
 
 const argv = process.argv.slice(2);
@@ -165,11 +186,11 @@ const q = await db
     switch (result.kind) {
       case "assigned":
         console.log(
-          `✅${mode} ${result.slug} (${result.uid}): ${result.previous ?? "(unassigned)"} → ${result.gatewayId}`,
+          `✅${mode} ${result.slug} (${result.uid}): ${result.previous ?? "(unassigned)"} → ${result.gatewayId} (${result.gatewayProfile})`,
         );
         break;
       case "already-assigned":
-        console.log(`•  ${result.slug} (${result.uid}): already on ${result.gatewayId}`);
+        console.log(`•  ${result.slug} (${result.uid}): already on ${result.gatewayId} (${result.gatewayProfile})`);
         break;
       case "not-ready":
         console.log(`⚠️  ${result.slug} (${result.uid}): not-ready — ${result.reason}`);

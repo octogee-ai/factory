@@ -94,6 +94,15 @@ function resolveSizingForResponse(
   };
 }
 
+function normalizeGatewayProfile(profile: unknown): GatewayProfile {
+  return profile === "operator" ? "operator" : "standard";
+}
+
+async function readGatewayProfile(db: Firestore, gatewayId: string): Promise<GatewayProfile> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
+}
+
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike { id: string; data(): GlmDoc }
 interface JobsByGateway { jobsByGateway: Map<string, Array<{ id: string; data: GlmDoc }>>; mounting: number; staleJobs: number; pending: number }
@@ -875,6 +884,7 @@ router.get(
 
 router.post(
     "/customers/:uid/assign",
+    // eslint-disable-next-line complexity -- linear request validation and one repair fast-path; each branch returns its own operator-facing response.
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
@@ -891,7 +901,7 @@ router.post(
         const userData = userSnap.data() as
           | {
               approved?: boolean;
-              provisioning?: { openclaw?: { gatewayId?: string } };
+              provisioning?: { openclaw?: { gatewayId?: string; gatewayProfile?: unknown } };
             }
           | undefined;
         if (!userData?.approved) {
@@ -919,19 +929,32 @@ router.post(
           return;
         }
         const currentGid = userData.provisioning?.openclaw?.gatewayId;
+        const gatewayProfile = await readGatewayProfile(db, body.gatewayId);
         if (currentGid === body.gatewayId) {
+          if (normalizeGatewayProfile(userData.provisioning?.openclaw?.gatewayProfile) !== gatewayProfile) {
+            await db
+              .collection("users")
+              .doc(uid)
+              .update({ "provisioning.openclaw.gatewayProfile": gatewayProfile });
+            res.status(200).json({ uid, gatewayId: body.gatewayId, gatewayProfile, repaired: true });
+            return;
+          }
           res.status(409).json({
             error: "user already assigned to that gateway — no-op",
             uid,
             gatewayId: body.gatewayId,
+            gatewayProfile,
           });
           return;
         }
         await db
           .collection("users")
           .doc(uid)
-          .update({ "provisioning.openclaw.gatewayId": body.gatewayId });
-        res.status(202).json({ uid, gatewayId: body.gatewayId });
+          .update({
+            "provisioning.openclaw.gatewayId": body.gatewayId,
+            "provisioning.openclaw.gatewayProfile": gatewayProfile,
+          });
+        res.status(202).json({ uid, gatewayId: body.gatewayId, gatewayProfile });
       } catch (e) {
         next(e);
       }
@@ -1534,6 +1557,7 @@ const KICKABLE_STATES = new Set(["pending", "dispatched", "running"]);
               };
             };
 
+        // eslint-disable-next-line complexity -- transaction keeps the restore-job state checks adjacent to the writes they guard.
         const outcome = await db.runTransaction(async (txn) => {
           
           const jobSnap = await txn.get(jobRef);

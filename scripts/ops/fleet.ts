@@ -14,6 +14,10 @@ import {
   RESTORE_JOBS_COLLECTION,
 } from "../../shared/types/fleet-controller.js";
 import {
+  GLM_GATEWAYS_COLLECTION,
+  type GatewayProfile,
+} from "../../shared/types/glm.js";
+import {
   type MigrationState,
   fullPlan,
   rollbackPlan,
@@ -131,7 +135,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Override placement: assign customer to a specific gateway.",
     args: "<slug> --to=<gw-id> [--apply]",
     description:
-      "Writes `users/{uid}.provisioning.openclaw.gatewayId`. Refuses if the gateway doesn't exist or is `unreachable`. Same downstream path as `assign-customer-gateway.ts`, but lets ops force a specific gateway (canary placement, repair).\n\nDry-run by default. Pass `--apply` to commit.",
+      "Writes `users/{uid}.provisioning.openclaw.gatewayId` and the mirrored `gatewayProfile`. Refuses if the gateway doesn't exist or is `unreachable`. Same downstream path as `assign-customer-gateway.ts`, but lets ops force a specific gateway (canary placement, repair).\n\nDry-run by default. Pass `--apply` to commit.",
     examples: [
       "fleet --env=prod add-customer ceckert --to=gw-prod-canary",
       "fleet --env=prod add-customer ceckert --to=gw-prod-canary --apply",
@@ -306,6 +310,15 @@ const KUBE_NS = args.env === "prod" ? "octogee" : "octogee-test";
 
 type FirestoreTs = { toMillis(): number };
 
+function normalizeGatewayProfile(profile: unknown): GatewayProfile {
+  return profile === "operator" ? "operator" : "standard";
+}
+
+async function readGatewayProfile(gatewayId: string): Promise<GatewayProfile> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
+}
+
 type GatewayDoc =
   & Omit<
     GatewayState,
@@ -329,6 +342,7 @@ interface UserDoc {
       slug?: string;
       status?: GatewayStatus | string;
       gatewayId?: string;
+      gatewayProfile?: unknown;
     };
   };
 }
@@ -773,13 +787,27 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
     process.exit(1);
   }
   const gw = gwSnap.data() as GatewayDoc;
+  const gatewayProfile = await readGatewayProfile(gatewayId);
   if (gw.status === "unreachable") {
     console.error(red(`${CROSS} Gateway '${gatewayId}' is in 'unreachable' status.`));
     console.error(dim(`  Refusing to assign — the customer would never get mounted.`));
     process.exit(1);
   }
   const current = user.data.provisioning?.openclaw?.gatewayId ?? null;
+  const currentProfile = normalizeGatewayProfile(user.data.provisioning?.openclaw?.gatewayProfile);
   if (current === gatewayId) {
+    if (currentProfile !== gatewayProfile) {
+      console.log(yellow(`'${slug}' is already assigned to '${gatewayId}', but gatewayProfile is ${currentProfile}; repairing to ${gatewayProfile}.`));
+      if (apply) {
+        await db.collection("users").doc(user.uid).update({
+          "provisioning.openclaw.gatewayProfile": gatewayProfile,
+        });
+        console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayProfile = ${gatewayProfile}`));
+      } else {
+        console.log(dim(`--- DRY RUN (re-run with --apply to repair gatewayProfile) ---`));
+      }
+      return;
+    }
     console.log(yellow(`'${slug}' is already assigned to '${gatewayId}'. Nothing to do.`));
     return;
   }
@@ -788,6 +816,7 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   console.log(`  uid                 ${user.uid}`);
   console.log(`  current gatewayId   ${current ?? dim("(none)")}`);
   console.log(`  new gatewayId       ${cyan(gatewayId)}`);
+  console.log(`  gateway profile     ${gatewayProfile}`);
   console.log(`  gateway status      ${gw.status}`);
   if (current && current !== gatewayId) {
     console.log("\n" + yellow(`!  moving from '${current}' to '${gatewayId}'. Old gateway will keep ${slug} in mountedCustomers until next reboot or explicit unmount — that's drift until Phase 2 ships /unmount RPC.`));
@@ -800,8 +829,10 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
 
   await db.collection("users").doc(user.uid).update({
     "provisioning.openclaw.gatewayId": gatewayId,
+    "provisioning.openclaw.gatewayProfile": gatewayProfile,
   });
   console.log("\n" + green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayId = ${gatewayId}`));
+  console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayProfile = ${gatewayProfile}`));
   console.log(dim(`  Controller's onUserUpdatedForFleet will fire and pick-next on ${gatewayId}.`));
 }
 

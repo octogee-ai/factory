@@ -123,7 +123,7 @@ export function describeStep(step: MigrationStep): string {
     case "transfer-state":
       return `push ~/.openclaw/agents/${step.slug} directly from ${step.from} → ${step.to}`;
     case "cutover-firestore":
-      return `Firestore: users/{uid=${step.uid}}.provisioning.openclaw.gatewayId = ${step.to} (was ${step.from})`;
+      return `Firestore: users/{uid=${step.uid}}.provisioning.openclaw.gatewayId = ${step.to} (was ${step.from}) + gatewayProfile mirror`;
     case "unmount-source":
       return `unmount ${step.slug} on ${step.gateway} (release agent + data dir)`;
     case "complete":
