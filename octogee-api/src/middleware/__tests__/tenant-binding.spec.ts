@@ -144,6 +144,29 @@ describe("tenant binding middleware", () => {
     });
   });
 
+  it("records shared gateway callers without attaching a tenant", async () => {
+    const warn = vi.fn();
+    const { app, registry } = buildApp({
+      warn,
+      reviewer: async () => ({
+        authenticated: true,
+        namespace: "octogee",
+        saName: "octogee-gateway",
+        audiences: ["octogee-api"],
+      }),
+    });
+
+    const res = await request(app)
+      .post("/internal/probe")
+      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.boundTenant).toBeNull();
+    await expect(registry.metrics()).resolves.toContain('result="shared_gateway"');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("soft-fails invalid tokens, reviewer errors, and unknown tenants", async () => {
     const warn = vi.fn();
     const invalid = buildApp({

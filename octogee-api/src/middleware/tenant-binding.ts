@@ -138,7 +138,7 @@ export function createTenantBindingMiddleware(
     record(opts.metrics, req, mapped.result);
     if (mapped.attached) {
       req.boundTenant = mapped.tenant;
-    } else {
+    } else if (mapped.result !== "shared_gateway") {
       warn(logger, "service account did not map to a tenant", {
         route: req.path,
         result: mapped.result,

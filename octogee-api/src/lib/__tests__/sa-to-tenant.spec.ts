@@ -87,6 +87,16 @@ describe("mapSaToTenant", () => {
     expect(incomplete).toEqual({ attached: false, result: "unknown_tenant" });
   });
 
+  it("classifies the legacy shared gateway KSA without tenant-binding it", async () => {
+    const result = await mapSaToTenant(
+      fakeDb({}),
+      { namespace: "octogee", saName: "octogee-gateway" },
+      "octogee",
+    );
+
+    expect(result).toEqual({ attached: false, result: "shared_gateway" });
+  });
+
   it("soft-fails malformed and unknown service accounts", async () => {
     const malformed = await mapSaToTenant(
       fakeDb({}),

@@ -107,6 +107,13 @@ spec:
         - protocol: TCP
           port: 2222
     - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - protocol: TCP
+          port: 3001
+    - to:
         - ipBlock:
             cidr: 169.254.169.254/32
       ports:
