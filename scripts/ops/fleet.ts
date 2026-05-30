@@ -801,8 +801,10 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
       if (apply) {
         await db.collection("users").doc(user.uid).update({
           "provisioning.openclaw.gatewayProfile": gatewayProfile,
+          "provisioning.openclaw.shellsEnabled": false,
         });
         console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayProfile = ${gatewayProfile}`));
+        console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.shellsEnabled = false`));
       } else {
         console.log(dim(`--- DRY RUN (re-run with --apply to repair gatewayProfile) ---`));
       }
@@ -830,9 +832,11 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   await db.collection("users").doc(user.uid).update({
     "provisioning.openclaw.gatewayId": gatewayId,
     "provisioning.openclaw.gatewayProfile": gatewayProfile,
+    "provisioning.openclaw.shellsEnabled": false,
   });
   console.log("\n" + green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayId = ${gatewayId}`));
   console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayProfile = ${gatewayProfile}`));
+  console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.shellsEnabled = false`));
   console.log(dim(`  Controller's onUserUpdatedForFleet will fire and pick-next on ${gatewayId}.`));
 }
 

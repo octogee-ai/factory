@@ -24,7 +24,7 @@
     "profile": {
       "type": "string",
       "enum": ["", "standard", "operator"],
-      "description": "Capability profile. Empty + 'standard' are equivalent cattle behavior; 'operator' enables pet-home (PVC), builder-shell, and skips the platform ANTHROPIC_API_KEY injection."
+      "description": "Capability profile. Empty + 'standard' are equivalent cattle behavior; 'operator' enables pet-home defaults and platform-secret withholding. Shells require operatorAccess.shellsEnabled."
     },
     "replicas": {
       "type": "integer",
@@ -79,6 +79,20 @@
     },
     "serviceAccountName": {
       "type": "string"
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "operatorAccess": {
+      "type": "object",
+      "properties": {
+        "shellsEnabled": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "verifiedAt": { "type": "number" },
+        "verifiedBy": { "type": "string" }
+      },
+      "additionalProperties": true
     },
     "computeClass": {
       "type": "string"

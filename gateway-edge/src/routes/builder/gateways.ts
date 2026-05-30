@@ -5,6 +5,10 @@ import {
   BuilderGatewayListEntry,
   BuilderGatewaysMeResponse,
 } from "../../../../shared/types/builder-shell.js";
+import {
+  isOperatorGatewayShellAccessEnabled,
+  type OperatorGatewayAccessSpec,
+} from "../../../../shared/types/glm.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -17,6 +21,7 @@ interface GlmGatewayDoc {
   coOwnerUids?: string[];
   desiredStatus?: string;
   imageTag?: string;
+  operatorAccess?: OperatorGatewayAccessSpec;
 }
 
 function builderViewOf(
@@ -29,6 +34,10 @@ function builderViewOf(
     profile: doc.profile ?? "standard",
     desiredStatus: doc.desiredStatus ?? "running",
     imageTag: doc.imageTag,
+    shellsEnabled: isOperatorGatewayShellAccessEnabled(
+      doc.profile === "operator" ? "operator" : "standard",
+      doc.operatorAccess,
+    ),
     via,
   };
 }

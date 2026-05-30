@@ -161,8 +161,10 @@ await deps.helm.removeInstance({
       imageRepository: change.to.image.repository,
       imageTag: change.to.image.tag,
       serviceAccountName: change.to.serviceAccountName,
+      serviceAccount: change.to.serviceAccount,
       gatewayContainerSecurityContext: change.to.gatewayContainerSecurityContext,
       persistence: change.to.persistence,
+      operatorAccess: change.to.operatorAccess,
       profile: change.to.profile,
       sizingTier: change.to.sizingTier,
       replicas: change.to.replicas,
@@ -187,6 +189,7 @@ async function readLiveReplicasInto(
           name: deploymentNameForInstance(instanceName),
         });
         if (live !== null) {
+          // eslint-disable-next-line security/detect-object-injection -- instanceName comes from own actualMap keys; this only refreshes its replica count.
           actualMap[instanceName] = { ...actualMap[instanceName], replicas: live };
         }
       } catch (err) {
@@ -773,15 +776,40 @@ syncFleetIngress,
         imageRepository: data.imageRepository,
         imageTag: data.imageTag,
         profile: data.profile,
+        persistence: data.persistence,
+        serviceAccountName: data.serviceAccountName,
+        serviceAccount: data.serviceAccount,
+        operatorAccess: data.operatorAccess,
       };
     },
-    updateGlmGatewayImage: async (gatewayId, imageRepository, imageTag, profile) => {
-      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({
+    updateGlmGatewayImage: async ({
+      gatewayId,
+      imageRepository,
+      imageTag,
+      profile,
+      persistence,
+      serviceAccountName,
+      serviceAccount,
+      operatorAccess,
+    }) => {
+      const update: Record<string, unknown> = {
         imageRepository,
         imageTag,
-
-profile: profile === "standard" ? FieldValue.delete() : profile,
-      });
+        profile: profile === "standard" ? FieldValue.delete() : profile,
+      };
+      if (persistence) {
+        update.persistence = persistence;
+      }
+      if (serviceAccountName) {
+        update.serviceAccountName = serviceAccountName;
+      }
+      if (serviceAccount) {
+        update.serviceAccount = serviceAccount;
+      }
+      if (operatorAccess) {
+        update.operatorAccess = operatorAccess;
+      }
+      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update(update);
     },
     readGatewayHeartbeat: async (gatewayId) => {
       const doc = await db.collection("gateways").doc(gatewayId).get();

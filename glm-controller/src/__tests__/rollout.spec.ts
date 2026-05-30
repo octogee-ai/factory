@@ -55,14 +55,27 @@ function makeDeps(state: FakeState, overrides: Partial<RolloutDeps> = {}): Rollo
       }),
     },
     readCurrentSpec: vi.fn(async (gatewayId: string) => state.specs.get(gatewayId) ?? null),
-    updateGlmGatewayImage: vi.fn(async (gatewayId, repo, tag, profile) => {
+    updateGlmGatewayImage: vi.fn(async ({
+      gatewayId,
+      imageRepository,
+      imageTag,
+      profile,
+      persistence,
+      serviceAccountName,
+      serviceAccount,
+      operatorAccess,
+    }) => {
       const cur = state.specs.get(gatewayId);
       if (cur)
         state.specs.set(gatewayId, {
           ...cur,
-          imageRepository: repo,
-          imageTag: tag,
+          imageRepository,
+          imageTag,
           ...(profile ? { profile } : {}),
+          ...(persistence ? { persistence } : {}),
+          ...(serviceAccountName ? { serviceAccountName } : {}),
+          ...(serviceAccount ? { serviceAccount } : {}),
+          ...(operatorAccess ? { operatorAccess } : {}),
         });
     }),
     readGatewayHeartbeat: vi.fn(async (gatewayId) => state.heartbeats.get(gatewayId) ?? null),
@@ -322,6 +335,17 @@ state.helmInstances.set("bender", { repository: OPERATOR_REPO, tag: "sha1" });
 
     expect(result.success).toBe(true);
     expect(state.specs.get("gw-bender")?.profile).toBe("operator");
+    expect(state.specs.get("gw-bender")?.persistence).toMatchObject({
+      enabled: true,
+      storageClassName: "premium-rwo",
+      size: "20Gi",
+      accessModes: ["ReadWriteOnce"],
+    });
+    expect(state.specs.get("gw-bender")?.serviceAccountName).toBe("octogee-gateway-bender");
+    expect(state.specs.get("gw-bender")?.serviceAccount).toMatchObject({ create: true });
+    expect(state.specs.get("gw-bender")?.operatorAccess).toMatchObject({
+      shellsEnabled: false,
+    });
 
 expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
   });
@@ -329,7 +353,27 @@ expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
   it("same sha AND same profile is still a no-op (boundary not over-broadened)", async () => {
     const state: FakeState = {
       specs: new Map([
-        ["gw-bender", { instanceName: "bender", imageRepository: REPO, imageTag: "sha1", profile: "operator" }],
+        [
+          "gw-bender",
+          {
+            instanceName: "bender",
+            imageRepository: REPO,
+            imageTag: "sha1",
+            profile: "operator",
+            persistence: {
+              enabled: true,
+              storageClassName: "premium-rwo",
+              size: "20Gi",
+              accessModes: ["ReadWriteOnce"],
+            },
+            serviceAccountName: "octogee-gateway-bender",
+            serviceAccount: { create: true },
+            operatorAccess: {
+              shellsEnabled: false,
+              reason: "operator-trust-boundary-not-provisioned",
+            },
+          },
+        ],
       ]),
       helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "sha1" }]]),
       heartbeats: new Map([["gw-bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
@@ -343,5 +387,37 @@ expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/no-op/);
     expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
+  });
+
+  it("same sha/profile still converges missing operator safety defaults instead of no-oping", async () => {
+    const state: FakeState = {
+      specs: new Map([
+        [
+          "gw-bender",
+          {
+            instanceName: "bender",
+            imageRepository: REPO,
+            imageTag: "sha1",
+            profile: "operator",
+          },
+        ],
+      ]),
+      helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "sha1" }]]),
+      heartbeats: new Map([["gw-bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
+    };
+    const deps = makeDeps(state);
+    const ctx = makeCtx();
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "gw-bender", imageTag: "sha1", profile: "operator" } }),
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(deps.updateGlmGatewayImage).toHaveBeenCalled();
+    expect(state.specs.get("gw-bender")?.serviceAccountName).toBe("octogee-gateway-bender");
+    expect(state.specs.get("gw-bender")?.serviceAccount).toMatchObject({ create: true });
+    expect(state.specs.get("gw-bender")?.operatorAccess).toMatchObject({
+      shellsEnabled: false,
+      reason: "operator-trust-boundary-not-provisioned",
+    });
   });
 });

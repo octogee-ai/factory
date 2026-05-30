@@ -1,7 +1,12 @@
-import type {
-  GatewayDesiredState,
-  HelmInstanceValue,
-  HelmInstancesMap,
+import {
+  GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
+  OPERATOR_GATEWAY_LOCKED_ACCESS,
+  OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  operatorGatewayServiceAccountName,
+  resolveGatewayPersistence,
+  type GatewayDesiredState,
+  type HelmInstanceValue,
+  type HelmInstancesMap,
 } from "../../shared/types/glm.js";
 import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 import { isSizingTier } from "../../shared/types/sizing.js";
@@ -27,20 +32,7 @@ export function buildInstancesMap(
   const out: HelmInstancesMap = {};
   for (const d of desired) {
     if (d.desiredStatus === "retired") continue;
-    out[d.instanceName] = {
-      enabled: true,
-      image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
-      gatewayId: d.gatewayId,
-      replicas: d.desiredStatus === "paused" ? 0 : 1,
-      ...(chartFingerprint ? { chartFingerprint } : {}),
-      ...(d.serviceAccountName ? { serviceAccountName: d.serviceAccountName } : {}),
-      ...(d.gatewayContainerSecurityContext
-        ? { gatewayContainerSecurityContext: d.gatewayContainerSecurityContext }
-        : {}),
-      ...(d.persistence ? { persistence: d.persistence } : {}),
-      ...(d.profile ? { profile: d.profile } : {}),
-      ...(isSizingTier(d.sizingTier) ? { sizingTier: d.sizingTier } : {}),
-    };
+    out[d.instanceName] = buildHelmInstanceValue(d, chartFingerprint);
   }
   return out;
 }
@@ -61,27 +53,64 @@ if (mounted === undefined || mounted.length === 0) {
       }
       continue;
     }
-    out[d.instanceName] = {
-      enabled: true,
-      image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
-      gatewayId: d.gatewayId,
-      replicas: d.desiredStatus === "paused" ? 0 : 1,
-      ...(chartFingerprint ? { chartFingerprint } : {}),
-      ...(d.serviceAccountName ? { serviceAccountName: d.serviceAccountName } : {}),
-      ...(d.gatewayContainerSecurityContext
-        ? { gatewayContainerSecurityContext: d.gatewayContainerSecurityContext }
-        : {}),
-      ...(d.persistence ? { persistence: d.persistence } : {}),
-      ...(d.profile ? { profile: d.profile } : {}),
-      ...(isSizingTier(d.sizingTier) ? { sizingTier: d.sizingTier } : {}),
-    };
+    out[d.instanceName] = buildHelmInstanceValue(d, chartFingerprint);
   }
   return out;
 }
 
-export interface DiffOptions {
+function resolveOperatorHelmKnobs(d: GatewayDesiredState): Pick<
+  HelmInstanceValue,
+  "serviceAccountName" | "serviceAccount" | "operatorAccess"
+> {
+  let serviceAccountName = d.serviceAccountName;
+  let serviceAccount = d.serviceAccount;
+  const generatedOperatorServiceAccountName = operatorGatewayServiceAccountName(d.gatewayId);
+  if (
+    d.profile === "operator" &&
+    (!serviceAccountName || serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME)
+  ) {
+    serviceAccountName = generatedOperatorServiceAccountName;
+  }
+  if (
+    d.profile === "operator" &&
+    serviceAccountName === generatedOperatorServiceAccountName &&
+    !serviceAccount
+  ) {
+    serviceAccount = OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT;
+  }
+  const operatorAccess =
+    d.profile === "operator"
+      ? d.operatorAccess ?? OPERATOR_GATEWAY_LOCKED_ACCESS
+      : d.operatorAccess;
+  return { serviceAccountName, serviceAccount, operatorAccess };
+}
 
-compareChartFingerprint?: boolean;
+function buildHelmInstanceValue(
+  d: GatewayDesiredState,
+  chartFingerprint?: string,
+): HelmInstanceValue {
+  const persistence = resolveGatewayPersistence(d.profile, d.persistence);
+  const { serviceAccountName, serviceAccount, operatorAccess } = resolveOperatorHelmKnobs(d);
+  return {
+    enabled: true,
+    image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
+    gatewayId: d.gatewayId,
+    replicas: d.desiredStatus === "paused" ? 0 : 1,
+    ...(chartFingerprint ? { chartFingerprint } : {}),
+    ...(serviceAccountName ? { serviceAccountName } : {}),
+    ...(serviceAccount ? { serviceAccount } : {}),
+    ...(d.gatewayContainerSecurityContext
+      ? { gatewayContainerSecurityContext: d.gatewayContainerSecurityContext }
+      : {}),
+    ...(persistence ? { persistence } : {}),
+    ...(operatorAccess ? { operatorAccess } : {}),
+    ...(d.profile ? { profile: d.profile } : {}),
+    ...(isSizingTier(d.sizingTier) ? { sizingTier: d.sizingTier } : {}),
+  };
+}
+
+export interface DiffOptions {
+  compareChartFingerprint?: boolean;
 }
 
 export function diffInstancesMap(
@@ -128,9 +157,15 @@ function instanceEqual(
   ];
   for (const [x, y] of scalars) if (x !== y) return false;
   if (compareChartFingerprint && a.chartFingerprint !== b.chartFingerprint) return false;
-  if (stableStringify(a.gatewayContainerSecurityContext ?? null) !==
-      stableStringify(b.gatewayContainerSecurityContext ?? null)) return false;
-  if (stableStringify(a.persistence ?? null) !== stableStringify(b.persistence ?? null)) return false;
+  const objects: ReadonlyArray<[unknown, unknown]> = [
+    [a.gatewayContainerSecurityContext, b.gatewayContainerSecurityContext],
+    [a.serviceAccount, b.serviceAccount],
+    [a.persistence, b.persistence],
+    [a.operatorAccess, b.operatorAccess],
+  ];
+  for (const [x, y] of objects) {
+    if (!stableEqual(x, y)) return false;
+  }
   return true;
 }
 
@@ -145,14 +180,14 @@ export function isReplicasOnlyUpdate(c: ReconcileChange): boolean {
   if (c.from.profile !== c.to.profile) return false;
   if (c.from.sizingTier !== c.to.sizingTier) return false;
   if (c.from.chartFingerprint !== c.to.chartFingerprint) return false;
-  if (
-    stableStringify(c.from.gatewayContainerSecurityContext ?? null) !==
-    stableStringify(c.to.gatewayContainerSecurityContext ?? null)
-  ) {
-    return false;
-  }
-  if (stableStringify(c.from.persistence ?? null) !== stableStringify(c.to.persistence ?? null)) {
-    return false;
+  const objects: ReadonlyArray<[unknown, unknown]> = [
+    [c.from.gatewayContainerSecurityContext, c.to.gatewayContainerSecurityContext],
+    [c.from.serviceAccount, c.to.serviceAccount],
+    [c.from.persistence, c.to.persistence],
+    [c.from.operatorAccess, c.to.operatorAccess],
+  ];
+  for (const [x, y] of objects) {
+    if (!stableEqual(x, y)) return false;
   }
   return true;
 }
@@ -170,4 +205,8 @@ function stableStringify(v: unknown): string {
   return `{${entries
     .map(([k, val]) => `${JSON.stringify(k)}:${stableStringify(val)}`)
     .join(",")}}`;
+}
+
+function stableEqual(a: unknown, b: unknown): boolean {
+  return stableStringify(a ?? null) === stableStringify(b ?? null);
 }

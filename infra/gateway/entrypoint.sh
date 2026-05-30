@@ -375,17 +375,20 @@ supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-
 supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
 supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
 
-# Builder-shell PTY server + tmux reconciler — operator profile only (cattle
-# gateways own no shells; their Helm Service omits the builder-shell port).
+# Builder-shell PTY server + tmux reconciler — operator profile plus explicit
+# access unlock only. Cattle and locked operator gateways own no shells; their
+# Helm Service omits the builder-shell port.
 # BUILDER_SHELL_REQUIRE_KEY enforces the INTERNAL_SERVICE_KEY header on :3005
 # (defense-in-depth over K8s-namespace isolation) so a compromised same-
 # namespace pod can't bypass chat-proxy's Origin allowlist + ticket discipline.
 # The reconciler flips Firestore shell docs to `dead` once their tmux session
 # is gone (process exit / pod roll), co-located so it reads the same tmux.
-if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
   export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
   supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
   supervise_runner shell-reconciler 30000 "$TSX" /octogee/scripts/entrypoints/reconcile-shells-runner.ts
+elif [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
+  log "Builder-shell disabled: operator trust boundary is not provisioned"
 fi
 
 # ── Runner metrics exporter (all profiles) ──────────────────────────────────

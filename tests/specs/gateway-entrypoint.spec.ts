@@ -92,14 +92,22 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     }
   });
 
-  it("gates the builder-shell + reconciler runners behind the operator profile + keeps BUILDER_SHELL_REQUIRE_KEY", () => {
+  it("gates the builder-shell + reconciler runners behind operator profile and explicit shell unlock", () => {
     expect(entrypoint).toMatch(/supervise_runner\s+builder-shell\s+5000\b/);
     expect(entrypoint).toMatch(/supervise_runner\s+shell-reconciler\s+30000\b/);
     const builderIdx = entrypoint.indexOf("supervise_runner builder-shell");
-    const guardIdx = entrypoint.lastIndexOf('= "operator" ]; then', builderIdx);
-    expect(guardIdx).toBeGreaterThan(-1);
-    expect(guardIdx).toBeLessThan(builderIdx);
+    const guardBlock = entrypoint.slice(
+      entrypoint.lastIndexOf("if [", builderIdx),
+      builderIdx,
+    );
+    expect(guardBlock).toMatch(/GATEWAY_PROFILE/);
+    expect(guardBlock).toMatch(/operator/);
+    expect(guardBlock).toMatch(/OPERATOR_SHELLS_ENABLED/);
+    expect(guardBlock).toMatch(/true/);
     expect(entrypoint).toMatch(/export BUILDER_SHELL_REQUIRE_KEY/);
+    expect(entrypoint).toMatch(
+      /Builder-shell disabled: operator trust boundary is not provisioned/,
+    );
   });
 
   it("starts the always-on runner-metrics-exporter", () => {

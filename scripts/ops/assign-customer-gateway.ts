@@ -76,7 +76,10 @@ if (data.approved !== true) {
   const currentProfile = normalizeGatewayProfile(openclaw?.gatewayProfile);
   if (current === target) {
     if (!opts.dryRun && currentProfile !== targetProfile) {
-      await userRef.update({ "provisioning.openclaw.gatewayProfile": targetProfile });
+      await userRef.update({
+        "provisioning.openclaw.gatewayProfile": targetProfile,
+        "provisioning.openclaw.shellsEnabled": false,
+      });
     }
     return { kind: "already-assigned", uid, slug, gatewayId: current, gatewayProfile: targetProfile };
   }
@@ -84,6 +87,7 @@ if (data.approved !== true) {
     await userRef.update({
       "provisioning.openclaw.gatewayId": target,
       "provisioning.openclaw.gatewayProfile": targetProfile,
+      "provisioning.openclaw.shellsEnabled": false,
     });
   }
   return { kind: "assigned", uid, slug, gatewayId: target, gatewayProfile: targetProfile, previous: current };

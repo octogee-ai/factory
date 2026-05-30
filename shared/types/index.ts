@@ -88,6 +88,10 @@ export {
 export type {
   GatewayDesiredStatus,
   GatewayDesiredState,
+  GatewayProfile,
+  GatewayPersistenceSpec,
+  GatewayServiceAccountSpec,
+  OperatorGatewayAccessSpec,
   OperationKind,
   OperationStatus,
   StepStatus,
@@ -99,6 +103,14 @@ export type {
 export {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
+  OPERATOR_GATEWAY_LOCKED_ACCESS,
+  OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX,
+  OPERATOR_GATEWAY_DEFAULT_PERSISTENCE,
+  isOperatorGatewayShellAccessEnabled,
+  operatorGatewayServiceAccountName,
+  resolveGatewayPersistence,
 } from './glm.js';
 
 export type {
@@ -173,4 +185,3 @@ export {
   startConnectChallengeTracker,
   sendWsRequest,
 } from './openclaw-wire-core.js';
-

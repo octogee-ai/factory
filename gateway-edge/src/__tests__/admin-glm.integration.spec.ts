@@ -347,6 +347,20 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(gwWrite?.data).toMatchObject({
       profile: "operator",
       sizingTier: "large",
+      persistence: {
+        enabled: true,
+        storageClassName: "premium-rwo",
+        size: "20Gi",
+        accessModes: ["ReadWriteOnce"],
+      },
+      operatorAccess: {
+        shellsEnabled: false,
+        reason: "operator-trust-boundary-not-provisioned",
+      },
+      serviceAccountName: "octogee-gateway-test-canary",
+      serviceAccount: {
+        create: true,
+      },
     });
   });
 
@@ -1254,6 +1268,36 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     );
     expect(update?.data).toMatchObject({
       "provisioning.openclaw.gatewayId": "gw-test",
+    });
+  });
+
+  it("does not grant shell access when assigning to an operator-profile gateway", async () => {
+    gatewaysDocs = {
+      "gw-operator": { status: "ready", mountedCustomers: [] },
+    };
+    glmGatewaysDocs = {
+      "gw-operator": { gatewayId: "gw-operator", profile: "operator" },
+    };
+    usersDocs = {
+      "uid-dave": { approved: true, username: "dave", email: "dave@example.com" },
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/customers/uid-dave/assign")
+      .send({ gatewayId: "gw-operator" });
+    expect(res.status).toBe(202);
+
+    const grant = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update" && c.docId === "gw-operator",
+    );
+    expect(grant).toBeUndefined();
+    const userUpdate = calls.find(
+      (c) => c.collection === "users" && c.op === "doc.update" && c.docId === "uid-dave",
+    );
+    expect(userUpdate?.data).toMatchObject({
+      "provisioning.openclaw.gatewayId": "gw-operator",
+      "provisioning.openclaw.gatewayProfile": "operator",
+      "provisioning.openclaw.shellsEnabled": false,
     });
   });
 

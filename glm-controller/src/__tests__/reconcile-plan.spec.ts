@@ -130,11 +130,78 @@ describe("buildInstancesMap", () => {
     expect(map).toEqual({});
   });
 
-it("propagates the operator profile onto the helm instance value (so the chart can gate env injection)", () => {
+  it("propagates the operator profile onto the helm instance value (so the chart can gate env injection)", () => {
     const map = buildInstancesMap([
       mkDesired({ instanceName: "bender", profile: "operator" }),
     ]);
     expect(map.bender.profile).toBe("operator");
+  });
+
+  it("defaults operator-profile gateways to a locked dedicated ServiceAccount and shell access", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        instanceName: "bender",
+        gatewayId: "gw-bender",
+        profile: "operator",
+      }),
+    ]);
+    expect(map.bender).toMatchObject({
+      serviceAccountName: "octogee-gateway-bender",
+      serviceAccount: { create: true },
+      operatorAccess: {
+        shellsEnabled: false,
+        reason: "operator-trust-boundary-not-provisioned",
+      },
+    });
+  });
+
+  it("does not let an operator-profile gateway inherit the platform default ServiceAccount", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        instanceName: "bender",
+        gatewayId: "gw-bender",
+        profile: "operator",
+        serviceAccountName: "octogee-gateway",
+      }),
+    ]);
+    expect(map.bender.serviceAccountName).toBe("octogee-gateway-bender");
+    expect(map.bender.serviceAccount).toEqual({ create: true });
+  });
+
+  it("preserves an explicit custom operator ServiceAccount name", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        instanceName: "bender",
+        gatewayId: "gw-bender",
+        profile: "operator",
+        serviceAccountName: "custom-operator-ksa",
+      }),
+    ]);
+    expect(map.bender.serviceAccountName).toBe("custom-operator-ksa");
+    expect(map.bender.serviceAccount).toBeUndefined();
+  });
+
+  it("defaults operator-profile gateways to durable home persistence when not explicitly configured", () => {
+    const map = buildInstancesMap([
+      mkDesired({ instanceName: "bender", profile: "operator" }),
+    ]);
+    expect(map.bender.persistence).toEqual({
+      enabled: true,
+      storageClassName: "premium-rwo",
+      size: "20Gi",
+      accessModes: ["ReadWriteOnce"],
+    });
+  });
+
+  it("preserves an explicit persistence override on operator-profile gateways", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        instanceName: "scratch",
+        profile: "operator",
+        persistence: { enabled: false },
+      }),
+    ]);
+    expect(map.scratch.persistence).toEqual({ enabled: false });
   });
 
   it("omits profile when desired state has none (cattle default — chart sees profile=\"\")", () => {

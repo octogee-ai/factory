@@ -17,8 +17,10 @@ upsertInstance(opts: {
     imageRepository: string;
     imageTag: string;
     serviceAccountName?: string;
+    serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
     gatewayContainerSecurityContext?: Record<string, unknown>;
     persistence?: HelmInstancesMap[string]["persistence"];
+    operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
     chartPath: string;
     valuesFile?: string;
     takeOwnership?: boolean;
@@ -103,8 +105,10 @@ interface PerReleaseValues {
   image?: { repository?: unknown; tag?: unknown };
   chartFingerprint?: unknown;
   serviceAccountName?: unknown;
+  serviceAccount?: unknown;
   gatewayContainerSecurityContext?: unknown;
   persistence?: unknown;
+  operatorAccess?: unknown;
   profile?: unknown;
   sizingTier?: unknown;
   replicas?: unknown;
@@ -187,11 +191,17 @@ function readPersonalKnobs(
   if (typeof v.serviceAccountName === "string" && v.serviceAccountName.length > 0) {
     out.serviceAccountName = v.serviceAccountName;
   }
+  if (isPlainObject(v.serviceAccount)) {
+    out.serviceAccount = v.serviceAccount as unknown as HelmInstancesMap[string]["serviceAccount"];
+  }
   if (isPlainObject(v.gatewayContainerSecurityContext)) {
     out.gatewayContainerSecurityContext = v.gatewayContainerSecurityContext;
   }
   if (isPlainObject(v.persistence)) {
     out.persistence = v.persistence as unknown as HelmInstancesMap[string]["persistence"];
+  }
+  if (isPlainObject(v.operatorAccess)) {
+    out.operatorAccess = v.operatorAccess as unknown as HelmInstancesMap[string]["operatorAccess"];
   }
   if (typeof v.profile === "string" && (v.profile === "standard" || v.profile === "operator")) {
     out.profile = v.profile;
@@ -209,8 +219,12 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v != null && typeof v === "object" && !Array.isArray(v);
 }
 
+const HELM_SET = "--set";
+const HELM_SET_STRING = "--set-string";
+const HELM_SET_JSON = "--set-json";
+
 function pushSetJson(args: string[], key: string, value: unknown): void {
-  args.push("--set-json", `${key}=${JSON.stringify(value)}`);
+  args.push(HELM_SET_JSON, `${key}=${JSON.stringify(value)}`);
 }
 
 interface BuildUpgradeArgsOpts {
@@ -227,8 +241,10 @@ interface BuildUpgradeArgsOpts {
   sizingTier?: SizingTier;
   replicas?: number;
   serviceAccountName?: string;
+  serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
   persistence?: HelmInstancesMap[string]["persistence"];
+  operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
   gcpProject?: string;
   valuesFile?: string;
   takeOwnership?: boolean;
@@ -260,25 +276,27 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     opts.chartPath,
     "-n",
     opts.namespace,
-    "--set-string",
+    HELM_SET_STRING,
     `instanceName=${opts.instanceName}`,
-    "--set-string",
+    HELM_SET_STRING,
     `gatewayId=${opts.gatewayId}`,
-    "--set-string",
+    HELM_SET_STRING,
     `imageTag=${opts.imageTag}`,
-    "--set-string",
+    HELM_SET_STRING,
     `image.repository=${opts.imageRepository}`,
   ];
-  if (opts.chartFingerprint) args.push("--set-string", `chartFingerprint=${opts.chartFingerprint}`);
-  if (opts.profile) args.push("--set-string", `profile=${opts.profile}`);
-  if (opts.sizingTier) args.push("--set-string", `sizingTier=${opts.sizingTier}`);
-  if (opts.replicas !== undefined) args.push("--set", `replicas=${opts.replicas}`);
-  if (opts.serviceAccountName) args.push("--set-string", `serviceAccountName=${opts.serviceAccountName}`);
+  if (opts.chartFingerprint) args.push(HELM_SET_STRING, `chartFingerprint=${opts.chartFingerprint}`);
+  if (opts.profile) args.push(HELM_SET_STRING, `profile=${opts.profile}`);
+  if (opts.sizingTier) args.push(HELM_SET_STRING, `sizingTier=${opts.sizingTier}`);
+  if (opts.replicas !== undefined) args.push(HELM_SET, `replicas=${opts.replicas}`);
+  if (opts.serviceAccountName) args.push(HELM_SET_STRING, `serviceAccountName=${opts.serviceAccountName}`);
+  if (opts.serviceAccount) pushSetJson(args, "serviceAccount", opts.serviceAccount);
   if (opts.gatewayContainerSecurityContext) {
     pushSetJson(args, "gatewayContainerSecurityContext", opts.gatewayContainerSecurityContext);
   }
   if (opts.persistence) pushSetJson(args, "persistence", opts.persistence);
-  if (opts.gcpProject) args.push("--set-string", `gatewayEdge.env.GCP_PROJECT_ID=${opts.gcpProject}`);
+  if (opts.operatorAccess) pushSetJson(args, "operatorAccess", opts.operatorAccess);
+  if (opts.gcpProject) args.push(HELM_SET_STRING, `gatewayEdge.env.GCP_PROJECT_ID=${opts.gcpProject}`);
   if (opts.valuesFile) args.push("-f", opts.valuesFile);
   if (opts.takeOwnership) args.push("--take-ownership");
   // Server-side apply + force-conflicts: matches the umbrella install path

@@ -1,8 +1,16 @@
-import type {
-  Operation,
-  OperationStep,
-  StepStatus,
-  GatewayProfile,
+import {
+  GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
+  OPERATOR_GATEWAY_LOCKED_ACCESS,
+  OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  operatorGatewayServiceAccountName,
+  resolveGatewayPersistence,
+  type Operation,
+  type OperationStep,
+  type StepStatus,
+  type GatewayProfile,
+  type GatewayPersistenceSpec,
+  type GatewayServiceAccountSpec,
+  type OperatorGatewayAccessSpec,
 } from "../../../shared/types/glm.js";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
@@ -18,6 +26,21 @@ export interface CurrentGatewaySpec {
   imageRepository: string;
   imageTag: string;
   profile?: GatewayProfile;
+  persistence?: GatewayPersistenceSpec;
+  serviceAccountName?: string;
+  serviceAccount?: GatewayServiceAccountSpec;
+  operatorAccess?: OperatorGatewayAccessSpec;
+}
+
+export interface RolloutGatewaySpecUpdate {
+  gatewayId: string;
+  imageRepository: string;
+  imageTag: string;
+  profile: GatewayProfile;
+  persistence: GatewayPersistenceSpec | undefined;
+  serviceAccountName: string | undefined;
+  serviceAccount: GatewayServiceAccountSpec | undefined;
+  operatorAccess: OperatorGatewayAccessSpec | undefined;
 }
 
 export interface RolloutDeps {
@@ -25,12 +48,7 @@ export interface RolloutDeps {
   
   readCurrentSpec: (gatewayId: string) => Promise<CurrentGatewaySpec | null>;
   
-  updateGlmGatewayImage: (
-    gatewayId: string,
-    imageRepository: string,
-    imageTag: string,
-    profile: GatewayProfile,
-  ) => Promise<void>;
+  updateGlmGatewayImage: (update: RolloutGatewaySpecUpdate) => Promise<void>;
   
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeatVersion | null>;
   
@@ -63,9 +81,14 @@ interface RolloutTarget {
   instanceName: string;
   newRepository: string;
   newProfile: GatewayProfile;
+  newPersistence: GatewayPersistenceSpec | undefined;
+  newServiceAccountName: string | undefined;
+  newServiceAccount: GatewayServiceAccountSpec | undefined;
+  newOperatorAccess: OperatorGatewayAccessSpec | undefined;
   resolvedRepository: string;
 }
 
+// eslint-disable-next-line complexity -- linear validation/target selection for one rollout operation; splitting obscures the no-op boundary checks.
 async function resolveRolloutTarget(
   op: Operation,
   deps: Pick<RolloutDeps, "readCurrentSpec" | "helm" | "log">,
@@ -88,15 +111,43 @@ async function resolveRolloutTarget(
   const newRepository = imageRepositoryOverride ?? current.imageRepository;
   const currentProfile: GatewayProfile = current.profile ?? "standard";
   const newProfile: GatewayProfile = profileOverride ?? currentProfile;
+  const newPersistence = resolveGatewayPersistence(newProfile, current.persistence);
+  const generatedOperatorServiceAccountName = operatorGatewayServiceAccountName(gatewayId);
+  const shouldUseLockedOperatorServiceAccount =
+    newProfile === "operator" &&
+    (!current.serviceAccountName ||
+      current.serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME);
+  const newServiceAccountName = shouldUseLockedOperatorServiceAccount
+    ? generatedOperatorServiceAccountName
+    : current.serviceAccountName;
+  const shouldCreateLockedOperatorServiceAccount =
+    newProfile === "operator" &&
+    newServiceAccountName === generatedOperatorServiceAccountName &&
+    !current.serviceAccount;
+  const newServiceAccount =
+    shouldUseLockedOperatorServiceAccount || shouldCreateLockedOperatorServiceAccount
+      ? OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT
+      : current.serviceAccount;
+  const newOperatorAccess =
+    newProfile === "operator"
+      ? current.operatorAccess ?? OPERATOR_GATEWAY_LOCKED_ACCESS
+      : current.operatorAccess;
   const resolvedRepository = resolveGatewayImageRepository({
     profile: newProfile,
     imageRepository: newRepository,
   });
+  const operatorSafetyDefaultsMissing =
+    newProfile === "operator" &&
+    (!current.persistence ||
+      shouldUseLockedOperatorServiceAccount ||
+      shouldCreateLockedOperatorServiceAccount ||
+      !current.operatorAccess);
 
-const desiredMatchesRequest =
+  const desiredMatchesRequest =
     newRepository === current.imageRepository &&
     imageTag === current.imageTag &&
-    newProfile === currentProfile;
+    newProfile === currentProfile &&
+    !operatorSafetyDefaultsMissing;
   if (desiredMatchesRequest) {
     const deployedMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
     const deployed = deployedMap[current.instanceName];
@@ -120,6 +171,10 @@ const desiredMatchesRequest =
       instanceName: current.instanceName,
       newRepository,
       newProfile,
+      newPersistence,
+      newServiceAccountName,
+      newServiceAccount,
+      newOperatorAccess,
       resolvedRepository,
     },
   };
@@ -131,18 +186,32 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
     if ("error" in resolved) {
       return { steps: [], success: false, error: resolved.error };
     }
-    const { gatewayId, imageTag, newRepository, newProfile, resolvedRepository } =
+    const {
+      gatewayId,
+      imageTag,
+      newRepository,
+      newProfile,
+      newPersistence,
+      newServiceAccountName,
+      newServiceAccount,
+      newOperatorAccess,
+      resolvedRepository,
+    } =
       resolved.target;
 
     const updateStartedAt = deps.now();
     await reportStep(ctx, { name: "update-spec", status: "running", startedAt: updateStartedAt });
     try {
-      await deps.updateGlmGatewayImage(
+      await deps.updateGlmGatewayImage({
         gatewayId,
-        newRepository,
+        imageRepository: newRepository,
         imageTag,
-        newProfile,
-      );
+        profile: newProfile,
+        persistence: newPersistence,
+        serviceAccountName: newServiceAccountName,
+        serviceAccount: newServiceAccount,
+        operatorAccess: newOperatorAccess,
+      });
       await reportStep(ctx, {
         name: "update-spec",
         status: "done",

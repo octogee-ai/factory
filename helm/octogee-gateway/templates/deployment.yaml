@@ -1,6 +1,7 @@
 {{- include "octogee-gateway.requireIdentity" . -}}
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $preset := index .Values.tiers $tier -}}
+{{- $operatorShellsEnabled := and (eq .Values.profile "operator") (.Values.operatorAccess.shellsEnabled | default false) -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
 {{- end -}}
@@ -82,6 +83,61 @@ spec:
             requests:
               cpu: "50m"
               memory: "32Mi"
+        {{- if ne .Values.profile "operator" }}
+        - name: mac-ops-bootstrap
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              export OPENCLAW_DIR=/home/node/.openclaw
+              mkdir -p "$OPENCLAW_DIR/customers" "$OPENCLAW_DIR/identity" "$OPENCLAW_DIR/secrets" "$OPENCLAW_DIR/agents"
+              OPERATOR_ENV="$OPENCLAW_DIR/secrets/operator.env"
+              if [ -f "$OPERATOR_ENV" ]; then
+                set -a
+                . "$OPERATOR_ENV"
+                set +a
+              fi
+              if [ -z "${MM_ADMIN_PAT:-}" ]; then
+                echo "mac-ops-bootstrap: MM_ADMIN_PAT unavailable; preserving template bot token"
+                exit 0
+              fi
+              if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
+                envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
+                chmod 600 "$OPENCLAW_DIR/openclaw.json"
+              fi
+              node /octogee/scripts/bootstrap-mac-ops.mjs || true
+          env:
+            - name: GATEWAY_ID
+              value: {{ .Values.gatewayId | quote }}
+            - name: MM_URL
+              value: {{ .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
+            - name: MM_SITE_URL
+              value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
+            - name: MM_INTERACTIONS_CALLBACK_BASE_URL
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.instanceName .Release.Namespace) | quote }}
+            - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
+              value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
+            - name: MM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: bot_token
+            - name: MM_ADMIN_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-gateway
+                  key: admin_token
+                  optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /home/node
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+        {{- end }}
       containers:
         - name: gateway
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
@@ -95,7 +151,7 @@ spec:
               name: preview
             - containerPort: {{ .Values.env.fleetControllerPort | default "3003" }}
               name: fleet-http
-            {{- if eq .Values.profile "operator" }}
+            {{- if $operatorShellsEnabled }}
             - containerPort: {{ .Values.env.builderShellPort | default "3005" }}
               name: builder-shell
             {{- end }}
@@ -111,6 +167,8 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: GCLOUD_PROJECT
+              value: {{ .Values.env.gcloudProject | quote }}
+            - name: CLOUDSDK_CORE_PROJECT
               value: {{ .Values.env.gcloudProject | quote }}
             - name: GCP_PROJECT_ID
               value: {{ .Values.env.gcloudProject | quote }}
@@ -128,6 +186,8 @@ spec:
             # so the entrypoint's `= "operator"` check is a no-op.
             - name: GATEWAY_PROFILE
               value: {{ .Values.profile | quote }}
+            - name: OPERATOR_SHELLS_ENABLED
+              value: {{ ternary "true" "false" $operatorShellsEnabled | quote }}
             - name: OPENCLAW_BROADCAST_ALL_AGENT_RUNS
               value: "1"
             - name: OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS
@@ -172,12 +232,14 @@ spec:
               value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
             - name: SITE_BUILD_API_PORT
               value: {{ .Values.env.siteBuildApiPort | default "3004" | quote }}
+            {{- if ne .Values.profile "operator" }}
             - name: FLEET_CONTROLLER_SECRET
               valueFrom:
                 secretKeyRef:
                   name: octogee-fleet-controller
                   key: secret
                   optional: true
+            {{- end }}
             {{- if .Values.preview.host }}
             # Public-facing host the gateway's preview-proxy returns in
             # URLs to the app. Must match the umbrella's
@@ -188,8 +250,13 @@ spec:
               value: {{ .Values.preview.host | quote }}
             {{- end }}
             {{- if ne .Values.profile "operator" }}
-            # Operator-profile gateways MUST NOT inherit the platform
-            # ANTHROPIC_API_KEY — it beats Claude subscription OAuth at
+            # Operator-profile gateway runtime is tenant-untrusted until the
+            # reservation/billing/tenant-identity boundary explicitly unlocks
+            # shells. Keep platform-wide secrets out of the shell-inheritable
+            # gateway container. gateway-edge remains the trusted sidecar for
+            # locality APIs and internal service calls.
+            #
+            # ANTHROPIC_API_KEY also beats Claude subscription OAuth at
             # runtime, silently shadowing per-account `claude auth login`
             # and per-agent BYOS credentials (BYO-SUBSCRIPTION-OAUTH-SPEC
             # §3b: "BYOT does not work at all without stripping it").
@@ -200,7 +267,6 @@ spec:
                 secretKeyRef:
                   name: octogee-anthropic
                   key: api_key
-            {{- end }}
             - name: GIT_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -254,6 +320,7 @@ spec:
                 secretKeyRef:
                   name: internal-service-key
                   key: key
+            {{- end }}
             # Same per-gateway K8s secret as init + gateway-edge (see init
             # container env block for the rationale). Pinned via the chart
             # so kubectl-set-env side-channels can't drift the value out

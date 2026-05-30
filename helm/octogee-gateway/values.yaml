@@ -26,6 +26,14 @@ image:
   tag: ""
 
 serviceAccountName: octogee-gateway
+serviceAccount:
+  create: false
+  annotations: {}
+operatorAccess:
+  # Locked by default. Cowboy may enable this only after a customer has a
+  # tenant-owned operator gateway boundary (billing/reservation + scoped
+  # platform credentials) and the app/user mirror has been updated.
+  shellsEnabled: false
 
 # Replica count — Cowboy passes `--set replicas=0` for desiredStatus=paused.
 # values.test.yaml defaults to 0 so TEST stays scaled-to-zero across release
@@ -36,10 +44,11 @@ replicas: 1
 # Capability profile — Cowboy passes `--set profile=<id>` for non-default
 # profiles (`operator` today). Empty default preserves cattle behavior
 # (welcome path for new Builders + L3-throttle platform fallback). The
-# chart gates profile-conditional resources on this — e.g. operator
-# gateways skip the platform `ANTHROPIC_API_KEY` env injection so per-
-# account OAuth (`claude auth login`) and per-agent BYOS are not shadowed
-# at runtime. See docs/specs/BYO-SUBSCRIPTION-OAUTH-SPEC.md §3b.
+# chart gates profile-conditional resources on this. Operator gateways
+# skip shell-inheritable platform secrets in the gateway container and
+# only expose builder-shell when `operatorAccess.shellsEnabled=true`.
+# See docs/specs/BYO-SUBSCRIPTION-OAUTH-SPEC.md §3b for the Claude auth
+# reason behind omitting the shared ANTHROPIC_API_KEY.
 profile: ""
 
 # Gateway container security defaults stay locked down. Personal build

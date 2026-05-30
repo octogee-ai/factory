@@ -52,8 +52,15 @@ function findDoc(out: string, kind: string, name: string): string | null {
   return (
     docs.find((d) => {
       if (!new RegExp(`^kind:\\s*${kind}\\s*$`, "m").test(d)) return false;
-      return new RegExp(`^  name:\\s*${name}\\s*$`, "m").test(d);
+      return new RegExp(`^  name:\\s*"?${name}"?\\s*$`, "m").test(d);
     }) ?? null
+  );
+}
+
+function containerBlock(dep: string, name: string): string {
+  return (
+    dep.match(new RegExp(`- name:\\s*${name}[\\s\\S]*?(?=\\n {8}- name:|\\n {6}volumes:)`))?.[0] ??
+    ""
   );
 }
 
@@ -62,6 +69,21 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
+  });
+
+  it("can render a per-operator ServiceAccount without a Workload Identity annotation by default", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      profile: "operator",
+      serviceAccountName: "octogee-gateway-bender",
+      "serviceAccount.create": "true",
+    });
+    const sa = findDoc(out, "ServiceAccount", "octogee-gateway-bender");
+    expect(sa).not.toBeNull();
+    expect(sa).not.toMatch(/iam\.gke\.io\/gcp-service-account/);
+    const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
+    expect(dep).toMatch(/serviceAccountName:\s*octogee-gateway-bender/);
   });
 
   it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {
@@ -106,6 +128,35 @@ const out = helmTemplate();
     expect(dep).toMatch(/containerPort:\s*9092\s*\n\s*name:\s*runner-metrics/);
     const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
     expect(svc).toMatch(/name:\s*runner-metrics\s*\n\s*port:\s*9092\s*\n\s*targetPort:\s*9092/);
+  });
+
+  it("does not expose builder-shell on locked operator gateways", () => {
+    const out = helmTemplate("octogee-gw-default", { profile: "operator" });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).not.toMatch(/name:\s*builder-shell/);
+    expect(gw).toMatch(
+      /- name:\s*OPERATOR_SHELLS_ENABLED[\s\S]*?value:\s*"false"/,
+    );
+
+    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    expect(svc).not.toMatch(/name:\s*builder-shell/);
+  });
+
+  it("exposes builder-shell only after explicit operator shell access is enabled", () => {
+    const out = helmTemplate("octogee-gw-default", {
+      profile: "operator",
+      "operatorAccess.shellsEnabled": "true",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/containerPort:\s*3005\s*\n\s*name:\s*builder-shell/);
+    expect(gw).toMatch(
+      /- name:\s*OPERATOR_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
+    );
+
+    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    expect(svc).toMatch(/name:\s*builder-shell\s*\n\s*port:\s*3005\s*\n\s*targetPort:\s*3005/);
   });
 
   it("renders a PodDisruptionBudget keyed by gateway-instance", () => {
@@ -226,6 +277,45 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).toMatch(/- name:\s*MM_INTERACTIONS_ALLOWED_SOURCE_IPS[\s\S]*?value:\s*"10\.117\.0\.0\/17"/);
   });
 
+  it("sets CLOUDSDK_CORE_PROJECT on the gateway container so gcloud cannot inherit the cluster host project", () => {
+    const out = helmTemplate("octogee-gw-default", {
+      "env.gcloudProject": "octogee-test",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(
+      /- name:\s*CLOUDSDK_CORE_PROJECT[\s\S]*?value:\s*"octogee-test"/,
+    );
+  });
+
+  it("keeps MM_ADMIN_PAT out of the runtime gateway container (operator shells must not inherit platform MM admin)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).not.toMatch(/- name:\s*MM_ADMIN_PAT\b/);
+  });
+
+  it("uses an init container for per-gateway Mattermost bot bootstrap, so the admin PAT is not present at shell runtime", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const bootstrap = containerBlock(dep, "mac-ops-bootstrap");
+    expect(bootstrap).toMatch(/node \/octogee\/scripts\/bootstrap-mac-ops\.mjs/);
+    expect(bootstrap).toMatch(
+      /- name:\s*MM_ADMIN_PAT[\s\S]*?name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token[\s\S]*?optional:\s*true/,
+    );
+  });
+
+  it("omits the Mattermost admin-PAT bootstrap init container on operator gateways", () => {
+    const dep =
+      findDoc(
+        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    expect(dep).not.toMatch(/name:\s*mac-ops-bootstrap/);
+    const init = dep.match(/initContainers:[\s\S]*?(?=\n {6}containers:)/)?.[0] ?? "";
+    expect(init).not.toMatch(/name:\s*MM_ADMIN_PAT\b/);
+    expect(init).not.toMatch(/name:\s*MM_BOT_TOKEN\b/);
+  });
+
   it("renders an init container that runs as root to seed + chown /home/node (operator pet-home parity)", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
@@ -241,9 +331,20 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
 
-const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
-    expect(dataMounts.length).toBe(3);
+    const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
+    expect(dataMounts.length).toBe(4);
     expect(dep).not.toMatch(/mountPath:\s*\/home\/node\/\.openclaw\b/);
+  });
+
+  it("operator gateways mount the data PVC only on fix-perms, gateway, and gateway-edge", () => {
+    const dep =
+      findDoc(
+        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
+    expect(dataMounts.length).toBe(3);
   });
 
   it("NPM_CONFIG_CACHE points at /home/node/.npm-cache (conventional home location)", () => {
@@ -297,15 +398,40 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(dep).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
   });
 
-  it("keeps the Mattermost + Gitea platform tokens for ALL profiles (chat-proxy + gateway-edge need them)", () => {
+  it("keeps platform Mattermost + Gitea tokens on the standard gateway container", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
+    expect(dep).not.toBeNull();
+    const gw = containerBlock(dep ?? "", "gateway");
+    expect(gw).toMatch(/name:\s*MM_BOT_TOKEN\b/);
+    expect(gw).toMatch(/name:\s*GIT_API_TOKEN\b/);
+  });
+
+  it("omits platform tokens from the operator gateway container until tenant isolation is provisioned", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", { profile: "operator" }),
       "Deployment",
       "octogee-gateway-default",
     );
     expect(dep).not.toBeNull();
-    expect(dep).toMatch(/name:\s*MM_BOT_TOKEN\b/);
-    expect(dep).toMatch(/name:\s*GIT_API_TOKEN\b/);
+    const gw = containerBlock(dep ?? "", "gateway");
+    for (const name of [
+      "FLEET_CONTROLLER_SECRET",
+      "GIT_API_TOKEN",
+      "BRAVE_API_KEY",
+      "MM_BOT_TOKEN",
+      "MM_ADMIN_USER",
+      "MM_ADMIN_PASS",
+      "MM_COMMUNITY_TEAM_ID",
+      "MM_BOT_USER_ID",
+      "MM_ADMIN_USER_ID",
+      "DISCORD_OPS_WEBHOOK_URL",
+      "INTERNAL_SERVICE_KEY",
+      "ANTHROPIC_API_KEY",
+    ]) {
+      expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
+    }
+    const edge = containerBlock(dep ?? "", "gateway-edge");
+    expect(edge).toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
   });
 
   it("threads the chart's profile through to the gateway container as GATEWAY_PROFILE so the entrypoint can gate operator-only boot steps", () => {
@@ -384,7 +510,10 @@ function splitNetworkPolicyRules(np: string): { restricted: string; open: string
 describe("helm/octogee-gateway/ — operator-profile NetworkPolicy port allowlist", () => {
   it("restricts :3005 (builder-shell) to same-instance pods — the backstop intent", () => {
     const np = findDoc(
-      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      helmTemplate("octogee-gw-default", {
+        profile: "operator",
+        "operatorAccess.shellsEnabled": "true",
+      }),
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
     );
@@ -397,7 +526,10 @@ describe("helm/octogee-gateway/ — operator-profile NetworkPolicy port allowlis
 
   it("allows other pod ports from any source — listed in a rule WITHOUT `from:` so the LB / sibling workloads / Prometheus can reach them", () => {
     const np = findDoc(
-      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      helmTemplate("octogee-gw-default", {
+        profile: "operator",
+        "operatorAccess.shellsEnabled": "true",
+      }),
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
     );
@@ -422,7 +554,10 @@ expect(open).toMatch(/port:\s*18789/);
 
   it("scopes runner-metrics (:9092) to the monitoring namespace only — never the open any-source rule", () => {
     const np = findDoc(
-      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      helmTemplate("octogee-gw-default", {
+        profile: "operator",
+        "operatorAccess.shellsEnabled": "true",
+      }),
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
     );
@@ -435,6 +570,11 @@ expect(open).toMatch(/port:\s*18789/);
 
   it("is NOT rendered for standard-profile gateways (cattle don't expose :3005 so no backstop needed)", () => {
     const out = helmTemplate();
+    expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
+  });
+
+  it("is NOT rendered for locked operator gateways before tenant shell access is provisioned", () => {
+    const out = helmTemplate("octogee-gw-default", { profile: "operator" });
     expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
   });
 });
@@ -476,14 +616,8 @@ describe("helm/octogee-gateway/ — required value validation", () => {
     expect(result.stderr).toMatch(/instanceName/);
   });
 
-  // #1131 follow-up: the operator-profile gateway-edge container has an
-  // explicit INTERNAL_SERVICE_KEY entry AND the same name comes through the
-  // .Values.gatewayEdge.secrets range loop — duplicate that breaks the
-  // strategic-merge-patch on `helm upgrade` and surfaces today as a
-  // kubectl-set-env warning. Same fix shape as #1131 (which dropped the
-  // same class of duplicate for GCP_PROJECT_ID / GITEA_ORG / GITEA_TOKEN).
-  describe("env dedup — operator profile must not add extra INTERNAL_SERVICE_KEY entries beyond the baseline range loop", () => {
-    it("operator profile renders the same INTERNAL_SERVICE_KEY count as the baseline (no extras)", () => {
+  describe("env dedup — operator profile keeps INTERNAL_SERVICE_KEY only on gateway-edge", () => {
+    it("operator profile renders fewer INTERNAL_SERVICE_KEY entries than cattle because the gateway container is tenant-untrusted", () => {
       const operatorOut = helmTemplate("octogee-gw-bender", {
         gatewayId: "gw-bender",
         instanceName: "bender",
@@ -504,10 +638,11 @@ describe("helm/octogee-gateway/ — required value validation", () => {
       expect(baselineDep).not.toBeNull();
       const count = (s: string): number =>
         (s.match(/name:\s*INTERNAL_SERVICE_KEY/g) ?? []).length;
-      expect(count(operatorDep!)).toBe(count(baselineDep!));
+      expect(count(operatorDep!)).toBe(1);
+      expect(count(baselineDep!)).toBeGreaterThan(count(operatorDep!));
     });
 
-    it("INTERNAL_SERVICE_KEY appears exactly twice in the rendered operator-profile Deployment (gateway + gateway-edge containers, one each)", () => {
+    it("INTERNAL_SERVICE_KEY appears exactly once in the rendered operator-profile Deployment (gateway-edge only)", () => {
       const out = helmTemplate("octogee-gw-bender", {
         gatewayId: "gw-bender",
         instanceName: "bender",
@@ -516,7 +651,11 @@ describe("helm/octogee-gateway/ — required value validation", () => {
       const dep = findDoc(out, "Deployment", "octogee-gateway-bender");
       expect(dep).not.toBeNull();
       const count = (dep!.match(/name:\s*INTERNAL_SERVICE_KEY/g) ?? []).length;
-      expect(count).toBe(2);
+      expect(count).toBe(1);
+      const gw = containerBlock(dep ?? "", "gateway");
+      const edge = containerBlock(dep ?? "", "gateway-edge");
+      expect(gw).not.toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
+      expect(edge).toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
     });
   });
 });

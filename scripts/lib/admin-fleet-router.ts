@@ -11,6 +11,10 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   GATEWAY_PROFILES,
+  OPERATOR_GATEWAY_LOCKED_ACCESS,
+  OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  operatorGatewayServiceAccountName,
+  resolveGatewayPersistence,
   type GatewayProfile,
 } from "../../shared/types/glm.js";
 import {
@@ -935,7 +939,10 @@ router.post(
             await db
               .collection("users")
               .doc(uid)
-              .update({ "provisioning.openclaw.gatewayProfile": gatewayProfile });
+              .update({
+                "provisioning.openclaw.gatewayProfile": gatewayProfile,
+                "provisioning.openclaw.shellsEnabled": false,
+              });
             res.status(200).json({ uid, gatewayId: body.gatewayId, gatewayProfile, repaired: true });
             return;
           }
@@ -953,6 +960,7 @@ router.post(
           .update({
             "provisioning.openclaw.gatewayId": body.gatewayId,
             "provisioning.openclaw.gatewayProfile": gatewayProfile,
+            "provisioning.openclaw.shellsEnabled": false,
           });
         res.status(202).json({ uid, gatewayId: body.gatewayId, gatewayProfile });
       } catch (e) {
@@ -1063,6 +1071,16 @@ router.post(
         }
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
+        const profile = body.profile as GatewayProfile | undefined;
+        const persistence = resolveGatewayPersistence(profile, undefined);
+        const operatorDefaults =
+          profile === "operator"
+            ? {
+                operatorAccess: OPERATOR_GATEWAY_LOCKED_ACCESS,
+                serviceAccountName: operatorGatewayServiceAccountName(body.gatewayId),
+                serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+              }
+            : {};
         await db
           .collection(GLM_GATEWAYS_COLLECTION)
           .doc(body.gatewayId)
@@ -1074,7 +1092,9 @@ router.post(
             desiredStatus: "running",
             createdBy,
             createdAt: Date.now(),
-            ...(body.profile ? { profile: body.profile as GatewayProfile } : {}),
+            ...(profile ? { profile } : {}),
+            ...(persistence ? { persistence } : {}),
+            ...operatorDefaults,
             ...(body.sizingTier ? { sizingTier: body.sizingTier as SizingTier } : {}),
           });
         const operationId = await createOperation(db, {

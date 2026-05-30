@@ -1,3 +1,4 @@
+{{- $operatorShellsEnabled := and (eq .Values.profile "operator") (.Values.operatorAccess.shellsEnabled | default false) -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -27,7 +28,7 @@ spec:
     - name: fleet-http
       port: {{ .Values.env.fleetControllerPort | default "3003" }}
       targetPort: {{ .Values.env.fleetControllerPort | default "3003" }}
-    {{- if eq .Values.profile "operator" }}
+    {{- if $operatorShellsEnabled }}
     - name: builder-shell
       port: {{ .Values.env.builderShellPort | default "3005" }}
       targetPort: {{ .Values.env.builderShellPort | default "3005" }}
