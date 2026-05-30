@@ -12,6 +12,7 @@ import notificationRoutes from "./notifications.js";
 import sharingRoutes from "./sharing.js";
 import emailWebhookRoutes from "./email-webhook.js";
 import emailUnsubscribeRoutes from "./email-unsubscribe.js";
+import authEmailRoutes from "./auth-email.js";
 import entitiesRoutes from "./entities.js";
 import profileRoutes from "./profile.js";
 import onboardingRoutes from "./onboarding.js";
@@ -73,6 +74,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   if (opts.mattermostMintRoutes) {
     app.use("/api/auth/mattermost", opts.mattermostMintRoutes);
   }
+  app.use("/api/auth/email", authEmailRoutes);
   app.use("/api/sharing", sharingRoutes);
   // Raw-body endpoints under /api/email/* (the Resend webhook) MUST be listed
   // in RAW_BODY_WEBHOOK_PATHS (see body-parsers.ts) or signature verification
