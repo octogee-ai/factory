@@ -8,10 +8,17 @@ const RAW_BODY_WEBHOOK_PATHS = new Set([
   "/api/email/webhook",
 ]);
 
+// Strip a single trailing slash so /api/email/webhook/ also lands in the raw-body
+// branch. Without this, a stray trailing slash would JSON-parse the body and the
+// handler would 500 on missing rawBody (or worse, signature-fail).
+function normalisePath(p: string): string {
+  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+}
+
 export function installBodyParsers(app: Express): void {
   app.use((req, res, next) => {
     if (req.path.startsWith(MM_REST_PROXY_PREFIX)) return next();
-    if (RAW_BODY_WEBHOOK_PATHS.has(req.path)) {
+    if (RAW_BODY_WEBHOOK_PATHS.has(normalisePath(req.path))) {
       express.raw({ type: "application/json" })(req, res, (err) => {
         if (err) return next(err);
         (req as Request & { rawBody?: Buffer }).rawBody = req.body;
