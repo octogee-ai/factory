@@ -8,6 +8,7 @@ type PlatformActor = Extract<BoundTenant, { kind: "platform" }>["actor"];
 export type TenantBindingResult =
   | "ok"
   | "ok_platform"
+  | "shared_gateway"
   | "ns_mismatch"
   | "unknown_tenant"
   | "malformed_sa"
@@ -23,6 +24,7 @@ export interface ServiceAccountIdentity {
 }
 
 const GATEWAY_SA_PREFIX = "octogee-gw-";
+const SHARED_GATEWAY_SA_NAME = "octogee-gateway";
 
 function isDnsLabel(value: string): boolean {
   if (value.length < 1 || value.length > 63) return false;
@@ -54,6 +56,10 @@ export async function mapSaToTenant(
 ): Promise<SaToTenantResult> {
   if (identity.namespace !== expectedNamespace) {
     return { attached: false, result: "ns_mismatch" };
+  }
+
+  if (identity.saName === SHARED_GATEWAY_SA_NAME) {
+    return { attached: false, result: "shared_gateway" };
   }
 
   if (identity.saName.startsWith(GATEWAY_SA_PREFIX)) {
