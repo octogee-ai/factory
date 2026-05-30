@@ -341,7 +341,7 @@ state.helmInstances.set("bender", { repository: OPERATOR_REPO, tag: "sha1" });
       size: "20Gi",
       accessModes: ["ReadWriteOnce"],
     });
-    expect(state.specs.get("gw-bender")?.serviceAccountName).toBe("octogee-gateway-bender");
+    expect(state.specs.get("gw-bender")?.serviceAccountName).toBe("octogee-gw-bender");
     expect(state.specs.get("gw-bender")?.serviceAccount).toMatchObject({ create: true });
     expect(state.specs.get("gw-bender")?.operatorAccess).toMatchObject({
       shellsEnabled: false,
@@ -366,7 +366,7 @@ expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
               size: "20Gi",
               accessModes: ["ReadWriteOnce"],
             },
-            serviceAccountName: "octogee-gateway-bender",
+            serviceAccountName: "octogee-gw-bender",
             serviceAccount: { create: true },
             operatorAccess: {
               shellsEnabled: false,
@@ -413,7 +413,7 @@ expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
     );
     expect(result.success).toBe(true);
     expect(deps.updateGlmGatewayImage).toHaveBeenCalled();
-    expect(state.specs.get("gw-bender")?.serviceAccountName).toBe("octogee-gateway-bender");
+    expect(state.specs.get("gw-bender")?.serviceAccountName).toBe("octogee-gw-bender");
     expect(state.specs.get("gw-bender")?.serviceAccount).toMatchObject({ create: true });
     expect(state.specs.get("gw-bender")?.operatorAccess).toMatchObject({
       shellsEnabled: false,

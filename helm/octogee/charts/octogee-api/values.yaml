@@ -5,11 +5,11 @@ image:
 replicas: 1
 port: 3001
 
-# Reuse the gateway pod's Workload Identity binding — octogee-api needs
-# the same GCP IAM (Firestore + GCS + Secret Manager + Gitea token) and
-# spinning up a parallel SA would require new Workload Identity bindings
-# plus new IAM policy. Same SA, same access, zero IAM churn.
-serviceAccountName: octogee-gateway
+serviceAccountName: octogee-api
+serviceAccount:
+  create: true
+  annotations:
+    iam.gke.io/gcp-service-account: octogee-gateway@octogee.iam.gserviceaccount.com
 
 env:
   GITEA_URL: ""  # auto-computed from K8S_NAMESPACE

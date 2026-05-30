@@ -171,7 +171,8 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       expect(String(url)).toBe("http://gateway.local:3001/api/project-preview/deploy");
-      expect(init?.headers).toMatchObject({ "X-Internal-Service-Key": "secret" });
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-Internal-Service-Key")).toBe("secret");
       const body = init?.body ? JSON.parse(String(init.body)) : {};
       expect(body).toMatchObject({ slug: "alice", projectSlug: "mygame", projectName: "My Game" });
       return new Response(

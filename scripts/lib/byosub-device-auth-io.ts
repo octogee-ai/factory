@@ -11,6 +11,7 @@ import {
   isSafeAgentId,
 } from "./byosub-restore.js";
 import type { DeviceAuthChild, DeviceAuthDeps } from "./byosub-device-auth.js";
+import { internalFetch } from "./internal-fetch.js";
 
 export interface DeviceAuthIoConfig {
   openclawDir: string;
@@ -123,13 +124,14 @@ onExit: (cb) => {
     },
     postCapture: async (flowId: string, credential: string) => {
       try {
-        const r = await fetch(`${base}/api/byosub/capture`, {
+        const r = await internalFetch(`${base}/api/byosub/capture`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Internal-Service-Key": cfg.internalServiceKey,
           },
           body: JSON.stringify({ flowId, credential }),
+        }, {
+          internalServiceKey: cfg.internalServiceKey,
         });
         if (!r.ok) {
 

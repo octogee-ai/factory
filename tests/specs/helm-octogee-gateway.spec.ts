@@ -76,14 +76,24 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       gatewayId: "gw-bender",
       instanceName: "bender",
       profile: "operator",
-      serviceAccountName: "octogee-gateway-bender",
+      serviceAccountName: "octogee-gw-bender",
       "serviceAccount.create": "true",
     });
-    const sa = findDoc(out, "ServiceAccount", "octogee-gateway-bender");
+    const sa = findDoc(out, "ServiceAccount", "octogee-gw-bender");
     expect(sa).not.toBeNull();
     expect(sa).not.toMatch(/iam\.gke\.io\/gcp-service-account/);
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
-    expect(dep).toMatch(/serviceAccountName:\s*octogee-gateway-bender/);
+    expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
+  });
+
+  it("mounts the octogee-api audience token into gateway and gateway-edge", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    const edge = containerBlock(dep, "gateway-edge");
+
+    expect(gw).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
+    expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
+    expect(dep).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*projected:\s*\n\s*sources:\s*\n\s*-\s*serviceAccountToken:\s*\n\s*path:\s*token\s*\n\s*audience:\s*octogee-api\s*\n\s*expirationSeconds:\s*3600/);
   });
 
   it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {

@@ -1,4 +1,5 @@
 import { coachAgentId } from "../../../scripts/lib/byosub-onboarding.js";
+import { internalFetch } from "./internal-fetch.js";
 
 export { coachAgentId };
 
@@ -93,13 +94,14 @@ export function gatewayDeviceAuthClient(): GatewayDeviceAuthClient {
         )
       : `http://octogee-gateway-${instanceName}.${ns}.svc.cluster.local:3003`;
   async function call<T>(url: string, init: RequestInit): Promise<T> {
-    const r = await fetch(url, {
+    const r = await internalFetch(url, {
       ...init,
       headers: {
         "Content-Type": "application/json",
-        "X-Internal-Service-Key": key,
         ...(init.headers || {}),
       },
+    }, {
+      internalServiceKey: key,
     });
     if (!r.ok) {
       throw new Error(`gateway ${r.status} ${await r.text().catch(() => "")}`);

@@ -12,10 +12,42 @@ import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
+import { createKubernetesTokenReviewer } from "./lib/token-review.js";
+import {
+  createTenantBindingHealthState,
+  startTenantBindingSelfCheck,
+} from "./lib/tenant-binding-health.js";
+import {
+  createTenantBindingMiddleware,
+  createTenantBindingMetrics,
+} from "./middleware/tenant-binding.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
+const TENANT_BOUND_API_ROUTES = new Set([
+  "/api/byosub/auth-state",
+  "/api/byosub/capture",
+  "/api/byosub/sync-back",
+  "/api/notifications/ingest",
+]);
 
-export function createApp() {
+export interface CreateAppOptions {
+  tenantBindingReviewer?: Parameters<typeof createTenantBindingMiddleware>[0]["reviewer"];
+  tenantBindingSelfCheck?: {
+    inCluster?: boolean;
+    tokenPath?: string;
+  };
+}
+
+export function shouldAttemptTenantBinding(path: string): boolean {
+  if (path === "/internal" || path.startsWith("/internal/")) return true;
+  if (TENANT_BOUND_API_ROUTES.has(path)) return true;
+  if (path.endsWith("/") && TENANT_BOUND_API_ROUTES.has(path.slice(0, -1))) {
+    return true;
+  }
+  return false;
+}
+
+export function createApp(opts: CreateAppOptions = {}) {
   const app = express();
 
   const metricsRegistry = new Registry();
@@ -37,6 +69,18 @@ export function createApp() {
   });
 
   setEmailMetrics(createEmailMetrics(metricsRegistry));
+  const tenantBindingMetrics = createTenantBindingMetrics(metricsRegistry);
+  const tenantBindingReviewer = opts.tenantBindingReviewer ?? createKubernetesTokenReviewer();
+  const tenantBindingHealth = createTenantBindingHealthState();
+  const tenantBindingMiddleware = createTenantBindingMiddleware({
+    reviewer: tenantBindingReviewer,
+    metrics: tenantBindingMetrics,
+  });
+  startTenantBindingSelfCheck(tenantBindingHealth, {
+    reviewer: tenantBindingReviewer,
+    ...opts.tenantBindingSelfCheck,
+    log: (msg) => logger.error(msg),
+  });
 
   app.use(helmetMiddleware);
   app.use(corsMiddleware);
@@ -65,11 +109,24 @@ const route = req.route?.path || "unmatched";
   });
 
   const healthHandler = (_req: Request, res: Response) => {
-    res.json({ status: "ok", service: "octogee-api", timestamp: new Date().toISOString() });
+    const tenantBinding = tenantBindingHealth.get();
+    res.status(tenantBinding.status === "unhealthy" ? 503 : 200).json({
+      status: tenantBinding.status === "unhealthy" ? "degraded" : "ok",
+      service: "octogee-api",
+      tenantBinding,
+      timestamp: new Date().toISOString(),
+    });
   };
   app.get("/health", healthHandler);
   app.get("/api/health", healthHandler);
 
+  app.use((req, res, next) => {
+    if (!shouldAttemptTenantBinding(req.path)) {
+      next();
+      return;
+    }
+    tenantBindingMiddleware(req, res, next);
+  });
   mountClusterRoutes(app, { mmRestProxyHandler, mattermostMintRoutes });
 
   app.use(errorHandler);

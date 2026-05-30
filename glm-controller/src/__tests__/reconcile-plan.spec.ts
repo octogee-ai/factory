@@ -146,7 +146,7 @@ describe("buildInstancesMap", () => {
       }),
     ]);
     expect(map.bender).toMatchObject({
-      serviceAccountName: "octogee-gateway-bender",
+      serviceAccountName: "octogee-gw-bender",
       serviceAccount: { create: true },
       operatorAccess: {
         shellsEnabled: false,
@@ -164,7 +164,7 @@ describe("buildInstancesMap", () => {
         serviceAccountName: "octogee-gateway",
       }),
     ]);
-    expect(map.bender.serviceAccountName).toBe("octogee-gateway-bender");
+    expect(map.bender.serviceAccountName).toBe("octogee-gw-bender");
     expect(map.bender.serviceAccount).toEqual({ create: true });
   });
 

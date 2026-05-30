@@ -333,6 +333,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            - name: octogee-api-sa-token
+              mountPath: /var/run/secrets/octogee-api
+              readOnly: true
           # Startup probe is HTTP GET /healthz (not TCP) — gates
           # liveness/readiness until openclaw is actually serving HTTP,
           # not just port-bound. Unrouted paths fall through to openclaw's
@@ -464,6 +467,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            - name: octogee-api-sa-token
+              mountPath: /var/run/secrets/octogee-api
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -485,3 +491,10 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        - name: octogee-api-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600

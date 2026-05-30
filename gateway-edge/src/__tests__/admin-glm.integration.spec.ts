@@ -357,7 +357,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
         shellsEnabled: false,
         reason: "operator-trust-boundary-not-provisioned",
       },
-      serviceAccountName: "octogee-gateway-test-canary",
+      serviceAccountName: "octogee-gw-test-canary",
       serviceAccount: {
         create: true,
       },

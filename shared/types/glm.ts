@@ -76,7 +76,7 @@ export const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec = {
   reason: "operator-trust-boundary-not-provisioned",
 };
 
-export const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gateway-";
+export const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
 
 export const OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec = {

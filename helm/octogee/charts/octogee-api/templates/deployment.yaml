@@ -95,3 +95,15 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: octogee-api-sa-token
+              mountPath: /var/run/secrets/octogee-api
+              readOnly: true
+      volumes:
+        - name: octogee-api-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600

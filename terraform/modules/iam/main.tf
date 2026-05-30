@@ -27,6 +27,12 @@ resource "google_service_account_iam_member" "workload_identity" {
   member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-gateway]"
 }
 
+resource "google_service_account_iam_member" "workload_identity_octogee_api" {
+  service_account_id = google_service_account.gateway.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-api]"
+}
+
 # ── Cloud SQL Client role ───────────────────────────────────────────────────
 # Gateway SA needs cloudsql.client to connect via Cloud SQL Proxy.
 resource "google_project_iam_member" "cloudsql_client" {
