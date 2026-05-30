@@ -10,6 +10,7 @@ import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middle
 
 import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
+import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
@@ -34,6 +35,8 @@ export function createApp() {
     labelNames: ["method", "route", "status"] as const,
     registers: [metricsRegistry],
   });
+
+  setEmailMetrics(createEmailMetrics(metricsRegistry));
 
   app.use(helmetMiddleware);
   app.use(corsMiddleware);

@@ -389,8 +389,55 @@ def d_tracing():
                      [tmpl_datasource()], refresh="", tags=["octogee", "tracing"])
 
 
+def d_email():
+    p = [
+        text("Transactional email (Resend)", "Send + delivery health for invites, digests, weeklies, "
+             "and auth (Phase 3). `octogee_email_sent_total{type,result}` for attempts, "
+             "`octogee_email_delivery_total{type,event}` for Resend webhook events, "
+             "`octogee_email_suppressions_total{reason}` for the suppression list. "
+             "Alerts: `ResendBounceRateHigh` (>5%/1h), `ResendComplaintRateHigh` (>0.1%/1h), "
+             "`ResendWebhookStale` (sends but no events in 1h).", h=5),
+        row("Send rate + outcomes"),
+        ts("Send rate by type", [(f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[5m])) by (type)', "{{type}}")], unit="ops", legend=True),
+        ts("Send outcomes (5m rate)", [
+            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[5m]))', "sent"),
+            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="suppressed"}}[5m]))', "suppressed"),
+            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="error"}}[5m]))', "error"),
+        ], unit="ops", legend=True),
+        stat("Sent (24h)", [f'sum(increase(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[24h])) or vector(0)']),
+        stat("Suppressed (24h)", [f'sum(increase(octogee_email_sent_total{{namespace="{NS}",result="suppressed"}}[24h])) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}]),
+        stat("Send errors (24h)", [f'sum(increase(octogee_email_sent_total{{namespace="{NS}",result="error"}}[24h])) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
+        row("Delivery feedback (Resend webhook)"),
+        ts("Delivery events by type", [
+            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="delivered"}}[5m])) by (type)', "delivered {{type}}"),
+            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="bounced"}}[5m])) by (type)', "bounced {{type}}"),
+            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="complained"}}[5m])) by (type)', "complained {{type}}"),
+        ], unit="ops", legend=True),
+        stat("Bounce rate (1h)",
+             [f'100 * sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="bounced"}}[1h])) / clamp_min(sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[1h])), 0.001)'],
+             unit="percent",
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 2}, {"color": "red", "value": 5}]),
+        stat("Complaint rate (1h)",
+             [f'100 * sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="complained"}}[1h])) / clamp_min(sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[1h])), 0.001)'],
+             unit="percent",
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.1}]),
+        stat("Failed (24h)", [f'sum(increase(octogee_email_delivery_total{{namespace="{NS}",event="failed"}}[24h])) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
+        row("Suppression list"),
+        ts("New suppressions / hour", [
+            (f'sum(rate(octogee_email_suppressions_total{{namespace="{NS}",reason="bounce"}}[1h]))*3600', "bounces/h"),
+            (f'sum(rate(octogee_email_suppressions_total{{namespace="{NS}",reason="complaint"}}[1h]))*3600', "complaints/h"),
+        ], unit="short", legend=True),
+        stat("Total suppressed (cumulative)", [f'sum(octogee_email_suppressions_total{{namespace="{NS}"}}) or vector(0)']),
+    ]
+    return dashboard("octogee-email", "Platform — Email (Resend)", p,
+                     [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "platform"])
+
+
 GROUPS = {
-    "platform": [d_overview, d_services, d_container_health, d_gitea, d_mattermost, d_postgres],
+    "platform": [d_overview, d_services, d_container_health, d_gitea, d_mattermost, d_postgres, d_email],
     "gateways": [d_agent, d_runner, d_fleet, d_bridge],
     "tracing": [d_tracing],
 }
