@@ -339,6 +339,24 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(r).toBe(false);
     expect(applyPatch).not.toHaveBeenCalled();
   });
+
+  it("waits for the booting runtime: deadline-bounded retries, not a 3-shot budget (byot fires at pod boot before openclaw listens on :18789)", async () => {
+    const opts: Array<Record<string, unknown>> = [];
+    const r = await applyCoachModelPatch(
+      { slug: "tester-70", provider: "openai-codex" },
+      {
+        isOperatorGateway: () => false,
+        applyConfigPatch: async (_args, o) => {
+          opts.push(o ?? {});
+          return { mode: "rpc", attempts: 1 };
+        },
+      },
+    );
+    expect(r).toBe(true);
+    expect(opts).toHaveLength(1);
+    expect(opts[0].maxRetries).toBe(Number.POSITIVE_INFINITY);
+    expect(opts[0].totalDeadlineMs as number).toBeGreaterThanOrEqual(60_000);
+  });
 });
 
 describe("operator gateway — provisioner does not touch auth or openclaw.json", () => {

@@ -11,10 +11,18 @@ import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { OPENCLAW_DIR, isOperatorGateway, log } from "./config.js";
 
+// byot-sync fires at pod boot, before openclaw is listening on :18789, so the
+// coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
+// rather than burn a fixed 3-shot budget. Deadline-bounded (matches the
+// coach-attach verify's runtime-readiness budget); permanent errors still fail
+// fast inside applyConfigPatch.
+const BYOT_RUNTIME_BOOT_PATIENCE_MS = 120_000;
+
 export async function applyCoachModelPatch(
   input: ByotInput | null,
   deps?: {
     applyPatch?: (patch: object) => Promise<void>;
+    applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
     isOperatorGateway?: () => boolean;
   },
@@ -25,12 +33,13 @@ export async function applyCoachModelPatch(
   if (!input) return false;
   const patch = byosCoachConfigPatch(input);
   if (!patch) return false;
+  const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
   const applyPatch =
     deps?.applyPatch ??
     (async (p: object) => {
-      await applyConfigPatch(
+      await applyConfigPatchFn(
         { buildPatch: () => p, logPrefix: `[byot-sync:${input.slug}]` },
-        { maxRetries: 3, totalDeadlineMs: 30_000 },
+        { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
       );
     });
   try {
