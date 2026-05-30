@@ -61,6 +61,20 @@ const stamperRegion = entrypoint.match(
 
 expect(stamperRegion).toMatch(/\[\s*-f\s+/);
   });
+
+  it("applies the codex YOLO sandbox when GATEWAY_PROFILE=operator AND the script exists", () => {
+    expect(entrypoint).toMatch(/\/octogee\/infra\/gateway\/apply-operator-codex-sandbox\.mjs/);
+    expect(entrypoint).toMatch(/node\s+[^\n]*apply-operator-codex-sandbox/);
+  });
+
+  it("the codex-sandbox applier is gated by BOTH the env guard AND the file-exists guard", () => {
+    const region = entrypoint.match(
+      /[\s\S]{0,400}apply-operator-codex-sandbox\.mjs[\s\S]{0,200}/,
+    )?.[0];
+    expect(region).toBeDefined();
+    expect(region).toMatch(/GATEWAY_PROFILE[\s\S]*operator/);
+    expect(region).toMatch(/\[\s*-f\s+/);
+  });
 });
 
 describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", () => {

@@ -241,6 +241,18 @@ if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$STAMPER" ]; then
   node "$STAMPER" || log "stamp-claude-first-run: non-fatal failure"
 fi
 
+# ── Operator-profile: codex YOLO sandbox ────────────────────────────────────
+# Operator-class is single-team — the gateway boundary IS the trust boundary,
+# so codex's app-server runs danger-full-access + approvalPolicy=never (the
+# agent acts without per-action approval prompts). Cattle gateways are shared /
+# multi-tenant and keep codex's sandboxed defaults — this script ships ONLY in
+# Dockerfile.operator and is gated on GATEWAY_PROFILE. Idempotent + non-fatal.
+# See tests/specs/apply-operator-codex-sandbox.spec.ts.
+CODEX_YOLO=/octogee/infra/gateway/apply-operator-codex-sandbox.mjs
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$CODEX_YOLO" ]; then
+  node "$CODEX_YOLO" || log "apply-operator-codex-sandbox: non-fatal failure"
+fi
+
 # ── Harden file permissions ─────────────────────────────────────────────────
 # The init container sets 775 for PVC/emptyDir. Tighten sensitive files.
 chmod 700 "$OPENCLAW_DIR" 2>/dev/null || true
