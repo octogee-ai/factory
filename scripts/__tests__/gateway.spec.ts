@@ -76,11 +76,25 @@ it("sets maxConcurrent to 8 when missing", () => {
     expect(agent.tools.deny).toEqual(["other"]);
   });
 
-  it("sets coach model to sonnet 4.6", () => {
+  it("sets coach model to sonnet 4.6 by default", () => {
     const agent: any = { id: "octogee-foo-coach", model: "anthropic/claude-haiku-4-5" };
     if (/^octogee-.+-coach$/.test(agent.id)) {
-      agent.model = "anthropic/claude-sonnet-4-6";
+      const faceModel = process.env.OPENCLAW_FACE_MODEL ?? "anthropic/claude-sonnet-4-6";
+      agent.model = faceModel;
     }
     expect(agent.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("respects OPENCLAW_FACE_MODEL env override for coach model", () => {
+    const prev = process.env.OPENCLAW_FACE_MODEL;
+    process.env.OPENCLAW_FACE_MODEL = "openai/gpt-5.5";
+    const agent: any = { id: "octogee-foo-coach", model: "anthropic/claude-sonnet-4-6" };
+    if (/^octogee-.+-coach$/.test(agent.id)) {
+      const faceModel = process.env.OPENCLAW_FACE_MODEL ?? "anthropic/claude-sonnet-4-6";
+      agent.model = faceModel;
+    }
+    expect(agent.model).toBe("openai/gpt-5.5");
+    if (prev === undefined) delete process.env.OPENCLAW_FACE_MODEL;
+    else process.env.OPENCLAW_FACE_MODEL = prev;
   });
 });

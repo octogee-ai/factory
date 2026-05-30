@@ -66,7 +66,7 @@ export function ensureGatewayDefaults(): void {
         log(`${agent.id} → removed exec/process from agent deny (moved to router plugin)`);
       }
 
-      const faceModel = "anthropic/claude-sonnet-4-6";
+      const faceModel = process.env.OPENCLAW_FACE_MODEL ?? "anthropic/claude-sonnet-4-6";
       if (agent.model !== faceModel) {
         const oldModel = agent.model ?? "default";
         agent.model = faceModel;
@@ -100,10 +100,11 @@ if (agent.heartbeat == null) {
   }
 
   config.agents.defaults.subagents ??= {};
-  if (config.agents.defaults.subagents.model !== "anthropic/claude-sonnet-4-6") {
-    config.agents.defaults.subagents.model = "anthropic/claude-sonnet-4-6";
+  const subagentModel = process.env.OPENCLAW_FACE_MODEL ?? "anthropic/claude-sonnet-4-6";
+  if (config.agents.defaults.subagents.model !== subagentModel) {
+    config.agents.defaults.subagents.model = subagentModel;
     changed = true;
-    log("Set agents.defaults.subagents.model = anthropic/claude-sonnet-4-6");
+    log(`Set agents.defaults.subagents.model = ${subagentModel}`);
   }
 
   if (!config.agents.defaults.subagents.runTimeoutSeconds || config.agents.defaults.subagents.runTimeoutSeconds < 900) {

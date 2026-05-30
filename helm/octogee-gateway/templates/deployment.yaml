@@ -164,6 +164,10 @@ spec:
               value: {{ .Values.env.octogeeRouterEnabled | quote }}
             - name: OPENCLAW_LOG_LEVEL
               value: {{ .Values.env.openclawLogLevel | default "info" | quote }}
+            {{- if .Values.env.openclawFaceModel }}
+            - name: OPENCLAW_FACE_MODEL
+              value: {{ .Values.env.openclawFaceModel | quote }}
+            {{- end }}
             - name: FLEET_CONTROLLER_PORT
               value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
             - name: SITE_BUILD_API_PORT
