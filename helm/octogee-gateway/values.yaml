@@ -51,6 +51,12 @@ replicas: 1
 # reason behind omitting the shared ANTHROPIC_API_KEY.
 profile: ""
 
+# Workspace auto-commit toggle. Unset (default) lets the gateway code
+# decide based on profile — operator → off, standard/cattle → on. Set
+# to "true" or "false" to override (e.g. an operator who wants the
+# auto-save net, or a cattle gateway under debugging).
+workspaceAutosaveEnabled: ""
+
 # Gateway container security defaults stay locked down. Personal build
 # gateways may override this per instance via glmGateways desired state.
 gatewayContainerSecurityContext:

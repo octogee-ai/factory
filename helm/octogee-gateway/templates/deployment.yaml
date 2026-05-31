@@ -192,6 +192,15 @@ spec:
             # so the entrypoint's `= "operator"` check is a no-op.
             - name: GATEWAY_PROFILE
               value: {{ .Values.profile | quote }}
+            {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
+            {{- if ne $autosave "" }}
+            # Override; unset → gateway code defaults from profile
+            # (operator off, cattle on). toString handles --set bool
+            # coercion so "false" still renders. See
+            # scripts/lib/workspace-autosave.ts.
+            - name: WORKSPACE_AUTOSAVE_ENABLED
+              value: {{ $autosave | quote }}
+            {{- end }}
             - name: OPERATOR_SHELLS_ENABLED
               value: {{ ternary "true" "false" $operatorShellsEnabled | quote }}
             {{- if eq .Values.profile "operator" }}
