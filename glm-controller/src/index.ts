@@ -733,6 +733,7 @@ async function buildHandlers(
 
   const addGateway = createAddGatewayHandler({
     helm,
+    kubeOps,
     readGatewayHeartbeat: async (gatewayId) => {
       const doc = await db.collection("gateways").doc(gatewayId).get();
       if (!doc.exists) return null;
@@ -751,6 +752,7 @@ async function buildHandlers(
     },
     syncFleetIngress,
     helmRenderTimeoutMs: 600_000,
+    deploymentCreatedTimeoutMs: 600_000,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),

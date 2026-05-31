@@ -1,6 +1,7 @@
 import type { Operation, OperationStep, StepStatus } from "../../../shared/types/glm.js";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
+import type { KubeOps } from "../lib/kube-ops.js";
 
 export interface GatewayHeartbeat {
   lastHeartbeatAt: number;
@@ -8,15 +9,19 @@ export interface GatewayHeartbeat {
 
 export interface AddGatewayDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
-  
+
+  kubeOps: Pick<KubeOps, "readDeployedReplicas">;
+
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeat | null>;
 
-syncFleetIngress: () => Promise<void>;
-  
+  syncFleetIngress: () => Promise<void>;
+
   helmRenderTimeoutMs: number;
-  
+
+  deploymentCreatedTimeoutMs: number;
+
   heartbeatTimeoutMs: number;
-  
+
   pollIntervalMs: number;
   now: () => number;
   wait: (ms: number) => Promise<void>;
@@ -34,6 +39,10 @@ interface PollResult {
 }
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
+
+function deploymentNameForInstance(instanceName: string): string {
+  return `octogee-gateway-${instanceName}`;
+}
 
 export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
@@ -57,6 +66,25 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
     });
     if (!renderResult.ok) {
       return { steps: [], success: false, error: renderResult.errorMsg };
+    }
+
+    const deploymentName = deploymentNameForInstance(instanceName);
+    const deploymentResult = await pollUntil({
+      stepName: "deployment-created",
+      timeoutMs: deps.deploymentCreatedTimeoutMs,
+      ctx,
+      deps,
+      check: async () => {
+        const replicas = await deps.kubeOps.readDeployedReplicas({
+          namespace: NAMESPACE,
+          name: deploymentName,
+        });
+        return replicas != null;
+      },
+      timeoutMessage: `deployment "${deploymentName}" was not created within ${deps.deploymentCreatedTimeoutMs}ms`,
+    });
+    if (!deploymentResult.ok) {
+      return { steps: [], success: false, error: deploymentResult.errorMsg };
     }
 
     const heartbeatResult = await pollUntil({
