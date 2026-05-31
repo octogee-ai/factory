@@ -145,6 +145,26 @@ specs: new Map([
 expect(state.specs.get("gw-test")?.imageTag).toBe("newSha");
   });
 
+  it("accepts a short build-sha heartbeat for pinned OpenClaw bundle image tags", async () => {
+    const imageTag = "47e30b8-oc2026.5.28";
+    const state: FakeState = {
+      specs: new Map([
+        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
+      ]),
+      helmInstances: new Map([["default", { repository: REPO, tag: imageTag }]]),
+      heartbeats: new Map([["gw-test", { version: "47e30b8", lastHeartbeatAt: 100 }]]),
+    };
+
+    const deps = makeDeps(state);
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "gw-test", imageTag } }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(state.specs.get("gw-test")?.imageTag).toBe(imageTag);
+  });
+
   it("accepts an imageRepository override (e.g., switching repos)", async () => {
     const ALT_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-alt";
     const state: FakeState = {
