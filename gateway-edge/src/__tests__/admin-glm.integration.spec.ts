@@ -364,6 +364,89 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     });
   });
 
+  it("reserves an operator gateway for a real owner without enabling shells", async () => {
+    usersDocs["uid-jack"] = {
+      username: "jack",
+      provisioning: { openclaw: { slug: "jack" } },
+    };
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-jack",
+      instanceName: "jack",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      profile: "operator",
+      ownerUid: "uid-jack",
+    });
+    expect(res.status).toBe(202);
+
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite?.data).toMatchObject({
+      gatewayId: "gw-test-jack",
+      profile: "operator",
+      ownerUid: "uid-jack",
+      builderSlug: "jack",
+      operatorAccess: {
+        shellsEnabled: false,
+        reason: "operator-trust-boundary-not-provisioned",
+      },
+      operatorReservation: {
+        status: "reserved",
+        reservedBy: "admin-user",
+        billingStatus: "manual",
+      },
+    });
+    expect(typeof gwWrite?.data?.operatorReservation).toBe("object");
+    expect(typeof (gwWrite?.data?.operatorReservation as { reservedAt?: unknown }).reservedAt).toBe("number");
+
+    const opWrite = calls.find((c) => c.collection === "glmOperations");
+    expect(opWrite?.data?.input).toMatchObject({
+      gatewayId: "gw-test-jack",
+      profile: "operator",
+      ownerUid: "uid-jack",
+      builderSlug: "jack",
+    });
+  });
+
+  it("rejects reservation fields on non-operator gateways before side effects", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-canary",
+      instanceName: "canary",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      ownerUid: "uid-jack",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/profile=operator/);
+    expect(provisionerCalls).toEqual([]);
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite).toBeUndefined();
+  });
+
+  it("rejects reservations for missing owner users before provisioning gateway auth", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "gw-test-ghost",
+      instanceName: "ghost",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      profile: "operator",
+      ownerUid: "uid-ghost",
+    });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/owner user/i);
+    expect(provisionerCalls).toEqual([]);
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite).toBeUndefined();
+  });
+
   it("rejects unknown sizingTier values on create with 400", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({

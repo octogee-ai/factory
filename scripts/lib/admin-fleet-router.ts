@@ -16,6 +16,7 @@ import {
   operatorGatewayServiceAccountName,
   resolveGatewayPersistence,
   type GatewayProfile,
+  type OperatorGatewayReservationSpec,
 } from "../../shared/types/glm.js";
 import {
   SIZING_TIERS,
@@ -315,6 +316,28 @@ interface NewOperationInput {
   input: Record<string, unknown>;
 }
 
+interface AddGatewayBody {
+  gatewayId: string;
+  instanceName: string;
+  imageRepository: string;
+  imageTag: string;
+  profile: string;
+  sizingTier: string;
+  ownerUid: string;
+  builderSlug: string;
+}
+
+interface AddGatewayCreate {
+  gatewayId: string;
+  instanceName: string;
+  imageRepository: string;
+  imageTag: string;
+  profile?: GatewayProfile;
+  sizingTier?: SizingTier;
+  ownerUid?: string;
+  builderSlug?: string;
+}
+
 interface CustomerLookupDoc {
   id: string;
   data: () =>
@@ -350,6 +373,10 @@ function ageMsOrNull(ms: number | null, now: number): number | null {
 
 function isValidGatewayImageRepository(repo: string): boolean {
   return repo.startsWith(GATEWAY_IMAGE_REPO_PREFIX);
+}
+
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
 }
 
 interface RolloutBodyError {
@@ -420,6 +447,176 @@ export function validateRolloutBody(
       ...(body.profile != null
         ? { profile: body.profile as GatewayProfile }
         : {}),
+    },
+  };
+}
+
+function validateAddGatewayRequiredFields(
+  body: Partial<AddGatewayBody>,
+): { error: RolloutBodyError } | {
+  ok: Pick<
+    AddGatewayCreate,
+    "gatewayId" | "instanceName" | "imageRepository" | "imageTag"
+  >;
+} {
+  if (
+    !isNonEmptyString(body.gatewayId) ||
+    !isNonEmptyString(body.instanceName) ||
+    !isNonEmptyString(body.imageRepository) ||
+    !isNonEmptyString(body.imageTag)
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "missing required fields",
+          required: ["gatewayId", "instanceName", "imageRepository", "imageTag"],
+        },
+      },
+    };
+  }
+  return {
+    ok: {
+      gatewayId: body.gatewayId,
+      instanceName: body.instanceName,
+      imageRepository: body.imageRepository,
+      imageTag: body.imageTag,
+    },
+  };
+}
+
+function validateAddGatewayProfile(
+  body: Partial<AddGatewayBody>,
+): { error: RolloutBodyError } | { ok: { profile?: GatewayProfile } } {
+  if (
+    body.profile !== undefined &&
+    !(GATEWAY_PROFILES as readonly string[]).includes(body.profile)
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: `profile must be one of: ${GATEWAY_PROFILES.join(", ")}`,
+          got: body.profile,
+        },
+      },
+    };
+  }
+  return {
+    ok: body.profile ? { profile: body.profile as GatewayProfile } : {},
+  };
+}
+
+function validateAddGatewaySizing(
+  body: Partial<AddGatewayBody>,
+): { error: RolloutBodyError } | { ok: { sizingTier?: SizingTier } } {
+  if (
+    body.sizingTier !== undefined &&
+    !(SIZING_TIERS as readonly string[]).includes(body.sizingTier)
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: `sizingTier must be one of: ${SIZING_TIERS.join(", ")}`,
+          got: body.sizingTier,
+        },
+      },
+    };
+  }
+  return {
+    ok: body.sizingTier ? { sizingTier: body.sizingTier as SizingTier } : {},
+  };
+}
+
+function validateAddGatewayReservationFields(
+  body: Partial<AddGatewayBody>,
+  profile: GatewayProfile | undefined,
+): { error: RolloutBodyError } | {
+  ok: { ownerUid?: string; builderSlug?: string };
+} {
+  if (body.ownerUid !== undefined && !isNonEmptyString(body.ownerUid)) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "ownerUid must be a non-empty string" },
+      },
+    };
+  }
+  if (body.builderSlug !== undefined && !isNonEmptyString(body.builderSlug)) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "builderSlug must be a non-empty string" },
+      },
+    };
+  }
+  if (
+    (body.ownerUid !== undefined || body.builderSlug !== undefined) &&
+    profile !== "operator"
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "operator gateway reservation requires profile=operator" },
+      },
+    };
+  }
+  if (body.builderSlug !== undefined && body.ownerUid === undefined) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "builderSlug requires ownerUid" },
+      },
+    };
+  }
+  return {
+    ok: {
+      ...(body.ownerUid ? { ownerUid: body.ownerUid } : {}),
+      ...(body.builderSlug ? { builderSlug: body.builderSlug } : {}),
+    },
+  };
+}
+
+function validateAddGatewayRepository(
+  imageRepository: string,
+): RolloutBodyError | null {
+  if (!isValidGatewayImageRepository(imageRepository)) {
+    return {
+      status: 400,
+      body: {
+        error:
+          "imageRepository must be the canonical Octogee Artifact Registry repo",
+        expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
+        got: imageRepository,
+      },
+    };
+  }
+  return null;
+}
+
+function validateAddGatewayBody(
+  body: Partial<AddGatewayBody>,
+): { error: RolloutBodyError } | { ok: AddGatewayCreate } {
+  const required = validateAddGatewayRequiredFields(body);
+  if ("error" in required) return required;
+  const profile = validateAddGatewayProfile(body);
+  if ("error" in profile) return profile;
+  const sizing = validateAddGatewaySizing(body);
+  if ("error" in sizing) return sizing;
+  const reservation = validateAddGatewayReservationFields(
+    body,
+    profile.ok.profile,
+  );
+  if ("error" in reservation) return reservation;
+  const repoError = validateAddGatewayRepository(required.ok.imageRepository);
+  if (repoError) return { error: repoError };
+  return {
+    ok: {
+      ...required.ok,
+      ...profile.ok,
+      ...sizing.ok,
+      ...reservation.ok,
     },
   };
 }
@@ -638,6 +835,112 @@ async function createOperation(
     ...(inputUid !== null ? { inputUid } : {}),
   });
   return ref.id;
+}
+
+async function ensureGatewayCreateIsUnique(
+  db: Firestore,
+  body: Pick<AddGatewayCreate, "gatewayId" | "instanceName">,
+): Promise<{ error: RolloutBodyError } | { ok: true }> {
+  const existing = await db
+    .collection(GLM_GATEWAYS_COLLECTION)
+    .doc(body.gatewayId)
+    .get();
+  if (existing.exists) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "gateway already exists",
+          gatewayId: body.gatewayId,
+        },
+      },
+    };
+  }
+
+  const collisionSnap = await db
+    .collection(GLM_GATEWAYS_COLLECTION)
+    .where("instanceName", "==", body.instanceName)
+    .limit(1)
+    .get();
+  if (collisionSnap.size > 0) {
+    const collidingId = collisionSnap.docs[0].id;
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "instanceName already in use",
+          instanceName: body.instanceName,
+          ownedBy: collidingId,
+        },
+      },
+    };
+  }
+
+  return { ok: true };
+}
+
+async function resolveOperatorReservation(opts: {
+  db: Firestore;
+  body: AddGatewayCreate;
+  createdBy: string;
+  now: number;
+  workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
+}): Promise<
+  | { error: RolloutBodyError }
+  | {
+      ok: {
+        ownerUid?: string;
+        builderSlug?: string;
+        operatorReservation?: OperatorGatewayReservationSpec;
+      };
+    }
+> {
+  const { body } = opts;
+  if (body.profile !== "operator" || body.ownerUid === undefined) {
+    return { ok: {} };
+  }
+
+  const ownerSnap = await opts.db.collection("users").doc(body.ownerUid).get();
+  if (!ownerSnap.exists) {
+    return {
+      error: {
+        status: 404,
+        body: {
+          error: "owner user not found",
+          ownerUid: body.ownerUid,
+        },
+      },
+    };
+  }
+
+  const userData = (ownerSnap.data() ?? {}) as Record<string, unknown>;
+  const builderSlug =
+    body.builderSlug ?? resolveCustomerSlug(userData, opts.workspaceSlugsForUser);
+  if (!builderSlug) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error:
+            "builderSlug is required when owner user has no resolvable workspace slug",
+          ownerUid: body.ownerUid,
+        },
+      },
+    };
+  }
+
+  return {
+    ok: {
+      ownerUid: body.ownerUid,
+      builderSlug,
+      operatorReservation: {
+        status: "reserved",
+        reservedAt: opts.now,
+        reservedBy: opts.createdBy,
+        billingStatus: "manual",
+      },
+    },
+  };
 }
 
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
@@ -974,79 +1277,35 @@ router.post(
     // eslint-disable-next-line complexity -- linear preflight: validate body, check uniqueness, provision GSA secret, write desired state. Each guard returns its own error response; flattening is clearer than threading.
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const body = req.body as Partial<{
-          gatewayId: string;
-          instanceName: string;
-          imageRepository: string;
-          imageTag: string;
-          profile: string;
-          sizingTier: string;
-        }>;
-        if (
-          typeof body.gatewayId !== "string" || body.gatewayId.length === 0 ||
-          typeof body.instanceName !== "string" || body.instanceName.length === 0 ||
-          typeof body.imageRepository !== "string" || body.imageRepository.length === 0 ||
-          typeof body.imageTag !== "string" || body.imageTag.length === 0
-        ) {
-          res.status(400).json({
-            error: "missing required fields",
-            required: [
-              "gatewayId",
-              "instanceName",
-              "imageRepository",
-              "imageTag",
-            ],
-          });
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const now = Date.now();
+
+        const parsed = validateAddGatewayBody(req.body as Partial<AddGatewayBody>);
+        if ("error" in parsed) {
+          res.status(parsed.error.status).json(parsed.error.body);
           return;
         }
-        if (body.profile !== undefined && !(GATEWAY_PROFILES as readonly string[]).includes(body.profile)) {
-          res.status(400).json({
-            error: `profile must be one of: ${GATEWAY_PROFILES.join(", ")}`,
-            got: body.profile,
-          });
+        const body = parsed.ok;
+
+        const uniqueness = await ensureGatewayCreateIsUnique(db, body);
+        if ("error" in uniqueness) {
+          res.status(uniqueness.error.status).json(uniqueness.error.body);
           return;
         }
-        if (body.sizingTier !== undefined && !(SIZING_TIERS as readonly string[]).includes(body.sizingTier)) {
-          res.status(400).json({
-            error: `sizingTier must be one of: ${SIZING_TIERS.join(", ")}`,
-            got: body.sizingTier,
-          });
+
+        const reservation = await resolveOperatorReservation({
+          db,
+          body,
+          createdBy,
+          now,
+          workspaceSlugsForUser: deps.workspaceSlugsForUser,
+        });
+        if ("error" in reservation) {
+          res.status(reservation.error.status).json(reservation.error.body);
           return;
         }
-        if (!isValidGatewayImageRepository(body.imageRepository)) {
-          res.status(400).json({
-            error:
-              "imageRepository must be the canonical Octogee Artifact Registry repo",
-            expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
-            got: body.imageRepository,
-          });
-          return;
-        }
-        const existing = await db
-          .collection(GLM_GATEWAYS_COLLECTION)
-          .doc(body.gatewayId)
-          .get();
-        if (existing.exists) {
-          res.status(409).json({
-            error: "gateway already exists",
-            gatewayId: body.gatewayId,
-          });
-          return;
-        }
-        const collisionSnap = await db
-          .collection(GLM_GATEWAYS_COLLECTION)
-          .where("instanceName", "==", body.instanceName)
-          .limit(1)
-          .get();
-        if (collisionSnap.size > 0) {
-          const collidingId = collisionSnap.docs[0].id;
-          res.status(409).json({
-            error: "instanceName already in use",
-            instanceName: body.instanceName,
-            ownedBy: collidingId,
-          });
-          return;
-        }
+
         const gatewayServiceAccount = process.env.GATEWAY_SERVICE_ACCOUNT;
         if (!gatewayServiceAccount) {
           res.status(500).json({
@@ -1069,12 +1328,9 @@ router.post(
           });
           return;
         }
-        const actor = req as ActorRequest;
-        const createdBy = actor.uid ?? "unknown";
-        const profile = body.profile as GatewayProfile | undefined;
-        const persistence = resolveGatewayPersistence(profile, undefined);
+        const persistence = resolveGatewayPersistence(body.profile, undefined);
         const operatorDefaults =
-          profile === "operator"
+          body.profile === "operator"
             ? {
                 operatorAccess: OPERATOR_GATEWAY_LOCKED_ACCESS,
                 serviceAccountName: operatorGatewayServiceAccountName(body.gatewayId),
@@ -1091,11 +1347,12 @@ router.post(
             imageTag: body.imageTag,
             desiredStatus: "running",
             createdBy,
-            createdAt: Date.now(),
-            ...(profile ? { profile } : {}),
+            createdAt: now,
+            ...(body.profile ? { profile: body.profile } : {}),
             ...(persistence ? { persistence } : {}),
             ...operatorDefaults,
-            ...(body.sizingTier ? { sizingTier: body.sizingTier as SizingTier } : {}),
+            ...reservation.ok,
+            ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),
           });
         const operationId = await createOperation(db, {
           kind: "add-gateway",
@@ -1104,6 +1361,10 @@ router.post(
             gatewayId: body.gatewayId,
             instanceName: body.instanceName,
             imageTag: body.imageTag,
+            ...(body.profile ? { profile: body.profile } : {}),
+            ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),
+            ...(reservation.ok.ownerUid ? { ownerUid: reservation.ok.ownerUid } : {}),
+            ...(reservation.ok.builderSlug ? { builderSlug: reservation.ok.builderSlug } : {}),
           },
         });
         res
