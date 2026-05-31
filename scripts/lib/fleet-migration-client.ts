@@ -28,6 +28,8 @@ export interface MigrationClientDeps {
   log?: (msg: string) => void;
   
   timeouts?: MigrationClientTimeouts;
+
+  resolveRequestSecret?: (gatewayId: string) => Promise<string>;
 }
 
 export interface MigrationClient {
@@ -43,6 +45,7 @@ export interface MigrationClient {
     fromGatewayId: string;
     toGatewayId: string;
     slug: string;
+    includeActivationManifest?: boolean;
   }): Promise<ImportResponse>;
 
   unmount(opts: {
@@ -91,7 +94,10 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     timeoutMs: number,
   ): Promise<Resp> => {
     const rawBody = JSON.stringify(body);
-    const signature = signFleetRequest(deps.secret, migrationId, rawBody);
+    const requestSecret = deps.resolveRequestSecret
+      ? await deps.resolveRequestSecret(gatewayId)
+      : deps.secret;
+    const signature = signFleetRequest(requestSecret, migrationId, rawBody);
     const url = `${deps.resolveGatewayUrl(gatewayId)}${path}`;
     const res = await fetchWithTimeout(
       path,
@@ -145,13 +151,24 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async transferState({ migrationId, fromGatewayId, toGatewayId, slug }) {
+    async transferState({ migrationId, fromGatewayId, toGatewayId, slug, includeActivationManifest }) {
       const targetUrl = deps.resolveGatewayUrl(toGatewayId);
+      const targetSecret = deps.resolveRequestSecret
+        ? await deps.resolveRequestSecret(toGatewayId)
+        : deps.secret;
+      const targetImportSignature = signFleetRequest(targetSecret, migrationId, slug);
       const parsed = await postSignedJson<ImportResponse>(
         fromGatewayId,
         `/push-state/${fromGatewayId}`,
         migrationId,
-        { migrationId, slug, targetGatewayId: toGatewayId, targetUrl },
+        {
+          migrationId,
+          slug,
+          targetGatewayId: toGatewayId,
+          targetUrl,
+          targetImportSignature,
+          ...(includeActivationManifest ? { includeActivationManifest: true } : {}),
+        },
         transferMs,
       );
       log(

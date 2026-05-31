@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { signFleetRequest } from "../lib/fleet-signature";
 import {
   SIGNATURE_HEADER,
@@ -169,10 +169,49 @@ describe("MigrationClient.transferState", () => {
       slug: "alice",
       targetGatewayId: "gw-to",
       targetUrl: "https://fleet-to.example.com",
+      targetImportSignature: signFleetRequest(SECRET, "m1", "alice"),
     });
     const expectedSig = signFleetRequest(SECRET, "m1", calls[0].body!);
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
     expect(res.imported).toBe(true);
+  });
+
+  it("uses per-gateway request secrets and can request an activation manifest", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const resolveRequestSecret = vi.fn(async (gatewayId: string) =>
+      gatewayId === "gw-from" ? "source-secret" : "target-secret",
+    );
+
+    const client = createMigrationClient({
+      secret: SECRET,
+      resolveGatewayUrl: (id) =>
+        id === "gw-from" ? "https://fleet-from.example.com" : "https://fleet-to.example.com",
+      resolveRequestSecret,
+      fetch: fakeFetch,
+    });
+    await client.transferState({
+      migrationId: "m1",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      includeActivationManifest: true,
+    });
+
+    const parsed = JSON.parse(calls[0].body!);
+    expect(parsed).toMatchObject({
+      includeActivationManifest: true,
+      targetImportSignature: signFleetRequest("target-secret", "m1", "alice"),
+    });
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
+      signFleetRequest("source-secret", "m1", calls[0].body!),
+    );
+    expect(resolveRequestSecret).toHaveBeenCalledWith("gw-to");
+    expect(resolveRequestSecret).toHaveBeenCalledWith("gw-from");
   });
 
   it("throws if push-state returns non-2xx", async () => {

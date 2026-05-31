@@ -47,6 +47,36 @@ function secretNameForGateway(gatewayId: string): string {
   return `gateway-auth-token-${gatewayId}`;
 }
 
+export async function readGatewayAuthToken(
+  deps: { runKubectl: KubectlSubprocess },
+  opts: { namespace: string; gatewayId: string },
+): Promise<string> {
+  const secretName = secretNameForGateway(opts.gatewayId);
+  const result = await deps.runKubectl([
+    "get",
+    "secret",
+    secretName,
+    "-n",
+    opts.namespace,
+    "-o",
+    "jsonpath={.data.token}",
+  ]);
+  if (result.code !== 0) {
+    throw new Error(
+      `kubectl get secret ${secretName} (ns=${opts.namespace}) failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  }
+  const raw = result.stdout.trim();
+  if (!raw) {
+    throw new Error(`gateway auth secret ${secretName} (ns=${opts.namespace}) has no token data`);
+  }
+  const token = Buffer.from(raw, "base64").toString("utf8");
+  if (!token) {
+    throw new Error(`gateway auth secret ${secretName} (ns=${opts.namespace}) decoded to an empty token`);
+  }
+  return token;
+}
+
 /**
  * Ensures a per-gateway K8s secret `gateway-auth-token-<gatewayId>` exists
  * in `namespace` with key `token`. Idempotent: a live secret is never

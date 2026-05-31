@@ -31,6 +31,7 @@ export interface MigrationRunnerInput {
   slug: string;
   fromGatewayId: string;
   toGatewayId: string;
+  includeActivationManifest?: boolean;
 }
 
 export interface MigrationRunnerResult {
@@ -45,6 +46,7 @@ async function executeStep(
   deps: MigrationRunnerDeps,
   migrationId: string,
   slug: string,
+  includeActivationManifest: boolean | undefined,
 ): Promise<void> {
   switch (step.action) {
     case "quiesce-source":
@@ -60,6 +62,7 @@ async function executeStep(
         fromGatewayId: step.from,
         toGatewayId: step.to,
         slug: step.slug,
+        includeActivationManifest,
       });
       return;
     case "cutover-firestore":
@@ -96,7 +99,13 @@ export async function runMigration(
     const phaseAtStart = state.phase;
     await report(deps, { name: step.action, status: "running" });
     try {
-      await executeStep(step, deps, input.migrationId, input.slug);
+      await executeStep(
+        step,
+        deps,
+        input.migrationId,
+        input.slug,
+        input.includeActivationManifest,
+      );
       await report(deps, { name: step.action, status: "done" });
       deps.log(
         `[migration-runner] ${step.action} ok migrationId=${input.migrationId} slug=${input.slug} (phase ${phaseAtStart} → ${advancePhase(state.phase)})`,
@@ -149,7 +158,7 @@ async function tryRollback(
     const rbName = `rollback:${step.action}`;
     await report(deps, { name: rbName, status: "running" });
     try {
-      await executeStep(step, deps, migrationId, state.slug);
+      await executeStep(step, deps, migrationId, state.slug, undefined);
       await report(deps, { name: rbName, status: "done" });
       deps.log(`[migration-runner] rollback ${step.action} ok`);
     } catch (rbErr) {

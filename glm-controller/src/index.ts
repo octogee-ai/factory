@@ -30,6 +30,7 @@ import {
 import {
   createAuthSecretEnsurer,
   defaultRandomTokenHex,
+  readGatewayAuthToken,
 } from "./auth-secret-ensurer.js";
 import {
   spawnKubectl,
@@ -754,7 +755,17 @@ const handlerSyncFleetIngress = async () => {
     await syncAllFleetIngresses(gateways);
   };
 
-  const handlers = await buildHandlers(db, log, helm, kubeOps, handlerSyncFleetIngress);
+  const handlers = await buildHandlers(
+    db,
+    log,
+    helm,
+    kubeOps,
+    {
+      syncFleetIngress: handlerSyncFleetIngress,
+      readGatewayAuthTokenForId: (gatewayId) =>
+        readGatewayAuthToken({ runKubectl }, { namespace: NAMESPACE, gatewayId }),
+    },
+  );
 
   const chartFingerprint = computeChartFingerprint(GATEWAY_CHART);
 
@@ -932,12 +943,43 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
   }
 }
 
+async function readGatewayProfileFromFirestore(
+  db: Firestore,
+  gatewayId: string,
+): Promise<"standard" | "operator"> {
+  const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const data = doc.data() as GatewayDesiredState | undefined;
+  return data?.profile === "operator" ? "operator" : "standard";
+}
+
+function createMigrationClientBuilder(
+  db: Firestore,
+  secret: string,
+  logFn: (msg: string) => void,
+  readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>,
+) {
+  return (resolveSync: (gatewayId: string) => string) =>
+    createMigrationClient({
+      secret,
+      resolveGatewayUrl: resolveSync,
+      log: logFn,
+      resolveRequestSecret: async (gatewayId) => {
+        const profile = await readGatewayProfileFromFirestore(db, gatewayId);
+        if (profile !== "operator") return secret;
+        return readGatewayAuthTokenForId(gatewayId);
+      },
+    });
+}
+
 async function buildHandlers(
   db: Firestore,
   logFn: (msg: string) => void,
   helm: HelmRunner,
   kubeOps: KubeOps,
-  syncFleetIngress: () => Promise<void>,
+  fleetOps: {
+    syncFleetIngress: () => Promise<void>;
+    readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>;
+  },
 ): Promise<OperationHandlers> {
   const secret = process.env.FLEET_CONTROLLER_SECRET;
   if (!secret) {
@@ -959,7 +1001,7 @@ async function buildHandlers(
         now: Date.now(),
       });
     },
-    syncFleetIngress,
+    syncFleetIngress: fleetOps.syncFleetIngress,
     helmRenderTimeoutMs: 600_000,
     deploymentReadyTimeoutMs: 600_000,
     heartbeatTimeoutMs: 240_000,
@@ -993,8 +1035,13 @@ async function buildHandlers(
       );
     },
     resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
-    buildClient: (resolveSync) =>
-      createMigrationClient({ secret, resolveGatewayUrl: resolveSync, log: logFn }),
+    readGatewayProfile: (gatewayId) => readGatewayProfileFromFirestore(db, gatewayId),
+    buildClient: createMigrationClientBuilder(
+      db,
+      secret,
+      logFn,
+      fleetOps.readGatewayAuthTokenForId,
+    ),
     genMigrationId: () => `mig-${Date.now()}-${randomUUID().slice(0, 8)}`,
     now: () => Date.now(),
     log: logFn,
@@ -1034,7 +1081,7 @@ async function buildHandlers(
       return doc.exists;
     },
     deleteGatewayPersistentVolumeClaim: createGatewayPersistentVolumeClaimDeleter(kubeOps),
-    syncFleetIngress,
+    syncFleetIngress: fleetOps.syncFleetIngress,
     helmUninstallTimeoutMs: 90_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),

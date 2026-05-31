@@ -180,6 +180,7 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
   it("does not start platform-authoritative provisioner runners on operator gateways", () => {
     const result = runRunnerBlock("operator");
     expect(result.status).toBe(0);
+    expect(result.runners).toContain("fleet-controller");
     expect(result.runners).toContain("site-build");
     expect(result.runners).toContain("preview-proxy");
     expect(result.runners).not.toContain("provisioner");

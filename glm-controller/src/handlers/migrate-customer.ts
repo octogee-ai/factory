@@ -40,6 +40,8 @@ export interface MigrateCustomerDeps {
 
 resolveGatewayUrl: (gatewayId: string) => Promise<string>;
 
+readGatewayProfile?: (gatewayId: string) => Promise<"standard" | "operator">;
+
 buildClient: (resolveSync: (gatewayId: string) => string) => MigrationClient;
   
   genMigrationId: () => string;
@@ -116,6 +118,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         [user.currentGatewayId, fromUrl],
         [toGatewayId, toUrl],
       ]);
+      const targetProfile = await deps.readGatewayProfile?.(toGatewayId) ?? "standard";
       const client = deps.buildClient((gatewayId) => {
         const url = urls.get(gatewayId);
         if (!url) {
@@ -133,6 +136,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           slug: user.slug,
           fromGatewayId: user.currentGatewayId,
           toGatewayId,
+          includeActivationManifest: targetProfile === "operator",
         },
         {
           client,

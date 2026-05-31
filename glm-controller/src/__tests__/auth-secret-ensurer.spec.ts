@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   createAuthSecretEnsurer,
+  readGatewayAuthToken,
   type KubectlSubprocess,
 } from "../auth-secret-ensurer";
 
@@ -185,5 +186,30 @@ describe("createAuthSecretEnsurer", () => {
     });
 
     expect(calls[0]).toContain("gateway-auth-token-gw-bender");
+  });
+});
+
+describe("readGatewayAuthToken", () => {
+  it("reads and base64-decodes the per-gateway token from the K8s secret", async () => {
+    const { runKubectl, calls } = mockKubectl([
+      { stdout: Buffer.from("token-for-gw").toString("base64"), code: 0 },
+    ]);
+
+    await expect(
+      readGatewayAuthToken(
+        { runKubectl },
+        { namespace: "octogee-test", gatewayId: "gw-test-op" },
+      ),
+    ).resolves.toBe("token-for-gw");
+
+    expect(calls[0]).toEqual([
+      "get",
+      "secret",
+      "gateway-auth-token-gw-test-op",
+      "-n",
+      "octogee-test",
+      "-o",
+      "jsonpath={.data.token}",
+    ]);
   });
 });

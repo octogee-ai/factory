@@ -480,6 +480,51 @@ describe("createPushStateHandler", () => {
     ]);
   });
 
+  it("embeds an activation manifest and forwards the target-specific import signature", async () => {
+    const adapter = mkAdapter({
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/state", path: "agents/octogee-chris-coach" },
+      ]),
+      exportOpenClawActivationManifest: vi.fn(async () => ({
+        version: 1,
+        slug: "chris",
+        agentId: "octogee-chris-coach",
+        accountId: "chris-coach",
+        agent: { id: "octogee-chris-coach" },
+        mattermostAccount: { botToken: "coach-pat" },
+        bindings: [{ agentId: "octogee-chris-coach" }],
+      })),
+    });
+    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
+    spawnMock.mockReturnValueOnce(fakeChild);
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>;
+      expect(headers[SIGNATURE_HEADER]).toBe("target-import-sig");
+      return new Response(
+        JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const body = {
+      ...SAMPLE_PUSH,
+      includeActivationManifest: true,
+      targetImportSignature: "target-import-sig",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(SECRET, SAMPLE_PUSH.migrationId, rawBody);
+    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(adapter.exportOpenClawActivationManifest).toHaveBeenCalledWith("chris");
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).toContain("agents/octogee-chris-coach");
+    expect(args).toContain(".octogee-migration-activation/chris/activation.json");
+  });
+
   it("rejects a missing targetGatewayId before spawning tar", async () => {
     const body = { migrationId: "mig-1", slug: "chris", targetUrl: "http://target" };
     const rawBody = JSON.stringify(body);
@@ -824,6 +869,7 @@ describe("findPathTraversalViolation", () => {
       "agents/octogee-chris-coach/",
       "customers/chris/.git/config",
       "customer-keys/chris/id_ed25519",
+      ".octogee-migration-activation/chris/activation.json",
     ], slug)).toBeNull();
   });
 
@@ -832,6 +878,7 @@ describe("findPathTraversalViolation", () => {
       "customers/chris",
       "customers/chris/",
       "customer-keys/chris",
+      ".octogee-migration-activation/chris",
     ], slug)).toBeNull();
   });
 

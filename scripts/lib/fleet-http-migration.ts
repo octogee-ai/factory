@@ -23,6 +23,10 @@ import { isValidUsername } from "../../shared/types/identity.js";
 import { signFleetRequest, verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { removeCustomerFromGateway } from "./customer-lifecycle.js";
+import {
+  MIGRATION_ACTIVATION_DIR,
+  writeActivationManifest,
+} from "./migration-activation-manifest.js";
 
 export interface MigrationHandlerDeps {
   secret: string;
@@ -238,7 +242,7 @@ function resolveTargetImportUrl(targetUrl: string, targetGatewayId: string): str
 function validatePushStateBody(
   body: PushStateRequestBody,
   res: Response,
-): { targetGatewayId: string; importUrl: string } | null {
+): { targetGatewayId: string; importUrl: string; targetImportSignature?: string } | null {
   if (typeof body.targetGatewayId !== "string" || body.targetGatewayId.length === 0) {
     res.status(400).json({ error: "missing targetGatewayId" });
     return null;
@@ -255,11 +259,40 @@ function validatePushStateBody(
     return {
       targetGatewayId: body.targetGatewayId,
       importUrl: resolveTargetImportUrl(body.targetUrl, body.targetGatewayId),
+      targetImportSignature: typeof body.targetImportSignature === "string" && body.targetImportSignature.length > 0
+        ? body.targetImportSignature
+        : undefined,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(400).json({ error: "invalid targetUrl", message });
     return null;
+  }
+}
+
+async function maybeMaterializeActivationManifest(
+  deps: MigrationHandlerDeps,
+  body: PushStateRequestBody,
+): Promise<{ source: { cwd: string; path: string } | null; cleanup: () => Promise<void> }> {
+  if (body.includeActivationManifest !== true) {
+    return { source: null, cleanup: async () => undefined };
+  }
+  if (!deps.adapter.exportOpenClawActivationManifest) {
+    throw new Error("source gateway cannot export an OpenClaw activation manifest");
+  }
+  const manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-activation-${body.migrationId}-`));
+  try {
+    const source = await writeActivationManifest(tmpDir, manifest);
+    return {
+      source,
+      cleanup: async () => {
+        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+      },
+    };
+  } catch (err) {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
   }
 }
 
@@ -337,6 +370,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
     );
 
     let tar: TarStream | null = null;
+    let cleanupActivationManifest: () => Promise<void> = async () => {};
     try {
       const sources = await deps.adapter.listExportPaths(body.slug);
       if (sources.length === 0) {
@@ -345,13 +379,19 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
+      const activationManifest = await maybeMaterializeActivationManifest(deps, body);
+      cleanupActivationManifest = activationManifest.cleanup;
+      if (activationManifest.source) {
+        sources.push(activationManifest.source);
+      }
       log(
         `[migration-http] push-state migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s) directly to ${target.targetGatewayId}`,
       );
 
       tar = spawnTarStream(sources);
 
-      const importSig = signFleetRequest(deps.secret, body.migrationId, body.slug);
+      const importSig =
+        target.targetImportSignature ?? signFleetRequest(deps.secret, body.migrationId, body.slug);
       const importRes = await fetchImpl(
         target.importUrl,
         {
@@ -408,6 +448,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
       }
     } finally {
       abort.detach();
+      await cleanupActivationManifest();
     }
   };
 }
@@ -545,6 +586,7 @@ const entries = await listTarEntries(tarPath);
 await extractTarToDir(tarPath, importDir);
 
 await deps.adapter.activateImportedCustomer(slug, { signal: controller.signal });
+      deps.adapter.onMounted?.(slug);
 
       const response: ImportResponse = { migrationId, slug, imported: true };
       log(`[migration-http] ✅ import migrationId=${migrationId} slug=${slug} done`);
@@ -618,6 +660,7 @@ export function findPathTraversalViolation(
     `agents/octogee-${slug}-coach/`,
     `customers/${slug}/`,
     `customer-keys/${slug}/`,
+    `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
   ];
   for (const raw of entries) {
 
@@ -631,7 +674,7 @@ if (entry.split("/").includes("..")) {
     }
     const allowed = allowedPrefixes.some((p) => entry === p.slice(0, -1) || entry.startsWith(p));
     if (!allowed) {
-      return `path '${raw}' is outside the per-slug allowlist (agents/octogee-${slug}-coach, customers/${slug}, customer-keys/${slug})`;
+      return `path '${raw}' is outside the per-slug allowlist (agents/octogee-${slug}-coach, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug})`;
     }
   }
   return null;
@@ -644,6 +687,21 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
+      if (deps.adapter.removeImportedCustomerBySlug) {
+        const result = await deps.adapter.removeImportedCustomerBySlug(body.slug);
+        if (result.wasMounted) deps.adapter.onUnmounted?.(body.slug);
+        const response: UnmountResponse = {
+          migrationId: body.migrationId,
+          slug: body.slug,
+          unmounted: result.wasMounted,
+        };
+        log(
+          `[migration-http] ✅ unmount migrationId=${body.migrationId} slug=${body.slug} wasMounted=${result.wasMounted} steps=${result.steps.join(",")}`,
+        );
+        res.status(200).json(response);
+        return;
+      }
+
       const uid = await deps.adapter.uidForSlug(body.slug);
       if (!uid) {
         

@@ -387,6 +387,7 @@ if [ "${GATEWAY_PROFILE:-}" != "operator" ]; then
   supervise_runner provisioner 5000 "$TSX" /octogee/scripts/entrypoints/local-provisioner.ts
 else
   log "Operator platform provisioner disabled: platform provisioning runs outside the locked operator gateway boundary"
+  supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
 fi
 supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
 supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
