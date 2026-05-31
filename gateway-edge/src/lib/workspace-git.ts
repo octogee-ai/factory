@@ -100,9 +100,6 @@ export async function gitCommitDiff(
   customerDir: string,
   sha: string,
 ): Promise<{ ok: true; diff: string } | { ok: false; error: WorkspaceGitError }> {
-  // The patch a single commit introduced. `diff-tree --root` handles the
-  // initial (parentless) commit, `--no-commit-id` drops the sha line, and the
-  // empty format means no commit message/author leaks into the diff payload.
   const args = [
     "diff-tree",
     "--no-commit-id",
