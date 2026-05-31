@@ -78,6 +78,41 @@ export interface StartedFleetController {
 whenReady: Promise<void>;
 }
 
+function slugFromAssignedUser(data: Record<string, unknown> | undefined): string | null {
+  const provisioning = data?.provisioning as Record<string, unknown> | undefined;
+  const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
+  const ocSlug = typeof openclaw?.slug === "string" ? openclaw.slug : null;
+  const fallbackSlug = typeof data?.username === "string" ? data.username : null;
+  return ocSlug ?? fallbackSlug;
+}
+
+export async function readMountedCustomersFromAssignedState(
+  db: Firestore,
+  gatewayId: string,
+  adapter: Pick<CustomerLifecycleAdapter, "hasCustomerDir" | "customerCoachWiredInOpenclawConfig">,
+): Promise<string[]> {
+  const snap = await db
+    .collection("users")
+    .where("provisioning.openclaw.gatewayId", "==", gatewayId)
+    .where("provisioning.openclaw.status", "==", "complete")
+    .get();
+
+  const mounted = new Set<string>();
+  for (const doc of snap.docs) {
+    const slug = slugFromAssignedUser(doc.data() as Record<string, unknown> | undefined);
+    if (!slug) continue;
+    if (!adapter.hasCustomerDir(slug)) continue;
+    if (
+      adapter.customerCoachWiredInOpenclawConfig
+      && !adapter.customerCoachWiredInOpenclawConfig(slug)
+    ) {
+      continue;
+    }
+    mounted.add(slug);
+  }
+  return [...mounted].sort((a, b) => a.localeCompare(b));
+}
+
 export async function startFleetController(
   opts: StartFleetOptions,
 ): Promise<StartedFleetController> {
@@ -136,8 +171,6 @@ const instanceName = process.env.GATEWAY_INSTANCE_NAME ?? "";
     }
   };
 
-  await emitHeartbeat("booting");
-
 const waitForGatewayReady = async (): Promise<void> => {
     while (runtime.status !== "ready") {
       try {
@@ -156,10 +189,6 @@ const waitForGatewayReady = async (): Promise<void> => {
       await new Promise<void>((r) => setTimeout(r, 1_000));
     }
   };
-
-  const heartbeatTimer = setInterval(() => {
-    void emitHeartbeat(runtime.status);
-  }, GATEWAY_HEARTBEAT_INTERVAL_MS);
 
   const app = express();
   app.disable("x-powered-by");
@@ -190,6 +219,29 @@ const waitForGatewayReady = async (): Promise<void> => {
       runtime.mountedCustomers = runtime.mountedCustomers.filter((s) => s !== slug);
     },
   };
+
+  try {
+    runtime.mountedCustomers = await readMountedCustomersFromAssignedState(
+      opts.db,
+      opts.gatewayId,
+      wrappedAdapter,
+    );
+    if (runtime.mountedCustomers.length > 0) {
+      opts.log(
+        `[fleet] seeded mounted customers from assigned local state: ${runtime.mountedCustomers.join(",")}`,
+      );
+    }
+  } catch (err) {
+    opts.log(
+      `[fleet] ⚠ mounted-customer seed failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  await emitHeartbeat("booting");
+
+  const heartbeatTimer = setInterval(() => {
+    void emitHeartbeat(runtime.status);
+  }, GATEWAY_HEARTBEAT_INTERVAL_MS);
 
   const gatewayIdGuard: express.RequestHandler = (req, res, next) => {
     if (req.params.gatewayId !== opts.gatewayId) {
@@ -248,14 +300,7 @@ const waitForGatewayReady = async (): Promise<void> => {
         .get();
       const slugs: string[] = [];
       for (const doc of snap.docs) {
-        const data = doc.data() as Record<string, unknown> | undefined;
-        const oc = (data?.provisioning as Record<string, unknown> | undefined)?.openclaw as
-          | Record<string, unknown>
-          | undefined;
-
-const ocSlug = typeof oc?.slug === "string" ? (oc.slug as string) : null;
-        const fallbackSlug = typeof data?.username === "string" ? (data.username as string) : null;
-        const slug = ocSlug ?? fallbackSlug;
+        const slug = slugFromAssignedUser(doc.data() as Record<string, unknown> | undefined);
         if (slug) slugs.push(slug);
       }
       return slugs;
