@@ -188,6 +188,15 @@ spec:
               value: {{ .Values.profile | quote }}
             - name: OPERATOR_SHELLS_ENABLED
               value: {{ ternary "true" "false" $operatorShellsEnabled | quote }}
+            {{- if eq .Values.profile "operator" }}
+            # Operator gateway shells run inside the tenant shell container,
+            # which intentionally does not inherit the platform-wide
+            # INTERNAL_SERVICE_KEY. The builder-shell port is exposed only
+            # for explicitly unlocked operator gateways and is still scoped
+            # by the per-gateway NetworkPolicy + shell ticket flow.
+            - name: BUILDER_SHELL_REQUIRE_KEY
+              value: "false"
+            {{- end }}
             - name: OPENCLAW_BROADCAST_ALL_AGENT_RUNS
               value: "1"
             - name: OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS

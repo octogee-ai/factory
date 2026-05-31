@@ -164,6 +164,10 @@ const out = helmTemplate();
     expect(gw).toMatch(
       /- name:\s*OPERATOR_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
     );
+    expect(gw).toMatch(
+      /- name:\s*BUILDER_SHELL_REQUIRE_KEY[\s\S]*?value:\s*"false"/,
+    );
+    expect(gw).not.toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
 
     const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
     expect(svc).toMatch(/name:\s*builder-shell\s*\n\s*port:\s*3005\s*\n\s*targetPort:\s*3005/);
