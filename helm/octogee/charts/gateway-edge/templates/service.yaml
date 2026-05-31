@@ -6,12 +6,14 @@ metadata:
     {{- include "gateway-edge.labels" . | nindent 4 }}
 spec:
   # Phase 6.B collocation: gateway-edge now runs as a sidecar inside the
-  # octogee-gateway pod. Selector flips from `app: gateway-edge` to the
-  # gateway pod's labels so the existing api[-test].octogee.com ingress
-  # (still pointed at this Service) routes to the new sidecar port. Same
-  # pattern chat-proxy already uses.
+  # octogee-gateway pod. This alias backs legacy bare /api/* fallback
+  # paths only; per-gateway /api/g/<gatewayId>/* paths use the standalone
+  # chart's gateway-edge-<instance> Services. Keep operator pods out of
+  # this alias so generic fallback traffic cannot land on tenant-untrusted
+  # gateway-edge sidecars.
   selector:
     app: octogee-gateway
+    gateway-profile: standard
   ports:
     - port: {{ .Values.port }}
       targetPort: {{ .Values.port }}
