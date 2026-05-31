@@ -7,6 +7,7 @@ type PlatformActor = Extract<BoundTenant, { kind: "platform" }>["actor"];
 
 export type TenantBindingResult =
   | "ok"
+  | "ok_legacy_operator"
   | "ok_platform"
   | "shared_gateway"
   | "ns_mismatch"
@@ -15,8 +16,18 @@ export type TenantBindingResult =
   | "unknown_sa";
 
 export type SaToTenantResult =
-  | { attached: true; tenant: BoundTenant; result: "ok" | "ok_platform" }
-  | { attached: false; result: Exclude<TenantBindingResult, "ok" | "ok_platform"> };
+  | {
+      attached: true;
+      tenant: BoundTenant;
+      result: "ok" | "ok_legacy_operator" | "ok_platform";
+    }
+  | {
+      attached: false;
+      result: Exclude<
+        TenantBindingResult,
+        "ok" | "ok_legacy_operator" | "ok_platform"
+      >;
+    };
 
 export interface ServiceAccountIdentity {
   namespace: string;
@@ -24,6 +35,7 @@ export interface ServiceAccountIdentity {
 }
 
 const GATEWAY_SA_PREFIX = "octogee-gw-";
+const LEGACY_OPERATOR_GATEWAY_SA_PREFIX = "octogee-gateway-";
 const SHARED_GATEWAY_SA_NAME = "octogee-gateway";
 
 function isDnsLabel(value: string): boolean {
@@ -49,6 +61,29 @@ function platformActorFromSa(saName: string): PlatformActor | null {
   return null;
 }
 
+async function bindGatewaySa(
+  db: Pick<Firestore, "collection">,
+  suffix: string,
+  result: "ok" | "ok_legacy_operator",
+): Promise<SaToTenantResult> {
+  const gatewayId = gatewayIdFromSaSuffix(suffix);
+  if (!gatewayId) return { attached: false, result: "malformed_sa" };
+
+  const snap = await db.collection("glmGateways").doc(gatewayId).get();
+  const data = snap.exists ? snap.data() : undefined;
+  const ownerUid = typeof data?.ownerUid === "string" ? data.ownerUid : null;
+  const instanceName =
+    typeof data?.instanceName === "string" ? data.instanceName : null;
+  if (!ownerUid || !instanceName) {
+    return { attached: false, result: "unknown_tenant" };
+  }
+  return {
+    attached: true,
+    result,
+    tenant: { kind: "gateway", gatewayId, ownerUid, instanceName },
+  };
+}
+
 export async function mapSaToTenant(
   db: Pick<Firestore, "collection">,
   identity: ServiceAccountIdentity,
@@ -63,23 +98,15 @@ export async function mapSaToTenant(
   }
 
   if (identity.saName.startsWith(GATEWAY_SA_PREFIX)) {
-    const suffix = identity.saName.slice(GATEWAY_SA_PREFIX.length);
-    const gatewayId = gatewayIdFromSaSuffix(suffix);
-    if (!gatewayId) return { attached: false, result: "malformed_sa" };
+    return bindGatewaySa(db, identity.saName.slice(GATEWAY_SA_PREFIX.length), "ok");
+  }
 
-    const snap = await db.collection("glmGateways").doc(gatewayId).get();
-    const data = snap.exists ? snap.data() : undefined;
-    const ownerUid = typeof data?.ownerUid === "string" ? data.ownerUid : null;
-    const instanceName =
-      typeof data?.instanceName === "string" ? data.instanceName : null;
-    if (!ownerUid || !instanceName) {
-      return { attached: false, result: "unknown_tenant" };
-    }
-    return {
-      attached: true,
-      result: "ok",
-      tenant: { kind: "gateway", gatewayId, ownerUid, instanceName },
-    };
+  if (identity.saName.startsWith(LEGACY_OPERATOR_GATEWAY_SA_PREFIX)) {
+    return bindGatewaySa(
+      db,
+      identity.saName.slice(LEGACY_OPERATOR_GATEWAY_SA_PREFIX.length),
+      "ok_legacy_operator",
+    );
   }
 
   const actor = platformActorFromSa(identity.saName);

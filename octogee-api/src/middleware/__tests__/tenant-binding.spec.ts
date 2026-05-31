@@ -102,6 +102,29 @@ describe("tenant binding middleware", () => {
     await expect(registry.metrics()).resolves.toContain('result="ok"');
   });
 
+  it("binds a grandfathered operator gateway service-account token", async () => {
+    const { app, registry } = buildApp({
+      reviewer: async () => ({
+        authenticated: true,
+        namespace: "octogee",
+        saName: "octogee-gateway-bender",
+        audiences: ["octogee-api"],
+      }),
+    });
+
+    const res = await request(app)
+      .post("/internal/probe")
+      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .send({ gatewayId: "gw-bender" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.boundTenant).toMatchObject({
+      kind: "gateway",
+      gatewayId: "gw-bender",
+    });
+    await expect(registry.metrics()).resolves.toContain('result="ok_legacy_operator"');
+  });
+
   it("does not let a request body forge the caller gateway", async () => {
     const { app } = buildApp({
       reviewer: async () => ({

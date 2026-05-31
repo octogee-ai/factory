@@ -61,6 +61,30 @@ describe("mapSaToTenant", () => {
     });
   });
 
+  it("maps grandfathered operator gateway KSAs to their gateway document", async () => {
+    const result = await mapSaToTenant(
+      fakeDb({
+        "gw-bender": {
+          ownerUid: "uid-bender",
+          instanceName: "bender",
+        },
+      }),
+      { namespace: "octogee", saName: "octogee-gateway-bender" },
+      "octogee",
+    );
+
+    expect(result).toEqual({
+      attached: true,
+      result: "ok_legacy_operator",
+      tenant: {
+        kind: "gateway",
+        gatewayId: "gw-bender",
+        ownerUid: "uid-bender",
+        instanceName: "bender",
+      },
+    });
+  });
+
   it("soft-fails namespace mismatches before tenant lookup", async () => {
     const result = await mapSaToTenant(
       fakeDb({}),
