@@ -51,7 +51,7 @@ gateway-edge:
   env:
     FIREBASE_PROJECT_ID: "octogee-test"
     GCLOUD_PROJECT: "octogee-test"
-    APP_URL: "https://octogee-test.web.app"
+    APP_URL: "https://app-octogee-test.web.app"
     SITE_URL: "https://octogee-test.web.app"
     K8S_NAMESPACE: "__NAMESPACE__"
   ingress:

@@ -14,7 +14,7 @@ env:
   MM_URL: ""  # leave empty to auto-compute from K8S_NAMESPACE
   FIREBASE_PROJECT_ID: "octogee"
   GCLOUD_PROJECT: "octogee"
-  APP_URL: "https://octogee.com"
+  APP_URL: "https://app.octogee.com"
   API_PUBLIC_URL: "https://api.octogee.com"
   SITE_URL: "https://octogee.com"
   K8S_NAMESPACE: "octogee"

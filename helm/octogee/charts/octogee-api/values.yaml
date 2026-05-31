@@ -15,7 +15,7 @@ env:
   GITEA_URL: ""  # auto-computed from K8S_NAMESPACE
   GITEA_ORG: "octogee"
   MM_URL: ""  # auto-computed from K8S_NAMESPACE
-  APP_URL: "https://octogee.com"
+  APP_URL: "https://app.octogee.com"
   SITE_URL: "https://octogee.com"
   # Single public host (POST-BENDER-CLEANUP-SPEC §2.7). API_PUBLIC_URL is
   # returned by the credential mint (mmUrl) + the openclaw/builder-shell

@@ -279,7 +279,7 @@ gatewayEdge:
     FIREBASE_PROJECT_ID: "octogee"
     GCLOUD_PROJECT: "octogee"
     GCP_PROJECT_ID: "octogee"
-    APP_URL: "https://octogee.com"
+    APP_URL: "https://app.octogee.com"
     API_PUBLIC_URL: "https://api.octogee.com"
     SITE_URL: "https://octogee.com"
     # Credential-at-rest KMS key (terraform/modules/kms output
