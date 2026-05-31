@@ -42,6 +42,16 @@ describe("validateRequiredEnv", () => {
     );
   });
 
+  it("does not require platform gateway-edge secrets for operator profile", () => {
+    expect(validateRequiredEnv({}, { isProd: true, profile: "operator" }).missing).toEqual([]);
+  });
+
+  it("still requires platform gateway-edge secrets when profile is standard", () => {
+    expect(validateRequiredEnv({}, { isProd: true, profile: "standard" }).missing.sort()).toEqual(
+      [...REQUIRED_ENV].sort(),
+    );
+  });
+
   it("is a no-op in non-prod (dev/test/local legitimately lack them)", () => {
     expect(validateRequiredEnv({}, { isProd: false }).missing).toEqual([]);
   });

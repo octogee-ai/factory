@@ -31,6 +31,7 @@ import {
 } from "./openclaw/inbound-gate.js";
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
+import { resolveBuilderShellInternalAuthSecret } from "../lib/builder-shell-internal-auth.js";
 import { attachMmWsBridge, createMmWsRegistry, type MmWsRegistry } from "./mm-proxy/ws.js";
 import {
   createChannelMemberResolver,
@@ -855,11 +856,11 @@ const redactWsPath = (p: string) => p.replace(/[A-Za-z0-9_-]{16,}/g, "<redacted>
 
 export async function attachBuilderShellRoute(server: http.Server): Promise<void> {
   const gatewayEdgeUrl = process.env.GATEWAY_EDGE_INTERNAL_URL;
-  const internalKey = process.env.INTERNAL_SERVICE_KEY;
+  const internalAuth = resolveBuilderShellInternalAuthSecret(process.env);
   const namespace = process.env.K8S_NAMESPACE || "octogee";
-  if (!gatewayEdgeUrl || !internalKey) {
+  if (!gatewayEdgeUrl || !internalAuth) {
     console.warn(
-      "[builder-shell] GATEWAY_EDGE_INTERNAL_URL or INTERNAL_SERVICE_KEY unset — builder-shell WS disabled",
+      "[builder-shell] GATEWAY_EDGE_INTERNAL_URL or builder-shell internal auth unset — builder-shell WS disabled",
     );
     return;
   }
@@ -869,10 +870,13 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
   const router = (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter;
   attachBuilderShellUpgrade(server, {
     router,
-    redeem: buildRedeemFetcher({ baseUrl: gatewayEdgeUrl, internalServiceKey: internalKey }),
+    redeem: buildRedeemFetcher({
+      baseUrl: gatewayEdgeUrl,
+      internalServiceKey: internalAuth.value,
+    }),
     connectUpstream: buildConnectUpstream({
       namespace,
-      internalServiceKey: internalKey,
+      internalServiceKey: internalAuth.value,
     }),
 
 allowedOrigins: isAllowedWsOrigin,
@@ -942,7 +946,9 @@ allowedOrigins: isAllowedWsOrigin,
       console.warn(`[builder-shell] ticket rejected reason=${e.reason}`);
     },
   });
-  console.log(`[builder-shell] WS route attached (gateway-edge=${gatewayEdgeUrl}, ns=${namespace})`);
+  console.log(
+    `[builder-shell] WS route attached (gateway-edge=${gatewayEdgeUrl}, ns=${namespace}, auth=${internalAuth.mode})`,
+  );
 }
 
 async function buildEditDiffFetcher() {

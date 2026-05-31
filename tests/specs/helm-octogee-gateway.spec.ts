@@ -86,6 +86,19 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
   });
 
+  it("stamps gateway-profile labels so alias Services can exclude operator pods after rollout", () => {
+    const standardDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(standardDep).toMatch(/gateway-profile:\s*"standard"/);
+
+    const operatorDep =
+      findDoc(
+        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    expect(operatorDep).toMatch(/gateway-profile:\s*"operator"/);
+  });
+
   it("mounts the octogee-api audience token into gateway and gateway-edge", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
@@ -253,7 +266,7 @@ expect(ge?.[0]).not.toMatch(/name:\s*chat-proxy/);
     expect(wsBlock).toMatch(/path:\s*\/health/);
   });
 
-  it("gateway-edge sidecar wires every secret from the chart's secrets list", () => {
+  it("cattle gateway-edge sidecar wires every secret from the chart's secrets list", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const wsBlock =
@@ -265,6 +278,37 @@ expect(wsBlock).toMatch(/INTERNAL_SERVICE_KEY/);
     expect(wsBlock).toMatch(/GITEA_TOKEN/);
     // GITHUB_TOKEN intentionally NOT in the platform chart — it comes
     // from per-customer client secrets, not from a shared K8s secret.
+  });
+
+  it("operator gateway-edge sidecar omits platform secret refs but keeps the per-gateway token", () => {
+    const out = helmTemplate("octogee-gw-default", {
+      profile: "operator",
+      "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME": "projects/octogee/locations/us/keyRings/r/cryptoKeys/k",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const wsBlock = containerBlock(dep, "gateway-edge");
+
+    for (const name of [
+      "INTERNAL_SERVICE_KEY",
+      "STRIPE_SECRET_KEY",
+      "MM_ADMIN_TOKEN",
+      "GITEA_TOKEN",
+      "MM_ADMIN_PAT",
+      "OCTOGEE_APPROVAL_SIGNING_SECRET",
+      "OCTOGEE_KMS_KEY_NAME",
+    ]) {
+      expect(wsBlock).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
+    }
+    expect(wsBlock).toMatch(/name:\s*OPENCLAW_GATEWAY_TOKEN\b/);
+  });
+
+  it("cattle gateway-edge keeps KMS key config when set", () => {
+    const out = helmTemplate("octogee-gw-default", {
+      "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME": "projects/octogee/locations/us/keyRings/r/cryptoKeys/k",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const wsBlock = containerBlock(dep, "gateway-edge");
+    expect(wsBlock).toMatch(/name:\s*OCTOGEE_KMS_KEY_NAME/);
   });
 });
 
@@ -404,7 +448,10 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
 
   it("OMITS ANTHROPIC_API_KEY when profile is operator (operator uses `claude auth login` instead)", () => {
     const dep = findDoc(
-      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      helmTemplate("octogee-gw-default", {
+        profile: "operator",
+        "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME": "projects/octogee/locations/us/keyRings/r/cryptoKeys/k",
+      }),
       "Deployment",
       "octogee-gateway-default",
     );
@@ -420,7 +467,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(gw).toMatch(/name:\s*GIT_API_TOKEN\b/);
   });
 
-  it("omits platform tokens from the operator gateway container until tenant isolation is provisioned", () => {
+  it("omits platform tokens from operator gateway + gateway-edge containers", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", { profile: "operator" }),
       "Deployment",
@@ -445,22 +492,43 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
       expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
     }
     const edge = containerBlock(dep ?? "", "gateway-edge");
-    expect(edge).toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
+    for (const name of [
+      "MM_ADMIN_PAT",
+      "OCTOGEE_APPROVAL_SIGNING_SECRET",
+      "STRIPE_SECRET_KEY",
+      "MM_ADMIN_TOKEN",
+      "GITEA_TOKEN",
+      "INTERNAL_SERVICE_KEY",
+      "RESEND_API_KEY",
+      "EMAIL_UNSUBSCRIBE_SECRET",
+      "OCTOGEE_KMS_KEY_NAME",
+    ]) {
+      expect(edge).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
+    }
+    expect(edge).toMatch(/name:\s*OPENCLAW_GATEWAY_TOKEN\b/);
   });
 
-  it("threads the chart's profile through to the gateway container as GATEWAY_PROFILE so the entrypoint can gate operator-only boot steps", () => {
+  it("threads the chart's profile through to gateway and gateway-edge containers", () => {
     const operatorDep =
       findDoc(
         helmTemplate("octogee-gw-default", { profile: "operator" }),
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";
-    expect(operatorDep).toMatch(
+    const operatorGateway = containerBlock(operatorDep, "gateway");
+    const operatorEdge = containerBlock(operatorDep, "gateway-edge");
+    expect(operatorGateway).toMatch(
+      /- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"operator"/,
+    );
+    expect(operatorEdge).toMatch(
       /- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"operator"/,
     );
 
 const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
-    expect(cattleDep).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*""/);
+    const cattleGateway = containerBlock(cattleDep, "gateway");
+    const cattleEdge = containerBlock(cattleDep, "gateway-edge");
+    expect(cattleGateway).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*""/);
+    expect(cattleEdge).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*""/);
   });
 });
 
@@ -630,8 +698,8 @@ describe("helm/octogee-gateway/ — required value validation", () => {
     expect(result.stderr).toMatch(/instanceName/);
   });
 
-  describe("env dedup — operator profile keeps INTERNAL_SERVICE_KEY only on gateway-edge", () => {
-    it("operator profile renders fewer INTERNAL_SERVICE_KEY entries than cattle because the gateway container is tenant-untrusted", () => {
+  describe("env dedup — operator profile omits INTERNAL_SERVICE_KEY from the pod", () => {
+    it("operator profile renders no INTERNAL_SERVICE_KEY entries because the pod is tenant-untrusted", () => {
       const operatorOut = helmTemplate("octogee-gw-bender", {
         gatewayId: "gw-bender",
         instanceName: "bender",
@@ -652,11 +720,11 @@ describe("helm/octogee-gateway/ — required value validation", () => {
       expect(baselineDep).not.toBeNull();
       const count = (s: string): number =>
         (s.match(/name:\s*INTERNAL_SERVICE_KEY/g) ?? []).length;
-      expect(count(operatorDep!)).toBe(1);
+      expect(count(operatorDep!)).toBe(0);
       expect(count(baselineDep!)).toBeGreaterThan(count(operatorDep!));
     });
 
-    it("INTERNAL_SERVICE_KEY appears exactly once in the rendered operator-profile Deployment (gateway-edge only)", () => {
+    it("INTERNAL_SERVICE_KEY is absent from both operator containers", () => {
       const out = helmTemplate("octogee-gw-bender", {
         gatewayId: "gw-bender",
         instanceName: "bender",
@@ -665,11 +733,11 @@ describe("helm/octogee-gateway/ — required value validation", () => {
       const dep = findDoc(out, "Deployment", "octogee-gateway-bender");
       expect(dep).not.toBeNull();
       const count = (dep!.match(/name:\s*INTERNAL_SERVICE_KEY/g) ?? []).length;
-      expect(count).toBe(1);
+      expect(count).toBe(0);
       const gw = containerBlock(dep ?? "", "gateway");
       const edge = containerBlock(dep ?? "", "gateway-edge");
       expect(gw).not.toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
-      expect(edge).toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
+      expect(edge).not.toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
     });
   });
 });
@@ -800,13 +868,10 @@ describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
 });
 
 // ── Profile-aware render-time assertions ───────────────────────────────────
-// The #1159 dedup removed an explicit INTERNAL_SERVICE_KEY block from the
-// operator-profile gateway-edge env on the assumption that
-// `.Values.gatewayEdge.secrets` would always include it. That assumption was
-// expressed only as a prose comment — there was no render-time guard. Lock
-// it in: if anyone deletes INTERNAL_SERVICE_KEY from gatewayEdge.secrets,
-// `helm template` fails loud with a named error rather than silently
-// rendering a half-broken gateway-edge.
+// Cattle gateway-edge still requires INTERNAL_SERVICE_KEY at render time.
+// Operator gateway-edge intentionally omits platform-scoped secrets; the
+// profile-aware runtime boot check and builder-shell locality auth cover that
+// path without a platform credential in the pod spec.
 describe("helm/octogee-gateway/ — required-env render assertions", () => {
   function templateWithSecretsListReplaced(extra: Record<string, string> = {}): {
     status: number | null;
@@ -836,17 +901,16 @@ describe("helm/octogee-gateway/ — required-env render assertions", () => {
     return { status: result.status, stderr: result.stderr };
   }
 
-  it("fails to render when gatewayEdge.secrets omits INTERNAL_SERVICE_KEY (operator profile)", () => {
+  it("renders operator profile when gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
     const result = templateWithSecretsListReplaced({ profile: "operator" });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/INTERNAL_SERVICE_KEY/);
-    expect(result.stderr).toMatch(/gatewayEdge\.secrets/);
+    expect(result.status).toBe(0);
   });
 
-  it("fails to render when gatewayEdge.secrets omits INTERNAL_SERVICE_KEY (cattle profile — same contract)", () => {
+  it("fails to render when gatewayEdge.secrets omits INTERNAL_SERVICE_KEY (cattle profile)", () => {
     const result = templateWithSecretsListReplaced();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/INTERNAL_SERVICE_KEY/);
+    expect(result.stderr).toMatch(/gatewayEdge\.secrets/);
   });
 });
 
