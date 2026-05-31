@@ -94,6 +94,36 @@ export interface OperatorGatewayReservationSpec {
   activatedBy?: string;
 }
 
+export const OPERATOR_GATEWAY_RESERVATIONS_COLLECTION =
+  "operatorGatewayReservations";
+
+export const OPERATOR_GATEWAY_RESERVATION_REQUEST_STATUSES = [
+  "billing_pending",
+  "requested",
+  "provisioning",
+  "fulfilled",
+  "cancelled",
+] as const;
+export type OperatorGatewayReservationRequestStatus =
+  (typeof OPERATOR_GATEWAY_RESERVATION_REQUEST_STATUSES)[number];
+
+export interface OperatorGatewayReservationRequest {
+  uid: string;
+  builderSlug: string;
+  requestedSizingTier: SizingTier;
+  status: OperatorGatewayReservationRequestStatus;
+  billingStatus: OperatorGatewayReservationBillingStatus;
+  currentGatewayId?: string;
+  currentGatewayProfile?: GatewayProfile;
+  gatewayId?: string;
+  requestedAt: number;
+  updatedAt: number;
+}
+
+export interface OperatorGatewayReservationRequestResponse {
+  reservation: OperatorGatewayReservationRequest | null;
+}
+
 export const OPERATOR_GATEWAY_DEFAULT_PERSISTENCE: GatewayPersistenceSpec = {
   enabled: true,
   storageClassName: "premium-rwo",
