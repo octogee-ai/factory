@@ -378,10 +378,21 @@ supervise_runner() {
   ) &
 }
 
-supervise_runner provisioner 5000 "$TSX" /octogee/scripts/entrypoints/local-provisioner.ts
+# Platform provisioner owns Firestore/MM/Gitea/Secret Manager authority. Locked
+# operator gateways intentionally do not have those credentials; running the
+# provisioner there just crash-loops on PERMISSION_DENIED and pressures us to
+# re-grant platform access. Until the reservation/scoped-provisioning boundary
+# exists, keep platform-authoritative runners out of operator pods entirely.
+if [ "${GATEWAY_PROFILE:-}" != "operator" ]; then
+  supervise_runner provisioner 5000 "$TSX" /octogee/scripts/entrypoints/local-provisioner.ts
+else
+  log "Operator platform provisioner disabled: platform provisioning runs outside the locked operator gateway boundary"
+fi
 supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
 supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
-supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
+if [ "${GATEWAY_PROFILE:-}" != "operator" ]; then
+  supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
+fi
 
 # Builder-shell PTY server + tmux reconciler — operator profile plus explicit
 # access unlock only. Cattle and locked operator gateways own no shells; their

@@ -130,6 +130,75 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
   });
 });
 
+function runnerBlockSource(): string {
+  const src = fs.readFileSync(ENTRYPOINT, "utf8");
+  const start = src.indexOf("TSX=/octogee/scripts/node_modules/.bin/tsx");
+  const end = src.indexOf("# Builder-shell PTY server", start);
+  if (start < 0 || end < 0) {
+    throw new Error("could not locate runner startup block in entrypoint.sh");
+  }
+  return src.slice(start, end).replace(
+    /supervise_runner\(\) \{[\s\S]*?\n\}\n/,
+    [
+      "supervise_runner() {",
+      "  echo \"$1\" >> \"$RUNNER_MARKER\"",
+      "}",
+      "",
+    ].join("\n"),
+  );
+}
+
+function runRunnerBlock(profile: string): {
+  status: number | null;
+  stderr: string;
+  runners: string[];
+} {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "entrypoint-runners-"));
+  try {
+    const marker = path.join(tmp, "runners");
+    const script = `
+      set -e
+      log() { echo "$*" >&2; }
+      export GATEWAY_PROFILE="${profile}"
+      export RUNNER_MARKER="${marker}"
+      ${runnerBlockSource()}
+    `;
+    const r = spawnSync("sh", ["-c", script], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    const runners = fs.existsSync(marker)
+      ? fs.readFileSync(marker, "utf8").trim().split("\n").filter(Boolean)
+      : [];
+    return { status: r.status, stderr: r.stderr, runners };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+describe("infra/gateway/entrypoint.sh — locked operator platform provisioner boundary", () => {
+  it("does not start platform-authoritative provisioner runners on operator gateways", () => {
+    const result = runRunnerBlock("operator");
+    expect(result.status).toBe(0);
+    expect(result.runners).toContain("site-build");
+    expect(result.runners).toContain("preview-proxy");
+    expect(result.runners).not.toContain("provisioner");
+    expect(result.runners).not.toContain("byosub-syncback");
+    expect(result.stderr).toMatch(/Operator platform provisioner disabled/);
+  });
+
+  it("keeps provisioner and byosub syncback running on cattle gateways", () => {
+    const result = runRunnerBlock("standard");
+    expect(result.status).toBe(0);
+    expect(result.runners).toEqual([
+      "provisioner",
+      "site-build",
+      "preview-proxy",
+      "byosub-syncback",
+    ]);
+  });
+});
+
 // ── PVC operator-env seam ──────────────────────────────────────────────────
 // Per GATEWAY-PLATFORM-SPEC.md §Operator-class customization surface:
 // operator-class gateways (PVC home) get a single shell-sourceable env
