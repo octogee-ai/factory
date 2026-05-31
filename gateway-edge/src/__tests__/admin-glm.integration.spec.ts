@@ -271,24 +271,33 @@ vi.mock("../../../scripts/lib/artifact-registry", () => ({
 
 vi.mock("../middleware/auth", () => ({
 
-requireAdmin: (req: any, _res: any, next: any) => {
+  requireAdmin: (req: any, _res: any, next: any) => {
     req.uid = "admin-user";
     req.user = { email: "admin@octogee.com" };
     next();
   },
   requireAuth: (req: any, _res: any, next: any) => {
     req.uid = "admin-user";
-    req.user = { email: "admin@octogee.com" };
+    req.user = usersDocs["admin-user"] ?? { email: "admin@octogee.com" };
     next();
   },
 }));
 
 import express from "express";
 import adminRouter from "../routes/admin.js";
+import operatorReservationRouter from "../routes/billing/operator-reservation.js";
 
 function buildApp() {
   const app = express();
   app.use(express.json());
+  app.use("/api/admin", adminRouter);
+  return app;
+}
+
+function buildOperatorFlowApp() {
+  const app = express();
+  app.use(express.json());
+  app.use("/api/billing", operatorReservationRouter);
   app.use("/api/admin", adminRouter);
   return app;
 }
@@ -571,6 +580,181 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/instanceName/);
+  });
+});
+
+describe("GET /api/admin/operator-gateway-reservations", () => {
+  it("returns reservations sorted by fulfillment priority with ISO timestamps", async () => {
+    operatorGatewayReservationsDocs["uid-pending"] = {
+      uid: "uid-pending",
+      builderSlug: "pending",
+      requestedSizingTier: "large",
+      status: "billing_pending",
+      billingStatus: "pending",
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+      requestedAt: 2_000,
+      updatedAt: 9_000,
+    };
+    operatorGatewayReservationsDocs["uid-ready"] = {
+      uid: "uid-ready",
+      builderSlug: "ready",
+      requestedSizingTier: "medium",
+      status: "requested",
+      billingStatus: "active",
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+      requestedAt: 1_000,
+      updatedAt: 1_000,
+    };
+    operatorGatewayReservationsDocs["uid-provisioning"] = {
+      uid: "uid-provisioning",
+      builderSlug: "provisioning",
+      requestedSizingTier: "medium",
+      status: "provisioning",
+      billingStatus: "active",
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+      gatewayId: "gw-test-provisioning",
+      operationId: "op-1",
+      provisioningStartedAt: 3_000,
+      provisioningStartedBy: "admin-user",
+      requestedAt: 3_000,
+      updatedAt: 8_000,
+    };
+
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/operator-gateway-reservations");
+
+    expect(res.status).toBe(200);
+    expect(res.body.reservations.map((r: { uid: string }) => r.uid)).toEqual([
+      "uid-ready",
+      "uid-pending",
+      "uid-provisioning",
+    ]);
+    expect(res.body.reservations[0]).toMatchObject({
+      uid: "uid-ready",
+      builderSlug: "ready",
+      requestedSizingTier: "medium",
+      status: "requested",
+      billingStatus: "active",
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+      requestedAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(1_000).toISOString(),
+      readyToFulfill: true,
+      fulfillBlockedReason: null,
+    });
+    expect(res.body.reservations[1]).toMatchObject({
+      uid: "uid-pending",
+      readyToFulfill: false,
+      fulfillBlockedReason: "status is billing_pending",
+    });
+    expect(res.body.reservations[2]).toMatchObject({
+      uid: "uid-provisioning",
+      gatewayId: "gw-test-provisioning",
+      operationId: "op-1",
+      provisioningStartedAt: new Date(3_000).toISOString(),
+      provisioningStartedBy: "admin-user",
+    });
+    expect(typeof res.body.generatedAt).toBe("string");
+  });
+});
+
+describe("operator reservation request → Cowboy fulfillment integration", () => {
+  it("surfaces an active customer request in Cowboy and fulfills a locked operator gateway without moving the user", async () => {
+    usersDocs["admin-user"] = {
+      username: "alice",
+      email: "alice@example.com",
+      subscription: { status: "active" },
+      provisioning: {
+        openclaw: {
+          slug: "alice",
+          gatewayId: "gw-test",
+          gatewayProfile: "standard",
+        },
+      },
+    };
+    const app = buildOperatorFlowApp();
+
+    const requestRes = await request(app)
+      .post("/api/billing/operator-gateway/reservation")
+      .send({ sizingTier: "large" });
+    expect(requestRes.status).toBe(202);
+    expect(requestRes.body.reservation).toMatchObject({
+      uid: "admin-user",
+      builderSlug: "alice",
+      requestedSizingTier: "large",
+      status: "requested",
+      billingStatus: "active",
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+    });
+
+    const queueRes = await request(app).get("/api/admin/operator-gateway-reservations");
+    expect(queueRes.status).toBe(200);
+    expect(queueRes.body.reservations).toHaveLength(1);
+    expect(queueRes.body.reservations[0]).toMatchObject({
+      uid: "admin-user",
+      builderSlug: "alice",
+      requestedSizingTier: "large",
+      readyToFulfill: true,
+      fulfillBlockedReason: null,
+    });
+
+    const fulfillRes = await request(app)
+      .post("/api/admin/operator-gateway-reservations/admin-user/fulfill")
+      .send({
+        gatewayId: "gw-test-alice",
+        instanceName: "alice",
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "abc1234",
+      });
+    expect(fulfillRes.status).toBe(202);
+    expect(fulfillRes.body).toMatchObject({
+      uid: "admin-user",
+      gatewayId: "gw-test-alice",
+      status: "provisioning",
+    });
+
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite?.data).toMatchObject({
+      gatewayId: "gw-test-alice",
+      profile: "operator",
+      ownerUid: "admin-user",
+      builderSlug: "alice",
+      sizingTier: "large",
+      operatorAccess: {
+        shellsEnabled: false,
+        reason: "operator-trust-boundary-not-provisioned",
+      },
+      serviceAccountName: "octogee-gw-test-alice",
+      serviceAccount: { create: true },
+      persistence: {
+        enabled: true,
+        storageClassName: "premium-rwo",
+        size: "20Gi",
+        accessModes: ["ReadWriteOnce"],
+      },
+    });
+
+    const userUpdates = calls.filter(
+      (c) => c.collection === "users" && c.op === "doc.update",
+    );
+    const fulfillmentUserUpdate = userUpdates[userUpdates.length - 1];
+    expect(fulfillmentUserUpdate?.docId).toBe("admin-user");
+    expect(fulfillmentUserUpdate?.data).toMatchObject({
+      "operatorGatewayReservation.status": "provisioning",
+      "operatorGatewayReservation.gatewayId": "gw-test-alice",
+    });
+    expect(fulfillmentUserUpdate?.data).not.toHaveProperty(
+      "provisioning.openclaw.gatewayId",
+    );
+    expect(fulfillmentUserUpdate?.data).not.toHaveProperty(
+      "provisioning.openclaw.shellsEnabled",
+    );
   });
 });
 

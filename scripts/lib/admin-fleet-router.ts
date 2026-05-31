@@ -355,6 +355,24 @@ interface FulfillableOperatorReservation {
   requestedAt: number;
 }
 
+interface AdminOperatorGatewayReservationSummary {
+  uid: string;
+  builderSlug: string | null;
+  requestedSizingTier: SizingTier | null;
+  status: string;
+  billingStatus: string;
+  currentGatewayId: string | null;
+  currentGatewayProfile: GatewayProfile | null;
+  gatewayId: string | null;
+  operationId: string | null;
+  requestedAt: string | null;
+  updatedAt: string | null;
+  provisioningStartedAt: string | null;
+  provisioningStartedBy: string | null;
+  readyToFulfill: boolean;
+  fulfillBlockedReason: string | null;
+}
+
 interface CustomerLookupDoc {
   id: string;
   data: () =>
@@ -707,6 +725,93 @@ function validateFulfillableOperatorReservation(
       requestedAt: data.requestedAt,
     },
   };
+}
+
+function normalizeReservationGatewayProfile(v: unknown): GatewayProfile | null {
+  return typeof v === "string" &&
+    (GATEWAY_PROFILES as readonly string[]).includes(v)
+    ? (v as GatewayProfile)
+    : null;
+}
+
+function fulfillBlockedReason(
+  uid: string,
+  data: Record<string, unknown>,
+): string | null {
+  if (data.uid !== uid) return "reservation uid mismatch";
+  if (data.status !== "requested") return `status is ${String(data.status)}`;
+  if (data.billingStatus !== "active") {
+    return `billing is ${String(data.billingStatus)}`;
+  }
+  if (!isNonEmptyString(data.builderSlug)) return "missing builderSlug";
+  if (!isSizingTier(data.requestedSizingTier)) return "invalid requestedSizingTier";
+  if (typeof data.requestedAt !== "number" || !Number.isFinite(data.requestedAt)) {
+    return "missing requestedAt";
+  }
+  return null;
+}
+
+function projectOperatorGatewayReservation(
+  doc: FirestoreDocLike,
+): AdminOperatorGatewayReservationSummary {
+  const data = doc.data();
+  const uid = isNonEmptyString(data.uid) ? data.uid : doc.id;
+  const blockedReason = fulfillBlockedReason(uid, data);
+  return {
+    uid,
+    builderSlug: isNonEmptyString(data.builderSlug) ? data.builderSlug : null,
+    requestedSizingTier: isSizingTier(data.requestedSizingTier)
+      ? data.requestedSizingTier
+      : null,
+    status: isNonEmptyString(data.status) ? data.status : "unknown",
+    billingStatus: isNonEmptyString(data.billingStatus)
+      ? data.billingStatus
+      : "unknown",
+    currentGatewayId: asStringOrNull(data.currentGatewayId),
+    currentGatewayProfile: normalizeReservationGatewayProfile(
+      data.currentGatewayProfile,
+    ),
+    gatewayId: asStringOrNull(data.gatewayId),
+    operationId: asStringOrNull(data.operationId),
+    requestedAt: toIso(data.requestedAt),
+    updatedAt: toIso(data.updatedAt),
+    provisioningStartedAt: toIso(data.provisioningStartedAt),
+    provisioningStartedBy: asStringOrNull(data.provisioningStartedBy),
+    readyToFulfill: blockedReason === null,
+    fulfillBlockedReason: blockedReason,
+  };
+}
+
+function operatorReservationRank(
+  reservation: AdminOperatorGatewayReservationSummary,
+): number {
+  if (reservation.readyToFulfill) return 0;
+  if (reservation.status === "billing_pending" || reservation.billingStatus === "pending") {
+    return 1;
+  }
+  if (reservation.status === "provisioning") return 2;
+  if (reservation.status === "requested") return 3;
+  if (reservation.status === "fulfilled") return 4;
+  if (reservation.status === "cancelled") return 5;
+  return 9;
+}
+
+function reservationSortMs(
+  reservation: AdminOperatorGatewayReservationSummary,
+): number {
+  const parsed = Date.parse(
+    reservation.updatedAt ?? reservation.requestedAt ?? "",
+  );
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareOperatorReservations(
+  a: AdminOperatorGatewayReservationSummary,
+  b: AdminOperatorGatewayReservationSummary,
+): number {
+  const rankDelta = operatorReservationRank(a) - operatorReservationRank(b);
+  if (rankDelta !== 0) return rankDelta;
+  return reservationSortMs(b) - reservationSortMs(a);
 }
 
 async function findInFlightJobId(
@@ -1325,6 +1430,26 @@ router.get(
         res.json({
           mountedCustomers,
           recentOperations,
+          generatedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.get(
+    "/operator-gateway-reservations",
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const snap = await db
+          .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
+          .get();
+        const reservations = snap.docs
+          .map(projectOperatorGatewayReservation)
+          .sort(compareOperatorReservations);
+        res.json({
+          reservations,
           generatedAt: new Date().toISOString(),
         });
       } catch (e) {
