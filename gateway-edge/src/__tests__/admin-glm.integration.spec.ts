@@ -662,6 +662,97 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
 });
 
 describe("operator reservation request → Cowboy fulfillment integration", () => {
+  it("lets request-stage reservations update sizing without resetting requestedAt", async () => {
+    usersDocs["admin-user"] = {
+      username: "alice",
+      email: "alice@example.com",
+      subscription: { status: "active" },
+      provisioning: {
+        openclaw: {
+          slug: "alice",
+          gatewayId: "gw-test",
+          gatewayProfile: "standard",
+        },
+      },
+    };
+    operatorGatewayReservationsDocs["admin-user"] = {
+      uid: "admin-user",
+      builderSlug: "alice",
+      requestedSizingTier: "small",
+      status: "billing_pending",
+      billingStatus: "pending",
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+      requestedAt: 1_234,
+      updatedAt: 1_234,
+    };
+    const app = buildOperatorFlowApp();
+
+    const res = await request(app)
+      .post("/api/billing/operator-gateway/reservation")
+      .send({ sizingTier: "large" });
+
+    expect(res.status).toBe(202);
+    expect(res.body.reservation).toMatchObject({
+      uid: "admin-user",
+      requestedSizingTier: "large",
+      status: "requested",
+      billingStatus: "active",
+      requestedAt: 1_234,
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+    });
+    expect(operatorGatewayReservationsDocs["admin-user"]).toMatchObject({
+      requestedSizingTier: "large",
+      status: "requested",
+      billingStatus: "active",
+      requestedAt: 1_234,
+    });
+  });
+
+  it("rejects customer updates once a reservation is provisioning", async () => {
+    usersDocs["admin-user"] = {
+      username: "alice",
+      email: "alice@example.com",
+      subscription: { status: "active" },
+      provisioning: {
+        openclaw: {
+          slug: "alice",
+          gatewayId: "gw-test",
+          gatewayProfile: "standard",
+        },
+      },
+    };
+    operatorGatewayReservationsDocs["admin-user"] = {
+      uid: "admin-user",
+      builderSlug: "alice",
+      requestedSizingTier: "large",
+      status: "provisioning",
+      billingStatus: "active",
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+      gatewayId: "gw-test-alice",
+      operationId: "op-add",
+      requestedAt: 1_234,
+      updatedAt: 2_345,
+    };
+    const before = { ...operatorGatewayReservationsDocs["admin-user"] };
+    const app = buildOperatorFlowApp();
+
+    const res = await request(app)
+      .post("/api/billing/operator-gateway/reservation")
+      .send({ sizingTier: "small" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: "operator gateway reservation can no longer be updated",
+      status: "provisioning",
+      gatewayId: "gw-test-alice",
+    });
+    expect(operatorGatewayReservationsDocs["admin-user"]).toEqual(before);
+    expect(calls.find((c) => c.collection === "operatorGatewayReservations")).toBeUndefined();
+  });
+
   it("surfaces an active customer request in Cowboy and fulfills a locked operator gateway without moving the user", async () => {
     usersDocs["admin-user"] = {
       username: "alice",
