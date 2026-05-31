@@ -10,19 +10,21 @@ export interface GatewayLiveState {
 export interface RetireGatewayDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
 
-readGatewayLiveState: (gatewayId: string) => Promise<GatewayLiveState | null>;
-  
+  readGatewayLiveState: (gatewayId: string) => Promise<GatewayLiveState | null>;
+
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
-  
+
   deleteGatewayHeartbeat: (gatewayId: string) => Promise<void>;
 
-readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
+  readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
 
-archiveAuthTokenSecret?: (gatewayId: string) => Promise<void>;
-  
+  archiveAuthTokenSecret?: (gatewayId: string) => Promise<void>;
+
+  deleteGatewayPersistentVolumeClaim?: (instanceName: string) => Promise<void>;
+
   readGlmGatewayInstanceName: (gatewayId: string) => Promise<string | null>;
 
-syncFleetIngress: () => Promise<void>;
+  syncFleetIngress: () => Promise<void>;
   helmUninstallTimeoutMs: number;
   pollIntervalMs: number;
   now: () => number;
@@ -32,6 +34,7 @@ syncFleetIngress: () => Promise<void>;
 
 interface RetireGatewayInput {
   gatewayId?: unknown;
+  deletePersistentVolumeClaim?: unknown;
 }
 
 interface PollResult {
@@ -39,39 +42,36 @@ interface PollResult {
   errorMsg?: string;
 }
 
+interface StepResult {
+  ok: boolean;
+  error?: string;
+}
+
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
+
+function shouldDeletePersistentVolumeClaim(input: RetireGatewayInput): boolean {
+  return input.deletePersistentVolumeClaim === true;
+}
+
+function failure(error: string): OperationResult {
+  return { steps: [], success: false, error };
+}
 
 export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     const input = op.input as RetireGatewayInput;
     const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
-    if (!gatewayId) return { steps: [], success: false, error: "missing gatewayId in op.input" };
+    if (!gatewayId) return failure("missing gatewayId in op.input");
+    const deletePersistentVolumeClaim = shouldDeletePersistentVolumeClaim(input);
 
-    const live = await deps.readGatewayLiveState(gatewayId);
-    if (live != null) {
-      if (live.mountedCustomers.length > 0) {
-        return {
-          steps: [],
-          success: false,
-          error: `gateway ${gatewayId} still has ${live.mountedCustomers.length} mounted customer(s): ${live.mountedCustomers.join(", ")}`,
-        };
-      }
-      if (live.inFlightJobId) {
-        return {
-          steps: [],
-          success: false,
-          error: `gateway ${gatewayId} has an in-flight restore job ${live.inFlightJobId}; refusing to retire mid-mount`,
-        };
-      }
-    }
+    const liveFailure = await assertGatewayRetirable(deps, gatewayId);
+    if (liveFailure) return liveFailure;
 
-const instanceName = await deps.readGlmGatewayInstanceName(gatewayId);
+    const instanceName = await deps.readGlmGatewayInstanceName(gatewayId);
     if (!instanceName) {
-      return {
-        steps: [],
-        success: false,
-        error: `glmGateways/${gatewayId} not found — cannot determine instanceName for helm uninstall`,
-      };
+      return failure(
+        `glmGateways/${gatewayId} not found — cannot determine instanceName for helm uninstall`,
+      );
     }
 
     const helmResult = await pollUntil({
@@ -86,99 +86,142 @@ const instanceName = await deps.readGlmGatewayInstanceName(gatewayId);
       timeoutMessage: `helm did not uninstall instance "${instanceName}" within ${deps.helmUninstallTimeoutMs}ms`,
     });
     if (!helmResult.ok) {
-      return { steps: [], success: false, error: helmResult.errorMsg };
+      return failure(helmResult.errorMsg ?? "helm uninstall failed");
     }
 
-    const cleanupStartedAt = deps.now();
-    await reportStep(ctx, { name: "cleanup", status: "running", startedAt: cleanupStartedAt });
-    try {
+    const pvcFailure = await deletePersistentVolumeClaimIfRequested({
+      ctx,
+      deps,
+      deletePersistentVolumeClaim,
+      instanceName,
+    });
+    if (pvcFailure) return pvcFailure;
 
-await deps.deleteGlmGateway(gatewayId);
-      await deps.deleteGatewayHeartbeat(gatewayId);
-      if (deps.archiveAuthTokenSecret) {
-        await deps.archiveAuthTokenSecret(gatewayId);
-      }
-      await reportStep(ctx, {
-        name: "cleanup",
-        status: "done",
-        startedAt: cleanupStartedAt,
-        completedAt: deps.now(),
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await reportStep(ctx, {
-        name: "cleanup",
-        status: "failed",
-        startedAt: cleanupStartedAt,
-        completedAt: deps.now(),
-        error: msg,
-      });
-      return {
-        steps: [],
-        success: false,
-        error: `cleanup failed after helm uninstall: ${msg}`,
-      };
-    }
+    const cleanupFailure = await cleanupGatewayRecords(ctx, deps, gatewayId);
+    if (cleanupFailure) return cleanupFailure;
 
-if (deps.readGatewayHeartbeatExists) {
-      const quiesceStartedAt = deps.now();
-      await reportStep(ctx, { name: "heartbeat-quiesce", status: "running", startedAt: quiesceStartedAt });
-      try {
-        await deps.wait(deps.pollIntervalMs);
-        const resurrected = await deps.readGatewayHeartbeatExists(gatewayId);
-        if (resurrected) {
-          await deps.deleteGatewayHeartbeat(gatewayId);
-        }
-        await reportStep(ctx, {
-          name: "heartbeat-quiesce",
-          status: "done",
-          startedAt: quiesceStartedAt,
-          completedAt: deps.now(),
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await reportStep(ctx, {
-          name: "heartbeat-quiesce",
-          status: "failed",
-          startedAt: quiesceStartedAt,
-          completedAt: deps.now(),
-          error: msg,
-        });
+    await quiesceGatewayHeartbeat(ctx, deps, gatewayId);
 
-deps.log(
-          `[retire-gateway] heartbeat-quiesce failed for ${gatewayId} (reaper will heal within 60s): ${msg}`,
-        );
-      }
-    }
-
-    const ingressStartedAt = deps.now();
-    await reportStep(ctx, { name: "fleet-ingress", status: "running", startedAt: ingressStartedAt });
-    try {
-      await deps.syncFleetIngress();
-      await reportStep(ctx, {
-        name: "fleet-ingress",
-        status: "done",
-        startedAt: ingressStartedAt,
-        completedAt: deps.now(),
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await reportStep(ctx, {
-        name: "fleet-ingress",
-        status: "failed",
-        startedAt: ingressStartedAt,
-        completedAt: deps.now(),
-        error: msg,
-      });
-
-deps.log(
-        `[retire-gateway] cleanup committed but fleet-ingress sync failed; reconciler will heal within 30s — ${msg}`,
-      );
-      return { steps: [], success: false, error: msg };
-    }
+    const ingressFailure = await syncFleetIngress(ctx, deps);
+    if (ingressFailure) return ingressFailure;
 
     return { steps: [], success: true };
   };
+}
+
+async function assertGatewayRetirable(
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+): Promise<OperationResult | null> {
+  const live = await deps.readGatewayLiveState(gatewayId);
+  if (live == null) return null;
+  if (live.mountedCustomers.length > 0) {
+    return failure(
+      `gateway ${gatewayId} still has ${live.mountedCustomers.length} mounted customer(s): ${live.mountedCustomers.join(", ")}`,
+    );
+  }
+  if (live.inFlightJobId) {
+    return failure(
+      `gateway ${gatewayId} has an in-flight restore job ${live.inFlightJobId}; refusing to retire mid-mount`,
+    );
+  }
+  return null;
+}
+
+async function deletePersistentVolumeClaimIfRequested(args: {
+  ctx: OperationContext;
+  deps: RetireGatewayDeps;
+  deletePersistentVolumeClaim: boolean;
+  instanceName: string;
+}): Promise<OperationResult | null> {
+  const { ctx, deps, deletePersistentVolumeClaim, instanceName } = args;
+  if (!deletePersistentVolumeClaim) return null;
+  const deletePvc = deps.deleteGatewayPersistentVolumeClaim;
+  if (!deletePvc) {
+    return failure("deletePersistentVolumeClaim requested but PVC deletion is not configured");
+  }
+  const result = await runReportedStep(ctx, deps, "delete-pvc", () => deletePvc(instanceName));
+  return result.ok ? null : failure(result.error ?? "PVC deletion failed");
+}
+
+async function cleanupGatewayRecords(
+  ctx: OperationContext,
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+): Promise<OperationResult | null> {
+  const result = await runReportedStep(ctx, deps, "cleanup", async () => {
+    await deps.deleteGlmGateway(gatewayId);
+    await deps.deleteGatewayHeartbeat(gatewayId);
+    if (deps.archiveAuthTokenSecret) {
+      await deps.archiveAuthTokenSecret(gatewayId);
+    }
+  });
+  return result.ok
+    ? null
+    : failure(`cleanup failed after helm uninstall: ${result.error ?? "unknown error"}`);
+}
+
+async function quiesceGatewayHeartbeat(
+  ctx: OperationContext,
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+): Promise<void> {
+  const readGatewayHeartbeatExists = deps.readGatewayHeartbeatExists;
+  if (!readGatewayHeartbeatExists) return;
+  const result = await runReportedStep(ctx, deps, "heartbeat-quiesce", async () => {
+    await deps.wait(deps.pollIntervalMs);
+    const resurrected = await readGatewayHeartbeatExists(gatewayId);
+    if (resurrected) {
+      await deps.deleteGatewayHeartbeat(gatewayId);
+    }
+  });
+  if (!result.ok) {
+    deps.log(
+      `[retire-gateway] heartbeat-quiesce failed for ${gatewayId} (reaper will heal within 60s): ${result.error ?? "unknown error"}`,
+    );
+  }
+}
+
+async function syncFleetIngress(
+  ctx: OperationContext,
+  deps: RetireGatewayDeps,
+): Promise<OperationResult | null> {
+  const result = await runReportedStep(ctx, deps, "fleet-ingress", () => deps.syncFleetIngress());
+  if (result.ok) return null;
+  deps.log(
+    `[retire-gateway] cleanup committed but fleet-ingress sync failed; reconciler will heal within 30s — ${result.error ?? "unknown error"}`,
+  );
+  return failure(result.error ?? "fleet-ingress sync failed");
+}
+
+async function runReportedStep(
+  ctx: OperationContext,
+  deps: RetireGatewayDeps,
+  name: string,
+  run: () => Promise<void>,
+): Promise<StepResult> {
+  const startedAt = deps.now();
+  await reportStep(ctx, { name, status: "running", startedAt });
+  try {
+    await run();
+    await reportStep(ctx, {
+      name,
+      status: "done",
+      startedAt,
+      completedAt: deps.now(),
+    });
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await reportStep(ctx, {
+      name,
+      status: "failed",
+      startedAt,
+      completedAt: deps.now(),
+      error: msg,
+    });
+    return { ok: false, error: msg };
+  }
 }
 
 async function pollUntil(args: {

@@ -77,6 +77,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     archiveAuthTokenSecret: vi.fn(async (gatewayId: string) => {
       state.archivedSecret.add(gatewayId);
     }),
+    deleteGatewayPersistentVolumeClaim: vi.fn(async () => {}),
     syncFleetIngress: vi.fn(async () => {}),
     helmUninstallTimeoutMs: 60_000,
     pollIntervalMs: 1_000,
@@ -176,6 +177,43 @@ describe("createRetireGatewayHandler — happy path", () => {
     expect(result.success).toBe(true);
     expect(state.deletedGlm.has("gw-test-canary")).toBe(true);
     expect(state.archivedSecret.size).toBe(0);
+  });
+
+  it("deletes the gateway PVC only when explicitly requested", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(),
+      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
+      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      deletedGlm: new Set(),
+      deletedHeartbeat: new Set(),
+      archivedSecret: new Set(),
+    };
+    const deps = makeDeps(state);
+
+    const result = await createRetireGatewayHandler(deps)(
+      mkOp({ input: { gatewayId: "gw-test-canary", deletePersistentVolumeClaim: true } }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(deps.deleteGatewayPersistentVolumeClaim).toHaveBeenCalledWith("canary");
+  });
+
+  it("preserves the PVC by default", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(),
+      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
+      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      deletedGlm: new Set(),
+      deletedHeartbeat: new Set(),
+      archivedSecret: new Set(),
+    };
+    const deps = makeDeps(state);
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
   });
 
   it("waits through pre-uninstall polls until helm removes the instance", async () => {

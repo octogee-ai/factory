@@ -106,6 +106,10 @@ function normalizeGatewayProfile(profile: unknown): GatewayProfile {
   return profile === "operator" ? "operator" : "standard";
 }
 
+function isTruthyQueryFlag(value: unknown): boolean {
+  return value === "true" || value === "1";
+}
+
 async function readGatewayProfile(db: Firestore, gatewayId: string): Promise<GatewayProfile> {
   const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
   return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
@@ -2193,6 +2197,9 @@ router.post(
         const id = req.params.id as string;
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
+        const deletePersistentVolumeClaim = isTruthyQueryFlag(
+          req.query.deletePersistentVolumeClaim,
+        );
         const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
         const snap = await ref.get();
         if (!snap.exists) {
@@ -2236,7 +2243,7 @@ router.post(
           }
         }
 
-const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+        const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
         const operationId = opRef.id;
         const batch = db.batch();
         batch.update(ref, { desiredStatus: "retired" });
@@ -2247,12 +2254,15 @@ const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
           createdAt: Date.now(),
           startedAt: null,
           completedAt: null,
-          input: { gatewayId: id },
+          input: {
+            gatewayId: id,
+            ...(deletePersistentVolumeClaim ? { deletePersistentVolumeClaim: true } : {}),
+          },
           steps: [],
           gatewayId: id,
         });
         await batch.commit();
-        res.status(202).json({ gatewayId: id, operationId });
+        res.status(202).json({ gatewayId: id, operationId, deletePersistentVolumeClaim });
       } catch (e) {
         next(e);
       }

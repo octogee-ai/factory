@@ -230,3 +230,41 @@ describe("createKubeSubprocessRunner — readDeployedReplicas", () => {
     ).rejects.toThrow(/replicas/);
   });
 });
+
+describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
+  it("deletes the named PVC idempotently", async () => {
+    const { runKubectl, calls } = mockSubprocess([
+      { stdout: "persistentvolumeclaim/octogee-gateway-bender-data deleted" },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await kube.deletePersistentVolumeClaim({
+      namespace: "octogee-test",
+      name: "octogee-gateway-bender-data",
+    });
+
+    expect(calls).toEqual([
+      [
+        "-n",
+        "octogee-test",
+        "delete",
+        "pvc/octogee-gateway-bender-data",
+        "--ignore-not-found=true",
+      ],
+    ]);
+  });
+
+  it("throws on kubectl delete PVC failures", async () => {
+    const { runKubectl } = mockSubprocess([
+      { stderr: "Error from server (Forbidden): denied", code: 1 },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await expect(
+      kube.deletePersistentVolumeClaim({
+        namespace: "octogee-test",
+        name: "octogee-gateway-bender-data",
+      }),
+    ).rejects.toThrow(/Forbidden/);
+  });
+});

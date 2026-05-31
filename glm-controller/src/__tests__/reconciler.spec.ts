@@ -761,6 +761,7 @@ function makeFakeKubeOps(behavior: {
     scaleDeployment: vi.fn(behavior.scale ?? (async () => undefined)),
     restartOpenClawInPlace: vi.fn(behavior.restart ?? (async () => undefined)),
     readDeployedReplicas: vi.fn(behavior.readReplicas ?? (async () => null)),
+    deletePersistentVolumeClaim: vi.fn(async () => undefined),
   } as unknown as Parameters<typeof startReconciler>[0]["kubeOps"];
 }
 

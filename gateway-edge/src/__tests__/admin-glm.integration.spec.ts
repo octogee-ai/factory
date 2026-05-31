@@ -1251,6 +1251,22 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(op?.data).toMatchObject({ kind: "retire-gateway", createdBy: "admin-user" });
   });
 
+  it("passes explicit PVC deletion through to the retire-gateway operation", async () => {
+    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    gatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", status: "ready", mountedCustomers: [] };
+    const app = buildApp();
+    const res = await request(app)
+      .delete("/api/admin/gateways/gw-test-canary")
+      .query({ deletePersistentVolumeClaim: "true" });
+    expect(res.status).toBe(202);
+    expect(res.body.deletePersistentVolumeClaim).toBe(true);
+    const op = calls.find((c) => c.collection === "glmOperations");
+    expect(op?.data.input).toMatchObject({
+      gatewayId: "gw-test-canary",
+      deletePersistentVolumeClaim: true,
+    });
+  });
+
   it("returns 404 when the gateway does not exist", async () => {
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/gw-missing");

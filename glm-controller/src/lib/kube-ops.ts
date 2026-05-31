@@ -12,6 +12,10 @@ export interface KubeOps {
     namespace: string;
     name: string;
   }): Promise<number | null>;
+  deletePersistentVolumeClaim(opts: {
+    namespace: string;
+    name: string;
+  }): Promise<void>;
 }
 
 export interface KubectlSubprocessResult {
@@ -132,6 +136,25 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       }
       return n;
     },
+
+    async deletePersistentVolumeClaim({ namespace, name }) {
+      const args = [
+        "-n",
+        namespace,
+        "delete",
+        `pvc/${name}`,
+        "--ignore-not-found=true",
+      ];
+      const result = await deps.runKubectl(args);
+      if (result.code !== 0) {
+        throw new Error(
+          `kubectl delete pvc/${name} ns=${namespace} failed (code=${result.code}): ${
+            result.stderr.trim() || result.stdout.trim()
+          }`,
+        );
+      }
+      deps.log(`[kube-ops] deleted pvc/${name} ns=${namespace}`);
+    },
   };
 }
 
@@ -146,6 +169,9 @@ export function createLoggingKubeOps(log: (msg: string) => void): KubeOps {
     readDeployedReplicas: async ({ namespace, name }) => {
       log(`[kube-ops:stub] readReplicas ns=${namespace} ${name} — returning null`);
       return null;
+    },
+    deletePersistentVolumeClaim: async ({ namespace, name }) => {
+      log(`[kube-ops:stub] delete pvc ns=${namespace} ${name} — no exec`);
     },
   };
 }

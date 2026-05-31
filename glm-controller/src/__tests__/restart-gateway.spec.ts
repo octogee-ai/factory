@@ -35,6 +35,7 @@ function mkDeps(overrides: Partial<RestartGatewayDeps> = {}): RestartGatewayDeps
       scaleDeployment: vi.fn(async () => undefined),
       restartOpenClawInPlace: vi.fn(async () => undefined),
       readDeployedReplicas: vi.fn(async () => 1),
+      deletePersistentVolumeClaim: vi.fn(async () => undefined),
     },
     namespace: "octogee-test",
     now: () => 1000,
@@ -109,6 +110,7 @@ describe("createRestartGatewayHandler", () => {
           throw new Error("kubectl: connection refused");
         }),
         readDeployedReplicas: vi.fn(async () => 1),
+        deletePersistentVolumeClaim: vi.fn(async () => undefined),
       },
     });
     const handler = createRestartGatewayHandler(deps);

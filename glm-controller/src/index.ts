@@ -5,6 +5,7 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   type GatewayDesiredState,
+  type HelmInstancesMap,
   type Operation,
 } from "../../shared/types/glm.js";
 import {
@@ -111,6 +112,17 @@ const GATEWAY_EDGE_INGRESS_NAME =
 
 const GATEWAY_EDGE_PORT = 3001;
 
+function createGatewayPersistentVolumeClaimDeleter(
+  kubeOps: KubeOps,
+): (instanceName: string) => Promise<void> {
+  return async (instanceName) => {
+    await kubeOps.deletePersistentVolumeClaim({
+      namespace: NAMESPACE,
+      name: `octogee-gateway-${instanceName}-data`,
+    });
+  };
+}
+
 interface ControllerDeps {
   db: Firestore;
   helm: HelmRunner;
@@ -118,13 +130,13 @@ interface ControllerDeps {
   handlers: OperationHandlers;
   log: (msg: string) => void;
 
-syncFleetIngress?: (
+  syncFleetIngress?: (
     gateways: ReadonlyArray<{ gatewayId: string; instanceName: string }>,
   ) => Promise<void>;
 
   reconcileRetryMs?: number;
 
-chartFingerprint?: string;
+  chartFingerprint?: string;
 }
 
 function deploymentNameForInstance(instanceName: string): string {
@@ -138,8 +150,7 @@ async function applyChanges(
   const kubeOps = deps.kubeOps ?? createLoggingKubeOps(deps.log);
   for (const change of changes) {
     if (change.kind === "drift") {
-
-await deps.helm.removeInstance({
+      await deps.helm.removeInstance({
         namespace: NAMESPACE,
         instanceName: change.instanceName,
       });
@@ -218,6 +229,117 @@ async function readMountedByGatewayId(
   return out;
 }
 
+type DriftChange = Extract<ReconcileChange, { kind: "drift" }>;
+
+interface ReconcileInputs {
+  desired: GatewayDesiredState[];
+  actualMap: HelmInstancesMap;
+  mountedByGatewayId: Map<string, readonly string[]>;
+}
+
+async function readReconcileInputs(deps: ControllerDeps): Promise<ReconcileInputs> {
+  const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
+  const desired = snap.docs.map((d) => d.data() as GatewayDesiredState);
+  const actualMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
+  const kubeOpsForRead = deps.kubeOps ?? createLoggingKubeOps(deps.log);
+  await readLiveReplicasInto(actualMap, kubeOpsForRead, deps.log);
+  const mountedByGatewayId = await readMountedByGatewayId(deps.db);
+  return { desired, actualMap, mountedByGatewayId };
+}
+
+function preservedDriftChanges(
+  changes: ReconcileChange[],
+  targetMap: HelmInstancesMap,
+): DriftChange[] {
+  return changes.filter(
+    (c): c is DriftChange =>
+      c.kind === "drift" &&
+      Object.prototype.hasOwnProperty.call(targetMap, c.instanceName),
+  );
+}
+
+function logPreservedDrift(
+  deps: ControllerDeps,
+  preservedDrift: DriftChange[],
+  desired: GatewayDesiredState[],
+): void {
+  const desiredGatewayIds = new Set(desired.map((d) => d.gatewayId));
+  const orphanDrift = preservedDrift.filter((c) => !desiredGatewayIds.has(c.current.gatewayId));
+  const draineeDrift = preservedDrift.filter((c) => desiredGatewayIds.has(c.current.gatewayId));
+  if (orphanDrift.length > 0) {
+    const formatted = orphanDrift
+      .map((d) => `${d.instanceName} (gatewayId=${d.current.gatewayId})`)
+      .join(", ");
+    deps.log(
+      `[glm-controller] ⚠ 🧟 orphan helm release(s) — no matching glmGateways doc: ${formatted} (manual \`helm uninstall octogee-gw-<instanceName>\` required to remove)`,
+    );
+  }
+  if (draineeDrift.length > 0) {
+    deps.log(
+      `[glm-controller] drift detected (preserved, not removed): ${draineeDrift.map((d) => d.instanceName).join(", ")}`,
+    );
+  }
+}
+
+async function applyTargetChanges(
+  deps: ControllerDeps,
+  targetVsActual: ReconcileChange[],
+  desiredCount: number,
+  actualCount: number,
+): Promise<void> {
+  if (targetVsActual.length === 0) {
+    deps.log(`[glm-controller] reconcile tick: no changes (${desiredCount} desired, ${actualCount} actual)`);
+    return;
+  }
+  const summary = targetVsActual
+    .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.instanceName}`)
+    .join(", ");
+  deps.log(`[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`);
+  await applyChanges(targetVsActual, deps);
+}
+
+async function syncFleetIngressIfConfigured(
+  deps: ControllerDeps,
+  desired: GatewayDesiredState[],
+): Promise<void> {
+  const syncFleetIngress = deps.syncFleetIngress;
+  if (!syncFleetIngress) return;
+  const fleetGateways = desired
+    .filter((g) => typeof g.gatewayId === "string" && typeof g.instanceName === "string")
+    .map((g) => ({ gatewayId: g.gatewayId, instanceName: g.instanceName }));
+  try {
+    await syncFleetIngress(fleetGateways);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`(source=fleet-ingress) ${message}`);
+  }
+}
+
+async function reconcileOnce(deps: ControllerDeps): Promise<void> {
+  const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
+  const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
+  const changes = diffInstancesMap(actualMap, desiredMap, {
+    compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
+  });
+  const targetMap = buildHelmTargetMap(
+    desired,
+    actualMap,
+    mountedByGatewayId,
+    deps.chartFingerprint,
+  );
+  logPreservedDrift(deps, preservedDriftChanges(changes, targetMap), desired);
+  const targetVsActual = diffInstancesMap(actualMap, targetMap, {
+    compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
+  });
+  await applyTargetChanges(deps, targetVsActual, desired.length, Object.keys(actualMap).length);
+  await syncFleetIngressIfConfigured(deps, desired);
+}
+
+function clearTimer(timer: NodeJS.Timeout | null): null {
+  if (timer) clearTimeout(timer);
+  return null;
+}
+
 export function startReconciler(deps: ControllerDeps): () => void {
   let debounceTimer: NodeJS.Timeout | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
@@ -236,93 +358,11 @@ export function startReconciler(deps: ControllerDeps): () => void {
       pendingTick = true;
       return;
     }
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-    }
-    if (retryTimer) {
-      clearTimeout(retryTimer);
-      retryTimer = null;
-    }
+    debounceTimer = clearTimer(debounceTimer);
+    retryTimer = clearTimer(retryTimer);
     inFlight = true;
     try {
-      const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
-      const desired: GatewayDesiredState[] = snap.docs.map(
-        (d) => d.data() as GatewayDesiredState,
-      );
-      const actualMap = await deps.helm.readDeployedInstances({
-        namespace: NAMESPACE,
-      });
-      const kubeOpsForRead = deps.kubeOps ?? createLoggingKubeOps(deps.log);
-      await readLiveReplicasInto(actualMap, kubeOpsForRead, deps.log);
-      const mountedByGatewayId = await readMountedByGatewayId(deps.db);
-      const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
-      const changes = diffInstancesMap(actualMap, desiredMap, {
-        compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
-      });
-      const targetMap = buildHelmTargetMap(
-        desired,
-        actualMap,
-        mountedByGatewayId,
-        deps.chartFingerprint,
-      );
-      const preservedDrift = changes.filter(
-        (c) =>
-          c.kind === "drift" &&
-          Object.prototype.hasOwnProperty.call(targetMap, c.instanceName),
-      );
-
-const desiredGatewayIds = new Set(desired.map((d) => d.gatewayId));
-      const orphanDrift = preservedDrift.filter(
-        (c) => c.kind === "drift" && !desiredGatewayIds.has(c.current.gatewayId),
-      );
-      const draineeDrift = preservedDrift.filter(
-        (c) => c.kind === "drift" && desiredGatewayIds.has(c.current.gatewayId),
-      );
-      if (orphanDrift.length > 0) {
-        const formatted = orphanDrift
-          .filter((d) => d.kind === "drift")
-          .map((d) =>
-            d.kind === "drift" ? `${d.instanceName} (gatewayId=${d.current.gatewayId})` : "",
-          )
-          .join(", ");
-        deps.log(
-          `[glm-controller] ⚠ 🧟 orphan helm release(s) — no matching glmGateways doc: ${formatted} (manual \`helm uninstall octogee-gw-<instanceName>\` required to remove)`,
-        );
-      }
-      if (draineeDrift.length > 0) {
-        deps.log(
-          `[glm-controller] drift detected (preserved, not removed): ${draineeDrift.map((d) => d.instanceName).join(", ")}`,
-        );
-      }
-      const targetVsActual = diffInstancesMap(actualMap, targetMap, {
-        compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
-      });
-      if (targetVsActual.length === 0) {
-        deps.log(
-          `[glm-controller] reconcile tick: no changes (${desired.length} desired, ${Object.keys(actualMap).length} actual)`,
-        );
-      } else {
-        const summary = targetVsActual
-          .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.instanceName}`)
-          .join(", ");
-        deps.log(
-          `[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`,
-        );
-        await applyChanges(targetVsActual, deps);
-      }
-      if (deps.syncFleetIngress) {
-        const fleetGateways = desired
-          .filter((g) => typeof g.gatewayId === "string" && typeof g.instanceName === "string")
-          .map((g) => ({ gatewayId: g.gatewayId, instanceName: g.instanceName }));
-        try {
-          await deps.syncFleetIngress(fleetGateways);
-        } catch (err) {
-
-const message = err instanceof Error ? err.message : String(err);
-          throw new Error(`(source=fleet-ingress) ${message}`);
-        }
-      }
+      await reconcileOnce(deps);
       recordReconcile("ok");
     } catch (err) {
       recordReconcile("fail");
@@ -338,10 +378,7 @@ const message = err instanceof Error ? err.message : String(err);
       inFlight = false;
       if (!stopped && pendingTick) {
         pendingTick = false;
-        if (retryTimer) {
-          clearTimeout(retryTimer);
-          retryTimer = null;
-        }
+        retryTimer = clearTimer(retryTimer);
         scheduleDebouncedTick();
       }
     }
@@ -785,8 +822,8 @@ async function buildHandlers(
       const doc = await db.collection("gateways").doc(gatewayId).get();
       return doc.exists;
     },
-
-syncFleetIngress,
+    deleteGatewayPersistentVolumeClaim: createGatewayPersistentVolumeClaimDeleter(kubeOps),
+    syncFleetIngress,
     helmUninstallTimeoutMs: 90_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),
