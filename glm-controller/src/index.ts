@@ -221,10 +221,20 @@ export function startReconciler(deps: ControllerDeps): () => void {
   let debounceTimer: NodeJS.Timeout | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
   let inFlight = false;
+  let pendingTick = false;
   let stopped = false;
   const retryMs = deps.reconcileRetryMs ?? RECONCILE_RETRY_MS_DEFAULT;
 
+  const scheduleDebouncedTick = () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => void tick(), RECONCILE_DEBOUNCE_MS);
+  };
+
   const tick = async () => {
+    if (inFlight) {
+      pendingTick = true;
+      return;
+    }
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
@@ -233,7 +243,6 @@ export function startReconciler(deps: ControllerDeps): () => void {
       clearTimeout(retryTimer);
       retryTimer = null;
     }
-    if (inFlight) return;
     inFlight = true;
     try {
       const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
@@ -326,14 +335,21 @@ const message = err instanceof Error ? err.message : String(err);
       }
     } finally {
       inFlight = false;
+      if (!stopped && pendingTick) {
+        pendingTick = false;
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        scheduleDebouncedTick();
+      }
     }
   };
 
   const unsub = deps.db.collection(GLM_GATEWAYS_COLLECTION).onSnapshot(
     () => {
       if (stopped) return;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => void tick(), RECONCILE_DEBOUNCE_MS);
+      scheduleDebouncedTick();
     },
     (err) => deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`),
   );
@@ -343,6 +359,7 @@ const message = err instanceof Error ? err.message : String(err);
     unsub();
     if (debounceTimer) clearTimeout(debounceTimer);
     if (retryTimer) clearTimeout(retryTimer);
+    pendingTick = false;
   };
 }
 

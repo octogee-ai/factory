@@ -152,6 +152,72 @@ await vi.advanceTimersByTimeAsync(20_000);
     stop();
   });
 
+  it("runs a follow-up tick when desired state changes during an in-flight reconcile", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    let resolveFirstUpgrade: () => void = () => {};
+    const upsertInstance = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveFirstUpgrade = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+    const desired = [
+      {
+        gatewayId: "gw-test",
+        instanceName: "default",
+        imageRepository: "repo",
+        imageTag: "abc",
+        desiredStatus: "running",
+        createdBy: "ci",
+      },
+    ];
+    const helm = makeFakeHelm({
+      upsertInstance: upsertInstance as unknown as () => Promise<void>,
+    });
+    const db = makeFakeDb({
+      glmGateways: desired,
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+
+    desired[0] = { ...desired[0], imageTag: "def" };
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+
+    resolveFirstUpgrade();
+    await flush();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(2);
+    expect(helm.upsertInstance).toHaveBeenLastCalledWith(
+      expect.objectContaining({ imageTag: "def" }),
+    );
+    stop();
+  });
+
   it("does NOT schedule a retry after stop() has been called (no post-stop fires)", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
