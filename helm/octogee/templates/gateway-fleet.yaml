@@ -113,6 +113,17 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
+    # Gateway-to-gateway migration direct transfer. The controller asks
+    # the source gateway to POST the workspace tarball directly to the
+    # target gateway's /import route, so no workspace bytes transit the
+    # controller process.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.global.fleetControllerPort | default "3003" }}
     - to:
         - ipBlock:
             cidr: 169.254.169.254/32
