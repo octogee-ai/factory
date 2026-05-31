@@ -23,16 +23,41 @@ const PROBE_PATHS = new Set([
   "/api/health",
 ]);
 
+// JSON.stringify drops Error's instance properties (name/message/stack are
+// non-enumerable), so `logger.error("x", { err })` was emitting `"err":{}`
+// — losing every caught error's actual content. This replacer walks meta
+// recursively and unpacks Errors to a plain object that survives stringify.
+// Any extra own keys (e.g. firebase-admin's `code: "auth/user-not-found"`)
+// ride along too, so callers can branch on them in log search.
+function serializeMeta(_key: string, value: unknown): unknown {
+  if (value instanceof Error) {
+    const out: Record<string, unknown> = {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+    for (const k of Object.keys(value)) {
+      out[k] = (value as unknown as Record<string, unknown>)[k];
+    }
+    return out;
+  }
+  return value;
+}
+
+function emit(severity: string, msg: string, meta: Record<string, unknown> | undefined): string {
+  return JSON.stringify({ severity, message: msg, ...meta }, serializeMeta);
+}
+
 export const logger = {
   info: (msg: string, meta?: Record<string, unknown>) =>
-    console.log(JSON.stringify({ severity: "INFO", message: msg, ...meta })),
+    console.log(emit("INFO", msg, meta)),
   warn: (msg: string, meta?: Record<string, unknown>) =>
-    console.warn(JSON.stringify({ severity: "WARNING", message: msg, ...meta })),
+    console.warn(emit("WARNING", msg, meta)),
   error: (msg: string, meta?: Record<string, unknown>) =>
-    console.error(JSON.stringify({ severity: "ERROR", message: msg, ...meta })),
+    console.error(emit("ERROR", msg, meta)),
   debug: (msg: string, meta?: Record<string, unknown>) => {
     if (logLevel() === "debug") {
-      console.log(JSON.stringify({ severity: "DEBUG", message: msg, ...meta }));
+      console.log(emit("DEBUG", msg, meta));
     }
   },
 };

@@ -53,6 +53,66 @@ describe("middleware/logging — logger.debug + LOG_LEVEL gate", () => {
   });
 });
 
+describe("middleware/logging — Error serialization in meta", () => {
+  // Without a serializer, JSON.stringify on `{ err: new Error("boom") }`
+  // emits `{ err: {} }` because Error's instance properties (name, message,
+  // stack, code, cause) are non-enumerable. We were losing every caught
+  // error this way — surfaced when the live no-enum spec's 500 logged
+  // `"err":{}` and we couldn't see why. Any meta value (or recursive
+  // value) that's an Error must serialize to `{ name, message, stack,
+  // code?, cause? }`.
+
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+  afterEach(() => errSpy.mockRestore());
+
+  function parseLastError(): Record<string, unknown> {
+    expect(errSpy).toHaveBeenCalled();
+    const lastCall = errSpy.mock.calls.at(-1) as unknown[] | undefined;
+    return JSON.parse(lastCall![0] as string) as Record<string, unknown>;
+  }
+
+  it("serializes a top-level Error in meta to name/message/stack", () => {
+    const err = new Error("boom");
+    logger.error("op failed", { err });
+    const out = parseLastError();
+    const serialized = out.err as Record<string, unknown>;
+    expect(serialized.name).toBe("Error");
+    expect(serialized.message).toBe("boom");
+    expect(typeof serialized.stack).toBe("string");
+  });
+
+  it("preserves the Firebase Admin `code` field on AppError-like errors", () => {
+    // Caught errors from firebase-admin carry a `code` property like
+    // "auth/user-not-found" that's NOT a standard Error field. The
+    // serializer must include arbitrary string/number/boolean own keys so
+    // the next reader can branch on code.
+    const err = new Error("not found") as Error & { code?: string };
+    err.code = "auth/user-not-found";
+    logger.error("op failed", { err });
+    const out = parseLastError();
+    expect((out.err as Record<string, unknown>).code).toBe("auth/user-not-found");
+  });
+
+  it("serializes a nested Error inside an object", () => {
+    const err = new Error("inner");
+    logger.error("op failed", { context: { cause: err } });
+    const out = parseLastError();
+    const serialized = ((out.context as Record<string, unknown>).cause) as Record<string, unknown>;
+    expect(serialized.message).toBe("inner");
+  });
+
+  it("leaves non-Error meta untouched (no shape regression for existing callers)", () => {
+    logger.error("op failed", { email: "a@b.com", count: 3, ok: false });
+    const out = parseLastError();
+    expect(out.email).toBe("a@b.com");
+    expect(out.count).toBe(3);
+    expect(out.ok).toBe(false);
+  });
+});
+
 describe("middleware/logging — requestLogger probe-path noise gating", () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
