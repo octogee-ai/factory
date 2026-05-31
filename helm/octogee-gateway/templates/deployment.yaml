@@ -42,7 +42,8 @@ spec:
         {{- if .Values.machineFamily }}
         cloud.google.com/machine-family: {{ .Values.machineFamily | quote }}
         {{- end }}
-      serviceAccountName: {{ .Values.serviceAccountName }}
+      serviceAccountName: {{ include "octogee-gateway.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -348,9 +349,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            {{- if ne .Values.profile "operator" }}
             - name: octogee-api-sa-token
               mountPath: /var/run/secrets/octogee-api
               readOnly: true
+            {{- end }}
           # Startup probe is HTTP GET /healthz (not TCP) — gates
           # liveness/readiness until openclaw is actually serving HTTP,
           # not just port-bound. Unrouted paths fall through to openclaw's

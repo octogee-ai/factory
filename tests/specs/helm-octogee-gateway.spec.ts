@@ -71,12 +71,11 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).not.toBeNull();
   });
 
-  it("can render a per-operator ServiceAccount without a Workload Identity annotation by default", () => {
+  it("can render the generated per-operator ServiceAccount without a Workload Identity annotation", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "gw-bender",
       instanceName: "bender",
       profile: "operator",
-      serviceAccountName: "octogee-gw-bender",
       "serviceAccount.create": "true",
     });
     const sa = findDoc(out, "ServiceAccount", "octogee-gw-bender");
@@ -84,6 +83,24 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(sa).not.toMatch(/iam\.gke\.io\/gcp-service-account/);
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
     expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
+  });
+
+  it("operator profile does not inherit the shared platform ServiceAccount when Cowboy omits an override", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "gw-bender",
+      instanceName: "bender",
+      profile: "operator",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
+
+    expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
+    expect(dep).not.toMatch(/serviceAccountName:\s*octogee-gateway\b/);
+    expect(findDoc(out, "ServiceAccount", "octogee-gw-bender")).toBeNull();
+  });
+
+  it("disables the default Kubernetes ServiceAccount token automount", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(dep).toMatch(/automountServiceAccountToken:\s*false/);
   });
 
   it("stamps gateway-profile labels so alias Services can exclude operator pods after rollout", () => {
@@ -99,7 +116,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(operatorDep).toMatch(/gateway-profile:\s*"operator"/);
   });
 
-  it("mounts the octogee-api audience token into gateway and gateway-edge", () => {
+  it("standard profile mounts the octogee-api audience token into gateway and gateway-edge", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
     const edge = containerBlock(dep, "gateway-edge");
@@ -107,6 +124,24 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(gw).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
     expect(dep).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*projected:\s*\n\s*sources:\s*\n\s*-\s*serviceAccountToken:\s*\n\s*path:\s*token\s*\n\s*audience:\s*octogee-api\s*\n\s*expirationSeconds:\s*3600/);
+  });
+
+  it("operator profile keeps the octogee-api token file out of the shell-bearing gateway container", () => {
+    const dep =
+      findDoc(
+        helmTemplate("octogee-gw-bender", {
+          gatewayId: "gw-bender",
+          instanceName: "bender",
+          profile: "operator",
+        }),
+        "Deployment",
+        "octogee-gateway-bender",
+      ) ?? "";
+    const gw = containerBlock(dep, "gateway");
+    const edge = containerBlock(dep, "gateway-edge");
+
+    expect(gw).not.toMatch(/mountPath:\s*\/var\/run\/secrets\/octogee-api/);
+    expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
   });
 
   it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {

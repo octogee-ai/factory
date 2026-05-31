@@ -14,6 +14,28 @@ gateway-instance: {{ required "instanceName is required" .Values.instanceName }}
 {{- end }}
 
 {{/*
+Resolve the Kubernetes ServiceAccount for this gateway pod.
+
+Operator gateways are shell-bearing tenant boundaries. They must never fall
+back to the shared platform KSA (`octogee-gateway`) just because a manual Helm
+render omitted Cowboy's serviceAccountName override. In that case, derive the
+locked per-gateway KSA name and let the pod fail closed if the KSA has not
+been provisioned yet.
+*/}}
+{{- define "octogee-gateway.operatorServiceAccountName" -}}
+octogee-gw-{{ trimPrefix "gw-" (required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId) }}
+{{- end }}
+
+{{- define "octogee-gateway.serviceAccountName" -}}
+{{- $requested := .Values.serviceAccountName | default "" -}}
+{{- if and (eq .Values.profile "operator") (or (eq $requested "") (eq $requested "octogee-gateway")) -}}
+{{- include "octogee-gateway.operatorServiceAccountName" . -}}
+{{- else -}}
+{{- required "serviceAccountName is required" $requested -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Validate required values up front so a typo in Cowboy's --set call
 fails at helm render rather than producing a half-rendered Deployment.
 
