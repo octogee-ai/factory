@@ -11,15 +11,18 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   GATEWAY_PROFILES,
+  OPERATOR_GATEWAY_RESERVATIONS_COLLECTION,
   OPERATOR_GATEWAY_LOCKED_ACCESS,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   operatorGatewayServiceAccountName,
   resolveGatewayPersistence,
   type GatewayProfile,
   type OperatorGatewayReservationSpec,
+  type OperatorGatewayReservationRequest,
 } from "../../shared/types/glm.js";
 import {
   SIZING_TIERS,
+  isSizingTier,
   resolveSizingTier,
   type SizingTier,
 } from "../../shared/types/sizing.js";
@@ -338,6 +341,20 @@ interface AddGatewayCreate {
   builderSlug?: string;
 }
 
+interface FulfillOperatorReservationBody {
+  gatewayId: string;
+  instanceName: string;
+  imageRepository: string;
+  imageTag: string;
+}
+
+interface FulfillableOperatorReservation {
+  uid: string;
+  builderSlug: string;
+  requestedSizingTier: SizingTier;
+  requestedAt: number;
+}
+
 interface CustomerLookupDoc {
   id: string;
   data: () =>
@@ -617,6 +634,77 @@ function validateAddGatewayBody(
       ...profile.ok,
       ...sizing.ok,
       ...reservation.ok,
+    },
+  };
+}
+
+function validateFulfillOperatorReservationBody(
+  body: Partial<FulfillOperatorReservationBody>,
+): { error: RolloutBodyError } | { ok: FulfillOperatorReservationBody } {
+  const required = validateAddGatewayRequiredFields(body);
+  if ("error" in required) return required;
+  const repoError = validateAddGatewayRepository(required.ok.imageRepository);
+  if (repoError) return { error: repoError };
+  return { ok: required.ok };
+}
+
+function validateFulfillableOperatorReservation(
+  uid: string,
+  data: Record<string, unknown>,
+): { error: RolloutBodyError } | { ok: FulfillableOperatorReservation } {
+  if (data.uid !== uid) {
+    return {
+      error: {
+        status: 409,
+        body: { error: "reservation uid mismatch", uid, got: data.uid },
+      },
+    };
+  }
+  if (data.status !== "requested" || data.billingStatus !== "active") {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "operator gateway reservation is not ready for fulfillment",
+          status: data.status,
+          billingStatus: data.billingStatus,
+        },
+      },
+    };
+  }
+  if (!isNonEmptyString(data.builderSlug)) {
+    return {
+      error: {
+        status: 409,
+        body: { error: "operator gateway reservation is missing builderSlug" },
+      },
+    };
+  }
+  if (!isSizingTier(data.requestedSizingTier)) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "operator gateway reservation has invalid requestedSizingTier",
+          requestedSizingTier: data.requestedSizingTier,
+        },
+      },
+    };
+  }
+  if (typeof data.requestedAt !== "number" || !Number.isFinite(data.requestedAt)) {
+    return {
+      error: {
+        status: 409,
+        body: { error: "operator gateway reservation is missing requestedAt" },
+      },
+    };
+  }
+  return {
+    ok: {
+      uid,
+      builderSlug: data.builderSlug,
+      requestedSizingTier: data.requestedSizingTier,
+      requestedAt: data.requestedAt,
     },
   };
 }
@@ -943,6 +1031,62 @@ async function resolveOperatorReservation(opts: {
   };
 }
 
+function operatorGatewayDesiredStateFromReservation(opts: {
+  body: FulfillOperatorReservationBody;
+  reservation: FulfillableOperatorReservation;
+  createdBy: string;
+  now: number;
+}): Record<string, unknown> {
+  const profile: GatewayProfile = "operator";
+  const persistence = resolveGatewayPersistence(profile, undefined);
+  return {
+    gatewayId: opts.body.gatewayId,
+    instanceName: opts.body.instanceName,
+    imageRepository: opts.body.imageRepository,
+    imageTag: opts.body.imageTag,
+    desiredStatus: "running",
+    createdBy: opts.createdBy,
+    createdAt: opts.now,
+    profile,
+    ...(persistence ? { persistence } : {}),
+    operatorAccess: OPERATOR_GATEWAY_LOCKED_ACCESS,
+    serviceAccountName: operatorGatewayServiceAccountName(opts.body.gatewayId),
+    serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+    ownerUid: opts.reservation.uid,
+    builderSlug: opts.reservation.builderSlug,
+    sizingTier: opts.reservation.requestedSizingTier,
+    operatorReservation: {
+      status: "provisioning",
+      reservedAt: opts.reservation.requestedAt,
+      reservedBy: opts.reservation.uid,
+      billingStatus: "active",
+      billingVerifiedAt: opts.now,
+    } satisfies OperatorGatewayReservationSpec,
+  };
+}
+
+function addGatewayOperationRecord(opts: {
+  createdBy: string;
+  now: number;
+  input: Record<string, unknown>;
+}): Record<string, unknown> {
+  const gatewayId =
+    typeof opts.input.gatewayId === "string" ? opts.input.gatewayId : null;
+  const inputUid = typeof opts.input.uid === "string" ? opts.input.uid : null;
+  return {
+    kind: "add-gateway",
+    status: "pending",
+    createdBy: opts.createdBy,
+    createdAt: opts.now,
+    startedAt: null,
+    completedAt: null,
+    input: opts.input,
+    steps: [],
+    ...(gatewayId !== null ? { gatewayId } : {}),
+    ...(inputUid !== null ? { inputUid } : {}),
+  };
+}
+
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(
   router: Router,
@@ -1266,6 +1410,143 @@ router.post(
             "provisioning.openclaw.shellsEnabled": false,
           });
         res.status(202).json({ uid, gatewayId: body.gatewayId, gatewayProfile });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.post(
+    "/operator-gateway-reservations/:uid/fulfill",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const uid = req.params.uid as string;
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const now = Date.now();
+
+        const parsed = validateFulfillOperatorReservationBody(
+          req.body as Partial<FulfillOperatorReservationBody>,
+        );
+        if ("error" in parsed) {
+          res.status(parsed.error.status).json(parsed.error.body);
+          return;
+        }
+        const body = parsed.ok;
+
+        const reservationRef = db
+          .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
+          .doc(uid);
+        const [reservationSnap, userSnap] = await Promise.all([
+          reservationRef.get(),
+          db.collection("users").doc(uid).get(),
+        ]);
+        if (!reservationSnap.exists) {
+          res.status(404).json({
+            error: "operator gateway reservation not found",
+            uid,
+          });
+          return;
+        }
+        if (!userSnap.exists) {
+          res.status(404).json({ error: "owner user not found", uid });
+          return;
+        }
+
+        const reservation = validateFulfillableOperatorReservation(
+          uid,
+          reservationSnap.data() as Record<string, unknown>,
+        );
+        if ("error" in reservation) {
+          res.status(reservation.error.status).json(reservation.error.body);
+          return;
+        }
+
+        const uniqueness = await ensureGatewayCreateIsUnique(db, body);
+        if ("error" in uniqueness) {
+          res.status(uniqueness.error.status).json(uniqueness.error.body);
+          return;
+        }
+
+        const gatewayServiceAccount = process.env.GATEWAY_SERVICE_ACCOUNT;
+        if (!gatewayServiceAccount) {
+          res.status(500).json({
+            error:
+              "GATEWAY_SERVICE_ACCOUNT not configured — admin cannot provision gateway auth-token secret",
+          });
+          return;
+        }
+        try {
+          await deps.provisionGatewayAuthSecret({
+            gatewayId: body.gatewayId,
+            gatewayServiceAccount,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(502).json({
+            error: "failed to provision gateway auth-token secret",
+            gatewayId: body.gatewayId,
+            detail: message,
+          });
+          return;
+        }
+
+        const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+        const operationId = opRef.id;
+        const operationInput = {
+          uid,
+          gatewayId: body.gatewayId,
+          instanceName: body.instanceName,
+          imageTag: body.imageTag,
+          profile: "operator",
+          sizingTier: reservation.ok.requestedSizingTier,
+          builderSlug: reservation.ok.builderSlug,
+          source: "operator-gateway-reservation",
+        };
+        const reservationUpdate: Partial<OperatorGatewayReservationRequest> = {
+          status: "provisioning",
+          gatewayId: body.gatewayId,
+          operationId,
+          provisioningStartedAt: now,
+          provisioningStartedBy: createdBy,
+          updatedAt: now,
+        };
+
+        const batch = db.batch();
+        batch.set(
+          db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId),
+          operatorGatewayDesiredStateFromReservation({
+            body,
+            reservation: reservation.ok,
+            createdBy,
+            now,
+          }),
+        );
+        batch.set(
+          opRef,
+          addGatewayOperationRecord({
+            createdBy,
+            now,
+            input: operationInput,
+          }),
+        );
+        batch.update(reservationRef, reservationUpdate);
+        batch.update(db.collection("users").doc(uid), {
+          "operatorGatewayReservation.status": "provisioning",
+          "operatorGatewayReservation.gatewayId": body.gatewayId,
+          "operatorGatewayReservation.operationId": operationId,
+          "operatorGatewayReservation.provisioningStartedAt": now,
+          "operatorGatewayReservation.provisioningStartedBy": createdBy,
+          "operatorGatewayReservation.updatedAt": now,
+        });
+        await batch.commit();
+
+        res.status(202).json({
+          uid,
+          gatewayId: body.gatewayId,
+          operationId,
+          status: "provisioning",
+        });
       } catch (e) {
         next(e);
       }

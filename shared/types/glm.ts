@@ -116,6 +116,9 @@ export interface OperatorGatewayReservationRequest {
   currentGatewayId?: string;
   currentGatewayProfile?: GatewayProfile;
   gatewayId?: string;
+  operationId?: string;
+  provisioningStartedAt?: number;
+  provisioningStartedBy?: string;
   requestedAt: number;
   updatedAt: number;
 }

@@ -16,6 +16,7 @@ let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = []
 let glmGatewaysDocs: Record<string, Record<string, unknown>> = {};
 let gatewaysDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
+let operatorGatewayReservationsDocs: Record<string, Record<string, unknown>> = {};
 let restoreJobsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
 
 function readNestedField(data: Record<string, unknown>, path: string): unknown {
@@ -104,17 +105,29 @@ vi.mock("../lib/db", () => {
           const data = usersDocs[docId];
           return { exists: data !== undefined, data: () => data };
         }
+        if (name === "operatorGatewayReservations") {
+          const data = operatorGatewayReservationsDocs[docId];
+          return { exists: data !== undefined, data: () => data };
+        }
         return { exists: true, data: () => ({}) };
       },
       set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
         calls.push({ collection: name, op: "doc.set", docId, data, options });
         if (name === "glmGateways") glmGatewaysDocs[docId] = data;
         if (name === "glmOperations") glmOperationsDocs.unshift({ id: docId, data });
+        if (name === "users") usersDocs[docId] = data;
+        if (name === "operatorGatewayReservations") operatorGatewayReservationsDocs[docId] = data;
       },
       update: async (data: Record<string, unknown>) => {
         calls.push({ collection: name, op: "doc.update", docId, data });
         if (name === "glmGateways" && glmGatewaysDocs[docId]) {
           glmGatewaysDocs[docId] = { ...glmGatewaysDocs[docId], ...data };
+        }
+        if (name === "users" && usersDocs[docId]) {
+          usersDocs[docId] = { ...usersDocs[docId], ...data };
+        }
+        if (name === "operatorGatewayReservations" && operatorGatewayReservationsDocs[docId]) {
+          operatorGatewayReservationsDocs[docId] = { ...operatorGatewayReservationsDocs[docId], ...data };
         }
       },
     };
@@ -154,6 +167,13 @@ doc: (docId?: string) => {
         }
         if (name === "glmGateways") {
           const docs = Object.entries(glmGatewaysDocs).map(([id, data]) => ({
+            id,
+            data: () => data,
+          }));
+          return { docs, size: docs.length };
+        }
+        if (name === "operatorGatewayReservations") {
+          const docs = Object.entries(operatorGatewayReservationsDocs).map(([id, data]) => ({
             id,
             data: () => data,
           }));
@@ -279,6 +299,7 @@ beforeEach(() => {
   glmGatewaysDocs = {};
   gatewaysDocs = { "gw-test-canary": { gatewayId: "gw-test-canary", status: "ready" } };
   usersDocs = {};
+  operatorGatewayReservationsDocs = {};
   restoreJobsDocs = [];
   provisionerCalls.length = 0;
   provisionerNextError = null;
@@ -550,6 +571,180 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/instanceName/);
+  });
+});
+
+describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
+  function seedReadyReservation() {
+    usersDocs["uid-alice"] = {
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
+      subscription: { status: "active" },
+    };
+    operatorGatewayReservationsDocs["uid-alice"] = {
+      uid: "uid-alice",
+      builderSlug: "alice",
+      requestedSizingTier: "medium",
+      status: "requested",
+      billingStatus: "active",
+      currentGatewayId: "gw-test",
+      currentGatewayProfile: "standard",
+      requestedAt: 1_234,
+      updatedAt: 1_234,
+    };
+  }
+
+  const fulfillBody = {
+    gatewayId: "gw-test-alice",
+    instanceName: "alice",
+    imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    imageTag: "abc1234",
+  };
+
+  it("creates a locked operator gateway desired state from a ready reservation", async () => {
+    seedReadyReservation();
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/operator-gateway-reservations/uid-alice/fulfill")
+      .send(fulfillBody);
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({
+      uid: "uid-alice",
+      gatewayId: "gw-test-alice",
+      status: "provisioning",
+    });
+    expect(res.body.operationId).toBeTruthy();
+    expect(provisionerCalls).toEqual([
+      {
+        gatewayId: "gw-test-alice",
+        gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
+      },
+    ]);
+
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite?.docId).toBe("gw-test-alice");
+    expect(gwWrite?.data).toMatchObject({
+      gatewayId: "gw-test-alice",
+      instanceName: "alice",
+      imageTag: "abc1234",
+      desiredStatus: "running",
+      profile: "operator",
+      ownerUid: "uid-alice",
+      builderSlug: "alice",
+      sizingTier: "medium",
+      operatorAccess: {
+        shellsEnabled: false,
+        reason: "operator-trust-boundary-not-provisioned",
+      },
+      serviceAccountName: "octogee-gw-test-alice",
+      serviceAccount: { create: true },
+      persistence: {
+        enabled: true,
+        storageClassName: "premium-rwo",
+        size: "20Gi",
+        accessModes: ["ReadWriteOnce"],
+      },
+      operatorReservation: {
+        status: "provisioning",
+        reservedAt: 1_234,
+        reservedBy: "uid-alice",
+        billingStatus: "active",
+      },
+    });
+    expect(typeof (gwWrite?.data?.operatorReservation as { billingVerifiedAt?: unknown }).billingVerifiedAt).toBe("number");
+
+    const reservationUpdate = calls.find(
+      (c) => c.collection === "operatorGatewayReservations" && c.op === "doc.update",
+    );
+    expect(reservationUpdate?.docId).toBe("uid-alice");
+    expect(reservationUpdate?.data).toMatchObject({
+      status: "provisioning",
+      gatewayId: "gw-test-alice",
+      operationId: res.body.operationId,
+      provisioningStartedBy: "admin-user",
+    });
+
+    const userUpdate = calls.find(
+      (c) => c.collection === "users" && c.op === "doc.update",
+    );
+    expect(userUpdate?.docId).toBe("uid-alice");
+    expect(userUpdate?.data).toMatchObject({
+      "operatorGatewayReservation.status": "provisioning",
+      "operatorGatewayReservation.gatewayId": "gw-test-alice",
+      "operatorGatewayReservation.operationId": res.body.operationId,
+    });
+    expect(userUpdate?.data).not.toHaveProperty("provisioning.openclaw.gatewayId");
+    expect(userUpdate?.data).not.toHaveProperty("provisioning.openclaw.shellsEnabled");
+
+    const opWrite = calls.find((c) => c.collection === "glmOperations");
+    expect(opWrite?.docId).toBe(res.body.operationId);
+    expect(opWrite?.data).toMatchObject({
+      kind: "add-gateway",
+      status: "pending",
+      createdBy: "admin-user",
+      gatewayId: "gw-test-alice",
+      inputUid: "uid-alice",
+      input: {
+        uid: "uid-alice",
+        gatewayId: "gw-test-alice",
+        profile: "operator",
+        sizingTier: "medium",
+        builderSlug: "alice",
+        source: "operator-gateway-reservation",
+      },
+    });
+  });
+
+  it("rejects billing-pending reservations before provisioning gateway auth", async () => {
+    seedReadyReservation();
+    operatorGatewayReservationsDocs["uid-alice"].status = "billing_pending";
+    operatorGatewayReservationsDocs["uid-alice"].billingStatus = "pending";
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/operator-gateway-reservations/uid-alice/fulfill")
+      .send(fulfillBody);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/not ready/i);
+    expect(provisionerCalls).toEqual([]);
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite).toBeUndefined();
+  });
+
+  it("returns 404 when the reservation request is missing", async () => {
+    usersDocs["uid-alice"] = { username: "alice" };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/operator-gateway-reservations/uid-alice/fulfill")
+      .send(fulfillBody);
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/reservation not found/i);
+    expect(provisionerCalls).toEqual([]);
+  });
+
+  it("does not update reservation state when gateway auth provisioning fails", async () => {
+    seedReadyReservation();
+    provisionerNextError = new Error("PERMISSION_DENIED on secretmanager.secrets.create");
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/operator-gateway-reservations/uid-alice/fulfill")
+      .send(fulfillBody);
+
+    expect(res.status).toBe(502);
+    const reservationUpdate = calls.find(
+      (c) => c.collection === "operatorGatewayReservations" && c.op === "doc.update",
+    );
+    expect(reservationUpdate).toBeUndefined();
+    expect(operatorGatewayReservationsDocs["uid-alice"]).toMatchObject({
+      status: "requested",
+    });
+    expect(operatorGatewayReservationsDocs["uid-alice"]).not.toHaveProperty("gatewayId");
   });
 });
 
