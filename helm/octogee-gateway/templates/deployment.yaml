@@ -11,6 +11,7 @@ metadata:
   name: octogee-gateway-{{ .Values.instanceName }}
   labels:
     app: octogee-gateway
+    gateway-profile: {{ .Values.profile | default "standard" | quote }}
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
   # Use kindIs to distinguish "explicit 0 (paused)" from "unset (default to 1)" —
@@ -27,6 +28,10 @@ spec:
       labels:
         app: octogee-gateway
         gateway-instance: {{ .Values.instanceName }}
+        # Profile label lets the umbrella gateway-edge alias Service
+        # safely exclude operator pods in a follow-up rollout after every
+        # gateway pod has this label.
+        gateway-profile: {{ .Values.profile | default "standard" | quote }}
         # Per-pod sizing tier — stamped on the pod (and matching PVC) so
         # GCP Billing Export can roll up cost by tier for the chargeback
         # surface (GATEWAY-PLATFORM-SPEC §Phase 5a).

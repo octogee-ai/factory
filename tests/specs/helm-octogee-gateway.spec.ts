@@ -86,6 +86,19 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
   });
 
+  it("stamps gateway-profile labels so alias Services can exclude operator pods after rollout", () => {
+    const standardDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(standardDep).toMatch(/gateway-profile:\s*"standard"/);
+
+    const operatorDep =
+      findDoc(
+        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    expect(operatorDep).toMatch(/gateway-profile:\s*"operator"/);
+  });
+
   it("mounts the octogee-api audience token into gateway and gateway-edge", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
