@@ -290,6 +290,12 @@ const bridgeMetrics = {
     help: 'Bridge upstream-WS reconnect count',
     registers: [metricsRegistry],
   }),
+  sessionSubscribe: new Counter({
+    name: 'octogee_bridge_session_subscribe_total',
+    help: 'Bridge upstream sessions.subscribe outcome (ok|failed)',
+    labelNames: ['outcome'] as const,
+    registers: [metricsRegistry],
+  }),
 };
 
 const approvalDroppedCounter = new Counter({
