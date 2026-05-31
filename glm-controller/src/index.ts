@@ -683,7 +683,7 @@ async function buildHandlers(
       return ms == null ? null : { lastHeartbeatAt: ms };
     },
     syncFleetIngress,
-    helmRenderTimeoutMs: 180_000,
+    helmRenderTimeoutMs: 600_000,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),
@@ -827,7 +827,7 @@ syncFleetIngress,
       }
       return { version, lastHeartbeatAt };
     },
-    helmRenderTimeoutMs: 180_000,
+    helmRenderTimeoutMs: 600_000,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),

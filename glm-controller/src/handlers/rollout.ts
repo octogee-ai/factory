@@ -74,6 +74,7 @@ interface PollResult {
 }
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
+const PINNED_OC_MARKER = "-oc";
 
 interface RolloutTarget {
   gatewayId: string;
@@ -86,6 +87,25 @@ interface RolloutTarget {
   newServiceAccount: GatewayServiceAccountSpec | undefined;
   newOperatorAccess: OperatorGatewayAccessSpec | undefined;
   resolvedRepository: string;
+}
+
+function heartbeatMatchesImageTag(version: string | null | undefined, imageTag: string): boolean {
+  if (!version) return false;
+  if (version === imageTag) return true;
+  const marker = imageTag.indexOf(PINNED_OC_MARKER);
+  if (marker < 7 || marker > 40) return false;
+  const buildSha = imageTag.slice(0, marker);
+  return isLowerHex(buildSha) && version === buildSha;
+}
+
+function isLowerHex(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    const isDigit = code >= 48 && code <= 57;
+    const isLowerAF = code >= 97 && code <= 102;
+    if (!isDigit && !isLowerAF) return false;
+  }
+  return true;
 }
 
 // eslint-disable-next-line complexity -- linear validation/target selection for one rollout operation; splitting obscures the no-op boundary checks.
@@ -253,7 +273,7 @@ const renderResult = await pollUntil({
       deps,
       check: async () => {
         const hb = await deps.readGatewayHeartbeat(gatewayId);
-        return hb?.version === imageTag;
+        return heartbeatMatchesImageTag(hb?.version, imageTag);
       },
       timeoutMessage: `gateway ${gatewayId} never published a heartbeat with version=${imageTag} within ${deps.heartbeatTimeoutMs}ms`,
     });
