@@ -24,6 +24,7 @@ export function validateRequiredEnv(
   opts: ValidateRequiredEnvOpts,
 ): RequiredEnvResult {
   if (!opts.isProd) return { missing: [] };
+  if (opts.profile === "operator") return { missing: [] };
   const missing = REQUIRED_ENV.filter((key) => {
     const value = env[key];
 

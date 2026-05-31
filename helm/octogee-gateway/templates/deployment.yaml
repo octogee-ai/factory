@@ -262,8 +262,9 @@ spec:
             # Operator-profile gateway runtime is tenant-untrusted until the
             # reservation/billing/tenant-identity boundary explicitly unlocks
             # shells. Keep platform-wide secrets out of the shell-inheritable
-            # gateway container. gateway-edge remains the trusted sidecar for
-            # locality APIs and internal service calls.
+            # gateway container. gateway-edge also omits platform secrets on
+            # operator pods; platform-authoritative routes fail closed here or
+            # are served by the singleton API.
             #
             # ANTHROPIC_API_KEY also beats Claude subscription OAuth at
             # runtime, silently shadowing per-account `claude auth login`
@@ -407,6 +408,8 @@ spec:
               value: "http://127.0.0.1:18789"
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
+            - name: GATEWAY_PROFILE
+              value: {{ .Values.profile | quote }}
             - name: MM_INTERNAL_URL
               value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — the folded chat-proxy WS bridge + activity bridge use it)" .Values.env.mmInternalUrl | quote }}
             - name: MM_PUBLIC_URL
@@ -414,10 +417,11 @@ spec:
             - name: FIREBASE_PROJECT
               value: {{ .Values.env.firebaseProjectId | quote }}
             # NOTE: GCP_PROJECT_ID + GITEA_ORG are NOT set here — the
-            # .Values.gatewayEdge.env range below already provides them
-            # (and GITEA_TOKEN comes from the .Values.gatewayEdge.secrets
-            # range). Setting them explicitly too renders duplicate env
-            # names, which fails `helm upgrade`'s in-place Deployment patch
+            # .Values.gatewayEdge.env range below already provides them.
+            # For cattle, GITEA_TOKEN comes from the secrets range below;
+            # operator gateway-edge omits that platform token. Setting any
+            # of these names explicitly too renders duplicate env names,
+            # which fails `helm upgrade`'s in-place Deployment patch
             # ("$setElementOrder list mismatch") and blocks the gateway roll.
             - name: OCTOGEE_ALLOWED_WS_ORIGINS
               value: {{ .Values.env.allowedWsOrigins | default "" | quote }}
@@ -425,6 +429,7 @@ spec:
             - name: GITEA_PUBLIC_BASE_URL
               value: {{ .Values.env.giteaPublicBaseUrl | quote }}
             {{- end }}
+            {{- if ne .Values.profile "operator" }}
             - name: MM_ADMIN_PAT
               valueFrom:
                 secretKeyRef:
@@ -436,6 +441,7 @@ spec:
                 secretKeyRef:
                   name: approval-signing
                   key: secret
+            {{- end }}
             # Same per-gateway K8s secret as init + gateway container (see
             # init container env block for the rationale). chat-proxy is
             # folded into this container and needs the same token openclaw
@@ -445,12 +451,13 @@ spec:
                 secretKeyRef:
                   name: gateway-auth-token-{{ .Values.gatewayId }}
                   key: token
-            {{- /* INTERNAL_SERVICE_KEY, GITEA_TOKEN, and GCP_PROJECT_ID are
-                NOT set here — the .Values.gatewayEdge.{env,secrets} ranges
-                below provide them. _helpers.tpl's requireGatewayEdgeSecret
-                helper asserts INTERNAL_SERVICE_KEY at render time so a
-                future trim of the secrets list fails loud instead of
-                producing a half-broken gateway-edge. Adding them here
+            {{- /* For cattle, INTERNAL_SERVICE_KEY, GITEA_TOKEN, and
+                GCP_PROJECT_ID are NOT set here — the
+                .Values.gatewayEdge.{env,secrets} ranges below provide them.
+                For operator, gateway-edge intentionally omits platform
+                secrets; locality routes that need platform authority fail
+                closed or are served by octogee-api, while builder-shell uses
+                the per-gateway token. Adding these env names explicitly here
                 creates duplicate env entries that break the helm-upgrade
                 strategic-merge patch (root cause of #1131 / gw-bender). */}}
             {{- if eq .Values.profile "operator" }}
@@ -458,11 +465,13 @@ spec:
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"
             {{- end }}
             {{- range $key, $val := .Values.gatewayEdge.env }}
-            {{- if $val }}
+            {{- $omitOperatorKms := and (eq $.Values.profile "operator") (eq $key "OCTOGEE_KMS_KEY_NAME") -}}
+            {{- if and $val (not $omitOperatorKms) }}
             - name: {{ $key }}
               value: {{ $val | quote }}
             {{- end }}
             {{- end }}
+            {{- if ne .Values.profile "operator" }}
             {{- range .Values.gatewayEdge.secrets }}
             - name: {{ .envName }}
               valueFrom:
@@ -470,6 +479,7 @@ spec:
                   name: {{ .secretName }}
                   key: {{ .secretKey }}
                   optional: {{ .optional | default false }}
+            {{- end }}
             {{- end }}
           resources:
             {{- toYaml .Values.gatewayEdge.resources | nindent 12 }}

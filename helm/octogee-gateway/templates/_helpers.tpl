@@ -28,17 +28,18 @@ error that broke add-gateway end-to-end on first real exercise.
 {{- define "octogee-gateway.requireIdentity" -}}
 {{- $_ := required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId -}}
 {{- $_ := required "instanceName is required (Cowboy must pass --set instanceName=<name>)" .Values.instanceName -}}
+{{- if ne .Values.profile "operator" -}}
 {{- include "octogee-gateway.requireGatewayEdgeSecret" (dict "Values" .Values "envName" "INTERNAL_SERVICE_KEY" "purpose" "cross-service auth (chat-proxy → openclaw, gateway-edge admin endpoints)") -}}
+{{- end -}}
 {{- end }}
 
 {{/*
 Render-time assertion: an envName MUST appear in `.Values.gatewayEdge.secrets`.
 
-Replaces the prose-only "intentionally omitted here — provided by the
-.Values.gatewayEdge.secrets range" comments that #1159 collapsed wrong on
-gw-bender. A future trim of the secrets list now fails `helm template`
-with a named error instead of silently rendering a gateway-edge that
-crash-loops at boot.
+Replaces prose-only "intentionally omitted here — provided by the
+.Values.gatewayEdge.secrets range" comments with a render-time guard for
+cattle gateways. Operator gateway-edge intentionally omits platform secrets;
+its profile-aware boot check and locality routes must not depend on this list.
 
 Caller passes `Values`, `envName`, and a short `purpose` string used in
 the error message. Returns no text.
