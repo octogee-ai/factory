@@ -355,6 +355,12 @@ interface FulfillableOperatorReservation {
   requestedAt: number;
 }
 
+interface ActivatableOperatorReservation {
+  uid: string;
+  builderSlug: string;
+  gatewayId: string;
+}
+
 interface AdminOperatorGatewayReservationSummary {
   uid: string;
   builderSlug: string | null;
@@ -369,6 +375,11 @@ interface AdminOperatorGatewayReservationSummary {
   updatedAt: string | null;
   provisioningStartedAt: string | null;
   provisioningStartedBy: string | null;
+  activationOperationId: string | null;
+  activationStartedAt: string | null;
+  activationStartedBy: string | null;
+  fulfilledAt: string | null;
+  fulfilledByOperationId: string | null;
   readyToFulfill: boolean;
   fulfillBlockedReason: string | null;
 }
@@ -727,6 +738,66 @@ function validateFulfillableOperatorReservation(
   };
 }
 
+function validateActivatableOperatorReservation(
+  uid: string,
+  data: Record<string, unknown>,
+): { error: RolloutBodyError } | { ok: ActivatableOperatorReservation } {
+  if (data.uid !== uid) {
+    return {
+      error: {
+        status: 409,
+        body: { error: "reservation uid mismatch", uid, got: data.uid },
+      },
+    };
+  }
+  if (data.status !== "provisioning") {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "operator gateway reservation is not ready for activation",
+          status: data.status,
+          billingStatus: data.billingStatus,
+        },
+      },
+    };
+  }
+  if (data.billingStatus !== "active") {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "operator gateway reservation billing is not active",
+          billingStatus: data.billingStatus,
+        },
+      },
+    };
+  }
+  if (!isNonEmptyString(data.builderSlug)) {
+    return {
+      error: {
+        status: 409,
+        body: { error: "operator gateway reservation is missing builderSlug" },
+      },
+    };
+  }
+  if (!isNonEmptyString(data.gatewayId)) {
+    return {
+      error: {
+        status: 409,
+        body: { error: "operator gateway reservation is missing gatewayId" },
+      },
+    };
+  }
+  return {
+    ok: {
+      uid,
+      builderSlug: data.builderSlug,
+      gatewayId: data.gatewayId,
+    },
+  };
+}
+
 function normalizeReservationGatewayProfile(v: unknown): GatewayProfile | null {
   return typeof v === "string" &&
     (GATEWAY_PROFILES as readonly string[]).includes(v)
@@ -777,9 +848,83 @@ function projectOperatorGatewayReservation(
     updatedAt: toIso(data.updatedAt),
     provisioningStartedAt: toIso(data.provisioningStartedAt),
     provisioningStartedBy: asStringOrNull(data.provisioningStartedBy),
+    activationOperationId: asStringOrNull(data.activationOperationId),
+    activationStartedAt: toIso(data.activationStartedAt),
+    activationStartedBy: asStringOrNull(data.activationStartedBy),
+    fulfilledAt: toIso(data.fulfilledAt),
+    fulfilledByOperationId: asStringOrNull(data.fulfilledByOperationId),
     readyToFulfill: blockedReason === null,
     fulfillBlockedReason: blockedReason,
   };
+}
+
+function readUserGatewayId(data: Record<string, unknown> | undefined): string | null {
+  const provisioning =
+    (data?.provisioning as Record<string, unknown> | undefined) ?? {};
+  const openclaw =
+    (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
+  return asStringOrNull(openclaw.gatewayId);
+}
+
+function validateOperatorGatewayOwnership(opts: {
+  uid: string;
+  reservation: ActivatableOperatorReservation;
+  gatewayData: Record<string, unknown>;
+}): RolloutBodyError | null {
+  if (opts.gatewayData.profile !== "operator") {
+    return {
+      status: 409,
+      body: {
+        error: "reserved gateway is not operator profile",
+        gatewayId: opts.reservation.gatewayId,
+        profile: opts.gatewayData.profile,
+      },
+    };
+  }
+  if (opts.gatewayData.ownerUid !== opts.uid) {
+    return {
+      status: 409,
+      body: {
+        error: "reserved gateway owner does not match reservation uid",
+        gatewayId: opts.reservation.gatewayId,
+        ownerUid: opts.gatewayData.ownerUid,
+      },
+    };
+  }
+  if (opts.gatewayData.builderSlug !== opts.reservation.builderSlug) {
+    return {
+      status: 409,
+      body: {
+        error: "reserved gateway builderSlug does not match reservation",
+        gatewayId: opts.reservation.gatewayId,
+        builderSlug: opts.gatewayData.builderSlug,
+      },
+    };
+  }
+  return null;
+}
+
+function findPendingActivationOperation(
+  docs: ReadonlyArray<FirestoreDocLike>,
+  uid: string,
+  gatewayId: string,
+): { id: string; kind: unknown } | null {
+  for (const doc of docs) {
+    const data = doc.data();
+    const input =
+      typeof data.input === "object" && data.input !== null
+        ? (data.input as Record<string, unknown>)
+        : {};
+    if (
+      data.kind === "migrate-customer" &&
+      input.uid === uid &&
+      input.toGatewayId === gatewayId &&
+      input.source === "operator-gateway-reservation"
+    ) {
+      return { id: doc.id, kind: data.kind };
+    }
+  }
+  return null;
 }
 
 function operatorReservationRank(
@@ -1451,6 +1596,203 @@ router.get(
         res.json({
           reservations,
           generatedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.post(
+    "/operator-gateway-reservations/:uid/activate",
+    // eslint-disable-next-line complexity -- activation is a single transactional admin boundary with several explicit guard responses; splitting would hide the order of safety checks.
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const uid = req.params.uid as string;
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const now = Date.now();
+
+        const reservationRef = db
+          .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
+          .doc(uid);
+        const [reservationSnap, userSnap] = await Promise.all([
+          reservationRef.get(),
+          db.collection("users").doc(uid).get(),
+        ]);
+        if (!reservationSnap.exists) {
+          res.status(404).json({
+            error: "operator gateway reservation not found",
+            uid,
+          });
+          return;
+        }
+        if (!userSnap.exists) {
+          res.status(404).json({ error: "owner user not found", uid });
+          return;
+        }
+
+        const reservationData = reservationSnap.data() as Record<string, unknown>;
+        const userData = userSnap.data() as Record<string, unknown> | undefined;
+        const currentGatewayId = readUserGatewayId(userData);
+        if (
+          reservationData.status === "fulfilled" &&
+          currentGatewayId === reservationData.gatewayId
+        ) {
+          res.status(200).json({
+            uid,
+            gatewayId: reservationData.gatewayId,
+            status: "fulfilled",
+            alreadyActive: true,
+          });
+          return;
+        }
+
+        const reservation = validateActivatableOperatorReservation(
+          uid,
+          reservationData,
+        );
+        if ("error" in reservation) {
+          res.status(reservation.error.status).json(reservation.error.body);
+          return;
+        }
+
+        const [targetDesiredSnap, targetHeartbeatSnap, pendingOpsSnap] =
+          await Promise.all([
+            db
+              .collection(GLM_GATEWAYS_COLLECTION)
+              .doc(reservation.ok.gatewayId)
+              .get(),
+            db.collection("gateways").doc(reservation.ok.gatewayId).get(),
+            db
+              .collection(GLM_OPERATIONS_COLLECTION)
+              .where("status", "in", ["pending", "running"])
+              .get(),
+          ]);
+        if (!targetDesiredSnap.exists) {
+          res.status(404).json({
+            error: "reserved gateway desired state not found",
+            gatewayId: reservation.ok.gatewayId,
+          });
+          return;
+        }
+        const ownershipError = validateOperatorGatewayOwnership({
+          uid,
+          reservation: reservation.ok,
+          gatewayData: targetDesiredSnap.data() as Record<string, unknown>,
+        });
+        if (ownershipError) {
+          res.status(ownershipError.status).json(ownershipError.body);
+          return;
+        }
+        if (!targetHeartbeatSnap.exists) {
+          res.status(409).json({
+            error: "reserved gateway has not reported ready yet",
+            gatewayId: reservation.ok.gatewayId,
+            status: "missing",
+          });
+          return;
+        }
+        const targetStatus = (
+          targetHeartbeatSnap.data() as Record<string, unknown> | undefined
+        )?.status;
+        if (targetStatus !== "ready") {
+          res.status(409).json({
+            error: "reserved gateway not ready",
+            gatewayId: reservation.ok.gatewayId,
+            status: targetStatus ?? "unknown",
+          });
+          return;
+        }
+
+        if (currentGatewayId === reservation.ok.gatewayId) {
+          const fulfilledUpdate = {
+            status: "fulfilled" as const,
+            fulfilledAt: now,
+            fulfilledByOperationId:
+              asStringOrNull(reservationData.activationOperationId) ??
+              asStringOrNull(reservationData.operationId) ??
+              "already-active",
+            updatedAt: now,
+          };
+          const batch = db.batch();
+          batch.update(reservationRef, fulfilledUpdate);
+          batch.update(db.collection("users").doc(uid), {
+            "operatorGatewayReservation.status": "fulfilled",
+            "operatorGatewayReservation.fulfilledAt": fulfilledUpdate.fulfilledAt,
+            "operatorGatewayReservation.fulfilledByOperationId":
+              fulfilledUpdate.fulfilledByOperationId,
+            "operatorGatewayReservation.updatedAt": now,
+          });
+          await batch.commit();
+          res.status(200).json({
+            uid,
+            gatewayId: reservation.ok.gatewayId,
+            status: "fulfilled",
+            alreadyActive: true,
+          });
+          return;
+        }
+
+        const existingActivation = findPendingActivationOperation(
+          pendingOpsSnap.docs,
+          uid,
+          reservation.ok.gatewayId,
+        );
+        if (existingActivation) {
+          res.status(409).json({
+            error: "operator gateway activation is already running",
+            uid,
+            gatewayId: reservation.ok.gatewayId,
+            operationId: existingActivation.id,
+            kind: existingActivation.kind,
+          });
+          return;
+        }
+
+        const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+        const operationId = opRef.id;
+        const operationInput = {
+          uid,
+          toGatewayId: reservation.ok.gatewayId,
+          source: "operator-gateway-reservation",
+          operatorReservationUid: uid,
+          builderSlug: reservation.ok.builderSlug,
+        };
+        const reservationUpdate: Partial<OperatorGatewayReservationRequest> = {
+          activationOperationId: operationId,
+          activationStartedAt: now,
+          activationStartedBy: createdBy,
+          updatedAt: now,
+        };
+
+        const batch = db.batch();
+        batch.set(opRef, {
+          kind: "migrate-customer",
+          status: "pending",
+          createdBy,
+          createdAt: now,
+          startedAt: null,
+          completedAt: null,
+          input: operationInput,
+          steps: [],
+          gatewayId: reservation.ok.gatewayId,
+          inputUid: uid,
+        });
+        batch.update(reservationRef, reservationUpdate);
+        batch.update(db.collection("users").doc(uid), {
+          "operatorGatewayReservation.activationOperationId": operationId,
+          "operatorGatewayReservation.activationStartedAt": now,
+          "operatorGatewayReservation.activationStartedBy": createdBy,
+          "operatorGatewayReservation.updatedAt": now,
+        });
+        await batch.commit();
+
+        res.status(202).json({
+          uid,
+          gatewayId: reservation.ok.gatewayId,
+          operationId,
+          status: "activating",
         });
       } catch (e) {
         next(e);

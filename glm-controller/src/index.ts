@@ -41,6 +41,7 @@ import {
   type OperationHandlers,
 } from "./operation-router.js";
 import { createOperationContext } from "./operation-context.js";
+import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { computeBootstrapWrites } from "./bootstrap.js";
 import {
   computeDefaultGatewayBootstrap,
@@ -426,6 +427,18 @@ let claimed = false;
     error: result.error ?? FieldValue.delete(),
     rolledBack: result.rolledBack ?? false,
   });
+  if (result.success) {
+    try {
+      await completeOperatorReservationAfterMigration(
+        { db: deps.db, now: () => Date.now(), log: deps.log },
+        op,
+      );
+    } catch (err) {
+      deps.log(
+        `[glm-controller] ⚠ operator reservation completion failed op=${op.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   const status = result.success ? "succeeded" : "failed";
   const errSuffix = result.error ? ` (${result.error})` : "";

@@ -119,6 +119,11 @@ export interface OperatorGatewayReservationRequest {
   operationId?: string;
   provisioningStartedAt?: number;
   provisioningStartedBy?: string;
+  activationOperationId?: string;
+  activationStartedAt?: number;
+  activationStartedBy?: string;
+  fulfilledAt?: number;
+  fulfilledByOperationId?: string;
   requestedAt: number;
   updatedAt: number;
 }

@@ -755,6 +755,47 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     expect(fulfillmentUserUpdate?.data).not.toHaveProperty(
       "provisioning.openclaw.shellsEnabled",
     );
+
+    gatewaysDocs["gw-test-alice"] = {
+      gatewayId: "gw-test-alice",
+      status: "ready",
+      mountedCustomers: [],
+    };
+    const activateRes = await request(app)
+      .post("/api/admin/operator-gateway-reservations/admin-user/activate")
+      .send({});
+    expect(activateRes.status).toBe(202);
+    expect(activateRes.body).toMatchObject({
+      uid: "admin-user",
+      gatewayId: "gw-test-alice",
+      status: "activating",
+    });
+    const activationOp = calls
+      .filter((c) => c.collection === "glmOperations" && c.op === "doc.set")
+      .at(-1);
+    expect(activationOp?.data).toMatchObject({
+      kind: "migrate-customer",
+      status: "pending",
+      createdBy: "admin-user",
+      gatewayId: "gw-test-alice",
+      inputUid: "admin-user",
+      input: {
+        uid: "admin-user",
+        toGatewayId: "gw-test-alice",
+        source: "operator-gateway-reservation",
+        operatorReservationUid: "admin-user",
+        builderSlug: "alice",
+      },
+    });
+    const activationReservationUpdate = calls
+      .filter(
+        (c) => c.collection === "operatorGatewayReservations" && c.op === "doc.update",
+      )
+      .at(-1);
+    expect(activationReservationUpdate?.data).toMatchObject({
+      activationOperationId: activateRes.body.operationId,
+      activationStartedBy: "admin-user",
+    });
   });
 });
 
