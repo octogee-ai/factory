@@ -7,6 +7,7 @@ import {
   type GatewayDesiredState,
   type HelmInstancesMap,
   type Operation,
+  type OperationStep,
 } from "../../shared/types/glm.js";
 import {
   buildHelmTargetMap,
@@ -394,31 +395,126 @@ async function syncFleetIngressIfConfigured(
   }
 }
 
+interface ReadyOperatorGateway {
+  gatewayId: string;
+  instanceName: string;
+  imageTag: string;
+}
+
 async function refreshOperatorGatewayReadiness(
   deps: ControllerDeps,
   desired: GatewayDesiredState[],
-): Promise<void> {
+): Promise<ReadyOperatorGateway[]> {
   const kubeOps = deps.kubeOps;
-  if (!kubeOps) return;
-  await Promise.all(
+  if (!kubeOps) return [];
+  const results = await Promise.all(
     desired.filter(isRunningOperatorGateway).map(async (gateway) => {
-      if (!gateway.gatewayId || !gateway.instanceName) return;
+      if (!gateway.gatewayId || !gateway.instanceName) return null;
       try {
         const available = await kubeOps.readAvailableReplicas({
           namespace: NAMESPACE,
           name: deploymentNameForInstance(gateway.instanceName),
         });
-        if (available == null || available < 1) return;
+        if (available == null || available < 1) return null;
         await publishPlatformGatewayReady(deps.db, {
           gatewayId: gateway.gatewayId,
           instanceName: gateway.instanceName,
           imageTag: gateway.imageTag,
           now: Date.now(),
         });
+        return {
+          gatewayId: gateway.gatewayId,
+          instanceName: gateway.instanceName,
+          imageTag: gateway.imageTag,
+        };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         deps.log(
           `[glm-controller] ⚠ operator readiness refresh failed for ${gateway.gatewayId}: ${msg}`,
+        );
+        return null;
+      }
+    }),
+  );
+  return results.filter((gateway): gateway is ReadyOperatorGateway => gateway != null);
+}
+
+function markStepDone(
+  steps: OperationStep[],
+  name: string,
+  now: number,
+): OperationStep[] {
+  const idx = steps.findIndex((step) => step.name === name);
+  if (idx === -1) {
+    return [...steps, { name, status: "done", startedAt: now, completedAt: now }];
+  }
+
+  return steps.map((step, stepIdx) => {
+    if (stepIdx !== idx) return step;
+    return {
+      name: step.name,
+      status: "done",
+      startedAt: step.startedAt ?? now,
+      completedAt: step.completedAt ?? now,
+    };
+  });
+}
+
+function recoveredAddGatewaySteps(steps: OperationStep[] | undefined, now: number): OperationStep[] {
+  return [
+    "helm-render",
+    "deployment-ready",
+    "platform-ready-record",
+    "fleet-ingress",
+    "reconciler-recovery",
+  ].reduce((next, name) => markStepDone(next, name, now), steps ?? []);
+}
+
+function isRecoverableOperatorAddGatewayOperation(
+  op: Operation | undefined,
+  gatewayId: string,
+): op is Operation {
+  if (!op) return false;
+  if (op.kind !== "add-gateway" || op.status !== "running") return false;
+  if (op.input?.gatewayId !== gatewayId) return false;
+  return op.input?.profile === "operator";
+}
+
+async function completeRecoveredOperatorAddGatewayOps(
+  deps: ControllerDeps,
+  readyGateways: ReadyOperatorGateway[],
+): Promise<void> {
+  if (readyGateways.length === 0) return;
+  const readyGatewayIds = new Set(readyGateways.map((gateway) => gateway.gatewayId));
+  const snap = await deps.db
+    .collection(GLM_OPERATIONS_COLLECTION)
+    .where("status", "==", "running")
+    .get();
+  const now = Date.now();
+
+  await Promise.all(
+    snap.docs.map(async (doc) => {
+      const data = doc.data() as Operation | undefined;
+      const gatewayId =
+        typeof data?.input?.gatewayId === "string" ? data.input.gatewayId : null;
+      if (!gatewayId || !readyGatewayIds.has(gatewayId)) return;
+
+      const recovered = await deps.db.runTransaction(async (txn) => {
+        const fresh = await txn.get(doc.ref);
+        const op = fresh.exists ? (fresh.data() as Operation | undefined) : undefined;
+        if (!isRecoverableOperatorAddGatewayOperation(op, gatewayId)) return false;
+        txn.update(doc.ref, {
+          status: "succeeded",
+          completedAt: now,
+          steps: recoveredAddGatewaySteps(op.steps, now),
+          error: FieldValue.delete(),
+          rolledBack: false,
+        });
+        return true;
+      });
+      if (recovered) {
+        deps.log(
+          `[glm-controller] op=${doc.id} → succeeded (recovered operator add-gateway from ready deployment)`,
         );
       }
     }),
@@ -442,8 +538,9 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
   });
   await applyTargetChanges(deps, targetVsActual, desired.length, Object.keys(actualMap).length);
-  await refreshOperatorGatewayReadiness(deps, desired);
+  const readyOperatorGateways = await refreshOperatorGatewayReadiness(deps, desired);
   await syncFleetIngressIfConfigured(deps, desired);
+  await completeRecoveredOperatorAddGatewayOps(deps, readyOperatorGateways);
 }
 
 function clearTimer(timer: NodeJS.Timeout | null): null {

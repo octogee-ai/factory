@@ -9,9 +9,25 @@ interface FakeSnapshot {
 function makeFakeDb(args: {
   glmGateways: Array<Record<string, unknown>>;
   gatewayDocs?: Record<string, Record<string, unknown>>;
+  glmOperations?: Record<string, Record<string, unknown>>;
   onSnapshot: { register: (cb: () => void) => void };
 }) {
   const gatewayDocs = args.gatewayDocs ?? {};
+  const glmOperations = args.glmOperations ?? {};
+  function makeDocRef(store: Record<string, Record<string, unknown>>, id: string) {
+    return {
+      get: async () => ({
+        exists: Object.prototype.hasOwnProperty.call(store, id),
+        data: () => store[id],
+      }),
+      set: async (data: Record<string, unknown>, options?: { merge?: boolean }) => {
+        store[id] = options?.merge ? { ...(store[id] ?? {}), ...data } : data;
+      },
+      update: async (data: Record<string, unknown>) => {
+        store[id] = { ...(store[id] ?? {}), ...data };
+      },
+    };
+  }
   return {
     collection: (name: string) => {
       if (name === "glmGateways") {
@@ -30,21 +46,32 @@ function makeFakeDb(args: {
           get: async (): Promise<FakeSnapshot> => ({
             docs: Object.entries(gatewayDocs).map(([id, data]) => ({
               id,
+              ref: makeDocRef(gatewayDocs, id),
               data: () => data,
             })),
           }),
-          doc: (id: string) => ({
-            get: async () => ({
-              exists: Object.prototype.hasOwnProperty.call(gatewayDocs, id),
-              data: () => gatewayDocs[id],
-            }),
-            set: async (data: Record<string, unknown>, options?: { merge?: boolean }) => {
-              gatewayDocs[id] = options?.merge
-                ? { ...(gatewayDocs[id] ?? {}), ...data }
-                : data;
-            },
-          }),
+          doc: (id: string) => makeDocRef(gatewayDocs, id),
         };
+      }
+      if (name === "glmOperations") {
+        const collection = {
+          where: (field: string, op: string, value: unknown) => {
+            if (op !== "==") throw new Error(`unexpected where op: ${op}`);
+            return {
+              get: async (): Promise<FakeSnapshot> => ({
+                docs: Object.entries(glmOperations)
+                  .filter(([, data]) => data[field] === value)
+                  .map(([id, data]) => ({
+                    id,
+                    ref: makeDocRef(glmOperations, id),
+                    data: () => data,
+                  })),
+              }),
+            };
+          },
+          doc: (id: string) => makeDocRef(glmOperations, id),
+        };
+        return collection;
       }
       throw new Error(`unexpected collection: ${name}`);
     },
@@ -55,12 +82,19 @@ function makeFakeDb(args: {
         data: Record<string, unknown>,
         options?: { merge?: boolean },
       ) => void;
+      update: (
+        ref: { update: (data: Record<string, unknown>) => Promise<void> },
+        data: Record<string, unknown>,
+      ) => void;
     }) => Promise<T>) => {
       const writes: Array<() => Promise<void>> = [];
       const result = await body({
         get: async (ref) => ref.get(),
         set: (ref, data, options) => {
           writes.push(() => ref.set(data, options));
+        },
+        update: (ref, data) => {
+          writes.push(() => ref.update(data));
         },
       });
       await Promise.all(writes.map((write) => write()));
@@ -1080,6 +1114,97 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       mountedCustomers: [],
       internalUrl: expect.stringContaining("octogee-gateway-op-canary"),
     });
+    stop();
+  });
+
+  it("recovers a running operator add-gateway op once the reconciler sees the deployment ready", async () => {
+    const snapCbs: Array<() => void> = [];
+    const gatewayDocs: Record<string, Record<string, unknown>> = {};
+    const glmOperations: Record<string, Record<string, unknown>> = {
+      op1: {
+        id: "op1",
+        kind: "add-gateway",
+        status: "running",
+        createdBy: "ci",
+        createdAt: 100,
+        startedAt: 200,
+        completedAt: null,
+        input: {
+          gatewayId: "gw-test-op-canary",
+          instanceName: "op-canary",
+          profile: "operator",
+        },
+        steps: [{ name: "helm-render", status: "running", startedAt: 200 }],
+        error: "controller exited mid-install",
+      },
+    };
+    const log = vi.fn();
+    const syncFleetIngress = vi.fn(async () => undefined);
+    const helm = makeFakeHelm({
+      read: async () => ({
+        "op-canary": {
+          enabled: true,
+          image: { repository: "repo", tag: "abc-oc2026.5.28" },
+          gatewayId: "gw-test-op-canary",
+          profile: "operator",
+          replicas: 1,
+        },
+      }),
+    });
+    const kubeOps = makeFakeKubeOps({
+      readReplicas: async () => 1,
+      readAvailableReplicas: async () => 1,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-test-op-canary",
+          instanceName: "op-canary",
+          imageRepository: "repo",
+          imageTag: "abc-oc2026.5.28",
+          profile: "operator",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      gatewayDocs,
+      glmOperations,
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      kubeOps,
+      syncFleetIngress,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(syncFleetIngress).toHaveBeenCalledTimes(1);
+    expect(glmOperations.op1).toMatchObject({
+      status: "succeeded",
+      completedAt: expect.any(Number),
+      rolledBack: false,
+    });
+    expect(glmOperations.op1.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "helm-render", status: "done" }),
+        expect.objectContaining({ name: "deployment-ready", status: "done" }),
+        expect.objectContaining({ name: "platform-ready-record", status: "done" }),
+        expect.objectContaining({ name: "fleet-ingress", status: "done" }),
+        expect.objectContaining({ name: "reconciler-recovery", status: "done" }),
+      ]),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("recovered operator add-gateway from ready deployment"),
+    );
     stop();
   });
 });
