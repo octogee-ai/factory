@@ -96,6 +96,29 @@ const args = ["diff", "--no-color", "--no-ext-diff", "--end-of-options", options
   return { ok: true, diff: r.stdout };
 }
 
+export async function gitCommitDiff(
+  customerDir: string,
+  sha: string,
+): Promise<{ ok: true; diff: string } | { ok: false; error: WorkspaceGitError }> {
+  // The patch a single commit introduced. `diff-tree --root` handles the
+  // initial (parentless) commit, `--no-commit-id` drops the sha line, and the
+  // empty format means no commit message/author leaks into the diff payload.
+  const args = [
+    "diff-tree",
+    "--no-commit-id",
+    "--no-color",
+    "--no-ext-diff",
+    "-p",
+    "-r",
+    "--root",
+    "--end-of-options",
+    sha,
+  ];
+  const r = await runGit(customerDir, args);
+  if (!r.ok) return r;
+  return { ok: true, diff: r.stdout };
+}
+
 export async function gitLog(
   customerDir: string,
   options: { limit?: number; branch?: string } = {},

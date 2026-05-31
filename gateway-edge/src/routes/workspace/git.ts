@@ -5,6 +5,7 @@ import {
   gitBranches,
   gitCheckout,
   gitCommit,
+  gitCommitDiff,
   gitDiff,
   gitLog,
   gitPush,
@@ -134,6 +135,32 @@ router.get(
       res.type("text/plain; charset=utf-8").send(r.diff);
     });
     logger.info(`git/diff slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
+  }),
+);
+
+router.get(
+  "/git/commit-diff",
+  withFileTarget(async (req, res, _next, target) => {
+    const start = Date.now();
+    const commit = typeof req.query.commit === "string" ? req.query.commit : undefined;
+    if (!commit || !isSafeRefName(commit)) {
+      res.status(400).json({ error: "Invalid commit ref", code: "BAD_REF" });
+      return;
+    }
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveTargetDir(customersRoot(), target);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitCommitDiff(dir, commit);
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.type("text/plain; charset=utf-8").send(r.diff);
+    });
+    logger.info(`git/commit-diff slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
   }),
 );
 

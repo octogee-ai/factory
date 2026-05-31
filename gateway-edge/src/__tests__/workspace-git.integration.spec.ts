@@ -523,3 +523,51 @@ describe("concurrency cap (P1-1)", () => {
     }
   });
 });
+
+describe("GET /api/workspace/git/commit-diff", () => {
+  it("returns the unified diff introduced by a specific commit", async () => {
+    const slugDir = path.join(customersRoot, SLUG);
+    await fs.writeFile(path.join(slugDir, "FEATURE.md"), "shiny new line\n");
+    gitAddCommit(slugDir, "add FEATURE.md");
+    const sha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: slugDir, encoding: "utf-8" }).stdout.trim();
+
+    const app = createApp();
+    const res = await request(app)
+      .get(`/api/workspace/git/commit-diff?slug=${SLUG}&commit=${sha}`)
+      .set("Authorization", "Bearer caller-idtoken");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/plain/);
+    expect(res.text).toContain("+++ b/FEATURE.md");
+    expect(res.text).toContain("+shiny new line");
+    // No commit-message header leaks into the diff payload.
+    expect(res.text).not.toContain("add FEATURE.md");
+  });
+
+  it("rejects a commit ref with shell metacharacters with 400 BAD_REF", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get(`/api/workspace/git/commit-diff?slug=${SLUG}&commit=abc123;rm -rf /`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("BAD_REF");
+  });
+
+  it("rejects a missing commit param with 400 BAD_REF", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get(`/api/workspace/git/commit-diff?slug=${SLUG}`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("BAD_REF");
+  });
+
+  it("returns 403 when caller is not the workspace owner", async () => {
+    firestoreData[`users/caller-uid`] = { uid: "caller-uid", username: "other", workspaceId: "other" };
+    const app = createApp();
+    const res = await request(app)
+      .get(`/api/workspace/git/commit-diff?slug=${SLUG}&commit=HEAD`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status).toBe(403);
+  });
+});
