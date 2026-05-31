@@ -143,8 +143,14 @@ fi
 # Secret rotation / reconciliation (env-sync) happens later via pre-boot-config.ts
 # — nothing else fixed up here. The template is canonical; don't re-derive.
 
-# Publish the fresh gateway auth token to Secret Manager so chat-proxy can
-# open authenticated upstream WS connections.
+# Publish the fresh gateway auth token to Secret Manager so cattle chat-proxy
+# can open authenticated upstream WS connections.
+#
+# Operator gateways intentionally run without platform Secret Manager access.
+# Their gateway-edge sidecar is in the same pod and receives the same
+# OPENCLAW_GATEWAY_TOKEN from the per-gateway K8s secret, so it authenticates
+# locally from env instead of requiring the shell-bearing gateway container to
+# mint/read platform SM versions at boot.
 #
 # Exit-code contract with publish-gateway-token.mjs:
 #   0 — published successfully; boot continues
@@ -155,9 +161,11 @@ fi
 #   1 — transient SM error (UNAVAILABLE, DNS blip). WARN + continue;
 #       the next boot retries. Ops agents keep working.
 #
-# Skipped silently when GCP_PROJECT_ID is unset (docker-compose local dev,
-# where chat-proxy uses the OPENCLAW_GATEWAY_TOKEN env fallback instead).
-if [ -n "${GCP_PROJECT_ID:-}" ]; then
+# Skipped when GCP_PROJECT_ID is unset (docker-compose local dev), or when the
+# operator profile is active (locked KSA, no platform SM access).
+if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
+  log "operator profile: skipping gateway auth token Secret Manager publish; gateway-edge uses the in-pod OPENCLAW_GATEWAY_TOKEN"
+elif [ -n "${GCP_PROJECT_ID:-}" ]; then
   set +e
   node /octogee/scripts/publish-gateway-token.mjs
   PUBLISH_RC=$?

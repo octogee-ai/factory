@@ -69,6 +69,67 @@ describe("infra/gateway/entrypoint.sh — OPENCLAW_GATEWAY_TOKEN platform-owned 
   });
 });
 
+function runPublishBlock(opts: {
+  profile?: string;
+  nodeExit?: number;
+}): {
+  status: number | null;
+  stderr: string;
+  calledNode: boolean;
+} {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-token-publish-"));
+  try {
+    const bin = path.join(tmp, "bin");
+    fs.mkdirSync(bin);
+    const marker = path.join(tmp, "node-called");
+    const fakeNode = path.join(bin, "node");
+    fs.writeFileSync(
+      fakeNode,
+      `#!/bin/sh\necho called > "${marker}"\nexit ${opts.nodeExit ?? 0}\n`,
+    );
+    fs.chmodSync(fakeNode, 0o755);
+
+    const script = `
+      set -e
+      log() { echo "$*" >&2; }
+      export GATEWAY_ID=gw-test
+      export GCP_PROJECT_ID=octogee-test
+      export GATEWAY_PROFILE="${opts.profile ?? ""}"
+      export OPENCLAW_GATEWAY_TOKEN=token-for-test
+      eval "$(sed -n '/^# Publish the fresh gateway auth token/,/^# ── Provision ops-agent/p' "${ENTRYPOINT}")"
+    `;
+    const r = spawnSync("sh", ["-c", script], {
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      },
+    });
+    return {
+      status: r.status,
+      stderr: r.stderr,
+      calledNode: fs.existsSync(marker),
+    };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish boundary", () => {
+  it("skips Secret Manager publish on operator gateways (locked KSA has no SM access)", () => {
+    const result = runPublishBlock({ profile: "operator", nodeExit: 2 });
+    expect(result.status).toBe(0);
+    expect(result.calledNode).toBe(false);
+    expect(result.stderr).toMatch(/operator profile: skipping gateway auth token Secret Manager publish/);
+  });
+
+  it("still publishes to Secret Manager for cattle gateways", () => {
+    const result = runPublishBlock({ profile: "standard", nodeExit: 0 });
+    expect(result.status).toBe(0);
+    expect(result.calledNode).toBe(true);
+    expect(result.stderr).toMatch(/gateway auth token published to Secret Manager/);
+  });
+});
+
 // ── PVC operator-env seam ──────────────────────────────────────────────────
 // Per GATEWAY-PLATFORM-SPEC.md §Operator-class customization surface:
 // operator-class gateways (PVC home) get a single shell-sourceable env

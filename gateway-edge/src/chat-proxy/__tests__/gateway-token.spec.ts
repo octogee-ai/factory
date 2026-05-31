@@ -18,12 +18,16 @@ function makeClient(result: unknown, throws?: Error): any {
 beforeEach(() => {
   __resetGatewayTokenCacheForTest();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.GATEWAY_ID;
+  delete process.env.GATEWAY_PROFILE;
   process.env.GCP_PROJECT_ID = "octogee-test";
 });
 
 afterEach(() => {
   __resetGatewayTokenCacheForTest();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.GATEWAY_ID;
+  delete process.env.GATEWAY_PROFILE;
   delete process.env.GCP_PROJECT_ID;
 });
 
@@ -120,6 +124,31 @@ describe("fetchGatewayToken", () => {
     await expect(
       fetchGatewayToken({ gatewayId: "gw-test", client }),
     ).rejects.toMatchObject({ code: "fetch-failed" });
+  });
+
+  it("operator profile uses the local in-pod OPENCLAW_GATEWAY_TOKEN instead of Secret Manager", async () => {
+    process.env.GATEWAY_PROFILE = "operator";
+    process.env.GATEWAY_ID = "gw-test";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "operator-local-token";
+    const err = Object.assign(new Error("PERMISSION_DENIED: locked KSA has no SM access"), { code: 7 });
+    const client = makeClient(undefined, err);
+    const token = await fetchGatewayToken({ gatewayId: "gw-test", client });
+    expect(token).toBe("operator-local-token");
+    expect(client.accessSecretVersion).not.toHaveBeenCalled();
+  });
+
+  it("operator env fallback is local-gateway only", async () => {
+    process.env.GATEWAY_PROFILE = "operator";
+    process.env.GATEWAY_ID = "gw-local";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "operator-local-token";
+    const err = Object.assign(new Error("PERMISSION_DENIED: locked KSA has no SM access"), { code: 7 });
+    const client = makeClient(undefined, err);
+    await expect(
+      fetchGatewayToken({ gatewayId: "gw-other", client }),
+    ).rejects.toMatchObject({ code: "fetch-failed" });
+    expect(client.accessSecretVersion).toHaveBeenCalledWith({
+      name: "projects/octogee-test/secrets/gateway-auth-token-gw-other/versions/latest",
+    });
   });
 
   it("does NOT fall back on a legit error whose message happens to contain UNAVAILABLE", async () => {
