@@ -23,12 +23,9 @@ const PROBE_PATHS = new Set([
   "/api/health",
 ]);
 
-// JSON.stringify drops Error's instance properties (name/message/stack are
-// non-enumerable), so `logger.error("x", { err })` was emitting `"err":{}`
-// — losing every caught error's actual content. This replacer walks meta
-// recursively and unpacks Errors to a plain object that survives stringify.
-// Any extra own keys (e.g. firebase-admin's `code: "auth/user-not-found"`)
-// ride along too, so callers can branch on them in log search.
+// Without this replacer, JSON.stringify on Error returns {} (name/message/stack
+// are non-enumerable) and "no silent failures" silently breaks for every caught
+// error logged via { err }.
 function serializeMeta(_key: string, value: unknown): unknown {
   if (value instanceof Error) {
     const out: Record<string, unknown> = {
