@@ -31,8 +31,9 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 
 interface FakeState {
   helmInstances: Set<string>;
-  deployments: Set<string>;
+  availableReplicas: Map<string, number>;
   heartbeats: Map<string, number>;
+  platformReady: Set<string>;
 }
 
 function makeDeps(
@@ -55,17 +56,20 @@ function makeDeps(
       }),
     },
     kubeOps: {
-      readDeployedReplicas: vi.fn(async ({ name }: { namespace: string; name: string }) => {
-        return state.deployments.has(name) ? 1 : null;
+      readAvailableReplicas: vi.fn(async ({ name }: { namespace: string; name: string }) => {
+        return state.availableReplicas.get(name) ?? null;
       }),
     },
     readGatewayHeartbeat: vi.fn(async (gatewayId: string) => {
       const ts = state.heartbeats.get(gatewayId);
       return ts == null ? null : { lastHeartbeatAt: ts };
     }),
+    publishGatewayReady: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
+      state.platformReady.add(gatewayId);
+    }),
     syncFleetIngress: vi.fn(async () => {}),
     helmRenderTimeoutMs: 60_000,
-    deploymentCreatedTimeoutMs: 240_000,
+    deploymentReadyTimeoutMs: 240_000,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 1_000,
     now: () => virtualClock,
@@ -81,8 +85,9 @@ describe("createAddGatewayHandler — happy path", () => {
   it("succeeds when helm renders the instance and the gateway heartbeats within budget", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      deployments: new Set(["octogee-gateway-canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
       heartbeats: new Map([["gw-test-canary", 1]]),
+      platformReady: new Set(),
     };
     const deps = makeDeps(state);
     const handler = createAddGatewayHandler(deps);
@@ -94,8 +99,8 @@ describe("createAddGatewayHandler — happy path", () => {
     expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
       "helm-render:running",
       "helm-render:done",
-      "deployment-created:running",
-      "deployment-created:done",
+      "deployment-ready:running",
+      "deployment-ready:done",
       "gateway-heartbeat:running",
       "gateway-heartbeat:done",
       "fleet-ingress:running",
@@ -106,8 +111,9 @@ describe("createAddGatewayHandler — happy path", () => {
   it("calls syncFleetIngress exactly once after the heartbeat step succeeds", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      deployments: new Set(["octogee-gateway-canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
       heartbeats: new Map([["gw-test-canary", 1]]),
+      platformReady: new Set(),
     };
     const sync = vi.fn(async () => {});
     const deps = makeDeps(state, { syncFleetIngress: sync });
@@ -120,8 +126,9 @@ describe("createAddGatewayHandler — happy path", () => {
   it("waits through pre-render polls and succeeds once helm picks up the new instance", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      deployments: new Set(["octogee-gateway-canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
       heartbeats: new Map([["gw-test-canary", 1]]),
+      platformReady: new Set(),
     };
     let polls = 0;
     const deps = makeDeps(state, {
@@ -138,20 +145,21 @@ describe("createAddGatewayHandler — happy path", () => {
     expect(result.success).toBe(true);
   });
 
-  it("does not spend heartbeat budget before Kubernetes creates the deployment", async () => {
+  it("does not spend heartbeat budget before Kubernetes reports the deployment available", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      deployments: new Set(),
+      availableReplicas: new Map(),
       heartbeats: new Map(),
+      platformReady: new Set(),
     };
     let virtualClock = 0;
     const deps = makeDeps(state, {
-      deploymentCreatedTimeoutMs: 300_000,
+      deploymentReadyTimeoutMs: 300_000,
       heartbeatTimeoutMs: 20_000,
       wait: vi.fn(async (ms: number) => {
         virtualClock += ms;
         if (virtualClock >= 240_000) {
-          state.deployments.add("octogee-gateway-canary");
+          state.availableReplicas.set("octogee-gateway-canary", 1);
         }
         if (virtualClock >= 250_000) {
           state.heartbeats.set("gw-test-canary", virtualClock);
@@ -163,7 +171,37 @@ describe("createAddGatewayHandler — happy path", () => {
     const result = await createAddGatewayHandler(deps)(mkOp(), makeCtx());
 
     expect(result.success).toBe(true);
-    expect(deps.kubeOps.readDeployedReplicas).toHaveBeenCalled();
+    expect(deps.kubeOps.readAvailableReplicas).toHaveBeenCalled();
+  });
+
+  it("publishes the platform-owned ready record instead of waiting for self-heartbeat on operator gateways", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
+      heartbeats: new Map(),
+      platformReady: new Set(),
+    };
+    const deps = makeDeps(state);
+    const ctx = makeCtx();
+
+    const result = await createAddGatewayHandler(deps)(
+      mkOp({ input: { gatewayId: "gw-test-canary", instanceName: "canary", imageTag: "abc", profile: "operator" } }),
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(state.platformReady.has("gw-test-canary")).toBe(true);
+    expect(deps.readGatewayHeartbeat).not.toHaveBeenCalled();
+    expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
+      "helm-render:running",
+      "helm-render:done",
+      "deployment-ready:running",
+      "deployment-ready:done",
+      "platform-ready-record:running",
+      "platform-ready-record:done",
+      "fleet-ingress:running",
+      "fleet-ingress:done",
+    ]);
   });
 });
 
@@ -171,8 +209,9 @@ describe("createAddGatewayHandler — failures", () => {
   it("fails with helm-render timeout when the instance never appears in the helm map", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      deployments: new Set(["octogee-gateway-canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
       heartbeats: new Map([["gw-test-canary", 1]]),
+      platformReady: new Set(),
     };
     const deps = makeDeps(state, {
       helmRenderTimeoutMs: 5_000,
@@ -188,30 +227,32 @@ describe("createAddGatewayHandler — failures", () => {
     expect(failedStep?.name).toBe("helm-render");
   });
 
-  it("fails with deployment-created timeout when Helm has not created the deployment", async () => {
+  it("fails with deployment-ready timeout when Helm has not made the deployment available", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      deployments: new Set(),
+      availableReplicas: new Map(),
       heartbeats: new Map([["gw-test-canary", 1]]),
+      platformReady: new Set(),
     };
     const deps = makeDeps(state, {
-      deploymentCreatedTimeoutMs: 5_000,
+      deploymentReadyTimeoutMs: 5_000,
       pollIntervalMs: 1_000,
     });
     const ctx = makeCtx();
     const result = await createAddGatewayHandler(deps)(mkOp(), ctx);
 
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/deployment.*not created/i);
+    expect(result.error).toMatch(/deployment.*available/i);
     const failedStep = ctx.reported.find((s) => s.status === "failed");
-    expect(failedStep?.name).toBe("deployment-created");
+    expect(failedStep?.name).toBe("deployment-ready");
   });
 
   it("fails with heartbeat timeout when helm renders but the pod never heartbeats", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      deployments: new Set(["octogee-gateway-canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
       heartbeats: new Map(),
+      platformReady: new Set(),
     };
     const deps = makeDeps(state, {
       heartbeatTimeoutMs: 5_000,
@@ -230,8 +271,9 @@ describe("createAddGatewayHandler — failures", () => {
   it("returns failure with explicit error when op.input is missing gatewayId", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      deployments: new Set(),
+      availableReplicas: new Map(),
       heartbeats: new Map(),
+      platformReady: new Set(),
     };
     const deps = makeDeps(state);
     const handler = createAddGatewayHandler(deps);
@@ -244,8 +286,9 @@ describe("createAddGatewayHandler — failures", () => {
   it("returns failure with explicit error when op.input is missing instanceName", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      deployments: new Set(),
+      availableReplicas: new Map(),
       heartbeats: new Map(),
+      platformReady: new Set(),
     };
     const deps = makeDeps(state);
     const handler = createAddGatewayHandler(deps);
@@ -258,8 +301,9 @@ describe("createAddGatewayHandler — failures", () => {
   it("fails the operation when fleet-ingress sync throws — surfaces the error and reports a failed step", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      deployments: new Set(["octogee-gateway-canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
       heartbeats: new Map([["gw-test-canary", 1]]),
+      platformReady: new Set(),
     };
     const deps = makeDeps(state, {
       syncFleetIngress: vi.fn(async () => {

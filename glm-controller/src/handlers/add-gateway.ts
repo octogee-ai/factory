@@ -10,15 +10,21 @@ export interface GatewayHeartbeat {
 export interface AddGatewayDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
 
-  kubeOps: Pick<KubeOps, "readDeployedReplicas">;
+  kubeOps: Pick<KubeOps, "readAvailableReplicas">;
 
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeat | null>;
+
+  publishGatewayReady: (input: {
+    gatewayId: string;
+    instanceName: string;
+    imageTag?: string;
+  }) => Promise<void>;
 
   syncFleetIngress: () => Promise<void>;
 
   helmRenderTimeoutMs: number;
 
-  deploymentCreatedTimeoutMs: number;
+  deploymentReadyTimeoutMs: number;
 
   heartbeatTimeoutMs: number;
 
@@ -31,6 +37,8 @@ export interface AddGatewayDeps {
 interface AddGatewayInput {
   gatewayId?: unknown;
   instanceName?: unknown;
+  imageTag?: unknown;
+  profile?: unknown;
 }
 
 interface PollResult {
@@ -49,6 +57,8 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
     const input = op.input as AddGatewayInput;
     const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
     const instanceName = typeof input.instanceName === "string" ? input.instanceName : undefined;
+    const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
+    const profile = input.profile === "operator" ? "operator" : "standard";
 
     if (!gatewayId) return { steps: [], success: false, error: "missing gatewayId in op.input" };
     if (!instanceName) return { steps: [], success: false, error: "missing instanceName in op.input" };
@@ -69,37 +79,65 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
     }
 
     const deploymentName = deploymentNameForInstance(instanceName);
-    const deploymentResult = await pollUntil({
-      stepName: "deployment-created",
-      timeoutMs: deps.deploymentCreatedTimeoutMs,
+    const deploymentReadyResult = await pollUntil({
+      stepName: "deployment-ready",
+      timeoutMs: deps.deploymentReadyTimeoutMs,
       ctx,
       deps,
       check: async () => {
-        const replicas = await deps.kubeOps.readDeployedReplicas({
+        const replicas = await deps.kubeOps.readAvailableReplicas({
           namespace: NAMESPACE,
           name: deploymentName,
         });
-        return replicas != null;
+        return replicas != null && replicas > 0;
       },
-      timeoutMessage: `deployment "${deploymentName}" was not created within ${deps.deploymentCreatedTimeoutMs}ms`,
+      timeoutMessage: `deployment "${deploymentName}" did not become available within ${deps.deploymentReadyTimeoutMs}ms`,
     });
-    if (!deploymentResult.ok) {
-      return { steps: [], success: false, error: deploymentResult.errorMsg };
+    if (!deploymentReadyResult.ok) {
+      return { steps: [], success: false, error: deploymentReadyResult.errorMsg };
     }
 
-    const heartbeatResult = await pollUntil({
-      stepName: "gateway-heartbeat",
-      timeoutMs: deps.heartbeatTimeoutMs,
-      ctx,
-      deps,
-      check: async () => {
-        const hb = await deps.readGatewayHeartbeat(gatewayId);
-        return hb != null;
-      },
-      timeoutMessage: `gateway "${gatewayId}" never published a heartbeat within ${deps.heartbeatTimeoutMs}ms`,
-    });
-    if (!heartbeatResult.ok) {
-      return { steps: [], success: false, error: heartbeatResult.errorMsg };
+    if (profile === "operator") {
+      const readyStartedAt = deps.now();
+      await reportStep(ctx, {
+        name: "platform-ready-record",
+        status: "running",
+        startedAt: readyStartedAt,
+      });
+      try {
+        await deps.publishGatewayReady({ gatewayId, instanceName, imageTag });
+        await reportStep(ctx, {
+          name: "platform-ready-record",
+          status: "done",
+          startedAt: readyStartedAt,
+          completedAt: deps.now(),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await reportStep(ctx, {
+          name: "platform-ready-record",
+          status: "failed",
+          startedAt: readyStartedAt,
+          completedAt: deps.now(),
+          error: msg,
+        });
+        return { steps: [], success: false, error: msg };
+      }
+    } else {
+      const heartbeatResult = await pollUntil({
+        stepName: "gateway-heartbeat",
+        timeoutMs: deps.heartbeatTimeoutMs,
+        ctx,
+        deps,
+        check: async () => {
+          const hb = await deps.readGatewayHeartbeat(gatewayId);
+          return hb != null;
+        },
+        timeoutMessage: `gateway "${gatewayId}" never published a heartbeat within ${deps.heartbeatTimeoutMs}ms`,
+      });
+      if (!heartbeatResult.ok) {
+        return { steps: [], success: false, error: heartbeatResult.errorMsg };
+      }
     }
 
     const ingressStartedAt = deps.now();

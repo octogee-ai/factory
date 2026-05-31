@@ -231,6 +231,69 @@ describe("createKubeSubprocessRunner — readDeployedReplicas", () => {
   });
 });
 
+describe("createKubeSubprocessRunner — readAvailableReplicas", () => {
+  it("returns the deployment's .status.availableReplicas via kubectl get -o jsonpath", async () => {
+    const { runKubectl, calls } = mockSubprocess([{ stdout: "1" }]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    const replicas = await kube.readAvailableReplicas({
+      namespace: "octogee-test",
+      name: "octogee-gateway-bender",
+    });
+
+    expect(replicas).toBe(1);
+    expect(calls[0]).toEqual([
+      "-n",
+      "octogee-test",
+      "get",
+      "deploy/octogee-gateway-bender",
+      "-o",
+      "jsonpath={.status.availableReplicas}",
+    ]);
+  });
+
+  it("returns zero when availableReplicas is absent on an existing deployment", async () => {
+    const { runKubectl } = mockSubprocess([{ stdout: "" }]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await expect(
+      kube.readAvailableReplicas({
+        namespace: "octogee-test",
+        name: "octogee-gateway-bender",
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("returns null when the deployment does not exist (NotFound)", async () => {
+    const { runKubectl } = mockSubprocess([
+      {
+        stderr: 'Error from server (NotFound): deployments.apps "x" not found',
+        code: 1,
+      },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    const replicas = await kube.readAvailableReplicas({
+      namespace: "octogee-test",
+      name: "octogee-gateway-bender",
+    });
+
+    expect(replicas).toBeNull();
+  });
+
+  it("throws when stdout is non-numeric (signal mismatch — never quiet)", async () => {
+    const { runKubectl } = mockSubprocess([{ stdout: "banana" }]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await expect(
+      kube.readAvailableReplicas({
+        namespace: "octogee-test",
+        name: "octogee-gateway-bender",
+      }),
+    ).rejects.toThrow(/availableReplicas/);
+  });
+});
+
 describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
   it("deletes the named PVC idempotently", async () => {
     const { runKubectl, calls } = mockSubprocess([

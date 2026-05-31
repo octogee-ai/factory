@@ -3,13 +3,15 @@ import { startReconciler } from "../index";
 import type { HelmInstancesMap } from "../../../shared/types/glm";
 
 interface FakeSnapshot {
-  docs: Array<{ data: () => unknown }>;
+  docs: Array<{ id?: string; data: () => unknown }>;
 }
 
 function makeFakeDb(args: {
   glmGateways: Array<Record<string, unknown>>;
+  gatewayDocs?: Record<string, Record<string, unknown>>;
   onSnapshot: { register: (cb: () => void) => void };
 }) {
+  const gatewayDocs = args.gatewayDocs ?? {};
   return {
     collection: (name: string) => {
       if (name === "glmGateways") {
@@ -25,10 +27,44 @@ function makeFakeDb(args: {
       }
       if (name === "gateways") {
         return {
-          get: async (): Promise<FakeSnapshot> => ({ docs: [] }),
+          get: async (): Promise<FakeSnapshot> => ({
+            docs: Object.entries(gatewayDocs).map(([id, data]) => ({
+              id,
+              data: () => data,
+            })),
+          }),
+          doc: (id: string) => ({
+            get: async () => ({
+              exists: Object.prototype.hasOwnProperty.call(gatewayDocs, id),
+              data: () => gatewayDocs[id],
+            }),
+            set: async (data: Record<string, unknown>, options?: { merge?: boolean }) => {
+              gatewayDocs[id] = options?.merge
+                ? { ...(gatewayDocs[id] ?? {}), ...data }
+                : data;
+            },
+          }),
         };
       }
       throw new Error(`unexpected collection: ${name}`);
+    },
+    runTransaction: async <T,>(body: (txn: {
+      get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
+      set: (
+        ref: { set: (data: Record<string, unknown>, options?: { merge?: boolean }) => Promise<void> },
+        data: Record<string, unknown>,
+        options?: { merge?: boolean },
+      ) => void;
+    }) => Promise<T>) => {
+      const writes: Array<() => Promise<void>> = [];
+      const result = await body({
+        get: async (ref) => ref.get(),
+        set: (ref, data, options) => {
+          writes.push(() => ref.set(data, options));
+        },
+      });
+      await Promise.all(writes.map((write) => write()));
+      return result;
     },
   } as unknown as Parameters<typeof startReconciler>[0]["db"];
 }
@@ -756,11 +792,13 @@ function makeFakeKubeOps(behavior: {
   scale?: () => Promise<void>;
   restart?: () => Promise<void>;
   readReplicas?: () => Promise<number | null>;
+  readAvailableReplicas?: () => Promise<number | null>;
 } = {}) {
   return {
     scaleDeployment: vi.fn(behavior.scale ?? (async () => undefined)),
     restartOpenClawInPlace: vi.fn(behavior.restart ?? (async () => undefined)),
     readDeployedReplicas: vi.fn(behavior.readReplicas ?? (async () => null)),
+    readAvailableReplicas: vi.fn(behavior.readAvailableReplicas ?? (async () => null)),
     deletePersistentVolumeClaim: vi.fn(async () => undefined),
   } as unknown as Parameters<typeof startReconciler>[0]["kubeOps"];
 }
@@ -980,6 +1018,68 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     });
     expect(helm.upsertInstance).not.toHaveBeenCalled();
     expect(kubeOps!.scaleDeployment).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("refreshes a platform-owned ready record for available operator gateways", async () => {
+    const snapCbs: Array<() => void> = [];
+    const gatewayDocs: Record<string, Record<string, unknown>> = {};
+    const helm = makeFakeHelm({
+      read: async () => ({
+        "op-canary": {
+          enabled: true,
+          image: { repository: "repo", tag: "abc-oc2026.5.28" },
+          gatewayId: "gw-test-op-canary",
+          profile: "operator",
+          replicas: 1,
+        },
+      }),
+    });
+    const kubeOps = makeFakeKubeOps({
+      readReplicas: async () => 1,
+      readAvailableReplicas: async () => 1,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "gw-test-op-canary",
+          instanceName: "op-canary",
+          imageRepository: "repo",
+          imageTag: "abc-oc2026.5.28",
+          profile: "operator",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      gatewayDocs,
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      kubeOps,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log: vi.fn(),
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(kubeOps!.readAvailableReplicas).toHaveBeenCalledWith({
+      namespace: expect.any(String),
+      name: "octogee-gateway-op-canary",
+    });
+    expect(gatewayDocs["gw-test-op-canary"]).toMatchObject({
+      gatewayId: "gw-test-op-canary",
+      status: "ready",
+      version: "abc",
+      mountedCustomers: [],
+      internalUrl: expect.stringContaining("octogee-gateway-op-canary"),
+    });
     stop();
   });
 });

@@ -12,6 +12,10 @@ export interface KubeOps {
     namespace: string;
     name: string;
   }): Promise<number | null>;
+  readAvailableReplicas(opts: {
+    namespace: string;
+    name: string;
+  }): Promise<number | null>;
   deletePersistentVolumeClaim(opts: {
     namespace: string;
     name: string;
@@ -137,6 +141,35 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       return n;
     },
 
+    async readAvailableReplicas({ namespace, name }) {
+      const args = [
+        "-n",
+        namespace,
+        "get",
+        `deploy/${name}`,
+        "-o",
+        "jsonpath={.status.availableReplicas}",
+      ];
+      const result = await deps.runKubectl(args);
+      if (result.code !== 0) {
+        if (isNotFound(result.stderr)) return null;
+        throw new Error(
+          `kubectl get deploy/${name} ns=${namespace} failed (code=${result.code}): ${
+            result.stderr.trim() || result.stdout.trim()
+          }`,
+        );
+      }
+      const raw = result.stdout.trim();
+      if (raw === "") return 0;
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0) {
+        throw new Error(
+          `kubectl get deploy/${name} ns=${namespace}: unparseable availableReplicas '${raw}'`,
+        );
+      }
+      return n;
+    },
+
     async deletePersistentVolumeClaim({ namespace, name }) {
       const args = [
         "-n",
@@ -168,6 +201,10 @@ export function createLoggingKubeOps(log: (msg: string) => void): KubeOps {
     },
     readDeployedReplicas: async ({ namespace, name }) => {
       log(`[kube-ops:stub] readReplicas ns=${namespace} ${name} — returning null`);
+      return null;
+    },
+    readAvailableReplicas: async ({ namespace, name }) => {
+      log(`[kube-ops:stub] readAvailableReplicas ns=${namespace} ${name} — returning null`);
       return null;
     },
     deletePersistentVolumeClaim: async ({ namespace, name }) => {

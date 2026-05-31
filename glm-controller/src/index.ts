@@ -87,6 +87,7 @@ const log = (msg: string) => logger.legacy(msg);
 
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
+const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
 
@@ -136,11 +137,89 @@ interface ControllerDeps {
 
   reconcileRetryMs?: number;
 
+  operatorReadyRefreshMs?: number;
+
   chartFingerprint?: string;
 }
 
 function deploymentNameForInstance(instanceName: string): string {
   return `octogee-gateway-${instanceName}`;
+}
+
+function gatewayServiceInternalUrl(instanceName: string): string {
+  return `http://${deploymentNameForInstance(instanceName)}.${NAMESPACE}.svc.cluster.local:18789`;
+}
+
+function versionFromImageTag(imageTag: string | undefined): string {
+  if (!imageTag) return "unknown";
+  const [buildSha] = imageTag.split("-oc");
+  return buildSha || imageTag;
+}
+
+function isRunningOperatorGateway(gateway: GatewayDesiredState): boolean {
+  return gateway.profile === "operator" && gateway.desiredStatus !== "paused" && gateway.desiredStatus !== "retired";
+}
+
+async function publishPlatformGatewayReady(
+  db: Firestore,
+  input: {
+    gatewayId: string;
+    instanceName: string;
+    imageTag?: string;
+    now: number;
+  },
+): Promise<void> {
+  const ref = db.collection("gateways").doc(input.gatewayId);
+  await db.runTransaction(async (txn) => {
+    const snap = await txn.get(ref);
+    const existing = snap.exists ? (snap.data() as Record<string, unknown> | undefined) : undefined;
+    const patch: Record<string, unknown> = {
+      gatewayId: input.gatewayId,
+      status: "ready",
+      version: versionFromImageTag(input.imageTag),
+      internalUrl: gatewayServiceInternalUrl(input.instanceName),
+      lastHeartbeatAt: FieldValue.serverTimestamp(),
+      startedAt: typeof existing?.startedAt === "number" ? existing.startedAt : input.now,
+    };
+    if (typeof existing?.openclawVersion === "string") {
+      patch.openclawVersion = existing.openclawVersion;
+    } else {
+      patch.openclawVersion = "unknown";
+    }
+    if (!Array.isArray(existing?.mountedCustomers)) {
+      patch.mountedCustomers = [];
+    }
+    if (!("inFlightJobId" in (existing ?? {}))) {
+      patch.inFlightJobId = null;
+    }
+    if (!("lastError" in (existing ?? {}))) {
+      patch.lastError = null;
+    }
+    if (!("failedCustomers" in (existing ?? {}))) {
+      patch.failedCustomers = {};
+    }
+    txn.set(ref, patch, { merge: true });
+  });
+}
+
+async function readGatewayHeartbeatFromFirestore(
+  db: Firestore,
+  gatewayId: string,
+): Promise<{ lastHeartbeatAt: number } | null> {
+  const doc = await db.collection("gateways").doc(gatewayId).get();
+  if (!doc.exists) return null;
+  const data = doc.data() as
+    | { lastHeartbeatAt?: { toMillis?: () => number } | number | Date }
+    | undefined;
+  const raw = data?.lastHeartbeatAt;
+  if (raw == null) return null;
+  let ms: number | null = null;
+  if (typeof raw === "number") ms = raw;
+  else if (raw instanceof Date) ms = raw.getTime();
+  else if (typeof (raw as { toMillis?: () => number }).toMillis === "function") {
+    ms = (raw as { toMillis: () => number }).toMillis();
+  }
+  return ms == null ? null : { lastHeartbeatAt: ms };
 }
 
 async function applyChanges(
@@ -315,6 +394,37 @@ async function syncFleetIngressIfConfigured(
   }
 }
 
+async function refreshOperatorGatewayReadiness(
+  deps: ControllerDeps,
+  desired: GatewayDesiredState[],
+): Promise<void> {
+  const kubeOps = deps.kubeOps;
+  if (!kubeOps) return;
+  await Promise.all(
+    desired.filter(isRunningOperatorGateway).map(async (gateway) => {
+      if (!gateway.gatewayId || !gateway.instanceName) return;
+      try {
+        const available = await kubeOps.readAvailableReplicas({
+          namespace: NAMESPACE,
+          name: deploymentNameForInstance(gateway.instanceName),
+        });
+        if (available == null || available < 1) return;
+        await publishPlatformGatewayReady(deps.db, {
+          gatewayId: gateway.gatewayId,
+          instanceName: gateway.instanceName,
+          imageTag: gateway.imageTag,
+          now: Date.now(),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        deps.log(
+          `[glm-controller] ⚠ operator readiness refresh failed for ${gateway.gatewayId}: ${msg}`,
+        );
+      }
+    }),
+  );
+}
+
 async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
   const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
@@ -332,6 +442,7 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
   });
   await applyTargetChanges(deps, targetVsActual, desired.length, Object.keys(actualMap).length);
+  await refreshOperatorGatewayReadiness(deps, desired);
   await syncFleetIngressIfConfigured(deps, desired);
 }
 
@@ -343,6 +454,7 @@ function clearTimer(timer: NodeJS.Timeout | null): null {
 export function startReconciler(deps: ControllerDeps): () => void {
   let debounceTimer: NodeJS.Timeout | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
+  let refreshTimer: NodeJS.Timeout | null = null;
   let inFlight = false;
   let pendingTick = false;
   let stopped = false;
@@ -392,11 +504,16 @@ export function startReconciler(deps: ControllerDeps): () => void {
     (err) => deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`),
   );
 
+  if (deps.operatorReadyRefreshMs && deps.operatorReadyRefreshMs > 0) {
+    refreshTimer = setInterval(() => void tick(), deps.operatorReadyRefreshMs);
+  }
+
   return () => {
     stopped = true;
     unsub();
     if (debounceTimer) clearTimeout(debounceTimer);
     if (retryTimer) clearTimeout(retryTimer);
+    if (refreshTimer) clearInterval(refreshTimer);
     pendingTick = false;
   };
 }
@@ -551,6 +668,7 @@ const handlerSyncFleetIngress = async () => {
     handlers,
     log,
     syncFleetIngress: syncAllFleetIngresses,
+    operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
     chartFingerprint,
   };
 
@@ -734,25 +852,19 @@ async function buildHandlers(
   const addGateway = createAddGatewayHandler({
     helm,
     kubeOps,
-    readGatewayHeartbeat: async (gatewayId) => {
-      const doc = await db.collection("gateways").doc(gatewayId).get();
-      if (!doc.exists) return null;
-      const data = doc.data() as
-        | { lastHeartbeatAt?: { toMillis?: () => number } | number | Date }
-        | undefined;
-      const raw = data?.lastHeartbeatAt;
-      if (raw == null) return null;
-      let ms: number | null = null;
-      if (typeof raw === "number") ms = raw;
-      else if (raw instanceof Date) ms = raw.getTime();
-      else if (typeof (raw as { toMillis?: () => number }).toMillis === "function") {
-        ms = (raw as { toMillis: () => number }).toMillis();
-      }
-      return ms == null ? null : { lastHeartbeatAt: ms };
+    readGatewayHeartbeat: (gatewayId) =>
+      readGatewayHeartbeatFromFirestore(db, gatewayId),
+    publishGatewayReady: async ({ gatewayId, instanceName, imageTag }) => {
+      await publishPlatformGatewayReady(db, {
+        gatewayId,
+        instanceName,
+        imageTag,
+        now: Date.now(),
+      });
     },
     syncFleetIngress,
     helmRenderTimeoutMs: 600_000,
-    deploymentCreatedTimeoutMs: 600_000,
+    deploymentReadyTimeoutMs: 600_000,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),
