@@ -252,9 +252,10 @@ fi
 # ── Operator-profile: codex YOLO sandbox ────────────────────────────────────
 # Operator-class is single-team — the gateway boundary IS the trust boundary,
 # so codex's app-server runs danger-full-access + approvalPolicy=never (the
-# agent acts without per-action approval prompts). Cattle gateways are shared /
-# multi-tenant and keep codex's sandboxed defaults — this script ships ONLY in
-# Dockerfile.operator and is gated on GATEWAY_PROFILE. Idempotent + non-fatal.
+# agent acts without per-action approval prompts). Cattle gateways currently get
+# the same Codex app-server posture from the template as a temporary unblock;
+# this script ships ONLY in Dockerfile.operator and is gated on GATEWAY_PROFILE.
+# Idempotent + non-fatal.
 # See tests/specs/apply-operator-codex-sandbox.spec.ts.
 CODEX_YOLO=/octogee/infra/gateway/apply-operator-codex-sandbox.mjs
 if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$CODEX_YOLO" ]; then

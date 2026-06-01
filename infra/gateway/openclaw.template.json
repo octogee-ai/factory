@@ -184,7 +184,13 @@
         "enabled": true
       },
       "codex": {
-        "enabled": true
+        "enabled": true,
+        "config": {
+          "appServer": {
+            "approvalPolicy": "never",
+            "sandbox": "danger-full-access"
+          }
+        }
       },
       "octogee-mattermost-tools": {
         "enabled": true,
