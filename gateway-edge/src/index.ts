@@ -90,7 +90,12 @@ app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
 app.use("/internal/billing", internalBillingRoutes);
+// builder-shell has two caller shapes: redeem is pod-local (the in-pod bridge,
+// bare path), kill is cross-pod (octogee-api → the owner pod via the
+// /api/g/<id>/* fleet seam). The HTTP server hands Express the raw url without
+// stripping the fleet prefix, so the scoped form needs its own mount.
 app.use("/internal/builder-shell", internalBuilderShellRoutes);
+app.use("/api/g/:gatewayId/internal/builder-shell", internalBuilderShellRoutes);
 
 // mountClusterRoutes goes FIRST so its public /api/projects routes
 // (readme) and explicit-auth sequencing aren't shadowed by the locality

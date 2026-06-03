@@ -128,6 +128,24 @@ process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
     expect(res.body).toEqual({ error: 'Missing ticket' });
   });
 
+  it('also mounts /internal/builder-shell on the fleet seam — cross-pod kill reaches the handler via /api/g/:gatewayId/internal/builder-shell/kill (404 = the prefix never reached the mount)', async () => {
+    process.env.INTERNAL_SERVICE_KEY = 'kill-scoped-mount-test-key';
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/g/gw-bender/internal/builder-shell/kill')
+      .set('X-Internal-Service-Key', 'kill-scoped-mount-test-key')
+      .send({ shellId: 'shell-bad' });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'invalid shellId' });
+  });
+
+  it('keeps the mountApi locality routes on the same fleet seam — scoped /api/g/:gatewayId/workspace reaches requireAuth, never 404', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/g/gw-bender/workspace/anything');
+    expect(res.status).not.toBe(404);
+    expect(res.status).toBe(401);
+  });
+
   it('sets X-Content-Type-Options: nosniff on all responses', async () => {
     const app = createApp();
     const res = await request(app).get('/api/health');
