@@ -92,7 +92,6 @@ export async function extractOpenClawActivationManifest(
   const agentId = expectedAgentId(slug);
   const accountId = expectedAccountId(slug);
   const agent = parsed.agents?.list?.find((entry) => isRecord(entry) && entry.id === agentId);
-  // eslint-disable-next-line security/detect-object-injection -- accountId is derived from a validated workspace slug, not request-controlled object shape.
   const mattermostAccount = parsed.channels?.mattermost?.accounts?.[accountId];
   const bindings = (parsed.bindings ?? []).filter(
     (binding) => isRecord(binding) && binding.agentId === agentId,

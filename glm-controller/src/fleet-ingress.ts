@@ -139,7 +139,6 @@ export function pathsEqual(
   b: ReadonlyArray<IngressPathRule>,
 ): boolean {
   if (a.length !== b.length) return false;
-  // eslint-disable-next-line security/detect-object-injection -- typed array index from .every()
   return a.every((x, i) => ruleEqual(x, b[i]!));
 }
 

@@ -82,7 +82,6 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
     let mimeType = "";
 
     bb.on("field", (name: string, val: string) => {
-      // eslint-disable-next-line security/detect-object-injection -- name is gated by ALLOWED_FIELDS above; fields is Object.create(null) so no prototype chain
       if (ALLOWED_FIELDS.has(name as AllowedField)) fields[name] = val;
     });
     bb.on("file", (_name: string, stream: NodeJS.ReadableStream, info: { filename: string; mimeType: string }) => {

@@ -23,7 +23,6 @@ export interface FleetMonthlyCost {
 }
 
 export function estimateGatewayMonthlyCost(tier: SizingTier): GatewayMonthlyCost {
-  // eslint-disable-next-line security/detect-object-injection -- tier is the typed SizingTier enum; Record lookup is exhaustive at compile time
   const preset = TIER_PRESETS[tier];
   const compute = computeMonthlyUsd(preset);
   return {
@@ -39,12 +38,10 @@ export function estimateFleetMonthlyCost(tiers: SizingTier[]): FleetMonthlyCost 
   for (const tier of tiers) {
     const cost = estimateGatewayMonthlyCost(tier).computeUsd;
     total += cost;
-    /* eslint-disable security/detect-object-injection -- tier is the typed SizingTier enum; partial-Record byTier is keyed by it exhaustively */
     const entry = byTier[tier] ?? { count: 0, subtotalUsd: 0 };
     entry.count += 1;
     entry.subtotalUsd += cost;
     byTier[tier] = entry;
-    /* eslint-enable security/detect-object-injection */
   }
   return { totalUsd: total, byTier };
 }

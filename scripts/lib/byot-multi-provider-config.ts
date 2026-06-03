@@ -200,7 +200,6 @@ export function secretNameFor(slug: string, provider: Provider): string {
 }
 
 export function isOauthProvider(provider: Provider): boolean {
-  // eslint-disable-next-line security/detect-object-injection -- typed Provider key into the closed PROVIDERS Record (no injection)
   return PROVIDERS[provider].mode === "oauth";
 }
 
@@ -326,7 +325,6 @@ export function buildCodexAuthJsonFromStore(
   const profiles = (parsed as { profiles?: Record<string, unknown> } | null)
     ?.profiles;
   if (!profiles || typeof profiles !== "object") return null;
-  // eslint-disable-next-line security/detect-object-injection -- constant profile-id key into a parsed-JSON record (no write, no proto access)
   const p = profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID] as
     | Record<string, unknown>
     | undefined;

@@ -128,6 +128,5 @@ export function resolveSizingTier(input: ResolveSizingTierInput): ResolvedSizing
     };
   }
   const tier = input.profile ? PROFILE_DEFAULT_TIER[input.profile] : FALLBACK_DEFAULT_TIER;
-  // eslint-disable-next-line security/detect-object-injection -- tier is the typed SizingTier enum; Record lookup is exhaustive
   return { tier, resolvedFrom: 'profile-default', preset: TIER_PRESETS[tier] };
 }

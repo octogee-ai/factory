@@ -282,7 +282,6 @@ async function readLiveReplicasInto(
           name: deploymentNameForInstance(instanceName),
         });
         if (live !== null) {
-          // eslint-disable-next-line security/detect-object-injection -- instanceName comes from own actualMap keys; this only refreshes its replica count.
           actualMap[instanceName] = { ...actualMap[instanceName], replicas: live };
         }
       } catch (err) {

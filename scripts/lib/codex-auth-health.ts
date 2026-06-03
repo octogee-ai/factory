@@ -23,7 +23,6 @@ export function deriveCodexAuthHealth(
   if (!isRecord(parsed) || !isRecord(parsed.usageStats)) {
     return "ok";
   }
-  // eslint-disable-next-line security/detect-object-injection -- caller-supplied typed profileId read from a parsed-JSON record (no write, no proto access)
   const stats = parsed.usageStats[profileId];
   if (!isRecord(stats) || stats.disabledReason !== "auth_permanent") {
     return "ok";

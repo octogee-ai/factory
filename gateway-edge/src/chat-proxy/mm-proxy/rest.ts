@@ -31,7 +31,6 @@ export function forwardMmRest(
 const forwardedHeaders: http.OutgoingHttpHeaders = {};
   for (const [key, value] of Object.entries(req.headers)) {
     if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
-    // eslint-disable-next-line security/detect-object-injection
     if (value !== undefined) forwardedHeaders[key] = value;
   }
   forwardedHeaders["host"] = target.host;
@@ -50,7 +49,6 @@ const forwardedHeaders: http.OutgoingHttpHeaders = {};
       const responseHeaders: http.OutgoingHttpHeaders = {};
       for (const [key, value] of Object.entries(upstreamRes.headers)) {
         if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
-        // eslint-disable-next-line security/detect-object-injection
         if (value !== undefined) responseHeaders[key] = value;
       }
       res.writeHead(upstreamRes.statusCode ?? 502, responseHeaders);
