@@ -122,6 +122,28 @@ return app;
 
 const app = createApp();
 
+export function dispatchGatewayEdgeRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  app: (req: http.IncomingMessage, res: http.ServerResponse) => void,
+): void {
+  const rawPath = (req.url || "").split("?")[0];
+  if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath))) {
+    chatProxyHandleRequest(req, res).catch((err) => {
+      logger.error("[chat-proxy] request handler failed", {
+        path: rawPath,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal error" }));
+      }
+    });
+  } else {
+    app(req, res);
+  }
+}
+
 if (process.env.NODE_ENV !== "test") {
   const env = process.env.K8S_NAMESPACE || process.env.NODE_ENV || "development";
   const isProd = env !== "development" && env !== "local" && env !== "test";
@@ -141,23 +163,9 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
-const server = http.createServer((req, res) => {
-    const rawPath = (req.url || "").split("?")[0];
-    if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath))) {
-      chatProxyHandleRequest(req, res).catch((err) => {
-        logger.error("[chat-proxy] request handler failed", {
-          path: rawPath,
-          err: err instanceof Error ? err.message : String(err),
-        });
-        if (!res.headersSent) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Internal error" }));
-        }
-      });
-    } else {
-      app(req, res);
-    }
-  });
+const server = http.createServer((req, res) =>
+    dispatchGatewayEdgeRequest(req, res, app),
+  );
   attachChatProxyWsUpgrade(server);
   attachBuilderShellRoute(server).catch((err) => {
     logger.error("[builder-shell] route attach failed — WS route disabled", {
