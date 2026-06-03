@@ -110,6 +110,12 @@ function isTruthyQueryFlag(value: unknown): boolean {
   return value === "true" || value === "1";
 }
 
+// The K8s namespace this fleet runs in — scopes the Grafana deep-link to the env.
+export function resolveFleetNamespace(env: NodeJS.ProcessEnv = process.env): string {
+  const ns = env.K8S_NAMESPACE;
+  return typeof ns === "string" && ns.length > 0 ? ns : "octogee";
+}
+
 async function readGatewayProfile(db: Firestore, gatewayId: string): Promise<GatewayProfile> {
   const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
   return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
@@ -178,13 +184,13 @@ function projectDesiredStatus(glmDoc: GlmDoc | undefined):
   return null;
 }
 
-function projectGatewaySummary(
+export function projectGatewaySummary(
   doc: FirestoreDocLike,
   ownJobs: ReadonlyArray<{ id: string; data: GlmDoc }>,
   glmDoc: GlmDoc | undefined,
   now: number,
 ): {
-  gatewayId: string; status: string;
+  gatewayId: string; instanceName: string | null; status: string;
   desiredStatus: "running" | "paused" | "draining" | "retired" | null;
   imageTag: string | null; openclawVersion: string | null;
   mountedCustomers: unknown[];
@@ -199,6 +205,7 @@ function projectGatewaySummary(
   const inFlightJobId = typeof data.inFlightJobId === "string" ? data.inFlightJobId : null;
   return {
     gatewayId: typeof data.gatewayId === "string" ? data.gatewayId : doc.id,
+    instanceName: typeof glmDoc?.instanceName === "string" ? glmDoc.instanceName : null,
     status: typeof data.status === "string" ? data.status : "unknown",
     desiredStatus: projectDesiredStatus(glmDoc),
     imageTag: typeof data.version === "string" ? data.version : null,
@@ -1432,6 +1439,7 @@ router.get(
         res.json({
           gateways,
           stats: rollupFleetStats(gateways, { mounting, staleJobs, pending }),
+          namespace: resolveFleetNamespace(),
           generatedAt: new Date().toISOString(),
         });
       } catch (e) {

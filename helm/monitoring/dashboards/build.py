@@ -51,6 +51,18 @@ def tmpl_gateway():
     }
 
 
+def tmpl_gwpod():
+    # cAdvisor / kube-state metrics key on `pod`, not the `job` the openclaw
+    # scrape uses — so the sizing board selects gateway *pods* by name.
+    return {
+        "name": "gwpod", "label": "Gateway pod", "type": "query",
+        "datasource": ds(),
+        "query": {"query": 'label_values(kube_pod_info{namespace="$namespace",pod=~"octogee-gateway-.*"}, pod)', "refId": "gwpod"},
+        "current": {"text": "All", "value": "$__all"},
+        "includeAll": True, "multi": True, "refresh": 2, "sort": 1,
+    }
+
+
 _id = [0]
 
 
@@ -102,13 +114,15 @@ def ts(title, exprs, unit="short", w=12, h=8, legend=None, stack=False, desc="")
     }
 
 
-def table(title, exprs, w=12, h=8):
+def table(title, exprs, w=12, h=8, transformations=None):
     p = {
         "id": nid(), "type": "table", "title": title, "datasource": ds(),
         "targets": [dict(t, format="table", instant=True) for t in _targets(exprs)],
         "fieldConfig": {"defaults": {"custom": {"align": "auto"}}, "overrides": []},
         "options": {"showHeader": True}, "gridPos": {"h": h, "w": w, "x": 0, "y": 0},
     }
+    if transformations:
+        p["transformations"] = transformations
     return p
 
 
@@ -360,6 +374,75 @@ def d_bridge():
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "gateway"])
 
 
+def d_sizing():
+    # cAdvisor + kube-state-metrics, keyed on the gateway *pod* and scoped to the
+    # `gateway` container (the openclaw runtime the tier preset actually sizes;
+    # the gateway-edge sidecar is fixed). Peaks use a subquery over $__range so
+    # the numbers track whatever window the operator sets (push it to 7d–30d).
+    pod = 'pod=~"$gwpod"'
+    g = 'container="gateway"'
+    cpu_peak = f'max_over_time(sum by(pod)(rate(container_cpu_usage_seconds_total{{namespace="{NS}",{pod},{g}}}[5m]))[$__range:5m])'
+    cpu_lim = f'sum by(pod)(kube_pod_container_resource_limits{{namespace="{NS}",{pod},{g},resource="cpu"}})'
+    mem_peak = f'max_over_time(sum by(pod)(container_memory_working_set_bytes{{namespace="{NS}",{pod},{g}}})[$__range:5m])'
+    mem_lim = f'sum by(pod)(kube_pod_container_resource_limits{{namespace="{NS}",{pod},{g},resource="memory"}})'
+    rename = {
+        "id": "organize",
+        "options": {
+            "excludeByName": {"Time": True},
+            "renameByName": {
+                "pod": "Gateway pod",
+                "Value #A": "Peak CPU (cores)", "Value #B": "CPU limit (cores)",
+                "Value #C": "CPU % of limit", "Value #D": "Peak mem (GiB)",
+                "Value #E": "Mem limit (GiB)", "Value #F": "Mem % of limit",
+            },
+        },
+    }
+    p = [
+        text("Reading this board", (
+            "**Right-size the `gateway` container's tier from real peak usage.** Gateways run **Guaranteed QoS** "
+            "(requests == limits), so a pod can't burst past its tier — under-sizing surfaces as **OOMKills** "
+            "(memory) or **CPU throttling**, never as >100% usage.\n\n"
+            "- **Peak mem % of limit** is the binding signal — pick the **smallest tier that keeps peak under ~70%**.\n"
+            "- **CPU throttled %** sustained above 0 means the agent wants more cores than the tier grants → size up.\n"
+            "- **Window = the dashboard time range.** Set it to **7d–30d** (Prometheus retains 30d) for a real "
+            "signal; the default `now-6h` is too short to size on.\n\n"
+            "Tiers (cpu / mem): nano 2 / 8Gi · **small 4 / 16Gi (operator default)** · medium 8 / 32Gi · "
+            "large 16 / 64Gi · xlarge 32 / 128Gi · 2xlarge 56 / 224Gi."
+        ), h=6),
+        row("Per-instance headroom — peak over the selected range"),
+        table("Right-sizing summary (gateway container)", [
+            (cpu_peak, "cpu_peak"),
+            (cpu_lim, "cpu_lim"),
+            (f'100 * {cpu_peak} / {cpu_lim}', "cpu_pct"),
+            (f'{mem_peak} / 1073741824', "mem_peak_gib"),
+            (f'{mem_lim} / 1073741824', "mem_lim_gib"),
+            (f'100 * {mem_peak} / {mem_lim}', "mem_pct"),
+        ], w=24, h=8, transformations=[{"id": "merge", "options": {}}, rename]),
+        row("CPU"),
+        ts("CPU cores — used vs limit", [
+            (f'sum by(pod)(rate(container_cpu_usage_seconds_total{{namespace="{NS}",{pod},{g}}}[5m]))', "{{pod}} used"),
+            (cpu_lim, "{{pod}} limit"),
+        ], unit="short", legend=True),
+        ts("CPU throttled %", [
+            (f'100 * sum by(pod)(rate(container_cpu_cfs_throttled_periods_total{{namespace="{NS}",{pod},{g}}}[5m])) / clamp_min(sum by(pod)(rate(container_cpu_cfs_periods_total{{namespace="{NS}",{pod},{g}}}[5m])), 0.001)', "{{pod}}")],
+           unit="percent", legend=True,
+           desc="Sustained above 0 → the gateway is CPU-starved at this tier; size up."),
+        row("Memory"),
+        ts("Memory working set — used vs limit", [
+            (f'sum by(pod)(container_memory_working_set_bytes{{namespace="{NS}",{pod},{g}}})', "{{pod}} used"),
+            (mem_lim, "{{pod}} limit"),
+        ], unit="bytes", legend=True),
+        stat("Gateway pods OOM-killed (range)", [f'sum(max_over_time(kube_pod_container_status_last_terminated_reason{{namespace="{NS}",{pod},{g},reason="OOMKilled"}}[$__range])) or vector(0)'],
+             w=6, h=4, thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
+        row("Per-container breakdown (gateway vs gateway-edge sidecar)"),
+        ts("CPU by container", [(f'sum by(pod,container)(rate(container_cpu_usage_seconds_total{{namespace="{NS}",{pod},container=~"gateway|gateway-edge"}}[5m]))', "{{pod}}/{{container}}")], unit="short", legend=True),
+        ts("Memory by container", [(f'sum by(pod,container)(container_memory_working_set_bytes{{namespace="{NS}",{pod},container=~"gateway|gateway-edge"}})', "{{pod}}/{{container}}")], unit="bytes", legend=True),
+    ]
+    return dashboard("octogee-gateway-sizing", "Gateways — Right-Sizing", p,
+                     [tmpl_datasource(), tmpl_namespace(), tmpl_gwpod()],
+                     links=[dlink("Gateways", "gateway")], tags=["octogee", "gateway"])
+
+
 # ─────────────────────────── TRACING ───────────────────────────
 def d_tracing():
     md = (
@@ -438,7 +521,7 @@ def d_email():
 
 GROUPS = {
     "platform": [d_overview, d_services, d_container_health, d_gitea, d_mattermost, d_postgres, d_email],
-    "gateways": [d_agent, d_runner, d_fleet, d_bridge],
+    "gateways": [d_agent, d_runner, d_fleet, d_bridge, d_sizing],
     "tracing": [d_tracing],
 }
 
