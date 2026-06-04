@@ -17,10 +17,14 @@ spec:
   policyTypes:
     - Ingress
   ingress:
+    # GMP scrapes from the managed collector DaemonSet in gke-gmp-system, NOT the
+    # monitoring namespace (which only runs Grafana + the gmp-frontend proxy).
+    # Pointing this at monitoring firewalls the collectors and takes gitea
+    # metrics dark (up=0).
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: monitoring
+              kubernetes.io/metadata.name: gke-gmp-system
       ports:
         - protocol: TCP
           port: 3000  # gitea /metrics (shares the http port)

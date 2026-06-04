@@ -180,7 +180,7 @@ const out = helmTemplate();
     expect(svc).toMatch(/gateway-instance:\s*default/);
   });
 
-  it("exposes the runner-metrics port (9092) on the gateway container + Service (scraped by the octogee-gateway ServiceMonitor)", () => {
+  it("exposes the runner-metrics port (9092) on the gateway container + Service (scraped by the octogee-gateway ClusterPodMonitoring)", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/containerPort:\s*9092\s*\n\s*name:\s*runner-metrics/);
@@ -670,7 +670,7 @@ expect(open).not.toMatch(/port:\s*8080/);
 expect(open).toMatch(/port:\s*18789/);
   });
 
-  it("scopes runner-metrics (:9092) to the monitoring namespace only — never the open any-source rule", () => {
+  it("scopes runner-metrics (:9092) to the gke-gmp-system namespace (GMP collectors) — never the open any-source rule", () => {
     const np = findDoc(
       helmTemplate("octogee-gw-default", {
         profile: "operator",
@@ -681,7 +681,7 @@ expect(open).toMatch(/port:\s*18789/);
     );
     expect(np).not.toBeNull();
     const { restricted, open } = splitNetworkPolicyRules(np!);
-    expect(restricted).toMatch(/namespaceSelector:[\s\S]*?kubernetes\.io\/metadata\.name:\s*monitoring/);
+    expect(restricted).toMatch(/namespaceSelector:[\s\S]*?kubernetes\.io\/metadata\.name:\s*gke-gmp-system/);
     expect(restricted).toMatch(/port:\s*9092/);
     expect(open).not.toMatch(/port:\s*9092/);
   });
