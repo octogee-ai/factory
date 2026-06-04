@@ -1,19 +1,15 @@
----
-# Octogee Alert Rules
-# Applied via: kubectl apply -f helm/monitoring/alert-rules.yaml
-# Requires Prometheus Operator (deployed by kube-prometheus-stack)
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
+# Octogee alert rules — GMP managed rule evaluation. Ported from the retired
+# PrometheusRule (kube-prometheus-stack). The managed rule-evaluator (auto-
+# deployed with GMP managed collection) evaluates these against Monarch and
+# routes firing alerts to the managed Alertmanager (Discord receiver, configured
+# by setup-monitoring.sh into the gmp-public/alertmanager secret). Same exprs as
+# before — every metric (up/kube_*/octogee_*/kubelet_*) now lives in GMP.
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterRules
 metadata:
   name: octogee-alerts
-  namespace: monitoring
-  labels:
-    app: kube-prometheus-stack
-    release: prometheus
 spec:
   groups:
-
-    # ── Gateway ──────────────────────────────────────────────────────────────
     - name: octogee.gateway
       rules:
         - alert: GatewayDown
@@ -24,7 +20,6 @@ spec:
           annotations:
             summary: "Octogee gateway is unreachable"
             description: "No gateway metrics for 2m. Pod may be crashlooping or stuck."
-
         - alert: GatewayHighRestarts
           expr: kube_pod_container_status_restarts_total{container="gateway"} > 3
           for: 5m
@@ -33,7 +28,6 @@ spec:
           annotations:
             summary: "Gateway pod has restarted {{ $value }} times"
             description: "Container {{ $labels.container }} in {{ $labels.namespace }} has restarted {{ $value }} times."
-
         - alert: GatewayPodNotReady
           expr: kube_pod_status_ready{pod=~"octogee-gateway-.*", condition="true"} == 0
           for: 3m
@@ -42,8 +36,6 @@ spec:
           annotations:
             summary: "Gateway pod not ready for 3m"
             description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not-ready for 3 minutes."
-
-    # ── Mattermost ───────────────────────────────────────────────────────────
     - name: octogee.mattermost
       rules:
         - alert: MattermostDown
@@ -54,7 +46,6 @@ spec:
           annotations:
             summary: "Mattermost is unreachable"
             description: "No Mattermost metrics for 2m. Chat is broken for all customers."
-
         - alert: MattermostPodNotReady
           expr: kube_pod_status_ready{pod=~"mattermost-.*", condition="true"} == 0
           for: 3m
@@ -63,8 +54,6 @@ spec:
           annotations:
             summary: "Mattermost pod not ready for 3m"
             description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not-ready for 3 minutes."
-
-    # ── Cloud SQL Proxy ───────────────────────────────────────────────────────
     - name: octogee.cloudsql
       rules:
         - alert: CloudSQLProxyDown
@@ -75,8 +64,6 @@ spec:
           annotations:
             summary: "Cloud SQL proxy has no available replicas"
             description: "Mattermost and Gitea cannot reach the database."
-
-    # ── Namespace health ──────────────────────────────────────────────────────
     - name: octogee.pods
       rules:
         - alert: PodCrashLooping
@@ -87,7 +74,6 @@ spec:
           annotations:
             summary: "Pod {{ $labels.pod }} is crash-looping"
             description: "Container {{ $labels.container }} in {{ $labels.namespace }} is restarting frequently."
-
         - alert: PodOOMKilled
           expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled", namespace=~"octogee|octogee-test"} == 1
           for: 0m
@@ -96,7 +82,6 @@ spec:
           annotations:
             summary: "Pod OOMKilled: {{ $labels.pod }}"
             description: "Container {{ $labels.container }} was OOM-killed. Check memory limits."
-
         - alert: PVCNearFull
           expr: |
             (kubelet_volume_stats_used_bytes{namespace=~"octogee|octogee-test"}
@@ -107,16 +92,6 @@ spec:
           annotations:
             summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
             description: "PVC in {{ $labels.namespace }} is above 85% capacity. Expand or clean up."
-
-    # ── In-pod runners + shell reconciler ─────────────────────────────────────
-    # Metrics from runner-metrics-exporter on the gateway pod (:9092). These
-    # catch failures that container-level alerts can't see: the runners are
-    # children of PID 1 (entrypoint.sh), so a crash-looping runner never shows
-    # as a container restart. See docs/specs/GATEWAY-RUNNER-OBSERVABILITY-SPEC.md.
-    #
-    # NOTE: there is deliberately no octogee_tmux_server_up alert — the tmux
-    # server self-terminates when its last shell session closes, so up=0 is the
-    # normal idle state. The gauge exists for dashboards only.
     - name: octogee.runners
       rules:
         - alert: RunnerDown
@@ -127,7 +102,6 @@ spec:
           annotations:
             summary: "In-pod runner {{ $labels.runner }} is down"
             description: "Runner {{ $labels.runner }} on {{ $labels.pod }} has reported down (or its supervisor's heartbeat went stale) for 5m."
-
         - alert: RunnerCrashLooping
           expr: increase(octogee_runner_restart_total[10m]) > 3
           for: 5m
@@ -136,7 +110,6 @@ spec:
           annotations:
             summary: "In-pod runner {{ $labels.runner }} is crash-looping"
             description: "Runner {{ $labels.runner }} on {{ $labels.pod }} restarted {{ $value }} times in 10m. Check its structured restart logs."
-
         - alert: ShellReconcilerStalled
           expr: (time() - octogee_shell_reconcile_last_success_timestamp_seconds) > 600
           for: 5m
@@ -145,10 +118,6 @@ spec:
           annotations:
             summary: "Shell reconciler has not completed a sweep in {{ $value | humanizeDuration }}"
             description: "octogee_shell_reconcile on {{ $labels.pod }} last succeeded >10m ago — stale shell docs won't flip to dead. Check octogee_shell_reconcile_errors_total + the reconciler logs."
-
-    # ── Email (Resend) ───────────────────────────────────────────────────────
-    # Per-namespace aggregation so test-env traffic doesn't page prod oncall
-    # (and vice versa). `namespace` lands in the alert labels via `by`.
     - name: octogee.email
       rules:
         - alert: ResendBounceRateHigh
@@ -163,7 +132,6 @@ spec:
           annotations:
             summary: "Resend bounce rate > 5% over the last hour in {{ $labels.namespace }}"
             description: "Bounces over the last 1h are >5% of sent volume in {{ $labels.namespace }}. Likely DKIM/DMARC drift, a bad address list, or a domain reputation issue. Check the Resend dashboard."
-
         - alert: ResendComplaintRateHigh
           expr: |
             sum by (namespace) (rate(octogee_email_delivery_total{namespace=~"octogee|octogee-test",event="complained"}[1h]))
@@ -176,11 +144,7 @@ spec:
           annotations:
             summary: "Resend complaint rate above 0.1% in {{ $labels.namespace }} (deliverability risk)"
             description: "Complaint rate > 0.1% over 1h in {{ $labels.namespace }}. Mailbox providers will start filtering — review send list + unsubscribe path."
-
         - alert: ResendWebhookStale
-          # Sends are happening but no delivery events arrived in the last hour
-          # — webhook is misconfigured, signing-secret drifted, or the Resend
-          # webhook was deleted. Sender-side silence after real traffic.
           expr: |
             (sum by (namespace) (rate(octogee_email_sent_total{namespace=~"octogee|octogee-test",result="sent"}[1h])) > 0.001)
             and

@@ -96,8 +96,8 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     res.json({ ok: true, service: "glm-controller" });
   });
 
-  // Unauthenticated Prometheus scrape endpoint (ClusterIP-only). See the
-  // glm-controller ServiceMonitor in helm/monitoring/service-monitors.yaml.
+  // Unauthenticated Prometheus scrape endpoint (ClusterIP-only). Scraped by GMP
+  // via the glm-controller ClusterPodMonitoring in helm/monitoring/gmp-podmonitorings.yaml.
   app.get("/metrics", (_req, res) => {
     res.set("Content-Type", "text/plain; version=0.0.4");
     res.end(renderMetrics());

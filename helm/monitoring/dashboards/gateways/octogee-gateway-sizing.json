@@ -34,8 +34,8 @@
         "type": "datasource",
         "query": "prometheus",
         "current": {
-          "text": "Prometheus",
-          "value": "Prometheus"
+          "text": "Managed Prometheus",
+          "value": "Managed Prometheus"
         },
         "hide": 0,
         "refresh": 1

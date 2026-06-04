@@ -1,0 +1,91 @@
+# App metrics → GMP. ClusterPodMonitoring is cluster-scoped, so each covers both
+# octogee + octogee-test (matching the retired ServiceMonitors' namespaceSelector).
+# GMP sets the `job` label to the resource name — kept identical to the old
+# ServiceMonitor jobs so dashboards/alerts (up{job="octogee-gateway"}, the
+# $gateway var, gateway-edge panels) keep working unchanged.
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: octogee-api
+spec:
+  selector:
+    matchLabels:
+      app: octogee-api
+  endpoints:
+    - port: 3001
+      path: /metrics
+      interval: 15s
+---
+# openclaw (:9091) + in-pod runner heartbeats (:9092) on the gateway pod.
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: octogee-gateway
+spec:
+  selector:
+    matchLabels:
+      app: octogee-gateway
+  endpoints:
+    - port: 9091
+      path: /metrics
+      interval: 15s
+    - port: 9092
+      path: /metrics
+      interval: 15s
+---
+# gateway-edge sidecar (:3001) — lives in the gateway pod, so select that pod but
+# keep job="gateway-edge" (separate CR) to match the old ServiceMonitor.
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: gateway-edge
+spec:
+  selector:
+    matchLabels:
+      app: octogee-gateway
+  endpoints:
+    - port: 3001
+      path: /metrics
+      interval: 15s
+---
+# Gitea's gauges are DB-backed (computed per scrape over the Cloud SQL proxy) —
+# give it room, like the old ServiceMonitor (60s/45s).
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: gitea
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gitea
+  endpoints:
+    - port: 3000
+      path: /metrics
+      interval: 60s
+      timeout: 45s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: mattermost
+spec:
+  selector:
+    matchLabels:
+      app: mattermost
+  endpoints:
+    - port: 8067
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: glm-controller
+spec:
+  selector:
+    matchLabels:
+      app: glm-controller
+  endpoints:
+    - port: 8080
+      path: /metrics
+      interval: 15s

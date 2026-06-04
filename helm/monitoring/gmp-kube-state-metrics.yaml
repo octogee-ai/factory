@@ -1,0 +1,161 @@
+# Standalone kube-state-metrics scraped INTO GMP. The kube-prometheus-stack
+# bundled a KSM, but that stack is retired (it can't scrape kubelets on
+# Autopilot); GMP is the single source of truth now. Distinct `app:
+# gmp-kube-state-metrics` selector so the ClusterPodMonitoring scrapes only this
+# instance (no double-count with the stack's KSM during the cutover overlap).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gmp-kube-state-metrics
+  namespace: monitoring
+  labels:
+    app: gmp-kube-state-metrics
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    app: gmp-kube-state-metrics
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, nodes, pods, services, serviceaccounts, resourcequotas, replicationcontrollers, limitranges, persistentvolumeclaims, persistentvolumes, namespaces, endpoints]
+    verbs: [list, watch]
+  - apiGroups: [apps]
+    resources: [statefulsets, daemonsets, deployments, replicasets]
+    verbs: [list, watch]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [list, watch]
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [list, watch]
+  - apiGroups: [certificates.k8s.io]
+    resources: [certificatesigningrequests]
+    verbs: [list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses, volumeattachments]
+    verbs: [list, watch]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+    verbs: [list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingressclasses, ingresses]
+    verbs: [list, watch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterrolebindings, clusterroles, rolebindings, roles]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    app: gmp-kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: gmp-kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: gmp-kube-state-metrics
+    namespace: monitoring
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gmp-kube-state-metrics
+  namespace: monitoring
+  labels:
+    app: gmp-kube-state-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gmp-kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: gmp-kube-state-metrics
+    spec:
+      serviceAccountName: gmp-kube-state-metrics
+      automountServiceAccountToken: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.0
+          args:
+            - --port=8080
+            - --telemetry-port=8081
+          ports:
+            - name: http-metrics
+              containerPort: 8080
+            - name: telemetry
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 300Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+# GMP scrapes the KSM into Monarch. targetLabels.metadata: [] keeps the metric's
+# OWN namespace/pod labels (KSM describes other objects) instead of the scrape
+# target's — the documented fix for the kube_* label collision. The keep-list
+# bounds GMP ingestion cost to the kube_* families the boards + alerts use.
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: gmp-kube-state-metrics
+spec:
+  selector:
+    matchLabels:
+      app: gmp-kube-state-metrics
+  endpoints:
+    - port: 8080
+      path: /metrics
+      interval: 30s
+      metricRelabeling:
+        - action: keep
+          sourceLabels: [__name__]
+          regex: kube_(pod|persistentvolumeclaim|deployment|statefulset|daemonset|node|namespace|replicaset)(_.+)?
+  targetLabels:
+    metadata: []

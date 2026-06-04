@@ -22,10 +22,13 @@ def ds():
     return {"type": "prometheus", "uid": "${datasource}"}
 
 
-def tmpl_datasource():
+def tmpl_datasource(default="Managed Prometheus"):
+    # Single source of truth: Google Managed Service for Prometheus (queried via
+    # the gmp-frontend). On Autopilot the self-managed Prometheus can't scrape
+    # kubelets; GMP collects system (cAdvisor/kubelet) + kube-state + app metrics.
     return {
         "name": "datasource", "label": "Datasource", "type": "datasource",
-        "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"},
+        "query": "prometheus", "current": {"text": default, "value": default},
         "hide": 0, "refresh": 1,
     }
 

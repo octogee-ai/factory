@@ -1,0 +1,77 @@
+# GMP query frontend — proxies PromQL to Google Managed Service for Prometheus
+# (Monarch). On Autopilot the self-managed kube-prometheus-stack cannot scrape
+# the kubelet (no kubelet/cAdvisor targets), so container CPU/memory live only in
+# GMP. Grafana points its "Managed Prometheus" datasource at this Service to read
+# them under standard Prometheus names. Reuses the `grafana` KSA, already
+# Workload-Identity-bound to monitoring-grafana@ (holds roles/monitoring.viewer).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gmp-frontend
+  namespace: monitoring
+  labels:
+    app: gmp-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gmp-frontend
+  template:
+    metadata:
+      labels:
+        app: gmp-frontend
+    spec:
+      serviceAccountName: grafana
+      automountServiceAccountToken: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+        - name: frontend
+          image: gke.gcr.io/prometheus-engine/frontend:v0.18.0-gke.2
+          args:
+            - "--web.listen-address=:9090"
+            - "--query.project-id=octogee"
+          ports:
+            - name: web
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gmp-frontend
+  namespace: monitoring
+  labels:
+    app: gmp-frontend
+spec:
+  selector:
+    app: gmp-frontend
+  ports:
+    - name: web
+      port: 9090
+      targetPort: web
+  type: ClusterIP
