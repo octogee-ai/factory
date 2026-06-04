@@ -1,0 +1,245 @@
+{{- if .Values.edgeIngress.enabled }}
+{{- $name := .Values.edgeIngress.name | default "octogee-edge-ingress" -}}
+{{- $hosts := .Values.edgeIngress.hosts -}}
+{{- $gatewayEdge := index .Values "gateway-edge" -}}
+{{- $apiSvc := $gatewayEdge.ingress.octogeeApiService | default "octogee-api" -}}
+{{- $edgeSvc := $gatewayEdge.ingress.targetService | default "gateway-edge" -}}
+{{- $glmSvc := $gatewayEdge.ingress.glmService | default "glm-controller" -}}
+{{- $fleetPort := .Values.global.fleetControllerPort | default "3003" -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: {{ join "," .Values.edgeIngress.managedCertificates | quote }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.edgeIngress.staticIpName }}
+spec:
+  ingressClassName: gce
+  rules:
+    - host: {{ $hosts.api }}
+      http:
+        paths:
+          - path: /api/admin/gateways/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/gateways
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/operations
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/restore-jobs/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/restore-jobs
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/builds
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/rollouts
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/customer-distribution
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/customers/by-slug/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/customer/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/customers/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/customers
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/admin/funnel
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glmSvc }}
+                port:
+                  name: http
+          - path: /api/workspace/git/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $edgeSvc }}
+                port:
+                  name: http
+          - path: /api/workspace/git
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $edgeSvc }}
+                port:
+                  name: http
+          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "v4" "auth" "openclaw" "billing" "invites" "integrations" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "shells" "admin" }}
+          {{- range $prefix := $octogeeApiPrefixes }}
+          - path: /api/{{ $prefix }}/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $apiSvc }}
+                port:
+                  name: http
+          - path: /api/{{ $prefix }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $apiSvc }}
+                port:
+                  name: http
+          {{- end }}
+          - path: /api/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $edgeSvc }}
+                port:
+                  name: http
+          - path: /health
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $edgeSvc }}
+                port:
+                  name: http
+    - host: {{ $hosts.git }}
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: octogee-gitea-http
+                port:
+                  number: 3000
+    - host: {{ $hosts.mattermost }}
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: mattermost
+                port:
+                  number: 8065
+    - host: {{ $hosts.fleet }}
+      http:
+        paths:
+          {{- range .Values.gatewayFleet.instances }}
+          {{- $svc := printf "octogee-gateway-%s" .instanceName }}
+          {{- $gid := .gatewayId }}
+          - path: /restore-customer/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $fleetPort }}
+          - path: /quiesce/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $fleetPort }}
+          - path: /export/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $fleetPort }}
+          - path: /push-state/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $fleetPort }}
+          - path: /import/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $fleetPort }}
+          - path: /unmount/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $fleetPort }}
+          {{- end }}
+          - path: /health
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: octogee-gateway
+                port:
+                  number: {{ $fleetPort }}
+    - host: {{ $hosts.preview }}
+      http:
+        paths:
+          - path: /health
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: octogee-gateway
+                port:
+                  number: 9080
+{{- end }}

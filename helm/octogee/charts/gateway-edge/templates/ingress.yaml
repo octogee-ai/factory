@@ -1,4 +1,5 @@
-{{- if .Values.ingress.enabled }}
+{{- $resourcesEnabled := or .Values.ingress.enabled (.Values.ingress.resourcesEnabled | default false) -}}
+{{- if $resourcesEnabled }}
 ---
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
@@ -30,6 +31,8 @@ spec:
   securityPolicy:
     name: {{ .Values.cloudArmor.policyName }}
   {{- end }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

@@ -22,6 +22,18 @@ env:
   gitOrg: ""
   mmUrl: ""
 
+# Ingress shells whose dynamic per-gateway paths are owned by Cowboy.
+# `sharedName` points all writers at the consolidated app Ingress; leave
+# it empty for the legacy per-host Ingress names below.
+ingress:
+  sharedName: ""
+  apiName: gateway-edge-ingress
+  apiHost: ""
+  fleetName: octogee-gateway-fleet-control-ingress
+  fleetHost: ""
+  previewName: preview-ingress
+  previewHost: ""
+
 resources:
   requests:
     cpu: "100m"

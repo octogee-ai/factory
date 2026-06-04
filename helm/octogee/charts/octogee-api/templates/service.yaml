@@ -5,6 +5,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     app: octogee-api
+  annotations:
+    cloud.google.com/backend-config: '{"default":"{{ .Values.backendConfig.name | default "octogee-api-backend" }}"}'
+    cloud.google.com/neg: '{"ingress":true}'
 spec:
   type: ClusterIP
   selector:

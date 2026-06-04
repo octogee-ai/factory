@@ -1,4 +1,5 @@
-{{- if .Values.gitea.webIngress.enabled }}
+{{- $edgeEnabled := .Values.edgeIngress.enabled | default false -}}
+{{- if or .Values.gitea.webIngress.enabled $edgeEnabled }}
 ---
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
@@ -30,6 +31,8 @@ metadata:
 spec:
   domains:
     - {{ .Values.gitea.webIngress.host }}
+{{- end }}
+{{- if and .Values.gitea.webIngress.enabled (not $edgeEnabled) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

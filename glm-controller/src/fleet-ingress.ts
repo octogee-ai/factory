@@ -13,6 +13,9 @@ export interface IngressPathRule {
 }
 
 const RPC_VERBS = ["restore-customer", "quiesce", "export", "push-state", "import", "unmount"] as const;
+const FLEET_CONTROL_PREFIXES = RPC_VERBS.map((verb) => `/${verb}/`);
+const API_FLEET_PREFIX = "/api/g/";
+const PREVIEW_FLEET_PREFIX = "/g/";
 
 export function computeDesiredFleetPaths(opts: {
   gateways: ReadonlyArray<FleetGateway>;
@@ -45,8 +48,7 @@ export function computeDesiredFleetPaths(opts: {
 export function computeDesiredApiFleetPaths(opts: {
   gateways: ReadonlyArray<FleetGateway>;
   gatewayEdgePort: number;
-
-gatewayEdgeServiceName: string;
+  gatewayEdgeServiceName: string;
 }): IngressPathRule[] {
   const sorted = [...opts.gateways].sort((a, b) =>
     a.gatewayId.localeCompare(b.gatewayId),
@@ -66,55 +68,87 @@ gatewayEdgeServiceName: string;
   return out;
 }
 
+export function computeDesiredPreviewPaths(opts: {
+  gateways: ReadonlyArray<FleetGateway>;
+  previewPort: number;
+}): IngressPathRule[] {
+  return [...opts.gateways]
+    .sort((a, b) => a.gatewayId.localeCompare(b.gatewayId))
+    .map((gw) => ({
+      path: `/g/${gw.gatewayId}/*`,
+      pathType: "ImplementationSpecific",
+      serviceName: `octogee-gateway-${gw.instanceName}`,
+      servicePort: opts.previewPort,
+    }));
+}
+
 export interface JsonPatchOp {
   op: "add" | "remove" | "test";
   path: string;
   value?: unknown;
 }
 
-const API_FLEET_PREFIX = "/api/g/";
-
 export function computeApiFleetPathOps(
   rawPaths: ReadonlyArray<RawIngressPath>,
   desired: ReadonlyArray<IngressPathRule>,
 ): JsonPatchOp[] {
+  return computeManagedPathOps({
+    rawPaths,
+    desired,
+    managedPathPrefixes: [API_FLEET_PREFIX],
+    pathsPatchPath: "/spec/rules/0/http/paths",
+  });
+}
+
+export function computeManagedPathOps(opts: {
+  rawPaths: ReadonlyArray<RawIngressPath>;
+  desired: ReadonlyArray<IngressPathRule>;
+  managedPathPrefixes: ReadonlyArray<string>;
+  pathsPatchPath: string;
+}): JsonPatchOp[] {
   const sig = (path: string, svc: string, port: number, pathType: string): string =>
     `${path}\0${svc}\0${port}\0${pathType}`;
 
-  const liveFleet = rawPaths
+  const liveManaged = opts.rawPaths
     .map((p, index) => ({ p, index }))
-    .filter((e) => typeof e.p.path === "string" && e.p.path.startsWith(API_FLEET_PREFIX));
+    .filter((e) => {
+      const path = e.p.path;
+      return (
+        typeof path === "string" &&
+        opts.managedPathPrefixes.some((prefix) => path.startsWith(prefix))
+      );
+    });
 
   const liveSig = new Set(
-    liveFleet
+    liveManaged
       .map((e) => parsePathRule(e.p))
       .filter((r): r is IngressPathRule => r !== null)
       .map((r) => sig(r.path, r.serviceName, r.servicePort, r.pathType)),
   );
   const desiredSig = new Set(
-    desired.map((r) => sig(r.path, r.serviceName, r.servicePort, r.pathType)),
+    opts.desired.map((r) => sig(r.path, r.serviceName, r.servicePort, r.pathType)),
   );
 
   const inSync =
     liveSig.size === desiredSig.size &&
-    liveFleet.length === desired.length &&
+    liveManaged.length === opts.desired.length &&
     [...desiredSig].every((s) => liveSig.has(s));
   if (inSync) return [];
 
   const ops: JsonPatchOp[] = [];
 
-for (const e of [...liveFleet].sort((a, b) => b.index - a.index)) {
+  for (const e of [...liveManaged].sort((a, b) => b.index - a.index)) {
     ops.push({
       op: "test",
-      path: `/spec/rules/0/http/paths/${e.index}/path`,
+      path: `${opts.pathsPatchPath}/${e.index}/path`,
       value: e.p.path,
     });
-    ops.push({ op: "remove", path: `/spec/rules/0/http/paths/${e.index}` });
+    ops.push({ op: "remove", path: `${opts.pathsPatchPath}/${e.index}` });
   }
-  for (const r of desired) {
+  for (const r of opts.desired) {
     ops.push({
       op: "add",
-      path: "/spec/rules/0/http/paths/-",
+      path: `${opts.pathsPatchPath}/-`,
       value: {
         path: r.path,
         pathType: r.pathType,
@@ -150,8 +184,13 @@ interface RawIngressPath {
 
 interface RawIngress {
   spec?: {
-    rules?: Array<{ http?: { paths?: RawIngressPath[] } }>;
+    rules?: RawIngressRule[];
   };
+}
+
+interface RawIngressRule {
+  host?: unknown;
+  http?: { paths?: RawIngressPath[] };
 }
 
 function asString(v: unknown): string | null {
@@ -201,6 +240,7 @@ export type KubectlSubprocess = (
 export interface SyncFleetIngressPathsOpts {
   runKubectl: KubectlSubprocess;
   ingressName: string;
+  ingressHost?: string;
   namespace: string;
   desiredGateways: ReadonlyArray<FleetGateway>;
   fleetControllerPort: number;
@@ -211,8 +251,6 @@ export interface SyncFleetIngressPathsOpts {
 export interface SyncFleetIngressPathsResult {
   changed: boolean;
 }
-
-export const FIELD_MANAGER = "cowboy-fleet-controller";
 
 const NOT_FOUND_PATTERNS = [
   /Error from server \(NotFound\)/i,
@@ -230,63 +268,24 @@ export async function syncFleetIngressPaths(
     gateways: opts.desiredGateways,
     fleetControllerPort: opts.fleetControllerPort,
     aliasServiceName: opts.aliasServiceName,
+  }).filter((p) => p.path !== "/health");
+
+  return syncManagedIngressPaths({
+    runKubectl: opts.runKubectl,
+    ingressName: opts.ingressName,
+    ingressHost: opts.ingressHost,
+    namespace: opts.namespace,
+    desired,
+    managedPathPrefixes: FLEET_CONTROL_PREFIXES,
+    logLabel: "fleet-control",
+    log: opts.log,
   });
-
-  const getResult = await opts.runKubectl([
-    "get",
-    "ingress",
-    opts.ingressName,
-    "-n",
-    opts.namespace,
-    "-o",
-    "json",
-  ]);
-  if (getResult.code !== 0) {
-    if (isIngressNotFound(getResult.stderr)) {
-
-opts.log(
-        `[fleet-ingress] ingress ${opts.ingressName} not yet present in ${opts.namespace} — deferring`,
-      );
-      return { changed: false };
-    }
-    throw new Error(
-      `kubectl get ingress ${opts.ingressName} failed (code=${getResult.code}): ${getResult.stderr.trim() || getResult.stdout.trim()}`,
-    );
-  }
-  const live = JSON.parse(getResult.stdout) as Record<string, unknown>;
-  const livePaths = extractIngressPaths(live);
-  if (pathsEqual(livePaths, desired)) {
-    return { changed: false };
-  }
-
-  const next = buildAppliableIngress(live, desired);
-  const applyResult = await opts.runKubectl(
-    [
-      "apply",
-      "-n",
-      opts.namespace,
-      "--server-side",
-      `--field-manager=${FIELD_MANAGER}`,
-      "--force-conflicts",
-      "-f",
-      "-",
-    ],
-    { stdin: JSON.stringify(next) },
-  );
-  if (applyResult.code !== 0) {
-    throw new Error(
-      `kubectl apply ${opts.ingressName} failed (code=${applyResult.code}): ${applyResult.stderr.trim() || applyResult.stdout.trim()}`,
-    );
-  }
-  opts.log(
-    `[fleet-ingress] applied ${desired.length} path(s) to ${opts.ingressName} (${opts.namespace})`,
-  );
-  return { changed: true };
 }
 
 export interface SyncApiFleetIngressPathsOpts {
   runKubectl: KubectlSubprocess;
   ingressName: string;
+  ingressHost?: string;
   namespace: string;
   desiredGateways: ReadonlyArray<FleetGateway>;
   gatewayEdgePort: number;
@@ -303,6 +302,92 @@ export async function syncApiFleetIngressPaths(
     gatewayEdgeServiceName: opts.gatewayEdgeServiceName,
   }).filter((p) => p.path !== "/health");
 
+  return syncManagedIngressPaths({
+    runKubectl: opts.runKubectl,
+    ingressName: opts.ingressName,
+    ingressHost: opts.ingressHost,
+    namespace: opts.namespace,
+    desired,
+    managedPathPrefixes: [API_FLEET_PREFIX],
+    logLabel: "api",
+    log: opts.log,
+  });
+}
+
+export interface SyncPreviewIngressPathsOpts {
+  runKubectl: KubectlSubprocess;
+  ingressName: string;
+  ingressHost?: string;
+  namespace: string;
+  desiredGateways: ReadonlyArray<FleetGateway>;
+  previewPort: number;
+  log: (msg: string) => void;
+}
+
+export async function syncPreviewIngressPaths(
+  opts: SyncPreviewIngressPathsOpts,
+): Promise<SyncFleetIngressPathsResult> {
+  const desired = computeDesiredPreviewPaths({
+    gateways: opts.desiredGateways,
+    previewPort: opts.previewPort,
+  });
+
+  return syncManagedIngressPaths({
+    runKubectl: opts.runKubectl,
+    ingressName: opts.ingressName,
+    ingressHost: opts.ingressHost,
+    namespace: opts.namespace,
+    desired,
+    managedPathPrefixes: [PREVIEW_FLEET_PREFIX],
+    logLabel: "preview",
+    log: opts.log,
+  });
+}
+
+export function computeIngressHostPathOps(
+  desired: ReadonlyArray<IngressPathRule>,
+  live: RawIngress,
+  opts: {
+    ingressHost?: string;
+    managedPathPrefixes: ReadonlyArray<string>;
+  },
+): JsonPatchOp[] {
+  const rules = live?.spec?.rules ?? [];
+  const ruleIndex = findIngressRuleIndex(rules, opts.ingressHost);
+  if (ruleIndex === null) {
+    const hostHint = opts.ingressHost ? `host ${opts.ingressHost}` : "single ingress rule";
+    throw new Error(`ingress is missing ${hostHint}`);
+  }
+  const rawPaths = rules[ruleIndex]?.http?.paths ?? [];
+  return computeManagedPathOps({
+    rawPaths,
+    desired,
+    managedPathPrefixes: opts.managedPathPrefixes,
+    pathsPatchPath: `/spec/rules/${ruleIndex}/http/paths`,
+  });
+}
+
+function findIngressRuleIndex(
+  rules: ReadonlyArray<RawIngressRule>,
+  ingressHost?: string,
+): number | null {
+  if (ingressHost) {
+    const index = rules.findIndex((rule) => asString(rule.host) === ingressHost);
+    return index >= 0 ? index : null;
+  }
+  return rules.length === 1 ? 0 : null;
+}
+
+async function syncManagedIngressPaths(opts: {
+  runKubectl: KubectlSubprocess;
+  ingressName: string;
+  ingressHost?: string;
+  namespace: string;
+  desired: ReadonlyArray<IngressPathRule>;
+  managedPathPrefixes: ReadonlyArray<string>;
+  logLabel: string;
+  log: (msg: string) => void;
+}): Promise<SyncFleetIngressPathsResult> {
   const getResult = await opts.runKubectl([
     "get",
     "ingress",
@@ -324,8 +409,10 @@ export async function syncApiFleetIngressPaths(
     );
   }
   const live = JSON.parse(getResult.stdout) as RawIngress;
-  const rawPaths = live?.spec?.rules?.[0]?.http?.paths ?? [];
-  const ops = computeApiFleetPathOps(rawPaths, desired);
+  const ops = computeIngressHostPathOps(opts.desired, live, {
+    ingressHost: opts.ingressHost,
+    managedPathPrefixes: opts.managedPathPrefixes,
+  });
   if (ops.length === 0) {
     return { changed: false };
   }
@@ -345,49 +432,11 @@ export async function syncApiFleetIngressPaths(
       `kubectl patch ${opts.ingressName} failed (code=${patchResult.code}): ${patchResult.stderr.trim() || patchResult.stdout.trim()}`,
     );
   }
+  const hostSuffix = opts.ingressHost ? ` host=${opts.ingressHost}` : "";
   opts.log(
-    `[fleet-ingress] patched ${desired.length} /api/g/* path(s) onto ${opts.ingressName} (${opts.namespace})`,
+    `[fleet-ingress] patched ${opts.desired.length} ${opts.logLabel} path(s) onto ${opts.ingressName}${hostSuffix} (${opts.namespace})`,
   );
   return { changed: true };
-}
-
-function buildAppliableIngress(
-  live: Record<string, unknown>,
-  desired: ReadonlyArray<IngressPathRule>,
-): Record<string, unknown> {
-  const liveTyped = live as {
-    apiVersion?: string;
-    kind?: string;
-    metadata?: { name?: string; namespace?: string };
-    spec?: { rules?: Array<{ host?: string }> };
-  };
-  const host = liveTyped.spec?.rules?.[0]?.host;
-  const newPaths = desired.map((p) => ({
-    path: p.path,
-    pathType: p.pathType,
-    backend: {
-      service: {
-        name: p.serviceName,
-        port: { number: p.servicePort },
-      },
-    },
-  }));
-  return {
-    apiVersion: liveTyped.apiVersion ?? "networking.k8s.io/v1",
-    kind: liveTyped.kind ?? "Ingress",
-    metadata: {
-      name: liveTyped.metadata?.name,
-      namespace: liveTyped.metadata?.namespace,
-    },
-    spec: {
-      rules: [
-        {
-          ...(host ? { host } : {}),
-          http: { paths: newPaths },
-        },
-      ],
-    },
-  };
 }
 
 const DEFAULT_KUBECTL_BIN = "/usr/local/bin/kubectl";

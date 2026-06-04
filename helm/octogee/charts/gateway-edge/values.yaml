@@ -106,6 +106,9 @@ resources:
 # Ingress (public routes only — /api/* and /health)
 ingress:
   enabled: true
+  # Render ManagedCertificate + BackendConfig even when the standalone
+  # gateway-edge Ingress is disabled by the umbrella edgeIngress.
+  resourcesEnabled: false
   host: api.octogee.com
   staticIpName: workspace-api-ip
   certName: workspace-api-cert

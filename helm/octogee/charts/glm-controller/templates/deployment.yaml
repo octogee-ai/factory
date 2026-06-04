@@ -1,3 +1,7 @@
+{{- $sharedIngressName := .Values.ingress.sharedName | default "" -}}
+{{- $apiIngressName := default (.Values.ingress.apiName | default "gateway-edge-ingress") $sharedIngressName -}}
+{{- $fleetIngressName := default (.Values.ingress.fleetName | default "octogee-gateway-fleet-control-ingress") $sharedIngressName -}}
+{{- $previewIngressName := default (.Values.ingress.previewName | default "preview-ingress") $sharedIngressName -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -85,6 +89,18 @@ spec:
             # cases don't merge umbrella values).
             - name: FLEET_CONTROLLER_PORT
               value: {{ (.Values.global).fleetControllerPort | default "3003" | quote }}
+            - name: FLEET_INGRESS_NAME
+              value: {{ $fleetIngressName | quote }}
+            - name: FLEET_INGRESS_HOST
+              value: {{ .Values.ingress.fleetHost | default "" | quote }}
+            - name: GATEWAY_EDGE_INGRESS_NAME
+              value: {{ $apiIngressName | quote }}
+            - name: GATEWAY_EDGE_INGRESS_HOST
+              value: {{ .Values.ingress.apiHost | default "" | quote }}
+            - name: PREVIEW_INGRESS_NAME
+              value: {{ $previewIngressName | quote }}
+            - name: PREVIEW_INGRESS_HOST
+              value: {{ .Values.ingress.previewHost | default "" | quote }}
             # Per-gateway auth-token Secret Manager rotation: when an
             # admin clicks "Add Gateway", the handler calls
             # provisionGatewayAuthSecret({gatewayServiceAccount}) and

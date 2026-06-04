@@ -5,6 +5,13 @@ image:
 replicas: 1
 port: 3001
 
+backendConfig:
+  name: octogee-api-backend
+  healthCheck:
+    path: /health
+    port: 3001
+  timeoutSec: 30
+
 serviceAccountName: octogee-api
 serviceAccount:
   create: true

@@ -23,6 +23,22 @@ global:
   # If you change this value, both consumers update together — no drift.
   fleetControllerPort: "3003"
 
+# Single shared GKE Ingress for the public app hosts. When disabled, the
+# legacy per-host Ingresses render exactly as before. When enabled, this
+# parent Ingress owns the edge, while the per-service templates still render
+# their ManagedCertificate and BackendConfig resources.
+edgeIngress:
+  enabled: false
+  name: octogee-edge-ingress
+  staticIpName: ""
+  hosts:
+    api: ""
+    git: ""
+    mattermost: ""
+    fleet: ""
+    preview: ""
+  managedCertificates: []
+
 # ── cloud-sql-proxy ─────────────────────────────────────────────────────────
 cloud-sql-proxy:
   image:
@@ -214,8 +230,8 @@ gatewayFleet:
       policyName: ""
   # Bootstrap-only seed of `{gatewayId, instanceName}` pairs for the
   # fleet-control Ingress's per-instance RPC paths. Leave empty in real
-  # envs — Cowboy (glm-controller) owns `.spec.rules` via SSA with field
-  # manager `cowboy-fleet-controller`. Use this only for first-time
+  # envs — Cowboy (glm-controller) owns dynamic paths via host-scoped
+  # JSON patch. Use this only for first-time
   # bootstrap before glm-controller is healthy.
   instances: []
 

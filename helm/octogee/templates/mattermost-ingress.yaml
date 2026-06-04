@@ -1,4 +1,5 @@
-{{- if .Values.mattermost.ingress.enabled }}
+{{- $edgeEnabled := .Values.edgeIngress.enabled | default false -}}
+{{- if or .Values.mattermost.ingress.enabled $edgeEnabled }}
 ---
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
@@ -33,6 +34,8 @@ metadata:
 spec:
   domains:
     - {{ .Values.mattermost.ingress.host }}
+{{- end }}
+{{- if and .Values.mattermost.ingress.enabled (not $edgeEnabled) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

@@ -273,6 +273,8 @@ spec:
             - name: PREVIEW_HOST
               value: {{ .Values.preview.host | quote }}
             {{- end }}
+            - name: PREVIEW_REQUIRE_GATEWAY_ID
+              value: "true"
             {{- if ne .Values.profile "operator" }}
             # Operator-profile gateway runtime is tenant-untrusted until the
             # reservation/billing/tenant-identity boundary explicitly unlocks

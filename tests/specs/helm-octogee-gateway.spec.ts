@@ -354,6 +354,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/- name:\s*PREVIEW_HOST[\s\S]*?value:\s*"preview-test\.octogee\.com"/);
+    expect(dep).toMatch(/- name:\s*PREVIEW_REQUIRE_GATEWAY_ID[\s\S]*?value:\s*"true"/);
   });
 
   it("emits MM_INTERACTIONS_CALLBACK_BASE_URL pointing at the per-instance Service DNS", () => {

@@ -9,16 +9,14 @@
 #     via the `app: octogee-gateway` selector)
 #   - fleet-control Ingress + cert + BackendConfig (Helm renders the
 #     shell with only the static /health rule; Cowboy writes the
-#     per-instance RPC paths via server-side apply at runtime)
-#   - preview Ingress + cert + BackendConfig (points at alias Service)
+#     per-instance RPC paths via host-scoped JSON patch at runtime)
+#   - preview Ingress + cert + BackendConfig (when not consolidated,
+#     points at alias Service; when consolidated, Cowboy writes
+#     /g/<gatewayId>/* paths to per-instance Services)
 #
-# Per-instance RPC paths (/restore-customer/<gid>, /quiesce/<gid>, etc.)
-# are SSA-owned by Cowboy with field manager `cowboy-fleet-controller`.
-# Install the umbrella with `helm upgrade --server-side=true --force-conflicts`
-# so Helm can take ownership back during an upgrade; Cowboy reclaims and
-# re-applies the per-instance paths on its next reconcile tick. Leave
-# `Values.gatewayFleet.instances` empty in test/prod — Cowboy is the
-# sole writer in steady state.
+# Per-instance RPC and preview paths are JSON-patch-owned by Cowboy.
+# Leave `Values.gatewayFleet.instances` empty in test/prod — Cowboy is
+# the sole writer in steady state.
 
 {{- if .Values.gatewayFleet.aliasService.enabled }}
 ---
@@ -142,7 +140,8 @@ spec:
           port: 443
 {{- end }}
 
-{{- if .Values.gatewayFleet.fleetControlIngress.enabled }}
+{{- $edgeEnabled := .Values.edgeIngress.enabled | default false -}}
+{{- if or .Values.gatewayFleet.fleetControlIngress.enabled $edgeEnabled }}
 ---
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
@@ -166,6 +165,8 @@ spec:
   securityPolicy:
     name: {{ .Values.gatewayFleet.fleetControlIngress.cloudArmor.policyName }}
   {{- end }}
+{{- end }}
+{{- if and .Values.gatewayFleet.fleetControlIngress.enabled (not $edgeEnabled) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -206,6 +207,13 @@ spec:
                 name: {{ $svc }}
                 port:
                   number: {{ $port }}
+          - path: /push-state/{{ $gid }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $port }}
           - path: /import/{{ $gid }}
             pathType: ImplementationSpecific
             backend:
@@ -230,7 +238,7 @@ spec:
                   number: {{ $port }}
 {{- end }}
 
-{{- if .Values.gatewayFleet.previewIngress.enabled }}
+{{- if or .Values.gatewayFleet.previewIngress.enabled $edgeEnabled }}
 ---
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
@@ -256,6 +264,8 @@ spec:
   {{- end }}
   connectionDraining:
     drainingTimeoutSec: 300
+{{- end }}
+{{- if and .Values.gatewayFleet.previewIngress.enabled (not $edgeEnabled) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

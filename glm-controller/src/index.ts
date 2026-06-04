@@ -36,6 +36,7 @@ import {
   spawnKubectl,
   syncApiFleetIngressPaths,
   syncFleetIngressPaths,
+  syncPreviewIngressPaths,
   type FleetGateway,
   type KubectlSubprocess,
 } from "./fleet-ingress.js";
@@ -108,12 +109,17 @@ const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 
 const FLEET_INGRESS_NAME = process.env.FLEET_INGRESS_NAME ?? "octogee-gateway-fleet-control-ingress";
+const FLEET_INGRESS_HOST = process.env.FLEET_INGRESS_HOST;
 const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway";
 
 const GATEWAY_EDGE_INGRESS_NAME =
   process.env.GATEWAY_EDGE_INGRESS_NAME ?? "gateway-edge-ingress";
+const GATEWAY_EDGE_INGRESS_HOST = process.env.GATEWAY_EDGE_INGRESS_HOST;
+const PREVIEW_INGRESS_NAME = process.env.PREVIEW_INGRESS_NAME ?? "preview-ingress";
+const PREVIEW_INGRESS_HOST = process.env.PREVIEW_INGRESS_HOST;
 
 const GATEWAY_EDGE_PORT = 3001;
+const PREVIEW_PORT = 9080;
 
 function createGatewayPersistentVolumeClaimDeleter(
   kubeOps: KubeOps,
@@ -721,6 +727,7 @@ async function main(): Promise<void> {
     syncFleetIngressPaths({
       runKubectl,
       ingressName: FLEET_INGRESS_NAME,
+      ingressHost: FLEET_INGRESS_HOST,
       namespace: NAMESPACE,
       desiredGateways: gateways,
       fleetControllerPort: parseInt(FLEET_CONTROLLER_PORT, 10),
@@ -731,16 +738,28 @@ async function main(): Promise<void> {
     syncApiFleetIngressPaths({
       runKubectl,
       ingressName: GATEWAY_EDGE_INGRESS_NAME,
+      ingressHost: GATEWAY_EDGE_INGRESS_HOST,
       namespace: NAMESPACE,
       desiredGateways: gateways,
       gatewayEdgePort: GATEWAY_EDGE_PORT,
       gatewayEdgeServiceName: "gateway-edge",
       log,
     }).then(() => undefined);
+  const syncPreviewIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
+    syncPreviewIngressPaths({
+      runKubectl,
+      ingressName: PREVIEW_INGRESS_NAME,
+      ingressHost: PREVIEW_INGRESS_HOST,
+      namespace: NAMESPACE,
+      desiredGateways: gateways,
+      previewPort: PREVIEW_PORT,
+      log,
+    }).then(() => undefined);
 
 const syncAllFleetIngresses = async (gateways: ReadonlyArray<FleetGateway>) => {
     await syncFleetIngressForGateways(gateways);
     await syncApiFleetIngressForGateways(gateways);
+    await syncPreviewIngressForGateways(gateways);
   };
 
 const handlerSyncFleetIngress = async () => {
