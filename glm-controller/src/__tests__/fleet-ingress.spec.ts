@@ -381,6 +381,7 @@ describe("syncFleetIngressPaths", () => {
     expect(calls[1].args).not.toContain("--server-side");
     const ops = JSON.parse(calls[1].args[calls[1].args.length - 1]);
     expect(ops.map((op: { path: string }) => op.path)).toEqual([
+      "/spec/rules/1/host",
       "/spec/rules/1/http/paths/-",
       "/spec/rules/1/http/paths/-",
       "/spec/rules/1/http/paths/-",
@@ -388,7 +389,12 @@ describe("syncFleetIngressPaths", () => {
       "/spec/rules/1/http/paths/-",
       "/spec/rules/1/http/paths/-",
     ]);
-    expect(ops.map((op: { value: { path: string } }) => op.value.path)).toEqual([
+    expect(ops[0]).toEqual({ op: "test", path: "/spec/rules/1/host", value: "fleet.example.com" });
+    expect(
+      ops
+        .filter((op: { op: string }) => op.op === "add")
+        .map((op: { value: { path: string } }) => op.value.path),
+    ).toEqual([
       "/restore-customer/gw-test",
       "/quiesce/gw-test",
       "/export/gw-test",
@@ -569,6 +575,7 @@ describe("computeIngressHostPathOps", () => {
       { ingressHost: "preview.example.com", managedPathPrefixes: ["/g/"] },
     );
     expect(ops).toEqual([
+      { op: "test", path: "/spec/rules/1/host", value: "preview.example.com" },
       {
         op: "add",
         path: "/spec/rules/1/http/paths/-",
@@ -710,7 +717,8 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
       log: vi.fn(),
     });
     const ops = JSON.parse(calls[1].args[calls[1].args.length - 1]);
-    expect(ops[0].path).toBe("/spec/rules/1/http/paths/-");
+    expect(ops[0]).toEqual({ op: "test", path: "/spec/rules/1/host", value: "api.example.com" });
+    expect(ops[1].path).toBe("/spec/rules/1/http/paths/-");
   });
 
   it("defers cleanly when the ingress is not yet present (bootstrap)", async () => {
@@ -789,6 +797,7 @@ describe("syncPreviewIngressPaths", () => {
     expect(result.changed).toBe(true);
     const ops = JSON.parse(calls[1].args[calls[1].args.length - 1]);
     expect(ops).toEqual([
+      { op: "test", path: "/spec/rules/1/host", value: "preview.example.com" },
       {
         op: "add",
         path: "/spec/rules/1/http/paths/-",

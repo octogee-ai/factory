@@ -359,12 +359,19 @@ export function computeIngressHostPathOps(
     throw new Error(`ingress is missing ${hostHint}`);
   }
   const rawPaths = rules[ruleIndex]?.http?.paths ?? [];
-  return computeManagedPathOps({
+  const ops = computeManagedPathOps({
     rawPaths,
     desired,
     managedPathPrefixes: opts.managedPathPrefixes,
     pathsPatchPath: `/spec/rules/${ruleIndex}/http/paths`,
   });
+  if (ops.length === 0 || !opts.ingressHost) {
+    return ops;
+  }
+  return [
+    { op: "test", path: `/spec/rules/${ruleIndex}/host`, value: opts.ingressHost },
+    ...ops,
+  ];
 }
 
 function findIngressRuleIndex(
