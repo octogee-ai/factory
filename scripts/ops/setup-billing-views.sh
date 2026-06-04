@@ -36,19 +36,42 @@ create_daily() {
 }
 
 create_gke_by_ns() {
-  # namespace label key varies by GKE version — match any of the known cost-allocation keys
+  # namespace label key varies by GKE version — match any of the known cost-allocation keys.
+  # LIMIT 1: some billing rows carry duplicate label entries, so the scalar
+  # subqueries must stay scalar ("subquery produced more than one element").
   bq query --project_id=octogee --use_legacy_sql=false "
     CREATE OR REPLACE VIEW \`${PROJECT}.${DS}.v_gke_cost_by_namespace\` AS
     SELECT DATE(usage_start_time) day,
-           (SELECT value FROM UNNEST(labels) WHERE key='goog-k8s-cluster-name') cluster,
+           (SELECT value FROM UNNEST(labels) WHERE key='goog-k8s-cluster-name' LIMIT 1) cluster,
            (SELECT value FROM UNNEST(labels)
-              WHERE key IN ('goog-k8s-namespace','k8s-namespace','goog-gke-namespace')) namespace,
+              WHERE key IN ('goog-k8s-namespace','k8s-namespace','goog-gke-namespace') LIMIT 1) namespace,
            sku.description sku,
            ${net} net_cost
     FROM \`${DETAIL}\`
     WHERE service.description='Kubernetes Engine'
     GROUP BY 1,2,3,4;"
   echo "  ✓ v_gke_cost_by_namespace  (src: ${DETAIL})"
+}
+
+create_gke_by_workload() {
+  # Per-workload (and per-gateway) GKE cost. k8s-workload-name is the controller
+  # name (octogee-gateway-<instance>); gateway-instance is the convenience column
+  # for gateways. Only captures cost from when GKE cost allocation was enabled —
+  # gateways that ran only before that won't have labeled rows.
+  bq query --project_id=octogee --use_legacy_sql=false "
+    CREATE OR REPLACE VIEW \`${PROJECT}.${DS}.v_gke_cost_by_workload\` AS
+    SELECT DATE(usage_start_time) day,
+           (SELECT value FROM UNNEST(labels) WHERE key='goog-k8s-cluster-name' LIMIT 1) cluster,
+           (SELECT value FROM UNNEST(labels)
+              WHERE key IN ('goog-k8s-namespace','k8s-namespace','goog-gke-namespace') LIMIT 1) namespace,
+           (SELECT value FROM UNNEST(labels) WHERE key='k8s-workload-name' LIMIT 1) workload,
+           (SELECT value FROM UNNEST(labels) WHERE key='k8s-label/gateway-instance' LIMIT 1) gateway_instance,
+           sku.description sku,
+           ${net} net_cost
+    FROM \`${DETAIL}\`
+    WHERE service.description='Kubernetes Engine'
+    GROUP BY 1,2,3,4,5,6;"
+  echo "  ✓ v_gke_cost_by_workload  (src: ${DETAIL})"
 }
 
 # An expired gcloud session (the squarepoint org enforces periodic reauth) must
@@ -65,6 +88,7 @@ if bq show "${PROJECT}:${DS}.gcp_billing_export_resource_v1_${ACCT}" >/dev/null 
   echo "detailed export present → creating views"
   create_daily "$DETAIL"
   create_gke_by_ns
+  create_gke_by_workload
   echo "done. Point Looker Studio at project=${PROJECT} dataset=${DS} → these views."
   self_decron
 elif bq show "${PROJECT}:${DS}.gcp_billing_export_v1_${ACCT}" >/dev/null 2>&1; then
