@@ -1,11 +1,9 @@
 import { Router, Request, Response, NextFunction } from "express";
-import * as crypto from "crypto";
 import { requireAuth } from "../middleware/auth.js";
-import { db, FieldValue } from "../lib/db.js";
+import { db } from "../lib/db.js";
+import { mintTicket } from "../lib/gateway-ticket.js";
 
 const router = Router();
-
-const TICKET_TTL_MS = 30_000;
 
 const GATEWAY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
@@ -13,22 +11,17 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
   try {
     const uid = req.uid!;
 
-    const ticket = crypto.randomUUID();
-    await db.doc(`ocTickets/${ticket}`).set({
-      uid,
-      createdAt: FieldValue.serverTimestamp(),
-      expiresAt: Date.now() + TICKET_TTL_MS,
-    });
-
-const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
+    const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;
     const gatewayId =
       typeof rawGatewayId === "string" && GATEWAY_ID_PATTERN.test(rawGatewayId)
         ? rawGatewayId
         : "";
 
-const proxyUrl = process.env.API_PUBLIC_URL || "";
-    res.json({ wsTicket: ticket, proxyUrl, gatewayId });
+    const t = await mintTicket({ uid, gatewayId, purpose: "openclaw-ws" });
+
+    const proxyUrl = process.env.API_PUBLIC_URL || "";
+    res.json({ wsTicket: t.ticket, proxyUrl, gatewayId });
   } catch (e) {
     next(e);
   }

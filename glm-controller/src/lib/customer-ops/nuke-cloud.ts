@@ -46,9 +46,7 @@ export interface NukeCloudDeps {
   mattermost: MmCleanupClient;
   
   nukeUserFirestore: (uid: string) => Promise<void>;
-  
-  nukeWsTickets: (uid: string) => Promise<{ deleted: number }>;
-  
+
   deleteAvatar: (uid: string) => Promise<void>;
 
 deleteAuthUser: (uid: string) => Promise<void>;
@@ -101,7 +99,6 @@ results.push(
 results.push(
     await runStep("firestore", log, async () => {
       await deps.nukeUserFirestore(ctx.uid);
-      await deps.nukeWsTickets(ctx.uid);
     }),
   );
 

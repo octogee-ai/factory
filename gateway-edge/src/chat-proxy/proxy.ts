@@ -11,6 +11,7 @@ import {
   resolveGatewayUrl,
   GatewayResolveError,
 } from "./openclaw/gateway-resolver.js";
+import { redeemTicket } from "../lib/gateway-ticket.js";
 import { watchGatewayIdChange } from "./openclaw/gateway-id-watcher.js";
 import {
   fetchGatewayToken,
@@ -636,34 +637,19 @@ function handleOpenClawWsUpgrade(
 
   (async () => {
     try {
-      const ticketRef = db.doc(`ocTickets/${ticket}`);
-
-      const TICKET_INVALID = "TICKET_INVALID";
-      let uid: string;
-      try {
-        uid = await db.runTransaction<string>(async (tx) => {
-          const snap = await tx.get(ticketRef);
-          if (!snap.exists) throw new Error(TICKET_INVALID);
-          const data = snap.data() ?? {};
-          const expiresAt = data.expiresAt;
-          const claimUid = data.uid;
-          if (typeof expiresAt !== "number" || expiresAt < Date.now()) {
-            throw new Error(TICKET_INVALID);
-          }
-          if (typeof claimUid !== "string" || claimUid.length === 0) {
-            throw new Error(TICKET_INVALID);
-          }
-          tx.delete(ticketRef);
-          return claimUid;
-        });
-      } catch (e) {
-        if (e instanceof Error && e.message === TICKET_INVALID) {
-          socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-        throw e;
+      const redeemed = await redeemTicket({
+        ticketId: ticket,
+        purpose: "openclaw-ws",
+        // Legacy: the OC WS re-resolves the gateway from the user doc below
+        // (resolveGatewayUrl), so the ticket's gatewayId isn't the binding source.
+        expectedGatewayId: null,
+      });
+      if (!redeemed) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
       }
+      const uid = redeemed.uid;
 
       let gatewayUrl: string;
       let gatewayId: string;

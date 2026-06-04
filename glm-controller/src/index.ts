@@ -1237,19 +1237,6 @@ function buildDeprovisionCustomerHandler(
         await userRef.delete();
         await db.recursiveDelete(db.collection("customerStats").doc(uid));
       },
-      nukeWsTickets: async (uid) => {
-
-const FIRESTORE_BATCH_LIMIT = 500;
-        const snap = await db.collection("wsTickets").where("uid", "==", uid).get();
-        for (let i = 0; i < snap.docs.length; i += FIRESTORE_BATCH_LIMIT) {
-          const batch = db.batch();
-          for (const doc of snap.docs.slice(i, i + FIRESTORE_BATCH_LIMIT)) {
-            batch.delete(doc.ref);
-          }
-          await batch.commit();
-        }
-        return { deleted: snap.size };
-      },
       deleteAvatar: async (uid) => {
         const file = getStorage().bucket().file(`avatars/${uid}`);
         const [exists] = await file.exists();

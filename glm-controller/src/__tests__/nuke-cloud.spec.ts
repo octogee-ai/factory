@@ -31,7 +31,6 @@ function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
       getUserChannels: vi.fn(async () => ["mm-c-1", "mm-c-2"]),
     },
     nukeUserFirestore: vi.fn(async () => undefined),
-    nukeWsTickets: vi.fn(async () => ({ deleted: 3 })),
     deleteAvatar: vi.fn(async () => undefined),
     deleteAuthUser: vi.fn(async () => undefined),
     log: vi.fn(),
@@ -190,11 +189,10 @@ await nukeUserCloudSide(
   });
 });
 
-describe("nukeUserCloudSide — wsTickets cleanup", () => {
-  it("calls nukeWsTickets after subtree delete", async () => {
+describe("nukeUserCloudSide — firestore step", () => {
+  it("calls nukeUserFirestore in the firestore step", async () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
     expect(deps.nukeUserFirestore).toHaveBeenCalledWith("uid-alice");
-    expect(deps.nukeWsTickets).toHaveBeenCalledWith("uid-alice");
   });
 });

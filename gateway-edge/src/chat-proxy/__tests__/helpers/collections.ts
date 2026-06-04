@@ -1,3 +1,3 @@
 
 
-export const TICKETS_COLLECTION = "ocTickets";
+export const TICKETS_COLLECTION = "gatewayTickets";

@@ -174,6 +174,8 @@ afterAll(async () => {
 async function seedTicket(opts: { expiresAt?: number; uid?: string | null } = {}): Promise<void> {
   const data: Record<string, unknown> = {
     expiresAt: opts.expiresAt ?? Date.now() + 60_000,
+    purpose: "openclaw-ws",
+    gatewayId: "",
   };
   if (opts.uid !== undefined && opts.uid !== null) data.uid = opts.uid;
   await getAdminDb().collection(TICKETS_COLLECTION).doc(TICKET).set(data);

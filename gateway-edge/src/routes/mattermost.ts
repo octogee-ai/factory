@@ -34,14 +34,7 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
       return;
     }
 
-    const ticket = crypto.randomUUID();
-    await db.doc(`wsTickets/${ticket}`).set({
-      uid,
-      createdAt: FieldValue.serverTimestamp(),
-      expiresAt: Date.now() + 30_000,
-    });
-
-const proxyUrl = process.env.API_PUBLIC_URL || "";
+    const proxyUrl = process.env.API_PUBLIC_URL || "";
     const coachMmUserId = ctx.coachUserId || null;
     const coachName = userData.onboarding?.coachName || null;
 
@@ -52,7 +45,7 @@ const provisioning = userData.provisioning as { openclaw?: { gatewayId?: unknown
         ? rawGatewayId
         : "";
 
-    res.json({ mmUserId, dmChannelId, proxyUrl, gatewayId, wsTicket: ticket, coachMmUserId, coachName });
+    res.json({ mmUserId, dmChannelId, proxyUrl, gatewayId, coachMmUserId, coachName });
   } catch (e) { next(e); }
 });
 

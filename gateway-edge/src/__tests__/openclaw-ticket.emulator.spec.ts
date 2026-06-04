@@ -52,10 +52,11 @@ describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulator
     const after = Date.now();
     expect(res.status).toBe(200);
 
-    const snap = await db.collection("ocTickets").doc(res.body.wsTicket).get();
+    const snap = await db.collection("gatewayTickets").doc(res.body.wsTicket).get();
     expect(snap.exists).toBe(true);
     const data = snap.data();
     expect(data?.uid).toBe("caller-uid");
+    expect(data?.purpose).toBe("openclaw-ws");
     const exp = data?.expiresAt as number;
     expect(exp).toBeGreaterThanOrEqual(before + 29_000);
     expect(exp).toBeLessThanOrEqual(after + 31_000);
