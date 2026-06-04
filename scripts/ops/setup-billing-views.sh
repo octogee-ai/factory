@@ -51,13 +51,23 @@ create_gke_by_ns() {
   echo "  ✓ v_gke_cost_by_namespace  (src: ${DETAIL})"
 }
 
-if bq show "$DETAIL" >/dev/null 2>&1; then
+# An expired gcloud session (the squarepoint org enforces periodic reauth) must
+# fail LOUD, not masquerade as "no export yet". Unattended runs want a service account.
+if ! bq ls "${PROJECT}:${DS}" >/dev/null 2>/tmp/.bqerr.$$; then
+  if grep -qiE "reauth|auth token|gcloud auth|credential" /tmp/.bqerr.$$ 2>/dev/null; then
+    echo "AUTH ERROR: gcloud session expired — run: gcloud auth login   (unattended cron should use a service account)." >&2
+    rm -f /tmp/.bqerr.$$; exit 2
+  fi
+fi
+rm -f /tmp/.bqerr.$$ 2>/dev/null || true
+
+if bq show "${PROJECT}:${DS}.gcp_billing_export_resource_v1_${ACCT}" >/dev/null 2>&1; then
   echo "detailed export present → creating views"
   create_daily "$DETAIL"
   create_gke_by_ns
   echo "done. Point Looker Studio at project=${PROJECT} dataset=${DS} → these views."
   self_decron
-elif bq show "$STD" >/dev/null 2>&1; then
+elif bq show "${PROJECT}:${DS}.gcp_billing_export_v1_${ACCT}" >/dev/null 2>&1; then
   echo "only STANDARD export present → creating daily view; enable the DETAILED (resource-level) export for GKE-by-namespace."
   create_daily "$STD"
 else
