@@ -96,7 +96,7 @@ const VERBS: readonly VerbHelp[] = [
       "MISSING = Firestore says assigned, gateway doesn't claim mounted.\nORPHANS = mounted on a gateway but not assigned in Firestore (separate table at the bottom).",
     examples: [
       "fleet --env=prod ls customers",
-      "fleet --env=prod ls customers --gateway=gw-prod",
+      "fleet --env=prod ls customers --gateway=default",
     ],
     writes: false,
   },
@@ -115,7 +115,7 @@ const VERBS: readonly VerbHelp[] = [
     args: "<gw-id>",
     description:
       "Mounted set, failedCustomers backoff, recent restoreJobs across the gateway, pod status. Single-screen state dump.",
-    examples: ["fleet --env=prod inspect gateway gw-prod"],
+    examples: ["fleet --env=prod inspect gateway default"],
     writes: false,
   },
   {
@@ -137,8 +137,8 @@ const VERBS: readonly VerbHelp[] = [
     description:
       "Writes `users/{uid}.provisioning.openclaw.gatewayId` and the mirrored `gatewayProfile`. Refuses if the gateway doesn't exist or is `unreachable`. Same downstream path as `assign-customer-gateway.ts`, but lets ops force a specific gateway (canary placement, repair).\n\nDry-run by default. Pass `--apply` to commit.",
     examples: [
-      "fleet --env=prod add-customer ceckert --to=gw-prod-canary",
-      "fleet --env=prod add-customer ceckert --to=gw-prod-canary --apply",
+      "fleet --env=prod add-customer ceckert --to=canary",
+      "fleet --env=prod add-customer ceckert --to=canary --apply",
     ],
     writes: true,
   },
@@ -149,8 +149,8 @@ const VERBS: readonly VerbHelp[] = [
     description:
       "Plans (or executes with --apply) the four-step migration: quiesce source → transfer state → cutover Firestore → unmount source. The state machine in scripts/lib/fleet-migration.ts owns the safety boundaries; rollback is automatic on per-step failure (un-quiesce pre-cutover; reverse cutover + unmount target post-cutover).\n\nDry-run by default — pass --apply to execute. Requires FLEET_CONTROLLER_SECRET in env (see error message for the gcloud one-liner).",
     examples: [
-      "fleet --env=test migrate-customer ceckert --to=gw-test-v2",
-      "fleet --env=test migrate-customer ceckert --to=gw-test-v2 --apply",
+      "fleet --env=test migrate-customer ceckert --to=canary",
+      "fleet --env=test migrate-customer ceckert --to=canary --apply",
     ],
     writes: true,
   },
