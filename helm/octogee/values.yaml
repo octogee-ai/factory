@@ -234,6 +234,12 @@ gatewayFleet:
   # JSON patch. Use this only for first-time
   # bootstrap before glm-controller is healthy.
   instances: []
+  # Cluster-scoped custom compute class for gateway nodes (rendered by
+  # templates/gateway-compute-class.yaml). Empty name = not rendered; set
+  # per env to a cluster-unique name the per-gateway chart's
+  # .Values.computeClass matches.
+  computeClass:
+    name: ""
 
 # ── Service Account ──────────────────────────────────────────────────────────
 serviceAccount:

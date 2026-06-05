@@ -1,0 +1,65 @@
+{{- if .Values.gatewayFleet.computeClass.name }}
+# Cluster-scoped custom compute class for gateway pods. The built-in
+# Performance class + a single `machineFamily: c2d` pin let Autopilot NAP
+# provision whatever c2d machine was available — frequently an oversized
+# highcpu/highmem variant (the c2d-highcpu-16 / n2d-highmem-4 we paid for),
+# and on a c2d stockout the pod could not schedule at all. This class pins
+# the dedicated node to the smallest STANDARD machine that fits the gateway's
+# sizing tier, across fast families, while capacity exists in the priority
+# list.
+#
+# Cluster-scoped, so it is named per environment (octogee-gateway /
+# octogee-gateway-test) — the two namespace umbrella releases must not contend
+# for one resource. The per-gateway chart references this name via its own
+# .Values.computeClass (helm/octogee-gateway/values.{prod,test}.yaml); the two
+# names must match per env.
+apiVersion: cloud.google.com/v1
+kind: ComputeClass
+metadata:
+  name: {{ .Values.gatewayFleet.computeClass.name }}
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  # Smallest-first within each size; fast families in price/perf order
+  # (c2d → n2d → n2). Standard series only (4 GB/vCPU) matches the gateway
+  # tier ratios, so NAP never *settles* on a highcpu/highmem variant. NAP
+  # provisions the first rule that fits the pod and is available, so a nano
+  # pod lands a *-standard-4, a small pod skips to *-standard-8, on up to a
+  # 2xlarge landing a *-standard-64. Every declared sizing tier (nano→2xlarge,
+  # shared/types/sizing.ts) has a fitting rule, so ScaleUpAnyway below is a
+  # true last resort — not a routine path for the big tiers.
+  priorities:
+    - machineType: c2d-standard-4
+    - machineType: n2d-standard-4
+    - machineType: n2-standard-4
+    - machineType: c2d-standard-8
+    - machineType: n2d-standard-8
+    - machineType: n2-standard-8
+    - machineType: c2d-standard-16
+    - machineType: n2d-standard-16
+    - machineType: n2-standard-16
+    - machineType: c2d-standard-32
+    - machineType: n2d-standard-32
+    - machineType: n2-standard-32
+    # xlarge (32-vCPU pod) needs a 48/56-core node; c2d's ladder has no 48
+    - machineType: n2d-standard-48
+    - machineType: n2-standard-48
+    - machineType: c2d-standard-56
+    # 2xlarge (56-vCPU pod) needs a 64-core node; c2d skips 64 (jumps to 112)
+    - machineType: n2d-standard-64
+    - machineType: n2-standard-64
+  # When a pod lands on a lower-priority (bigger) node because the preferred
+  # one was momentarily unavailable, migrate it back onto a higher-priority
+  # node once one can be provisioned — so oversizing self-heals instead of
+  # sticking the way the highcpu-16 node did.
+  activeMigration:
+    optimizeRulePriority: true
+  # Required for Autopilot to create node pools from the priority rules.
+  nodePoolAutoCreation:
+    enabled: true
+  # Never strand a gateway Pending on a stockout: if every listed type is
+  # unavailable, fall back to default Autopilot scaling (activeMigration then
+  # pulls it back onto a preferred node). Availability beats strictness for a
+  # customer-facing runtime.
+  whenUnsatisfiable: ScaleUpAnyway
+{{- end }}

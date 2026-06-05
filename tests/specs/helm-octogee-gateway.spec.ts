@@ -583,6 +583,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/emptyDir:\s*\{\}/);
+    expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
     expect(dep).toMatch(/allowPrivilegeEscalation:\s*false/);
     expect(dep).toMatch(/drop:\s*\n\s*-\s*ALL/);
     expect(
@@ -602,6 +603,9 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
     expect(dep).toMatch(
       /persistentVolumeClaim:\s*\n\s*claimName:\s*"?octogee-gateway-bender-data/,
+    );
+    expect(dep).toMatch(
+      /annotations:\s*\n\s*cluster-autoscaler\.kubernetes\.io\/safe-to-evict:\s*"false"/,
     );
   });
 
