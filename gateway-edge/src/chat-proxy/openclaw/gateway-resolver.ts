@@ -2,7 +2,8 @@ import type { Firestore } from "firebase-admin/firestore";
 
 export type GatewayResolveErrorCode =
   | "user-not-provisioned"
-  | "gateway-not-registered";
+  | "gateway-not-registered"
+  | "gateway-url-unresolved";
 
 export class GatewayResolveError extends Error {
   override readonly name = "GatewayResolveError";
@@ -14,35 +15,21 @@ export class GatewayResolveError extends Error {
   }
 }
 
-export function canonicalGatewayUrl(
-  _gatewayId: string,
-  namespace: string,
-  port: string,
-): string {
-  return `http://octogee-gateway.${namespace}.svc.cluster.local:${port}`;
-}
-
 export interface ResolveGatewayOptions {
   db: Firestore;
   uid: string;
-  namespace?: string;
-  port?: string;
   overrideUrl?: string;
 }
 
 export interface ResolvedGateway {
   gatewayId: string;
   url: string;
-  usedFallback: boolean;
   userData: Record<string, unknown>;
 }
 
 export async function resolveGatewayUrl(
   opts: ResolveGatewayOptions,
 ): Promise<ResolvedGateway> {
-  const namespace = opts.namespace ?? process.env.K8S_NAMESPACE ?? "octogee";
-  const port = opts.port ?? process.env.OPENCLAW_GATEWAY_PORT ?? "18789";
-
   const userSnap = await opts.db.doc(`users/${opts.uid}`).get();
   const userData = userSnap.data() ?? {};
   const gatewayId = userData?.provisioning?.openclaw?.gatewayId;
@@ -55,7 +42,7 @@ export async function resolveGatewayUrl(
 
   const overrideUrl = opts.overrideUrl ?? process.env.OPENCLAW_GATEWAY_URL;
   if (typeof overrideUrl === "string" && overrideUrl.length > 0) {
-    return { gatewayId, url: overrideUrl, usedFallback: false, userData };
+    return { gatewayId, url: overrideUrl, userData };
   }
 
   const gwSnap = await opts.db.doc(`gateways/${gatewayId}`).get();
@@ -68,13 +55,11 @@ export async function resolveGatewayUrl(
   const gwData = gwSnap.data() ?? {};
   const internalUrl = typeof gwData.internalUrl === "string" ? gwData.internalUrl : "";
 
-  if (internalUrl.length > 0) {
-    return { gatewayId, url: internalUrl, usedFallback: false, userData };
+  if (internalUrl.length === 0) {
+    throw new GatewayResolveError(
+      "gateway-url-unresolved",
+      `gateways/${gatewayId}.internalUrl is empty — refusing to fall back to the round-robin alias`,
+    );
   }
-  return {
-    gatewayId,
-    url: canonicalGatewayUrl(gatewayId, namespace, port),
-    usedFallback: true,
-    userData,
-  };
+  return { gatewayId, url: internalUrl, userData };
 }

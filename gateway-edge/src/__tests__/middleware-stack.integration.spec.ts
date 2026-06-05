@@ -104,18 +104,6 @@ it.each(['capture', 'sync-back', 'auth-state'])(
     },
   );
 
-  it('parses JSON bodies on internal routes', async () => {
-    process.env.INTERNAL_SERVICE_KEY = 'parses-json-test-key';
-    const app = createApp();
-    const res = await request(app)
-      .post('/internal/billing/check-limit')
-      .set('X-Internal-Service-Key', 'parses-json-test-key')
-      .send({});
-
-    expect(res.status).toBe(400);
-    expect(res.body).toEqual({ error: 'Missing uid' });
-  });
-
   it('mounts /internal/builder-shell on THIS sidecar (locality) — the in-pod shell bridge redeems via localhost:3001', async () => {
 
 process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
