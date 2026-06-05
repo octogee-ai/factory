@@ -831,7 +831,7 @@ if [[ "$ENV" == "custom" ]]; then
 else
   ORCH_OUTPUT=$( (cd "$REPO_DIR/scripts" && npx tsx ops/seed-orchestrator-config.ts --env="$ENV" --dry-run) 2>&1 || true)
   if echo "$ORCH_OUTPUT" | grep -q "already seeded"; then
-    pass "config/orchestrator.defaultGatewayId = gw-$ENV (matches expected)"
+    pass "config/orchestrator.defaultGatewayId = default (matches expected)"
   elif echo "$ORCH_OUTPUT" | grep -q "(DRY-RUN) seeding"; then
     fail "config/orchestrator missing — every new signup will stall with reason 'config-missing'"
     if $FIX; then
