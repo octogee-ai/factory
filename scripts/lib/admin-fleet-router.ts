@@ -1348,6 +1348,76 @@ function addGatewayOperationRecord(opts: {
   };
 }
 
+export interface BuilderCandidate {
+  uid: string;
+  username: string;
+  email: string;
+  slug: string | null;
+  assigned: boolean;
+}
+
+interface BuilderCandidateDoc {
+  id: string;
+  data: () => Record<string, unknown>;
+}
+
+// A builder is "assigned" — and therefore excluded from the operator-gateway picker —
+// when any of three signals say a pet gateway already belongs to them:
+//   1. they are the ownerUid (or a coOwnerUid) on a glmGateways desired-state doc,
+//   2. an operatorGatewayReservations doc (id === uid) has a non-released status, or
+//   3. their own user doc carries an operatorGatewayReservation with a non-released status.
+// `released` is the only reservation status that frees the builder back up.
+export function buildBuilderCandidates(opts: {
+  approvedUsers: BuilderCandidateDoc[];
+  glmGateways: BuilderCandidateDoc[];
+  reservations: BuilderCandidateDoc[];
+  workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
+}): BuilderCandidate[] {
+  const assigned = new Set<string>();
+
+  for (const doc of opts.glmGateways) {
+    const data = doc.data();
+    const ownerUid = asStringOrNull(data.ownerUid);
+    if (ownerUid) assigned.add(ownerUid);
+    if (Array.isArray(data.coOwnerUids)) {
+      for (const co of data.coOwnerUids) {
+        if (typeof co === "string" && co.length > 0) assigned.add(co);
+      }
+    }
+  }
+
+  for (const doc of opts.reservations) {
+    const status = asStringOrNull(doc.data().status);
+    if (status !== "released") assigned.add(doc.id);
+  }
+
+  const candidates = opts.approvedUsers.map((doc) => {
+    const data = doc.data();
+    const ownReservation =
+      data.operatorGatewayReservation &&
+      typeof data.operatorGatewayReservation === "object"
+        ? (data.operatorGatewayReservation as { status?: unknown })
+        : null;
+    const ownStatus = asStringOrNull(ownReservation?.status);
+    const isAssigned =
+      assigned.has(doc.id) || (ownReservation !== null && ownStatus !== "released");
+    return {
+      uid: doc.id,
+      username: asStringOrNull(data.username) ?? "",
+      email: asStringOrNull(data.email) ?? "",
+      slug: resolveCustomerSlug(data, opts.workspaceSlugsForUser),
+      assigned: isAssigned,
+    };
+  });
+
+  candidates.sort((a, b) =>
+    (a.username || a.email).localeCompare(b.username || b.email, undefined, {
+      sensitivity: "base",
+    }),
+  );
+  return candidates;
+}
+
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(
   router: Router,
@@ -1589,6 +1659,28 @@ router.get(
           recentOperations,
           generatedAt: new Date().toISOString(),
         });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.get(
+    "/builder-candidates",
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const [usersSnap, glmSnap, reservationsSnap] = await Promise.all([
+          db.collection("users").where("approved", "==", true).get(),
+          db.collection(GLM_GATEWAYS_COLLECTION).get(),
+          db.collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION).get(),
+        ]);
+        const candidates = buildBuilderCandidates({
+          approvedUsers: usersSnap.docs,
+          glmGateways: glmSnap.docs,
+          reservations: reservationsSnap.docs,
+          workspaceSlugsForUser: deps.workspaceSlugsForUser,
+        });
+        res.json({ candidates, generatedAt: new Date().toISOString() });
       } catch (e) {
         next(e);
       }
