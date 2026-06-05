@@ -23,6 +23,15 @@ function fqSecretName(name: string): string {
   return `projects/${projectId()}/secrets/${name}`;
 }
 
+// Single-region (us-central1) replication. The platform lives entirely in
+// us-central1, so multi-region "automatic" replication adds no real
+// availability (region down ⇒ cluster down too) and costs ~25× the
+// per-version storage. All programmatic secret creation must use this. See
+// DECISIONS.md.
+export const SINGLE_REGION_REPLICATION = {
+  userManaged: { replicas: [{ location: "us-central1" }] },
+};
+
 export async function writeSecret(params: {
   name: string;
   value: string;
@@ -36,7 +45,7 @@ export async function writeSecret(params: {
       parent,
       secretId: params.name,
       secret: {
-        replication: { automatic: {} },
+        replication: SINGLE_REGION_REPLICATION,
         labels: params.labels,
       },
     });
@@ -137,7 +146,7 @@ export async function provisionGatewayAuthSecret(params: {
     await client().createSecret({
       parent,
       secretId,
-      secret: { replication: { automatic: {} } },
+      secret: { replication: SINGLE_REGION_REPLICATION },
     });
   } catch (err: unknown) {
     if ((err as { code?: number })?.code !== 6) throw err;

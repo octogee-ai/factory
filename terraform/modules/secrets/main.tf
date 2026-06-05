@@ -16,7 +16,11 @@ resource "google_secret_manager_secret" "mm_db_password" {
   project   = var.project_id
 
   replication {
-    auto {}
+    user_managed {
+      replicas {
+        location = "us-central1"
+      }
+    }
   }
 }
 
@@ -31,7 +35,11 @@ resource "google_secret_manager_secret" "gitea_db_password" {
   project   = var.project_id
 
   replication {
-    auto {}
+    user_managed {
+      replicas {
+        location = "us-central1"
+      }
+    }
   }
 }
 
@@ -46,7 +54,11 @@ resource "google_secret_manager_secret" "cloudsql_connection" {
   project   = var.project_id
 
   replication {
-    auto {}
+    user_managed {
+      replicas {
+        location = "us-central1"
+      }
+    }
   }
 }
 

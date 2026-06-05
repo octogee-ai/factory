@@ -196,7 +196,7 @@ case "$SECRET" in
       --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
     echo -n "$NEW_VALUE" | gcloud secrets create ANTHROPIC_API_KEY \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=automatic 2>/dev/null || \
+      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
       fail "Could not write to Secret Manager"
     ok "Secret Manager updated"
 
@@ -225,7 +225,7 @@ case "$SECRET" in
       --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
     echo -n "$NEW_VALUE" | gcloud secrets create INTERNAL_SERVICE_KEY \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=automatic 2>/dev/null || \
+      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
       fail "Could not write to Secret Manager"
     ok "Secret Manager updated"
 
@@ -317,7 +317,7 @@ print(json.dumps(d))
       --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
     echo -n "$NEW_VALUE" | gcloud secrets create DISCORD_OPS_WEBHOOK_URL \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=automatic 2>/dev/null || \
+      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
       fail "Could not write to Secret Manager"
     ok "Secret Manager updated"
 

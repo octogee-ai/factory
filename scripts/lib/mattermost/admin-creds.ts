@@ -3,6 +3,7 @@ import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { log } from "../config.js";
 import { db } from "../firebase.js";
 import { mmApiCall, getMmAdminToken } from "./client.js";
+import { SINGLE_REGION_REPLICATION } from "../secret-manager.js";
 
 const secretClient = new SecretManagerServiceClient();
 
@@ -52,7 +53,7 @@ const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID ||
       await secretClient.createSecret({
         parent: `projects/${project}`,
         secretId: "MM_ADMIN_TOKEN",
-        secret: { replication: { automatic: {} } },
+        secret: { replication: SINGLE_REGION_REPLICATION },
       });
       await secretClient.addSecretVersion({
         parent: secretName,

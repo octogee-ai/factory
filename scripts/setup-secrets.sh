@@ -326,7 +326,7 @@ if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
     INTERNAL_SERVICE_KEY="$EXISTING_ISK"
     echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=automatic --quiet 2>/dev/null || \
+      --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null || \
     echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
       --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
   else
@@ -335,7 +335,7 @@ if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
     info "  First install — generating INTERNAL_SERVICE_KEY, saving to Secret Manager ($FIREBASE_PROJECT)"
     if echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
          --data-file=- --project="$FIREBASE_PROJECT" \
-         --replication-policy=automatic --quiet 2>/dev/null; then
+         --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
       ok "  Created SM secret: INTERNAL_SERVICE_KEY"
     elif echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
          --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
@@ -393,7 +393,7 @@ if [[ -z "$FLEET_CONTROLLER_SECRET" ]]; then
     FLEET_CONTROLLER_SECRET="$EXISTING_FCS"
     echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets create "FLEET_CONTROLLER_SECRET" \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=automatic --quiet 2>/dev/null || \
+      --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null || \
     echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add "FLEET_CONTROLLER_SECRET" \
       --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
   else
@@ -402,7 +402,7 @@ if [[ -z "$FLEET_CONTROLLER_SECRET" ]]; then
     info "  First install — generating FLEET_CONTROLLER_SECRET, saving to Secret Manager ($FIREBASE_PROJECT)"
     if echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets create "FLEET_CONTROLLER_SECRET" \
          --data-file=- --project="$FIREBASE_PROJECT" \
-         --replication-policy=automatic --quiet 2>/dev/null; then
+         --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
       ok "  Created SM secret: FLEET_CONTROLLER_SECRET"
     elif echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add "FLEET_CONTROLLER_SECRET" \
          --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
@@ -497,7 +497,7 @@ for gw_id in "${GATEWAY_IDS[@]}"; do
     if echo -n "placeholder-awaiting-gateway-boot" | gcloud secrets create "$SECRET_NAME" \
          --data-file=- \
          --project="$FIREBASE_PROJECT" \
-         --replication-policy=automatic \
+         --replication-policy=user-managed --locations=us-central1 \
          --quiet 2>/dev/null; then
       ok "  Created SM secret: $SECRET_NAME (placeholder)"
     else
@@ -685,7 +685,7 @@ for sm_secret in \
     echo -n "placeholder" | gcloud secrets create "$sm_secret" \
       --data-file=- \
       --project="$SM_PROJECT_CF" \
-      --replication-policy=automatic \
+      --replication-policy=user-managed --locations=us-central1 \
       --quiet 2>/dev/null && ok "  Created SM secret: $sm_secret" || warn "  Could not create $sm_secret"
   fi
 done
