@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- heartbeat files live under an operator-controlled in-pod directory. */
 /* eslint-disable sonarjs/publicly-writable-directories -- /tmp is an in-pod heartbeat cache with fixed filenames, not user-controlled temp input. */
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

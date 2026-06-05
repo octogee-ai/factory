@@ -31,7 +31,6 @@ function walk(root: string, repoRoot: string): string[] {
     const dir = stack.pop()!;
     let entries: fs.Dirent[];
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- local dev audit walking the git-toplevel tree; no untrusted input, no prod surface (scripts/ is operator-risk-accepted)
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
       continue;
@@ -96,7 +95,6 @@ function main(): void {
       path: f,
       content: (() => {
         try {
-          // eslint-disable-next-line security/detect-non-literal-fs-filename -- f is a repo-relative path from the git-toplevel walk; local dev audit, no prod surface
           return fs.readFileSync(path.join(repoRoot, f), "utf8");
         } catch {
           return "";
@@ -110,7 +108,6 @@ function main(): void {
   const entries: CoverageEntry[] = sourceFiles.map((f) => {
     let loc = 0;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- f is a repo-relative path from the git-toplevel walk; local dev audit, no prod surface
       loc = fs.readFileSync(path.join(repoRoot, f), "utf8").split("\n").length;
     } catch {
       /* unreadable — loc stays 0 */

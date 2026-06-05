@@ -39,7 +39,6 @@ if (!isSafeAgentId(agentId)) {
 
 const stagingHome = codexStagingHomeDir(cfg.openclawDir, agentId);
 
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- traversal-guarded per-agent staging codex-home (isSafeAgentId)
       mkdirSync(stagingHome, { recursive: true });
       const child = spawn(codexBin, ["login", "--device-auth"], {
         env: {
@@ -79,7 +78,6 @@ onExit: (cb) => {
       if (!isSafeAgentId(agentId)) return null;
       try {
 
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- traversal-guarded per-agent staging codex-home (isSafeAgentId)
         return await readFile(
           codexStagingAuthJsonPath(cfg.openclawDir, agentId),
           "utf8",
@@ -97,13 +95,9 @@ onExit: (cb) => {
       const tmp = `${live}.promote.tmp`;
       try {
 
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- traversal-guarded per-agent codex-home (isSafeAgentId)
         const payload = await readFile(staged, "utf8");
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- traversal-guarded per-agent codex-home (isSafeAgentId)
         await mkdir(dirname(live), { recursive: true });
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- traversal-guarded per-agent codex-home (isSafeAgentId)
         await writeFile(tmp, payload, { mode: 0o600 });
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- traversal-guarded per-agent codex-home (isSafeAgentId)
         await rename(tmp, live);
         return { ok: true };
       } catch (e) {

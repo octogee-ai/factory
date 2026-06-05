@@ -94,7 +94,6 @@ async function main(): Promise<void> {
 
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-supplied --file; operator CLI
     raw = fs.readFileSync(args.file, "utf-8");
   } catch (e) {
     console.error(`--file is not readable: ${(e as Error).message}`);
@@ -113,7 +112,6 @@ async function main(): Promise<void> {
     process.env.HOME ?? "",
     `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
   );
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- SA key path derived from --env; operator CLI
   if (!fs.existsSync(saPath)) {
     console.error(`SA key not found at ${saPath}`);
     process.exit(1);
@@ -121,7 +119,6 @@ async function main(): Promise<void> {
   process.env.GCP_PROJECT_ID = project;
   process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
   initializeApp({
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- SA key path derived from --env; operator CLI
     credential: cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
     projectId: project,
   });

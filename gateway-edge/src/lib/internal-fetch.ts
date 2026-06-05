@@ -12,7 +12,6 @@ export interface InternalFetchOptions {
 
 async function readProjectedToken(tokenPath: string): Promise<string | null> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed projected service-account token path, injectable only for tests.
     const token = (await readFile(tokenPath, "utf8")).trim();
     return token.length > 0 ? token : null;
   } catch {

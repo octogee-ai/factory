@@ -423,14 +423,12 @@ const tryByField = async (
       },
       fileExists: (p) => {
         try {
-          // eslint-disable-next-line security/detect-non-literal-fs-filename -- p is path.join(HOME, ".gitconfig"), trusted-internal
           fs.statSync(p);
           return true;
         } catch {
           return false;
         }
       },
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- p is path.join(HOME, ".gitconfig"), trusted-internal
       writeFile: (p, c) => fs.writeFileSync(p, c, { mode: 0o644 }),
       logFn: log,
     });

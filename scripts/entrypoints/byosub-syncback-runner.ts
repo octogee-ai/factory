@@ -23,7 +23,6 @@ function log(msg: string): void {
 async function loadTargets(): Promise<SyncBackTarget[]> {
   let config: unknown;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed module-const path
     config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
   } catch {
     return [];

@@ -607,7 +607,6 @@ if (tmpDir) {
 
 async function streamRequestToFile(req: Request, dest: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest is a fixed import.tar path under an fs.mkdtemp-created migration dir.
     const writeStream = createWriteStream(dest);
     let settled = false;
     const settle = (action: () => void) => {
@@ -758,7 +757,6 @@ export async function readAgentSessions(
 ): Promise<SessionsJson["sessions"]> {
   const sessionsPath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- stateDir is gateway-owned OpenClaw state and agentId is derived from a validated slug.
     const raw = await fs.readFile(sessionsPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<SessionsJson>;
     return parsed.sessions ?? [];

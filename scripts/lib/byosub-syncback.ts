@@ -8,7 +8,6 @@ export interface AuthFingerprint {
 
 export function fingerprintFile(filePath: string): AuthFingerprint | null {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- per-agent codex-home path from SAFE_AGENT_ID-guarded plan
     const buf = fs.readFileSync(filePath);
     return {
       sha256: createHash("sha256").update(buf).digest("hex"),
@@ -68,7 +67,6 @@ export async function syncBackSweep(opts: {
       continue;
     }
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- per-agent codex-home path from the SAFE_AGENT_ID-guarded plan
       const payload = fs.readFileSync(t.authPath, "utf-8");
       if (opts.pushCredential) await opts.pushCredential(t.agentId, payload);
       pushed++;

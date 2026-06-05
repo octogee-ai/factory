@@ -82,7 +82,6 @@ export async function extractOpenClawActivationManifest(
   configPath: string,
   slug: string,
 ): Promise<MigrationActivationManifest> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is the gateway-owned OpenClaw config path from runtime config.
   const raw = await fs.readFile(configPath, "utf-8");
   const parsed = JSON.parse(raw) as {
     agents?: { list?: unknown[] };
@@ -116,9 +115,7 @@ export async function writeActivationManifest(
 ): Promise<{ cwd: string; path: string }> {
   const relPath = activationManifestTarPath(manifest.slug);
   const fullPath = path.join(rootDir, relPath);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- rootDir is an fs.mkdtemp-created directory and relPath is fixed from a validated slug.
   await fs.mkdir(path.dirname(fullPath), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fullPath is under the fs.mkdtemp-created migration manifest directory.
   await fs.writeFile(fullPath, `${JSON.stringify(manifest)}\n`, "utf-8");
   return { cwd: rootDir, path: relPath };
 }
@@ -128,7 +125,6 @@ export async function readActivationManifest(
   slug: string,
 ): Promise<MigrationActivationManifest> {
   const manifestPath = activationManifestDiskPath(openclawDir, slug);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath is under gateway-owned OPENCLAW_DIR and a fixed migration metadata path.
   const raw = await fs.readFile(manifestPath, "utf-8");
   return validateManifestShape(JSON.parse(raw), slug);
 }

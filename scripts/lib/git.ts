@@ -5,9 +5,8 @@
 // scripts/lib/provisionSteps.ts. The remaining slug sources here are
 // either operator-supplied (deleteCustomerSshKey, archive*) which the
 // operator owns, or on-disk listings of already-provisioned customer
-// directories (syncAllWorkspaces). The non-literal-fs rule can't see
-// the cross-module invariant; isValidUsername() IS the defense.
-/* eslint-disable security/detect-non-literal-fs-filename */
+// directories (syncAllWorkspaces). isValidUsername() at that entry point
+// is the path-traversal defense.
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";

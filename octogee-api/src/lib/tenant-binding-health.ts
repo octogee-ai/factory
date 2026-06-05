@@ -45,7 +45,6 @@ export function startTenantBindingSelfCheck(
   const tokenPath = opts.tokenPath ?? DEFAULT_PROJECTED_API_TOKEN_PATH;
   const runSelfCheck = async (): Promise<void> => {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed projected service-account token path, injectable only for tests.
       const token = (await readFile(tokenPath, "utf8")).trim();
       if (!token) throw new Error(`empty projected token at ${tokenPath}`);
       const reviewed = await opts.reviewer(token);

@@ -80,13 +80,11 @@ const blobEntries = Object.entries(manifest).filter(([, e]) => e.type === "blob"
 }
 
 function pathExists(p: string): boolean {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header
   return fs.existsSync(p);
 }
 
 function readJsonOrLog<T>(filePath: string, slug: string, label: string): T | null {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header
     return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
   } catch {
     log(`⚠ [blob-sync] ${slug}: failed to parse ${label}`);
@@ -96,7 +94,6 @@ function readJsonOrLog<T>(filePath: string, slug: string, label: string): T | nu
 
 function readJsonOrEmpty<T>(filePath: string): T | null {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header
     return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
   } catch {
     return null;
@@ -104,25 +101,21 @@ function readJsonOrEmpty<T>(filePath: string): T | null {
 }
 
 function mkdirP(dir: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header
   fs.mkdirSync(dir, { recursive: true });
 }
 
 function writeFile(filePath: string, contents: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header
   fs.writeFileSync(filePath, contents, "utf-8");
 }
 
 function unlinkIfExists(filePath: string): boolean {
   if (!pathExists(filePath)) return false;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header
   fs.unlinkSync(filePath);
   return true;
 }
 
 function statOrNull(filePath: string): fs.Stats | null {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header
     return fs.statSync(filePath);
   } catch {
     return null;
@@ -132,7 +125,6 @@ function statOrNull(filePath: string): fs.Stats | null {
 export function listFilesRecursive(dir: string, base: string): string[] {
   if (!pathExists(dir)) return [];
   const results: string[] = [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- see file header
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue;
     const full = path.join(dir, entry.name);
@@ -183,9 +175,7 @@ function recordUpload(
 export async function blobSyncAll(): Promise<void> {
   if (!pathExists(CUSTOMERS_DIR)) return;
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CUSTOMERS_DIR is config
   const slugs = fs.readdirSync(CUSTOMERS_DIR).filter(d => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- CUSTOMERS_DIR is config
     return fs.statSync(path.join(CUSTOMERS_DIR, d)).isDirectory();
   });
 

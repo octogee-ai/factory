@@ -51,7 +51,6 @@ type ReadResult<T> =
 function readJson<T>(filePath: string): ReadResult<T> {
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- internal agent dir, see file header
     raw = fs.readFileSync(filePath, "utf-8");
   } catch (err) {
     return (err as NodeJS.ErrnoException)?.code === "ENOENT"

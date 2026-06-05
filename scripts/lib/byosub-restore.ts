@@ -166,12 +166,10 @@ const apPath = codexAuthProfilesPath(item.openclawDir, item.agentId);
     const apTmp = `${apPath}.tmp`;
 
 if (item.provider === "openai") {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path-traversal-guarded per-agent path (codexAuthProfilesPath / SAFE_AGENT_ID)
       const authProfilesPresent = fs.existsSync(apPath);
       const authStatePath = codexAuthStatePath(item.openclawDir, item.agentId);
       let authStateText: string | null = null;
       try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent agentDir (see above)
         authStateText = fs.readFileSync(authStatePath, "utf8");
       } catch {
         authStateText = null; 
@@ -194,27 +192,20 @@ if (item.provider === "openai") {
     try {
       const payload = await opts.fetchSecret(item.secretName);
 
-const codexStore =
+      const codexStore =
         item.provider === "openai" ? buildCodexAuthProfilesStore(payload) : null;
 
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- path-traversal-guarded per-agent codex-home (SAFE_AGENT_ID)
       fs.mkdirSync(path.dirname(item.targetPath), { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent codex-home (see above)
       fs.writeFileSync(tmp, payload, { mode: 0o600 });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent codex-home (see above)
       fs.chmodSync(tmp, 0o600);
       if (codexStore) {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent agentDir (see above)
         fs.writeFileSync(apTmp, JSON.stringify(codexStore, null, 2) + "\n", {
           mode: 0o600,
         });
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent agentDir (see above)
         fs.chmodSync(apTmp, 0o600);
       }
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent codex-home (see above)
       fs.renameSync(tmp, item.targetPath);
       if (codexStore) {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded per-agent agentDir (see above)
         fs.renameSync(apTmp, apPath);
       }
       restored++;

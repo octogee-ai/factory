@@ -171,9 +171,7 @@ export function createKubernetesTokenReviewer(
     const apiPort = opts.apiPort ?? process.env.KUBERNETES_SERVICE_PORT_HTTPS ?? "443";
     const reviewerTokenPath = opts.reviewerTokenPath ?? DEFAULT_K8S_SA_TOKEN_PATH;
     const caPath = opts.caPath ?? DEFAULT_K8S_CA_PATH;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed service-account path, injectable only for tests.
     const bearerToken = (await readFile(reviewerTokenPath, "utf8")).trim();
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed service-account CA path, injectable only for tests.
     const ca = await readFile(caPath, "utf8").catch(() => undefined);
     const response = await transport({
       url: `https://${apiHost}:${apiPort}/apis/authentication.k8s.io/v1/tokenreviews`,
