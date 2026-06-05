@@ -10,7 +10,7 @@ gcpServiceAccount: ""
 # Path inside the controller image where the standalone per-instance
 # gateway chart is baked at build time (see glm-controller/Dockerfile,
 # which COPYs helm/octogee-gateway → /charts/octogee-gateway). The
-# reconciler installs `octogee-gw-<instanceName>` releases off this
+# reconciler installs `octogee-gw-<gatewayId>` releases off this
 # chart. Override only for tests / non-standard image layouts.
 gatewayChart: /charts/octogee-gateway
 

@@ -123,11 +123,11 @@ const PREVIEW_PORT = 9080;
 
 function createGatewayPersistentVolumeClaimDeleter(
   kubeOps: KubeOps,
-): (instanceName: string) => Promise<void> {
-  return async (instanceName) => {
+): (gatewayId: string) => Promise<void> {
+  return async (gatewayId) => {
     await kubeOps.deletePersistentVolumeClaim({
       namespace: NAMESPACE,
-      name: `octogee-gateway-${instanceName}-data`,
+      name: `octogee-gateway-${gatewayId}-data`,
     });
   };
 }
@@ -140,7 +140,7 @@ interface ControllerDeps {
   log: (msg: string) => void;
 
   syncFleetIngress?: (
-    gateways: ReadonlyArray<{ gatewayId: string; instanceName: string }>,
+    gateways: ReadonlyArray<{ gatewayId: string }>,
   ) => Promise<void>;
 
   reconcileRetryMs?: number;
@@ -150,12 +150,12 @@ interface ControllerDeps {
   chartFingerprint?: string;
 }
 
-function deploymentNameForInstance(instanceName: string): string {
-  return `octogee-gateway-${instanceName}`;
+function deploymentNameForInstance(gatewayId: string): string {
+  return `octogee-gateway-${gatewayId}`;
 }
 
-function gatewayServiceInternalUrl(instanceName: string): string {
-  return `http://${deploymentNameForInstance(instanceName)}.${NAMESPACE}.svc.cluster.local:18789`;
+function gatewayServiceInternalUrl(gatewayId: string): string {
+  return `http://${deploymentNameForInstance(gatewayId)}.${NAMESPACE}.svc.cluster.local:18789`;
 }
 
 function versionFromImageTag(imageTag: string | undefined): string {
@@ -172,7 +172,6 @@ async function publishPlatformGatewayReady(
   db: Firestore,
   input: {
     gatewayId: string;
-    instanceName: string;
     imageTag?: string;
     now: number;
   },
@@ -185,7 +184,7 @@ async function publishPlatformGatewayReady(
       gatewayId: input.gatewayId,
       status: "ready",
       version: versionFromImageTag(input.imageTag),
-      internalUrl: gatewayServiceInternalUrl(input.instanceName),
+      internalUrl: gatewayServiceInternalUrl(input.gatewayId),
       lastHeartbeatAt: FieldValue.serverTimestamp(),
       startedAt: typeof existing?.startedAt === "number" ? existing.startedAt : input.now,
     };
@@ -239,7 +238,7 @@ async function applyChanges(
     if (change.kind === "drift") {
       await deps.helm.removeInstance({
         namespace: NAMESPACE,
-        instanceName: change.instanceName,
+        gatewayId: change.gatewayId,
       });
       continue;
     }
@@ -247,7 +246,7 @@ async function applyChanges(
       const replicas = change.to.replicas ?? 1;
       await kubeOps.scaleDeployment({
         namespace: NAMESPACE,
-        name: deploymentNameForInstance(change.instanceName),
+        name: deploymentNameForInstance(change.gatewayId),
         replicas,
       });
       continue;
@@ -255,7 +254,6 @@ async function applyChanges(
 
     await deps.helm.upsertInstance({
       namespace: NAMESPACE,
-      instanceName: change.instanceName,
       gatewayId: change.to.gatewayId,
       imageRepository: change.to.image.repository,
       imageTag: change.to.image.tag,
@@ -281,19 +279,19 @@ async function readLiveReplicasInto(
 ): Promise<void> {
   const names = Object.keys(actualMap);
   await Promise.all(
-    names.map(async (instanceName) => {
+    names.map(async (gatewayId) => {
       try {
         const live = await kubeOps.readDeployedReplicas({
           namespace: NAMESPACE,
-          name: deploymentNameForInstance(instanceName),
+          name: deploymentNameForInstance(gatewayId),
         });
         if (live !== null) {
-          actualMap[instanceName] = { ...actualMap[instanceName], replicas: live };
+          actualMap[gatewayId] = { ...actualMap[gatewayId], replicas: live };
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(
-          `[glm-controller] ⚠ kube readReplicas failed for ${instanceName}: ${msg} — keeping helm-stored value`,
+          `[glm-controller] ⚠ kube readReplicas failed for ${gatewayId}: ${msg} — keeping helm-stored value`,
         );
       }
     }),
@@ -340,7 +338,7 @@ function preservedDriftChanges(
   return changes.filter(
     (c): c is DriftChange =>
       c.kind === "drift" &&
-      Object.prototype.hasOwnProperty.call(targetMap, c.instanceName),
+      Object.prototype.hasOwnProperty.call(targetMap, c.gatewayId),
   );
 }
 
@@ -353,16 +351,14 @@ function logPreservedDrift(
   const orphanDrift = preservedDrift.filter((c) => !desiredGatewayIds.has(c.current.gatewayId));
   const draineeDrift = preservedDrift.filter((c) => desiredGatewayIds.has(c.current.gatewayId));
   if (orphanDrift.length > 0) {
-    const formatted = orphanDrift
-      .map((d) => `${d.instanceName} (gatewayId=${d.current.gatewayId})`)
-      .join(", ");
+    const formatted = orphanDrift.map((d) => d.gatewayId).join(", ");
     deps.log(
-      `[glm-controller] ⚠ 🧟 orphan helm release(s) — no matching glmGateways doc: ${formatted} (manual \`helm uninstall octogee-gw-<instanceName>\` required to remove)`,
+      `[glm-controller] ⚠ 🧟 orphan helm release(s) — no matching glmGateways doc: ${formatted} (manual \`helm uninstall octogee-gw-<gatewayId>\` required to remove)`,
     );
   }
   if (draineeDrift.length > 0) {
     deps.log(
-      `[glm-controller] drift detected (preserved, not removed): ${draineeDrift.map((d) => d.instanceName).join(", ")}`,
+      `[glm-controller] drift detected (preserved, not removed): ${draineeDrift.map((d) => d.gatewayId).join(", ")}`,
     );
   }
 }
@@ -378,7 +374,7 @@ async function applyTargetChanges(
     return;
   }
   const summary = targetVsActual
-    .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.instanceName}`)
+    .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.gatewayId}`)
     .join(", ");
   deps.log(`[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`);
   await applyChanges(targetVsActual, deps);
@@ -391,8 +387,8 @@ async function syncFleetIngressIfConfigured(
   const syncFleetIngress = deps.syncFleetIngress;
   if (!syncFleetIngress) return;
   const fleetGateways = desired
-    .filter((g) => typeof g.gatewayId === "string" && typeof g.instanceName === "string")
-    .map((g) => ({ gatewayId: g.gatewayId, instanceName: g.instanceName }));
+    .filter((g) => typeof g.gatewayId === "string")
+    .map((g) => ({ gatewayId: g.gatewayId }));
   try {
     await syncFleetIngress(fleetGateways);
   } catch (err) {
@@ -403,7 +399,6 @@ async function syncFleetIngressIfConfigured(
 
 interface ReadyOperatorGateway {
   gatewayId: string;
-  instanceName: string;
   imageTag: string;
 }
 
@@ -415,22 +410,20 @@ async function refreshOperatorGatewayReadiness(
   if (!kubeOps) return [];
   const results = await Promise.all(
     desired.filter(isRunningOperatorGateway).map(async (gateway) => {
-      if (!gateway.gatewayId || !gateway.instanceName) return null;
+      if (!gateway.gatewayId) return null;
       try {
         const available = await kubeOps.readAvailableReplicas({
           namespace: NAMESPACE,
-          name: deploymentNameForInstance(gateway.instanceName),
+          name: deploymentNameForInstance(gateway.gatewayId),
         });
         if (available == null || available < 1) return null;
         await publishPlatformGatewayReady(deps.db, {
           gatewayId: gateway.gatewayId,
-          instanceName: gateway.instanceName,
           imageTag: gateway.imageTag,
           now: Date.now(),
         });
         return {
           gatewayId: gateway.gatewayId,
-          instanceName: gateway.instanceName,
           imageTag: gateway.imageTag,
         };
       } catch (err) {
@@ -765,11 +758,8 @@ const syncAllFleetIngresses = async (gateways: ReadonlyArray<FleetGateway>) => {
 const handlerSyncFleetIngress = async () => {
     const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
     const gateways: FleetGateway[] = snap.docs
-      .map((d) => d.data() as { gatewayId?: unknown; instanceName?: unknown })
-      .filter(
-        (g): g is FleetGateway =>
-          typeof g.gatewayId === "string" && typeof g.instanceName === "string",
-      );
+      .map((d) => d.data() as { gatewayId?: unknown })
+      .filter((g): g is FleetGateway => typeof g.gatewayId === "string");
     await syncAllFleetIngresses(gateways);
   };
 
@@ -875,7 +865,7 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
     try {
       await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(w.gatewayId).create(w.doc);
       deps.log(
-        `[glm-controller] bootstrap: registering existing instance ${w.doc.instanceName} as glmGateways/${w.gatewayId}`,
+        `[glm-controller] bootstrap: registering existing release as glmGateways/${w.gatewayId}`,
       );
     } catch (err) {
       if ((err as { code?: number })?.code === 6) {
@@ -935,7 +925,6 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
     actualMap,
     existingGatewayIds,
     defaultGatewayId,
-    instanceName: process.env.BOOTSTRAP_INSTANCE_NAME ?? "default",
     imageRepository:
       process.env.BOOTSTRAP_IMAGE_REPOSITORY ??
       "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
@@ -948,7 +937,7 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
   try {
     await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(decision.gatewayId).create(decision.doc);
     deps.log(
-      `[glm-controller] default-gateway bootstrap: created glmGateways/${decision.gatewayId} (instanceName=${decision.doc.instanceName}, imageTag=${decision.doc.imageTag})`,
+      `[glm-controller] default-gateway bootstrap: created glmGateways/${decision.gatewayId} (imageTag=${decision.doc.imageTag})`,
     );
   } catch (err) {
     if ((err as { code?: number })?.code === 6) {
@@ -1011,10 +1000,9 @@ async function buildHandlers(
     kubeOps,
     readGatewayHeartbeat: (gatewayId) =>
       readGatewayHeartbeatFromFirestore(db, gatewayId),
-    publishGatewayReady: async ({ gatewayId, instanceName, imageTag }) => {
+    publishGatewayReady: async ({ gatewayId, imageTag }) => {
       await publishPlatformGatewayReady(db, {
         gatewayId,
-        instanceName,
         imageTag,
         now: Date.now(),
       });
@@ -1082,11 +1070,11 @@ async function buildHandlers(
           : null;
       return { mountedCustomers: mounted, inFlightJobId };
     },
-    readGlmGatewayInstanceName: async (gatewayId) => {
+    readGlmGatewayId: async (gatewayId) => {
       const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
       if (!doc.exists) return null;
       const data = doc.data() as GatewayDesiredState | undefined;
-      return data?.instanceName ?? null;
+      return data?.gatewayId ?? null;
     },
     deleteGlmGateway: async (gatewayId) => {
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).delete();
@@ -1113,9 +1101,9 @@ async function buildHandlers(
       const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
       if (!doc.exists) return null;
       const data = doc.data() as GatewayDesiredState | undefined;
-      if (!data?.instanceName || !data.imageRepository || !data.imageTag) return null;
+      if (!data?.gatewayId || !data.imageRepository || !data.imageTag) return null;
       return {
-        instanceName: data.instanceName,
+        gatewayId: data.gatewayId,
         imageRepository: data.imageRepository,
         imageTag: data.imageTag,
         profile: data.profile,
@@ -1315,12 +1303,7 @@ async function resolveGatewayUrlFromFirestore(
   if (!doc.exists) {
     throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
   }
-  const data = doc.data() as GatewayDesiredState | undefined;
-  const instanceName = data?.instanceName;
-  if (!instanceName) {
-    throw new Error(`glmGateways/${gatewayId} missing instanceName`);
-  }
-  return `http://octogee-gateway-${instanceName}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}`;
+  return `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}`;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

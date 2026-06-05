@@ -22,7 +22,7 @@ export interface GatewayHeartbeatVersion {
 }
 
 export interface CurrentGatewaySpec {
-  instanceName: string;
+  gatewayId: string;
   imageRepository: string;
   imageTag: string;
   profile?: GatewayProfile;
@@ -79,7 +79,6 @@ const PINNED_OC_MARKER = "-oc";
 interface RolloutTarget {
   gatewayId: string;
   imageTag: string;
-  instanceName: string;
   newRepository: string;
   newProfile: GatewayProfile;
   newPersistence: GatewayPersistenceSpec | undefined;
@@ -170,7 +169,7 @@ async function resolveRolloutTarget(
     !operatorSafetyDefaultsMissing;
   if (desiredMatchesRequest) {
     const deployedMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-    const deployed = deployedMap[current.instanceName];
+    const deployed = deployedMap[current.gatewayId];
     const actualMatchesRequest =
       !!deployed &&
       deployed.image.repository === resolvedRepository &&
@@ -188,7 +187,6 @@ async function resolveRolloutTarget(
     target: {
       gatewayId,
       imageTag,
-      instanceName: current.instanceName,
       newRepository,
       newProfile,
       newPersistence,
@@ -257,10 +255,10 @@ const renderResult = await pollUntil({
       deps,
       check: async () => {
         const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-        const entry = map[resolved.target.instanceName];
+        const entry = map[resolved.target.gatewayId];
         return entry?.image.tag === imageTag && entry.image.repository === resolvedRepository;
       },
-      timeoutMessage: `helm did not render ${resolved.target.instanceName}@${imageTag} within ${deps.helmRenderTimeoutMs}ms`,
+      timeoutMessage: `helm did not render ${resolved.target.gatewayId}@${imageTag} within ${deps.helmRenderTimeoutMs}ms`,
     });
     if (!renderResult.ok) {
       return { steps: [], success: false, error: renderResult.errorMsg };

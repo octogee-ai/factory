@@ -13,12 +13,11 @@ beforeAll(() => {
     throw new Error(`octogee-gateway chart not found at ${CHART_PATH}`);
   }
 
-spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "instanceName=warmup", "--set", "imageTag=warmup", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example"], { encoding: "utf-8" });
+spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "imageTag=warmup", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example"], { encoding: "utf-8" });
 }, 60_000);
 
 const REQUIRED_VALUES: Record<string, string> = {
-  gatewayId: "gw-test",
-  instanceName: "default",
+  gatewayId: "default",
   imageTag: "abc1234",
   "env.mmSiteUrl": "https://mm-test.example.com",
   "env.mmInternalUrl": "http://mattermost.octogee-test.svc.cluster.local:8065",
@@ -65,7 +64,7 @@ function containerBlock(dep: string, name: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
-  it("renders one Deployment named octogee-gateway-<instanceName>", () => {
+  it("renders one Deployment named octogee-gateway-<gatewayId>", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
@@ -73,8 +72,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
 
   it("can render the generated per-operator ServiceAccount without a Workload Identity annotation", () => {
     const out = helmTemplate("octogee-gw-bender", {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+      gatewayId: "bender",
       profile: "operator",
       "serviceAccount.create": "true",
     });
@@ -87,8 +85,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
 
   it("operator profile does not inherit the shared platform ServiceAccount when Cowboy omits an override", () => {
     const out = helmTemplate("octogee-gw-bender", {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+      gatewayId: "bender",
       profile: "operator",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
@@ -130,8 +127,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", {
-          gatewayId: "gw-bender",
-          instanceName: "bender",
+          gatewayId: "bender",
           profile: "operator",
         }),
         "Deployment",
@@ -166,14 +162,14 @@ const out = helmTemplate();
     }
   });
 
-  it("renders the per-instance Service octogee-gateway-<instanceName>", () => {
+  it("renders the per-instance Service octogee-gateway-<gatewayId>", () => {
     const out = helmTemplate();
     const svc = findDoc(out, "Service", "octogee-gateway-default");
     expect(svc).not.toBeNull();
     expect(svc).toMatch(/gateway-instance:\s*default/);
   });
 
-  it("renders the gateway-edge-<instanceName> alias Service", () => {
+  it("renders the gateway-edge-<gatewayId> alias Service", () => {
     const out = helmTemplate();
     const svc = findDoc(out, "Service", "gateway-edge-default");
     expect(svc).not.toBeNull();
@@ -238,8 +234,7 @@ const out = helmTemplate();
 
   it("emits a different deployment name for a second instance", () => {
     const out = helmTemplate("octogee-gw-canary", {
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
     });
     expect(findDoc(out, "Deployment", "octogee-gateway-canary")).not.toBeNull();
     expect(findDoc(out, "Service", "octogee-gateway-canary")).not.toBeNull();
@@ -593,8 +588,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
 
   it("persistence.enabled renders a PVC that survives `helm uninstall` (pet volume must not be reclaimed)", () => {
     const out = helmTemplate("octogee-gw-bender", {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+      gatewayId: "bender",
       "persistence.enabled": "true",
     });
     const pvc = findDoc(out, "PersistentVolumeClaim", "octogee-gateway-bender-data");
@@ -611,8 +605,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
 
   it("gatewayContainerSecurityContext override elevates one instance without touching the default", () => {
     const out = helmTemplate("octogee-gw-bender", {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+      gatewayId: "bender",
       "gatewayContainerSecurityContext.allowPrivilegeEscalation": "true",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
@@ -709,8 +702,6 @@ describe("helm/octogee-gateway/ — required value validation", () => {
       CHART_PATH,
       "--namespace=octogee-test",
       "--set",
-      "instanceName=broken",
-      "--set",
       "imageTag=abc",
       "--set",
       "env.mmSiteUrl=https://x",
@@ -720,29 +711,10 @@ describe("helm/octogee-gateway/ — required value validation", () => {
     expect(result.stderr).toMatch(/gatewayId/);
   });
 
-  it("fails to render when instanceName is missing", () => {
-    const args = [
-      "template",
-      "octogee-gw-broken",
-      CHART_PATH,
-      "--namespace=octogee-test",
-      "--set",
-      "gatewayId=gw-broken",
-      "--set",
-      "imageTag=abc",
-      "--set",
-      "env.mmSiteUrl=https://x",
-    ];
-    const result = spawnSync("helm", args, { encoding: "utf-8" });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/instanceName/);
-  });
-
   describe("env dedup — operator profile omits INTERNAL_SERVICE_KEY from the pod", () => {
     it("operator profile renders no INTERNAL_SERVICE_KEY entries because the pod is tenant-untrusted", () => {
       const operatorOut = helmTemplate("octogee-gw-bender", {
-        gatewayId: "gw-bender",
-        instanceName: "bender",
+        gatewayId: "bender",
         profile: "operator",
       });
       const baselineOut = helmTemplate();
@@ -766,8 +738,7 @@ describe("helm/octogee-gateway/ — required value validation", () => {
 
     it("INTERNAL_SERVICE_KEY is absent from both operator containers", () => {
       const out = helmTemplate("octogee-gw-bender", {
-        gatewayId: "gw-bender",
-        instanceName: "bender",
+        gatewayId: "bender",
         profile: "operator",
       });
       const dep = findDoc(out, "Deployment", "octogee-gateway-bender");
@@ -792,7 +763,7 @@ describe("helm/octogee-gateway/ — required value validation", () => {
 // value; the chart threads it via secretKeyRef on every container that
 // needs it. Token is stable across reboots, helm-owned end to end.
 describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () => {
-  const SECRET_NAME = "gateway-auth-token-gw-test";
+  const SECRET_NAME = "gateway-auth-token-default";
 
   function envBlock(dep: string, containerName: "gateway" | "gateway-edge"): string {
     return (
@@ -852,13 +823,12 @@ describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () =
 
   it("derives the secret name from gatewayId so operator and cattle gateways get distinct secrets", () => {
     const benderOut = helmTemplate("octogee-gw-bender", {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+      gatewayId: "bender",
       profile: "operator",
     });
     const benderDep = findDoc(benderOut, "Deployment", "octogee-gateway-bender") ?? "";
-    expect(benderDep).toMatch(/name:\s*gateway-auth-token-gw-bender\b/);
-    expect(benderDep).not.toMatch(/name:\s*gateway-auth-token-gw-test\b/);
+    expect(benderDep).toMatch(/name:\s*gateway-auth-token-bender\b/);
+    expect(benderDep).not.toMatch(/name:\s*gateway-auth-token-default\b/);
   });
 
   it("operator profile threads the same secret on the same three containers (no profile-specific drift)", () => {
@@ -923,9 +893,7 @@ describe("helm/octogee-gateway/ — required-env render assertions", () => {
       CHART_PATH,
       "--namespace=octogee-test",
       "--set",
-      "gatewayId=gw-test",
-      "--set",
-      "instanceName=default",
+      "gatewayId=default",
       "--set",
       "imageTag=abc",
       "--set",
@@ -968,9 +936,7 @@ describe("helm/octogee-gateway/ — values.schema.json", () => {
       CHART_PATH,
       "--namespace=octogee-test",
       "--set",
-      "gatewayId=gw-test",
-      "--set",
-      "instanceName=default",
+      "gatewayId=default",
       "--set",
       "imageTag=abc",
       "--set",
@@ -993,9 +959,7 @@ describe("helm/octogee-gateway/ — values.schema.json", () => {
       CHART_PATH,
       "--namespace=octogee-test",
       "--set",
-      "gatewayId=gw-test",
-      "--set",
-      "instanceName=default",
+      "gatewayId=default",
       "--set",
       "imageTag=abc",
       "--set",
@@ -1094,8 +1058,7 @@ describe("helm/octogee-gateway/ — env entries pass K8s schema (no value+valueF
 
   it("operator profile: no env entry sets both `value` and `valueFrom`", () => {
     const out = helmTemplate("octogee-gw-bender", {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+      gatewayId: "bender",
       profile: "operator",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
@@ -1133,8 +1096,7 @@ describe("helm/octogee-gateway/ — env entries pass K8s schema (no value+valueF
 
     it("renders the override when workspaceAutosaveEnabled=true (operator opts back in)", () => {
       const out = helmTemplate("octogee-gw-bender", {
-        gatewayId: "gw-bender",
-        instanceName: "bender",
+        gatewayId: "bender",
         profile: "operator",
         workspaceAutosaveEnabled: "true",
       });

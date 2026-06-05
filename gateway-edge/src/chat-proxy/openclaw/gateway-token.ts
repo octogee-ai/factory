@@ -1,8 +1,11 @@
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import {
-  GATEWAY_ID_PATTERN,
   GATEWAY_TOKEN_PLACEHOLDER,
 } from "./gateway-token-constants.js";
+import {
+  GATEWAY_ID_REQUIREMENT,
+  isValidGatewayId,
+} from "../../../../shared/types/glm.js";
 
 export type GatewayTokenErrorCode =
   | "empty-token"
@@ -45,10 +48,10 @@ function getClient(): SecretManagerServiceClient {
 }
 
 function requireValidGatewayId(gatewayId: string): void {
-  if (!GATEWAY_ID_PATTERN.test(gatewayId)) {
+  if (!isValidGatewayId(gatewayId)) {
     throw new GatewayTokenError(
       "invalid-gateway-id",
-      `gatewayId ${JSON.stringify(gatewayId)} does not match ${GATEWAY_ID_PATTERN}`,
+      `gatewayId ${JSON.stringify(gatewayId)} is invalid: ${GATEWAY_ID_REQUIREMENT}`,
     );
   }
 }

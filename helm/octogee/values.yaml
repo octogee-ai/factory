@@ -228,7 +228,7 @@ gatewayFleet:
     cloudArmor:
       enabled: false
       policyName: ""
-  # Bootstrap-only seed of `{gatewayId, instanceName}` pairs for the
+  # Bootstrap-only seed of bare `gatewayId`s for the
   # fleet-control Ingress's per-instance RPC paths. Leave empty in real
   # envs — Cowboy (glm-controller) owns dynamic paths via host-scoped
   # JSON patch. Use this only for first-time

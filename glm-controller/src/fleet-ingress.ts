@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 
 export interface FleetGateway {
   gatewayId: string;
-  instanceName: string;
 }
 
 export interface IngressPathRule {
@@ -31,7 +30,7 @@ export function computeDesiredFleetPaths(opts: {
       out.push({
         path: `/${verb}/${gw.gatewayId}`,
         pathType: "ImplementationSpecific",
-        serviceName: `octogee-gateway-${gw.instanceName}`,
+        serviceName: `octogee-gateway-${gw.gatewayId}`,
         servicePort: opts.fleetControllerPort,
       });
     }
@@ -56,7 +55,7 @@ export function computeDesiredApiFleetPaths(opts: {
   const out: IngressPathRule[] = sorted.map((gw) => ({
     path: `/api/g/${gw.gatewayId}/*`,
     pathType: "ImplementationSpecific",
-    serviceName: `gateway-edge-${gw.instanceName}`,
+    serviceName: `gateway-edge-${gw.gatewayId}`,
     servicePort: opts.gatewayEdgePort,
   }));
   out.push({
@@ -77,7 +76,7 @@ export function computeDesiredPreviewPaths(opts: {
     .map((gw) => ({
       path: `/g/${gw.gatewayId}/*`,
       pathType: "ImplementationSpecific",
-      serviceName: `octogee-gateway-${gw.instanceName}`,
+      serviceName: `octogee-gateway-${gw.gatewayId}`,
       servicePort: opts.previewPort,
     }));
 }

@@ -7,7 +7,6 @@ export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 
 export interface GatewayDesiredState {
   gatewayId: string;
-  instanceName: string;
   imageRepository: string;
   imageTag: string;
 
@@ -146,14 +145,33 @@ export const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec = {
 
 export const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
+export const GATEWAY_ID_MAX_LENGTH = 32;
+export const GATEWAY_ID_REQUIREMENT =
+  "gatewayId must be a lowercase DNS-safe id, 1-32 chars, starting and ending with a letter or digit";
 
 export const OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec = {
   create: true,
 };
 
+export function isValidGatewayId(id: unknown): id is string {
+  if (typeof id !== "string" || id.length === 0 || id.length > GATEWAY_ID_MAX_LENGTH) {
+    return false;
+  }
+  if (!isGatewayIdEndpoint(id.charCodeAt(0))) return false;
+  if (!isGatewayIdEndpoint(id.charCodeAt(id.length - 1))) return false;
+  for (let i = 1; i < id.length - 1; i += 1) {
+    const code = id.charCodeAt(i);
+    if (!isGatewayIdEndpoint(code) && code !== 45) return false;
+  }
+  return true;
+}
+
+function isGatewayIdEndpoint(code: number): boolean {
+  return (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
+}
+
 export function operatorGatewayServiceAccountName(gatewayId: string): string {
-  const suffix = gatewayId.startsWith("gw-") ? gatewayId.slice(3) : gatewayId;
-  return `${OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX}${suffix}`;
+  return `${OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
 }
 
 export function resolveGatewayPersistence(

@@ -2,7 +2,7 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: octogee-gateway-{{ .Values.instanceName }}
+  name: octogee-gateway-{{ .Values.gatewayId }}
   namespace: {{ .Release.Namespace }}
   labels:
     app: octogee-gateway
@@ -12,5 +12,5 @@ spec:
   selector:
     matchLabels:
       app: octogee-gateway
-      gateway-instance: {{ .Values.instanceName }}
+      gateway-instance: {{ .Values.gatewayId }}
 {{- end }}

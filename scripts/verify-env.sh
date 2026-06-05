@@ -140,9 +140,9 @@ else
   HELM_VALUES_FILE="helm/octogee/values.$ENV.yaml"
 fi
 
-# Per-instance gateway deployment name (post-#858 — Cowboy installs
-# octogee-gateway-<instanceName>; default instanceName is "default").
-# Resolve via label selector so we don't hardcode the instance name.
+# Per-gateway deployment name (Cowboy installs
+# octogee-gateway-<gatewayId>; the shared gateway id is "default").
+# Resolve via label selector so we don't hardcode the gateway id.
 # Empty when no gateway is deployed yet (Cowboy hasn't reconciled).
 GW_DEPLOYMENT=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
   -l app=octogee-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")

@@ -15,8 +15,7 @@ beforeAll(() => {
 });
 
 const REQUIRED_VALUES: Record<string, string> = {
-  gatewayId: "gw-test",
-  instanceName: "default",
+  gatewayId: "default",
   imageTag: "abc1234",
   "env.mmSiteUrl": "https://mm-test.example.com",
   "env.mmInternalUrl": "http://mattermost.octogee-test.svc.cluster.local:8065",

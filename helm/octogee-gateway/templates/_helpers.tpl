@@ -10,7 +10,7 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 app.kubernetes.io/name: octogee-gateway
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-gateway-instance: {{ required "instanceName is required" .Values.instanceName }}
+gateway-instance: {{ required "gatewayId is required" .Values.gatewayId }}
 {{- end }}
 
 {{/*
@@ -23,7 +23,7 @@ locked per-gateway KSA name and let the pod fail closed if the KSA has not
 been provisioned yet.
 */}}
 {{- define "octogee-gateway.operatorServiceAccountName" -}}
-octogee-gw-{{ trimPrefix "gw-" (required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId) }}
+octogee-gw-{{ required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId }}
 {{- end }}
 
 {{- define "octogee-gateway.serviceAccountName" -}}
@@ -41,15 +41,14 @@ fails at helm render rather than producing a half-rendered Deployment.
 
 The `$_ :=` discards the return value so the helper emits no text.
 Without that, `required` returns the value it just validated, and
-the literal `<gatewayId><instanceName>` got concatenated onto the
-top of every doc that called this helper — producing
-`gw-blueblueapiVersion: apps/v1` on the first line of the rendered
-Deployment and the famous helm `apiVersion not set` validation
-error that broke add-gateway end-to-end on first real exercise.
+the literal gatewayId got concatenated onto the top of every doc
+that called this helper — producing `blueapiVersion: apps/v1` on
+the first line of the rendered Deployment and the famous helm
+`apiVersion not set` validation error that broke add-gateway
+end-to-end on first real exercise.
 */}}
 {{- define "octogee-gateway.requireIdentity" -}}
 {{- $_ := required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId -}}
-{{- $_ := required "instanceName is required (Cowboy must pass --set instanceName=<name>)" .Values.instanceName -}}
 {{- if ne .Values.profile "operator" -}}
 {{- include "octogee-gateway.requireGatewayEdgeSecret" (dict "Values" .Values "envName" "INTERNAL_SERVICE_KEY" "purpose" "cross-service auth (chat-proxy → openclaw, gateway-edge admin endpoints)") -}}
 {{- end -}}

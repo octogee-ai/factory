@@ -12,16 +12,16 @@ import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 import { isSizingTier } from "../../shared/types/sizing.js";
 
 export type ReconcileChange =
-  | { kind: "create"; instanceName: string; to: HelmInstanceValue }
-  | { kind: "update"; instanceName: string; from: HelmInstanceValue; to: HelmInstanceValue }
-  | { kind: "drift"; instanceName: string; current: HelmInstanceValue };
+  | { kind: "create"; gatewayId: string; to: HelmInstanceValue }
+  | { kind: "update"; gatewayId: string; from: HelmInstanceValue; to: HelmInstanceValue }
+  | { kind: "drift"; gatewayId: string; current: HelmInstanceValue };
 
 export function deriveFleetImageTag(
   desired: GatewayDesiredState[],
 ): string | undefined {
   const live = desired.filter((d) => d.desiredStatus !== "retired");
   if (live.length === 0) return undefined;
-  const primary = live.find((d) => d.instanceName === "default") ?? live[0];
+  const primary = live.find((d) => d.gatewayId === "default") ?? live[0];
   return primary.imageTag;
 }
 
@@ -32,7 +32,7 @@ export function buildInstancesMap(
   const out: HelmInstancesMap = {};
   for (const d of desired) {
     if (d.desiredStatus === "retired") continue;
-    out[d.instanceName] = buildHelmInstanceValue(d, chartFingerprint);
+    out[d.gatewayId] = buildHelmInstanceValue(d, chartFingerprint);
   }
   return out;
 }
@@ -49,11 +49,11 @@ export function buildHelmTargetMap(
       const mounted = mountedByGatewayId.get(d.gatewayId);
 
 if (mounted === undefined || mounted.length === 0) {
-        delete out[d.instanceName];
+        delete out[d.gatewayId];
       }
       continue;
     }
-    out[d.instanceName] = buildHelmInstanceValue(d, chartFingerprint);
+    out[d.gatewayId] = buildHelmInstanceValue(d, chartFingerprint);
   }
   return out;
 }
@@ -130,11 +130,11 @@ export function diffInstancesMap(
     const a = actualEntries.get(name);
     const d = desiredEntries.get(name);
     if (!a && d) {
-      changes.push({ kind: "create", instanceName: name, to: d });
+      changes.push({ kind: "create", gatewayId: name, to: d });
     } else if (a && !d) {
-      changes.push({ kind: "drift", instanceName: name, current: a });
+      changes.push({ kind: "drift", gatewayId: name, current: a });
     } else if (a && d && !instanceEqual(a, d, compareChartFingerprint)) {
-      changes.push({ kind: "update", instanceName: name, from: a, to: d });
+      changes.push({ kind: "update", gatewayId: name, from: a, to: d });
     }
   }
   return changes;

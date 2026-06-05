@@ -1,18 +1,17 @@
 # helm/octogee-gateway/values.yaml — defaults for ONE gateway instance.
 #
 # Cowboy (glm-controller) installs this chart once per gateway instance
-# under release name `octogee-gw-<instanceName>`. The umbrella `octogee`
+# under release name `octogee-gw-<gatewayId>`. The umbrella `octogee`
 # release no longer manages gateway pods.
 
-# Logical, stable, Cowboy-set gateway identity. Written to Firestore
-# `gateways/{gatewayId}` heartbeats and matched against customer
-# `provisioning.openclaw.gatewayId`. Must match `[a-z0-9-]+`.
+# Logical, stable, Cowboy-set gateway identity — a bare name (`default`,
+# `bender`, `canary`). Written to Firestore `gateways/{gatewayId}`
+# heartbeats and matched against customer `provisioning.openclaw.gatewayId`.
+# Also forms the per-instance K8s resource names
+# (`octogee-gateway-<gatewayId>`, `gateway-edge-<gatewayId>`) that the
+# umbrella's fleet-control Ingress routes to. Must be a lowercase DNS-safe id
+# that fits every rendered resource suffix.
 gatewayId: ""
-
-# Helm release / DNS-friendly suffix. Forms the per-instance Service
-# name (`octogee-gateway-<instanceName>`, `gateway-edge-<instanceName>`)
-# that the umbrella's fleet-control Ingress routes to.
-instanceName: ""
 
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take

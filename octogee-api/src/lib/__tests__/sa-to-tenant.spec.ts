@@ -22,9 +22,8 @@ describe("mapSaToTenant", () => {
   it("maps per-operator gateway KSAs to their gateway document", async () => {
     const result = await mapSaToTenant(
       fakeDb({
-        "gw-bender": {
+        bender: {
           ownerUid: "uid-bender",
-          instanceName: "bender",
         },
       }),
       { namespace: "octogee", saName: "octogee-gw-bender" },
@@ -36,37 +35,34 @@ describe("mapSaToTenant", () => {
       result: "ok",
       tenant: {
         kind: "gateway",
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         ownerUid: "uid-bender",
-        instanceName: "bender",
       },
     });
   });
 
-  it("also accepts the explicit gw- suffix form", async () => {
+  it("takes the SA suffix as the bare gatewayId verbatim", async () => {
     const result = await mapSaToTenant(
       fakeDb({
-        "gw-bender": {
-          ownerUid: "uid-bender",
-          instanceName: "bender",
+        "canary-2": {
+          ownerUid: "uid-canary",
         },
       }),
-      { namespace: "octogee", saName: "octogee-gw-gw-bender" },
+      { namespace: "octogee", saName: "octogee-gw-canary-2" },
       "octogee",
     );
 
     expect(result).toMatchObject({
       attached: true,
-      tenant: { gatewayId: "gw-bender" },
+      tenant: { gatewayId: "canary-2" },
     });
   });
 
   it("maps grandfathered operator gateway KSAs to their gateway document", async () => {
     const result = await mapSaToTenant(
       fakeDb({
-        "gw-bender": {
+        bender: {
           ownerUid: "uid-bender",
-          instanceName: "bender",
         },
       }),
       { namespace: "octogee", saName: "octogee-gateway-bender" },
@@ -78,9 +74,8 @@ describe("mapSaToTenant", () => {
       result: "ok_legacy_operator",
       tenant: {
         kind: "gateway",
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         ownerUid: "uid-bender",
-        instanceName: "bender",
       },
     });
   });
@@ -102,7 +97,7 @@ describe("mapSaToTenant", () => {
       "octogee",
     );
     const incomplete = await mapSaToTenant(
-      fakeDb({ "gw-bender": { ownerUid: "uid-bender" } }),
+      fakeDb({ bender: {} }),
       { namespace: "octogee", saName: "octogee-gw-bender" },
       "octogee",
     );

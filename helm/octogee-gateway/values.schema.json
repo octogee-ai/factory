@@ -3,19 +3,14 @@
   "title": "octogee-gateway values",
   "description": "Defense-in-depth schema for the per-gateway chart. Catches shape errors (wrong type, missing required key, unknown profile) BEFORE template logic runs. Semantic contracts (e.g. INTERNAL_SERVICE_KEY must be in gatewayEdge.secrets) live in _helpers.tpl `requireGatewayEdgeSecret` instead — the schema can't express list-member predicates.",
   "type": "object",
-  "required": ["gatewayId", "instanceName", "imageTag", "image", "gatewayEdge"],
+  "required": ["gatewayId", "imageTag", "image", "gatewayEdge"],
   "properties": {
     "gatewayId": {
       "type": "string",
-      "pattern": "^[a-z0-9-]+$",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$",
       "minLength": 1,
-      "description": "Logical gateway identity used in Firestore heartbeats + the per-gateway K8s auth-token secret name."
-    },
-    "instanceName": {
-      "type": "string",
-      "pattern": "^[a-z0-9-]+$",
-      "minLength": 1,
-      "description": "DNS-friendly suffix for per-instance K8s resource names (Deployment, Service, PVC)."
+      "maxLength": 32,
+      "description": "Bare logical gateway identity (e.g. `default`, `bender`). Used in Firestore heartbeats, the per-gateway K8s auth-token secret name, and as the DNS-friendly suffix for per-instance K8s resource names (Deployment, Service, PVC)."
     },
     "imageTag": {
       "type": "string",

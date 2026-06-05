@@ -39,14 +39,6 @@ async function resolveUserGateway(uid: string): Promise<ResolvedGateway | null> 
   return { slug, gatewayId };
 }
 
-async function resolveInstanceName(gatewayId: string): Promise<string | null> {
-  const snap = await db.collection("glmGateways").doc(gatewayId).get();
-  if (!snap.exists) return null;
-  const data = (snap.data() || {}) as { instanceName?: unknown };
-  const instanceName = data?.instanceName;
-  return typeof instanceName === "string" && instanceName ? instanceName : null;
-}
-
 interface FlowDoc {
   uid: string;
   gatewayId: string;
@@ -92,17 +84,10 @@ router.post(
           .json({ error: "No provisioned workspace/gateway for this user" });
         return;
       }
-      const instanceName = await resolveInstanceName(resolved.gatewayId);
-      if (!instanceName) {
-        res
-          .status(400)
-          .json({ error: "Gateway is not registered with an instanceName" });
-        return;
-      }
       const agentId = coachAgentId(resolved.slug);
       try {
         const out = await gatewayDeviceAuthClient().start({
-          instanceName,
+          gatewayId: resolved.gatewayId,
           agentId,
         });
 
@@ -140,16 +125,9 @@ if (!flow || flow.uid !== req.uid!) {
         res.status(404).json({ error: "flow not found" });
         return;
       }
-      const instanceName = await resolveInstanceName(flow.gatewayId);
-      if (!instanceName) {
-        res
-          .status(400)
-          .json({ error: "Gateway is not registered with an instanceName" });
-        return;
-      }
       try {
         const out = await gatewayDeviceAuthClient().status({
-          instanceName,
+          gatewayId: flow.gatewayId,
           flowId: req.params.flowId as string,
         });
         res.json(out);

@@ -8,7 +8,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: octogee-gateway-{{ .Values.instanceName }}
+  name: octogee-gateway-{{ .Values.gatewayId }}
   labels:
     app: octogee-gateway
     gateway-profile: {{ .Values.profile | default "standard" | quote }}
@@ -22,7 +22,7 @@ spec:
   selector:
     matchLabels:
       app: octogee-gateway
-      gateway-instance: {{ .Values.instanceName }}
+      gateway-instance: {{ .Values.gatewayId }}
   template:
     metadata:
 {{ if .Values.persistence.enabled }}
@@ -31,7 +31,7 @@ spec:
 {{ end }}
       labels:
         app: octogee-gateway
-        gateway-instance: {{ .Values.instanceName }}
+        gateway-instance: {{ .Values.gatewayId }}
         # Profile label lets the umbrella gateway-edge alias Service
         # safely exclude operator pods in a follow-up rollout after every
         # gateway pod has this label.
@@ -126,7 +126,7 @@ spec:
             - name: MM_SITE_URL
               value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_CALLBACK_BASE_URL
-              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.instanceName .Release.Namespace) | quote }}
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.gatewayId .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
               value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
             - name: MM_BOT_TOKEN
@@ -188,8 +188,6 @@ spec:
               value: {{ .Values.env.agentPrefix | quote }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
-            - name: GATEWAY_INSTANCE_NAME
-              value: {{ .Values.instanceName | quote }}
             # Capability profile (cattle vs operator) — read by
             # entrypoint.sh to gate operator-only boot steps such as the
             # Claude Code first-run stamper. Cattle renders this as "",
@@ -239,7 +237,7 @@ spec:
             - name: MM_SITE_URL
               value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_CALLBACK_BASE_URL
-              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.instanceName .Release.Namespace) | quote }}
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.gatewayId .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
               value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
             - name: GIT_API_URL
@@ -529,7 +527,7 @@ spec:
         - name: data
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (printf "octogee-gateway-%s-data" .Values.instanceName) | quote }}
+            claimName: {{ .Values.persistence.existingClaim | default (printf "octogee-gateway-%s-data" .Values.gatewayId) | quote }}
           {{- else }}
           emptyDir: {}
           {{- end }}

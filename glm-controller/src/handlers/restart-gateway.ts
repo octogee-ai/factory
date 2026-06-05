@@ -11,11 +11,10 @@ export interface RestartGatewayDeps {
 
 interface RestartGatewayInput {
   gatewayId?: unknown;
-  instanceName?: unknown;
 }
 
-function deploymentNameForInstance(instanceName: string): string {
-  return `octogee-gateway-${instanceName}`;
+function deploymentNameForGateway(gatewayId: string): string {
+  return `octogee-gateway-${gatewayId}`;
 }
 
 export function createRestartGatewayHandler(
@@ -25,18 +24,9 @@ export function createRestartGatewayHandler(
     const input = op.input as RestartGatewayInput;
     const gatewayId =
       typeof input.gatewayId === "string" ? input.gatewayId : undefined;
-    const instanceName =
-      typeof input.instanceName === "string" ? input.instanceName : undefined;
 
     if (!gatewayId) {
       return { steps: [], success: false, error: "missing gatewayId in op.input" };
-    }
-    if (!instanceName) {
-      return {
-        steps: [],
-        success: false,
-        error: "missing instanceName in op.input",
-      };
     }
 
     const startedAt = deps.now();
@@ -49,7 +39,7 @@ export function createRestartGatewayHandler(
     try {
       await deps.kubeOps.restartOpenClawInPlace({
         namespace: deps.namespace,
-        name: deploymentNameForInstance(instanceName),
+        name: deploymentNameForGateway(gatewayId),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

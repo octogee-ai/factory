@@ -8,8 +8,7 @@ const OPERATOR_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gatewa
 
 function mkDesired(o: Partial<GatewayDesiredState>): GatewayDesiredState {
   return {
-    gatewayId: "gw-x",
-    instanceName: "x",
+    gatewayId: "x",
     imageRepository: STD_REPO,
     imageTag: "abc1234",
     desiredStatus: "running",
@@ -45,32 +44,32 @@ expect(
 describe("Cowboy resolves profile in the helm maps (image name, NOT the tag)", () => {
   it("buildInstancesMap: operator profile → operator repo, tag unchanged (fleet SHA)", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "bender", gatewayId: "gw-bender", profile: "operator" }),
+      mkDesired({ gatewayId: "bender", profile: "operator" }),
     ]);
     expect(map.bender.image.repository).toBe(OPERATOR_REPO);
     expect(map.bender.image.tag).toBe("abc1234");
   });
 
   it("buildInstancesMap: no profile → repo is byte-unchanged (regression guard)", () => {
-    const map = buildInstancesMap([mkDesired({ instanceName: "default" })]);
+    const map = buildInstancesMap([mkDesired({ gatewayId: "default" })]);
     expect(map.default.image.repository).toBe(STD_REPO);
   });
 
   it("buildHelmTargetMap: operator profile resolves the same way", () => {
     const map = buildHelmTargetMap([
-      mkDesired({ instanceName: "bender", gatewayId: "gw-bender", profile: "operator" }),
+      mkDesired({ gatewayId: "bender", profile: "operator" }),
     ], {});
     expect(map.bender.image.repository).toBe(OPERATOR_REPO);
   });
 
   it("changing profile is a reconcile `update` (Cowboy rolls the instance onto the profile image)", () => {
-    const actual = buildInstancesMap([mkDesired({ instanceName: "bender", gatewayId: "gw-bender" })]);
+    const actual = buildInstancesMap([mkDesired({ gatewayId: "bender" })]);
     const desired = buildInstancesMap([
-      mkDesired({ instanceName: "bender", gatewayId: "gw-bender", profile: "operator" }),
+      mkDesired({ gatewayId: "bender", profile: "operator" }),
     ]);
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual([
-      { kind: "update", instanceName: "bender", from: actual.bender, to: desired.bender },
+      { kind: "update", gatewayId: "bender", from: actual.bender, to: desired.bender },
     ]);
   });
 });

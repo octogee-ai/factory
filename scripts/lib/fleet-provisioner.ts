@@ -269,8 +269,7 @@ export async function startFleetController(
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
 
-const instanceName = process.env.GATEWAY_INSTANCE_NAME ?? "";
-  const serviceName = instanceName ? `octogee-gateway-${instanceName}` : "octogee-gateway";
+const serviceName = `octogee-gateway-${opts.gatewayId}`;
   const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
 
   const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {

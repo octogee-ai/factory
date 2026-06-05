@@ -16,7 +16,9 @@
 #
 # Per-instance RPC and preview paths are JSON-patch-owned by Cowboy.
 # Leave `Values.gatewayFleet.instances` empty in test/prod — Cowboy is
-# the sole writer in steady state.
+# the sole writer in steady state. Each bootstrap entry is keyed by a
+# bare `gatewayId`; the per-instance Service name is
+# `octogee-gateway-<gatewayId>`.
 
 {{- if .Values.gatewayFleet.aliasService.enabled }}
 ---
@@ -184,8 +186,8 @@ spec:
         paths:
           {{- $port := .Values.global.fleetControllerPort | default "3003" }}
           {{- range .Values.gatewayFleet.instances }}
-          {{- $svc := printf "octogee-gateway-%s" .instanceName }}
           {{- $gid := .gatewayId }}
+          {{- $svc := printf "octogee-gateway-%s" $gid }}
           - path: /restore-customer/{{ $gid }}
             pathType: ImplementationSpecific
             backend:

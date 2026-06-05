@@ -17,7 +17,7 @@ function mkOp(overrides: Partial<Operation> = {}): Operation {
     createdAt: 0,
     startedAt: null,
     completedAt: null,
-    input: { gatewayId: "gw-test", imageTag: "newSha" },
+    input: { gatewayId: "default", imageTag: "newSha" },
     steps: [],
     ...overrides,
   };
@@ -49,7 +49,7 @@ function makeDeps(state: FakeState, overrides: Partial<RolloutDeps> = {}): Rollo
       readDeployedInstances: vi.fn(async () => {
         const m: Record<string, { enabled: boolean; image: { repository: string; tag: string }; gatewayId: string }> = {};
         for (const [name, image] of state.helmInstances) {
-          m[name] = { enabled: true, image, gatewayId: `gw-test-${name === "default" ? "" : name}`.replace(/-$/, "") || "gw-test" };
+          m[name] = { enabled: true, image, gatewayId: name };
         }
         return m;
       }),
@@ -95,10 +95,10 @@ describe("createRolloutHandler — happy path", () => {
   it("updates glmGateways spec, then waits for helm + heartbeat to converge on the new tag", async () => {
     const state: FakeState = {
       specs: new Map([
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
+        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
       ]),
       helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
-      heartbeats: new Map([["gw-test", { version: "oldSha", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["default", { version: "oldSha", lastHeartbeatAt: 0 }]]),
     };
 
     let pollsToFlipHelm = 2;
@@ -109,7 +109,7 @@ describe("createRolloutHandler — happy path", () => {
           state.helmInstances.set("default", { repository: REPO, tag: "newSha" });
         }
         if (--pollsToFlipHeartbeat === 0) {
-          state.heartbeats.set("gw-test", { version: "newSha", lastHeartbeatAt: 100 });
+          state.heartbeats.set("default", { version: "newSha", lastHeartbeatAt: 100 });
         }
       }),
     });
@@ -118,7 +118,7 @@ describe("createRolloutHandler — happy path", () => {
     const result = await createRolloutHandler(deps)(mkOp(), ctx);
 
     expect(result.success).toBe(true);
-    expect(state.specs.get("gw-test")?.imageTag).toBe("newSha");
+    expect(state.specs.get("default")?.imageTag).toBe("newSha");
     expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
       "update-spec:running",
       "update-spec:done",
@@ -133,54 +133,54 @@ describe("createRolloutHandler — happy path", () => {
     const state: FakeState = {
 
 specs: new Map([
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
+        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
       ]),
       helmInstances: new Map([["default", { repository: REPO, tag: "newSha" }]]),
-      heartbeats: new Map([["gw-test", { version: "newSha", lastHeartbeatAt: 100 }]]),
+      heartbeats: new Map([["default", { version: "newSha", lastHeartbeatAt: 100 }]]),
     };
     const deps = makeDeps(state);
     const result = await createRolloutHandler(deps)(mkOp(), makeCtx());
     expect(result.success).toBe(true);
 
-expect(state.specs.get("gw-test")?.imageTag).toBe("newSha");
+expect(state.specs.get("default")?.imageTag).toBe("newSha");
   });
 
   it("accepts a short build-sha heartbeat for pinned OpenClaw bundle image tags", async () => {
     const imageTag = "47e30b8-oc2026.5.28";
     const state: FakeState = {
       specs: new Map([
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
+        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
       ]),
       helmInstances: new Map([["default", { repository: REPO, tag: imageTag }]]),
-      heartbeats: new Map([["gw-test", { version: "47e30b8", lastHeartbeatAt: 100 }]]),
+      heartbeats: new Map([["default", { version: "47e30b8", lastHeartbeatAt: 100 }]]),
     };
 
     const deps = makeDeps(state);
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-test", imageTag } }),
+      mkOp({ input: { gatewayId: "default", imageTag } }),
       makeCtx(),
     );
 
     expect(result.success).toBe(true);
-    expect(state.specs.get("gw-test")?.imageTag).toBe(imageTag);
+    expect(state.specs.get("default")?.imageTag).toBe(imageTag);
   });
 
   it("accepts an imageRepository override (e.g., switching repos)", async () => {
     const ALT_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-alt";
     const state: FakeState = {
       specs: new Map([
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
+        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
       ]),
       helmInstances: new Map([["default", { repository: ALT_REPO, tag: "newSha" }]]),
-      heartbeats: new Map([["gw-test", { version: "newSha", lastHeartbeatAt: 100 }]]),
+      heartbeats: new Map([["default", { version: "newSha", lastHeartbeatAt: 100 }]]),
     };
     const deps = makeDeps(state);
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-test", imageTag: "newSha", imageRepository: ALT_REPO } }),
+      mkOp({ input: { gatewayId: "default", imageTag: "newSha", imageRepository: ALT_REPO } }),
       makeCtx(),
     );
     expect(result.success).toBe(true);
-    expect(state.specs.get("gw-test")?.imageRepository).toBe(ALT_REPO);
+    expect(state.specs.get("default")?.imageRepository).toBe(ALT_REPO);
   });
 });
 
@@ -195,7 +195,7 @@ describe("createRolloutHandler — refusals + edge cases", () => {
   it("refuses when op.input is missing imageTag", async () => {
     const deps = makeDeps({ specs: new Map(), helmInstances: new Map(), heartbeats: new Map() });
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-test" } }),
+      mkOp({ input: { gatewayId: "default" } }),
       makeCtx(),
     );
     expect(result.success).toBe(false);
@@ -212,20 +212,20 @@ describe("createRolloutHandler — refusals + edge cases", () => {
   it("refuses when the requested image is identical to current (no-op)", async () => {
     const state: FakeState = {
       specs: new Map([
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "sameSha" }],
+        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "sameSha" }],
       ]),
       helmInstances: new Map([["default", { repository: REPO, tag: "sameSha" }]]),
-      heartbeats: new Map([["gw-test", { version: "sameSha", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["default", { version: "sameSha", lastHeartbeatAt: 0 }]]),
     };
     const deps = makeDeps(state);
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-test", imageTag: "sameSha" } }),
+      mkOp({ input: { gatewayId: "default", imageTag: "sameSha" } }),
       makeCtx(),
     );
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/no-op|already on/i);
     
-    expect(state.specs.get("gw-test")?.imageTag).toBe("sameSha");
+    expect(state.specs.get("default")?.imageTag).toBe("sameSha");
   });
 
 it("does NOT refuse no-op when Firestore desired matches request but actual deployed differs (drift)", async () => {
@@ -233,11 +233,11 @@ it("does NOT refuse no-op when Firestore desired matches request but actual depl
     const state: FakeState = {
       specs: new Map([
 
-["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "newSha" }],
+["default", { gatewayId: "default", imageRepository: REPO, imageTag: "newSha" }],
       ]),
 
 helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
-      heartbeats: new Map([["gw-test", { version: "oldSha", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["default", { version: "oldSha", lastHeartbeatAt: 0 }]]),
     };
     const deps = makeDeps(state, {
 
@@ -249,7 +249,7 @@ helm: {
             default: {
               enabled: true,
               image: { repository: REPO, tag },
-              gatewayId: "gw-test",
+              gatewayId: "default",
             },
           };
         }),
@@ -262,7 +262,7 @@ helm: {
       ),
     });
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-test", imageTag: "newSha" } }),
+      mkOp({ input: { gatewayId: "default", imageTag: "newSha" } }),
       makeCtx(),
     );
 
@@ -274,14 +274,14 @@ expect(result.error ?? "").not.toMatch(/no-op|already on/i);
 
 const state: FakeState = {
       specs: new Map([
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "sameSha" }],
+        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "sameSha" }],
       ]),
       helmInstances: new Map([["default", { repository: REPO, tag: "sameSha" }]]),
-      heartbeats: new Map([["gw-test", { version: "sameSha", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["default", { version: "sameSha", lastHeartbeatAt: 0 }]]),
     };
     const deps = makeDeps(state);
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-test", imageTag: "sameSha" } }),
+      mkOp({ input: { gatewayId: "default", imageTag: "sameSha" } }),
       makeCtx(),
     );
     expect(result.success).toBe(false);
@@ -294,10 +294,10 @@ describe("createRolloutHandler — failures", () => {
   it("times out helm-render when helm never renders the new tag", async () => {
     const state: FakeState = {
       specs: new Map([
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
+        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
       ]),
       helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
-      heartbeats: new Map([["gw-test", { version: "oldSha", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["default", { version: "oldSha", lastHeartbeatAt: 0 }]]),
     };
     const deps = makeDeps(state, { helmRenderTimeoutMs: 5_000, pollIntervalMs: 1_000 });
     const ctx = makeCtx();
@@ -312,11 +312,11 @@ describe("createRolloutHandler — failures", () => {
   it("times out heartbeat-fresh when the new pod never publishes the new version", async () => {
     const state: FakeState = {
       specs: new Map([
-        ["gw-test", { instanceName: "default", imageRepository: REPO, imageTag: "oldSha" }],
+        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
       ]),
       
       helmInstances: new Map([["default", { repository: REPO, tag: "newSha" }]]),
-      heartbeats: new Map([["gw-test", { version: "oldSha", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["default", { version: "oldSha", lastHeartbeatAt: 0 }]]),
     };
     const deps = makeDeps(state, { helmRenderTimeoutMs: 60_000, heartbeatTimeoutMs: 5_000 });
     const ctx = makeCtx();
@@ -333,10 +333,10 @@ describe("createRolloutHandler — capability profile", () => {
     const state: FakeState = {
       specs: new Map([
         
-        ["gw-bender", { instanceName: "bender", imageRepository: REPO, imageTag: "sha1" }],
+        ["bender", { gatewayId: "bender", imageRepository: REPO, imageTag: "sha1" }],
       ]),
       helmInstances: new Map([["bender", { repository: REPO, tag: "sha1" }]]),
-      heartbeats: new Map([["gw-bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
     };
     let polls = 2;
     const deps = makeDeps(state, {
@@ -349,34 +349,34 @@ state.helmInstances.set("bender", { repository: OPERATOR_REPO, tag: "sha1" });
     });
     const ctx = makeCtx();
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-bender", imageTag: "sha1", profile: "operator" } }),
+      mkOp({ input: { gatewayId: "bender", imageTag: "sha1", profile: "operator" } }),
       ctx,
     );
 
     expect(result.success).toBe(true);
-    expect(state.specs.get("gw-bender")?.profile).toBe("operator");
-    expect(state.specs.get("gw-bender")?.persistence).toMatchObject({
+    expect(state.specs.get("bender")?.profile).toBe("operator");
+    expect(state.specs.get("bender")?.persistence).toMatchObject({
       enabled: true,
       storageClassName: "premium-rwo",
       size: "20Gi",
       accessModes: ["ReadWriteOnce"],
     });
-    expect(state.specs.get("gw-bender")?.serviceAccountName).toBe("octogee-gw-bender");
-    expect(state.specs.get("gw-bender")?.serviceAccount).toMatchObject({ create: true });
-    expect(state.specs.get("gw-bender")?.operatorAccess).toMatchObject({
+    expect(state.specs.get("bender")?.serviceAccountName).toBe("octogee-gw-bender");
+    expect(state.specs.get("bender")?.serviceAccount).toMatchObject({ create: true });
+    expect(state.specs.get("bender")?.operatorAccess).toMatchObject({
       shellsEnabled: false,
     });
 
-expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
+expect(state.specs.get("bender")?.imageRepository).toBe(REPO);
   });
 
   it("same sha AND same profile is still a no-op (boundary not over-broadened)", async () => {
     const state: FakeState = {
       specs: new Map([
         [
-          "gw-bender",
+          "bender",
           {
-            instanceName: "bender",
+            gatewayId: "bender",
             imageRepository: REPO,
             imageTag: "sha1",
             profile: "operator",
@@ -396,12 +396,12 @@ expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
         ],
       ]),
       helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "sha1" }]]),
-      heartbeats: new Map([["gw-bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
     };
     const deps = makeDeps(state);
     const ctx = makeCtx();
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-bender", imageTag: "sha1", profile: "operator" } }),
+      mkOp({ input: { gatewayId: "bender", imageTag: "sha1", profile: "operator" } }),
       ctx,
     );
     expect(result.success).toBe(false);
@@ -413,9 +413,9 @@ expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
     const state: FakeState = {
       specs: new Map([
         [
-          "gw-bender",
+          "bender",
           {
-            instanceName: "bender",
+            gatewayId: "bender",
             imageRepository: REPO,
             imageTag: "sha1",
             profile: "operator",
@@ -423,19 +423,19 @@ expect(state.specs.get("gw-bender")?.imageRepository).toBe(REPO);
         ],
       ]),
       helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "sha1" }]]),
-      heartbeats: new Map([["gw-bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
+      heartbeats: new Map([["bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
     };
     const deps = makeDeps(state);
     const ctx = makeCtx();
     const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-bender", imageTag: "sha1", profile: "operator" } }),
+      mkOp({ input: { gatewayId: "bender", imageTag: "sha1", profile: "operator" } }),
       ctx,
     );
     expect(result.success).toBe(true);
     expect(deps.updateGlmGatewayImage).toHaveBeenCalled();
-    expect(state.specs.get("gw-bender")?.serviceAccountName).toBe("octogee-gw-bender");
-    expect(state.specs.get("gw-bender")?.serviceAccount).toMatchObject({ create: true });
-    expect(state.specs.get("gw-bender")?.operatorAccess).toMatchObject({
+    expect(state.specs.get("bender")?.serviceAccountName).toBe("octogee-gw-bender");
+    expect(state.specs.get("bender")?.serviceAccount).toMatchObject({ create: true });
+    expect(state.specs.get("bender")?.operatorAccess).toMatchObject({
       shellsEnabled: false,
       reason: "operator-trust-boundary-not-provisioned",
     });

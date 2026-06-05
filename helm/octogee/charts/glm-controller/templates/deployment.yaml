@@ -42,7 +42,7 @@ spec:
             # GATEWAY_CHART tells the controller where the standalone
             # per-instance chart is baked in the image (Dockerfile copies
             # helm/octogee-gateway/ → /charts/octogee-gateway). The
-            # reconciler installs `octogee-gw-<instanceName>` releases
+            # reconciler installs `octogee-gw-<gatewayId>` releases
             # off this chart. The umbrella `octogee` release is now
             # written by CI, not by the controller, so HELM_RELEASE +
             # HELM_CHART are no longer needed.
@@ -115,8 +115,6 @@ spec:
               value: {{ .Values.gcpServiceAccount | quote }}
             - name: BOOTSTRAP_DEFAULT_GATEWAY
               value: {{ (.Values.bootstrapDefaultGateway).enabled | default false | quote }}
-            - name: BOOTSTRAP_INSTANCE_NAME
-              value: {{ (.Values.bootstrapDefaultGateway).instanceName | default "default" | quote }}
             - name: BOOTSTRAP_IMAGE_REPOSITORY
               value: {{ (.Values.bootstrapDefaultGateway).imageRepository | default "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway" | quote }}
             - name: BOOTSTRAP_IMAGE_TAG

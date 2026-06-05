@@ -6,11 +6,11 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   GLM_GATEWAYS_COLLECTION,
+  isValidGatewayId,
   type GatewayProfile,
 } from "../../shared/types/glm.js";
 
 const ORCHESTRATOR_CONFIG_DOC = "config/orchestrator";
-const GATEWAY_ID_PATTERN = /^[a-z0-9-]+$/;
 
 interface OrchestratorConfig {
   defaultGatewayId: string;
@@ -21,14 +21,14 @@ async function readOrchestratorConfig(db: Firestore): Promise<OrchestratorConfig
   const snap = await db.doc(ORCHESTRATOR_CONFIG_DOC).get();
   if (!snap.exists) return null;
   const data = snap.data() as Partial<OrchestratorConfig> | undefined;
-  if (typeof data?.defaultGatewayId !== "string" || !GATEWAY_ID_PATTERN.test(data.defaultGatewayId)) {
+  if (!isValidGatewayId(data?.defaultGatewayId)) {
     return null;
   }
   const overrides =
     data.overrides && typeof data.overrides === "object"
       ? Object.fromEntries(
           Object.entries(data.overrides).filter(
-            ([, v]) => typeof v === "string" && GATEWAY_ID_PATTERN.test(v),
+            ([, v]) => isValidGatewayId(v),
           ),
         )
       : undefined;

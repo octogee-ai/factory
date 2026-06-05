@@ -38,9 +38,8 @@ function buildApp(opts: {
       reviewer: opts.reviewer,
       db: fakeDb(
         opts.docs ?? {
-          "gw-bender": {
+          bender: {
             ownerUid: "uid-bender",
-            instanceName: "bender",
           },
         },
       ),
@@ -90,14 +89,13 @@ describe("tenant binding middleware", () => {
     const res = await request(app)
       .post("/internal/probe")
       .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
-      .send({ gatewayId: "gw-bender" });
+      .send({ gatewayId: "bender" });
 
     expect(res.status).toBe(200);
     expect(res.body.boundTenant).toEqual({
       kind: "gateway",
-      gatewayId: "gw-bender",
+      gatewayId: "bender",
       ownerUid: "uid-bender",
-      instanceName: "bender",
     });
     await expect(registry.metrics()).resolves.toContain('result="ok"');
   });
@@ -115,12 +113,12 @@ describe("tenant binding middleware", () => {
     const res = await request(app)
       .post("/internal/probe")
       .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
-      .send({ gatewayId: "gw-bender" });
+      .send({ gatewayId: "bender" });
 
     expect(res.status).toBe(200);
     expect(res.body.boundTenant).toMatchObject({
       kind: "gateway",
-      gatewayId: "gw-bender",
+      gatewayId: "bender",
     });
     await expect(registry.metrics()).resolves.toContain('result="ok_legacy_operator"');
   });
@@ -138,11 +136,11 @@ describe("tenant binding middleware", () => {
     const res = await request(app)
       .post("/internal/probe")
       .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
-      .send({ gatewayId: "gw-other" });
+      .send({ gatewayId: "other" });
 
     expect(res.status).toBe(200);
-    expect(res.body.requestedGatewayId).toBe("gw-other");
-    expect(res.body.boundTenant.gatewayId).toBe("gw-bender");
+    expect(res.body.requestedGatewayId).toBe("other");
+    expect(res.body.boundTenant.gatewayId).toBe("bender");
   });
 
   it("binds known platform callers", async () => {

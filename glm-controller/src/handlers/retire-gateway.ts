@@ -20,9 +20,9 @@ export interface RetireGatewayDeps {
 
   archiveAuthTokenSecret?: (gatewayId: string) => Promise<void>;
 
-  deleteGatewayPersistentVolumeClaim?: (instanceName: string) => Promise<void>;
+  deleteGatewayPersistentVolumeClaim?: (gatewayId: string) => Promise<void>;
 
-  readGlmGatewayInstanceName: (gatewayId: string) => Promise<string | null>;
+  readGlmGatewayId: (gatewayId: string) => Promise<string | null>;
 
   syncFleetIngress: () => Promise<void>;
   helmUninstallTimeoutMs: number;
@@ -67,10 +67,10 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const liveFailure = await assertGatewayRetirable(deps, gatewayId);
     if (liveFailure) return liveFailure;
 
-    const instanceName = await deps.readGlmGatewayInstanceName(gatewayId);
-    if (!instanceName) {
+    const resolvedGatewayId = await deps.readGlmGatewayId(gatewayId);
+    if (!resolvedGatewayId) {
       return failure(
-        `glmGateways/${gatewayId} not found — cannot determine instanceName for helm uninstall`,
+        `glmGateways/${gatewayId} not found — cannot determine gatewayId for helm uninstall`,
       );
     }
 
@@ -81,9 +81,9 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
       deps,
       check: async () => {
         const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-        return !Object.prototype.hasOwnProperty.call(map, instanceName);
+        return !Object.prototype.hasOwnProperty.call(map, resolvedGatewayId);
       },
-      timeoutMessage: `helm did not uninstall instance "${instanceName}" within ${deps.helmUninstallTimeoutMs}ms`,
+      timeoutMessage: `helm did not uninstall instance "${resolvedGatewayId}" within ${deps.helmUninstallTimeoutMs}ms`,
     });
     if (!helmResult.ok) {
       return failure(helmResult.errorMsg ?? "helm uninstall failed");
@@ -93,7 +93,7 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
       ctx,
       deps,
       deletePersistentVolumeClaim,
-      instanceName,
+      gatewayId: resolvedGatewayId,
     });
     if (pvcFailure) return pvcFailure;
 
@@ -132,15 +132,15 @@ async function deletePersistentVolumeClaimIfRequested(args: {
   ctx: OperationContext;
   deps: RetireGatewayDeps;
   deletePersistentVolumeClaim: boolean;
-  instanceName: string;
+  gatewayId: string;
 }): Promise<OperationResult | null> {
-  const { ctx, deps, deletePersistentVolumeClaim, instanceName } = args;
+  const { ctx, deps, deletePersistentVolumeClaim, gatewayId } = args;
   if (!deletePersistentVolumeClaim) return null;
   const deletePvc = deps.deleteGatewayPersistentVolumeClaim;
   if (!deletePvc) {
     return failure("deletePersistentVolumeClaim requested but PVC deletion is not configured");
   }
-  const result = await runReportedStep(ctx, deps, "delete-pvc", () => deletePvc(instanceName));
+  const result = await runReportedStep(ctx, deps, "delete-pvc", () => deletePvc(gatewayId));
   return result.ok ? null : failure(result.error ?? "PVC deletion failed");
 }
 

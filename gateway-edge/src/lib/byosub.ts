@@ -1,4 +1,5 @@
 import { coachAgentId } from "../../../scripts/lib/byosub-onboarding.js";
+import { isValidGatewayId } from "../../../shared/types/glm.js";
 import { internalFetch } from "./internal-fetch.js";
 
 export { coachAgentId };
@@ -8,7 +9,7 @@ export function byosubSecretName(uid: string, provider: string): string {
 }
 
 export function isSafeGatewayId(id: unknown): id is string {
-  return typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id);
+  return isValidGatewayId(id);
 }
 
 const MAX_CREDENTIAL_BYTES = 32_768;
@@ -79,20 +80,20 @@ export interface DeviceAuthStatus {
   expiresInMinutes?: number;
 }
 export interface GatewayDeviceAuthClient {
-  start(args: { instanceName: string; agentId: string }): Promise<DeviceAuthStart>;
-  status(args: { instanceName: string; flowId: string }): Promise<DeviceAuthStatus>;
+  start(args: { gatewayId: string; agentId: string }): Promise<DeviceAuthStart>;
+  status(args: { gatewayId: string; flowId: string }): Promise<DeviceAuthStatus>;
 }
 
 export function gatewayDeviceAuthClient(): GatewayDeviceAuthClient {
   const key = process.env.INTERNAL_SERVICE_KEY ?? "";
   const ns = process.env.K8S_NAMESPACE ?? "octogee";
-  const base = (instanceName: string): string =>
+  const base = (gatewayId: string): string =>
     process.env.GATEWAY_INTERNAL_URL_TEMPLATE
       ? process.env.GATEWAY_INTERNAL_URL_TEMPLATE.replace(
-          "{instanceName}",
-          instanceName,
+          "{gatewayId}",
+          gatewayId,
         )
-      : `http://octogee-gateway-${instanceName}.${ns}.svc.cluster.local:3003`;
+      : `http://octogee-gateway-${gatewayId}.${ns}.svc.cluster.local:3003`;
   async function call<T>(url: string, init: RequestInit): Promise<T> {
     const r = await internalFetch(url, {
       ...init,
@@ -109,14 +110,14 @@ export function gatewayDeviceAuthClient(): GatewayDeviceAuthClient {
     return (await r.json()) as T;
   }
   return {
-    start: ({ instanceName, agentId }) =>
-      call(`${base(instanceName)}/internal/byosub/device-auth/start`, {
+    start: ({ gatewayId, agentId }) =>
+      call(`${base(gatewayId)}/internal/byosub/device-auth/start`, {
         method: "POST",
         body: JSON.stringify({ agentId }),
       }),
-    status: ({ instanceName, flowId }) =>
+    status: ({ gatewayId, flowId }) =>
       call(
-        `${base(instanceName)}/internal/byosub/device-auth/status/${encodeURIComponent(flowId)}`,
+        `${base(gatewayId)}/internal/byosub/device-auth/status/${encodeURIComponent(flowId)}`,
         { method: "GET" },
       ),
   };

@@ -1,6 +1,6 @@
 
+import { isValidGatewayId } from "../../../shared/types/glm.js";
 
-const GATEWAY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const FLEET_PREFIX = "/api/g/";
 
 export function stripGatewayPrefix(urlPath: string): string {
@@ -9,9 +9,9 @@ export function stripGatewayPrefix(urlPath: string): string {
   const slashIdx = rest.indexOf("/");
   const gwId = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
 
-if (!GATEWAY_ID_PATTERN.test(gwId)) return urlPath;
+  if (!isValidGatewayId(gwId)) return urlPath;
 
-if (slashIdx === -1) return "/";
+  if (slashIdx === -1) return "/";
   return rest.slice(slashIdx);
 }
 

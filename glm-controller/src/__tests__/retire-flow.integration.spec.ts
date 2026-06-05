@@ -32,8 +32,8 @@ function makeHelm(state: SharedState) {
       return out;
     },
     upsertInstance: vi.fn(async () => undefined),
-    removeInstance: vi.fn(async ({ instanceName }: { instanceName: string }) => {
-      state.helmReleases.delete(instanceName);
+    removeInstance: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
+      state.helmReleases.delete(gatewayId);
     }),
   };
 }
@@ -60,7 +60,7 @@ async function reconcilerTick(
   const changes = diffInstancesMap(actualMap, targetMap);
   for (const change of changes) {
     if (change.kind === "drift") {
-      await helm.removeInstance({ namespace: NS, instanceName: change.instanceName });
+      await helm.removeInstance({ namespace: NS, gatewayId: change.gatewayId });
     }
   }
   return changes;
@@ -104,8 +104,8 @@ function makeRetireDeps(state: SharedState, helm: ReturnType<typeof makeHelm>) {
       if (!hb) return null;
       return { mountedCustomers: hb.mountedCustomers, inFlightJobId: hb.inFlightJobId };
     },
-    readGlmGatewayInstanceName: async (gatewayId: string) =>
-      state.glmGateways.get(gatewayId)?.instanceName ?? null,
+    readGlmGatewayId: async (gatewayId: string) =>
+      state.glmGateways.has(gatewayId) ? gatewayId : null,
     deleteGlmGateway: async (gatewayId: string) => {
       state.glmGateways.delete(gatewayId);
     },
@@ -132,16 +132,15 @@ describe("retire-gateway choreography (integration)", () => {
           {
             enabled: true,
             image: { repository: REPO, tag: "abc1234" },
-            gatewayId: "gw-test",
+            gatewayId: "default",
           },
         ],
       ]),
       glmGateways: new Map([
         [
-          "gw-test",
+          "default",
           {
-            gatewayId: "gw-test",
-            instanceName: "default",
+            gatewayId: "default",
             imageRepository: REPO,
             imageTag: "abc1234",
             desiredStatus: "running",
@@ -150,23 +149,23 @@ describe("retire-gateway choreography (integration)", () => {
         ],
       ]),
       gateways: new Map([
-        ["gw-test", { mountedCustomers: [], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
+        ["default", { mountedCustomers: [], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
       ]),
       operations: new Map(),
     };
     const helm = makeHelm(state);
 
-const adminRes = adminDeleteGateway(state, "gw-test");
+const adminRes = adminDeleteGateway(state, "default");
     expect(adminRes.status).toBe(202);
-    expect(state.glmGateways.get("gw-test")?.desiredStatus).toBe("retired");
+    expect(state.glmGateways.get("default")?.desiredStatus).toBe("retired");
     expect(state.operations.size).toBe(1);
 
 const changes = await reconcilerTick(state, helm);
     expect(changes).toEqual([
-      expect.objectContaining({ kind: "drift", instanceName: "default" }),
+      expect.objectContaining({ kind: "drift", gatewayId: "default" }),
     ]);
     expect(helm.removeInstance).toHaveBeenCalledWith(
-      expect.objectContaining({ instanceName: "default" }),
+      expect.objectContaining({ gatewayId: "default" }),
     );
     expect(state.helmReleases.size).toBe(0);
 
@@ -202,16 +201,15 @@ const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
           {
             enabled: true,
             image: { repository: REPO, tag: "abc1234" },
-            gatewayId: "gw-test",
+            gatewayId: "default",
           },
         ],
       ]),
       glmGateways: new Map([
         [
-          "gw-test",
+          "default",
           {
-            gatewayId: "gw-test",
-            instanceName: "default",
+            gatewayId: "default",
             imageRepository: REPO,
             imageTag: "abc1234",
             desiredStatus: "running",
@@ -220,15 +218,15 @@ const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
         ],
       ]),
       gateways: new Map([
-        ["gw-test", { mountedCustomers: ["cust-a"], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
+        ["default", { mountedCustomers: ["cust-a"], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
       ]),
       operations: new Map(),
     };
     const helm = makeHelm(state);
 
-    const adminRes = adminDeleteGateway(state, "gw-test");
+    const adminRes = adminDeleteGateway(state, "default");
     expect(adminRes.status).toBe(409);
-    expect(state.glmGateways.get("gw-test")?.desiredStatus).toBe("running");
+    expect(state.glmGateways.get("default")?.desiredStatus).toBe("running");
     expect(state.operations.size).toBe(0);
 
 await reconcilerTick(state, helm);
@@ -244,16 +242,15 @@ await reconcilerTick(state, helm);
           {
             enabled: true,
             image: { repository: REPO, tag: "abc1234" },
-            gatewayId: "gw-test",
+            gatewayId: "default",
           },
         ],
       ]),
       glmGateways: new Map([
         [
-          "gw-test",
+          "default",
           {
-            gatewayId: "gw-test",
-            instanceName: "default",
+            gatewayId: "default",
             imageRepository: REPO,
             imageTag: "abc1234",
             desiredStatus: "running",
@@ -267,7 +264,7 @@ await reconcilerTick(state, helm);
     };
     const helm = makeHelm(state);
 
-    const adminRes = adminDeleteGateway(state, "gw-test");
+    const adminRes = adminDeleteGateway(state, "default");
     expect(adminRes.status).toBe(202);
 
     await reconcilerTick(state, helm);
@@ -288,16 +285,15 @@ it("regression — numeric imageTag does NOT short-circuit either step", async (
           {
             enabled: true,
             image: { repository: REPO, tag: "9778420" },
-            gatewayId: "gw-smoke",
+            gatewayId: "smoke",
           },
         ],
       ]),
       glmGateways: new Map([
         [
-          "gw-smoke",
+          "smoke",
           {
-            gatewayId: "gw-smoke",
-            instanceName: "smoke",
+            gatewayId: "smoke",
             imageRepository: REPO,
 
 imageTag: "9778420",
@@ -307,13 +303,13 @@ imageTag: "9778420",
         ],
       ]),
       gateways: new Map([
-        ["gw-smoke", { mountedCustomers: [], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
+        ["smoke", { mountedCustomers: [], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
       ]),
       operations: new Map(),
     };
     const helm = makeHelm(state);
 
-    const adminRes = adminDeleteGateway(state, "gw-smoke");
+    const adminRes = adminDeleteGateway(state, "smoke");
     expect(adminRes.status).toBe(202);
 
     await reconcilerTick(state, helm);

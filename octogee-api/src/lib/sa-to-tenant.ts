@@ -1,7 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 
 export type BoundTenant =
-  | { kind: "gateway"; gatewayId: string; ownerUid: string; instanceName: string }
+  | { kind: "gateway"; gatewayId: string; ownerUid: string }
   | { kind: "platform"; actor: "glm-controller" | "octogee-api" };
 type PlatformActor = Extract<BoundTenant, { kind: "platform" }>["actor"];
 
@@ -52,7 +52,7 @@ function isDnsLabel(value: string): boolean {
 
 function gatewayIdFromSaSuffix(suffix: string): string | null {
   if (!isDnsLabel(suffix)) return null;
-  return suffix.startsWith("gw-") ? suffix : `gw-${suffix}`;
+  return suffix;
 }
 
 function platformActorFromSa(saName: string): PlatformActor | null {
@@ -72,15 +72,13 @@ async function bindGatewaySa(
   const snap = await db.collection("glmGateways").doc(gatewayId).get();
   const data = snap.exists ? snap.data() : undefined;
   const ownerUid = typeof data?.ownerUid === "string" ? data.ownerUid : null;
-  const instanceName =
-    typeof data?.instanceName === "string" ? data.instanceName : null;
-  if (!ownerUid || !instanceName) {
+  if (!ownerUid) {
     return { attached: false, result: "unknown_tenant" };
   }
   return {
     attached: true,
     result,
-    tenant: { kind: "gateway", gatewayId, ownerUid, instanceName },
+    tenant: { kind: "gateway", gatewayId, ownerUid },
   };
 }
 

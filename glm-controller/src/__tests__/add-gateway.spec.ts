@@ -13,7 +13,7 @@ function mkOp(overrides: Partial<Operation> = {}): Operation {
     createdAt: 0,
     startedAt: null,
     completedAt: null,
-    input: { gatewayId: "gw-test-canary", instanceName: "canary", imageTag: "abc1234" },
+    input: { gatewayId: "canary", imageTag: "abc1234" },
     steps: [],
     ...overrides,
   };
@@ -49,7 +49,7 @@ function makeDeps(
           m[name] = {
             enabled: true,
             image: { repository: "repo", tag: "abc" },
-            gatewayId: name === "canary" ? "gw-test-canary" : `gw-test-${name}`,
+            gatewayId: name,
           };
         }
         return m;
@@ -86,7 +86,7 @@ describe("createAddGatewayHandler — happy path", () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
-      heartbeats: new Map([["gw-test-canary", 1]]),
+      heartbeats: new Map([["canary", 1]]),
       platformReady: new Set(),
     };
     const deps = makeDeps(state);
@@ -112,7 +112,7 @@ describe("createAddGatewayHandler — happy path", () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
-      heartbeats: new Map([["gw-test-canary", 1]]),
+      heartbeats: new Map([["canary", 1]]),
       platformReady: new Set(),
     };
     const sync = vi.fn(async () => {});
@@ -127,7 +127,7 @@ describe("createAddGatewayHandler — happy path", () => {
     const state: FakeState = {
       helmInstances: new Set(),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
-      heartbeats: new Map([["gw-test-canary", 1]]),
+      heartbeats: new Map([["canary", 1]]),
       platformReady: new Set(),
     };
     let polls = 0;
@@ -162,7 +162,7 @@ describe("createAddGatewayHandler — happy path", () => {
           state.availableReplicas.set("octogee-gateway-canary", 1);
         }
         if (virtualClock >= 250_000) {
-          state.heartbeats.set("gw-test-canary", virtualClock);
+          state.heartbeats.set("canary", virtualClock);
         }
       }),
       now: () => virtualClock,
@@ -185,12 +185,12 @@ describe("createAddGatewayHandler — happy path", () => {
     const ctx = makeCtx();
 
     const result = await createAddGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-test-canary", instanceName: "canary", imageTag: "abc", profile: "operator" } }),
+      mkOp({ input: { gatewayId: "canary", imageTag: "abc", profile: "operator" } }),
       ctx,
     );
 
     expect(result.success).toBe(true);
-    expect(state.platformReady.has("gw-test-canary")).toBe(true);
+    expect(state.platformReady.has("canary")).toBe(true);
     expect(deps.readGatewayHeartbeat).not.toHaveBeenCalled();
     expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
       "helm-render:running",
@@ -210,7 +210,7 @@ describe("createAddGatewayHandler — failures", () => {
     const state: FakeState = {
       helmInstances: new Set(),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
-      heartbeats: new Map([["gw-test-canary", 1]]),
+      heartbeats: new Map([["canary", 1]]),
       platformReady: new Set(),
     };
     const deps = makeDeps(state, {
@@ -231,7 +231,7 @@ describe("createAddGatewayHandler — failures", () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       availableReplicas: new Map(),
-      heartbeats: new Map([["gw-test-canary", 1]]),
+      heartbeats: new Map([["canary", 1]]),
       platformReady: new Set(),
     };
     const deps = makeDeps(state, {
@@ -278,31 +278,16 @@ describe("createAddGatewayHandler — failures", () => {
     const deps = makeDeps(state);
     const handler = createAddGatewayHandler(deps);
     const ctx = makeCtx();
-    const result = await handler(mkOp({ input: { instanceName: "canary", imageTag: "abc" } }), ctx);
+    const result = await handler(mkOp({ input: { imageTag: "abc" } }), ctx);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/gatewayId/i);
-  });
-
-  it("returns failure with explicit error when op.input is missing instanceName", async () => {
-    const state: FakeState = {
-      helmInstances: new Set(),
-      availableReplicas: new Map(),
-      heartbeats: new Map(),
-      platformReady: new Set(),
-    };
-    const deps = makeDeps(state);
-    const handler = createAddGatewayHandler(deps);
-    const ctx = makeCtx();
-    const result = await handler(mkOp({ input: { gatewayId: "gw-test-canary", imageTag: "abc" } }), ctx);
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/instanceName/i);
   });
 
   it("fails the operation when fleet-ingress sync throws — surfaces the error and reports a failed step", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
-      heartbeats: new Map([["gw-test-canary", 1]]),
+      heartbeats: new Map([["canary", 1]]),
       platformReady: new Set(),
     };
     const deps = makeDeps(state, {

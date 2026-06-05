@@ -47,17 +47,15 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       
       {
         stdout: JSON.stringify({
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageTag: "abc1234",
           image: { repository: REPO },
         }),
       },
-      
+
       {
         stdout: JSON.stringify({
-          gatewayId: "gw-test-canary",
-          instanceName: "canary",
+          gatewayId: "canary",
           imageTag: "def5678",
           image: { repository: REPO },
         }),
@@ -80,12 +78,12 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     expect(map.default).toEqual({
       enabled: true,
       image: { repository: REPO, tag: "abc1234" },
-      gatewayId: "gw-test",
+      gatewayId: "default",
     });
     expect(map.canary).toEqual({
       enabled: true,
       image: { repository: REPO, tag: "def5678" },
-      gatewayId: "gw-test-canary",
+      gatewayId: "canary",
     });
   });
 
@@ -99,8 +97,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       },
       {
         stdout: JSON.stringify({
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageTag: "abc1234",
           image: { repository: REPO },
           chartFingerprint: fp,
@@ -121,8 +118,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       },
       {
         stdout: JSON.stringify({
-          gatewayId: "gw-bender",
-          instanceName: "bender",
+          gatewayId: "bender",
           imageTag: "abc1234",
           image: { repository: REPO },
           serviceAccountName: "octogee-gateway-bender",
@@ -162,8 +158,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       },
       {
         stdout: JSON.stringify({
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageTag: "abc1234",
           image: { repository: REPO },
         }),
@@ -189,7 +184,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
         ]),
       },
       
-      { stdout: JSON.stringify({ instanceName: "broken" }) },
+      { stdout: JSON.stringify({}) },
     ]);
     const log = vi.fn();
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log });
@@ -211,8 +206,7 @@ const { runHelm } = mockSubprocess([
       
       {
         stdout: JSON.stringify({
-          gatewayId: "gw-smoke",
-          instanceName: "smoke",
+          gatewayId: "smoke",
           imageTag: 9778420,
           image: { repository: REPO },
         }),
@@ -224,7 +218,7 @@ const { runHelm } = mockSubprocess([
     expect(map.smoke).toEqual({
       enabled: true,
       image: { repository: REPO, tag: "9778420" },
-      gatewayId: "gw-smoke",
+      gatewayId: "smoke",
     });
     expect(log).not.toHaveBeenCalledWith(
       expect.stringContaining("missing"),
@@ -241,7 +235,6 @@ const { runHelm } = mockSubprocess([
       {
         stdout: JSON.stringify({
           gatewayId: 12345,
-          instanceName: "numeric",
           imageTag: "abc1234",
           image: { repository: REPO },
         }),
@@ -274,8 +267,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -293,8 +285,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     // imageTag="3280519") don't get coerced to a number and rejected
     // by the chart schema. Numeric fields (replicas) still use --set.
     expect(args).toContain("--set-string");
-    expect(args).toContain("instanceName=default");
-    expect(args).toContain("gatewayId=gw-test");
+    expect(args).toContain("gatewayId=default");
     expect(args).toContain("imageTag=abc1234");
     expect(args).toContain(`image.repository=${REPO}`);
     expect(args).toContain("--wait");
@@ -324,8 +315,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -345,8 +335,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -362,8 +351,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -378,8 +366,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -398,8 +385,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -415,8 +401,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      instanceName: "bender",
-      gatewayId: "gw-bender",
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -450,8 +435,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      instanceName: "bender",
-      gatewayId: "gw-bender",
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -467,8 +451,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -483,8 +466,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      instanceName: "bender",
-      gatewayId: "gw-bender",
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "3280519", // digits only — would be coerced to number by plain --set
       chartPath: "/charts/octogee-gateway",
@@ -500,8 +482,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       return idx === -1 ? undefined : args[idx + 1];
     };
     expect(stringPair("imageTag")).toBe("imageTag=3280519");
-    expect(stringPair("gatewayId")).toBe("gatewayId=gw-bender");
-    expect(stringPair("instanceName")).toBe("instanceName=bender");
+    expect(stringPair("gatewayId")).toBe("gatewayId=bender");
     expect(stringPair("profile")).toBe("profile=operator");
     expect(stringPair("sizingTier")).toBe("sizingTier=large");
     // replicas stays on --set because it's number-typed.
@@ -517,8 +498,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      instanceName: "bender",
-      gatewayId: "gw-bender",
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -534,8 +514,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -550,8 +529,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -569,8 +547,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     await expect(
       runner.upsertInstance({
         namespace: "octogee-test",
-        instanceName: "default",
-        gatewayId: "gw-test",
+        gatewayId: "default",
         imageRepository: REPO,
         imageTag: "abc1234",
         chartPath: "/charts/octogee-gateway",
@@ -598,8 +575,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      instanceName: "bender",
-      gatewayId: "gw-bender",
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -607,7 +583,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     expect(ensureAuthSecret).toHaveBeenCalledWith({
       namespace: "octogee",
-      gatewayId: "gw-bender",
+      gatewayId: "bender",
     });
     const ensureIdx = events.indexOf("ensure");
     const upgradeIdx = events.indexOf("upgrade");
@@ -630,8 +606,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     await expect(
       runner.upsertInstance({
         namespace: "octogee",
-        instanceName: "bender",
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         imageRepository: REPO,
         imageTag: "abc1234",
         chartPath: "/charts/octogee-gateway",
@@ -649,8 +624,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee-test",
-      instanceName: "default",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -671,8 +645,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      instanceName: "acme",
-      gatewayId: "gw-acme",
+      gatewayId: "acme",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -687,8 +660,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pending release", () => {
   const upsertArgs = {
     namespace: "octogee-test",
-    instanceName: "default",
-    gatewayId: "gw-test",
+    gatewayId: "default",
     imageRepository: REPO,
     imageTag: "newtag",
     chartPath: "/charts/octogee-gateway",
@@ -1240,7 +1212,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
 
     await runner.removeInstance({
       namespace: "octogee-test",
-      instanceName: "default",
+      gatewayId: "default",
     });
 
     const args = calls[0];
@@ -1258,7 +1230,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
-      runner.removeInstance({ namespace: "octogee-test", instanceName: "ghost" }),
+      runner.removeInstance({ namespace: "octogee-test", gatewayId: "ghost" }),
     ).resolves.toBeUndefined();
   });
 
@@ -1269,7 +1241,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
-      runner.removeInstance({ namespace: "octogee-test", instanceName: "broken" }),
+      runner.removeInstance({ namespace: "octogee-test", gatewayId: "broken" }),
     ).rejects.toThrow(/pre-delete hook failed/);
   });
 
@@ -1305,7 +1277,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
-      runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),
+      runner.removeInstance({ namespace: "octogee-test", gatewayId: "default" }),
     ).resolves.toBeUndefined();
 
     expect(calls.map((c) => c[0])).toEqual([
@@ -1351,7 +1323,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
-      runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),
+      runner.removeInstance({ namespace: "octogee-test", gatewayId: "default" }),
     ).resolves.toBeUndefined();
 
     expect(calls.map((c) => c[0])).toEqual([
@@ -1371,7 +1343,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
-      runner.removeInstance({ namespace: "octogee-test", instanceName: "ghost" }),
+      runner.removeInstance({ namespace: "octogee-test", gatewayId: "ghost" }),
     ).resolves.toBeUndefined();
     expect(calls.map((c) => c[0])).toEqual(["uninstall"]);
   });
@@ -1403,7 +1375,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await expect(
-      runner.removeInstance({ namespace: "octogee-test", instanceName: "default" }),
+      runner.removeInstance({ namespace: "octogee-test", gatewayId: "default" }),
     ).rejects.toThrow(/rollback/i);
     expect(calls.map((c) => c[0])).toEqual(["uninstall", "history", "rollback"]);
   });

@@ -2,10 +2,9 @@ import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
+import { isValidGatewayId } from "../../../shared/types/glm.js";
 
 const router = Router();
-
-const GATEWAY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 router.post("/ticket", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -14,7 +13,7 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
     const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;
     const gatewayId =
-      typeof rawGatewayId === "string" && GATEWAY_ID_PATTERN.test(rawGatewayId)
+      isValidGatewayId(rawGatewayId)
         ? rawGatewayId
         : "";
 

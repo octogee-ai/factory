@@ -14,8 +14,7 @@ const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 
 function mkDesired(overrides: Partial<GatewayDesiredState>): GatewayDesiredState {
   return {
-    gatewayId: "gw-test-default",
-    instanceName: "default",
+    gatewayId: "default",
     imageRepository: REPO,
     imageTag: "abc1234",
     desiredStatus: "running",
@@ -52,13 +51,13 @@ describe("sizingTier transition safety (stale Firestore values)", () => {
 describe("buildInstancesMap", () => {
   it("renders one instance entry per `running` desired-state doc", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "default", gatewayId: "gw-test", imageTag: "abc" }),
+      mkDesired({ gatewayId: "default", imageTag: "abc" }),
     ]);
     expect(map).toEqual({
       default: {
         enabled: true,
         image: { repository: REPO, tag: "abc" },
-        gatewayId: "gw-test",
+        gatewayId: "default",
         replicas: 1,
       },
     });
@@ -66,40 +65,39 @@ describe("buildInstancesMap", () => {
 
   it("paused desired-status renders replicas=0 (release stays, pod scales to zero)", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "default", desiredStatus: "paused" }),
+      mkDesired({ gatewayId: "default", desiredStatus: "paused" }),
     ]);
     expect(map.default).toMatchObject({ enabled: true, replicas: 0 });
   });
 
   it("keeps enabled=true for desiredStatus=draining — pod stays up; new placements are blocked elsewhere", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "default", desiredStatus: "draining" }),
+      mkDesired({ gatewayId: "default", desiredStatus: "draining" }),
     ]);
     expect(map.default.enabled).toBe(true);
   });
 
   it("omits desiredStatus=retired entirely (instance slot is gone)", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "default", desiredStatus: "running" }),
-      mkDesired({ instanceName: "old", desiredStatus: "retired" }),
+      mkDesired({ gatewayId: "default", desiredStatus: "running" }),
+      mkDesired({ gatewayId: "old", desiredStatus: "retired" }),
     ]);
     expect(Object.keys(map).sort()).toEqual(["default"]);
   });
 
   it("renders multiple running instances side by side", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "default", gatewayId: "gw-test", imageTag: "abc" }),
-      mkDesired({ instanceName: "canary", gatewayId: "gw-test-canary", imageTag: "def" }),
+      mkDesired({ gatewayId: "default", imageTag: "abc" }),
+      mkDesired({ gatewayId: "canary", imageTag: "def" }),
     ]);
-    expect(map.default).toMatchObject({ gatewayId: "gw-test", image: { tag: "abc" } });
-    expect(map.canary).toMatchObject({ gatewayId: "gw-test-canary", image: { tag: "def" } });
+    expect(map.default).toMatchObject({ gatewayId: "default", image: { tag: "abc" } });
+    expect(map.canary).toMatchObject({ gatewayId: "canary", image: { tag: "def" } });
   });
 
   it("preserves personal gateway helm knobs from desired state", () => {
     const map = buildInstancesMap([
       mkDesired({
-        instanceName: "bender",
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         serviceAccountName: "octogee-gateway-bender",
         gatewayContainerSecurityContext: {
           allowPrivilegeEscalation: true,
@@ -132,7 +130,7 @@ describe("buildInstancesMap", () => {
 
   it("propagates the operator profile onto the helm instance value (so the chart can gate env injection)", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "bender", profile: "operator" }),
+      mkDesired({ gatewayId: "bender", profile: "operator" }),
     ]);
     expect(map.bender.profile).toBe("operator");
   });
@@ -140,8 +138,7 @@ describe("buildInstancesMap", () => {
   it("defaults operator-profile gateways to a locked dedicated ServiceAccount and shell access", () => {
     const map = buildInstancesMap([
       mkDesired({
-        instanceName: "bender",
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         profile: "operator",
       }),
     ]);
@@ -158,8 +155,7 @@ describe("buildInstancesMap", () => {
   it("does not let an operator-profile gateway inherit the platform default ServiceAccount", () => {
     const map = buildInstancesMap([
       mkDesired({
-        instanceName: "bender",
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         profile: "operator",
         serviceAccountName: "octogee-gateway",
       }),
@@ -171,8 +167,7 @@ describe("buildInstancesMap", () => {
   it("preserves an explicit custom operator ServiceAccount name", () => {
     const map = buildInstancesMap([
       mkDesired({
-        instanceName: "bender",
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         profile: "operator",
         serviceAccountName: "custom-operator-ksa",
       }),
@@ -183,7 +178,7 @@ describe("buildInstancesMap", () => {
 
   it("defaults operator-profile gateways to durable home persistence when not explicitly configured", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "bender", profile: "operator" }),
+      mkDesired({ gatewayId: "bender", profile: "operator" }),
     ]);
     expect(map.bender.persistence).toEqual({
       enabled: true,
@@ -196,7 +191,7 @@ describe("buildInstancesMap", () => {
   it("preserves an explicit persistence override on operator-profile gateways", () => {
     const map = buildInstancesMap([
       mkDesired({
-        instanceName: "scratch",
+        gatewayId: "scratch",
         profile: "operator",
         persistence: { enabled: false },
       }),
@@ -206,7 +201,7 @@ describe("buildInstancesMap", () => {
 
   it("omits profile when desired state has none (cattle default — chart sees profile=\"\")", () => {
     const map = buildInstancesMap([
-      mkDesired({ instanceName: "default" }),
+      mkDesired({ gatewayId: "default" }),
     ]);
     expect(map.default).not.toHaveProperty("profile");
   });
@@ -215,31 +210,31 @@ describe("buildInstancesMap", () => {
 describe("deriveFleetImageTag — what sidecars should run", () => {
   it("uses the `default` instance's imageTag when present", () => {
     const tag = deriveFleetImageTag([
-      mkDesired({ instanceName: "default", imageTag: "abc1234" }),
-      mkDesired({ instanceName: "canary", imageTag: "canary999" }),
+      mkDesired({ gatewayId: "default", imageTag: "abc1234" }),
+      mkDesired({ gatewayId: "canary", imageTag: "canary999" }),
     ]);
     expect(tag).toBe("abc1234");
   });
 
   it("falls back to the first non-retired instance's imageTag when there's no `default`", () => {
     const tag = deriveFleetImageTag([
-      mkDesired({ instanceName: "smoke", imageTag: "smoke111" }),
-      mkDesired({ instanceName: "canary", imageTag: "canary222" }),
+      mkDesired({ gatewayId: "smoke", imageTag: "smoke111" }),
+      mkDesired({ gatewayId: "canary", imageTag: "canary222" }),
     ]);
     expect(tag).toBe("smoke111");
   });
 
   it("ignores retired instances when picking the fleet imageTag", () => {
     const tag = deriveFleetImageTag([
-      mkDesired({ instanceName: "default", desiredStatus: "retired", imageTag: "old" }),
-      mkDesired({ instanceName: "canary", imageTag: "fresh" }),
+      mkDesired({ gatewayId: "default", desiredStatus: "retired", imageTag: "old" }),
+      mkDesired({ gatewayId: "canary", imageTag: "fresh" }),
     ]);
     expect(tag).toBe("fresh");
   });
 
   it("returns undefined when no non-retired instances exist (chart default applies)", () => {
     const tag = deriveFleetImageTag([
-      mkDesired({ instanceName: "default", desiredStatus: "retired", imageTag: "old" }),
+      mkDesired({ gatewayId: "default", desiredStatus: "retired", imageTag: "old" }),
     ]);
     expect(tag).toBeUndefined();
   });
@@ -271,7 +266,7 @@ describe("diffInstancesMap", () => {
     };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({ kind: "create", instanceName: "canary" });
+    expect(changes[0]).toMatchObject({ kind: "create", gatewayId: "canary" });
   });
 
   it("reports `drift` (NOT `remove`) when actual has an instance desired doesn't — never auto-deletes", () => {
@@ -282,7 +277,7 @@ describe("diffInstancesMap", () => {
     const desired: HelmInstancesMap = { default: baseInstance("abc") };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual([
-      { kind: "drift", instanceName: "old", current: actual.old },
+      { kind: "drift", gatewayId: "old", current: actual.old },
     ]);
   });
 
@@ -291,7 +286,7 @@ describe("diffInstancesMap", () => {
     const desired: HelmInstancesMap = { default: baseInstance("def") };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
-      { kind: "update", instanceName: "default", from: actual.default, to: desired.default },
+      { kind: "update", gatewayId: "default", from: actual.default, to: desired.default },
     ]);
   });
 
@@ -300,7 +295,7 @@ describe("diffInstancesMap", () => {
     const desired: HelmInstancesMap = { default: { ...baseInstance("abc"), replicas: 0 } };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
-      { kind: "update", instanceName: "default", from: actual.default, to: desired.default },
+      { kind: "update", gatewayId: "default", from: actual.default, to: desired.default },
     ]);
   });
 
@@ -309,7 +304,7 @@ describe("diffInstancesMap", () => {
     const desired: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "large" } };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
-      { kind: "update", instanceName: "default", from: actual.default, to: desired.default },
+      { kind: "update", gatewayId: "default", from: actual.default, to: desired.default },
     ]);
   });
 
@@ -318,7 +313,7 @@ describe("diffInstancesMap", () => {
     const desired: HelmInstancesMap = { default: { ...baseInstance("def"), sizingTier: "large", replicas: 0 } };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({ kind: "update", instanceName: "default" });
+    expect(changes[0]).toMatchObject({ kind: "update", gatewayId: "default" });
   });
 
   it("reports an update when personal gateway helm knobs change", () => {
@@ -326,7 +321,7 @@ describe("diffInstancesMap", () => {
       bender: {
         enabled: true,
         image: { repository: REPO, tag: "abc" },
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
       },
     };
     const desired: HelmInstancesMap = {
@@ -338,7 +333,7 @@ describe("diffInstancesMap", () => {
     };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
-      { kind: "update", instanceName: "bender", from: actual.bender, to: desired.bender },
+      { kind: "update", gatewayId: "bender", from: actual.bender, to: desired.bender },
     ]);
   });
 
@@ -347,7 +342,7 @@ describe("diffInstancesMap", () => {
       bender: {
         enabled: true,
         image: { repository: REPO, tag: "abc" },
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         gatewayContainerSecurityContext: {
           allowPrivilegeEscalation: true,
           capabilities: { drop: ["ALL"] },
@@ -359,7 +354,7 @@ describe("diffInstancesMap", () => {
 const desired: HelmInstancesMap = {
       bender: {
         enabled: true,
-        gatewayId: "gw-bender",
+        gatewayId: "bender",
         image: { tag: "abc", repository: REPO },
         persistence: { storageClassName: "premium-rwo", size: "20Gi", enabled: true },
         gatewayContainerSecurityContext: {
@@ -400,8 +395,8 @@ const desired: HelmInstancesMap = {
 describe("buildHelmTargetMap", () => {
   const REPO_PATH = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
   const desired = (overrides: Partial<GatewayDesiredState>): GatewayDesiredState => ({
-    gatewayId: "gw-test-default",
-    instanceName: "default",
+    gatewayId: "default",
+    gatewayId: "default",
     imageRepository: REPO_PATH,
     imageTag: "abc1234",
     desiredStatus: "running",
@@ -412,7 +407,7 @@ describe("buildHelmTargetMap", () => {
   it("preserves drifted instances (in actual but no glmGateways doc) — never deletes", () => {
     const actual: HelmInstancesMap = {
       default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
-      old: { enabled: true, image: { repository: REPO_PATH, tag: "xyz" }, gatewayId: "gw-test-old" },
+      old: { enabled: true, image: { repository: REPO_PATH, tag: "xyz" }, gatewayId: "old" },
     };
     const target = buildHelmTargetMap([desired({})], actual);
     expect(Object.keys(target).sort()).toEqual(["default", "old"]);
@@ -424,7 +419,7 @@ describe("buildHelmTargetMap", () => {
       default: { enabled: true, image: { repository: REPO_PATH, tag: "old" }, gatewayId: "gw-test" },
     };
     const target = buildHelmTargetMap(
-      [desired({ instanceName: "default", imageTag: "new" })],
+      [desired({ gatewayId: "default", imageTag: "new" })],
       actual,
     );
     expect(target.default.image.tag).toBe("new");
@@ -433,24 +428,24 @@ describe("buildHelmTargetMap", () => {
   it("adds new instances from glmGateways that aren't in actual yet (the create case)", () => {
     const actual: HelmInstancesMap = {};
     const target = buildHelmTargetMap(
-      [desired({ instanceName: "canary", gatewayId: "gw-test-canary" })],
+      [desired({ gatewayId: "canary" })],
       actual,
     );
-    expect(target.canary.gatewayId).toBe("gw-test-canary");
+    expect(target.canary.gatewayId).toBe("canary");
   });
 
   it("removes a retired instance from target when no customers are mounted (helm uninstalls)", () => {
     const actual: HelmInstancesMap = {
       default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
-      canary: { enabled: true, image: { repository: REPO_PATH, tag: "def" }, gatewayId: "gw-test-canary" },
+      canary: { enabled: true, image: { repository: REPO_PATH, tag: "def" }, gatewayId: "canary" },
     };
     const mounted = new Map<string, readonly string[]>([
       ["gw-test", ["alice", "bob"]],
-      ["gw-test-canary", []],
+      ["canary", []],
     ]);
     const target = buildHelmTargetMap(
       [
-        desired({ instanceName: "canary", gatewayId: "gw-test-canary", desiredStatus: "retired" }),
+        desired({ gatewayId: "canary", desiredStatus: "retired" }),
       ],
       actual,
       mounted,
@@ -461,14 +456,14 @@ describe("buildHelmTargetMap", () => {
   it("preserves a retired instance from target while customers are still mounted (drain wait)", () => {
     const actual: HelmInstancesMap = {
       default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
-      canary: { enabled: true, image: { repository: REPO_PATH, tag: "def" }, gatewayId: "gw-test-canary" },
+      canary: { enabled: true, image: { repository: REPO_PATH, tag: "def" }, gatewayId: "canary" },
     };
     const mounted = new Map<string, readonly string[]>([
-      ["gw-test-canary", ["alice"]],
+      ["canary", ["alice"]],
     ]);
     const target = buildHelmTargetMap(
       [
-        desired({ instanceName: "canary", gatewayId: "gw-test-canary", desiredStatus: "retired" }),
+        desired({ gatewayId: "canary", desiredStatus: "retired" }),
       ],
       actual,
       mounted,
@@ -479,12 +474,12 @@ describe("buildHelmTargetMap", () => {
   it("removes a retired instance whose heartbeat doc never existed (stranded crash-looping canary case)", () => {
     const actual: HelmInstancesMap = {
       default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
-      crashloop: { enabled: true, image: { repository: REPO_PATH, tag: "bad" }, gatewayId: "gw-test-crashloop" },
+      crashloop: { enabled: true, image: { repository: REPO_PATH, tag: "bad" }, gatewayId: "crashloop" },
     };
     const mounted = new Map<string, readonly string[]>([["gw-test", []]]);
     const target = buildHelmTargetMap(
       [
-        desired({ instanceName: "crashloop", gatewayId: "gw-test-crashloop", desiredStatus: "retired" }),
+        desired({ gatewayId: "crashloop", desiredStatus: "retired" }),
       ],
       actual,
       mounted,
@@ -510,7 +505,7 @@ describe("chart-template drift detection", () => {
 
   const desired = (overrides: Partial<GatewayDesiredState>): GatewayDesiredState => ({
     gatewayId: "gw-test",
-    instanceName: "default",
+    gatewayId: "default",
     imageRepository: REPO,
     imageTag: "abc",
     desiredStatus: "running",
@@ -539,7 +534,7 @@ describe("chart-template drift detection", () => {
     const desiredMap: HelmInstancesMap = { default: { ...baseInstance("abc"), chartFingerprint: "fp-new" } };
     const changes = diffInstancesMap(actual, desiredMap);
     expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({ kind: "update", instanceName: "default" });
+    expect(changes[0]).toMatchObject({ kind: "update", gatewayId: "default" });
   });
 
   it("diffInstancesMap returns no changes when both sides carry the same fingerprint", () => {
@@ -587,7 +582,7 @@ describe("chart-drift comparison is caller-gated (issue #997 — PROD must not a
       compareChartFingerprint: false,
     });
     expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({ kind: "update", instanceName: "default" });
+    expect(changes[0]).toMatchObject({ kind: "update", gatewayId: "default" });
   });
 
   it("compareChartFingerprint defaults to true — chart-only drift still re-applies (TEST auto-roll unchanged)", () => {
@@ -610,7 +605,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns true when only replicas differs (paused: 1 → 0)", () => {
     const change: ReconcileChange = {
       kind: "update",
-      instanceName: "default",
+      gatewayId: "default",
       from: { ...base(), replicas: 1 },
       to: { ...base(), replicas: 0 },
     };
@@ -620,7 +615,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns true when only replicas differs (resume: 0 → 1)", () => {
     const change: ReconcileChange = {
       kind: "update",
-      instanceName: "default",
+      gatewayId: "default",
       from: { ...base(), replicas: 0 },
       to: { ...base(), replicas: 1 },
     };
@@ -630,7 +625,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns false when replicas AND image tag differ (chart-shape change → helm)", () => {
     const change: ReconcileChange = {
       kind: "update",
-      instanceName: "default",
+      gatewayId: "default",
       from: { ...base(), image: { repository: REPO2, tag: "abc" }, replicas: 1 },
       to: { ...base(), image: { repository: REPO2, tag: "def" }, replicas: 0 },
     };
@@ -640,7 +635,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns false when replicas AND sizingTier differ", () => {
     const change: ReconcileChange = {
       kind: "update",
-      instanceName: "default",
+      gatewayId: "default",
       from: { ...base(), sizingTier: "small", replicas: 1 },
       to: { ...base(), sizingTier: "large", replicas: 0 },
     };
@@ -650,7 +645,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns false when persistence differs (object diff)", () => {
     const change: ReconcileChange = {
       kind: "update",
-      instanceName: "bender",
+      gatewayId: "bender",
       from: { ...base(), persistence: { enabled: true, size: "20Gi" }, replicas: 1 },
       to: { ...base(), persistence: { enabled: true, size: "40Gi" }, replicas: 0 },
     };
@@ -660,7 +655,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns false on `create` kind", () => {
     const change: ReconcileChange = {
       kind: "create",
-      instanceName: "default",
+      gatewayId: "default",
       to: { ...base(), replicas: 1 },
     };
     expect(isReplicasOnlyUpdate(change)).toBe(false);
@@ -669,7 +664,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns false on `drift` kind", () => {
     const change: ReconcileChange = {
       kind: "drift",
-      instanceName: "default",
+      gatewayId: "default",
       current: { ...base(), replicas: 0 },
     };
     expect(isReplicasOnlyUpdate(change)).toBe(false);
@@ -678,7 +673,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns false when chartFingerprint differs", () => {
     const change: ReconcileChange = {
       kind: "update",
-      instanceName: "default",
+      gatewayId: "default",
       from: { ...base(), chartFingerprint: "fp-old", replicas: 1 },
       to: { ...base(), chartFingerprint: "fp-new", replicas: 0 },
     };
@@ -689,7 +684,7 @@ describe("isReplicasOnlyUpdate", () => {
     const inst = { ...base(), replicas: 1 };
     const change: ReconcileChange = {
       kind: "update",
-      instanceName: "default",
+      gatewayId: "default",
       from: inst,
       to: inst,
     };

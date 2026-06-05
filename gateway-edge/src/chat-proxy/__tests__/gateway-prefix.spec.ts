@@ -17,7 +17,7 @@ describe("stripGatewayPrefix", () => {
     expect(stripGatewayPrefix("/api/g/gw-prod/healthz")).toBe("/healthz");
   });
 
-  it("accepts gatewayIds matching /^[a-z0-9][a-z0-9-]{0,62}$/ (same shape as resolveBridgeGatewayId, prevents ReDoS)", () => {
+  it("accepts gatewayIds matching the shared rendered-resource-safe shape", () => {
     expect(stripGatewayPrefix("/api/g/gw-customer-foo-bar/api/x")).toBe("/api/x");
     expect(stripGatewayPrefix("/api/g/gw-9/api/x")).toBe("/api/x");
     expect(stripGatewayPrefix("/api/g/default/api/x")).toBe("/api/x");
@@ -28,8 +28,9 @@ describe("stripGatewayPrefix", () => {
     expect(stripGatewayPrefix("/api/g/-leading-hyphen/api/x")).toBe("/api/g/-leading-hyphen/api/x");
     expect(stripGatewayPrefix("/api/g/has_underscore/api/x")).toBe("/api/g/has_underscore/api/x");
     
-    expect(stripGatewayPrefix("/api/g/" + "a".repeat(64) + "/api/x")).toBe(
-      "/api/g/" + "a".repeat(64) + "/api/x",
+    expect(stripGatewayPrefix("/api/g/trailing-hyphen-/api/x")).toBe("/api/g/trailing-hyphen-/api/x");
+    expect(stripGatewayPrefix("/api/g/" + "a".repeat(33) + "/api/x")).toBe(
+      "/api/g/" + "a".repeat(33) + "/api/x",
     );
   });
 

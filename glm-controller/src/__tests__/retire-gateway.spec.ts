@@ -13,7 +13,7 @@ function mkOp(overrides: Partial<Operation> = {}): Operation {
     createdAt: 0,
     startedAt: null,
     completedAt: null,
-    input: { gatewayId: "gw-test-canary" },
+    input: { gatewayId: "canary" },
     steps: [],
     ...overrides,
   };
@@ -33,7 +33,7 @@ interface FakeState {
   helmInstances: Set<string>;
   
   live: Map<string, { mounted: string[]; inFlightJobId: string | null }>;
-  glmInstanceNames: Map<string, string>;
+  glmGatewayIds: Map<string, string>;
   deletedGlm: Set<string>;
   deletedHeartbeat: Set<string>;
   archivedSecret: Set<string>;
@@ -51,7 +51,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
           m[name] = {
             enabled: true,
             image: { repository: "repo", tag: "abc" },
-            gatewayId: name === "canary" ? "gw-test-canary" : `gw-test-${name}`,
+            gatewayId: name,
           };
         }
         return m;
@@ -62,8 +62,8 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
       if (!live) return null;
       return { mountedCustomers: live.mounted, inFlightJobId: live.inFlightJobId };
     }),
-    readGlmGatewayInstanceName: vi.fn(async (gatewayId: string) => {
-      return state.glmInstanceNames.get(gatewayId) ?? null;
+    readGlmGatewayId: vi.fn(async (gatewayId: string) => {
+      return state.glmGatewayIds.get(gatewayId) ?? null;
     }),
     deleteGlmGateway: vi.fn(async (gatewayId: string) => {
       state.deletedGlm.add(gatewayId);
@@ -94,8 +94,8 @@ describe("createRetireGatewayHandler — happy path", () => {
   it("waits for helm uninstall, then deletes glmGateways + heartbeat (and archives SM if provided)", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -107,9 +107,9 @@ describe("createRetireGatewayHandler — happy path", () => {
     const result = await handler(mkOp(), ctx);
 
     expect(result.success).toBe(true);
-    expect(state.deletedGlm.has("gw-test-canary")).toBe(true);
-    expect(state.deletedHeartbeat.has("gw-test-canary")).toBe(true);
-    expect(state.archivedSecret.has("gw-test-canary")).toBe(true);
+    expect(state.deletedGlm.has("canary")).toBe(true);
+    expect(state.deletedHeartbeat.has("canary")).toBe(true);
+    expect(state.archivedSecret.has("canary")).toBe(true);
     expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
       "helm-uninstall:running",
       "helm-uninstall:done",
@@ -125,8 +125,8 @@ describe("createRetireGatewayHandler — happy path", () => {
   it("calls syncFleetIngress exactly once after cleanup succeeds", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -141,8 +141,8 @@ describe("createRetireGatewayHandler — happy path", () => {
   it("fails the operation when fleet-ingress sync throws — reports a failed step but cleanup is already done", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -157,8 +157,8 @@ describe("createRetireGatewayHandler — happy path", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/kubectl apply denied/);
     
-    expect(state.deletedGlm.has("gw-test-canary")).toBe(true);
-    expect(state.deletedHeartbeat.has("gw-test-canary")).toBe(true);
+    expect(state.deletedGlm.has("canary")).toBe(true);
+    expect(state.deletedHeartbeat.has("canary")).toBe(true);
     const failedStep = ctx.reported.find((s) => s.status === "failed");
     expect(failedStep?.name).toBe("fleet-ingress");
   });
@@ -166,8 +166,8 @@ describe("createRetireGatewayHandler — happy path", () => {
   it("skips SM secret archive when no archiveAuthTokenSecret is provided", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -175,15 +175,15 @@ describe("createRetireGatewayHandler — happy path", () => {
     const deps = makeDeps(state, { archiveAuthTokenSecret: undefined });
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
     expect(result.success).toBe(true);
-    expect(state.deletedGlm.has("gw-test-canary")).toBe(true);
+    expect(state.deletedGlm.has("canary")).toBe(true);
     expect(state.archivedSecret.size).toBe(0);
   });
 
   it("deletes the gateway PVC only when explicitly requested", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -191,7 +191,7 @@ describe("createRetireGatewayHandler — happy path", () => {
     const deps = makeDeps(state);
 
     const result = await createRetireGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "gw-test-canary", deletePersistentVolumeClaim: true } }),
+      mkOp({ input: { gatewayId: "canary", deletePersistentVolumeClaim: true } }),
       makeCtx(),
     );
 
@@ -202,8 +202,8 @@ describe("createRetireGatewayHandler — happy path", () => {
   it("preserves the PVC by default", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -219,8 +219,8 @@ describe("createRetireGatewayHandler — happy path", () => {
   it("waits through pre-uninstall polls until helm removes the instance", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -242,8 +242,8 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
   it("refuses when the gateway still has mounted customers", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      live: new Map([["gw-test-canary", { mounted: ["alice", "bob"], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: ["alice", "bob"], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -262,9 +262,9 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       live: new Map([
-        ["gw-test-canary", { mounted: [], inFlightJobId: "job-restore-7" }],
+        ["canary", { mounted: [], inFlightJobId: "job-restore-7" }],
       ]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -282,7 +282,7 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     const state: FakeState = {
       helmInstances: new Set(),
       live: new Map(),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -290,15 +290,15 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     const deps = makeDeps(state);
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
     expect(result.success).toBe(true);
-    expect(state.deletedGlm.has("gw-test-canary")).toBe(true);
-    expect(state.deletedHeartbeat.has("gw-test-canary")).toBe(true);
+    expect(state.deletedGlm.has("canary")).toBe(true);
+    expect(state.deletedHeartbeat.has("canary")).toBe(true);
   });
 
-  it("refuses when glmGateways doc is missing (cannot determine instanceName)", async () => {
+  it("refuses when glmGateways doc is missing (cannot determine gatewayId)", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map(),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map(),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -306,14 +306,14 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     const deps = makeDeps(state);
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/glmGateways.*not found|instanceName/);
+    expect(result.error).toMatch(/glmGateways.*not found|gatewayId/);
   });
 
   it("returns failure when op.input is missing gatewayId", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
       live: new Map(),
-      glmInstanceNames: new Map(),
+      glmGatewayIds: new Map(),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -329,8 +329,8 @@ describe("createRetireGatewayHandler — failures", () => {
   it("times out helm-uninstall and reports the failure step when helm never removes the instance", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
@@ -351,13 +351,13 @@ describe("createRetireGatewayHandler — P2 heartbeat-quiesce", () => {
   it("re-deletes the heartbeat doc when a pod's late write resurrected it after cleanup", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),
 
-heartbeatPresentAfterDelete: new Set(["gw-test-canary"]),
+heartbeatPresentAfterDelete: new Set(["canary"]),
     };
     const deps = makeDeps(state);
     const ctx = makeCtx();
@@ -374,8 +374,8 @@ heartbeatPresentAfterDelete: new Set(["gw-test-canary"]),
   it("skips the re-delete when heartbeat stays gone after cleanup (happy path, no zombie)", async () => {
     const state: FakeState = {
       helmInstances: new Set(),
-      live: new Map([["gw-test-canary", { mounted: [], inFlightJobId: null }]]),
-      glmInstanceNames: new Map([["gw-test-canary", "canary"]]),
+      live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+      glmGatewayIds: new Map([["canary", "canary"]]),
       deletedGlm: new Set(),
       deletedHeartbeat: new Set(),
       archivedSecret: new Set(),

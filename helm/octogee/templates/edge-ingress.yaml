@@ -180,8 +180,8 @@ spec:
       http:
         paths:
           {{- range .Values.gatewayFleet.instances }}
-          {{- $svc := printf "octogee-gateway-%s" .instanceName }}
           {{- $gid := .gatewayId }}
+          {{- $svc := printf "octogee-gateway-%s" $gid }}
           - path: /restore-customer/{{ $gid }}
             pathType: ImplementationSpecific
             backend:

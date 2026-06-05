@@ -142,8 +142,7 @@ await Promise.resolve();
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
@@ -189,8 +188,7 @@ await vi.advanceTimersByTimeAsync(5_000);
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
@@ -237,8 +235,7 @@ await vi.advanceTimersByTimeAsync(20_000);
       .mockResolvedValue(undefined);
     const desired = [
       {
-        gatewayId: "gw-test",
-        instanceName: "default",
+        gatewayId: "default",
         imageRepository: "repo",
         imageTag: "abc",
         desiredStatus: "running",
@@ -301,8 +298,7 @@ await vi.advanceTimersByTimeAsync(20_000);
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
@@ -336,7 +332,7 @@ resolveUpgrade(undefined);
     expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
   });
 
-  it("calls syncFleetIngress after applyChanges with the gatewayId+instanceName of every desired gateway", async () => {
+  it("calls syncFleetIngress after applyChanges with the gatewayId of every desired gateway", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const helm = makeFakeHelm({
@@ -346,16 +342,14 @@ resolveUpgrade(undefined);
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
           createdBy: "ci",
         },
         {
-          gatewayId: "gw-test-canary",
-          instanceName: "canary",
+          gatewayId: "canary",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
@@ -381,12 +375,10 @@ resolveUpgrade(undefined);
 
     expect(syncFleetIngress).toHaveBeenCalledTimes(1);
     const arg = (syncFleetIngress.mock.calls[0] ?? [])[0] as
-      | ReadonlyArray<{ gatewayId: string; instanceName: string }>
+      | ReadonlyArray<{ gatewayId: string }>
       | undefined;
     expect(arg).toBeDefined();
-    expect(arg!.map((g) => g.gatewayId).sort()).toEqual(["gw-test", "gw-test-canary"]);
-    expect(arg!.find((g) => g.gatewayId === "gw-test")?.instanceName).toBe("default");
-    expect(arg!.find((g) => g.gatewayId === "gw-test-canary")?.instanceName).toBe("canary");
+    expect(arg!.map((g) => g.gatewayId).sort()).toEqual(["canary", "default"]);
     stop();
   });
 
@@ -394,8 +386,7 @@ resolveUpgrade(undefined);
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const desired = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+      gatewayId: "default",
       imageRepository: "repo",
       imageTag: "abc",
       desiredStatus: "running",
@@ -407,7 +398,7 @@ resolveUpgrade(undefined);
         default: {
           enabled: true,
           image: { repository: "repo", tag: "abc" },
-          gatewayId: "gw-test",
+          gatewayId: "default",
           replicas: 1,
         },
       }),
@@ -448,8 +439,7 @@ resolveUpgrade(undefined);
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
@@ -506,8 +496,7 @@ resolveUpgrade(undefined);
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
@@ -566,7 +555,7 @@ beforeEach(() => {
         default: {
           enabled: true,
           image: { repository: "repo", tag: "sha-prod" },
-          gatewayId: "gw-prod",
+          gatewayId: "default",
           chartFingerprint: "fp-OLD",
           replicas: 1,
         },
@@ -575,8 +564,7 @@ beforeEach(() => {
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-prod",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "sha-prod",
           desiredStatus: "running",
@@ -617,8 +605,7 @@ beforeEach(() => {
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-prod",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "sha-prod",
           desiredStatus: "running",
@@ -653,7 +640,7 @@ beforeEach(() => {
         default: {
           enabled: true,
           image: { repository: "repo", tag: "sha-OLD" },
-          gatewayId: "gw-prod",
+          gatewayId: "default",
           chartFingerprint: "fp-OLD",
         },
       }),
@@ -661,8 +648,7 @@ beforeEach(() => {
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-prod",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "sha-NEW",
           desiredStatus: "running",
@@ -712,12 +698,12 @@ read: async () => ({
         orphan: {
           enabled: true,
           image: { repository: "repo", tag: "abc1234" },
-          gatewayId: "gw-orphan",
+          gatewayId: "orphan",
         },
       }),
     });
     const db = makeFakeDb({
-      glmGateways: [], // intentionally empty — no doc matches gw-orphan
+      glmGateways: [], // intentionally empty — no doc matches orphan
       onSnapshot: { register: (cb) => snapCbs.push(cb) },
     });
 
@@ -739,7 +725,7 @@ read: async () => ({
     );
     expect(orphanWarn).toBeDefined();
     expect(orphanWarn?.[0]).toContain("orphan");
-    expect(orphanWarn?.[0]).toContain("gw-orphan");
+    expect(orphanWarn?.[0]).toContain("orphan");
     stop();
   });
 
@@ -751,7 +737,7 @@ read: async () => ({
         draining: {
           enabled: true,
           image: { repository: "repo", tag: "abc1234" },
-          gatewayId: "gw-draining",
+          gatewayId: "draining",
         },
       }),
     });
@@ -764,8 +750,7 @@ const db = {
               docs: [
                 {
                   data: () => ({
-                    gatewayId: "gw-draining",
-                    instanceName: "draining",
+                    gatewayId: "draining",
                     imageRepository: "repo",
                     imageTag: "abc1234",
                     desiredStatus: "retired",
@@ -785,7 +770,7 @@ const db = {
             get: async () => ({
               docs: [
                 {
-                  id: "gw-draining",
+                  id: "draining",
                   data: () => ({ mountedCustomers: ["cust-1", "cust-2"] }),
                 },
               ],
@@ -857,7 +842,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         default: {
           enabled: true,
           image: { repository: "repo", tag: "abc" },
-          gatewayId: "gw-test",
+          gatewayId: "default",
           replicas: 1,
         },
       }),
@@ -868,8 +853,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "paused",
@@ -910,7 +894,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         bender: {
           enabled: true,
           image: { repository: "repo", tag: "abc" },
-          gatewayId: "gw-bender",
+          gatewayId: "bender",
           replicas: 0,
         },
       }),
@@ -921,8 +905,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-bender",
-          instanceName: "bender",
+          gatewayId: "bender",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
@@ -962,7 +945,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         default: {
           enabled: true,
           image: { repository: "repo", tag: "old-tag" },
-          gatewayId: "gw-test",
+          gatewayId: "default",
           replicas: 1,
         },
       }),
@@ -973,8 +956,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "new-tag",
           desiredStatus: "paused",
@@ -1010,7 +992,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         default: {
           enabled: true,
           image: { repository: "repo", tag: "abc" },
-          gatewayId: "gw-test",
+          gatewayId: "default",
           replicas: 1,
         },
       }),
@@ -1021,8 +1003,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test",
-          instanceName: "default",
+          gatewayId: "default",
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "paused",
@@ -1063,7 +1044,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         "op-canary": {
           enabled: true,
           image: { repository: "repo", tag: "abc-oc2026.5.28" },
-          gatewayId: "gw-test-op-canary",
+          gatewayId: "op-canary",
           profile: "operator",
           replicas: 1,
         },
@@ -1076,8 +1057,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test-op-canary",
-          instanceName: "op-canary",
+          gatewayId: "op-canary",
           imageRepository: "repo",
           imageTag: "abc-oc2026.5.28",
           profile: "operator",
@@ -1107,8 +1087,8 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       namespace: expect.any(String),
       name: "octogee-gateway-op-canary",
     });
-    expect(gatewayDocs["gw-test-op-canary"]).toMatchObject({
-      gatewayId: "gw-test-op-canary",
+    expect(gatewayDocs["op-canary"]).toMatchObject({
+      gatewayId: "op-canary",
       status: "ready",
       version: "abc",
       mountedCustomers: [],
@@ -1130,8 +1110,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         startedAt: 200,
         completedAt: null,
         input: {
-          gatewayId: "gw-test-op-canary",
-          instanceName: "op-canary",
+          gatewayId: "op-canary",
           profile: "operator",
         },
         steps: [{ name: "helm-render", status: "running", startedAt: 200 }],
@@ -1145,7 +1124,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         "op-canary": {
           enabled: true,
           image: { repository: "repo", tag: "abc-oc2026.5.28" },
-          gatewayId: "gw-test-op-canary",
+          gatewayId: "op-canary",
           profile: "operator",
           replicas: 1,
         },
@@ -1158,8 +1137,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     const db = makeFakeDb({
       glmGateways: [
         {
-          gatewayId: "gw-test-op-canary",
-          instanceName: "op-canary",
+          gatewayId: "op-canary",
           imageRepository: "repo",
           imageTag: "abc-oc2026.5.28",
           profile: "operator",

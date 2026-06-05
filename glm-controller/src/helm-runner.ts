@@ -12,7 +12,6 @@ readDeployedInstances(opts: { namespace: string }): Promise<HelmInstancesMap>;
 
 upsertInstance(opts: {
     namespace: string;
-    instanceName: string;
     gatewayId: string;
     imageRepository: string;
     imageTag: string;
@@ -38,7 +37,7 @@ gcpProject?: string;
 
 removeInstance(opts: {
     namespace: string;
-    instanceName: string;
+    gatewayId: string;
   }): Promise<void>;
 }
 
@@ -83,11 +82,11 @@ function isReleaseNotFound(stderr: string): boolean {
   return NOT_FOUND_PATTERNS.some((p) => p.test(stderr));
 }
 
-function releaseNameForInstance(instanceName: string): string {
-  return `${RELEASE_PREFIX}${instanceName}`;
+function releaseNameForGateway(gatewayId: string): string {
+  return `${RELEASE_PREFIX}${gatewayId}`;
 }
 
-function instanceNameFromRelease(releaseName: string): string | null {
+function gatewayIdFromRelease(releaseName: string): string | null {
   if (!releaseName.startsWith(RELEASE_PREFIX)) return null;
   return releaseName.slice(RELEASE_PREFIX.length);
 }
@@ -100,7 +99,6 @@ interface HelmListItem {
 
 interface PerReleaseValues {
   gatewayId?: unknown;
-  instanceName?: unknown;
   imageTag?: unknown;
   image?: { repository?: unknown; tag?: unknown };
   chartFingerprint?: unknown;
@@ -231,7 +229,6 @@ interface BuildUpgradeArgsOpts {
   release: string;
   chartPath: string;
   namespace: string;
-  instanceName: string;
   gatewayId: string;
   imageTag: string;
   imageRepository: string;
@@ -276,8 +273,6 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     opts.chartPath,
     "-n",
     opts.namespace,
-    HELM_SET_STRING,
-    `instanceName=${opts.instanceName}`,
     HELM_SET_STRING,
     `gatewayId=${opts.gatewayId}`,
     HELM_SET_STRING,
@@ -460,18 +455,18 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       const items = await listGatewayReleases(deps, namespace);
       const entries: [string, HelmInstancesMap[string]][] = [];
       for (const item of items) {
-        const instanceName = instanceNameFromRelease(item.name);
-        if (!instanceName) continue;
+        const gatewayId = gatewayIdFromRelease(item.name);
+        if (!gatewayId) continue;
         const value = await readInstanceValue(deps, namespace, item.name);
-        if (value) entries.push([instanceName, value]);
+        if (value) entries.push([gatewayId, value]);
       }
       return Object.fromEntries(entries);
     },
 
     async upsertInstance(opts) {
-      const { namespace, instanceName, gatewayId, imageTag, chartFingerprint, takeOwnership } =
+      const { namespace, gatewayId, imageTag, chartFingerprint, takeOwnership } =
         opts;
-      const release = releaseNameForInstance(instanceName);
+      const release = releaseNameForGateway(gatewayId);
       const args = buildUpgradeArgs({
         ...opts,
         release,
@@ -527,8 +522,8 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       );
     },
 
-    async removeInstance({ namespace, instanceName }) {
-      const release = releaseNameForInstance(instanceName);
+    async removeInstance({ namespace, gatewayId }) {
+      const release = releaseNameForGateway(gatewayId);
       const uninstallArgs = [
         "uninstall",
         release,
@@ -608,12 +603,12 @@ export function createLoggingHelmRunner(log: (msg: string) => void): HelmRunner 
     },
     upsertInstance: async (opts) => {
       log(
-        `[helm-runner:stub] upsertInstance ns=${opts.namespace} instanceName=${opts.instanceName} gatewayId=${opts.gatewayId} imageTag=${opts.imageTag} — no exec`,
+        `[helm-runner:stub] upsertInstance ns=${opts.namespace} gatewayId=${opts.gatewayId} imageTag=${opts.imageTag} — no exec`,
       );
     },
     removeInstance: async (opts) => {
       log(
-        `[helm-runner:stub] removeInstance ns=${opts.namespace} instanceName=${opts.instanceName} — no exec`,
+        `[helm-runner:stub] removeInstance ns=${opts.namespace} gatewayId=${opts.gatewayId} — no exec`,
       );
     },
   };

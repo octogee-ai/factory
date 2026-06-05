@@ -11,28 +11,27 @@ function gatewayDoc(id: string, data: Record<string, unknown> = {}) {
   };
 }
 
-describe("projectGatewaySummary — instanceName", () => {
+describe("projectGatewaySummary — gatewayId", () => {
   const now = 1_750_000_000_000;
 
-  it("surfaces instanceName from the glm desired-state doc (drives the metrics pod selector)", () => {
+  it("surfaces the bare gatewayId from the status doc", () => {
     const summary = projectGatewaySummary(
-      gatewayDoc("gw-bender"),
+      gatewayDoc("bender"),
       [],
-      { instanceName: "bender", profile: "operator" },
+      { profile: "operator" },
       now,
     );
-    expect(summary.gatewayId).toBe("gw-bender");
-    expect(summary.instanceName).toBe("bender");
+    expect(summary.gatewayId).toBe("bender");
   });
 
-  it("is null when there is no matching glm doc (orphan status doc)", () => {
-    const summary = projectGatewaySummary(gatewayDoc("gw-orphan"), [], undefined, now);
-    expect(summary.instanceName).toBeNull();
-  });
-
-  it("is null when the glm doc omits instanceName", () => {
-    const summary = projectGatewaySummary(gatewayDoc("gw-x"), [], { profile: "standard" }, now);
-    expect(summary.instanceName).toBeNull();
+  it("falls back to the doc id when the status doc omits gatewayId", () => {
+    const summary = projectGatewaySummary(
+      { id: "default", data: () => ({ status: "ready", mountedCustomers: [] }) },
+      [],
+      undefined,
+      now,
+    );
+    expect(summary.gatewayId).toBe("default");
   });
 });
 

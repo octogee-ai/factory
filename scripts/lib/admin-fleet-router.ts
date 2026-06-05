@@ -10,10 +10,12 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  GATEWAY_ID_REQUIREMENT,
   GATEWAY_PROFILES,
   OPERATOR_GATEWAY_RESERVATIONS_COLLECTION,
   OPERATOR_GATEWAY_LOCKED_ACCESS,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  isValidGatewayId,
   operatorGatewayServiceAccountName,
   resolveGatewayPersistence,
   type GatewayProfile,
@@ -190,7 +192,7 @@ export function projectGatewaySummary(
   glmDoc: GlmDoc | undefined,
   now: number,
 ): {
-  gatewayId: string; instanceName: string | null; status: string;
+  gatewayId: string; status: string;
   desiredStatus: "running" | "paused" | "draining" | "retired" | null;
   imageTag: string | null; openclawVersion: string | null;
   mountedCustomers: unknown[];
@@ -205,7 +207,6 @@ export function projectGatewaySummary(
   const inFlightJobId = typeof data.inFlightJobId === "string" ? data.inFlightJobId : null;
   return {
     gatewayId: typeof data.gatewayId === "string" ? data.gatewayId : doc.id,
-    instanceName: typeof glmDoc?.instanceName === "string" ? glmDoc.instanceName : null,
     status: typeof data.status === "string" ? data.status : "unknown",
     desiredStatus: projectDesiredStatus(glmDoc),
     imageTag: typeof data.version === "string" ? data.version : null,
@@ -332,7 +333,6 @@ interface NewOperationInput {
 
 interface AddGatewayBody {
   gatewayId: string;
-  instanceName: string;
   imageRepository: string;
   imageTag: string;
   profile: string;
@@ -343,7 +343,6 @@ interface AddGatewayBody {
 
 interface AddGatewayCreate {
   gatewayId: string;
-  instanceName: string;
   imageRepository: string;
   imageTag: string;
   profile?: GatewayProfile;
@@ -354,7 +353,6 @@ interface AddGatewayCreate {
 
 interface FulfillOperatorReservationBody {
   gatewayId: string;
-  instanceName: string;
   imageRepository: string;
   imageTag: string;
 }
@@ -513,12 +511,11 @@ function validateAddGatewayRequiredFields(
 ): { error: RolloutBodyError } | {
   ok: Pick<
     AddGatewayCreate,
-    "gatewayId" | "instanceName" | "imageRepository" | "imageTag"
+    "gatewayId" | "imageRepository" | "imageTag"
   >;
 } {
   if (
     !isNonEmptyString(body.gatewayId) ||
-    !isNonEmptyString(body.instanceName) ||
     !isNonEmptyString(body.imageRepository) ||
     !isNonEmptyString(body.imageTag)
   ) {
@@ -527,7 +524,18 @@ function validateAddGatewayRequiredFields(
         status: 400,
         body: {
           error: "missing required fields",
-          required: ["gatewayId", "instanceName", "imageRepository", "imageTag"],
+          required: ["gatewayId", "imageRepository", "imageTag"],
+        },
+      },
+    };
+  }
+  if (!isValidGatewayId(body.gatewayId)) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: GATEWAY_ID_REQUIREMENT,
+          got: body.gatewayId,
         },
       },
     };
@@ -535,7 +543,6 @@ function validateAddGatewayRequiredFields(
   return {
     ok: {
       gatewayId: body.gatewayId,
-      instanceName: body.instanceName,
       imageRepository: body.imageRepository,
       imageTag: body.imageTag,
     },
@@ -1188,7 +1195,7 @@ async function createOperation(
 
 async function ensureGatewayCreateIsUnique(
   db: Firestore,
-  body: Pick<AddGatewayCreate, "gatewayId" | "instanceName">,
+  body: Pick<AddGatewayCreate, "gatewayId">,
 ): Promise<{ error: RolloutBodyError } | { ok: true }> {
   const existing = await db
     .collection(GLM_GATEWAYS_COLLECTION)
@@ -1201,25 +1208,6 @@ async function ensureGatewayCreateIsUnique(
         body: {
           error: "gateway already exists",
           gatewayId: body.gatewayId,
-        },
-      },
-    };
-  }
-
-  const collisionSnap = await db
-    .collection(GLM_GATEWAYS_COLLECTION)
-    .where("instanceName", "==", body.instanceName)
-    .limit(1)
-    .get();
-  if (collisionSnap.size > 0) {
-    const collidingId = collisionSnap.docs[0].id;
-    return {
-      error: {
-        status: 409,
-        body: {
-          error: "instanceName already in use",
-          instanceName: body.instanceName,
-          ownedBy: collidingId,
         },
       },
     };
@@ -1302,7 +1290,6 @@ function operatorGatewayDesiredStateFromReservation(opts: {
   const persistence = resolveGatewayPersistence(profile, undefined);
   return {
     gatewayId: opts.body.gatewayId,
-    instanceName: opts.body.instanceName,
     imageRepository: opts.body.imageRepository,
     imageTag: opts.body.imageTag,
     desiredStatus: "running",
@@ -2067,7 +2054,6 @@ router.post(
         const operationInput = {
           uid,
           gatewayId: body.gatewayId,
-          instanceName: body.instanceName,
           imageTag: body.imageTag,
           profile: "operator",
           sizingTier: reservation.ok.requestedSizingTier,
@@ -2194,7 +2180,6 @@ router.post(
           .doc(body.gatewayId)
           .set({
             gatewayId: body.gatewayId,
-            instanceName: body.instanceName,
             imageRepository: body.imageRepository,
             imageTag: body.imageTag,
             desiredStatus: "running",
@@ -2211,7 +2196,6 @@ router.post(
           createdBy,
           input: {
             gatewayId: body.gatewayId,
-            instanceName: body.instanceName,
             imageTag: body.imageTag,
             ...(body.profile ? { profile: body.profile } : {}),
             ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),
@@ -2382,15 +2366,6 @@ router.post(
             .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
           return;
         }
-        const data = snap.data() as { instanceName?: string } | undefined;
-        const instanceName = data?.instanceName;
-        if (typeof instanceName !== "string" || instanceName.length === 0) {
-          res.status(500).json({
-            error: "gateway missing instanceName — corrupt glmGateways doc",
-            gatewayId: id,
-          });
-          return;
-        }
 
         const inFlightJobId = await findInFlightJobId(db, id);
         if (inFlightJobId) {
@@ -2430,7 +2405,7 @@ router.post(
         const operationId = await createOperation(db, {
           kind: "restart-gateway",
           createdBy: actor.uid ?? "unknown",
-          input: { gatewayId: id, instanceName },
+          input: { gatewayId: id },
         });
         res.status(202).json({ gatewayId: id, operationId });
       } catch (e) {

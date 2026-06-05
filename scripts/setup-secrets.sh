@@ -468,9 +468,9 @@ ksecret octogee-fleet-controller --from-literal=secret="$FLEET_CONTROLLER_SECRET
 # Gateway IDs by env (match helm/octogee/values.{test,prod}.yaml):
 info "gateway-auth-token (Secret Manager, per-gatewayId)"
 case "$ENV" in
-  prod)      GATEWAY_IDS=("gw-prod") ;;
-  test)      GATEWAY_IDS=("gw-test") ;;
-  custom)    GATEWAY_IDS=("gw-$CUSTOM_NS") ;;
+  prod)      GATEWAY_IDS=("default") ;;
+  test)      GATEWAY_IDS=("default") ;;
+  custom)    GATEWAY_IDS=("default") ;;
 esac
 
 # Gateway + chat-proxy both run on this SA via Workload Identity (see

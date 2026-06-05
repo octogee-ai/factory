@@ -30,9 +30,9 @@ describe("computeDesiredFleetPaths", () => {
     ]);
   });
 
-  it("emits 6 RPC paths per gateway routed to the per-instance Service plus /health at the end", () => {
+  it("emits 6 RPC paths per gateway routed to the per-gateway Service plus /health at the end", () => {
     const gateways: FleetGateway[] = [
-      { gatewayId: "gw-test", instanceName: "default" },
+      { gatewayId: "default" },
     ];
     const paths = computeDesiredFleetPaths({
       gateways,
@@ -40,12 +40,12 @@ describe("computeDesiredFleetPaths", () => {
       aliasServiceName: ALIAS,
     });
     expect(paths.map((p) => p.path)).toEqual([
-      "/restore-customer/gw-test",
-      "/quiesce/gw-test",
-      "/export/gw-test",
-      "/push-state/gw-test",
-      "/import/gw-test",
-      "/unmount/gw-test",
+      "/restore-customer/default",
+      "/quiesce/default",
+      "/export/default",
+      "/push-state/default",
+      "/import/default",
+      "/unmount/default",
       "/health",
     ]);
     expect(paths[0]).toMatchObject({
@@ -61,9 +61,9 @@ describe("computeDesiredFleetPaths", () => {
 
   it("orders gateways by gatewayId for deterministic output", () => {
     const gateways: FleetGateway[] = [
-      { gatewayId: "gw-zebra", instanceName: "z" },
-      { gatewayId: "gw-alpha", instanceName: "a" },
-      { gatewayId: "gw-mike", instanceName: "m" },
+      { gatewayId: "zebra" },
+      { gatewayId: "alpha" },
+      { gatewayId: "mike" },
     ];
     const paths = computeDesiredFleetPaths({
       gateways,
@@ -72,9 +72,9 @@ describe("computeDesiredFleetPaths", () => {
     });
     const restorePaths = paths.filter((p) => p.path.startsWith("/restore-customer/"));
     expect(restorePaths.map((p) => p.path)).toEqual([
-      "/restore-customer/gw-alpha",
-      "/restore-customer/gw-mike",
-      "/restore-customer/gw-zebra",
+      "/restore-customer/alpha",
+      "/restore-customer/mike",
+      "/restore-customer/zebra",
     ]);
   });
 });
@@ -99,9 +99,9 @@ describe("computeDesiredApiFleetPaths", () => {
     ]);
   });
 
-  it("emits one /api/g/<gatewayId>/* path per gateway routed to the per-instance gateway-edge Service, /health last", () => {
+  it("emits one /api/g/<gatewayId>/* path per gateway routed to the per-gateway gateway-edge Service, /health last", () => {
     const gateways: FleetGateway[] = [
-      { gatewayId: "gw-bender", instanceName: "bender" },
+      { gatewayId: "bender" },
     ];
     const paths = computeDesiredApiFleetPaths({
       gateways,
@@ -109,7 +109,7 @@ describe("computeDesiredApiFleetPaths", () => {
       gatewayEdgeServiceName: WSAPI_ALIAS,
     });
     expect(paths.map((p) => p.path)).toEqual([
-      "/api/g/gw-bender/*",
+      "/api/g/bender/*",
       "/health",
     ]);
     expect(paths[0]).toMatchObject({
@@ -120,10 +120,10 @@ describe("computeDesiredApiFleetPaths", () => {
     expect(paths.at(-1)).toMatchObject({ path: "/health", serviceName: WSAPI_ALIAS });
   });
 
-  it("uses instanceName (never gatewayId) for the per-gateway Service name — same convention as fleet-control", () => {
+  it("uses the gatewayId for the per-gateway Service name — same convention as fleet-control", () => {
     const gateways: FleetGateway[] = [
-      { gatewayId: "gw-bender", instanceName: "bender" },
-      { gatewayId: "default", instanceName: "default" },
+      { gatewayId: "bender" },
+      { gatewayId: "default" },
     ];
     const paths = computeDesiredApiFleetPaths({
       gateways,
@@ -132,16 +132,16 @@ describe("computeDesiredApiFleetPaths", () => {
     });
     const gatewayPaths = paths.filter((p) => p.path.startsWith("/api/g/"));
     expect(gatewayPaths.map((p) => p.serviceName)).toEqual([
-      "gateway-edge-default",
       "gateway-edge-bender",
+      "gateway-edge-default",
     ]);
   });
 
   it("orders gateways by gatewayId for deterministic output (matches fleet-control)", () => {
     const gateways: FleetGateway[] = [
-      { gatewayId: "gw-zebra", instanceName: "z" },
-      { gatewayId: "gw-alpha", instanceName: "a" },
-      { gatewayId: "default", instanceName: "default" },
+      { gatewayId: "zebra" },
+      { gatewayId: "alpha" },
+      { gatewayId: "default" },
     ];
     const paths = computeDesiredApiFleetPaths({
       gateways,
@@ -150,33 +150,33 @@ describe("computeDesiredApiFleetPaths", () => {
     });
     const gatewayPaths = paths.filter((p) => p.path.startsWith("/api/g/"));
     expect(gatewayPaths.map((p) => p.path)).toEqual([
+      "/api/g/alpha/*",
       "/api/g/default/*",
-      "/api/g/gw-alpha/*",
-      "/api/g/gw-zebra/*",
+      "/api/g/zebra/*",
     ]);
   });
 });
 
 describe("computeDesiredPreviewPaths", () => {
-  it("emits one /g/<gatewayId>/* path per gateway routed to the per-instance gateway Service", () => {
+  it("emits one /g/<gatewayId>/* path per gateway routed to the per-gateway gateway Service", () => {
     const paths = computeDesiredPreviewPaths({
       gateways: [
-        { gatewayId: "gw-zebra", instanceName: "z" },
-        { gatewayId: "gw-alpha", instanceName: "a" },
+        { gatewayId: "zebra" },
+        { gatewayId: "alpha" },
       ],
       previewPort: 9080,
     });
     expect(paths).toEqual([
       {
-        path: "/g/gw-alpha/*",
+        path: "/g/alpha/*",
         pathType: "ImplementationSpecific",
-        serviceName: "octogee-gateway-a",
+        serviceName: "octogee-gateway-alpha",
         servicePort: 9080,
       },
       {
-        path: "/g/gw-zebra/*",
+        path: "/g/zebra/*",
         pathType: "ImplementationSpecific",
-        serviceName: "octogee-gateway-z",
+        serviceName: "octogee-gateway-zebra",
         servicePort: 9080,
       },
     ]);
@@ -368,7 +368,7 @@ describe("syncFleetIngressPaths", () => {
       ingressName,
       ingressHost: "fleet.example.com",
       namespace,
-      desiredGateways: [{ gatewayId: "gw-test", instanceName: "default" }],
+      desiredGateways: [{ gatewayId: "default" }],
       fleetControllerPort: FLEET_PORT,
       aliasServiceName: ALIAS,
       log: vi.fn(),
@@ -395,12 +395,12 @@ describe("syncFleetIngressPaths", () => {
         .filter((op: { op: string }) => op.op === "add")
         .map((op: { value: { path: string } }) => op.value.path),
     ).toEqual([
-      "/restore-customer/gw-test",
-      "/quiesce/gw-test",
-      "/export/gw-test",
-      "/push-state/gw-test",
-      "/import/gw-test",
-      "/unmount/gw-test",
+      "/restore-customer/default",
+      "/quiesce/default",
+      "/export/default",
+      "/push-state/default",
+      "/import/default",
+      "/unmount/default",
     ]);
   });
 
@@ -413,13 +413,13 @@ describe("syncFleetIngressPaths", () => {
       runKubectl,
       ingressName,
       namespace,
-      desiredGateways: [{ gatewayId: "gw-test", instanceName: "default" }],
+      desiredGateways: [{ gatewayId: "default" }],
       fleetControllerPort: FLEET_PORT,
       aliasServiceName: ALIAS,
       log,
     });
     expect(result.changed).toBe(false);
-    expect(calls).toHaveLength(1); 
+    expect(calls).toHaveLength(1);
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/not yet present.*deferring/));
   });
 
@@ -454,7 +454,7 @@ describe("syncFleetIngressPaths", () => {
         runKubectl,
         ingressName,
         namespace,
-        desiredGateways: [{ gatewayId: "gw-test", instanceName: "default" }],
+        desiredGateways: [{ gatewayId: "default" }],
         fleetControllerPort: FLEET_PORT,
         aliasServiceName: ALIAS,
         log: vi.fn(),
@@ -467,13 +467,13 @@ describe("computeApiFleetPathOps", () => {
   const STATIC = {
     path: "/api/*",
     pathType: "ImplementationSpecific",
-    
+
     backend: { service: { name: "gateway-edge", port: { name: "http" } } },
   };
-  const fleet = (id: string, instance: string) => ({
+  const fleet = (id: string) => ({
     path: `/api/g/${id}/*`,
     pathType: "ImplementationSpecific",
-    backend: { service: { name: `gateway-edge-${instance}`, port: { number: 3001 } } },
+    backend: { service: { name: `gateway-edge-${id}`, port: { number: 3001 } } },
   });
   const desired = (gws: FleetGateway[]) =>
     computeDesiredApiFleetPaths({
@@ -483,23 +483,23 @@ describe("computeApiFleetPathOps", () => {
     }).filter((p) => p.path !== "/health");
 
   it("returns [] when live /api/g/* entries already match desired", () => {
-    const raw = [STATIC, fleet("gw-bender", "bender")];
+    const raw = [STATIC, fleet("bender")];
     expect(
-      computeApiFleetPathOps(raw, desired([{ gatewayId: "gw-bender", instanceName: "bender" }])),
+      computeApiFleetPathOps(raw, desired([{ gatewayId: "bender" }])),
     ).toEqual([]);
   });
 
   it("adds a missing /api/g/* entry without touching the named-port static path", () => {
     const ops = computeApiFleetPathOps(
       [STATIC],
-      desired([{ gatewayId: "gw-bender", instanceName: "bender" }]),
+      desired([{ gatewayId: "bender" }]),
     );
     expect(ops).toEqual([
       {
         op: "add",
         path: "/spec/rules/0/http/paths/-",
         value: {
-          path: "/api/g/gw-bender/*",
+          path: "/api/g/bender/*",
           pathType: "ImplementationSpecific",
           backend: { service: { name: "gateway-edge-bender", port: { number: 3001 } } },
         },
@@ -508,20 +508,20 @@ describe("computeApiFleetPathOps", () => {
   });
 
   it("removes a stale /api/g/* entry test-guarded at its index, static path index untouched", () => {
-    
-    const ops = computeApiFleetPathOps([STATIC, fleet("old", "old")], desired([]));
+
+    const ops = computeApiFleetPathOps([STATIC, fleet("old")], desired([]));
     expect(ops).toEqual([
       { op: "test", path: "/spec/rules/0/http/paths/1/path", value: "/api/g/old/*" },
       { op: "remove", path: "/spec/rules/0/http/paths/1" },
     ]);
-    
+
     expect(ops.some((o) => o.path.includes("paths/0"))).toBe(false);
   });
 
   it("removes descending then re-adds when the fleet set changes (race-safe ordering)", () => {
-    const raw = [STATIC, fleet("a", "a"), fleet("b", "b")];
-    const ops = computeApiFleetPathOps(raw, desired([{ gatewayId: "c", instanceName: "c" }]));
-    
+    const raw = [STATIC, fleet("a"), fleet("b")];
+    const ops = computeApiFleetPathOps(raw, desired([{ gatewayId: "c" }]));
+
     const removeIdx = ops
       .filter((o) => o.op === "remove")
       .map((o) => Number(o.path.split("/").pop()));
@@ -565,7 +565,7 @@ describe("computeIngressHostPathOps", () => {
     const ops = computeIngressHostPathOps(
       [
         {
-          path: "/g/gw-test/*",
+          path: "/g/default/*",
           pathType: "ImplementationSpecific",
           serviceName: "octogee-gateway-default",
           servicePort: 9080,
@@ -580,7 +580,7 @@ describe("computeIngressHostPathOps", () => {
         op: "add",
         path: "/spec/rules/1/http/paths/-",
         value: {
-          path: "/g/gw-test/*",
+          path: "/g/default/*",
           pathType: "ImplementationSpecific",
           backend: { service: { name: "octogee-gateway-default", port: { number: 9080 } } },
         },
@@ -620,7 +620,7 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
     const live = liveWith([
       staticPath,
       {
-        path: "/api/g/gw-bender/*",
+        path: "/api/g/bender/*",
         pathType: "ImplementationSpecific",
         backend: { service: { name: "gateway-edge-bender", port: { number: WSAPI_PORT } } },
       },
@@ -630,7 +630,7 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
       runKubectl,
       ingressName,
       namespace,
-      desiredGateways: [{ gatewayId: "gw-bender", instanceName: "bender" }],
+      desiredGateways: [{ gatewayId: "bender" }],
       gatewayEdgePort: WSAPI_PORT,
       gatewayEdgeServiceName: WSAPI_ALIAS,
       log: vi.fn(),
@@ -651,8 +651,8 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
       ingressName,
       namespace,
       desiredGateways: [
-        { gatewayId: "default", instanceName: "default" },
-        { gatewayId: "gw-bender", instanceName: "bender" },
+        { gatewayId: "default" },
+        { gatewayId: "bender" },
       ],
       gatewayEdgePort: WSAPI_PORT,
       gatewayEdgeServiceName: WSAPI_ALIAS,
@@ -662,7 +662,7 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
     expect(calls).toHaveLength(2);
     expect(calls[1].args).toContain("patch");
     expect(calls[1].args).toContain("--type=json");
-    
+
     expect(calls[1].args).not.toContain("--server-side");
     const ops = JSON.parse(calls[1].args[calls[1].args.length - 1]);
     expect(ops).toEqual([
@@ -670,18 +670,18 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
         op: "add",
         path: "/spec/rules/0/http/paths/-",
         value: {
-          path: "/api/g/default/*",
+          path: "/api/g/bender/*",
           pathType: "ImplementationSpecific",
-          backend: { service: { name: "gateway-edge-default", port: { number: WSAPI_PORT } } },
+          backend: { service: { name: "gateway-edge-bender", port: { number: WSAPI_PORT } } },
         },
       },
       {
         op: "add",
         path: "/spec/rules/0/http/paths/-",
         value: {
-          path: "/api/g/gw-bender/*",
+          path: "/api/g/default/*",
           pathType: "ImplementationSpecific",
-          backend: { service: { name: "gateway-edge-bender", port: { number: WSAPI_PORT } } },
+          backend: { service: { name: "gateway-edge-default", port: { number: WSAPI_PORT } } },
         },
       },
     ]);
@@ -711,7 +711,7 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
       ingressName: "octogee-edge-ingress",
       ingressHost: "api.example.com",
       namespace,
-      desiredGateways: [{ gatewayId: "gw-bender", instanceName: "bender" }],
+      desiredGateways: [{ gatewayId: "bender" }],
       gatewayEdgePort: WSAPI_PORT,
       gatewayEdgeServiceName: WSAPI_ALIAS,
       log: vi.fn(),
@@ -733,7 +733,7 @@ describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () =
       runKubectl,
       ingressName,
       namespace,
-      desiredGateways: [{ gatewayId: "gw-bender", instanceName: "bender" }],
+      desiredGateways: [{ gatewayId: "bender" }],
       gatewayEdgePort: WSAPI_PORT,
       gatewayEdgeServiceName: WSAPI_ALIAS,
       log,
@@ -790,7 +790,7 @@ describe("syncPreviewIngressPaths", () => {
       ingressName: "octogee-edge-ingress",
       ingressHost: "preview.example.com",
       namespace,
-      desiredGateways: [{ gatewayId: "gw-test", instanceName: "default" }],
+      desiredGateways: [{ gatewayId: "default" }],
       previewPort: 9080,
       log: vi.fn(),
     });
@@ -802,7 +802,7 @@ describe("syncPreviewIngressPaths", () => {
         op: "add",
         path: "/spec/rules/1/http/paths/-",
         value: {
-          path: "/g/gw-test/*",
+          path: "/g/default/*",
           pathType: "ImplementationSpecific",
           backend: { service: { name: "octogee-gateway-default", port: { number: 9080 } } },
         },

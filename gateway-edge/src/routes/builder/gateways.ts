@@ -15,7 +15,6 @@ router.use(requireAuth);
 
 interface GlmGatewayDoc {
   gatewayId: string;
-  instanceName: string;
   profile?: string;
   ownerUid?: string;
   coOwnerUids?: string[];
@@ -30,7 +29,6 @@ function builderViewOf(
 ): BuilderGatewayListEntry {
   return {
     gatewayId: doc.gatewayId,
-    instanceName: doc.instanceName,
     profile: doc.profile ?? "standard",
     desiredStatus: doc.desiredStatus ?? "running",
     imageTag: doc.imageTag,

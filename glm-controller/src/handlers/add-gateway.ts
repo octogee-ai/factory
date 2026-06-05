@@ -16,7 +16,6 @@ export interface AddGatewayDeps {
 
   publishGatewayReady: (input: {
     gatewayId: string;
-    instanceName: string;
     imageTag?: string;
   }) => Promise<void>;
 
@@ -36,7 +35,6 @@ export interface AddGatewayDeps {
 
 interface AddGatewayInput {
   gatewayId?: unknown;
-  instanceName?: unknown;
   imageTag?: unknown;
   profile?: unknown;
 }
@@ -48,20 +46,18 @@ interface PollResult {
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
-function deploymentNameForInstance(instanceName: string): string {
-  return `octogee-gateway-${instanceName}`;
+function deploymentNameForGateway(gatewayId: string): string {
+  return `octogee-gateway-${gatewayId}`;
 }
 
 export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     const input = op.input as AddGatewayInput;
     const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
-    const instanceName = typeof input.instanceName === "string" ? input.instanceName : undefined;
     const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
     const profile = input.profile === "operator" ? "operator" : "standard";
 
     if (!gatewayId) return { steps: [], success: false, error: "missing gatewayId in op.input" };
-    if (!instanceName) return { steps: [], success: false, error: "missing instanceName in op.input" };
 
     const renderResult = await pollUntil({
       stepName: "helm-render",
@@ -70,15 +66,15 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
       deps,
       check: async () => {
         const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-        return Object.prototype.hasOwnProperty.call(map, instanceName);
+        return Object.prototype.hasOwnProperty.call(map, gatewayId);
       },
-      timeoutMessage: `helm did not render instance "${instanceName}" within ${deps.helmRenderTimeoutMs}ms`,
+      timeoutMessage: `helm did not render instance "${gatewayId}" within ${deps.helmRenderTimeoutMs}ms`,
     });
     if (!renderResult.ok) {
       return { steps: [], success: false, error: renderResult.errorMsg };
     }
 
-    const deploymentName = deploymentNameForInstance(instanceName);
+    const deploymentName = deploymentNameForGateway(gatewayId);
     const deploymentReadyResult = await pollUntil({
       stepName: "deployment-ready",
       timeoutMs: deps.deploymentReadyTimeoutMs,
@@ -105,7 +101,7 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
         startedAt: readyStartedAt,
       });
       try {
-        await deps.publishGatewayReady({ gatewayId, instanceName, imageTag });
+        await deps.publishGatewayReady({ gatewayId, imageTag });
         await reportStep(ctx, {
           name: "platform-ready-record",
           status: "done",

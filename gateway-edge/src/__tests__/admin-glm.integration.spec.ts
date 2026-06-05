@@ -306,7 +306,7 @@ beforeEach(() => {
   calls.length = 0;
   glmOperationsDocs = [];
   glmGatewaysDocs = {};
-  gatewaysDocs = { "gw-test-canary": { gatewayId: "gw-test-canary", status: "ready" } };
+  gatewaysDocs = { "canary": { gatewayId: "canary", status: "ready" } };
   usersDocs = {};
   operatorGatewayReservationsDocs = {};
   restoreJobsDocs = [];
@@ -323,22 +323,20 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("writes a glmGateways doc and creates an add-gateway operation", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(202);
-    expect(res.body).toMatchObject({ gatewayId: "gw-test-canary" });
+    expect(res.body).toMatchObject({ gatewayId: "canary" });
     expect(res.body.operationId).toBeTruthy();
 
     const gwWrite = calls.find(
       (c) => c.collection === "glmGateways" && c.op === "doc.set",
     );
-    expect(gwWrite?.docId).toBe("gw-test-canary");
+    expect(gwWrite?.docId).toBe("canary");
     expect(gwWrite?.data).toMatchObject({
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       desiredStatus: "running",
@@ -350,7 +348,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       kind: "add-gateway",
       status: "pending",
       createdBy: "admin-user",
-      gatewayId: "gw-test-canary",
+      gatewayId: "canary",
     });
   });
 
@@ -363,8 +361,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("persists sizingTier and profile when supplied in the body", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       profile: "operator",
@@ -387,7 +384,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
         shellsEnabled: false,
         reason: "operator-trust-boundary-not-provisioned",
       },
-      serviceAccountName: "octogee-gw-test-canary",
+      serviceAccountName: "octogee-gw-canary",
       serviceAccount: {
         create: true,
       },
@@ -401,8 +398,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     };
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-jack",
-      instanceName: "jack",
+      gatewayId: "jack",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       profile: "operator",
@@ -414,7 +410,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       (c) => c.collection === "glmGateways" && c.op === "doc.set",
     );
     expect(gwWrite?.data).toMatchObject({
-      gatewayId: "gw-test-jack",
+      gatewayId: "jack",
       profile: "operator",
       ownerUid: "uid-jack",
       builderSlug: "jack",
@@ -433,7 +429,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
 
     const opWrite = calls.find((c) => c.collection === "glmOperations");
     expect(opWrite?.data?.input).toMatchObject({
-      gatewayId: "gw-test-jack",
+      gatewayId: "jack",
       profile: "operator",
       ownerUid: "uid-jack",
       builderSlug: "jack",
@@ -443,8 +439,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("rejects reservation fields on non-operator gateways before side effects", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       ownerUid: "uid-jack",
@@ -461,8 +456,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("rejects reservations for missing owner users before provisioning gateway auth", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-ghost",
-      instanceName: "ghost",
+      gatewayId: "ghost",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       profile: "operator",
@@ -480,8 +474,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("rejects unknown sizingTier values on create with 400", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       sizingTier: "bogus-tier",
@@ -497,15 +490,14 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("provisions the gateway-auth-token Secret Manager shell (+ IAM) before writing the glmGateways doc", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(202);
     expect(provisionerCalls).toEqual([
       {
-        gatewayId: "gw-test-canary",
+        gatewayId: "canary",
         gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
       },
     ]);
@@ -515,8 +507,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     provisionerNextError = new Error("PERMISSION_DENIED on secretmanager.secrets.create");
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
@@ -530,8 +521,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     delete process.env.GATEWAY_SERVICE_ACCOUNT;
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-canary",
-      instanceName: "canary",
+      gatewayId: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
@@ -542,8 +532,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("rejects 400 when imageRepository is not the canonical Artifact Registry repo", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-test-typo",
-      instanceName: "typo",
+      gatewayId: "typo",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogeee/octogee-gateway",
       imageTag: "abc1234",
     });
@@ -554,33 +543,16 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("returns 409 when the gatewayId already exists", async () => {
     glmGatewaysDocs["gw-existing"] = {
       gatewayId: "gw-existing",
-      instanceName: "existing",
     };
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "gw-existing",
-      instanceName: "another",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "v1",
     });
     expect(res.status).toBe(409);
   });
 
-  it("returns 409 when another gateway already uses the same instanceName", async () => {
-    glmGatewaysDocs["gw-existing"] = {
-      gatewayId: "gw-existing",
-      instanceName: "default",
-    };
-    const app = buildApp();
-    const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-new",
-      instanceName: "default",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "v1",
-    });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/instanceName/);
-  });
 });
 
 describe("GET /api/admin/operator-gateway-reservations", () => {
@@ -591,7 +563,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
       requestedSizingTier: "large",
       status: "billing_pending",
       billingStatus: "pending",
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
       requestedAt: 2_000,
       updatedAt: 9_000,
@@ -602,7 +574,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
       requestedSizingTier: "medium",
       status: "requested",
       billingStatus: "active",
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
       requestedAt: 1_000,
       updatedAt: 1_000,
@@ -613,9 +585,9 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
       requestedSizingTier: "medium",
       status: "provisioning",
       billingStatus: "active",
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
-      gatewayId: "gw-test-provisioning",
+      gatewayId: "provisioning",
       operationId: "op-1",
       provisioningStartedAt: 3_000,
       provisioningStartedBy: "admin-user",
@@ -638,7 +610,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
       requestedSizingTier: "medium",
       status: "requested",
       billingStatus: "active",
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
       requestedAt: new Date(1_000).toISOString(),
       updatedAt: new Date(1_000).toISOString(),
@@ -652,7 +624,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
     });
     expect(res.body.reservations[2]).toMatchObject({
       uid: "uid-provisioning",
-      gatewayId: "gw-test-provisioning",
+      gatewayId: "provisioning",
       operationId: "op-1",
       provisioningStartedAt: new Date(3_000).toISOString(),
       provisioningStartedBy: "admin-user",
@@ -670,7 +642,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       provisioning: {
         openclaw: {
           slug: "alice",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           gatewayProfile: "standard",
         },
       },
@@ -681,7 +653,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       requestedSizingTier: "small",
       status: "billing_pending",
       billingStatus: "pending",
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
       requestedAt: 1_234,
       updatedAt: 1_234,
@@ -699,7 +671,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       status: "requested",
       billingStatus: "active",
       requestedAt: 1_234,
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
     });
     expect(operatorGatewayReservationsDocs["admin-user"]).toMatchObject({
@@ -718,7 +690,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       provisioning: {
         openclaw: {
           slug: "alice",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           gatewayProfile: "standard",
         },
       },
@@ -729,9 +701,9 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       requestedSizingTier: "large",
       status: "provisioning",
       billingStatus: "active",
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
       operationId: "op-add",
       requestedAt: 1_234,
       updatedAt: 2_345,
@@ -747,7 +719,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     expect(res.body).toMatchObject({
       error: "operator gateway reservation can no longer be updated",
       status: "provisioning",
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
     });
     expect(operatorGatewayReservationsDocs["admin-user"]).toEqual(before);
     expect(calls.find((c) => c.collection === "operatorGatewayReservations")).toBeUndefined();
@@ -761,7 +733,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       provisioning: {
         openclaw: {
           slug: "alice",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           gatewayProfile: "standard",
         },
       },
@@ -778,7 +750,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       requestedSizingTier: "large",
       status: "requested",
       billingStatus: "active",
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
     });
 
@@ -796,15 +768,14 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     const fulfillRes = await request(app)
       .post("/api/admin/operator-gateway-reservations/admin-user/fulfill")
       .send({
-        gatewayId: "gw-test-alice",
-        instanceName: "alice",
+        gatewayId: "alice",
         imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
         imageTag: "abc1234",
       });
     expect(fulfillRes.status).toBe(202);
     expect(fulfillRes.body).toMatchObject({
       uid: "admin-user",
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
       status: "provisioning",
     });
 
@@ -812,7 +783,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       (c) => c.collection === "glmGateways" && c.op === "doc.set",
     );
     expect(gwWrite?.data).toMatchObject({
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
       profile: "operator",
       ownerUid: "admin-user",
       builderSlug: "alice",
@@ -821,7 +792,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
         shellsEnabled: false,
         reason: "operator-trust-boundary-not-provisioned",
       },
-      serviceAccountName: "octogee-gw-test-alice",
+      serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },
       persistence: {
         enabled: true,
@@ -838,7 +809,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     expect(fulfillmentUserUpdate?.docId).toBe("admin-user");
     expect(fulfillmentUserUpdate?.data).toMatchObject({
       "operatorGatewayReservation.status": "provisioning",
-      "operatorGatewayReservation.gatewayId": "gw-test-alice",
+      "operatorGatewayReservation.gatewayId": "alice",
     });
     expect(fulfillmentUserUpdate?.data).not.toHaveProperty(
       "provisioning.openclaw.gatewayId",
@@ -847,8 +818,8 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       "provisioning.openclaw.shellsEnabled",
     );
 
-    gatewaysDocs["gw-test-alice"] = {
-      gatewayId: "gw-test-alice",
+    gatewaysDocs["alice"] = {
+      gatewayId: "alice",
       status: "ready",
       mountedCustomers: [],
     };
@@ -858,7 +829,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     expect(activateRes.status).toBe(202);
     expect(activateRes.body).toMatchObject({
       uid: "admin-user",
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
       status: "activating",
     });
     const activationOp = calls
@@ -868,11 +839,11 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       kind: "migrate-customer",
       status: "pending",
       createdBy: "admin-user",
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
       inputUid: "admin-user",
       input: {
         uid: "admin-user",
-        toGatewayId: "gw-test-alice",
+        toGatewayId: "alice",
         source: "operator-gateway-reservation",
         operatorReservationUid: "admin-user",
         builderSlug: "alice",
@@ -894,7 +865,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
   function seedReadyReservation() {
     usersDocs["uid-alice"] = {
       username: "alice",
-      provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
       subscription: { status: "active" },
     };
     operatorGatewayReservationsDocs["uid-alice"] = {
@@ -903,7 +874,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       requestedSizingTier: "medium",
       status: "requested",
       billingStatus: "active",
-      currentGatewayId: "gw-test",
+      currentGatewayId: "default",
       currentGatewayProfile: "standard",
       requestedAt: 1_234,
       updatedAt: 1_234,
@@ -911,8 +882,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
   }
 
   const fulfillBody = {
-    gatewayId: "gw-test-alice",
-    instanceName: "alice",
+    gatewayId: "alice",
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
     imageTag: "abc1234",
   };
@@ -927,13 +897,13 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({
       uid: "uid-alice",
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
       status: "provisioning",
     });
     expect(res.body.operationId).toBeTruthy();
     expect(provisionerCalls).toEqual([
       {
-        gatewayId: "gw-test-alice",
+        gatewayId: "alice",
         gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
       },
     ]);
@@ -941,10 +911,9 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     const gwWrite = calls.find(
       (c) => c.collection === "glmGateways" && c.op === "doc.set",
     );
-    expect(gwWrite?.docId).toBe("gw-test-alice");
+    expect(gwWrite?.docId).toBe("alice");
     expect(gwWrite?.data).toMatchObject({
-      gatewayId: "gw-test-alice",
-      instanceName: "alice",
+      gatewayId: "alice",
       imageTag: "abc1234",
       desiredStatus: "running",
       profile: "operator",
@@ -955,7 +924,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
         shellsEnabled: false,
         reason: "operator-trust-boundary-not-provisioned",
       },
-      serviceAccountName: "octogee-gw-test-alice",
+      serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },
       persistence: {
         enabled: true,
@@ -978,7 +947,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     expect(reservationUpdate?.docId).toBe("uid-alice");
     expect(reservationUpdate?.data).toMatchObject({
       status: "provisioning",
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
       operationId: res.body.operationId,
       provisioningStartedBy: "admin-user",
     });
@@ -989,7 +958,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     expect(userUpdate?.docId).toBe("uid-alice");
     expect(userUpdate?.data).toMatchObject({
       "operatorGatewayReservation.status": "provisioning",
-      "operatorGatewayReservation.gatewayId": "gw-test-alice",
+      "operatorGatewayReservation.gatewayId": "alice",
       "operatorGatewayReservation.operationId": res.body.operationId,
     });
     expect(userUpdate?.data).not.toHaveProperty("provisioning.openclaw.gatewayId");
@@ -1001,11 +970,11 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       kind: "add-gateway",
       status: "pending",
       createdBy: "admin-user",
-      gatewayId: "gw-test-alice",
+      gatewayId: "alice",
       inputUid: "uid-alice",
       input: {
         uid: "uid-alice",
-        gatewayId: "gw-test-alice",
+        gatewayId: "alice",
         profile: "operator",
         sizingTier: "medium",
         builderSlug: "alice",
@@ -1066,12 +1035,12 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
 
 describe("GET /api/admin/gateways — sizing enrichment", () => {
   it("attaches sizing.tier from glmGateways.sizingTier (explicit) and sizing.resolvedFrom='explicit'", async () => {
-    gatewaysDocs["gw-test-bender"] = { gatewayId: "gw-test-bender", status: "ready", mountedCustomers: ["alice"] };
-    glmGatewaysDocs["gw-test-bender"] = { gatewayId: "gw-test-bender", sizingTier: "large", profile: "operator", desiredStatus: "running" };
+    gatewaysDocs["bender"] = { gatewayId: "bender", status: "ready", mountedCustomers: ["alice"] };
+    glmGatewaysDocs["bender"] = { gatewayId: "bender", sizingTier: "large", profile: "operator", desiredStatus: "running" };
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
-    const bender = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-bender");
+    const bender = res.body.gateways.find((g: any) => g.gatewayId === "bender");
     expect(bender.sizing.tier).toBe("large");
     expect(bender.sizing.resolvedFrom).toBe("explicit");
     expect(bender.sizing.resources.requests.cpu).toBe("16000m");
@@ -1080,25 +1049,25 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   });
 
   it("falls back to profile-default tier when sizingTier is unset (resolvedFrom='profile-default')", async () => {
-    gatewaysDocs["gw-test-default"] = { gatewayId: "gw-test-default", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["gw-test-default"] = { gatewayId: "gw-test-default", profile: "operator", desiredStatus: "running" };
+    gatewaysDocs["default"] = { gatewayId: "default", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["default"] = { gatewayId: "default", profile: "operator", desiredStatus: "running" };
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
-    const g = res.body.gateways.find((x: any) => x.gatewayId === "gw-test-default");
+    const g = res.body.gateways.find((x: any) => x.gatewayId === "default");
     expect(g.sizing.tier).toBe("small");
     expect(g.sizing.resolvedFrom).toBe("profile-default");
   });
 
   it("reports compute=0 for paused gateways (no replicas → no node consumption)", async () => {
     for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
-    gatewaysDocs["gw-test-paused"] = { gatewayId: "gw-test-paused", status: "ready", mountedCustomers: [] };
-    gatewaysDocs["gw-test-running"] = { gatewayId: "gw-test-running", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["gw-test-paused"] = { gatewayId: "gw-test-paused", sizingTier: "large", desiredStatus: "paused" };
-    glmGatewaysDocs["gw-test-running"] = { gatewayId: "gw-test-running", sizingTier: "large", desiredStatus: "running" };
+    gatewaysDocs["paused"] = { gatewayId: "paused", status: "ready", mountedCustomers: [] };
+    gatewaysDocs["running"] = { gatewayId: "running", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["paused"] = { gatewayId: "paused", sizingTier: "large", desiredStatus: "paused" };
+    glmGatewaysDocs["running"] = { gatewayId: "running", sizingTier: "large", desiredStatus: "running" };
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
-    const paused = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-paused");
-    const running = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-running");
+    const paused = res.body.gateways.find((g: any) => g.gatewayId === "paused");
+    const running = res.body.gateways.find((g: any) => g.gatewayId === "running");
     expect(paused.sizing.tier).toBe("large"); // tier preserved for nameplate display
     expect(paused.sizing.monthlyCostUsd.compute).toBe(0);
     expect(paused.sizing.monthlyCostUsd.perBuilderAtTarget).toBe(0);
@@ -1110,10 +1079,10 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   it("rolls up stats.fleetCost.byTier and stats.fleetCost.monthlyUsd across the fleet", async () => {
     // Reset the beforeEach seed so we exercise exactly the two fixtures we set up below.
     for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
-    gatewaysDocs["gw-test-bender"] = { gatewayId: "gw-test-bender", status: "ready", mountedCustomers: [] };
-    gatewaysDocs["gw-test-default"] = { gatewayId: "gw-test-default", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["gw-test-bender"] = { gatewayId: "gw-test-bender", sizingTier: "large", desiredStatus: "running" };
-    glmGatewaysDocs["gw-test-default"] = { gatewayId: "gw-test-default", sizingTier: "medium", desiredStatus: "running" };
+    gatewaysDocs["bender"] = { gatewayId: "bender", status: "ready", mountedCustomers: [] };
+    gatewaysDocs["default"] = { gatewayId: "default", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["bender"] = { gatewayId: "bender", sizingTier: "large", desiredStatus: "running" };
+    glmGatewaysDocs["default"] = { gatewayId: "default", sizingTier: "medium", desiredStatus: "running" };
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const fc = res.body.stats.fleetCost;
@@ -1126,10 +1095,10 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
 
 describe("PATCH /api/admin/gateways/:id — update desired state", () => {
   it("updates the imageTag field on an existing desired state doc", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
     const app = buildApp();
     const res = await request(app)
-      .patch("/api/admin/gateways/gw-test-canary")
+      .patch("/api/admin/gateways/canary")
       .send({ imageTag: "def5678" });
     expect(res.status).toBe(202);
     const update = calls.find(
@@ -1147,10 +1116,10 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
   });
 
   it("rejects unknown desiredStatus enum values with 400 (does not write garbage to Firestore)", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
     const app = buildApp();
     const res = await request(app)
-      .patch("/api/admin/gateways/gw-test-canary")
+      .patch("/api/admin/gateways/canary")
       .send({ desiredStatus: "burning" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/desiredStatus/);
@@ -1161,10 +1130,10 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
   });
 
   it("accepts desiredStatus=paused for the pause/resume flow", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
     const app = buildApp();
     const res = await request(app)
-      .patch("/api/admin/gateways/gw-test-canary")
+      .patch("/api/admin/gateways/canary")
       .send({ desiredStatus: "paused" });
     expect(res.status).toBe(202);
     const update = calls.find(
@@ -1174,10 +1143,10 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
   });
 
   it("updates the sizingTier field when a valid tier is supplied", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
     const app = buildApp();
     const res = await request(app)
-      .patch("/api/admin/gateways/gw-test-canary")
+      .patch("/api/admin/gateways/canary")
       .send({ sizingTier: "large" });
     expect(res.status).toBe(202);
     const update = calls.find(
@@ -1187,10 +1156,10 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
   });
 
   it("rejects unknown sizingTier values with 400 (does not write garbage to Firestore)", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
     const app = buildApp();
     const res = await request(app)
-      .patch("/api/admin/gateways/gw-test-canary")
+      .patch("/api/admin/gateways/canary")
       .send({ sizingTier: "bogus-tier" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/sizingTier/);
@@ -1206,13 +1175,34 @@ describe("POST /api/admin/gateways — body type guards", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: 12345,
-      instanceName: "canary",
       imageRepository:
         "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
+  });
+
+  it("rejects gatewayIds that cannot render as fleet Kubernetes resource names", async () => {
+    const app = buildApp();
+    for (const gatewayId of [
+      "Bender",
+      "gw_test",
+      "-bender",
+      "bender-",
+      "a".repeat(33),
+    ]) {
+      const res = await request(app).post("/api/admin/gateways").send({
+        gatewayId,
+        imageRepository:
+          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "abc1234",
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/gatewayId/i);
+    }
+    expect(calls.some((c) => c.collection === "glmGateways")).toBe(false);
+    expect(provisionerCalls).toEqual([]);
   });
 });
 
@@ -1231,17 +1221,17 @@ describe("POST /api/admin/rollouts — body type guards", () => {
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/rollouts")
-      .send({ fromGatewayId: "gw-test", imageTag: 9999 });
+      .send({ fromGatewayId: "default", imageTag: 9999 });
     expect(res.status).toBe(400);
   });
 });
 
 describe("DELETE /api/admin/gateways/:id — retire", () => {
   it("sets desiredStatus=retired and creates a retire-gateway op when no customers are mounted", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
-    gatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
     const app = buildApp();
-    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
     const update = calls.find(
       (c) => c.collection === "glmGateways" && c.op === "doc.update",
@@ -1252,17 +1242,17 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("passes explicit PVC deletion through to the retire-gateway operation", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
-    gatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
     const app = buildApp();
     const res = await request(app)
-      .delete("/api/admin/gateways/gw-test-canary")
+      .delete("/api/admin/gateways/canary")
       .query({ deletePersistentVolumeClaim: "true" });
     expect(res.status).toBe(202);
     expect(res.body.deletePersistentVolumeClaim).toBe(true);
     const op = calls.find((c) => c.collection === "glmOperations");
     expect(op?.data.input).toMatchObject({
-      gatewayId: "gw-test-canary",
+      gatewayId: "canary",
       deletePersistentVolumeClaim: true,
     });
   });
@@ -1274,14 +1264,14 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("returns 409 with the customer list when the gateway still has mounted customers", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
-    gatewaysDocs["gw-test-canary"] = {
-      gatewayId: "gw-test-canary",
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    gatewaysDocs["canary"] = {
+      gatewayId: "canary",
       status: "ready",
       mountedCustomers: ["alice", "bob"],
     };
     const app = buildApp();
-    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/still has mounted customers/i);
     expect(res.body.mountedCustomers).toEqual(["alice", "bob"]);
@@ -1292,9 +1282,9 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("proceeds with retire when the gateway has no heartbeat doc (stranded crash-loop case)", async () => {
-    glmGatewaysDocs["gw-test-orphan"] = { gatewayId: "gw-test-orphan" };
+    glmGatewaysDocs["orphan"] = { gatewayId: "orphan" };
     const app = buildApp();
-    const res = await request(app).delete("/api/admin/gateways/gw-test-orphan");
+    const res = await request(app).delete("/api/admin/gateways/orphan");
     expect(res.status).toBe(202);
     const update = calls.find(
       (c) => c.collection === "glmGateways" && c.op === "doc.update",
@@ -1305,10 +1295,10 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("commits desiredStatus + op create as one atomic batch (P3 audit follow-up)", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
-    gatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
     const app = buildApp();
-    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
 
 const updateIdx = calls.findIndex(
@@ -1323,27 +1313,27 @@ const updateIdx = calls.findIndex(
   });
 
   it("rolls back BOTH writes if the batch commit fails (atomicity)", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", desiredStatus: "running" };
-    gatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["canary"] = { gatewayId: "canary", desiredStatus: "running" };
+    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
     batchCommitFailures = 1;
     const app = buildApp();
-    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(500);
     
-    expect(glmGatewaysDocs["gw-test-canary"]).toMatchObject({ desiredStatus: "running" });
+    expect(glmGatewaysDocs["canary"]).toMatchObject({ desiredStatus: "running" });
     expect(glmOperationsDocs.find((d) => d.data.kind === "retire-gateway")).toBeUndefined();
   });
 
   it("returns 409 when an in-flight restore job is set on the heartbeat (mid-mount)", async () => {
-    glmGatewaysDocs["gw-test-canary"] = { gatewayId: "gw-test-canary" };
-    gatewaysDocs["gw-test-canary"] = {
-      gatewayId: "gw-test-canary",
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    gatewaysDocs["canary"] = {
+      gatewayId: "canary",
       status: "ready",
       mountedCustomers: [],
       inFlightJobId: "job-restore-7",
     };
     const app = buildApp();
-    const res = await request(app).delete("/api/admin/gateways/gw-test-canary");
+    const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/in-flight restore job/i);
     expect(res.body.inFlightJobId).toBe("job-restore-7");
@@ -1358,56 +1348,53 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 
   it("creates a rollout op with the new imageTag (and inherited repo)", async () => {
-    glmGatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "oldSha",
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-test/rollout")
+      .post("/api/admin/gateways/default/rollout")
       .send({ imageTag: "abcdef1" });
     expect(res.status).toBe(202);
     const op = calls.find((c) => c.collection === "glmOperations");
     expect(op?.data).toMatchObject({
       kind: "rollout",
-      input: { gatewayId: "gw-test", imageTag: "abcdef1" },
+      input: { gatewayId: "default", imageTag: "abcdef1" },
       createdBy: "admin-user",
     });
   });
 
   it("profile-only flip at the SAME sha is NOT a no-op — creates a rollout op carrying profile", async () => {
-    glmGatewaysDocs["gw-bender"] = {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+    glmGatewaysDocs["bender"] = {
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abcdef1",
       // no profile field → cattle/standard today
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-bender/rollout")
+      .post("/api/admin/gateways/bender/rollout")
       .send({ imageTag: "abcdef1", profile: "operator" });
     expect(res.status).toBe(202);
     const op = calls.find((c) => c.collection === "glmOperations");
     expect(op?.data).toMatchObject({
       kind: "rollout",
-      input: { gatewayId: "gw-bender", imageTag: "abcdef1", profile: "operator" },
+      input: { gatewayId: "bender", imageTag: "abcdef1", profile: "operator" },
     });
   });
 
   it("same sha AND same profile is still a 409 no-op (boundary not over-broadened)", async () => {
-    glmGatewaysDocs["gw-bender"] = {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+    glmGatewaysDocs["bender"] = {
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abcdef1",
       profile: "operator",
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-bender/rollout")
+      .post("/api/admin/gateways/bender/rollout")
       .send({ imageTag: "abcdef1", profile: "operator" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no-op/);
@@ -1415,15 +1402,14 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("rejects an unknown profile with 400 (no op written)", async () => {
-    glmGatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "oldSha",
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-test/rollout")
+      .post("/api/admin/gateways/default/rollout")
       .send({ imageTag: "abcdef1", profile: "root" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/profile/);
@@ -1431,16 +1417,15 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 400 when imageTag is not a SHA-style hex string (e.g. 'latest', 'v1.2.3')", async () => {
-    glmGatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "oldSha1",
     };
     const app = buildApp();
     for (const bad of ["latest", "v1.2.3", "ABC123def", "abc"]) {
       const res = await request(app)
-        .post("/api/admin/gateways/gw-test/rollout")
+        .post("/api/admin/gateways/default/rollout")
         .send({ imageTag: bad });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/SHA/);
@@ -1449,9 +1434,8 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 409 when another op is already pending or running for this gateway", async () => {
-    glmGatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "oldSha1",
     };
@@ -1460,12 +1444,12 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
       data: {
         kind: "migrate-customer",
         status: "running",
-        input: { gatewayId: "gw-test", uid: "u1" },
+        input: { gatewayId: "default", uid: "u1" },
       },
     });
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-test/rollout")
+      .post("/api/admin/gateways/default/rollout")
       .send({ imageTag: "abcdef2" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already pending or running/);
@@ -1474,28 +1458,26 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 400 when imageTag is missing", async () => {
-    glmGatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "oldSha",
     };
     const app = buildApp();
-    const res = await request(app).post("/api/admin/gateways/gw-test/rollout").send({});
+    const res = await request(app).post("/api/admin/gateways/default/rollout").send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/imageTag/);
   });
 
   it("returns 400 when imageRepository is not the canonical Octogee AR repo", async () => {
-    glmGatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "oldSha",
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-test/rollout")
+      .post("/api/admin/gateways/default/rollout")
       .send({ imageTag: "abcdef1", imageRepository: "evil.example.com/payload" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/imageRepository/);
@@ -1510,15 +1492,14 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 409 when the gateway is already on the requested image (no-op)", async () => {
-    glmGatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "1234567",
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-test/rollout")
+      .post("/api/admin/gateways/default/rollout")
       .send({ imageTag: "1234567" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no-op|already on/i);
@@ -1527,20 +1508,19 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 409 when an in-flight restore job is set on the heartbeat", async () => {
-    glmGatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
-      instanceName: "default",
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
       imageRepository: REPO,
       imageTag: "oldSha",
     };
-    gatewaysDocs["gw-test"] = {
-      gatewayId: "gw-test",
+    gatewaysDocs["default"] = {
+      gatewayId: "default",
       status: "ready",
       inFlightJobId: "job-restore-9",
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-test/rollout")
+      .post("/api/admin/gateways/default/rollout")
       .send({ imageTag: "abcdef1" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/in-flight restore job/i);
@@ -1551,22 +1531,21 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
 describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl rollout restart", () => {
   const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 
-  it("creates a restart-gateway operation (kind + instanceName carried in input)", async () => {
-    glmGatewaysDocs["gw-bender"] = {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+  it("creates a restart-gateway operation (kind carried in input)", async () => {
+    glmGatewaysDocs["bender"] = {
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abcdef1",
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-bender/restart")
+      .post("/api/admin/gateways/bender/restart")
       .send({});
     expect(res.status).toBe(202);
     const op = calls.find((c) => c.collection === "glmOperations");
     expect(op?.data).toMatchObject({
       kind: "restart-gateway",
-      input: { gatewayId: "gw-bender", instanceName: "bender" },
+      input: { gatewayId: "bender" },
       createdBy: "admin-user",
     });
   });
@@ -1581,28 +1560,26 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
   });
 
   it("does NOT gate on mountedCustomers — restart is operator intent", async () => {
-    glmGatewaysDocs["gw-bender"] = {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+    glmGatewaysDocs["bender"] = {
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abcdef1",
     };
-    gatewaysDocs["gw-bender"] = {
-      gatewayId: "gw-bender",
+    gatewaysDocs["bender"] = {
+      gatewayId: "bender",
       status: "ready",
       mountedCustomers: ["alice", "bob"],
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-bender/restart")
+      .post("/api/admin/gateways/bender/restart")
       .send({});
     expect(res.status).toBe(202);
   });
 
   it("returns 409 when another op is already pending or running for this gateway", async () => {
-    glmGatewaysDocs["gw-bender"] = {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+    glmGatewaysDocs["bender"] = {
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abcdef1",
     };
@@ -1611,12 +1588,12 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
       data: {
         kind: "rollout",
         status: "running",
-        input: { gatewayId: "gw-bender", imageTag: "feedbee" },
+        input: { gatewayId: "bender", imageTag: "feedbee" },
       },
     });
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-bender/restart")
+      .post("/api/admin/gateways/bender/restart")
       .send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already pending or running/);
@@ -1624,20 +1601,19 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
   });
 
   it("returns 409 when an in-flight customer restore job is set on the heartbeat (would kill the restore)", async () => {
-    glmGatewaysDocs["gw-bender"] = {
-      gatewayId: "gw-bender",
-      instanceName: "bender",
+    glmGatewaysDocs["bender"] = {
+      gatewayId: "bender",
       imageRepository: REPO,
       imageTag: "abcdef1",
     };
-    gatewaysDocs["gw-bender"] = {
-      gatewayId: "gw-bender",
+    gatewaysDocs["bender"] = {
+      gatewayId: "bender",
       status: "ready",
       inFlightJobId: "job-restore-7",
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/gw-bender/restart")
+      .post("/api/admin/gateways/bender/restart")
       .send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/in-flight restore job/i);
@@ -1651,13 +1627,13 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-alice/migrate")
-      .send({ to: "gw-test-canary" });
+      .send({ to: "canary" });
     expect(res.status).toBe(202);
     const op = calls.find((c) => c.collection === "glmOperations");
     expect(op?.data).toMatchObject({
       kind: "migrate-customer",
       status: "pending",
-      input: { uid: "uid-alice", toGatewayId: "gw-test-canary" },
+      input: { uid: "uid-alice", toGatewayId: "canary" },
       createdBy: "admin-user",
     });
   });
@@ -1689,12 +1665,12 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
 
   it("returns 409 when the target equals the customer's current gateway (migrate-to-self)", async () => {
     usersDocs["uid-alice"] = {
-      provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test-canary" } },
+      provisioning: { openclaw: { slug: "alice", gatewayId: "canary" } },
     };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-alice/migrate")
-      .send({ to: "gw-test-canary" });
+      .send({ to: "canary" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already/i);
   });
@@ -1704,7 +1680,7 @@ describe("POST /api/admin/rollouts — composite operation", () => {
   it("creates a rollout operation with the source gateway + target image", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/rollouts").send({
-      fromGatewayId: "gw-test-default",
+      fromGatewayId: "default",
       imageTag: "def5678",
     });
     expect(res.status).toBe(202);
@@ -1712,7 +1688,7 @@ describe("POST /api/admin/rollouts — composite operation", () => {
     expect(op?.data).toMatchObject({
       kind: "rollout",
       status: "pending",
-      input: { fromGatewayId: "gw-test-default", imageTag: "def5678" },
+      input: { fromGatewayId: "default", imageTag: "def5678" },
       createdBy: "admin-user",
     });
   });
@@ -1721,12 +1697,12 @@ describe("POST /api/admin/rollouts — composite operation", () => {
 describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
   it("returns uid + currentGatewayId for a slug stored at provisioning.openclaw.slug", async () => {
     usersDocs["uid-alice"] = {
-      provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test-canary" } },
+      provisioning: { openclaw: { slug: "alice", gatewayId: "canary" } },
     };
     const app = buildApp();
     const res = await request(app).get("/api/admin/customers/by-slug/alice");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ uid: "uid-alice", currentGatewayId: "gw-test-canary" });
+    expect(res.body).toEqual({ uid: "uid-alice", currentGatewayId: "canary" });
   });
 
   it("falls back to username when no provisioning slug matches", async () => {
@@ -1757,26 +1733,26 @@ describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
 describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
   it("buckets approved users into mounted / assigned-not-mounted / unassigned", async () => {
     gatewaysDocs = {
-      "gw-test": { status: "ready", mountedCustomers: ["alice", "bob"] },
+      "default": { status: "ready", mountedCustomers: ["alice", "bob"] },
     };
     usersDocs = {
       "uid-alice": {
         approved: true,
         username: "alice",
         email: "alice@example.com",
-        provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
+        provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
       },
       "uid-bob": {
         approved: true,
         username: "bob",
         email: "bob@example.com",
-        provisioning: { openclaw: { slug: "bob", gatewayId: "gw-test" } },
+        provisioning: { openclaw: { slug: "bob", gatewayId: "default" } },
       },
       "uid-carol": {
         approved: true,
         username: "carol",
         email: "carol@example.com",
-        provisioning: { openclaw: { slug: "carol", gatewayId: "gw-test" } },
+        provisioning: { openclaw: { slug: "carol", gatewayId: "default" } },
       },
       "uid-dave": {
         approved: true,
@@ -1788,7 +1764,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
         approved: false,
         username: "eve",
         email: "eve@example.com",
-        provisioning: { openclaw: { slug: "eve", gatewayId: "gw-test" } },
+        provisioning: { openclaw: { slug: "eve", gatewayId: "default" } },
       },
     };
     const app = buildApp();
@@ -1810,7 +1786,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
     });
     expect(res.body.perGateway).toEqual([
       expect.objectContaining({
-        gatewayId: "gw-test",
+        gatewayId: "default",
         status: "ready",
         assignedCount: 3,
         mountedCount: 2,
@@ -1820,7 +1796,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
 
   it("flags users whose gateway no longer exists with reason='gateway-gone'", async () => {
     gatewaysDocs = {
-      "gw-test": { status: "ready", mountedCustomers: [] },
+      "default": { status: "ready", mountedCustomers: [] },
     };
     usersDocs = {
       "uid-orphan": {
@@ -1843,7 +1819,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
 
   it("returns empty buckets when no approved users exist", async () => {
     gatewaysDocs = {
-      "gw-test": { status: "ready", mountedCustomers: [] },
+      "default": { status: "ready", mountedCustomers: [] },
     };
     usersDocs = {};
     const app = buildApp();
@@ -1862,7 +1838,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
 describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
   it("writes provisioning.openclaw.gatewayId on the user doc", async () => {
     gatewaysDocs = {
-      "gw-test": { status: "ready", mountedCustomers: [] },
+      "default": { status: "ready", mountedCustomers: [] },
     };
     usersDocs = {
       "uid-dave": { approved: true, username: "dave", email: "dave@example.com" },
@@ -1870,14 +1846,14 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-dave/assign")
-      .send({ gatewayId: "gw-test" });
+      .send({ gatewayId: "default" });
     expect(res.status).toBe(202);
-    expect(res.body).toMatchObject({ uid: "uid-dave", gatewayId: "gw-test" });
+    expect(res.body).toMatchObject({ uid: "uid-dave", gatewayId: "default" });
     const update = calls.find(
       (c) => c.collection === "users" && c.op === "doc.update",
     );
     expect(update?.data).toMatchObject({
-      "provisioning.openclaw.gatewayId": "gw-test",
+      "provisioning.openclaw.gatewayId": "default",
     });
   });
 
@@ -1920,24 +1896,24 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
   });
 
   it("returns 404 when the user does not exist", async () => {
-    gatewaysDocs = { "gw-test": { status: "ready" } };
+    gatewaysDocs = { "default": { status: "ready" } };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-missing/assign")
-      .send({ gatewayId: "gw-test" });
+      .send({ gatewayId: "default" });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/user not found/);
   });
 
   it("returns 409 when the user is not approved", async () => {
-    gatewaysDocs = { "gw-test": { status: "ready" } };
+    gatewaysDocs = { "default": { status: "ready" } };
     usersDocs = {
       "uid-pending": { approved: false, username: "pending", email: "pending@example.com" },
     };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-pending/assign")
-      .send({ gatewayId: "gw-test" });
+      .send({ gatewayId: "default" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/not approved/);
   });
@@ -1953,28 +1929,28 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
   });
 
   it("returns 409 when the target gateway is not ready (booting/unreachable/draining)", async () => {
-    gatewaysDocs = { "gw-test": { status: "booting" } };
+    gatewaysDocs = { "default": { status: "booting" } };
     usersDocs = { "uid-dave": { approved: true } };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-dave/assign")
-      .send({ gatewayId: "gw-test" });
+      .send({ gatewayId: "default" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/not ready/);
   });
 
   it("returns 409 when the user is already assigned to that gateway (no-op)", async () => {
-    gatewaysDocs = { "gw-test": { status: "ready" } };
+    gatewaysDocs = { "default": { status: "ready" } };
     usersDocs = {
       "uid-alice": {
         approved: true,
-        provisioning: { openclaw: { gatewayId: "gw-test" } },
+        provisioning: { openclaw: { gatewayId: "default" } },
       },
     };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-alice/assign")
-      .send({ gatewayId: "gw-test" });
+      .send({ gatewayId: "default" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already assigned/);
   });
@@ -1987,7 +1963,7 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
         id: "job-newest",
         data: {
           jobId: "job-newest",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           state: "running",
           attempt: 2,
           createdAt: { toDate: () => new Date(3_000) },
@@ -2001,7 +1977,7 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
         id: "job-older",
         data: {
           jobId: "job-older",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           state: "done",
           attempt: 1,
           createdAt: { toDate: () => new Date(1_000) },
@@ -2018,7 +1994,7 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
     expect(res.body.jobs).toHaveLength(2);
     expect(res.body.jobs[0]).toMatchObject({
       jobId: "job-newest",
-      gatewayId: "gw-test",
+      gatewayId: "default",
       state: "running",
       attempt: 2,
       uid: "u-1",
@@ -2058,7 +2034,7 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
         id: "job-epoch",
         data: {
           jobId: "job-epoch",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           state: "done",
           attempt: 1,
           createdAt: 0,
@@ -2082,7 +2058,7 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
         id: "job-nan",
         data: {
           jobId: "job-nan",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           state: "running",
           attempt: NaN,
           createdAt: { toDate: () => new Date(1_000) },
@@ -2105,7 +2081,7 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
         id: "job-malformed",
         data: {
           jobId: "job-malformed",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           state: "weird-state-not-in-union",
           attempt: 1,
           createdAt: { toDate: () => new Date(1_000) },
@@ -2128,7 +2104,7 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
         id: "job-failed",
         data: {
           jobId: "job-failed",
-          gatewayId: "gw-test",
+          gatewayId: "default",
           state: "failed",
           attempt: 3,
           createdAt: { toDate: () => new Date(1_000) },
@@ -2153,11 +2129,11 @@ describe("GET /api/admin/restore-jobs — provisioner queue", () => {
 describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
   it("returns mounted-customer details + recent ops for the gateway", async () => {
     glmGatewaysDocs = {
-      "gw-test": { gatewayId: "gw-test", imageTag: "abc1234" },
+      "default": { gatewayId: "default", imageTag: "abc1234" },
     };
     gatewaysDocs = {
-      "gw-test": {
-        gatewayId: "gw-test",
+      "default": {
+        gatewayId: "default",
         status: "ready",
         mountedCustomers: ["alice", "bob"],
       },
@@ -2169,7 +2145,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
         email: "alice@octogee.com",
         throttleLevel: 0,
         lastActive: "2026-05-04T09:00:00Z",
-        provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
+        provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
       },
       "uid-bob": {
         approved: true,
@@ -2177,7 +2153,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
         email: "bob@octogee.com",
         throttleLevel: 2,
         lastActive: "2026-05-04T08:30:00Z",
-        provisioning: { openclaw: { slug: "bob", gatewayId: "gw-test" } },
+        provisioning: { openclaw: { slug: "bob", gatewayId: "default" } },
       },
       "uid-carol": {
         approved: true,
@@ -2193,8 +2169,8 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
           kind: "rollout",
           status: "succeeded",
           createdAt: 5_000,
-          gatewayId: "gw-test",
-          input: { gatewayId: "gw-test", imageTag: "abc1234" },
+          gatewayId: "default",
+          input: { gatewayId: "default", imageTag: "abc1234" },
           steps: [],
         },
       },
@@ -2211,7 +2187,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
       },
     ];
     const app = buildApp();
-    const res = await request(app).get("/api/admin/gateways/gw-test/details");
+    const res = await request(app).get("/api/admin/gateways/default/details");
     expect(res.status).toBe(200);
     expect(res.body.mountedCustomers).toHaveLength(2);
     const slugs = res.body.mountedCustomers.map((m: { slug: string }) => m.slug).sort();
@@ -2260,9 +2236,9 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
   });
 
   it("only returns operations whose input.gatewayId matches the path id", async () => {
-    glmGatewaysDocs = { "gw-test": { gatewayId: "gw-test" } };
+    glmGatewaysDocs = { "default": { gatewayId: "default" } };
     gatewaysDocs = {
-      "gw-test": { gatewayId: "gw-test", status: "ready", mountedCustomers: [] },
+      "default": { gatewayId: "default", status: "ready", mountedCustomers: [] },
     };
     glmOperationsDocs = [
       {
@@ -2271,8 +2247,8 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
           kind: "rollout",
           status: "succeeded",
           createdAt: 5_000,
-          gatewayId: "gw-test",
-          input: { gatewayId: "gw-test" },
+          gatewayId: "default",
+          input: { gatewayId: "default" },
           steps: [],
         },
       },
@@ -2299,7 +2275,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
       },
     ];
     const app = buildApp();
-    const res = await request(app).get("/api/admin/gateways/gw-test/details");
+    const res = await request(app).get("/api/admin/gateways/default/details");
     expect(res.status).toBe(200);
     expect(res.body.recentOperations.map((o: { id: string }) => o.id)).toEqual(["op-a"]);
   });

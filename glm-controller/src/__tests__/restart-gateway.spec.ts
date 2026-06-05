@@ -13,7 +13,7 @@ function mkOp(overrides: Partial<Operation> = {}): Operation {
     createdAt: 0,
     startedAt: null,
     completedAt: null,
-    input: { gatewayId: "gw-bender", instanceName: "bender" },
+    input: { gatewayId: "bender" },
     steps: [],
     ...overrides,
   };
@@ -45,7 +45,7 @@ function mkDeps(overrides: Partial<RestartGatewayDeps> = {}): RestartGatewayDeps
 }
 
 describe("createRestartGatewayHandler", () => {
-  it("calls kubeOps.restartOpenClawInPlace with the deployment derived from instanceName", async () => {
+  it("calls kubeOps.restartOpenClawInPlace with the deployment derived from gatewayId", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);
     const { ctx } = mkCtx();
@@ -73,28 +73,13 @@ describe("createRestartGatewayHandler", () => {
     ]);
   });
 
-  it("returns failure when instanceName is missing from op.input", async () => {
-    const deps = mkDeps();
-    const handler = createRestartGatewayHandler(deps);
-    const { ctx } = mkCtx();
-
-    const result = await handler(
-      mkOp({ input: { gatewayId: "gw-bender" } }),
-      ctx,
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/instanceName/);
-    expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
-  });
-
   it("returns failure when gatewayId is missing from op.input (defensive — admin route always provides)", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);
     const { ctx } = mkCtx();
 
     const result = await handler(
-      mkOp({ input: { instanceName: "bender" } }),
+      mkOp({ input: {} }),
       ctx,
     );
 
@@ -142,7 +127,7 @@ describe("createRestartGatewayHandler", () => {
     const { ctx } = mkCtx();
 
     const result = await handler(
-      mkOp({ input: { gatewayId: "gw-bender", instanceName: "bender", mountedCustomers: ["alice", "bob"] } }),
+      mkOp({ input: { gatewayId: "bender", mountedCustomers: ["alice", "bob"] } }),
       ctx,
     );
 
