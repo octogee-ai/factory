@@ -457,12 +457,17 @@ spec:
                   name: mattermost-gateway
                   key: admin_token
                   optional: true
+            {{- end }}
+            # Every gateway needs this: wireActivityBridge() requires it for
+            # approval-callback HMAC, independent of the admin PAT. Operator
+            # gateways run the bridge admin-PAT-free, so it must live OUTSIDE the
+            # operator-excluded MM_ADMIN_PAT block (else bender crash-loops on the
+            # empty secret once the bridge boots).
             - name: OCTOGEE_APPROVAL_SIGNING_SECRET
               valueFrom:
                 secretKeyRef:
                   name: approval-signing
                   key: secret
-            {{- end }}
             # Same per-gateway K8s secret as init + gateway container (see
             # init container env block for the rationale). chat-proxy is
             # folded into this container and needs the same token openclaw

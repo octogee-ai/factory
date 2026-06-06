@@ -140,6 +140,37 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
   });
 
+  it("operator profile still wires OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge — the bridge needs it; only MM_ADMIN_PAT is operator-excluded", () => {
+    const dep =
+      findDoc(
+        helmTemplate("octogee-gw-bender", {
+          gatewayId: "bender",
+          profile: "operator",
+        }),
+        "Deployment",
+        "octogee-gateway-bender",
+      ) ?? "";
+    const edge = containerBlock(dep, "gateway-edge");
+    // wireActivityBridge() requires OCTOGEE_APPROVAL_SIGNING_SECRET (approval-callback
+    // HMAC) on EVERY gateway. Operator gateways run the bridge admin-PAT-free, so the
+    // signing secret must NOT be lumped into the operator-excluded MM_ADMIN_PAT block
+    // (regression: bender crash-looped on the empty secret after the per-coach rework).
+    expect(edge).toMatch(
+      /name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*approval-signing\s*\n\s*key:\s*secret/,
+    );
+    // The platform admin PAT stays operator-excluded (operator gateways never get it).
+    expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
+  });
+
+  it("standard profile wires both MM_ADMIN_PAT and OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge", () => {
+    const edge = containerBlock(
+      findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "",
+      "gateway-edge",
+    );
+    expect(edge).toMatch(/name:\s*MM_ADMIN_PAT/);
+    expect(edge).toMatch(/name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET/);
+  });
+
   it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
@@ -324,7 +355,6 @@ expect(wsBlock).toMatch(/INTERNAL_SERVICE_KEY/);
       "MM_ADMIN_TOKEN",
       "GITEA_TOKEN",
       "MM_ADMIN_PAT",
-      "OCTOGEE_APPROVAL_SIGNING_SECRET",
       "OCTOGEE_KMS_KEY_NAME",
     ]) {
       expect(wsBlock).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
@@ -525,7 +555,6 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     const edge = containerBlock(dep ?? "", "gateway-edge");
     for (const name of [
       "MM_ADMIN_PAT",
-      "OCTOGEE_APPROVAL_SIGNING_SECRET",
       "STRIPE_SECRET_KEY",
       "MM_ADMIN_TOKEN",
       "GITEA_TOKEN",
