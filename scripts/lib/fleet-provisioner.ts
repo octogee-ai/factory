@@ -68,6 +68,11 @@ export interface StartFleetOptions {
   openclawVersion: string;
   adminMmUserId?: string;
   platformState?: boolean;
+  // Read-only observability (seed + report mounted customers, write this
+  // gateway's own liveness heartbeat) — independent of platformState (write-side
+  // provisioning). Defaults true; operator gateways set it true while
+  // platformState stays false. See OPERATOR-GATEWAY-DURABILITY-SPEC §4.
+  reportState?: boolean;
   enableDeviceAuthRoutes?: boolean;
   
   openclawDir?: string;
@@ -79,6 +84,31 @@ export interface StartedFleetController {
   stop: () => Promise<void>;
 
 whenReady: Promise<void>;
+}
+
+export interface FleetCapabilities {
+  /** Read the assigned roster + write this gateway's own liveness/mounted
+   *  heartbeat (observability). Independent of provisioning. */
+  reportMounted: boolean;
+  /** Run the write-side platform provisioner: restore-customer, drain loop,
+   *  byosub device-auth. Off inside the locked operator boundary. */
+  provision: boolean;
+  /** At least one capability needs Firestore write deps (own heartbeat +
+   *  glmGateways mirror, or restore jobs). */
+  needsStateDeps: boolean;
+}
+
+// The observability-vs-provisioning seam (OPERATOR-GATEWAY-DURABILITY-SPEC §4):
+// operator gateways report (reportState) WITHOUT provisioning (platformState).
+// Both require a Firestore handle, so each capability also gates on hasDb.
+export function resolveFleetCapabilities(opts: {
+  platformState: boolean;
+  reportState: boolean;
+  hasDb: boolean;
+}): FleetCapabilities {
+  const reportMounted = opts.reportState && opts.hasDb;
+  const provision = opts.platformState && opts.hasDb;
+  return { reportMounted, provision, needsStateDeps: reportMounted || provision };
 }
 
 function slugFromAssignedUser(data: Record<string, unknown> | undefined): string | null {
@@ -122,13 +152,13 @@ interface FleetRuntime {
 }
 
 function startMaybeDrainLoop(params: {
-  platformState: boolean;
+  provision: boolean;
   opts: StartFleetOptions;
   wrappedAdapter: CustomerLifecycleAdapter;
   runtime: FleetRuntime;
 }): () => void {
-  const { platformState, opts, wrappedAdapter, runtime } = params;
-  if (!platformState || !opts.db) return () => undefined;
+  const { provision, opts, wrappedAdapter, runtime } = params;
+  if (!provision || !opts.db) return () => undefined;
   return startDrainLoop({
     gatewayId: opts.gatewayId,
     intervalMs: DRAIN_LOOP_INTERVAL_MS,
@@ -171,10 +201,10 @@ function startMaybeDrainLoop(params: {
   });
 }
 
-function createStateDeps(opts: StartFleetOptions, platformState: boolean): FleetStateDeps | null {
-  if (!platformState) return null;
+function createStateDeps(opts: StartFleetOptions, needsState: boolean): FleetStateDeps | null {
+  if (!needsState) return null;
   if (!opts.db) {
-    throw new Error("[fleet] db is required when platformState is enabled");
+    throw new Error("[fleet] db is required when platformState or reportState is enabled");
   }
   return {
     db: opts.db as unknown as FleetStateFirestore,
@@ -227,13 +257,13 @@ function wrapAdapterWithRuntime(
 
 async function seedRuntimeMountedCustomers(params: {
   opts: StartFleetOptions;
-  platformState: boolean;
+  reportMounted: boolean;
   wrappedAdapter: CustomerLifecycleAdapter;
   runtime: FleetRuntime;
 }): Promise<void> {
-  const { opts, platformState, wrappedAdapter, runtime } = params;
+  const { opts, reportMounted, wrappedAdapter, runtime } = params;
   try {
-    if (!platformState || !opts.db) return;
+    if (!reportMounted || !opts.db) return;
     runtime.mountedCustomers = await readMountedCustomersFromAssignedState(
       opts.db,
       opts.gatewayId,
@@ -255,7 +285,9 @@ export async function startFleetController(
   opts: StartFleetOptions,
 ): Promise<StartedFleetController> {
   const platformState = opts.platformState !== false;
-  const stateDeps = createStateDeps(opts, platformState);
+  const reportState = opts.reportState !== false;
+  const caps = resolveFleetCapabilities({ platformState, reportState, hasDb: !!opts.db });
+  const stateDeps = createStateDeps(opts, caps.needsStateDeps);
   const adapter = buildFleetAdapter(opts);
 
   const runtime: FleetRuntime = {
@@ -329,11 +361,11 @@ const waitForGatewayReady = async (): Promise<void> => {
 
   const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
 
-  await seedRuntimeMountedCustomers({ opts, platformState, wrappedAdapter, runtime });
+  await seedRuntimeMountedCustomers({ opts, reportMounted: caps.reportMounted, wrappedAdapter, runtime });
 
   await emitHeartbeat("booting");
 
-  const heartbeatTimer = platformState
+  const heartbeatTimer = caps.reportMounted
     ? setInterval(() => {
         void emitHeartbeat(runtime.status);
       }, GATEWAY_HEARTBEAT_INTERVAL_MS)
@@ -354,7 +386,7 @@ const waitForGatewayReady = async (): Promise<void> => {
     next();
   };
 
-  if (stateDeps) {
+  if (caps.provision && stateDeps) {
     app.post(
       "/restore-customer/:gatewayId",
       gatewayIdGuard,
@@ -383,12 +415,12 @@ const waitForGatewayReady = async (): Promise<void> => {
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
 
-  if (opts.enableDeviceAuthRoutes ?? platformState) {
+  if (opts.enableDeviceAuthRoutes ?? caps.provision) {
     registerByosubDeviceAuth(app, opts);
   }
 
   const stopDrainLoop = startMaybeDrainLoop({
-    platformState,
+    provision: caps.provision,
     opts,
     wrappedAdapter,
     runtime,
@@ -397,9 +429,9 @@ const waitForGatewayReady = async (): Promise<void> => {
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
   });
-  const drainLoopStatus = platformState ? `${DRAIN_LOOP_INTERVAL_MS}ms` : "disabled";
+  const drainLoopStatus = caps.provision ? `${DRAIN_LOOP_INTERVAL_MS}ms` : "disabled";
   opts.log(
-    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; drain-loop=${drainLoopStatus}`,
+    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; drain-loop=${drainLoopStatus}`,
   );
 
 return {

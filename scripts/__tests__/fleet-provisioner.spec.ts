@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
-import { readMountedCustomersFromAssignedState } from "../lib/fleet-provisioner.js";
+import {
+  readMountedCustomersFromAssignedState,
+  resolveFleetCapabilities,
+} from "../lib/fleet-provisioner.js";
 
 function mkDb(rows: Array<Record<string, unknown>>): Firestore {
   const docs = rows.map((row) => ({ data: () => row }));
@@ -46,5 +49,37 @@ describe("readMountedCustomersFromAssignedState", () => {
         hasCustomerDir: (slug) => slug === "bob",
       }),
     ).resolves.toEqual(["bob"]);
+  });
+});
+
+describe("resolveFleetCapabilities — observability vs provisioning seam", () => {
+  it("cattle (platformState + reportState + db): reports AND provisions", () => {
+    expect(
+      resolveFleetCapabilities({ platformState: true, reportState: true, hasDb: true }),
+    ).toEqual({ reportMounted: true, provision: true, needsStateDeps: true });
+  });
+
+  it("operator (platformState=false, reportState=true, db): reports, does NOT provision", () => {
+    expect(
+      resolveFleetCapabilities({ platformState: false, reportState: true, hasDb: true }),
+    ).toEqual({ reportMounted: true, provision: false, needsStateDeps: true });
+  });
+
+  it("no db (local dev): neither reports nor provisions, regardless of flags", () => {
+    expect(
+      resolveFleetCapabilities({ platformState: true, reportState: true, hasDb: false }),
+    ).toEqual({ reportMounted: false, provision: false, needsStateDeps: false });
+  });
+
+  it("reportState explicitly off + db: no reporting (lets a gateway opt out)", () => {
+    expect(
+      resolveFleetCapabilities({ platformState: false, reportState: false, hasDb: true }),
+    ).toEqual({ reportMounted: false, provision: false, needsStateDeps: false });
+  });
+
+  it("the two axes are independent: provision without reporting", () => {
+    expect(
+      resolveFleetCapabilities({ platformState: true, reportState: false, hasDb: true }),
+    ).toEqual({ reportMounted: false, provision: true, needsStateDeps: true });
   });
 });

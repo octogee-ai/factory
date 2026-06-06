@@ -7,6 +7,7 @@ import {
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
 import { buildLocalMigrationAdapter } from "../lib/fleet-local-migration-adapter.js";
 import { startFleetController } from "../lib/fleet-provisioner.js";
+import { db } from "../lib/firebase.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { execFileSync } from "node:child_process";
 
@@ -34,6 +35,12 @@ async function main(): Promise<void> {
     openclawVersion,
     openclawDir: OPENCLAW_DIR,
     platformState: false,
+    // Observability on (read roster + write this gateway's own heartbeat) so the
+    // operator gateway reports its mounted customers + stays live in the fleet
+    // view; the write-side provisioner stays off inside the locked boundary
+    // (OPERATOR-GATEWAY-DURABILITY-SPEC §4).
+    reportState: true,
+    db,
     internalServiceKey: "",
   });
 
