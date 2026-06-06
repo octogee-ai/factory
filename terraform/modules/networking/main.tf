@@ -49,11 +49,6 @@ resource "google_compute_global_address" "workspace_api" {
   project = var.project_id
 }
 
-resource "google_compute_global_address" "chat_proxy" {
-  name    = "chat-proxy-ip"
-  project = var.project_id
-}
-
 # ── Static external IP for gateway fleet-control plane Ingress ──────────────
 # GKE Ingress for fleet.octogee.com / fleet-test.octogee.com (the fleet
 # controller's Cloud Tasks push target — see docs/GATEWAY-PLATFORM-SPEC.md

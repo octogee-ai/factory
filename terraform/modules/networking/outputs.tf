@@ -22,8 +22,3 @@ output "workspace_api_ip" {
   description = "Static external IP for workspace-api Ingress"
   value       = google_compute_global_address.workspace_api.address
 }
-
-output "chat_proxy_ip" {
-  description = "Static external IP for chat-proxy Ingress"
-  value       = google_compute_global_address.chat_proxy.address
-}
