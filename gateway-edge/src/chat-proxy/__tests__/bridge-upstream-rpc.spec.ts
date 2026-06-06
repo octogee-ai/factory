@@ -29,7 +29,7 @@ describe("attachUpstreamRpcClient", () => {
     client.dispose();
   });
 
-  it("sends a JSON-RPC request envelope when call() is invoked", async () => {
+  it("sends a canonical req envelope when call() is invoked", async () => {
     const promise = client.call("exec.approval.resolve", {
       approvalId: "appr-1",
       decision: "approved",
@@ -38,13 +38,13 @@ describe("attachUpstreamRpcClient", () => {
     expect(ws.sent.length).toBe(1);
     const sent = JSON.parse(ws.sent[0]);
     expect(sent).toMatchObject({
-      type: "request",
+      type: "req",
       method: "exec.approval.resolve",
       params: { approvalId: "appr-1" },
     });
     expect(typeof sent.id).toBe("string");
 
-    ws.simulateMessage({ type: "response", id: sent.id, ok: true, result: { ok: true } });
+    ws.simulateMessage({ type: "res", id: sent.id, ok: true, payload: { ok: true } });
     const result = await promise;
     expect(result).toEqual({ ok: true, result: { ok: true } });
   });
@@ -52,7 +52,7 @@ describe("attachUpstreamRpcClient", () => {
   it("rejects via the returned ok:false shape on response.ok === false", async () => {
     const promise = client.call("plugin.approval.resolve", { approvalId: "appr-2", decision: "denied" });
     const sentId = JSON.parse(ws.sent[0]).id;
-    ws.simulateMessage({ type: "response", id: sentId, ok: false, error: { message: "no such approval" } });
+    ws.simulateMessage({ type: "res", id: sentId, ok: false, error: { code: "NOT_FOUND", message: "no such approval" } });
     const result = await promise;
     expect(result).toEqual({ ok: false, reason: expect.stringContaining("no such approval") });
   });
@@ -68,9 +68,9 @@ describe("attachUpstreamRpcClient", () => {
 
   it("ignores response envelopes whose id doesn't match any in-flight call (no crash)", async () => {
     const promise = client.call("exec.approval.resolve", { approvalId: "appr-4" });
-    ws.simulateMessage({ type: "response", id: "unrelated-id", ok: true, result: {} });
+    ws.simulateMessage({ type: "res", id: "unrelated-id", ok: true, payload: {} });
     const sentId = JSON.parse(ws.sent[0]).id;
-    ws.simulateMessage({ type: "response", id: sentId, ok: true, result: {} });
+    ws.simulateMessage({ type: "res", id: sentId, ok: true, payload: {} });
     await expect(promise).resolves.toMatchObject({ ok: true });
   });
 

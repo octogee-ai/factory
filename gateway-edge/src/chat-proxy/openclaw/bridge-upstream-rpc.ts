@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
+import { isResponseFrame } from "../../../../shared/types/openclaw-wire-core.js";
 
 export interface UpstreamRpcClient {
   call<T = unknown>(
@@ -41,20 +42,21 @@ export function attachUpstreamRpcClient(
     } catch {
       return;
     }
-    if (!parsed || typeof parsed !== "object") return;
-    const env = parsed as { type?: unknown; id?: unknown; ok?: unknown; result?: unknown; error?: unknown };
-    if (env.type !== "response" || typeof env.id !== "string") return;
+    // Match the canonical wire protocol (packages/gateway-protocol RequestFrame/
+    // ResponseFrameSchema, mirrored in shared/types/openclaw-wire-core): responses
+    // are { type:"res", id, ok, payload?, error? }. The old hand-rolled match on
+    // type:"response" + .result never matched this gateway, so every RPC timed out.
+    if (!isResponseFrame(parsed)) return;
+    const env = parsed;
     const pending = inFlight.get(env.id);
     if (!pending) return;
     inFlight.delete(env.id);
     clearTimeout(pending.timer);
     if (env.ok === true) {
-      pending.resolve({ ok: true, result: env.result });
+      pending.resolve({ ok: true, result: env.payload });
     } else {
       const errMsg =
-        env.error && typeof env.error === "object" && typeof (env.error as { message?: unknown }).message === "string"
-          ? (env.error as { message: string }).message
-          : String(env.error ?? "rpc error");
+        typeof env.error?.message === "string" ? env.error.message : "rpc error";
       pending.resolve({ ok: false, reason: errMsg });
     }
   };
@@ -95,7 +97,7 @@ export function attachUpstreamRpcClient(
       try {
         ws.send(
           JSON.stringify({
-            type: "request",
+            type: "req",
             id,
             method,
             params,
