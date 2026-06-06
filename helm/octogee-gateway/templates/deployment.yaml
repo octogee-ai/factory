@@ -40,6 +40,12 @@ spec:
         # GCP Billing Export can roll up cost by tier for the chargeback
         # surface (GATEWAY-PLATFORM-SPEC §Phase 5a).
         tier: {{ $tier | quote }}
+        # Build tag this pod rolled to — `kubectl get pods -L gateway-image`
+        # makes a blue/green or rolling update legible at a glance (the
+        # pod-template-hash already changes per image but isn't readable back to
+        # a SHA). Pod-template label ONLY, never the selector — selectors must
+        # stay stable across rolls.
+        gateway-image: {{ .Values.image.tag | default .Values.imageTag | quote }}
     spec:
       nodeSelector:
         cloud.google.com/compute-class: {{ .Values.computeClass | default "Performance" | quote }}

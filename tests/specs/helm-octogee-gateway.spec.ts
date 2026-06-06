@@ -113,6 +113,25 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(operatorDep).toMatch(/gateway-profile:\s*"operator"/);
   });
 
+  it("stamps the gateway-image label (build tag) on pods so a roll is legible via `kubectl get pods -L gateway-image`", () => {
+    const dep = findDoc(helmTemplate("octogee-gw-default", { imageTag: "7637d1a" }), "Deployment", "octogee-gateway-default") ?? "";
+    // On the pod-template labels...
+    expect(dep).toMatch(/gateway-image:\s*"?7637d1a"?/);
+    // ...but NOT on the selector — selectors must stay stable across rolls, else
+    // every image bump would orphan the prior ReplicaSet's pods.
+    const selectorBlock = dep.slice(dep.indexOf("selector:"), dep.indexOf("template:"));
+    expect(selectorBlock).not.toMatch(/gateway-image/);
+  });
+
+  it("stamps gateway-image on operator pods too", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "operator", imageTag: "deadbee1" }),
+      "Deployment",
+      "octogee-gateway-bender",
+    ) ?? "";
+    expect(dep).toMatch(/gateway-image:\s*"?deadbee1"?/);
+  });
+
   it("standard profile mounts the octogee-api audience token into gateway and gateway-edge", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
