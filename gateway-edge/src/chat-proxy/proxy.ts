@@ -43,6 +43,16 @@ import {
   bridgeHealthBody,
 } from "./openclaw/bridge-boot-status.js";
 
+// The slice of the activity-bridge handle the channel-member resolver needs:
+// resolve a channel's coach token so member lists are fetched as the coach
+// (admin-PAT-free). Forward-referenced because the resolver is built before the
+// handle is wired.
+interface BridgeHandleForMembers {
+  coachForChannel?: (
+    activityChannelId: string,
+  ) => { coachToken: string; coachMmUserId: string } | null;
+}
+
 if (process.env.NODE_ENV !== "test") {
   if (!process.env.MM_INTERNAL_URL) {
     console.error("FATAL: MM_INTERNAL_URL is required (in-cluster Mattermost URL, e.g. http://mattermost.<ns>.svc.cluster.local:8065)");
@@ -983,25 +993,51 @@ export async function startChatProxyBackground(): Promise<void> {
   });
 
   void (async () => {
-    const mmAdminPat = process.env.MM_ADMIN_PAT ?? '';
-    if (!mmAdminPat || mmAdminPat.trim().length === 0) {
-      console.warn(
-        '[chat-proxy] MM_ADMIN_PAT not mounted — skipping activity bridge boot. ' +
-        'Mount K8s secret `mattermost-gateway/admin_token` to enable. See ' +
-        'helm/octogee/charts/gateway/templates/deployment.yaml.',
-      );
-      bridgeBootStatus.set('mm-admin-pat-missing');
-      return;
-    }
+    // Forward reference: `channelMembers.fetchMembers` resolves the channel's
+    // coach token off the bridge handle, but the handle is wired below (after
+    // channelMembers). Filled once `wired` exists; fetchMembers only reads it at
+    // runtime. The bridge is admin-PAT-free now — member lists are fetched with
+    // the channel's coach token (a coach can list its own channel's members).
+    let bridgeHandleHolder: BridgeHandleForMembers | null = null;
 
-const channelMembers = createChannelMemberResolver({
+    const channelMembers = createChannelMemberResolver({
       ttlMs: 60_000,
-      fetchMembers: (channelId: string) =>
-        fetchMmChannelMemberIds(MM_INTERNAL_URL, mmAdminPat, channelId),
+      fetchMembers: async (channelId: string): Promise<Set<string>> => {
+        const coach = bridgeHandleHolder?.coachForChannel?.(channelId) ?? null;
+        if (!coach) {
+          // Untracked channel (no run has resolved it yet) → no coach token to
+          // fetch with. Empty set; the resolver caches it briefly and retries
+          // once a run tracks the channel.
+          return new Set<string>();
+        }
+        return fetchMmChannelMemberIds(MM_INTERNAL_URL, coach.coachToken, channelId);
+      },
       onError: reportMemberResolveFailure,
     });
     const ctxEmitChains = new Map<string, Promise<void>>();
     const phaseEmitChains = new Map<string, Promise<void>>();
+    const gatewayIdResult = resolveBridgeGatewayId(process.env);
+    const reconcileGatewayId = gatewayIdResult.ok ? gatewayIdResult.gatewayId : null;
+    // The bridge reconciles its tracked coaches against this gateway's mounted
+    // set each sweep, untracking the coaches of unmounted customers (Copilot #2)
+    // so the per-coach WS set can't grow monotonically over the pod lifetime.
+    // Read failure → null → fail-safe keep.
+    const getMountedCustomers = reconcileGatewayId
+      ? async (): Promise<string[] | null> => {
+          try {
+            const snap = await db.collection('gateways').doc(reconcileGatewayId).get();
+            const m = (snap.data() as { mountedCustomers?: unknown } | undefined)?.mountedCustomers;
+            return Array.isArray(m) ? m.filter((s): s is string => typeof s === 'string') : null;
+          } catch (err) {
+            console.warn(
+              `[chat-proxy] mounted-set read failed for coach reconcile: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+            return null;
+          }
+        }
+      : undefined;
     const { wireActivityBridge, connectBridgeUpstream } = await import('./openclaw/bridge-boot.js');
     let wired: Awaited<ReturnType<typeof wireActivityBridge>>;
     try {
@@ -1009,7 +1045,6 @@ const channelMembers = createChannelMemberResolver({
         db: db as unknown as Parameters<typeof wireActivityBridge>[0]['db'],
         upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
         gatewayToken: '',
-        mmAdminPat,
         identity: getOpenClawIdentity(),
         mmBaseUrl: MM_PUBLIC_URL,
         metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
@@ -1017,6 +1052,7 @@ const channelMembers = createChannelMemberResolver({
         editDiffFetcher: await buildEditDiffFetcher(),
         emitEphemeral: makeEmitEphemeral(channelMembers, mmWsRegistry, ctxEmitChains),
         emitPhase: makeEmitPhase(channelMembers, mmWsRegistry, phaseEmitChains),
+        getMountedCustomers,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1024,8 +1060,8 @@ const channelMembers = createChannelMemberResolver({
       process.exit(1);
     }
     approvalCallbackHandler = wired.approvalCallbackHandler;
+    bridgeHandleHolder = wired.handle;
 
-    const gatewayIdResult = resolveBridgeGatewayId(process.env);
     if (!gatewayIdResult.ok) {
       console.error(
         `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
@@ -1038,7 +1074,7 @@ const channelMembers = createChannelMemberResolver({
     const gatewayId = gatewayIdResult.gatewayId;
 
     const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
-    const { startMmEventListener } = await import('./openclaw/mm-event-listener.js');
+    const { startMmCoachEventListeners } = await import('./openclaw/mm-event-listener.js');
     const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
     const { resolveChannelOwnerUid } = await import('./openclaw/owner-resolution.js');
     const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
@@ -1047,9 +1083,8 @@ const channelMembers = createChannelMemberResolver({
       };
       return wiredAny.__getRpcClient?.() ?? null;
     };
-    startMmEventListener({
+    const coachListeners = startMmCoachEventListeners({
       mmWsUrl,
-      mmAdminPat,
       log: (msg) => console.warn(msg),
       openWebSocket: () => new WebSocket(mmWsUrl),
       isTrackedChannel: (channelId) =>
@@ -1126,9 +1161,24 @@ const channelMembers = createChannelMemberResolver({
         });
       },
     });
-    console.log('[chat-proxy] MM event listener started (reactions + reply-as-steer)');
+    // One MM WebSocket per tracked coach, each auth'd with that coach's own
+    // token (no admin PAT): 1 WS on an operator gateway (single coach), N on a
+    // shared gateway. Seed with any coach already tracked, then add each new one
+    // as the bridge tracks it.
+    for (const coach of wired.handle.getTrackedCoaches?.() ?? []) {
+      coachListeners.addCoach(coach);
+    }
+    wired.handle.onActivityChannelTracked?.((coach) => {
+      coachListeners.addCoach(coach);
+    });
+    // Symmetric prune: when the bridge drops a coach whose customer unmounted,
+    // close its WS so the per-coach socket set shrinks with the mounted set.
+    wired.handle.onActivityChannelUntracked?.((coach) => {
+      coachListeners.removeCoach(coach.coachMmUserId);
+    });
+    console.log('[chat-proxy] MM coach event listeners started (per-coach WS: reactions + reply-as-steer)');
 
-const healthUrl = gatewayHealthUrl();
+    const healthUrl = gatewayHealthUrl();
     startBridgeUpstreamReconnectLoop({
       probeReady: () => probeGatewayReady(healthUrl),
       probeIntervalMs: 500,
