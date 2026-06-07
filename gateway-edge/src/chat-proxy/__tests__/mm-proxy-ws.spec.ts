@@ -603,7 +603,7 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     attachMmWsBridge(deps(u1), b1 as unknown as WebSocket);
     attachMmWsBridge(deps(u2), b2 as unknown as WebSocket);
 
-    const frame = { event: "octogee.ctx", data: { channelId: "c1", pct: 13, used: 34900, limit: 272000 } };
+    const frame = { event: "octogee.hud", data: { channelId: "c1", pct: 13, used: 34900, limit: 272000 } };
     registry.broadcast(frame);
     await tick();
     expect(b1.sent.map(String)).toContain(JSON.stringify(frame));
@@ -629,7 +629,7 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     registry.add((f) => sentByPreAuth.push(f), () => null); 
 
     const members = new Set(["u-member"]);
-    const frame = { event: "octogee.ctx", data: { channelId: "c1", pct: 13 } };
+    const frame = { event: "octogee.hud", data: { channelId: "c1", pct: 13 } };
     registry.broadcast(frame, (uid) => uid !== null && members.has(uid));
 
     expect(sentByMember.map(String)).toContain(JSON.stringify(frame));
@@ -643,7 +643,7 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     const preAuth: string[] = [];
     registry.add((f) => preAuth.push(f), () => null);
 
-registry.broadcast({ event: "octogee.ctx", data: { channelId: "c1" } }, () => true);
+registry.broadcast({ event: "octogee.hud", data: { channelId: "c1" } }, () => true);
     expect(preAuth).toHaveLength(0);
     
     registry.broadcast({ event: "x" });

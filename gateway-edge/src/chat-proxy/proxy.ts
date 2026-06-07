@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
 import { buildGatewayMetricsFetcher, startMetricsBaseline } from "./openclaw/metrics-baseline.js";
+import type { LiveHudPayload } from "./openclaw/session-telemetry.js";
 import { generateIdentity, type DeviceIdentity } from "../../../shared/types/device-identity.js";
 import { WsUpgradeRouter } from "../../../shared/ws/upgrade-router.js";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
@@ -356,8 +357,8 @@ function makeEmitEphemeral(
   channelMembers: ChannelMemberResolver,
   registry: MmWsRegistry,
   chains: Map<string, Promise<void>>,
-): (channelId: string, payload: { pct: number | null; used: number; limit: number }) => void {
-  return makeScopedFrameEmitter("octogee.ctx", channelMembers, registry, chains);
+): (channelId: string, payload: LiveHudPayload) => void {
+  return makeScopedFrameEmitter("octogee.hud", channelMembers, registry, chains);
 }
 
 function makeEmitPhase(
