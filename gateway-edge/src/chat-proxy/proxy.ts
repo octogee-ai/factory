@@ -1086,13 +1086,20 @@ export async function startChatProxyBackground(): Promise<void> {
     const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
     const { startMmCoachEventListeners } = await import('./openclaw/mm-event-listener.js');
     const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
-    const { resolveChannelOwnerUid } = await import('./openclaw/owner-resolution.js');
+    const { handleReplyAsSteer } = await import('./openclaw/reply-handler.js');
+    const { resolveChannelOwnerUid, resolveOctogeeUidByMmUser } = await import('./openclaw/owner-resolution.js');
     const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
       const wiredAny = wired as unknown as {
         __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
       };
       return wiredAny.__getRpcClient?.() ?? null;
     };
+    // Owner/uid resolvers, hoisted so both onReply and onReaction share them
+    // (and stay out of the deep callback nesting).
+    const ownerOf = (channelId: string) =>
+      resolveChannelOwnerUid(channelId, { db: db as never, log: (msg) => console.warn(msg) });
+    const uidOf = (mmUserId: string) =>
+      resolveOctogeeUidByMmUser(mmUserId, { db: db as never, log: (msg) => console.warn(msg) });
     const coachListeners = startMmCoachEventListeners({
       mmWsUrl,
       log: (msg) => console.warn(msg),
@@ -1109,43 +1116,26 @@ export async function startChatProxyBackground(): Promise<void> {
           );
           return;
         }
-        try {
-          await rpc.call('chat.send', {
-            sessionKey: reply.sessionKey,
-            message: reply.message,
-            deliver: false,
-            idempotencyKey: reply.replyPostId,
-          });
-        } catch (err) {
-          console.warn(
-            `[mm-event-listener] chat.send (reply-as-steer) failed for session ${reply.sessionKey}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
+        await handleReplyAsSteer(reply, {
+          resolveChannelOwnerUid: ownerOf,
+          resolveOctogeeUidByMmUser: uidOf,
+          dispatchSteer: async ({ sessionKey, message, idempotencyKey }) => {
+            await rpc.call('chat.send', {
+              sessionKey,
+              message,
+              deliver: false,
+              idempotencyKey,
+            });
+          },
+          log: (msg) => console.warn(msg),
+        });
       },
       onReaction: async (reaction) => {
         await handleReactionAdded(reaction, {
           resolveRunForRootPost: (postId) =>
             wired.handle.getRunStateByRootPostId?.(postId) ?? null,
-          resolveChannelOwnerUid: (channelId) =>
-            resolveChannelOwnerUid(channelId, {
-              db: db as never,
-              log: (msg) => console.warn(msg),
-            }),
-          resolveOctogeeUidByMmUser: async (mmUserId) => {
-            try {
-              const snap = await db
-                .collection('users' as never)
-                .where('mattermost.userId' as never, '==' as never, mmUserId as never)
-                .get();
-              const docs = (snap as unknown as { docs: Array<{ id: string }> }).docs;
-              return docs[0]?.id ?? null;
-            } catch (err) {
-              console.warn(
-                `[reaction-handler] resolveOctogeeUidByMmUser failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
-              return null;
-            }
-          },
+          resolveChannelOwnerUid: ownerOf,
+          resolveOctogeeUidByMmUser: uidOf,
           effects: {
             dispatchAbort: async (sessionKey) => {
               const rpc = getRpcClient();
