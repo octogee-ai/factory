@@ -307,6 +307,12 @@ const bridgeMetrics = {
     labelNames: ['outcome'] as const,
     registers: [metricsRegistry],
   }),
+  seqGap: new Counter({
+    name: 'octogee_bridge_seq_gap_total',
+    help: 'Bridge upstream broadcast seq-gap handling (tolerated|forced-reconnect); count is missed frames (§4.6.1)',
+    labelNames: ['outcome'] as const,
+    registers: [metricsRegistry],
+  }),
 };
 
 const approvalDroppedCounter = new Counter({
@@ -1038,7 +1044,11 @@ export async function startChatProxyBackground(): Promise<void> {
           }
         }
       : undefined;
-    const { wireActivityBridge, connectBridgeUpstream } = await import('./openclaw/bridge-boot.js');
+    const { wireActivityBridge, connectBridgeUpstream, createResyncFloor } = await import('./openclaw/bridge-boot.js');
+    // One forced-reconnect cooldown floor for the bridge's whole life: it must outlive
+    // any single WS so SEQ_GAP_COOLDOWN_MS actually spaces the reconnects it triggers
+    // (a forced close resets the per-connection window, but not this).
+    const resyncFloor = createResyncFloor();
     let wired: Awaited<ReturnType<typeof wireActivityBridge>>;
     try {
       wired = wireActivityBridge({
@@ -1208,6 +1218,7 @@ export async function startChatProxyBackground(): Promise<void> {
           ws,
           log: (msg) => console.warn(msg),
           metrics: bridgeMetrics,
+          resyncFloor,
         });
         return {
           onClose: (handler) => {
