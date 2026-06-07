@@ -1,0 +1,25 @@
+[
+  {
+    "name": "keep-pinned-and-release-pointers",
+    "action": { "type": "Keep" },
+    "condition": {
+      "tagState": "tagged",
+      "tagPrefixes": ["keep", "pin", "canonical", "latest"]
+    }
+  },
+  {
+    "name": "keep-recent-2-per-image",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": { "keepCount": 2 }
+  },
+  {
+    "name": "delete-untagged",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "untagged", "olderThan": "604800s" }
+  },
+  {
+    "name": "delete-stale-tagged",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "tagged", "olderThan": "1209600s" }
+  }
+]
