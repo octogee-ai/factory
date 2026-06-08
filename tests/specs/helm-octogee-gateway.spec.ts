@@ -646,9 +646,25 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     expect(dep).toMatch(
       /persistentVolumeClaim:\s*\n\s*claimName:\s*"?octogee-gateway-bender-data/,
     );
-    expect(dep).toMatch(
-      /annotations:\s*\n\s*cluster-autoscaler\.kubernetes\.io\/safe-to-evict:\s*"false"/,
-    );
+  });
+
+  // Operator/persistent gateways must NOT carry
+  // cluster-autoscaler.kubernetes.io/safe-to-evict:"false". GKE Autopilot maps it
+  // to the extended-duration-pods feature, which it refuses to grant to Pods that
+  // target a custom compute class (our nodeSelector pins
+  // cloud.google.com/compute-class) — so it warned on every deploy and the 7-day
+  // pin never took. It was a dead no-op: the real voluntary-disruption guard is
+  // the minAvailable:1 PDB (replicas:1 => disruptionsAllowed:0), unchanged here,
+  // which also already blocks the ComputeClass's activeMigration on a single-
+  // replica gateway. Resilience comes from the durable PVC + boot-sync. See
+  // DECISIONS.md "Operator gateways don't pin themselves with safe-to-evict".
+  it("persistent/operator gateway sets no safe-to-evict (extended-duration is unsupported under the CCC and would defeat right-sizing)", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      "persistence.enabled": "true",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
+    expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
   });
 
   it("gatewayContainerSecurityContext override elevates one instance without touching the default", () => {
