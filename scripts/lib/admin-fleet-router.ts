@@ -202,6 +202,7 @@ export function projectGatewaySummary(
   inFlightJob: ReturnType<typeof projectInFlightJob>;
   lastError: ReturnType<typeof projectLastError>;
   sizing: ReturnType<typeof resolveSizingForResponse>;
+  profile: GatewayProfile;
 } {
   const data = doc.data();
   const inFlightJobId = typeof data.inFlightJobId === "string" ? data.inFlightJobId : null;
@@ -220,6 +221,7 @@ export function projectGatewaySummary(
     inFlightJob: projectInFlightJob(inFlightJobId, ownJobs, now),
     lastError: projectLastError(data.lastError),
     sizing: resolveSizingForResponse(glmDoc),
+    profile: normalizeGatewayProfile(glmDoc?.profile),
   };
 }
 
