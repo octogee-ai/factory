@@ -1063,6 +1063,10 @@ export async function startChatProxyBackground(): Promise<void> {
         editDiffFetcher: await buildEditDiffFetcher(),
         emitEphemeral: makeEmitEphemeral(channelMembers, mmWsRegistry, ctxEmitChains),
         emitPhase: makeEmitPhase(channelMembers, mmWsRegistry, phaseEmitChains),
+        // Phase 11 (write-both): enable the run-live Firestore projection per-env.
+        // OFF unless OCTOGEE_RUN_LIVE_PROJECTION=1, so a merge to main starts no
+        // prod writes until we flip it (TEST first). See ACTIVITY-LIVE-FIRESTORE-SPEC.
+        runLiveProjection: process.env.OCTOGEE_RUN_LIVE_PROJECTION === '1',
         getMountedCustomers,
       });
     } catch (err) {
