@@ -93,6 +93,11 @@ export interface FleetCapabilities {
   /** Run the write-side platform provisioner: restore-customer, drain loop,
    *  byosub device-auth. Off inside the locked operator boundary. */
   provision: boolean;
+  /** Re-derive the reported mounted set from assigned state each heartbeat.
+   *  On for report-only (operator) gateways, which have no drain loop to drop a
+   *  customer who moved away; off for provisioning gateways (the drain loop +
+   *  mount callbacks already keep runtime.mountedCustomers honest). */
+  refreshReportedMounts: boolean;
   /** At least one capability needs Firestore write deps (own heartbeat +
    *  glmGateways mirror, or restore jobs). */
   needsStateDeps: boolean;
@@ -108,7 +113,13 @@ export function resolveFleetCapabilities(opts: {
 }): FleetCapabilities {
   const reportMounted = opts.reportState && opts.hasDb;
   const provision = opts.platformState && opts.hasDb;
-  return { reportMounted, provision, needsStateDeps: reportMounted || provision };
+  const refreshReportedMounts = reportMounted && !provision;
+  return {
+    reportMounted,
+    provision,
+    refreshReportedMounts,
+    needsStateDeps: reportMounted || provision,
+  };
 }
 
 function slugFromAssignedUser(data: Record<string, unknown> | undefined): string | null {
@@ -281,6 +292,45 @@ async function seedRuntimeMountedCustomers(params: {
   }
 }
 
+/**
+ * Re-derive a report-only gateway's mounted set from assigned state each heartbeat.
+ * Operator gateways have no drain loop, so a customer who moved to another gateway
+ * would otherwise linger in `mountedCustomers` forever — blocking retire and
+ * mis-accounting the fleet. Honest reporting per OPERATOR-GATEWAY-DURABILITY-SPEC §4.1
+ * (assigned ∩ has-dir ∩ coach-wired). Provisioning gateways skip this: their drain
+ * loop + mount callbacks already keep runtime.mountedCustomers honest.
+ *
+ * Last-writer-wins: a slow refresh can briefly lose a concurrent onMounted during a
+ * migration onto an operator gateway, but the next tick re-derives and reconverges,
+ * so the under-report is transient and acceptable for a pinned single-owner pod.
+ */
+export async function maybeRefreshReportedMounts(params: {
+  refresh: boolean;
+  db: Firestore | undefined;
+  gatewayId: string;
+  adapter: Pick<
+    CustomerLifecycleAdapter,
+    "hasCustomerDir" | "customerCoachWiredInOpenclawConfig"
+  >;
+  runtime: { mountedCustomers: string[] };
+  log: (msg: string) => void;
+}): Promise<void> {
+  if (!params.refresh || !params.db) return;
+  try {
+    params.runtime.mountedCustomers = await readMountedCustomersFromAssignedState(
+      params.db,
+      params.gatewayId,
+      params.adapter,
+    );
+  } catch (err) {
+    params.log(
+      `[fleet] ⚠ mounted-customer refresh failed (keeping prior set): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
 export async function startFleetController(
   opts: StartFleetOptions,
 ): Promise<StartedFleetController> {
@@ -367,7 +417,17 @@ const waitForGatewayReady = async (): Promise<void> => {
 
   const heartbeatTimer = caps.reportMounted
     ? setInterval(() => {
-        void emitHeartbeat(runtime.status);
+        void (async () => {
+          await maybeRefreshReportedMounts({
+            refresh: caps.refreshReportedMounts,
+            db: opts.db,
+            gatewayId: opts.gatewayId,
+            adapter: wrappedAdapter,
+            runtime,
+            log: opts.log,
+          });
+          await emitHeartbeat(runtime.status);
+        })();
       }, GATEWAY_HEARTBEAT_INTERVAL_MS)
     : null;
 
@@ -430,8 +490,11 @@ const waitForGatewayReady = async (): Promise<void> => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
   });
   const drainLoopStatus = caps.provision ? `${DRAIN_LOOP_INTERVAL_MS}ms` : "disabled";
+  const reportRefreshStatus = caps.refreshReportedMounts
+    ? `${GATEWAY_HEARTBEAT_INTERVAL_MS}ms`
+    : "off";
   opts.log(
-    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; drain-loop=${drainLoopStatus}`,
+    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; drain-loop=${drainLoopStatus}; report-refresh=${reportRefreshStatus}`,
   );
 
 return {
