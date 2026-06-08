@@ -54,6 +54,12 @@ const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid"
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
+// Consistent, timestamped formatting for the bridge's human-readable text logs
+// (the `[bridge-boot] …` lines, incl. the frame trace) — kept plain (not JSON)
+// so they stay greppable/readable by eye during live debugging.
+const bridgeLog = (msg: string): void =>
+  console.warn(`${new Date().toISOString()} ${msg}`);
+
 const MM_PUBLIC_URL = MM_INTERNAL_URL;
 
 const MM_INTERNAL_WS_URL = MM_INTERNAL_URL.replace(/^http/, "ws") + "/api/v4/websocket";
@@ -292,7 +298,7 @@ const bridgeBootStatusGauge = new Gauge({
 
 const bridgeBootStatus = createBridgeBootStatus({
   gauge: bridgeBootStatusGauge,
-  log: (msg) => console.warn(msg),
+  log: bridgeLog,
 });
 
 let approvalCallbackHandler:
@@ -732,7 +738,7 @@ const urlPath = applyGatewayPrefixStripInPlace(req);
         attachMmWsBridge(
           {
             mmInternalWsUrl: MM_INTERNAL_WS_URL,
-            log: (msg) => console.warn(msg),
+            log: bridgeLog,
             resolveMmUserId,
             openUpstream: (url) => new WebSocket(url),
             registry: mmWsRegistry,
@@ -870,7 +876,7 @@ const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
     giteaUrl,
     giteaToken,
     giteaPublicBaseUrl,
-    log: (msg) => console.warn(msg),
+    log: bridgeLog,
   });
 }
 
@@ -889,7 +895,7 @@ export async function startChatProxyBackground(): Promise<void> {
   startMetricsBaseline({
     fetchGatewayMetrics: buildGatewayMetricsFetcher(process.env),
     intervalMs: 30_000,
-    log: (msg) => console.warn(msg),
+    log: bridgeLog,
     onSample: observePluginLookupSample,
   });
 
@@ -930,7 +936,7 @@ export async function startChatProxyBackground(): Promise<void> {
         identity: getOpenClawIdentity(),
         mmBaseUrl: MM_PUBLIC_URL,
         metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
-        log: (msg) => console.warn(msg),
+        log: bridgeLog,
         debugLog: (msg, meta) => logger.debug(msg, meta),
         editDiffFetcher: await buildEditDiffFetcher(),
         getMountedCustomers,
@@ -967,12 +973,12 @@ export async function startChatProxyBackground(): Promise<void> {
     // Owner/uid resolvers, hoisted so both onReply and onReaction share them
     // (and stay out of the deep callback nesting).
     const ownerOf = (channelId: string) =>
-      resolveChannelOwnerUid(channelId, { db: db as never, log: (msg) => console.warn(msg) });
+      resolveChannelOwnerUid(channelId, { db: db as never, log: bridgeLog });
     const uidOf = (mmUserId: string) =>
-      resolveOctogeeUidByMmUser(mmUserId, { db: db as never, log: (msg) => console.warn(msg) });
+      resolveOctogeeUidByMmUser(mmUserId, { db: db as never, log: bridgeLog });
     const coachListeners = startMmCoachEventListeners({
       mmWsUrl,
-      log: (msg) => console.warn(msg),
+      log: bridgeLog,
       openWebSocket: () => new WebSocket(mmWsUrl),
       isTrackedChannel: (channelId) =>
         wired.handle.isTrackedActivityChannel?.(channelId) ?? false,
@@ -997,7 +1003,7 @@ export async function startChatProxyBackground(): Promise<void> {
               idempotencyKey,
             });
           },
-          log: (msg) => console.warn(msg),
+          log: bridgeLog,
         });
       },
       onReaction: async (reaction) => {
@@ -1018,7 +1024,7 @@ export async function startChatProxyBackground(): Promise<void> {
               await rpc.call('chat.abort', { sessionKey });
             },
           },
-          log: (msg) => console.warn(msg),
+          log: bridgeLog,
           metrics: {
             reactionDispatchMs: bridgeMetrics.reactionDispatchMs,
             reactionDropped: new Counter({
@@ -1076,7 +1082,7 @@ export async function startChatProxyBackground(): Promise<void> {
         });
         await connectBridgeUpstream(wired, {
           ws,
-          log: (msg) => console.warn(msg),
+          log: bridgeLog,
           metrics: bridgeMetrics,
           resyncFloor,
         });
@@ -1090,7 +1096,7 @@ export async function startChatProxyBackground(): Promise<void> {
           },
         };
       },
-      log: (msg) => console.warn(msg),
+      log: bridgeLog,
       onConnected: () => {
         bridgeBootStatus.set('connected');
         console.log('[chat-proxy] activity bridge upstream WS connected');
