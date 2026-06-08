@@ -585,7 +585,7 @@ describe("maybeCaptureMmTokenForAuth", () => {
   });
 });
 
-describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
+describe("MmWsRegistry — custom frame broadcast", () => {
   it("broadcasts a non-MM frame to every live browser bridge and stops after close", async () => {
     const { createMmWsRegistry } = await import("../mm-proxy/ws.js");
     const registry = createMmWsRegistry();
@@ -603,7 +603,7 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     attachMmWsBridge(deps(u1), b1 as unknown as WebSocket);
     attachMmWsBridge(deps(u2), b2 as unknown as WebSocket);
 
-    const frame = { event: "octogee.hud", data: { channelId: "c1", pct: 13, used: 34900, limit: 272000 } };
+    const frame = { event: "system.notice", data: { channelId: "c1", message: "hello" } };
     registry.broadcast(frame);
     await tick();
     expect(b1.sent.map(String)).toContain(JSON.stringify(frame));
@@ -626,15 +626,15 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     const sentByPreAuth: string[] = [];
     registry.add((f) => sentByMember.push(f), () => "u-member");
     registry.add((f) => sentByNonMember.push(f), () => "u-other");
-    registry.add((f) => sentByPreAuth.push(f), () => null); 
+    registry.add((f) => sentByPreAuth.push(f), () => null);
 
     const members = new Set(["u-member"]);
-    const frame = { event: "octogee.hud", data: { channelId: "c1", pct: 13 } };
+    const frame = { event: "system.notice", data: { channelId: "c1" } };
     registry.broadcast(frame, (uid) => uid !== null && members.has(uid));
 
     expect(sentByMember.map(String)).toContain(JSON.stringify(frame));
-    expect(sentByNonMember).toHaveLength(0); 
-    expect(sentByPreAuth).toHaveLength(0); 
+    expect(sentByNonMember).toHaveLength(0);
+    expect(sentByPreAuth).toHaveLength(0);
   });
 
   it("Copilot#5: registry enforces fail-closed for null mmUserId even if the predicate is buggy", async () => {
@@ -643,9 +643,9 @@ describe("MmWsRegistry — Phase 7.C ephemeral broadcast", () => {
     const preAuth: string[] = [];
     registry.add((f) => preAuth.push(f), () => null);
 
-registry.broadcast({ event: "octogee.hud", data: { channelId: "c1" } }, () => true);
+    registry.broadcast({ event: "system.notice", data: { channelId: "c1" } }, () => true);
     expect(preAuth).toHaveLength(0);
-    
+
     registry.broadcast({ event: "x" });
     expect(preAuth).toHaveLength(1);
   });

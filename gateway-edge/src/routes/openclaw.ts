@@ -37,7 +37,7 @@ router.get(
         return;
       }
 
-const fields = ["mattermost.channelId", "mattermost.activityChannelId"] as const;
+      const fields = ["mattermost.channelId", "mattermost.activityChannelId"] as const;
       let matched: { ref: unknown; data: Record<string, unknown> } | null = null;
       for (const field of fields) {
         const snap = await db
@@ -61,15 +61,16 @@ const fields = ["mattermost.channelId", "mattermost.activityChannelId"] as const
       const activityChannelId =
         typeof mm.activityChannelId === "string" ? mm.activityChannelId : "";
       if (!activityChannelId) {
-
-res.status(404).json({ error: "not_paired_yet" });
+        res.status(404).json({ error: "not_paired_yet" });
         return;
       }
 
-const channelKind = inferChannelKind(matched.ref);
+      const channelPath = extractRefPath(matched.ref);
+      const channelKind = inferChannelKind(matched.ref);
       res.json({
         activityChannelId,
         channelKind,
+        channelPath,
       });
     } catch (e) {
       next(e);
@@ -80,20 +81,37 @@ const channelKind = inferChannelKind(matched.ref);
 function inferChannelKind(
   ref: unknown,
 ): "project" | "coach-dm" | "workspace" | "social" | "unknown" {
-
-const segments: string[] = [];
-  let cur: any = ref;
+  const segments: string[] = [];
+  let cur: unknown = ref;
   while (cur && typeof cur === "object") {
-    if (typeof cur.id === "string") segments.unshift(cur.id);
-    cur = cur.parent;
+    const node = cur as { id?: unknown; parent?: unknown };
+    if (typeof node.id === "string") segments.unshift(node.id);
+    cur = node.parent;
   }
 
-if (segments[0] === "community") return "social";
+  if (segments[0] === "community") return "social";
   if (segments.includes("projects")) return "project";
   const lastTwo = segments.slice(-2).join("/");
   if (lastTwo === "channels/coach-dm") return "coach-dm";
   if (lastTwo.startsWith("channels/")) return "workspace";
   return "unknown";
+}
+
+function extractRefPath(ref: unknown): string | null {
+  if (!ref || typeof ref !== "object") return null;
+  const direct = (ref as { path?: unknown }).path;
+  if (typeof direct === "string" && direct.length > 0) return direct;
+
+  const segments: string[] = [];
+  let cur: unknown = ref;
+  while (cur && typeof cur === "object") {
+    const node = cur as { id?: unknown; parent?: unknown };
+    if (typeof node.id === "string" && node.id.length > 0) {
+      segments.unshift(node.id);
+    }
+    cur = node.parent;
+  }
+  return segments.length > 0 ? segments.join("/") : null;
 }
 
 export default router;

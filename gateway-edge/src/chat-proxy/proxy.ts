@@ -3,8 +3,11 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
-import { buildGatewayMetricsFetcher, startMetricsBaseline } from "./openclaw/metrics-baseline.js";
-import type { LiveHudPayload } from "./openclaw/session-telemetry.js";
+import {
+  buildGatewayMetricsFetcher,
+  startMetricsBaseline,
+  type PluginLookupSample,
+} from "./openclaw/metrics-baseline.js";
 import { generateIdentity, type DeviceIdentity } from "../../../shared/types/device-identity.js";
 import { WsUpgradeRouter } from "../../../shared/ws/upgrade-router.js";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
@@ -34,25 +37,12 @@ import {
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
 import { resolveBuilderShellInternalAuthSecret } from "../lib/builder-shell-internal-auth.js";
-import { attachMmWsBridge, createMmWsRegistry, type MmWsRegistry } from "./mm-proxy/ws.js";
-import {
-  createChannelMemberResolver,
-  type ChannelMemberResolver,
-} from "./mm-proxy/channel-members.js";
+import { logger } from "../middleware/logging.js";
+import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
 import {
   createBridgeBootStatus,
   bridgeHealthBody,
 } from "./openclaw/bridge-boot-status.js";
-
-// The slice of the activity-bridge handle the channel-member resolver needs:
-// resolve a channel's coach token so member lists are fetched as the coach
-// (admin-PAT-free). Forward-referenced because the resolver is built before the
-// handle is wired.
-interface BridgeHandleForMembers {
-  coachForChannel?: (
-    activityChannelId: string,
-  ) => { coachToken: string; coachMmUserId: string } | null;
-}
 
 if (process.env.NODE_ENV !== "test") {
   if (!process.env.MM_INTERNAL_URL) {
@@ -129,36 +119,6 @@ function evictMmUserIdCacheIfNeeded(): void {
     if (oldestKey === undefined) break;
     mmUserIdCache.delete(oldestKey);
   }
-}
-
-async function fetchMmChannelMemberIds(
-  mmInternalUrl: string,
-  adminPat: string,
-  channelId: string,
-): Promise<Set<string>> {
-  const ids = new Set<string>();
-  const MAX_PAGES = 25;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const resp = await fetch(
-      `${mmInternalUrl}/api/v4/channels/${channelId}/members?page=${page}&per_page=200`,
-      { headers: { Authorization: `Bearer ${adminPat}` } },
-    );
-    if (!resp.ok) {
-      throw new Error(`MM channel members ${channelId} → ${resp.status}`);
-    }
-    const batch = (await resp.json()) as Array<{ user_id?: unknown }>;
-    for (const m of batch) {
-      if (typeof m.user_id === "string") ids.add(m.user_id);
-    }
-    if (batch.length < 200) return ids;
-
-if (page === MAX_PAGES - 1) {
-      throw new Error(
-        `MM channel members ${channelId} exceeded ${MAX_PAGES * 200} — refusing partial set`,
-      );
-    }
-  }
-  return ids;
 }
 
 async function probeGatewayReady(
@@ -322,74 +282,6 @@ const approvalDroppedCounter = new Counter({
   labelNames: ['reason'] as const,
   registers: [metricsRegistry],
 });
-
-const memberResolveFailuresTotal = new Counter({
-  name: 'octogee_bridge_member_resolve_failures_total',
-  help: 'Activity-channel membership resolution failures (ctx fan-out fails closed)',
-  registers: [metricsRegistry],
-});
-const lastMemberResolveWarnByChannel = new Map<string, number>();
-
-function makeScopedFrameEmitter<P extends object>(
-  event: string,
-  channelMembers: ChannelMemberResolver,
-  registry: MmWsRegistry,
-  chains: Map<string, Promise<void>>,
-): (channelId: string, payload: P) => void {
-  return (channelId, payload) => {
-    const prev = chains.get(channelId) ?? Promise.resolve();
-    const next = prev
-      .then(() => channelMembers.getMembers(channelId))
-      .then((members) => {
-        registry.broadcast(
-          { event, data: { channelId, ...payload } },
-          (mmUserId) => mmUserId !== null && members.has(mmUserId),
-        );
-      })
-      .catch(() => {
-        // resolver already fails closed; nothing to recover
-      });
-    chains.set(channelId, next);
-  };
-}
-
-function makeEmitEphemeral(
-  channelMembers: ChannelMemberResolver,
-  registry: MmWsRegistry,
-  chains: Map<string, Promise<void>>,
-): (channelId: string, payload: LiveHudPayload) => void {
-  return makeScopedFrameEmitter("octogee.hud", channelMembers, registry, chains);
-}
-
-function makeEmitPhase(
-  channelMembers: ChannelMemberResolver,
-  registry: MmWsRegistry,
-  chains: Map<string, Promise<void>>,
-): (
-  channelId: string,
-  payload: {
-    status: string | null;
-    planTitle: string | null;
-    planSteps: string[];
-    terminal: string | null;
-  },
-) => void {
-  return makeScopedFrameEmitter("octogee.phase", channelMembers, registry, chains);
-}
-
-function reportMemberResolveFailure(channelId: string, err: unknown): void {
-  memberResolveFailuresTotal.inc();
-  const nowMs = Date.now();
-  const last = lastMemberResolveWarnByChannel.get(channelId) ?? 0;
-  if (nowMs - last > FRAME_DROP_LOG_WINDOW_MS) {
-    lastMemberResolveWarnByChannel.set(channelId, nowMs);
-    console.warn(
-      `[mm-proxy/channel-members] membership resolve failed for ${channelId} — ` +
-        `ctx meter fails closed (delivers to nobody) until it recovers: ` +
-        `${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-}
 
 const bridgeBootStatusGauge = new Gauge({
   name: 'octogee_bridge_boot_status',
@@ -982,6 +874,14 @@ const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
   });
 }
 
+function observePluginLookupSample(sample: PluginLookupSample): void {
+  ocPluginLookupDurationMs.observe({ stage: 'registrySnapshot' }, sample.registrySnapshotMs);
+  ocPluginLookupDurationMs.observe({ stage: 'manifestRegistry' }, sample.manifestRegistryMs);
+  ocPluginLookupDurationMs.observe({ stage: 'startupPlan' }, sample.startupPlanMs);
+  ocPluginLookupDurationMs.observe({ stage: 'ownerMaps' }, sample.ownerMapsMs);
+  ocPluginLookupDurationMs.observe({ stage: 'total' }, sample.totalMs);
+}
+
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
@@ -990,39 +890,10 @@ export async function startChatProxyBackground(): Promise<void> {
     fetchGatewayMetrics: buildGatewayMetricsFetcher(process.env),
     intervalMs: 30_000,
     log: (msg) => console.warn(msg),
-    onSample: (sample) => {
-      ocPluginLookupDurationMs.observe({ stage: 'registrySnapshot' }, sample.registrySnapshotMs);
-      ocPluginLookupDurationMs.observe({ stage: 'manifestRegistry' }, sample.manifestRegistryMs);
-      ocPluginLookupDurationMs.observe({ stage: 'startupPlan' }, sample.startupPlanMs);
-      ocPluginLookupDurationMs.observe({ stage: 'ownerMaps' }, sample.ownerMapsMs);
-      ocPluginLookupDurationMs.observe({ stage: 'total' }, sample.totalMs);
-    },
+    onSample: observePluginLookupSample,
   });
 
   void (async () => {
-    // Forward reference: `channelMembers.fetchMembers` resolves the channel's
-    // coach token off the bridge handle, but the handle is wired below (after
-    // channelMembers). Filled once `wired` exists; fetchMembers only reads it at
-    // runtime. The bridge is admin-PAT-free now — member lists are fetched with
-    // the channel's coach token (a coach can list its own channel's members).
-    let bridgeHandleHolder: BridgeHandleForMembers | null = null;
-
-    const channelMembers = createChannelMemberResolver({
-      ttlMs: 60_000,
-      fetchMembers: async (channelId: string): Promise<Set<string>> => {
-        const coach = bridgeHandleHolder?.coachForChannel?.(channelId) ?? null;
-        if (!coach) {
-          // Untracked channel (no run has resolved it yet) → no coach token to
-          // fetch with. Empty set; the resolver caches it briefly and retries
-          // once a run tracks the channel.
-          return new Set<string>();
-        }
-        return fetchMmChannelMemberIds(MM_INTERNAL_URL, coach.coachToken, channelId);
-      },
-      onError: reportMemberResolveFailure,
-    });
-    const ctxEmitChains = new Map<string, Promise<void>>();
-    const phaseEmitChains = new Map<string, Promise<void>>();
     const gatewayIdResult = resolveBridgeGatewayId(process.env);
     const reconcileGatewayId = gatewayIdResult.ok ? gatewayIdResult.gatewayId : null;
     // The bridge reconciles its tracked coaches against this gateway's mounted
@@ -1060,13 +931,8 @@ export async function startChatProxyBackground(): Promise<void> {
         mmBaseUrl: MM_PUBLIC_URL,
         metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
         log: (msg) => console.warn(msg),
+        debugLog: (msg, meta) => logger.debug(msg, meta),
         editDiffFetcher: await buildEditDiffFetcher(),
-        emitEphemeral: makeEmitEphemeral(channelMembers, mmWsRegistry, ctxEmitChains),
-        emitPhase: makeEmitPhase(channelMembers, mmWsRegistry, phaseEmitChains),
-        // Phase 11 (write-both): enable the run-live Firestore projection per-env.
-        // OFF unless OCTOGEE_RUN_LIVE_PROJECTION=1, so a merge to main starts no
-        // prod writes until we flip it (TEST first). See ACTIVITY-LIVE-FIRESTORE-SPEC.
-        runLiveProjection: process.env.OCTOGEE_RUN_LIVE_PROJECTION === '1',
         getMountedCustomers,
       });
     } catch (err) {
@@ -1075,7 +941,6 @@ export async function startChatProxyBackground(): Promise<void> {
       process.exit(1);
     }
     approvalCallbackHandler = wired.approvalCallbackHandler;
-    bridgeHandleHolder = wired.handle;
 
     if (!gatewayIdResult.ok) {
       console.error(
