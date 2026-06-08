@@ -67,6 +67,10 @@ router.get(
 
       const channelPath = extractRefPath(matched.ref);
       const channelKind = inferChannelKind(matched.ref);
+      if (!isLiveActivityChannelKind(channelKind)) {
+        res.status(404).json({ error: "not_live_activity_channel", channelKind });
+        return;
+      }
       res.json({
         activityChannelId,
         channelKind,
@@ -78,9 +82,17 @@ router.get(
   },
 );
 
-function inferChannelKind(
+export type OpenClawActivityChannelKind =
+  | "project"
+  | "coach-dm"
+  | "workspace"
+  | "workspace-admin"
+  | "social"
+  | "unknown";
+
+export function inferChannelKind(
   ref: unknown,
-): "project" | "coach-dm" | "workspace" | "social" | "unknown" {
+): OpenClawActivityChannelKind {
   const segments: string[] = [];
   let cur: unknown = ref;
   while (cur && typeof cur === "object") {
@@ -93,11 +105,16 @@ function inferChannelKind(
   if (segments.includes("projects")) return "project";
   const lastTwo = segments.slice(-2).join("/");
   if (lastTwo === "channels/coach-dm") return "coach-dm";
+  if (lastTwo === "channels/admin") return "workspace-admin";
   if (lastTwo.startsWith("channels/")) return "workspace";
   return "unknown";
 }
 
-function extractRefPath(ref: unknown): string | null {
+export function isLiveActivityChannelKind(kind: OpenClawActivityChannelKind): boolean {
+  return kind === "coach-dm" || kind === "workspace" || kind === "project";
+}
+
+export function extractRefPath(ref: unknown): string | null {
   if (!ref || typeof ref !== "object") return null;
   const direct = (ref as { path?: unknown }).path;
   if (typeof direct === "string" && direct.length > 0) return direct;
