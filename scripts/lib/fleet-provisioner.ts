@@ -1,5 +1,6 @@
 import express from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
 import type { Server } from "http";
 import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "../../shared/types/fleet-controller.js";
 import { ActiveRestoreSet, createRestoreCustomerHandler, IdempotencyCache } from "./fleet-http.js";
@@ -138,31 +139,6 @@ export function resolveFleetCapabilities(opts: {
     evictDepartedMounts,
     needsStateDeps: reportMounted || provision,
   };
-}
-
-function slugFromAssignedUser(data: Record<string, unknown> | undefined): string | null {
-  const provisioning = data?.provisioning as Record<string, unknown> | undefined;
-  const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
-  const ocSlug = typeof openclaw?.slug === "string" ? openclaw.slug : null;
-  const fallbackSlug = typeof data?.username === "string" ? data.username : null;
-  return ocSlug ?? fallbackSlug;
-}
-
-export async function readAssignedSlugsForGateway(
-  db: Firestore,
-  gatewayId: string,
-): Promise<string[]> {
-  const snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.gatewayId", "==", gatewayId)
-    .where("provisioning.openclaw.status", "==", "complete")
-    .get();
-  const slugs: string[] = [];
-  for (const doc of snap.docs) {
-    const slug = slugFromAssignedUser(doc.data() as Record<string, unknown> | undefined);
-    if (slug) slugs.push(slug);
-  }
-  return slugs;
 }
 
 export async function readMountedCustomersFromAssignedState(
@@ -521,7 +497,9 @@ const waitForGatewayReady = async (): Promise<void> => {
     res.json({
       status: runtime.status,
       gatewayId: opts.gatewayId,
-      mounted: runtime.mountedCustomers.length,
+      version: opts.version,
+      startedAt: PROCESS_STARTED_AT_MS,
+      customers: adapter.listLocalCustomerSlugs?.() ?? [],
     });
   });
 

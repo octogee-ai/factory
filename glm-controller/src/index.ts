@@ -10,6 +10,11 @@ import {
   type OperationStep,
 } from "../../shared/types/glm.js";
 import {
+  parseHealthResponse,
+  startOperatorHeartbeatPoller,
+  type OperatorHeartbeatPollerDeps,
+} from "./operator-heartbeat-poller.js";
+import {
   buildHelmTargetMap,
   buildInstancesMap,
   diffInstancesMap,
@@ -61,6 +66,7 @@ import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.j
 import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { signFleetRequest } from "../../scripts/lib/fleet-signature.js";
+import { readAssignedSlugsForGateway } from "../../scripts/lib/assigned-roster.js";
 import { SIGNATURE_HEADER } from "../../shared/types/fleet-controller.js";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
@@ -106,6 +112,8 @@ const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
 const AUTO_ROLL_ON_CHART_DRIFT = NAMESPACE !== "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
+const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
+const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 
 const FLEET_INGRESS_NAME = process.env.FLEET_INGRESS_NAME ?? "octogee-gateway-fleet-control-ingress";
@@ -695,6 +703,46 @@ let claimed = false;
   deps.log(`[glm-controller] op=${op.id} → ${status}${errSuffix}`);
 }
 
+function buildOperatorHeartbeatPollerDeps(
+  db: Firestore,
+  log: (msg: string) => void,
+): OperatorHeartbeatPollerDeps {
+  return {
+    listOperatorGatewayIds: async () => {
+      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
+      return snap.docs
+        .map((doc) => doc.data() as GatewayDesiredState)
+        .filter(isRunningOperatorGateway)
+        .map((gateway) => gateway.gatewayId);
+    },
+    fetchHealth: async (gatewayId) => {
+      const url = `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}/health`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), OPERATOR_HEALTH_TIMEOUT_MS);
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) return null;
+        return parseHealthResponse(await res.json());
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    readAssignedSlugs: (gatewayId) => readAssignedSlugsForGateway(db, gatewayId),
+    writeHeartbeat: async (gatewayId, record) => {
+      await db
+        .collection("gateways")
+        .doc(gatewayId)
+        .set(
+          { ...record, lastHeartbeatAt: FieldValue.serverTimestamp() },
+          { merge: true },
+        );
+    },
+    log,
+  };
+}
+
 async function main(): Promise<void> {
   initializeApp({ credential: applicationDefault() });
   const db = getFirestore();
@@ -797,6 +845,10 @@ const handlerSyncFleetIngress = async () => {
 
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
+  const stopPoller = startOperatorHeartbeatPoller(
+    buildOperatorHeartbeatPollerDeps(db, log),
+    OPERATOR_HEARTBEAT_POLL_MS,
+  );
 
 const stopReaper = startOrphanHeartbeatReaper({
     db,
@@ -831,6 +883,7 @@ const stopStuckOpReaper = startStuckOpReaper({
     log("[glm-controller] shutdown signal — stopping subscribers");
     stopReconciler();
     stopWorker();
+    stopPoller();
     stopReaper();
     stopStuckOpReaper();
     stopHttp();

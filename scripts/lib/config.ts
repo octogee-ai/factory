@@ -23,9 +23,6 @@ export const CUSTOMER_KEYS_DIR = path.join(OPENCLAW_DIR, "customer-keys");
 
 export const TEMPLATES_DIR = process.env.OCTOGEE_TEMPLATES_DIR || path.resolve(__dirname, "..", "..", "templates");
 
-export const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS
-  ?? path.join(OPENCLAW_DIR, "secrets", "octogee-test-sa-key.json");
-
 // eslint-disable-next-line sonarjs/no-clear-text-protocols -- in-cluster ClusterIP, not internet-exposed
 export const GIT_API_URL = process.env.GIT_API_URL || "http://gitea-http.octogee.svc.cluster.local:3000/api/v1";
 export const GIT_API_TOKEN = process.env.GIT_API_TOKEN || "";
