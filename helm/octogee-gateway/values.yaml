@@ -271,7 +271,10 @@ probes:
 
 pdb:
   enabled: true
+  # operator pets (profile=operator) — disruptionsAllowed:0, pins the live session
   minAvailable: 1
+  # cattle — disruptionsAllowed:1 so the ComputeClass activeMigration right-sizing runs
+  maxUnavailable: 1
 
 
 # ── gateway-edge sidecar ──────────────────────────────────────────────────

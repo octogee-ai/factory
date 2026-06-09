@@ -274,6 +274,35 @@ const out = helmTemplate();
     expect(pdb).toMatch(/gateway-instance:\s*default/);
   });
 
+  // PDB policy is per-profile because it feeds or fights the ComputeClass's
+  // activeMigration right-sizing (DECISIONS "Gateway PDB policy is per-profile").
+  // Cattle: maxUnavailable:1 (disruptionsAllowed:1) so activeMigration can evict +
+  // right-size onto a cheaper node. Operator pet: minAvailable:1
+  // (disruptionsAllowed:0) so the live session isn't churned. A uniform
+  // minAvailable:1 silently blocked the self-heal fleet-wide. Anchored regexes —
+  // the rendered comments mention the other field's name.
+  it("cattle gateway PDB allows one voluntary disruption (maxUnavailable:1) so activeMigration can right-size", () => {
+    const pdb = findDoc(helmTemplate(), "PodDisruptionBudget", "octogee-gateway-default") ?? "";
+    expect(pdb).toMatch(/^\s*maxUnavailable:\s*1\s*$/m);
+    expect(pdb).not.toMatch(/^\s*minAvailable:/m);
+  });
+
+  it("operator gateway PDB pins the pet (minAvailable:1 => disruptionsAllowed:0, blocks opportunistic eviction)", () => {
+    const pdb =
+      findDoc(
+        helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "operator" }),
+        "PodDisruptionBudget",
+        "octogee-gateway-bender",
+      ) ?? "";
+    expect(pdb).toMatch(/^\s*minAvailable:\s*1\s*$/m);
+    expect(pdb).not.toMatch(/^\s*maxUnavailable:/m);
+  });
+
+  it("pdb.enabled=false renders no PodDisruptionBudget", () => {
+    const out = helmTemplate("octogee-gw-default", { "pdb.enabled": "false" });
+    expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-default")).toBeNull();
+  });
+
   it("does NOT render the umbrella's spanning resources (alias Service, Ingress, NetworkPolicy)", () => {
     const out = helmTemplate();
     expect(findDoc(out, "Service", "octogee-gateway")).toBeNull();
