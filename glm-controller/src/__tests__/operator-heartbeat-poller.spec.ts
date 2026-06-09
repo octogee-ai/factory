@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  departedFromAssigned,
   intersectMounted,
   parseHealthResponse,
   pollOperatorHeartbeatsOnce,
+  type EvictionInFlight,
+  type EvictionStreaks,
   type OperatorHeartbeatPollerDeps,
 } from "../operator-heartbeat-poller.js";
 
@@ -28,6 +31,15 @@ describe("parseHealthResponse", () => {
     expect(parseHealthResponse({ status: 1, customers: ["a"] })).toBeNull(); // non-string status
     expect(parseHealthResponse({ status: "ready" })).toBeNull(); // missing customers
     expect(parseHealthResponse({ status: "ready", customers: "a" })).toBeNull(); // non-array
+  });
+
+  it("carries startedAt when /health reports a number, ignores a non-number", () => {
+    expect(
+      parseHealthResponse({ status: "ready", customers: [], startedAt: 1700 }),
+    ).toEqual({ status: "ready", customers: [], startedAt: 1700 });
+    expect(
+      parseHealthResponse({ status: "ready", customers: [], startedAt: "x" }),
+    ).toEqual({ status: "ready", customers: [] });
   });
 });
 
@@ -74,6 +86,22 @@ describe("pollOperatorHeartbeatsOnce", () => {
     });
   });
 
+  it("persists startedAt from /health so the shell reaper can detect a roll", async () => {
+    const deps = makeDeps({
+      fetchHealth: vi.fn(async () => ({
+        status: "ready",
+        customers: ["ceckert"],
+        startedAt: 1700000,
+      })),
+    });
+    await pollOperatorHeartbeatsOnce(deps);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
+      status: "ready",
+      mountedCustomers: ["ceckert"],
+      startedAt: 1700000,
+    });
+  });
+
   it("skips a gateway it cannot reach (does NOT clobber the doc to empty)", async () => {
     const deps = makeDeps({ fetchHealth: vi.fn(async () => null) });
     await pollOperatorHeartbeatsOnce(deps);
@@ -107,5 +135,105 @@ describe("pollOperatorHeartbeatsOnce", () => {
     await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).not.toHaveBeenCalled();
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("operator gateways"));
+  });
+});
+
+describe("departedFromAssigned", () => {
+  it("returns locally-present customers that are no longer assigned, sorted", () => {
+    expect(departedFromAssigned(["ghost", "ceckert"], ["ceckert"])).toEqual(["ghost"]);
+  });
+
+  it("is empty when everything present is still assigned", () => {
+    expect(departedFromAssigned(["ceckert"], ["ceckert", "other"])).toEqual([]);
+  });
+});
+
+describe("pollOperatorHeartbeatsOnce — Cowboy-driven local eviction", () => {
+  function evictDeps(over: Partial<OperatorHeartbeatPollerDeps> = {}) {
+    // makeDeps reports ghost present but not assigned → ghost is the departed one.
+    return makeDeps({ evictSlug: vi.fn(async () => {}), evictAfterStreak: 2, ...over });
+  }
+
+  it("evicts a departed local customer only after the streak threshold", async () => {
+    const deps = evictDeps();
+    const streaks: EvictionStreaks = new Map();
+    await pollOperatorHeartbeatsOnce(deps, streaks); // ghost departed, streak 1
+    expect(deps.evictSlug).not.toHaveBeenCalled();
+    await pollOperatorHeartbeatsOnce(deps, streaks); // streak 2 → evict
+    expect(deps.evictSlug).toHaveBeenCalledTimes(1);
+    expect(deps.evictSlug).toHaveBeenCalledWith("bender", "ghost");
+  });
+
+  it("never evicts a customer that is still assigned, no matter how many ticks", async () => {
+    const deps = evictDeps({ readAssignedSlugs: vi.fn(async () => ["ceckert", "ghost"]) });
+    const streaks: EvictionStreaks = new Map();
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    expect(deps.evictSlug).not.toHaveBeenCalled();
+  });
+
+  it("resets the streak when a departed customer is re-assigned before the threshold", async () => {
+    let assigned = ["ceckert"];
+    const deps = evictDeps({ readAssignedSlugs: vi.fn(async () => assigned) });
+    const streaks: EvictionStreaks = new Map();
+    await pollOperatorHeartbeatsOnce(deps, streaks); // ghost departed, streak 1
+    assigned = ["ceckert", "ghost"]; // re-assigned
+    await pollOperatorHeartbeatsOnce(deps, streaks); // ghost assigned → streak reset
+    assigned = ["ceckert"]; // departs again
+    await pollOperatorHeartbeatsOnce(deps, streaks); // streak back to 1, not 2 → no evict
+    expect(deps.evictSlug).not.toHaveBeenCalled();
+  });
+
+  it("does nothing (but still reports) when no evictSlug is configured", async () => {
+    const deps = makeDeps({ evictAfterStreak: 1 }); // no evictSlug
+    const streaks: EvictionStreaks = new Map();
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    expect(deps.writeHeartbeat).toHaveBeenCalled();
+  });
+
+  it("logs and continues the poll when an eviction call fails", async () => {
+    const deps = evictDeps({
+      evictAfterStreak: 1,
+      evictSlug: vi.fn(async () => {
+        throw new Error("unmount 500");
+      }),
+    });
+    const streaks: EvictionStreaks = new Map();
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    expect(deps.evictSlug).toHaveBeenCalledWith("bender", "ghost");
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("evict"));
+    expect(deps.writeHeartbeat).toHaveBeenCalled();
+  });
+
+  it("does not double-issue eviction while a prior /unmount is still in flight", async () => {
+    let markStarted!: () => void;
+    let releaseEviction!: () => void;
+    const evictionStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const evictionRelease = new Promise<void>((resolve) => {
+      releaseEviction = resolve;
+    });
+    const deps = evictDeps({
+      evictAfterStreak: 1,
+      evictSlug: vi.fn(async () => {
+        markStarted();
+        await evictionRelease;
+      }),
+    });
+    const streaks: EvictionStreaks = new Map();
+    const inFlight: EvictionInFlight = new Set();
+
+    const firstPoll = pollOperatorHeartbeatsOnce(deps, streaks, inFlight);
+    await evictionStarted;
+    await pollOperatorHeartbeatsOnce(deps, streaks, inFlight);
+
+    expect(deps.evictSlug).toHaveBeenCalledTimes(1);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("already in flight"));
+
+    releaseEviction();
+    await firstPoll;
   });
 });

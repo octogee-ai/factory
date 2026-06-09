@@ -7,10 +7,6 @@ import {
   readHeartbeats,
   renderPrometheus,
 } from "../lib/runner-heartbeat.js";
-import {
-  readReconcileHealth,
-  renderReconcileHealth,
-} from "../lib/reconcile-health.js";
 
 // Always-on (all gateway profiles) Prometheus exporter for the in-pod runner
 // heartbeats. One scrape target for every supervised runner; a single
@@ -26,11 +22,7 @@ const server = createServer((req, res) => {
     return;
   }
   if (req.url === "/metrics") {
-    let body = renderPrometheus(readHeartbeats(dir), Date.now());
-    // tmux + reconcile health, present only on operator gateways (the
-    // reconciler writes it). Absent → omit, don't emit empty series.
-    const reconcile = readReconcileHealth(dir);
-    if (reconcile) body += renderReconcileHealth(reconcile);
+    const body = renderPrometheus(readHeartbeats(dir), Date.now());
     res.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
     res.end(body);
     return;

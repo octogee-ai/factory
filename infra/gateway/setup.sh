@@ -56,22 +56,11 @@ mkdir -p "$OPENCLAW_DIR/identity"
 mkdir -p "$OPENCLAW_DIR/secrets"
 echo "==> Data directory: $OPENCLAW_DIR"
 
-# --- Firebase SA key check ---
-SA_KEY="$OPENCLAW_DIR/secrets/octogee-test-sa-key.json"
-if [[ ! -f "$SA_KEY" ]]; then
-  echo ""
-  echo "⚠️  Firebase service account key not found at:"
-  echo "   $SA_KEY"
-  echo ""
-  echo "   The provisioner needs this to watch Firestore."
-  echo "   Download it from Firebase Console → Project Settings → Service Accounts"
-  echo "   and save it to the path above."
-  echo ""
-  echo "   On GCP with Workload Identity this file is not needed — continue normally."
-  echo ""
-  read -r -p "   Continue without SA key? [y/N] " confirm
-  [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
-fi
+# --- Firestore auth (Application Default Credentials) ---
+# The provisioner reaches Firestore via ADC — no service-account key file
+# (firebase.ts is ADC/Workload-Identity only). Local dev:
+# `gcloud auth application-default login`; in-cluster: Workload Identity.
+echo "==> Firestore auth: Application Default Credentials (no key file)"
 
 # --- Ensure openclaw base image exists ---
 if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then

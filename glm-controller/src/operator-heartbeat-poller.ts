@@ -1,22 +1,31 @@
 /**
- * Pull-model fleet reporting for operator gateways (OPERATOR-GATEWAY-PULL-REPORTING).
+ * Pull-model fleet reporting + eviction for operator gateways
+ * (OPERATOR-GATEWAY-PULL-REPORTING).
  *
  * Operator gateways are customer-controlled and run the agent with a
- * danger-full-access sandbox, so they must NOT hold broad Firestore IAM — a
- * shelled or prompt-injected pod could read every tenant's data. Instead of the
- * pod writing its own `gateways/{id}` heartbeat, Cowboy (the trusted fleet
- * authority) polls each operator gateway's `/health` for the locally-present
- * customer set, intersects it with the assigned roster on the trusted side, and
- * writes the live telemetry itself. The gateway needs zero platform credentials.
+ * danger-full-access sandbox, so they hold NO platform Firestore credentials. The
+ * pod cannot read the assigned roster or write its own heartbeat. Instead, Cowboy
+ * (the trusted fleet authority) polls each operator gateway's `/health` for its
+ * locally-present coach-wired customers, and does the trusted-side roster work:
+ *  - reporting: writes gateways/{id}.mountedCustomers = present ∩ assigned;
+ *  - eviction: tears down a departed customer's LOCAL footprint (present − assigned)
+ *    by calling the pod's existing /unmount RPC — a local-only teardown that needs
+ *    no platform credentials. Debounced by a consecutive-streak so a transient
+ *    assigned-state blip never blind-evicts.
  *
  * Identity fields (version/startedAt/internalUrl, status=ready) stay owned by the
- * reconcile path (publishPlatformGatewayReady). This poller owns only the live
- * telemetry — status, the honest mounted set, and lastHeartbeatAt — and a
- * successful poll IS the liveness signal (it only writes when /health responds).
+ * reconcile path (publishPlatformGatewayReady). This poller owns the live telemetry
+ * — status, the honest mounted set, lastHeartbeatAt — and a successful poll IS the
+ * liveness signal (it only writes when /health responds).
  */
+
+export const EVICT_AFTER_STREAK = 2;
 
 export interface OperatorGatewayHealth {
   status: string;
+  /** The pod's current process start (epoch ms). Persisted trusted-side so the
+   *  shell reaper can detect a roll. Optional — omitted by a malformed /health. */
+  startedAt?: number;
   /** Slugs the pod actually has on disk + coach-wired — reported Firestore-free. */
   customers: string[];
 }
@@ -24,6 +33,8 @@ export interface OperatorGatewayHealth {
 export interface OperatorHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
+  /** Live pod-boot time (epoch ms) — lets reapGoneGatewayShells reap pre-roll shells. */
+  startedAt?: number;
 }
 
 export interface OperatorHeartbeatPollerDeps {
@@ -35,27 +46,26 @@ export interface OperatorHeartbeatPollerDeps {
   readAssignedSlugs: (gatewayId: string) => Promise<string[]>;
   /** Persist live telemetry; the impl stamps lastHeartbeatAt. */
   writeHeartbeat: (gatewayId: string, record: OperatorHeartbeatRecord) => Promise<void>;
+  /** Tear down a departed customer's local footprint on the gateway (pod /unmount).
+   *  Omit to disable Cowboy-driven eviction (e.g. no fleet secret configured). */
+  evictSlug?: (gatewayId: string, slug: string) => Promise<void>;
+  /** Consecutive departed-observations before eviction (debounce). Default 2. */
+  evictAfterStreak?: number;
   log: (msg: string) => void;
+}
+
+/** Per-gateway → per-slug consecutive "orphaned" (present ∧ unassigned) streak. */
+export type EvictionStreaks = Map<string, Map<string, number>>;
+/** `gatewayId\0slug` entries currently being torn down via /unmount. */
+export type EvictionInFlight = Set<string>;
+
+interface EvictionState {
+  streaks: EvictionStreaks;
+  inFlight: EvictionInFlight;
 }
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/**
- * Parse + validate a gateway /health body. Returns null for anything malformed
- * (non-object, missing/empty status, non-array customers) so the poller treats a
- * garbled /health like an unreachable gateway — it never writes fabricated state.
- */
-export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null {
-  if (typeof json !== "object" || json === null) return null;
-  const body = json as { status?: unknown; customers?: unknown };
-  if (typeof body.status !== "string" || body.status.length === 0) return null;
-  if (!Array.isArray(body.customers)) return null;
-  const customers = body.customers.filter(
-    (slug): slug is string => typeof slug === "string",
-  );
-  return { status: body.status, customers };
 }
 
 /** The honest mounted set: locally-present customers that are still assigned here. */
@@ -66,8 +76,82 @@ export function intersectMounted(present: string[], assigned: string[]): string[
     .sort((a, b) => a.localeCompare(b));
 }
 
+/** Locally-present customers that are no longer assigned here — eviction candidates. */
+export function departedFromAssigned(present: string[], assigned: string[]): string[] {
+  const assignedSet = new Set(assigned);
+  return present
+    .filter((slug) => !assignedSet.has(slug))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Parse + validate a gateway /health body. Returns null for anything malformed
+ * (non-object, missing/empty status, non-array customers) so the poller treats a
+ * garbled /health like an unreachable gateway — it never writes fabricated state.
+ */
+export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null {
+  if (typeof json !== "object" || json === null) return null;
+  const body = json as { status?: unknown; customers?: unknown; startedAt?: unknown };
+  if (typeof body.status !== "string" || body.status.length === 0) return null;
+  if (!Array.isArray(body.customers)) return null;
+  const customers = body.customers.filter(
+    (slug): slug is string => typeof slug === "string",
+  );
+  const health: OperatorGatewayHealth = { status: body.status, customers };
+  if (typeof body.startedAt === "number") health.startedAt = body.startedAt;
+  return health;
+}
+
+async function evictDepartedForGateway(
+  deps: OperatorHeartbeatPollerDeps,
+  gatewayId: string,
+  footprint: string[],
+  assigned: string[],
+  state: EvictionState,
+): Promise<void> {
+  if (!deps.evictSlug) return;
+  const threshold = deps.evictAfterStreak ?? EVICT_AFTER_STREAK;
+  const assignedSet = new Set(assigned);
+  const onDisk = new Set(footprint);
+
+  let gatewayStreaks = state.streaks.get(gatewayId);
+  if (!gatewayStreaks) {
+    gatewayStreaks = new Map();
+    state.streaks.set(gatewayId, gatewayStreaks);
+  }
+  // A slug that is re-assigned or has dropped off disk is no longer orphaned — reset.
+  for (const slug of [...gatewayStreaks.keys()]) {
+    if (!onDisk.has(slug) || assignedSet.has(slug)) gatewayStreaks.delete(slug);
+  }
+
+  for (const slug of departedFromAssigned(footprint, assigned)) {
+    const streak = (gatewayStreaks.get(slug) ?? 0) + 1;
+    gatewayStreaks.set(slug, streak);
+    if (streak < threshold) continue;
+    const flightKey = `${gatewayId}\0${slug}`;
+    if (state.inFlight.has(flightKey)) {
+      deps.log(
+        `[operator-poll] ${gatewayId}/${slug} eviction already in flight — skipping duplicate`,
+      );
+      continue;
+    }
+    state.inFlight.add(flightKey);
+    try {
+      await deps.evictSlug(gatewayId, slug);
+    } catch (err) {
+      deps.log(
+        `[operator-poll] ⚠ evict ${gatewayId}/${slug}: ${errMsg(err)} — will retry next tick`,
+      );
+    } finally {
+      state.inFlight.delete(flightKey);
+    }
+  }
+}
+
 export async function pollOperatorHeartbeatsOnce(
   deps: OperatorHeartbeatPollerDeps,
+  streaks: EvictionStreaks = new Map(),
+  inFlight: EvictionInFlight = new Set(),
 ): Promise<void> {
   let gatewayIds: string[];
   try {
@@ -82,10 +166,19 @@ export async function pollOperatorHeartbeatsOnce(
       const health = await deps.fetchHealth(gatewayId);
       if (!health) continue;
       const assigned = await deps.readAssignedSlugs(gatewayId);
-      await deps.writeHeartbeat(gatewayId, {
+      const record: OperatorHeartbeatRecord = {
         status: health.status,
         mountedCustomers: intersectMounted(health.customers, assigned),
-      });
+      };
+      if (typeof health.startedAt === "number") record.startedAt = health.startedAt;
+      await deps.writeHeartbeat(gatewayId, record);
+      await evictDepartedForGateway(
+        deps,
+        gatewayId,
+        health.customers,
+        assigned,
+        { streaks, inFlight },
+      );
     } catch (err) {
       deps.log(`[operator-poll] ⚠ ${gatewayId}: ${errMsg(err)} — will retry next tick`);
     }
@@ -96,6 +189,11 @@ export function startOperatorHeartbeatPoller(
   deps: OperatorHeartbeatPollerDeps,
   intervalMs: number,
 ): () => void {
-  const timer = setInterval(() => void pollOperatorHeartbeatsOnce(deps), intervalMs);
+  const streaks: EvictionStreaks = new Map();
+  const inFlight: EvictionInFlight = new Set();
+  const timer = setInterval(
+    () => void pollOperatorHeartbeatsOnce(deps, streaks, inFlight),
+    intervalMs,
+  );
   return () => clearInterval(timer);
 }

@@ -92,9 +92,8 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     }
   });
 
-  it("gates the builder-shell + reconciler runners behind operator profile and explicit shell unlock", () => {
+  it("gates builder-shell behind operator profile and explicit shell unlock", () => {
     expect(entrypoint).toMatch(/supervise_runner\s+builder-shell\s+5000\b/);
-    expect(entrypoint).toMatch(/supervise_runner\s+shell-reconciler\s+30000\b/);
     const builderIdx = entrypoint.indexOf("supervise_runner builder-shell");
     const guardBlock = entrypoint.slice(
       entrypoint.lastIndexOf("if [", builderIdx),
@@ -108,6 +107,11 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(entrypoint).toMatch(
       /Builder-shell disabled: operator trust boundary is not provisioned/,
     );
+  });
+
+  it("does not run the Firestore-backed shell reconciler inside operator pods", () => {
+    expect(entrypoint).not.toMatch(/supervise_runner\s+shell-reconciler\b/);
+    expect(entrypoint).not.toMatch(/reconcile-shells-runner\.ts/);
   });
 
   it("starts the always-on runner-metrics-exporter", () => {

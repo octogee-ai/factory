@@ -1094,6 +1094,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       mountedCustomers: [],
       internalUrl: expect.stringContaining("octogee-gateway-op-canary"),
     });
+    expect(gatewayDocs["op-canary"]).not.toHaveProperty("lastHeartbeatAt");
     stop();
   });
 

@@ -67,7 +67,10 @@ import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { signFleetRequest } from "../../scripts/lib/fleet-signature.js";
 import { readAssignedSlugsForGateway } from "../../scripts/lib/assigned-roster.js";
-import { SIGNATURE_HEADER } from "../../shared/types/fleet-controller.js";
+import {
+  MIGRATION_UNMOUNT_TIMEOUT_MS,
+  SIGNATURE_HEADER,
+} from "../../shared/types/fleet-controller.js";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
 import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
@@ -193,7 +196,6 @@ async function publishPlatformGatewayReady(
       status: "ready",
       version: versionFromImageTag(input.imageTag),
       internalUrl: gatewayServiceInternalUrl(input.gatewayId),
-      lastHeartbeatAt: FieldValue.serverTimestamp(),
       startedAt: typeof existing?.startedAt === "number" ? existing.startedAt : input.now,
     };
     if (typeof existing?.openclawVersion === "string") {
@@ -703,9 +705,10 @@ let claimed = false;
   deps.log(`[glm-controller] op=${op.id} → ${status}${errSuffix}`);
 }
 
-function buildOperatorHeartbeatPollerDeps(
+export function buildOperatorHeartbeatPollerDeps(
   db: Firestore,
   log: (msg: string) => void,
+  readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>,
 ): OperatorHeartbeatPollerDeps {
   return {
     listOperatorGatewayIds: async () => {
@@ -738,6 +741,10 @@ function buildOperatorHeartbeatPollerDeps(
           { ...record, lastHeartbeatAt: FieldValue.serverTimestamp() },
           { merge: true },
         );
+    },
+    evictSlug: async (gatewayId: string, slug: string) => {
+      const secret = await readGatewayAuthTokenForId(gatewayId);
+      await callUnmountRpc(db, { secret, gatewayId, slug, log, tag: "evict" });
     },
     log,
   };
@@ -811,6 +818,9 @@ const handlerSyncFleetIngress = async () => {
     await syncAllFleetIngresses(gateways);
   };
 
+  const readGatewayAuthTokenForId = (gatewayId: string) =>
+    readGatewayAuthToken({ runKubectl }, { namespace: NAMESPACE, gatewayId });
+
   const handlers = await buildHandlers(
     db,
     log,
@@ -818,8 +828,7 @@ const handlerSyncFleetIngress = async () => {
     kubeOps,
     {
       syncFleetIngress: handlerSyncFleetIngress,
-      readGatewayAuthTokenForId: (gatewayId) =>
-        readGatewayAuthToken({ runKubectl }, { namespace: NAMESPACE, gatewayId }),
+      readGatewayAuthTokenForId,
     },
   );
 
@@ -846,7 +855,7 @@ const handlerSyncFleetIngress = async () => {
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
   const stopPoller = startOperatorHeartbeatPoller(
-    buildOperatorHeartbeatPollerDeps(db, log),
+    buildOperatorHeartbeatPollerDeps(db, log, readGatewayAuthTokenForId),
     OPERATOR_HEARTBEAT_POLL_MS,
   );
 
@@ -1264,7 +1273,7 @@ function buildDeprovisionCustomerHandler(
   return createDeprovisionCustomerHandler({
     loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
     unmountFromGateway: (gatewayId, slug) =>
-      callUnmountRpc(db, secret, gatewayId, slug, logFn),
+      callUnmountRpc(db, { secret, gatewayId, slug, log: logFn }),
     cloudCleanup: {
       gitea,
       mattermost,
@@ -1324,28 +1333,62 @@ scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
   });
 }
 
-async function callUnmountRpc(
+export async function callUnmountRpc(
   db: Firestore,
-  secret: string,
-  gatewayId: string,
-  slug: string,
-  log: (msg: string) => void,
+  opts: {
+    secret: string;
+    gatewayId: string;
+    slug: string;
+    log: (msg: string) => void;
+    tag?: string;
+    timeoutMs?: number;
+  },
 ): Promise<void> {
+  const {
+    secret,
+    gatewayId,
+    slug,
+    log,
+    tag = "deprov",
+    timeoutMs = MIGRATION_UNMOUNT_TIMEOUT_MS,
+  } = opts;
 
-const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
-  const migrationId = `deprov-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+  const migrationId = `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const body = JSON.stringify({ migrationId, slug });
   const signature = signFleetRequest(secret, migrationId, body);
-  const resp = await fetch(`${url}/unmount/${gatewayId}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", [SIGNATURE_HEADER]: signature },
-    body,
-  });
+  const controller = new AbortController();
+  let didTimeout = false;
+  const timer = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, timeoutMs);
+  let resp: Response;
+  try {
+    resp = await fetch(`${url}/unmount/${gatewayId}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [SIGNATURE_HEADER]: signature,
+      },
+      body,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (didTimeout) {
+      throw new Error(
+        `unmount timed out after ${timeoutMs}ms gatewayId=${gatewayId} slug=${slug}`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!resp.ok) {
     const text = await resp.text().catch(() => "<no body>");
     throw new Error(`unmount failed: ${resp.status} ${text.slice(0, 200)}`);
   }
-  log(`[deprovision] unmount RPC ok gatewayId=${gatewayId} slug=${slug}`);
+  log(`[${tag}] unmount RPC ok gatewayId=${gatewayId} slug=${slug}`);
 }
 
 async function resolveGatewayUrlFromFirestore(

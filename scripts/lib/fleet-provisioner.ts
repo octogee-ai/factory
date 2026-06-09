@@ -21,19 +21,12 @@ import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
 import { removeCustomerFromGateway } from "./customer-lifecycle.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
-import { drainOrphanedMounts, startDrainLoop } from "./drain-loop.js";
-import { listOnDiskCustomerSlugs } from "./git.js";
+import { startDrainLoop } from "./drain-loop.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
 import { mountByosubDeviceAuth } from "./byosub-device-auth-http.js";
 
 const DRAIN_LOOP_INTERVAL_MS = 15 * 1000;
-
-// Operator-gateway local eviction is destructive and (unlike a cattle drain) has no
-// restore loop to undo a mistake, so a departed customer's footprint is only torn down
-// after it is seen orphaned on this many consecutive heartbeats — debounced against a
-// transient assigned-state blip, mirroring the activity-bridge coach-prune (spec §5).
-const EVICT_AFTER_STREAK = 2;
 
 const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
@@ -101,17 +94,6 @@ export interface FleetCapabilities {
   /** Run the write-side platform provisioner: restore-customer, drain loop,
    *  byosub device-auth. Off inside the locked operator boundary. */
   provision: boolean;
-  /** Re-derive the reported mounted set from assigned state each heartbeat.
-   *  On for report-only (operator) gateways, which have no drain loop to drop a
-   *  customer who moved away; off for provisioning gateways (the drain loop +
-   *  mount callbacks already keep runtime.mountedCustomers honest). */
-  refreshReportedMounts: boolean;
-  /** Actively tear down a departed customer's LOCAL footprint (coach unwired from
-   *  openclaw config + customer dir/keys/agent-session dirs deleted) on report-only
-   *  (operator) gateways, which have no drain loop to do it. Local-only teardown —
-   *  no platform credentials, so safe inside the locked operator boundary. Off for
-   *  provisioning gateways (their drain loop already evicts orphaned mounts). */
-  evictDepartedMounts: boolean;
   /** At least one capability needs Firestore write deps (own heartbeat +
    *  glmGateways mirror, or restore jobs). */
   needsStateDeps: boolean;
@@ -127,16 +109,9 @@ export function resolveFleetCapabilities(opts: {
 }): FleetCapabilities {
   const reportMounted = opts.reportState && opts.hasDb;
   const provision = opts.platformState && opts.hasDb;
-  // Operator (report-only) gateways self-reconcile: they keep their reported set
-  // honest (refresh) AND tear down departed local footprint (evict), since no
-  // drain loop runs for them. Same trigger condition, two distinct behaviors.
-  const refreshReportedMounts = reportMounted && !provision;
-  const evictDepartedMounts = reportMounted && !provision;
   return {
     reportMounted,
     provision,
-    refreshReportedMounts,
-    evictDepartedMounts,
     needsStateDeps: reportMounted || provision,
   };
 }
@@ -291,138 +266,6 @@ async function seedRuntimeMountedCustomers(params: {
   }
 }
 
-/**
- * Re-derive a report-only gateway's mounted set from assigned state each heartbeat.
- * Operator gateways have no drain loop, so a customer who moved to another gateway
- * would otherwise linger in `mountedCustomers` forever — blocking retire and
- * mis-accounting the fleet. Honest reporting per OPERATOR-GATEWAY-DURABILITY-SPEC §4.1
- * (assigned ∩ has-dir ∩ coach-wired). Provisioning gateways skip this: their drain
- * loop + mount callbacks already keep runtime.mountedCustomers honest.
- *
- * Last-writer-wins: a slow refresh can briefly lose a concurrent onMounted during a
- * migration onto an operator gateway, but the next tick re-derives and reconverges,
- * so the under-report is transient and acceptable for a pinned single-owner pod.
- */
-export async function maybeRefreshReportedMounts(params: {
-  refresh: boolean;
-  db: Firestore | undefined;
-  gatewayId: string;
-  adapter: Pick<
-    CustomerLifecycleAdapter,
-    "hasCustomerDir" | "customerCoachWiredInOpenclawConfig"
-  >;
-  runtime: { mountedCustomers: string[] };
-  log: (msg: string) => void;
-}): Promise<void> {
-  if (!params.refresh || !params.db) return;
-  try {
-    params.runtime.mountedCustomers = await readMountedCustomersFromAssignedState(
-      params.db,
-      params.gatewayId,
-      params.adapter,
-    );
-  } catch (err) {
-    params.log(
-      `[fleet] ⚠ mounted-customer refresh failed (keeping prior set): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-}
-
-/**
- * Actively evict a departed customer's LOCAL footprint from a report-only
- * (operator) gateway each heartbeat. The #1425 refresh keeps the *report* honest,
- * but a departed customer's coach stays wired in openclaw + their dir/keys/sessions
- * stay on the PVC — cruft that matters when the pod is reused for a new owner (and
- * an inert wired coach muddies the activity-bridge prune, OPERATOR-GATEWAY-DURABILITY-SPEC §5).
- *
- * Cattle gateways skip this: their drain loop already evicts orphaned mounts. The
- * footprint source is the on-disk customer dirs (`listFootprint`), NOT
- * `runtime.mountedCustomers` — the refresh re-derives that from assigned state, so a
- * departed customer is already gone from it and would never register as an orphan.
- *
- * Two protections, because eviction is destructive and operator gateways have no
- * restore loop to undo a mistaken teardown:
- *  - Fail-safe: a failed assigned-state query (e.g. PERMISSION_DENIED) returns without
- *    evicting — never blind-delete when we can't confirm who is assigned. (The report
- *    path already proves this read works on operator pods, so this is belt-and-braces.)
- *  - Debounce: a slug is only torn down after it is seen orphaned (on-disk ∧ unassigned)
- *    on `evictAfterStreak` consecutive passes, recorded in the caller-owned
- *    `orphanStreaks` map. A transient one-tick absence resets and never evicts.
- *
- * Teardown reuses `removeImportedCustomerBySlug` — the same local-only primitive the
- * migration /unmount uses: config.patch-remove the coach + delete the customer
- * dir/keys/agent-session dirs. No platform credentials, so safe inside the locked
- * operator boundary. A just-evicted slug drops off disk, so its streak self-prunes on
- * the next pass; a slug whose teardown failed stays on disk and is retried.
- *
- * The streak loop has already applied the assigned gate, so `ready` is exactly the set
- * to tear down. `drainOrphanedMounts` is reused not for its diff (its `readAssignedSlugs`
- * here is a constant pass-through) but for its per-slug error isolation, outcome logging,
- * and module-level in-flight set — which de-dupes a slow teardown spanning two heartbeats
- * so the same slug is never torn down twice concurrently.
- */
-export async function maybeEvictDepartedLocalCustomers(params: {
-  evict: boolean;
-  db: Firestore | undefined;
-  gatewayId: string;
-  adapter: Pick<CustomerLifecycleAdapter, "removeImportedCustomerBySlug" | "onUnmounted">;
-  listFootprint: () => string[];
-  orphanStreaks: Map<string, number>;
-  evictAfterStreak?: number;
-  log: (msg: string) => void;
-}): Promise<void> {
-  if (!params.evict || !params.db) return;
-  const { db, gatewayId, adapter, listFootprint, orphanStreaks, log } = params;
-  const threshold = params.evictAfterStreak ?? EVICT_AFTER_STREAK;
-
-  let assigned: Set<string>;
-  try {
-    assigned = new Set(await readAssignedSlugsForGateway(db, gatewayId));
-  } catch (err) {
-    log(
-      `[fleet] ⚠ mounted-customer evict skipped — assigned-state query failed (no eviction this tick): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    return;
-  }
-
-  const footprint = listFootprint();
-  const onDisk = new Set(footprint);
-  for (const slug of [...orphanStreaks.keys()]) {
-    if (!onDisk.has(slug) || assigned.has(slug)) orphanStreaks.delete(slug);
-  }
-
-  const ready: string[] = [];
-  for (const slug of footprint) {
-    if (assigned.has(slug)) continue;
-    const streak = (orphanStreaks.get(slug) ?? 0) + 1;
-    orphanStreaks.set(slug, streak);
-    if (streak >= threshold) ready.push(slug);
-  }
-  if (ready.length === 0) return;
-
-  await drainOrphanedMounts({
-    gatewayId,
-    log,
-    getMounted: () => ready,
-    readAssignedSlugs: async () => [...assigned],
-    unmountSlug: async (slug: string) => {
-      const remove = adapter.removeImportedCustomerBySlug;
-      if (!remove) {
-        throw new Error(
-          `operator evict requires removeImportedCustomerBySlug on the lifecycle adapter (slug=${slug})`,
-        );
-      }
-      const result = await remove(slug);
-      if (result.wasMounted) adapter.onUnmounted?.(slug);
-      return result.wasMounted ? "drained" : "noop";
-    },
-  });
-}
-
 export async function startFleetController(
   opts: StartFleetOptions,
 ): Promise<StartedFleetController> {
@@ -509,29 +352,9 @@ const waitForGatewayReady = async (): Promise<void> => {
 
   await emitHeartbeat("booting");
 
-  const departedOrphanStreaks = new Map<string, number>();
   const heartbeatTimer = caps.reportMounted
     ? setInterval(() => {
-        void (async () => {
-          await maybeRefreshReportedMounts({
-            refresh: caps.refreshReportedMounts,
-            db: opts.db,
-            gatewayId: opts.gatewayId,
-            adapter: wrappedAdapter,
-            runtime,
-            log: opts.log,
-          });
-          await maybeEvictDepartedLocalCustomers({
-            evict: caps.evictDepartedMounts,
-            db: opts.db,
-            gatewayId: opts.gatewayId,
-            adapter: wrappedAdapter,
-            listFootprint: () => listOnDiskCustomerSlugs(),
-            orphanStreaks: departedOrphanStreaks,
-            log: opts.log,
-          });
-          await emitHeartbeat(runtime.status);
-        })();
+        void emitHeartbeat(runtime.status);
       }, GATEWAY_HEARTBEAT_INTERVAL_MS)
     : null;
 
@@ -594,14 +417,8 @@ const waitForGatewayReady = async (): Promise<void> => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
   });
   const drainLoopStatus = caps.provision ? `${DRAIN_LOOP_INTERVAL_MS}ms` : "disabled";
-  const reportRefreshStatus = caps.refreshReportedMounts
-    ? `${GATEWAY_HEARTBEAT_INTERVAL_MS}ms`
-    : "off";
-  const localEvictStatus = caps.evictDepartedMounts
-    ? `${GATEWAY_HEARTBEAT_INTERVAL_MS}ms`
-    : "off";
   opts.log(
-    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; drain-loop=${drainLoopStatus}; report-refresh=${reportRefreshStatus}; local-evict=${localEvictStatus}`,
+    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; drain-loop=${drainLoopStatus}`,
   );
 
 return {
