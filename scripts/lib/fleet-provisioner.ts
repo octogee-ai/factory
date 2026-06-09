@@ -380,6 +380,12 @@ export async function maybeRefreshReportedMounts(params: {
  * dir/keys/agent-session dirs. No platform credentials, so safe inside the locked
  * operator boundary. A just-evicted slug drops off disk, so its streak self-prunes on
  * the next pass; a slug whose teardown failed stays on disk and is retried.
+ *
+ * The streak loop has already applied the assigned gate, so `ready` is exactly the set
+ * to tear down. `drainOrphanedMounts` is reused not for its diff (its `readAssignedSlugs`
+ * here is a constant pass-through) but for its per-slug error isolation, outcome logging,
+ * and module-level in-flight set — which de-dupes a slow teardown spanning two heartbeats
+ * so the same slug is never torn down twice concurrently.
  */
 export async function maybeEvictDepartedLocalCustomers(params: {
   evict: boolean;

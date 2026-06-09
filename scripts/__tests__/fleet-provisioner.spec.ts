@@ -386,4 +386,26 @@ describe("maybeEvictDepartedLocalCustomers — operator gateways tear down depar
     expect(adapter.onUnmounted).toHaveBeenCalledWith("eggman");
     expect(adapter.onUnmounted).not.toHaveBeenCalledWith("boom");
   });
+
+  it("does not double-issue a teardown for a slug whose eviction spans two passes (cross-tick in-flight dedup)", async () => {
+    let resolveFirst!: () => void;
+    const removeImportedCustomerBySlug = vi.fn(
+      () =>
+        new Promise<{ wasMounted: boolean; steps: string[] }>((resolve) => {
+          resolveFirst = () => resolve({ wasMounted: true, steps: ["config-patch-remove", "delete-dir"] });
+        }),
+    );
+    const adapter = mkAdapter({ removeImportedCustomerBySlug });
+    const streaks = new Map<string, number>();
+
+    // Pass 1's teardown hangs (still in flight); pass 2 overlaps it on the same slug.
+    const first = runEvict({ db: mkDb([]), adapter, footprint: ["eggman"], streaks, evictAfterStreak: 1 });
+    const second = runEvict({ db: mkDb([]), adapter, footprint: ["eggman"], streaks, evictAfterStreak: 1 });
+    await second;
+    expect(removeImportedCustomerBySlug).toHaveBeenCalledTimes(1);
+
+    resolveFirst();
+    await first;
+    expect(removeImportedCustomerBySlug).toHaveBeenCalledTimes(1);
+  });
 });
