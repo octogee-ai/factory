@@ -45,6 +45,10 @@ import { requireAuth } from "../middleware/auth.js";
 export interface MountClusterRoutesOpts {
   mmRestProxyHandler?: RequestHandler;
   mattermostMintRoutes?: Router;
+  // octogee-api-only: operator gateways broker their deploy-record write here over
+  // Workload-Identity OIDC (they hold no Firestore creds). Never mounted on
+  // gateway-edge (in-pod). See docs/operations/OPERATOR-GATEWAY-PULL-REPORTING.md.
+  siteDeployRoutes?: Router;
 }
 
 export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = {}): void {
@@ -73,6 +77,9 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
 
   if (opts.mattermostMintRoutes) {
     app.use("/api/auth/mattermost", opts.mattermostMintRoutes);
+  }
+  if (opts.siteDeployRoutes) {
+    app.use("/api/site/deploy-record", opts.siteDeployRoutes);
   }
   app.use("/api/auth/email", authEmailRoutes);
   app.use("/api/sharing", sharingRoutes);

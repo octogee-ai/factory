@@ -105,6 +105,7 @@ env:
   agentPrefix: "octogee-"
   githubOrg: "octogee"
   mmUrl: ""  # auto-computed from release namespace if empty
+  octogeeApiUrl: ""  # internal octogee-api DNS; auto-computed from release namespace if empty
   mmSiteUrl: ""
   mmInteractionsCallbackBaseUrl: ""  # auto-computed per-instance if empty
   mmInteractionsAllowedSourceIps: "10.117.0.0/17"  # GKE pod CIDR

@@ -12,6 +12,8 @@ import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
+import { createSiteDeployRoutes } from "./routes/site-deploy.js";
+import { db } from "../../gateway-edge/src/lib/db.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
   createTenantBindingHealthState,
@@ -127,7 +129,11 @@ const route = req.route?.path || "unmatched";
     }
     tenantBindingMiddleware(req, res, next);
   });
-  mountClusterRoutes(app, { mmRestProxyHandler, mattermostMintRoutes });
+  mountClusterRoutes(app, {
+    mmRestProxyHandler,
+    mattermostMintRoutes,
+    siteDeployRoutes: createSiteDeployRoutes({ db }),
+  });
 
   app.use(errorHandler);
 
