@@ -1,4 +1,5 @@
 import http from "node:http";
+import * as fs from "node:fs";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
@@ -38,6 +39,17 @@ import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-o
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
 import { resolveBuilderShellInternalAuthSecret } from "../lib/builder-shell-internal-auth.js";
 import { logger } from "../middleware/logging.js";
+import {
+  listLocalCoachWiredSlugs,
+  readOpenclawConfig,
+  coachWiredInParsedConfig,
+} from "../../../scripts/lib/local-coach-wired.js";
+
+// The operator pod holds no platform credentials, so the bridge's coach reconcile
+// derives the mounted set locally (PVC + openclaw config) instead of reading
+// gateways/{id} from Firestore. Pod paths, env-overridable (mirrors workspace/git.ts).
+const COACH_RECONCILE_CUSTOMERS_DIR = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+const COACH_RECONCILE_OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
 import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
 import {
   createBridgeBootStatus,
@@ -908,13 +920,22 @@ export async function startChatProxyBackground(): Promise<void> {
     // Read failure → null → fail-safe keep.
     const getMountedCustomers = reconcileGatewayId
       ? async (): Promise<string[] | null> => {
+          // Local-derived, no Firestore: the operator pod holds no platform creds, so
+          // reading gateways/{id}.mountedCustomers would 403. The pod's own coach-wired
+          // set (PVC dirs ∩ openclaw config) is the honest — and more direct — answer:
+          // the bridge is reconciling its OWN coaches against what's locally present.
+          // dir/config-unreadable → null = fail-safe keep (don't untrack on an indeterminate read).
+          // Parse the openclaw config ONCE per sweep, then check each slug against it.
           try {
-            const snap = await db.collection('gateways').doc(reconcileGatewayId).get();
-            const m = (snap.data() as { mountedCustomers?: unknown } | undefined)?.mountedCustomers;
-            return Array.isArray(m) ? m.filter((s): s is string => typeof s === 'string') : null;
+            if (!fs.existsSync(COACH_RECONCILE_CUSTOMERS_DIR)) return null;
+            const config = readOpenclawConfig(COACH_RECONCILE_OPENCLAW_CONFIG);
+            if (!config) return null;
+            return listLocalCoachWiredSlugs(COACH_RECONCILE_CUSTOMERS_DIR, (slug) =>
+              coachWiredInParsedConfig(config, slug),
+            );
           } catch (err) {
             console.warn(
-              `[chat-proxy] mounted-set read failed for coach reconcile: ${
+              `[chat-proxy] local coach-wired read failed for reconcile: ${
                 err instanceof Error ? err.message : String(err)
               }`,
             );

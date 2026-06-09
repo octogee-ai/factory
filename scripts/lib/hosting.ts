@@ -4,9 +4,8 @@ import * as path from "node:path";
 import zlib from "node:zlib";
 
 // Firebase Hosting REST flow, split so the credentialed half can run wherever the
-// Hosting token lives: cattle pods run both halves locally; operator pods collect
-// locally (no creds) and broker `deployCollectedFiles` to octogee-api, which holds
-// the Hosting credential. `getToken` is injected — this module imports no GCP SDK.
+// Hosting token lives: cattle pods run both halves locally; operator publishing is
+// CI/CD/control-plane-owned. `getToken` is injected — this module imports no GCP SDK.
 // See docs/decisions/DECISIONS.md ("Operator-gateway site deploys").
 
 export type DeployResult = { success: true; url: string } | { success: false; error: string };
@@ -33,8 +32,8 @@ interface PopulateResponse {
 
 /**
  * Walk `distDir`, gzip + sha256 each file, and return the Hosting deploy manifest
- * plus the gzipped blobs keyed by hash. Pure filesystem work — no credentials — so
- * an operator pod can do this and ship the result to the broker. Null if no dist.
+ * plus the gzipped blobs keyed by hash. Pure filesystem work — no credentials.
+ * Null if no dist.
  */
 export function collectDistFiles(distDir: string): CollectedFiles | null {
   if (!fs.existsSync(distDir)) return null;
@@ -71,8 +70,7 @@ export interface DeployCollectedOptions {
 /**
  * Deploy already-collected files to a Hosting site: create a version, populate the
  * file manifest, upload only the blobs Hosting reports missing, finalize, release.
- * `getToken` supplies the Hosting access token from whatever ADC is in scope (the
- * cattle pod's SA, or octogee-api's SA on the brokered path).
+ * `getToken` supplies the Hosting access token from whatever ADC is in scope.
  */
 export async function deployCollectedFiles(
   siteId: string,

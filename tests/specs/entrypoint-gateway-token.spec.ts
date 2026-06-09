@@ -181,11 +181,12 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     const result = runRunnerBlock("operator");
     expect(result.status).toBe(0);
     expect(result.runners).toContain("fleet-controller");
-    expect(result.runners).toContain("site-build");
     expect(result.runners).toContain("preview-proxy");
     expect(result.runners).not.toContain("provisioner");
+    expect(result.runners).not.toContain("site-build");
     expect(result.runners).not.toContain("byosub-syncback");
     expect(result.stderr).toMatch(/Operator platform provisioner disabled/);
+    expect(result.stderr).toMatch(/Operator site-build-api disabled/);
   });
 
   it("keeps provisioner and byosub syncback running on cattle gateways", () => {

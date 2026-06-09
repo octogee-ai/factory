@@ -78,7 +78,7 @@ expect(stamperRegion).toMatch(/\[\s*-f\s+/);
 });
 
 describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", () => {
-  it("routes the all-profile runners through supervise-runner", () => {
+  it("routes the cattle runners through supervise-runner", () => {
     const runners: Record<string, string> = {
       provisioner: "5000",
       "site-build": "5000",
@@ -90,6 +90,17 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
         new RegExp(`supervise_runner\\s+${runner}\\s+${restartDelayMs}\\b`),
       );
     }
+  });
+
+  it("skips site-build-api on operator gateways", () => {
+    const siteBuildIdx = entrypoint.indexOf("supervise_runner site-build");
+    expect(siteBuildIdx).toBeGreaterThan(0);
+    const guardBlock = entrypoint.slice(
+      entrypoint.lastIndexOf("if [", siteBuildIdx),
+      siteBuildIdx,
+    );
+    expect(guardBlock).toMatch(/GATEWAY_PROFILE/);
+    expect(guardBlock).toMatch(/!= "operator"/);
   });
 
   it("gates builder-shell behind operator profile and explicit shell unlock", () => {

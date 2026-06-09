@@ -159,7 +159,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
   });
 
-  it("operator profile wires the deploy-broker hop: gateway → gateway-edge → octogee-api", () => {
+  it("operator profile does not wire the SiteAPI deploy-broker hop", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "operator" }),
@@ -169,10 +169,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const gw = containerBlock(dep, "gateway");
     const edge = containerBlock(dep, "gateway-edge");
 
-    // The shell-bearing gateway container (no token) reaches gateway-edge on localhost.
-    expect(gw).toMatch(/name:\s*GATEWAY_EDGE_INTERNAL_URL\s*\n\s*value:\s*"http:\/\/127\.0\.0\.1:/);
-    // gateway-edge (holds the token) forwards to the cluster octogee-api.
-    expect(edge).toMatch(/name:\s*OCTOGEE_API_URL\s*\n\s*value:\s*"http:\/\/octogee-api\./);
+    // The shell-bearing gateway container gets no localhost deploy-broker target.
+    expect(gw).not.toMatch(/name:\s*GATEWAY_EDGE_INTERNAL_URL\b/);
+    // gateway-edge gets no octogee-api deploy-broker target for operator SiteAPI.
+    expect(edge).not.toMatch(/name:\s*OCTOGEE_API_URL\b/);
   });
 
   it("operator profile still wires OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge — the bridge needs it; only MM_ADMIN_PAT is operator-excluded", () => {

@@ -91,8 +91,9 @@ app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
 app.use("/internal/billing", internalBillingRoutes);
-// Operator site-build-api (shell-bearing, tokenless) brokers its deploy through here;
-// gateway-edge holds the KSA token and forwards to octogee-api.
+// Hosting-deploy broker route. Operator gateways no longer wire site-build-api to
+// this path; their publishing is CI/CD-owned. Kept fail-closed behind internal auth
+// for any trusted caller that explicitly configures OCTOGEE_API_URL.
 app.use("/internal/site", internalSiteDeployRoutes);
 // builder-shell has two caller shapes: redeem is pod-local (the in-pod bridge,
 // bare path), kill is cross-pod (octogee-api → the owner pod via the

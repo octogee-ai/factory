@@ -390,7 +390,11 @@ else
   log "Operator platform provisioner disabled: platform provisioning runs outside the locked operator gateway boundary"
   supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
 fi
-supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
+if [ "${GATEWAY_PROFILE:-}" != "operator" ]; then
+  supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
+else
+  log "Operator site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
+fi
 supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
 if [ "${GATEWAY_PROFILE:-}" != "operator" ]; then
   supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
