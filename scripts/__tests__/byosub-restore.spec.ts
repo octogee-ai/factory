@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -13,10 +13,17 @@ import {
   codexStagingAuthJsonPath,
   codexAgentDir,
   codexAuthStatePath,
-  codexAuthProfilesPath,
   shouldRestoreCodexCredential,
   isSafeAgentId,
+  readCodexAuthStateText,
 } from "../lib/byosub-restore.js";
+import * as authProfileSqlite from "../lib/auth-profile-sqlite.js";
+const {
+  readAuthProfileStore,
+  writeAuthProfileStore,
+  resolveAuthDbPath,
+} = authProfileSqlite;
+import { DatabaseSync } from "node:sqlite";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../lib/byot-multi-provider-config.js";
 
 const tmpDirs: string[] = [];
@@ -51,8 +58,13 @@ const codexBlob = () =>
     last_refresh: "2026-05-18T00:11:06Z",
   });
 
-const apPathFor = (oc: string, agentId: string) =>
-  path.join(oc, "agents", agentId, "agent", "auth-profiles.json");
+const apReadFor = (oc: string, agentId: string): unknown =>
+  readAuthProfileStore(codexAgentDir(oc, agentId));
+const apWriteFor = (oc: string, agentId: string, payload: unknown) => {
+  const dir = codexAgentDir(oc, agentId);
+  fs.mkdirSync(dir, { recursive: true });
+  writeAuthProfileStore(dir, payload);
+};
 
 describe("isSafeAgentId (shared path-safety boundary)", () => {
   it("accepts real coach agent ids", () => {
@@ -93,14 +105,14 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
     );
   });
 
-  it("codexAuthStatePath = openclaw auth-state.json, sibling of auth-profiles.json (R8 reader/writer no-drift)", () => {
+  it("codexAuthStatePath + resolveAuthDbPath = openclaw paths, siblings under agentDir (R8 reader/writer no-drift)", () => {
     expect(codexAgentDir(OC, "octogee-a-coach")).toBe(
       "/home/node/.openclaw/agents/octogee-a-coach/agent",
     );
     expect(codexAuthStatePath(OC, "octogee-a-coach")).toBe(
       "/home/node/.openclaw/agents/octogee-a-coach/agent/auth-state.json",
     );
-    
+
     expect(path.dirname(codexAuthStatePath(OC, "octogee-a-coach"))).toBe(
       codexAgentDir(OC, "octogee-a-coach"),
     );
@@ -108,10 +120,12 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
       codexAgentDir(OC, "octogee-a-coach"),
     );
 
-expect(codexAuthProfilesPath(OC, "octogee-a-coach")).toBe(
-      "/home/node/.openclaw/agents/octogee-a-coach/agent/auth-profiles.json",
+    // auth-profiles moved to openclaw-agent.sqlite in OC v2026.6+ (PR #89102).
+    // The DB sits as a sibling of auth-state.json, both under agentDir.
+    expect(resolveAuthDbPath(codexAgentDir(OC, "octogee-a-coach"))).toBe(
+      "/home/node/.openclaw/agents/octogee-a-coach/agent/openclaw-agent.sqlite",
     );
-    expect(path.dirname(codexAuthProfilesPath(OC, "octogee-a-coach"))).toBe(
+    expect(path.dirname(resolveAuthDbPath(codexAgentDir(OC, "octogee-a-coach")))).toBe(
       path.dirname(codexAuthStatePath(OC, "octogee-a-coach")),
     );
   });
@@ -328,11 +342,11 @@ describe("restoreByosubCredentials", () => {
     expect(fs.statSync(item.targetPath).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
 
-const ap = apPathFor(oc, "octogee-a-coach");
-    expect(fs.existsSync(ap)).toBe(true);
-    expect(fs.statSync(ap).mode & 0o777).toBe(0o600);
-    expect(fs.existsSync(ap + ".tmp")).toBe(false);
-    const store = JSON.parse(fs.readFileSync(ap, "utf-8"));
+    const store = apReadFor(oc, "octogee-a-coach") as {
+      version: number;
+      profiles: Record<string, unknown>;
+    };
+    expect(store).not.toBeNull();
     expect(store.version).toBe(1);
     expect(store.profiles["openai-codex:default"]).toMatchObject({
       type: "oauth",
@@ -366,13 +380,11 @@ const ap = apPathFor(oc, "octogee-a-coach");
     expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
     expect(fs.existsSync(item.targetPath)).toBe(false);
     expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
-    const ap = apPathFor(oc, "octogee-a-coach");
-    expect(fs.existsSync(ap)).toBe(false);
-    expect(fs.existsSync(ap + ".tmp")).toBe(false);
+    expect(apReadFor(oc, "octogee-a-coach")).toBeNull();
     expect(logs.join("\n")).toMatch(/octogee-a-coach|access_token/);
   });
 
-  it("cross-pair atomicity (Copilot #989): a staging failure on auth-profiles.json aborts BEFORE codex-home is promoted — no half-promoted pair", async () => {
+  it("cross-pair atomicity (Copilot #989): a SQLite write failure on auth-profiles aborts BEFORE codex-home is promoted — no half-promoted pair", async () => {
     const oc = mkTmp();
     const agentId = "octogee-a-coach";
     const item = {
@@ -383,8 +395,16 @@ const ap = apPathFor(oc, "octogee-a-coach");
       openclawDir: oc,
     };
 
-const agentDir = path.join(oc, "agents", agentId, "agent");
-    fs.mkdirSync(path.join(agentDir, "auth-profiles.json.tmp"), { recursive: true });
+    // Spy on the SQLite write so it throws — isolates the failure to
+    // step 3 of the restore (after secret fetch + codex-home tmp write,
+    // before codex-home rename). Replicates the Copilot #989 invariant:
+    // a write-step failure must not leave codex-home half-promoted.
+    const writeSpy = vi
+      .spyOn(authProfileSqlite, "writeAuthProfileStore")
+      .mockImplementation(() => {
+        throw new Error("simulated SQLite write failure");
+      });
+
     const logs: string[] = [];
     const r = await restoreByosubCredentials({
       plan: [item],
@@ -392,12 +412,15 @@ const agentDir = path.join(oc, "agents", agentId, "agent");
       logFn: (m) => logs.push(m),
     });
     expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
-    
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(item.targetPath)).toBe(false);
     expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
-    
-    expect(fs.existsSync(apPathFor(oc, agentId))).toBe(false);
+
+    const agentDir = codexAgentDir(oc, agentId);
+    expect(fs.existsSync(resolveAuthDbPath(agentDir))).toBe(false);
     expect(logs.join("\n")).toMatch(/octogee-a-coach/);
+    writeSpy.mockRestore();
   });
 
   it("isolates per-item failure: one bad fetch does not abort the others; never throws", async () => {
@@ -424,15 +447,15 @@ const agentDir = path.join(oc, "agents", agentId, "agent");
     expect(logs.join("\n")).toMatch(/octogee-b-coach|secret access denied/);
   });
 
-  it("KEYSTONE: a healthy on-disk auth-profiles.json is NOT clobbered — skip, no SM read (the refresh_token_reused root cause)", async () => {
+  it("KEYSTONE: a healthy on-disk auth-profile SQLite row is NOT clobbered — skip, no SM read (the refresh_token_reused root cause)", async () => {
     const oc = mkTmp();
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
-    
-    const liveCred = JSON.stringify({ version: 1, profiles: { rotated: "RT1" } });
-    fs.writeFileSync(path.join(agentDir, "auth-profiles.json"), liveCred);
-    
+
+    const liveCred = { version: 1, profiles: { rotated: "RT1" } };
+    writeAuthProfileStore(agentDir, liveCred);
+
     let fetched = false;
     const logs: string[] = [];
     const r = await restoreByosubCredentials({
@@ -452,11 +475,9 @@ const agentDir = path.join(oc, "agents", agentId, "agent");
       logFn: (m) => logs.push(m),
     });
     expect(r).toEqual({ restored: 0, failed: 0, skipped: 1 });
-    expect(fetched).toBe(false); 
-    
-    expect(fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf-8")).toBe(
-      liveCred,
-    );
+    expect(fetched).toBe(false);
+
+    expect(readAuthProfileStore(agentDir)).toEqual(liveCred);
     expect(fs.existsSync(path.join(agentDir, "codex-home", "auth.json"))).toBe(false);
     expect(logs.join("\n")).toMatch(/octogee-a-coach|skip|conservative/i);
   });
@@ -466,7 +487,7 @@ const agentDir = path.join(oc, "agents", agentId, "agent");
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
-    fs.writeFileSync(path.join(agentDir, "auth-profiles.json"), '{"stale":true}');
+    writeAuthProfileStore(agentDir, { stale: true });
     fs.writeFileSync(
       path.join(agentDir, "auth-state.json"),
       JSON.stringify({
@@ -492,10 +513,104 @@ const agentDir = path.join(oc, "agents", agentId, "agent");
       fetchSecret: async () => codexBlob(),
     });
     expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
-    const store = JSON.parse(
-      fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+    const store = readAuthProfileStore(agentDir) as {
+      profiles: Record<string, { access?: string }>;
+    };
+    expect(store.profiles["openai-codex:default"].access).toBe("acc-1");
+  });
+});
+
+describe("readCodexAuthStateText — SQLite state row preferred, JSON file fallback (upstream PR #89102 + earlier)", () => {
+  function seedSqliteState(agentDir: string, payload: unknown): void {
+    fs.mkdirSync(agentDir, { recursive: true });
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath);
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS auth_profile_state (state_key TEXT NOT NULL PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL);`,
     );
-    expect(store.profiles["openai-codex:default"].access).toBe("acc-1"); 
+    db.prepare(
+      `INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('primary', ?, ?)`,
+    ).run(JSON.stringify(payload), Date.now());
+    db.close();
+  }
+
+  it("returns null when no SQLite row and no legacy JSON file exists", () => {
+    const oc = mkTmp();
+    fs.mkdirSync(path.join(oc, "agents", "octogee-a-coach", "agent"), { recursive: true });
+    expect(readCodexAuthStateText(oc, "octogee-a-coach")).toBeNull();
+  });
+
+  it("returns the legacy JSON file when SQLite has no state row (mixed-build slot or pre-migration)", () => {
+    const oc = mkTmp();
+    const agentDir = codexAgentDir(oc, "octogee-a-coach");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const json = JSON.stringify({ version: 1, usageStats: {} });
+    fs.writeFileSync(codexAuthStatePath(oc, "octogee-a-coach"), json);
+    expect(readCodexAuthStateText(oc, "octogee-a-coach")).toBe(json);
+  });
+
+  it("returns the SQLite state row (re-stringified) when present — even if a stale JSON file is also on disk", () => {
+    const oc = mkTmp();
+    const agentDir = codexAgentDir(oc, "octogee-a-coach");
+    const sqlitePayload = {
+      version: 1,
+      usageStats: {
+        "openai-codex:default": { disabledReason: "auth_permanent", disabledUntil: 2_000_000_000_000 },
+      },
+    };
+    seedSqliteState(agentDir, sqlitePayload);
+    // Stale legacy file — must NOT shadow the live SQLite state.
+    fs.writeFileSync(codexAuthStatePath(oc, "octogee-a-coach"), JSON.stringify({ stale: true }));
+    const got = readCodexAuthStateText(oc, "octogee-a-coach");
+    expect(JSON.parse(got ?? "null")).toEqual(sqlitePayload);
+  });
+});
+
+describe("restoreByosubCredentials — honors SQLite auth_profile_state (the P1 gap)", () => {
+  it("openclaw flagged auth_permanent in SQLite state row → restore REPLACES the dead cred", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const agentDir = codexAgentDir(oc, agentId);
+    fs.mkdirSync(agentDir, { recursive: true });
+    writeAuthProfileStore(agentDir, { stale: true });
+    // No legacy auth-state.json — only the SQLite state row.
+    const db = new DatabaseSync(resolveAuthDbPath(agentDir));
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS auth_profile_state (state_key TEXT NOT NULL PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL);`,
+    );
+    db.prepare(
+      `INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('primary', ?, ?)`,
+    ).run(
+      JSON.stringify({
+        version: 1,
+        usageStats: {
+          "openai-codex:default": {
+            disabledReason: "auth_permanent",
+            disabledUntil: Date.now() + 3_600_000,
+          },
+        },
+      }),
+      Date.now(),
+    );
+    db.close();
+
+    const r = await restoreByosubCredentials({
+      plan: [
+        {
+          agentId,
+          provider: "openai" as const,
+          secretName: "byosub-a-openai",
+          targetPath: path.join(agentDir, "codex-home", "auth.json"),
+          openclawDir: oc,
+        },
+      ],
+      fetchSecret: async () => codexBlob(),
+    });
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
+    const store = readAuthProfileStore(agentDir) as {
+      profiles: Record<string, { access?: string }>;
+    };
+    expect(store.profiles["openai-codex:default"].access).toBe("acc-1");
   });
 });
 
@@ -558,12 +673,11 @@ describe("restoreByosubForAgents (shared plan+restore composition)", () => {
       JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
         .auth_mode,
     ).toBe("chatgpt");
-    
-    expect(
-      JSON.parse(fs.readFileSync(apPathFor(oc, "octogee-tester-70-coach"), "utf-8")).profiles[
-        "openai-codex:default"
-      ].provider,
-    ).toBe("openai-codex");
+
+    const store = apReadFor(oc, "octogee-tester-70-coach") as {
+      profiles: Record<string, { provider?: string }>;
+    };
+    expect(store.profiles["openai-codex:default"].provider).toBe("openai-codex");
   });
 
   it("never throws on a bad secret — {failed:1, planned:1}", async () => {

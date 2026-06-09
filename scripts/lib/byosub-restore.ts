@@ -4,6 +4,11 @@ import {
   buildCodexAuthProfilesStore,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./byot-multi-provider-config.js";
+import {
+  readAuthProfileState,
+  readAuthProfileStore,
+  writeAuthProfileStore,
+} from "./auth-profile-sqlite.js";
 import { deriveCodexAuthHealth } from "./codex-auth-health.js";
 
 export type ByosubProvider = "openai" | "anthropic";
@@ -78,11 +83,31 @@ export function codexAuthStatePath(
   return path.join(codexAgentDir(openclawDir, agentId), "auth-state.json");
 }
 
-export function codexAuthProfilesPath(
+// codexAuthProfilesPath retired in 2026.6 — auth-profiles is now a SQLite
+// row in {agentDir}/openclaw-agent.sqlite (upstream PR #89102). Use
+// readAuthProfileStore / writeAuthProfileStore from auth-profile-sqlite.ts.
+
+/**
+ * Reads the codex auth-state payload as text — preferring the SQLite
+ * auth_profile_state row (openclaw v2026.6.5+) and falling back to the
+ * legacy auth-state.json file when the SQLite row is absent. Returns null
+ * when neither source has data.
+ *
+ * Single source for both the restore decision (byosub-restore) and the
+ * gateway-side health sweep (codex-auth-health-io). Keeps the text-in /
+ * health-out contract of `deriveCodexAuthHealth` unchanged.
+ */
+export function readCodexAuthStateText(
   openclawDir: string,
   agentId: string,
-): string {
-  return path.join(codexAgentDir(openclawDir, agentId), "auth-profiles.json");
+): string | null {
+  const stateRow = readAuthProfileState(codexAgentDir(openclawDir, agentId));
+  if (stateRow !== null) return JSON.stringify(stateRow);
+  try {
+    return fs.readFileSync(codexAuthStatePath(openclawDir, agentId), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 export function shouldRestoreCodexCredential(opts: {
@@ -161,19 +186,11 @@ export async function restoreByosubCredentials(opts: {
   let skipped = 0;
   for (const item of opts.plan) {
     const tmp = `${item.targetPath}.tmp`;
+    const agentDir = codexAgentDir(item.openclawDir, item.agentId);
 
-const apPath = codexAuthProfilesPath(item.openclawDir, item.agentId);
-    const apTmp = `${apPath}.tmp`;
-
-if (item.provider === "openai") {
-      const authProfilesPresent = fs.existsSync(apPath);
-      const authStatePath = codexAuthStatePath(item.openclawDir, item.agentId);
-      let authStateText: string | null = null;
-      try {
-        authStateText = fs.readFileSync(authStatePath, "utf8");
-      } catch {
-        authStateText = null; 
-      }
+    if (item.provider === "openai") {
+      const authProfilesPresent = readAuthProfileStore(agentDir) !== null;
+      const authStateText = readCodexAuthStateText(item.openclawDir, item.agentId);
       if (
         shouldRestoreCodexCredential({
           authProfilesPresent,
@@ -199,15 +216,13 @@ if (item.provider === "openai") {
       fs.writeFileSync(tmp, payload, { mode: 0o600 });
       fs.chmodSync(tmp, 0o600);
       if (codexStore) {
-        fs.writeFileSync(apTmp, JSON.stringify(codexStore, null, 2) + "\n", {
-          mode: 0o600,
-        });
-        fs.chmodSync(apTmp, 0o600);
+        // Write SQLite BEFORE promoting codex-home — preserves cross-pair
+        // atomicity (the Copilot #989 invariant): if the auth-profiles
+        // store can't be written, codex-home stays unpromoted, so we
+        // never half-flip routing.
+        writeAuthProfileStore(agentDir, codexStore);
       }
       fs.renameSync(tmp, item.targetPath);
-      if (codexStore) {
-        fs.renameSync(apTmp, apPath);
-      }
       restored++;
       log(`byosub: restored ${item.provider} credential for ${item.agentId}`);
     } catch (e) {
@@ -217,7 +232,6 @@ if (item.provider === "openai") {
       );
       try {
         fs.rmSync(tmp, { force: true });
-        fs.rmSync(apTmp, { force: true });
       } catch {
         // best-effort temp cleanup
       }

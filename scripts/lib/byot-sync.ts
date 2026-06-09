@@ -9,6 +9,11 @@ import {
   type ByotConfigInput,
 } from "./byot-multi-provider-config.js";
 import { AGENTS_DIR, log } from "./config.js";
+import {
+  deleteAuthProfileStore,
+  readAuthProfileStore,
+  writeAuthProfileStore,
+} from "./auth-profile-sqlite.js";
 
 function agentIdForSlug(slug: string): string {
   return `octogee-${slug}-coach`;
@@ -18,7 +23,10 @@ function agentDirForSlug(slug: string, agentsDir: string = AGENTS_DIR): string {
   return path.join(agentsDir, agentIdForSlug(slug), "agent");
 }
 
-const BYOT_FILES = ["auth-profiles.json", "models.json"] as const;
+// auth-profiles moved to SQLite in openclaw v2026.6.1+ (PR #89102) — we
+// write that row directly via auth-profile-sqlite. models.json stayed as a
+// file, so it's the only entry in this list.
+const BYOT_FILES = ["models.json"] as const;
 type ByotFile = (typeof BYOT_FILES)[number];
 
 const BYOT_MARKER = ".byot-managed";
@@ -102,6 +110,13 @@ agentsDir: string = AGENTS_DIR,
     }
     let changed = false;
     for (const f of BYOT_FILES) changed = removeIfExists(filePath(f)) || changed;
+    // Clear the SQLite-backed auth-profiles row (no-op if the row or DB is
+    // absent). The marker presence is the canonical "BYOT was on" signal,
+    // so we don't need to know whether the row was actually there to log.
+    if (readAuthProfileStore(dir) !== null) {
+      deleteAuthProfileStore(dir);
+      changed = true;
+    }
     changed = removeIfExists(markerPath) || changed;
     if (changed) log(`[byot-sync] ${slug}: removed BYOT files (BYOT off)`);
     return changed;
@@ -115,13 +130,11 @@ agentsDir: string = AGENTS_DIR,
   const cfg = buildByotConfigForProvider(input);
 
   const desired: Record<ByotFile, string | null> = {
-    "auth-profiles.json": cfg.authProfiles ? JSON.stringify(cfg.authProfiles, null, 2) : null,
     "models.json":        cfg.models        ? JSON.stringify(cfg.models, null, 2)        : null,
   };
 
   let changed = false;
   for (const f of BYOT_FILES) {
-    if (f === "auth-profiles.json" && isOauthProvider(input.provider)) continue;
     const target = filePath(f);
     const want = desired[f];
     const existing = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
@@ -133,6 +146,21 @@ agentsDir: string = AGENTS_DIR,
     if (existing === want) continue;
     writeAtomic(target, want);
     changed = true;
+  }
+
+  // auth-profiles → SQLite. OAuth providers (codex) manage their own
+  // auth-profiles via openclaw; skip them here, same as the JSON era.
+  if (!isOauthProvider(input.provider)) {
+    if (cfg.authProfiles) {
+      const before = readAuthProfileStore(dir);
+      if (JSON.stringify(before) !== JSON.stringify(cfg.authProfiles)) {
+        writeAuthProfileStore(dir, cfg.authProfiles);
+        changed = true;
+      }
+    } else if (readAuthProfileStore(dir) !== null) {
+      deleteAuthProfileStore(dir);
+      changed = true;
+    }
   }
 
   if (!fs.existsSync(markerPath)) {

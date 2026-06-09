@@ -48,7 +48,8 @@ import {
   applyCoachModelPatch,
   syncByotForCustomer,
 } from "../lib/byot-sync-runtime";
-import { codexAuthJsonPath } from "../lib/byosub-restore.js";
+import { codexAuthJsonPath, codexAgentDir } from "../lib/byosub-restore.js";
+import { readAuthProfileStore } from "../lib/auth-profile-sqlite.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -177,8 +178,11 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
         .auth_mode,
     ).toBe("chatgpt");
 
-const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
-    const prof = JSON.parse(fs.readFileSync(ap, "utf-8"));
+    const agentDir = codexAgentDir(oc, "octogee-tester-70-coach");
+    const prof = readAuthProfileStore(agentDir) as {
+      version: number;
+      profiles: Record<string, unknown>;
+    };
     expect(prof.version).toBe(1);
     expect(prof.profiles["openai-codex:default"]).toMatchObject({
       type: "oauth",

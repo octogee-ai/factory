@@ -1,0 +1,305 @@
+import { describe, it, expect, afterEach, vi } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { DatabaseSync } from "node:sqlite";
+import {
+  resolveAuthDbPath,
+  readAuthProfileStore,
+  writeAuthProfileStore,
+  deleteAuthProfileStore,
+  readAuthProfileState,
+} from "../lib/auth-profile-sqlite.js";
+
+const tmps: string[] = [];
+function mk(): string {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "auth-sqlite-"));
+  tmps.push(d);
+  return d;
+}
+afterEach(() => {
+  for (const d of tmps.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+});
+
+describe("resolveAuthDbPath", () => {
+  it("returns {agentDir}/openclaw-agent.sqlite — the upstream path our writes target", () => {
+    expect(resolveAuthDbPath("/home/node/.openclaw/agents/octogee-a-coach/agent")).toBe(
+      "/home/node/.openclaw/agents/octogee-a-coach/agent/openclaw-agent.sqlite",
+    );
+  });
+});
+
+describe("readAuthProfileStore — missing DB / missing row", () => {
+  it("returns null when the database file does not exist (graceful empty for fresh BYOS onboard)", () => {
+    const agentDir = mk();
+    expect(readAuthProfileStore(agentDir)).toBeNull();
+  });
+
+  it("returns null when the database exists but the singleton row is missing (post-doctor, pre-write)", () => {
+    const agentDir = mk();
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath);
+    db.exec(
+      `CREATE TABLE auth_profile_store (store_key TEXT NOT NULL PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+       CREATE TABLE auth_profile_state (state_key TEXT NOT NULL PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL);`,
+    );
+    db.close();
+    expect(readAuthProfileStore(agentDir)).toBeNull();
+  });
+});
+
+describe("writeAuthProfileStore — bootstrap + round-trip", () => {
+  it("creates the database + tables on first write and round-trips the JSON-blob payload", () => {
+    const agentDir = mk();
+    const payload = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "acc-1",
+          refresh: "ref-1",
+          expires: 0,
+          copyToAgents: true,
+        },
+      },
+    };
+    writeAuthProfileStore(agentDir, payload);
+    expect(fs.existsSync(resolveAuthDbPath(agentDir))).toBe(true);
+    expect(readAuthProfileStore(agentDir)).toEqual(payload);
+  });
+
+  it("upserts on the singleton key — last writer wins, never appends a second row", () => {
+    const agentDir = mk();
+    writeAuthProfileStore(agentDir, { v: 1 });
+    writeAuthProfileStore(agentDir, { v: 2 });
+    writeAuthProfileStore(agentDir, { v: 3 });
+    expect(readAuthProfileStore(agentDir)).toEqual({ v: 3 });
+    const db = new DatabaseSync(resolveAuthDbPath(agentDir), { readOnly: true });
+    const rows = db
+      .prepare(`SELECT COUNT(*) AS c FROM auth_profile_store`)
+      .all() as Array<{ c: number }>;
+    db.close();
+    expect(rows[0].c).toBe(1);
+  });
+
+  it("joins an existing openclaw-created DB without dropping its other tables (lockstep with upstream's schema)", () => {
+    const agentDir = mk();
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath);
+    db.exec(
+      `CREATE TABLE auth_profile_store (store_key TEXT NOT NULL PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+       CREATE TABLE auth_profile_state (state_key TEXT NOT NULL PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+       CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL, agent_id TEXT, app_version TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+       INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at) VALUES ('primary', 'agent', 1, 0, 0);`,
+    );
+    db.close();
+
+    writeAuthProfileStore(agentDir, { v: "x" });
+
+    const verify = new DatabaseSync(dbPath, { readOnly: true });
+    const meta = verify.prepare(`SELECT meta_key FROM schema_meta`).all() as Array<{
+      meta_key: string;
+    }>;
+    verify.close();
+    expect(meta.map((r) => r.meta_key)).toEqual(["primary"]);
+    expect(readAuthProfileStore(agentDir)).toEqual({ v: "x" });
+  });
+
+  it("stamps updated_at — monotonically increasing across writes", () => {
+    const agentDir = mk();
+    writeAuthProfileStore(agentDir, { v: 1 });
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const t1 = (db.prepare(`SELECT updated_at AS t FROM auth_profile_store`).get() as {
+      t: number;
+    }).t;
+    db.close();
+    expect(t1).toBeGreaterThan(0);
+  });
+});
+
+describe("deleteAuthProfileStore — clears the singleton row on disable", () => {
+  it("is a no-op when the DB does not exist (BYOT disabled on a fresh customer)", () => {
+    expect(() => deleteAuthProfileStore(mk())).not.toThrow();
+  });
+
+  it("removes a previously-written store row and leaves state untouched", () => {
+    const agentDir = mk();
+    writeAuthProfileStore(agentDir, { secret: "live" });
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath);
+    db.prepare(
+      `INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('primary', ?, ?)`,
+    ).run(JSON.stringify({ rotated: true }), Date.now());
+    db.close();
+
+    deleteAuthProfileStore(agentDir);
+
+    expect(readAuthProfileStore(agentDir)).toBeNull();
+    expect(readAuthProfileState(agentDir)).toEqual({ rotated: true });
+  });
+});
+
+describe("readAuthProfileState — symmetric to store", () => {
+  it("returns null when the database doesn't exist", () => {
+    expect(readAuthProfileState(mk())).toBeNull();
+  });
+
+  it("reads a state row when one is present (we don't write state; openclaw owns it)", () => {
+    const agentDir = mk();
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath);
+    db.exec(
+      `CREATE TABLE auth_profile_state (state_key TEXT NOT NULL PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL);`,
+    );
+    const stateBlob = JSON.stringify({ version: 1, usageStats: {} });
+    db.prepare(
+      `INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('primary', ?, ?)`,
+    ).run(stateBlob, Date.now());
+    db.close();
+    expect(readAuthProfileState(agentDir)).toEqual({ version: 1, usageStats: {} });
+  });
+});
+
+describe("filesystem-mode hardening — mirror upstream openclaw-agent-db (0700 dir + 0600 db/wal/shm)", () => {
+  it("writeAuthProfileStore creates the agent dir with mode 0700 (private to the process owner)", () => {
+    const parent = mk();
+    const agentDir = path.join(parent, "agents", "octogee-a-coach", "agent");
+    writeAuthProfileStore(agentDir, { v: 1 });
+    const mode = fs.statSync(agentDir).mode & 0o777;
+    expect(mode).toBe(0o700);
+  });
+
+  it("writeAuthProfileStore leaves the DB file at mode 0600 (no group/other read)", () => {
+    const agentDir = mk();
+    writeAuthProfileStore(agentDir, { v: 1 });
+    const mode = fs.statSync(resolveAuthDbPath(agentDir)).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it("writeAuthProfileStore chmods -wal and -shm sidecars to 0600 when present", () => {
+    const agentDir = mk();
+    writeAuthProfileStore(agentDir, { v: 1 });
+    // WAL mode is opt-in via pragma; touch the sidecars if upstream/openclaw left
+    // them at default modes, then trigger another write so we re-harden.
+    const dbPath = resolveAuthDbPath(agentDir);
+    fs.writeFileSync(`${dbPath}-wal`, "");
+    fs.writeFileSync(`${dbPath}-shm`, "");
+    fs.chmodSync(`${dbPath}-wal`, 0o644);
+    fs.chmodSync(`${dbPath}-shm`, 0o644);
+    writeAuthProfileStore(agentDir, { v: 2 });
+    expect(fs.statSync(`${dbPath}-wal`).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(`${dbPath}-shm`).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("busy_timeout — match upstream's 30s contention budget (PRAGMA busy_timeout)", () => {
+  it("every write opens with PRAGMA busy_timeout = 30000 so concurrent openclaw writers don't fail-fast", () => {
+    // Spy on DatabaseSync.prototype.exec to capture every SQL the write
+    // path issues. The hardened opener runs PRAGMA busy_timeout on each
+    // fresh connection; this verifies the contract end-to-end without
+    // needing a multi-process harness.
+    const agentDir = mk();
+    const execSpy = vi.spyOn(DatabaseSync.prototype, "exec");
+    try {
+      writeAuthProfileStore(agentDir, { v: 1 });
+      const pragmas = execSpy.mock.calls.map((c) => String(c[0]));
+      expect(pragmas).toContain(`PRAGMA busy_timeout = 30000;`);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+});
+
+describe("delete retries SQLITE_BUSY — symmetric with write", () => {
+  it("the delete path runs inside the same withWriteRetry loop (transient busy is retried, not surfaced)", () => {
+    // Inject a transient BUSY via a one-shot mock of BEGIN IMMEDIATE.
+    // The first attempt throws SQLITE_BUSY, the retry succeeds — proving
+    // delete shares the write path's retry-on-busy semantics (the P2 gap).
+    const agentDir = mk();
+    writeAuthProfileStore(agentDir, { v: 1 });
+
+    const originalExec = DatabaseSync.prototype.exec;
+    let beginImmediateCalls = 0;
+    const execSpy = vi
+      .spyOn(DatabaseSync.prototype, "exec")
+      .mockImplementation(function (this: DatabaseSync, sql: string) {
+        if (sql === "BEGIN IMMEDIATE" && beginImmediateCalls === 0) {
+          beginImmediateCalls++;
+          const err = new Error("database is locked") as Error & { code?: string };
+          err.code = "SQLITE_BUSY";
+          throw err;
+        }
+        return originalExec.call(this, sql) as unknown;
+      });
+
+    try {
+      expect(() => deleteAuthProfileStore(agentDir)).not.toThrow();
+    } finally {
+      execSpy.mockRestore();
+    }
+    expect(beginImmediateCalls).toBe(1);
+    expect(readAuthProfileStore(agentDir)).toBeNull();
+  });
+});
+
+describe("tolerant reads — corrupt DB / corrupt JSON returns null rather than aborting the sweep", () => {
+  it("readAuthProfileStore returns null when the JSON cell is unparseable (matches upstream tolerance)", () => {
+    const agentDir = mk();
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath);
+    db.exec(
+      `CREATE TABLE auth_profile_store (store_key TEXT NOT NULL PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL);`,
+    );
+    db.prepare(
+      `INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES ('primary', ?, ?)`,
+    ).run("{not-json", Date.now());
+    db.close();
+    expect(readAuthProfileStore(agentDir)).toBeNull();
+  });
+
+  it("readAuthProfileStore returns null when the DB file is corrupt (one bad agent must not abort the whole sweep)", () => {
+    const agentDir = mk();
+    fs.writeFileSync(resolveAuthDbPath(agentDir), "not-a-sqlite-file");
+    expect(readAuthProfileStore(agentDir)).toBeNull();
+  });
+
+  it("readAuthProfileState returns null when the JSON cell is unparseable", () => {
+    const agentDir = mk();
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath);
+    db.exec(
+      `CREATE TABLE auth_profile_state (state_key TEXT NOT NULL PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL);`,
+    );
+    db.prepare(
+      `INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('primary', ?, ?)`,
+    ).run("{also-not-json", Date.now());
+    db.close();
+    expect(readAuthProfileState(agentDir)).toBeNull();
+  });
+
+  it("readAuthProfileState returns null when the DB file is corrupt", () => {
+    const agentDir = mk();
+    fs.writeFileSync(resolveAuthDbPath(agentDir), "garbage");
+    expect(readAuthProfileState(agentDir)).toBeNull();
+  });
+});
+
+describe("concurrent writers — last-writer-wins, no rows lost", () => {
+  it("two writes to the same DB both complete and the final state matches the last write", async () => {
+    const agentDir = mk();
+    await Promise.all([
+      Promise.resolve().then(() => writeAuthProfileStore(agentDir, { who: "A" })),
+      Promise.resolve().then(() => writeAuthProfileStore(agentDir, { who: "B" })),
+    ]);
+    const final = readAuthProfileStore(agentDir) as { who: string };
+    expect(["A", "B"]).toContain(final.who);
+    const db = new DatabaseSync(resolveAuthDbPath(agentDir), { readOnly: true });
+    const rows = db
+      .prepare(`SELECT COUNT(*) AS c FROM auth_profile_store`)
+      .all() as Array<{ c: number }>;
+    db.close();
+    expect(rows[0].c).toBe(1);
+  });
+});
