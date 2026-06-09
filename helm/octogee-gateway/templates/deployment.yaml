@@ -196,12 +196,15 @@ spec:
             # so the entrypoint's `= "operator"` check is a no-op.
             - name: GATEWAY_PROFILE
               value: {{ .Values.profile | quote }}
-            # Operator gateways hold no Firestore credentials; their site-build-api
-            # brokers deploy-record writes to octogee-api over Workload-Identity OIDC
-            # (cattle write directly via ADC and ignore this). Namespace-derived
-            # internal DNS. See docs/operations/OPERATOR-GATEWAY-PULL-REPORTING.md.
-            - name: OCTOGEE_API_URL
-              value: {{ .Values.env.octogeeApiUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001" .Release.Namespace) | quote }}
+            {{- if eq .Values.profile "operator" }}
+            # Operator gateways are shell-bearing and hold NO octogee-api token; their
+            # site-build-api brokers the deploy to gateway-edge (this pod's non-shell
+            # sidecar, which holds the token and forwards to octogee-api). Standard
+            # gateways deploy directly with their own token and don't need this.
+            # See docs/decisions/DECISIONS.md ("Operator-gateway site deploys").
+            - name: GATEWAY_EDGE_INTERNAL_URL
+              value: "http://127.0.0.1:{{ .Values.gatewayEdge.port }}"
+            {{- end }}
             {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
             {{- if ne $autosave "" }}
             # Override; unset → gateway code defaults from profile
@@ -370,6 +373,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            # Operator excluded: the gateway container is shell-bearing (BuilderShell +
+            # the yolo agent), so it must NOT hold the octogee-api KSA token — the shell
+            # could read/replay/exfiltrate the gateway identity. Operator site-build-api
+            # instead brokers its deploy through gateway-edge (the sidecar that holds the
+            # token). Standard gateways are not shell-bearing and mount it directly.
             {{- if ne .Values.profile "operator" }}
             - name: octogee-api-sa-token
               mountPath: /var/run/secrets/octogee-api
@@ -497,6 +505,11 @@ spec:
             {{- if eq .Values.profile "operator" }}
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"
+            # Operator gateway-edge brokers the shell container's site deploy to
+            # octogee-api on its behalf (it holds the KSA token; the shell container
+            # does not). Namespace-derived internal DNS.
+            - name: OCTOGEE_API_URL
+              value: {{ .Values.env.octogeeApiUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001" .Release.Namespace) | quote }}
             {{- end }}
             {{- range $key, $val := .Values.gatewayEdge.env }}
             {{- $omitOperatorKms := and (eq $.Values.profile "operator") (eq $key "OCTOGEE_KMS_KEY_NAME") -}}

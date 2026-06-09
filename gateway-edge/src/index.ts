@@ -16,6 +16,7 @@ import deployPreviewRoutes from "./routes/projects/deploy-preview.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
+import internalSiteDeployRoutes from "./routes/internal/site-deploy.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 
 import {
@@ -90,6 +91,9 @@ app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
 app.use("/internal/billing", internalBillingRoutes);
+// Operator site-build-api (shell-bearing, tokenless) brokers its deploy through here;
+// gateway-edge holds the KSA token and forwards to octogee-api.
+app.use("/internal/site", internalSiteDeployRoutes);
 // builder-shell has two caller shapes: redeem is pod-local (the in-pod bridge,
 // bare path), kill is cross-pod (octogee-api → the owner pod via the
 // /api/g/<id>/* fleet seam). The HTTP server hands Express the raw url without

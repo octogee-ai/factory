@@ -30,6 +30,9 @@ const TENANT_BOUND_API_ROUTES = new Set([
   "/api/byosub/capture",
   "/api/byosub/sync-back",
   "/api/notifications/ingest",
+  // Operator gateways broker their Firebase Hosting deploy here over the KSA
+  // tenant-binding token; the handler authorizes via req.boundTenant.
+  "/api/site/hosting-deploy",
 ]);
 
 export interface CreateAppOptions {
@@ -132,8 +135,10 @@ const route = req.route?.path || "unmatched";
   mountClusterRoutes(app, {
     mmRestProxyHandler,
     mattermostMintRoutes,
-    siteDeployRoutes: createSiteDeployRoutes({ db }),
   });
+  // octogee-api-only: the Hosting-deploy broker. Mounted after the tenant-binding
+  // middleware so req.boundTenant is attached; never mounted on the in-pod gateway-edge.
+  app.use("/api/site/hosting-deploy", createSiteDeployRoutes({ db }));
 
   app.use(errorHandler);
 
