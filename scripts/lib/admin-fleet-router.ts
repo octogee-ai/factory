@@ -447,6 +447,45 @@ interface RolloutBodyOk {
   profile?: GatewayProfile;
 }
 
+// A PATCH may move a gateway between running/paused/draining, but NOT to
+// "retired": that must run full teardown via DELETE (which creates the
+// retire-gateway op). A bare PATCH to "retired" only flips desired state, and
+// the reconciler would then remove the pod while stranding the PVC, both
+// auth-token secrets, the GSA, and the Firestore records.
+export function validateDesiredStatusPatch(
+  desiredStatus: string,
+):
+  | { error: { status: number; body: { error: string; got?: string } } }
+  | { ok: "running" | "paused" | "draining" } {
+  if (desiredStatus === "retired") {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error:
+            "retire a gateway via DELETE /gateways/:id (full teardown), not PATCH desiredStatus=retired",
+        },
+      },
+    };
+  }
+  if (
+    desiredStatus !== "running" &&
+    desiredStatus !== "paused" &&
+    desiredStatus !== "draining"
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "desiredStatus must be one of: running, paused, draining",
+          got: desiredStatus,
+        },
+      },
+    };
+  }
+  return { ok: desiredStatus };
+}
+
 export function validateRolloutBody(
   body: Partial<{ imageTag: string; imageRepository: string; profile: string }>,
 ): { error: RolloutBodyError } | { ok: RolloutBodyOk } {
@@ -2229,20 +2268,12 @@ router.post(
           update.imageTag = body.imageTag;
         }
         if (body.desiredStatus !== undefined) {
-          if (
-            body.desiredStatus !== "running" &&
-            body.desiredStatus !== "paused" &&
-            body.desiredStatus !== "draining" &&
-            body.desiredStatus !== "retired"
-          ) {
-            res.status(400).json({
-              error:
-                "desiredStatus must be one of: running, paused, draining, retired",
-              got: body.desiredStatus,
-            });
+          const v = validateDesiredStatusPatch(body.desiredStatus);
+          if ("error" in v) {
+            res.status(v.error.status).json(v.error.body);
             return;
           }
-          update.desiredStatus = body.desiredStatus;
+          update.desiredStatus = v.ok;
         }
         if (body.sizingTier !== undefined) {
           if (!(SIZING_TIERS as readonly string[]).includes(body.sizingTier)) {
@@ -2283,9 +2314,8 @@ router.post(
         const id = req.params.id as string;
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
-        const deletePersistentVolumeClaim = isTruthyQueryFlag(
-          req.query.deletePersistentVolumeClaim,
-        );
+        const retainData = isTruthyQueryFlag(req.query.retainData);
+        const retainServiceAccount = isTruthyQueryFlag(req.query.retainServiceAccount);
         const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
         const snap = await ref.get();
         if (!snap.exists) {
@@ -2342,13 +2372,14 @@ router.post(
           completedAt: null,
           input: {
             gatewayId: id,
-            ...(deletePersistentVolumeClaim ? { deletePersistentVolumeClaim: true } : {}),
+            ...(retainData ? { retainData: true } : {}),
+            ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
           },
           steps: [],
           gatewayId: id,
         });
         await batch.commit();
-        res.status(202).json({ gatewayId: id, operationId, deletePersistentVolumeClaim });
+        res.status(202).json({ gatewayId: id, operationId, retainData, retainServiceAccount });
       } catch (e) {
         next(e);
       }

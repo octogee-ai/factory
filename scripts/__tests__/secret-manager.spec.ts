@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   updateSecret: vi.fn(),
   getIamPolicy: vi.fn(),
   setIamPolicy: vi.fn(),
+  deleteSecret: vi.fn(),
 }));
 
 vi.mock("@google-cloud/secret-manager", () => ({
@@ -16,6 +17,7 @@ vi.mock("@google-cloud/secret-manager", () => ({
       updateSecret: mocks.updateSecret,
       getIamPolicy: mocks.getIamPolicy,
       setIamPolicy: mocks.setIamPolicy,
+      deleteSecret: mocks.deleteSecret,
     };
   }),
 }));
@@ -23,6 +25,7 @@ vi.mock("@google-cloud/secret-manager", () => ({
 import {
   writeSecret,
   provisionGatewayAuthSecret,
+  deleteSecret,
   SINGLE_REGION_REPLICATION,
 } from "../lib/secret-manager.js";
 
@@ -33,7 +36,29 @@ beforeEach(() => {
   mocks.updateSecret.mockResolvedValue([{}]);
   mocks.getIamPolicy.mockResolvedValue([{ bindings: [] }]);
   mocks.setIamPolicy.mockResolvedValue([{}]);
+  mocks.deleteSecret.mockResolvedValue([{}]);
   process.env.GCP_PROJECT_ID = "octogee";
+});
+
+describe("deleteSecret — hard delete, idempotent (decommission teardown)", () => {
+  it("deletes the secret by fully-qualified name", async () => {
+    const res = await deleteSecret("gateway-auth-token-mama");
+    expect(mocks.deleteSecret).toHaveBeenCalledWith({
+      name: "projects/octogee/secrets/gateway-auth-token-mama",
+    });
+    expect(res).toEqual({ deleted: true });
+  });
+
+  it("is idempotent — a NotFound (code 5) resolves cleanly, never throws", async () => {
+    mocks.deleteSecret.mockRejectedValueOnce(Object.assign(new Error("not found"), { code: 5 }));
+    const res = await deleteSecret("gateway-auth-token-gone");
+    expect(res).toEqual({ deleted: false });
+  });
+
+  it("rethrows non-NotFound errors (no silent failure)", async () => {
+    mocks.deleteSecret.mockRejectedValueOnce(Object.assign(new Error("denied"), { code: 7 }));
+    await expect(deleteSecret("gateway-auth-token-x")).rejects.toThrow(/denied/);
+  });
 });
 
 describe("secret-manager replication policy is single-region (automatic = ~25× storage cost)", () => {

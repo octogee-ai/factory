@@ -107,12 +107,12 @@ spec:
             # binds the generated SM secret to this GCP service account.
             # Without this env, the request 500s with "GATEWAY_SERVICE_
             # ACCOUNT not configured — admin cannot provision gateway
-            # auth-token secret". Reuses the same gateway-pod GSA the
-            # subchart already runs under (Workload Identity binding
-            # via serviceAccountName at the top of this template +
-            # `gcpServiceAccount` annotation on the KSA).
+            # auth-token secret". This is the gateway-POD consumer GSA
+            # (octogee-gateway), NOT Cowboy's own gcpServiceAccount — the
+            # token secret must be readable by the gateway pod, and must
+            # never be bound to the control-plane identity.
             - name: GATEWAY_SERVICE_ACCOUNT
-              value: {{ .Values.gcpServiceAccount | quote }}
+              value: {{ .Values.gatewayServiceAccount | quote }}
             - name: BOOTSTRAP_DEFAULT_GATEWAY
               value: {{ (.Values.bootstrapDefaultGateway).enabled | default false | quote }}
             - name: BOOTSTRAP_IMAGE_REPOSITORY

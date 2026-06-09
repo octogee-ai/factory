@@ -20,6 +20,10 @@ export interface KubeOps {
     namespace: string;
     name: string;
   }): Promise<void>;
+  deleteSecret(opts: {
+    namespace: string;
+    name: string;
+  }): Promise<void>;
 }
 
 export interface KubectlSubprocessResult {
@@ -188,6 +192,25 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       }
       deps.log(`[kube-ops] deleted pvc/${name} ns=${namespace}`);
     },
+
+    async deleteSecret({ namespace, name }) {
+      const args = [
+        "-n",
+        namespace,
+        "delete",
+        `secret/${name}`,
+        "--ignore-not-found=true",
+      ];
+      const result = await deps.runKubectl(args);
+      if (result.code !== 0) {
+        throw new Error(
+          `kubectl delete secret/${name} ns=${namespace} failed (code=${result.code}): ${
+            result.stderr.trim() || result.stdout.trim()
+          }`,
+        );
+      }
+      deps.log(`[kube-ops] deleted secret/${name} ns=${namespace}`);
+    },
   };
 }
 
@@ -209,6 +232,9 @@ export function createLoggingKubeOps(log: (msg: string) => void): KubeOps {
     },
     deletePersistentVolumeClaim: async ({ namespace, name }) => {
       log(`[kube-ops:stub] delete pvc ns=${namespace} ${name} — no exec`);
+    },
+    deleteSecret: async ({ namespace, name }) => {
+      log(`[kube-ops:stub] delete secret ns=${namespace} ${name} — no exec`);
     },
   };
 }

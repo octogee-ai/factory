@@ -1129,6 +1129,20 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
     expect(update).toBeUndefined();
   });
 
+  it("rejects desiredStatus=retired — retirement must go through DELETE for full teardown", async () => {
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    const app = buildApp();
+    const res = await request(app)
+      .patch("/api/admin/gateways/canary")
+      .send({ desiredStatus: "retired" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/DELETE \/gateways\/:id/);
+    const update = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+    );
+    expect(update).toBeUndefined();
+  });
+
   it("accepts desiredStatus=paused for the pause/resume flow", async () => {
     glmGatewaysDocs["canary"] = { gatewayId: "canary" };
     const app = buildApp();
@@ -1241,19 +1255,35 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(op?.data).toMatchObject({ kind: "retire-gateway", createdBy: "admin-user" });
   });
 
-  it("passes explicit PVC deletion through to the retire-gateway operation", async () => {
+  it("defaults to full teardown — no retain flags on the retire-gateway op", async () => {
+    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
+    const app = buildApp();
+    const res = await request(app).delete("/api/admin/gateways/canary");
+    expect(res.status).toBe(202);
+    expect(res.body.retainData).toBe(false);
+    expect(res.body.retainServiceAccount).toBe(false);
+    const op = calls.find((c) => c.collection === "glmOperations");
+    expect(op?.data.input).toMatchObject({ gatewayId: "canary" });
+    expect(op?.data.input.retainData).toBeUndefined();
+    expect(op?.data.input.retainServiceAccount).toBeUndefined();
+  });
+
+  it("passes retainData + retainServiceAccount through to the retire-gateway operation", async () => {
     glmGatewaysDocs["canary"] = { gatewayId: "canary" };
     gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
     const app = buildApp();
     const res = await request(app)
       .delete("/api/admin/gateways/canary")
-      .query({ deletePersistentVolumeClaim: "true" });
+      .query({ retainData: "true", retainServiceAccount: "true" });
     expect(res.status).toBe(202);
-    expect(res.body.deletePersistentVolumeClaim).toBe(true);
+    expect(res.body.retainData).toBe(true);
+    expect(res.body.retainServiceAccount).toBe(true);
     const op = calls.find((c) => c.collection === "glmOperations");
     expect(op?.data.input).toMatchObject({
       gatewayId: "canary",
-      deletePersistentVolumeClaim: true,
+      retainData: true,
+      retainServiceAccount: true,
     });
   });
 

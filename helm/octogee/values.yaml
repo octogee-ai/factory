@@ -250,8 +250,11 @@ serviceAccount:
 # block the glm-controller subchart sees gcpServiceAccount: "" and renders
 # a KSA missing the iam.gke.io/gcp-service-account annotation, so Workload
 # Identity falls back to the cluster's default node identity which lacks
-# Firestore access. Reuses the gateway GSA — which already has
-# roles/datastore.user — so we don't need a separate GSA for it. Per-env
-# override in values.{test,prod}.yaml swaps to the env's GSA.
+# Firestore access. Cowboy runs as its OWN dedicated GSA (octogee-glm-controller)
+# rather than the shared gateway SA, so its privileged teardown grants — Secret
+# Manager admin + per-gateway SA delete — are not inherited by cattle gateway
+# pods. Per-env override in values.test.yaml swaps to the env's GSA.
 glm-controller:
-  gcpServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"
+  gcpServiceAccount: "octogee-glm-controller@octogee.iam.gserviceaccount.com"
+  # Gateway-pod consumer GSA for new per-gateway auth-token secrets (NOT Cowboy's).
+  gatewayServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"

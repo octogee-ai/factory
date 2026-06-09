@@ -59,6 +59,7 @@ import {
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
+import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
 import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
@@ -78,7 +79,7 @@ import {
   cutoverUserGatewayAndMarkMounted,
   type FleetStateFirestore,
 } from "../../scripts/lib/fleet-state.js";
-import { provisionGatewayAuthSecret } from "../../scripts/lib/secret-manager.js";
+import { provisionGatewayAuthSecret, deleteSecret } from "../../scripts/lib/secret-manager.js";
 import { listGatewayBuilds } from "../../scripts/lib/artifact-registry.js";
 import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
 import { deleteAuthUserTolerantOfMissing } from "../../scripts/lib/firebase-auth-helpers.js";
@@ -1149,6 +1150,23 @@ async function buildHandlers(
       return doc.exists;
     },
     deleteGatewayPersistentVolumeClaim: createGatewayPersistentVolumeClaimDeleter(kubeOps),
+    deleteGatewayKubeSecret: async (gatewayId) =>
+      kubeOps.deleteSecret({ namespace: NAMESPACE, name: `gateway-auth-token-${gatewayId}` }),
+    deleteAuthTokenSecret: async (gatewayId) => {
+      await deleteSecret(`gateway-auth-token-${gatewayId}`);
+    },
+    teardownGatewayServiceAccount: createGatewayServiceAccountTeardown({
+      projectId: process.env.GOOGLE_CLOUD_PROJECT ?? "octogee",
+      log: logFn,
+      request: async ({ url, method }) => {
+        const auth = new GoogleAuth({
+          scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        });
+        const client = await auth.getClient();
+        const res = await client.request<unknown>({ url, method });
+        return { status: res.status };
+      },
+    }),
     syncFleetIngress: fleetOps.syncFleetIngress,
     helmUninstallTimeoutMs: 90_000,
     pollIntervalMs: 5_000,

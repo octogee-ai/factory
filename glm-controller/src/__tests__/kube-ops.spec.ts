@@ -331,3 +331,41 @@ describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
     ).rejects.toThrow(/Forbidden/);
   });
 });
+
+describe("createKubeSubprocessRunner — deleteSecret", () => {
+  it("deletes the named secret idempotently", async () => {
+    const { runKubectl, calls } = mockSubprocess([
+      { stdout: "secret/gateway-auth-token-bender deleted" },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await kube.deleteSecret({
+      namespace: "octogee-test",
+      name: "gateway-auth-token-bender",
+    });
+
+    expect(calls).toEqual([
+      [
+        "-n",
+        "octogee-test",
+        "delete",
+        "secret/gateway-auth-token-bender",
+        "--ignore-not-found=true",
+      ],
+    ]);
+  });
+
+  it("throws on kubectl delete secret failures", async () => {
+    const { runKubectl } = mockSubprocess([
+      { stderr: "Error from server (Forbidden): denied", code: 1 },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await expect(
+      kube.deleteSecret({
+        namespace: "octogee-test",
+        name: "gateway-auth-token-bender",
+      }),
+    ).rejects.toThrow(/Forbidden/);
+  });
+});

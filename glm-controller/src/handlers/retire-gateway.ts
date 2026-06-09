@@ -1,4 +1,5 @@
 import type { Operation, OperationStep, StepStatus } from "../../../shared/types/glm.js";
+import { isValidGatewayId } from "../../../shared/types/glm.js";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
 
@@ -18,9 +19,19 @@ export interface RetireGatewayDeps {
 
   readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
 
-  archiveAuthTokenSecret?: (gatewayId: string) => Promise<void>;
+  // Teardown of the per-gateway runtime resources. All three are REQUIRED —
+  // the teardown-completeness invariant is structural: a retire handler that
+  // forgets to remove the PVC or either auth-token secret cannot be
+  // constructed. (Mirror of provisioning: provisionGatewayAuthSecret +
+  // ensureAuthSecret + the chart PVC created these; decommission removes them.)
+  deleteGatewayPersistentVolumeClaim: (gatewayId: string) => Promise<void>;
+  deleteGatewayKubeSecret: (gatewayId: string) => Promise<void>;
+  deleteAuthTokenSecret: (gatewayId: string) => Promise<void>;
 
-  deleteGatewayPersistentVolumeClaim?: (gatewayId: string) => Promise<void>;
+  // Optional, operator-only, best-effort: delete the per-gateway GSA (deleting
+  // the service account also removes its Workload-Identity binding). No-op when
+  // no GSA exists for the gateway (cattle gateways never have one).
+  teardownGatewayServiceAccount?: (gatewayId: string) => Promise<void>;
 
   readGlmGatewayId: (gatewayId: string) => Promise<string | null>;
 
@@ -34,7 +45,8 @@ export interface RetireGatewayDeps {
 
 interface RetireGatewayInput {
   gatewayId?: unknown;
-  deletePersistentVolumeClaim?: unknown;
+  retainData?: unknown;
+  retainServiceAccount?: unknown;
 }
 
 interface PollResult {
@@ -49,8 +61,12 @@ interface StepResult {
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
-function shouldDeletePersistentVolumeClaim(input: RetireGatewayInput): boolean {
-  return input.deletePersistentVolumeClaim === true;
+function shouldRetainData(input: RetireGatewayInput): boolean {
+  return input.retainData === true;
+}
+
+function shouldRetainServiceAccount(input: RetireGatewayInput): boolean {
+  return input.retainServiceAccount === true;
 }
 
 function failure(error: string): OperationResult {
@@ -62,7 +78,11 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const input = op.input as RetireGatewayInput;
     const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
     if (!gatewayId) return failure("missing gatewayId in op.input");
-    const deletePersistentVolumeClaim = shouldDeletePersistentVolumeClaim(input);
+    if (!isValidGatewayId(gatewayId)) {
+      return failure(`invalid gatewayId in op.input: "${gatewayId}"`);
+    }
+    const retainData = shouldRetainData(input);
+    const retainServiceAccount = shouldRetainServiceAccount(input);
 
     const liveFailure = await assertGatewayRetirable(deps, gatewayId);
     if (liveFailure) return liveFailure;
@@ -73,7 +93,18 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
         `glmGateways/${gatewayId} not found — cannot determine gatewayId for helm uninstall`,
       );
     }
+    // Teardown targets resources named from resolvedGatewayId but removes
+    // records by the input gatewayId — they must be the same gateway, or a
+    // mismatched doc would delete one gateway's records while clearing
+    // another's resources.
+    if (resolvedGatewayId !== gatewayId) {
+      return failure(
+        `glmGateways/${gatewayId}.gatewayId is "${resolvedGatewayId}" — refusing teardown under a mismatched id`,
+      );
+    }
 
+    // 1. Stop the workload first — nothing must be holding the PVC / secrets /
+    //    service account when we delete them.
     const helmResult = await pollUntil({
       stepName: "helm-uninstall",
       timeoutMs: deps.helmUninstallTimeoutMs,
@@ -89,14 +120,25 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
       return failure(helmResult.errorMsg ?? "helm uninstall failed");
     }
 
-    const pvcFailure = await deletePersistentVolumeClaimIfRequested({
+    // 2. Tear down the per-gateway resources. Steps are independent and
+    //    best-effort: every one is attempted even if a prior one failed (D4),
+    //    so a single stuck resource cannot strand the rest. Records are NOT
+    //    removed until all gating teardown succeeds, so a partial failure
+    //    leaves the operation re-drivable from glmGateways/<id>.
+    const teardownErrors = await teardownResources(
       ctx,
       deps,
-      deletePersistentVolumeClaim,
-      gatewayId: resolvedGatewayId,
-    });
-    if (pvcFailure) return pvcFailure;
+      resolvedGatewayId,
+      retainData,
+      retainServiceAccount,
+    );
+    if (teardownErrors.length > 0) {
+      return failure(
+        `teardown incomplete (records preserved for retry): ${teardownErrors.join("; ")}`,
+      );
+    }
 
+    // 3. Remove the control-plane records last.
     const cleanupFailure = await cleanupGatewayRecords(ctx, deps, gatewayId);
     if (cleanupFailure) return cleanupFailure;
 
@@ -107,6 +149,53 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
 
     return { steps: [], success: true };
   };
+}
+
+async function teardownResources(
+  ctx: OperationContext,
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+  retainData: boolean,
+  retainServiceAccount: boolean,
+): Promise<string[]> {
+  const errors: string[] = [];
+
+  if (retainData) {
+    deps.log(`[retire-gateway] retainData set — preserving PVC for ${gatewayId}`);
+  } else {
+    const r = await runReportedStep(ctx, deps, "delete-pvc", () =>
+      deps.deleteGatewayPersistentVolumeClaim(gatewayId),
+    );
+    if (!r.ok) errors.push(`delete-pvc: ${r.error ?? "unknown error"}`);
+  }
+
+  const kube = await runReportedStep(ctx, deps, "delete-kube-secret", () =>
+    deps.deleteGatewayKubeSecret(gatewayId),
+  );
+  if (!kube.ok) errors.push(`delete-kube-secret: ${kube.error ?? "unknown error"}`);
+
+  const sm = await runReportedStep(ctx, deps, "delete-sm-secret", () =>
+    deps.deleteAuthTokenSecret(gatewayId),
+  );
+  if (!sm.ok) errors.push(`delete-sm-secret: ${sm.error ?? "unknown error"}`);
+
+  // GSA teardown: a non-404 failure means a per-gateway GSA (a standing IAM
+  // principal — the exact thing decommission must remove) is still live, so it
+  // is aggregate-gated like the other resources (the op fails and is
+  // re-drivable). A 404 "no GSA" is a clean no-op in gateway-gsa.ts, so cattle
+  // gateways still pass. retainServiceAccount skips it entirely — for a
+  // terraform-managed GSA (gw-bender), decommissioned via terraform, not here.
+  const teardownGsa = deps.teardownGatewayServiceAccount;
+  if (retainServiceAccount) {
+    deps.log(
+      `[retire-gateway] retainServiceAccount set — leaving the per-gateway GSA in place for ${gatewayId}`,
+    );
+  } else if (teardownGsa) {
+    const gsa = await runReportedStep(ctx, deps, "teardown-gsa", () => teardownGsa(gatewayId));
+    if (!gsa.ok) errors.push(`teardown-gsa: ${gsa.error ?? "unknown error"}`);
+  }
+
+  return errors;
 }
 
 async function assertGatewayRetirable(
@@ -128,22 +217,6 @@ async function assertGatewayRetirable(
   return null;
 }
 
-async function deletePersistentVolumeClaimIfRequested(args: {
-  ctx: OperationContext;
-  deps: RetireGatewayDeps;
-  deletePersistentVolumeClaim: boolean;
-  gatewayId: string;
-}): Promise<OperationResult | null> {
-  const { ctx, deps, deletePersistentVolumeClaim, gatewayId } = args;
-  if (!deletePersistentVolumeClaim) return null;
-  const deletePvc = deps.deleteGatewayPersistentVolumeClaim;
-  if (!deletePvc) {
-    return failure("deletePersistentVolumeClaim requested but PVC deletion is not configured");
-  }
-  const result = await runReportedStep(ctx, deps, "delete-pvc", () => deletePvc(gatewayId));
-  return result.ok ? null : failure(result.error ?? "PVC deletion failed");
-}
-
 async function cleanupGatewayRecords(
   ctx: OperationContext,
   deps: RetireGatewayDeps,
@@ -152,13 +225,10 @@ async function cleanupGatewayRecords(
   const result = await runReportedStep(ctx, deps, "cleanup", async () => {
     await deps.deleteGlmGateway(gatewayId);
     await deps.deleteGatewayHeartbeat(gatewayId);
-    if (deps.archiveAuthTokenSecret) {
-      await deps.archiveAuthTokenSecret(gatewayId);
-    }
   });
   return result.ok
     ? null
-    : failure(`cleanup failed after helm uninstall: ${result.error ?? "unknown error"}`);
+    : failure(`cleanup failed after teardown: ${result.error ?? "unknown error"}`);
 }
 
 async function quiesceGatewayHeartbeat(

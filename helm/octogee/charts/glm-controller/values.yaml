@@ -2,10 +2,17 @@ image:
   repository: us-central1-docker.pkg.dev/octogee/octogee/glm-controller
   tag: latest
 
-# Workload Identity binding — KSA `glm-controller` impersonates this GSA
-# for Firestore admin access. The GSA needs `roles/datastore.user` on the
-# project. Per-env values.yaml overrides this with the env-suffixed GSA.
+# Workload Identity binding — KSA `glm-controller` impersonates THIS GSA:
+# Cowboy's own dedicated identity (octogee-glm-controller), which carries the
+# privileged teardown grants. Per-env values.yaml overrides with the
+# env-suffixed GSA.
 gcpServiceAccount: ""
+
+# The gateway-POD consumer GSA (octogee-gateway) that new per-gateway
+# auth-token Secret Manager secrets are bound to when an admin adds a gateway.
+# Distinct from gcpServiceAccount above — Cowboy's identity must NOT be granted
+# access to gateway token secrets. Per-env values.yaml sets the env-suffixed GSA.
+gatewayServiceAccount: ""
 
 # Path inside the controller image where the standalone per-instance
 # gateway chart is baked at build time (see glm-controller/Dockerfile,

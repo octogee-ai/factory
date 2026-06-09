@@ -127,6 +127,23 @@ export async function archiveSecret(name: string): Promise<{ disabledCount: numb
   }
 }
 
+// Hard-delete the whole secret (container + all versions + its IAM bindings).
+// For decommission teardown a dead gateway's token must not linger as a
+// standing credential — archive (disable versions) leaves the container and
+// its resource-IAM, so retirement deletes. Idempotent: a NotFound (code 5)
+// is success, never an error.
+export async function deleteSecret(name: string): Promise<{ deleted: boolean }> {
+  try {
+    await client().deleteSecret({ name: fqSecretName(name) });
+    return { deleted: true };
+  } catch (err) {
+    if ((err as { code?: number } | null)?.code === 5) {
+      return { deleted: false };
+    }
+    throw err;
+  }
+}
+
 const GATEWAY_AUTH_TOKEN_SECRET_ROLES = [
   "roles/secretmanager.secretAccessor",
   "roles/secretmanager.secretVersionAdder",

@@ -1,5 +1,31 @@
 import { describe, it, expect } from "vitest";
-import { validateRolloutBody } from "../lib/admin-fleet-router";
+import { validateRolloutBody, validateDesiredStatusPatch } from "../lib/admin-fleet-router";
+
+describe("validateDesiredStatusPatch", () => {
+  it("rejects retired — retirement must go through DELETE for full teardown", () => {
+    const r = validateDesiredStatusPatch("retired");
+    expect("error" in r).toBe(true);
+    if ("error" in r) {
+      expect(r.error.status).toBe(400);
+      expect(r.error.body.error).toMatch(/DELETE \/gateways\/:id/);
+    }
+  });
+
+  it("rejects an unknown status with the offending value", () => {
+    const r = validateDesiredStatusPatch("zombie");
+    expect("error" in r).toBe(true);
+    if ("error" in r) {
+      expect(r.error.status).toBe(400);
+      expect(r.error.body).toMatchObject({ got: "zombie" });
+    }
+  });
+
+  it.each(["running", "paused", "draining"] as const)("accepts %s", (status) => {
+    const r = validateDesiredStatusPatch(status);
+    expect("ok" in r).toBe(true);
+    if ("ok" in r) expect(r.ok).toBe(status);
+  });
+});
 
 describe("validateRolloutBody", () => {
   it("rejects when imageTag is missing", () => {
