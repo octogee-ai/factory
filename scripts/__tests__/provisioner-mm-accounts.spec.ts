@@ -97,7 +97,7 @@ describe("wireCoachMattermostAccount", () => {
     wireCoachMattermostAccount(config, SLUG, mkMmUpdate());
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
-      groupPolicy: "allowlist",
+      groupPolicy: "open",
       groupAllowFrom: ["mm-ceckert", "mm-admin"],
     });
   });
@@ -134,7 +134,7 @@ describe("wireCoachMattermostAccount", () => {
     expect(config.channels.mattermost.defaultAccount).toBe("some-custom");
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
-      groupPolicy: "allowlist",
+      groupPolicy: "open",
       groupAllowFrom: ["mm-ceckert", "mm-admin"],
     });
   });
@@ -176,7 +176,7 @@ describe("wireCoachMattermostAccount", () => {
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toBeUndefined();
   });
 
-  it("REFUSES to emit when both customerMmUserId and MM_ADMIN_USER_ID are missing", () => {
+  it("still emits an `open` account when both customerMmUserId and MM_ADMIN_USER_ID are missing (membership-gated; no allowlist needed)", () => {
     delete process.env.MM_ADMIN_USER_ID;
     const config: any = {};
     wireCoachMattermostAccount(
@@ -184,10 +184,10 @@ describe("wireCoachMattermostAccount", () => {
       SLUG,
       mkMmUpdate({ "mattermost.userId": undefined }),
     );
-    expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toBeUndefined();
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("empty allowlist"),
-    );
+    expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
+      botToken: "tok-ceckert-abc123",
+      groupPolicy: "open",
+    });
   });
 
   it("per-customer account upsert is scoped by slug — no cross-tenant clobber", () => {
@@ -206,7 +206,7 @@ describe("wireCoachMattermostAccount", () => {
     });
     expect(config.channels.mattermost.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-ceckert-abc123",
-      groupPolicy: "allowlist",
+      groupPolicy: "open",
       groupAllowFrom: ["mm-ceckert", "mm-admin"],
     });
   });

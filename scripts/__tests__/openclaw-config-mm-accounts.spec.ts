@@ -113,7 +113,7 @@ describe("buildMattermostAccounts", () => {
     expect(accounts.admin).toBeUndefined();
   });
 
-  it("adds `{slug}-coach` entries for customers with a mint'd PAT + allowlist scoped to (customer, admin)", () => {
+  it("adds `{slug}-coach` entries with groupPolicy `open` (membership-gated) + advisory (customer, admin) seed", () => {
     const accounts = buildMattermostAccounts(
       [
         { uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" },
@@ -127,13 +127,13 @@ describe("buildMattermostAccounts", () => {
     );
     expect(accounts["chris-coach"]).toEqual({
       botToken: "tok-chris",
-      groupPolicy: "allowlist",
+      groupPolicy: "open",
       groupAllowFrom: ["mm-chris", "mm-admin"],
       commands: { native: false },
     });
     expect(accounts["sam-coach"]).toEqual({
       botToken: "tok-sam",
-      groupPolicy: "allowlist",
+      groupPolicy: "open",
       groupAllowFrom: ["mm-sam", "mm-admin"],
       commands: { native: false },
     });
@@ -150,7 +150,7 @@ describe("buildMattermostAccounts", () => {
     );
     expect(accounts["chris-coach"]).toMatchObject({
       botToken: "tok-chris",
-      groupPolicy: "allowlist",
+      groupPolicy: "open",
     });
     expect(accounts["sam-coach"]).toBeUndefined();
     expect(Object.values(accounts).every((a) => a.botToken.length > 0)).toBe(true);
@@ -175,16 +175,17 @@ describe("buildMattermostAccounts", () => {
     expect(accounts["pat-coach"].groupAllowFrom).toEqual(["mm-pat", "mm-admin"]);
   });
 
-  it("coach-only-for-admin: when customerMmUserId is absent, allowlist is {admin} — the customer cannot trigger their own coach", () => {
+  it("when customerMmUserId is absent, the advisory seed is {admin} but the gate stays open (membership-gated)", () => {
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris" }],
       new Map([["uid-a", "tok-chris"]]),
       "mm-admin",
     );
+    expect(accounts["chris-coach"].groupPolicy).toBe("open");
     expect(accounts["chris-coach"].groupAllowFrom).toEqual(["mm-admin"]);
   });
 
-  it("REFUSES to emit when both customerMmUserId and adminMmUserId are missing (warns; skips account)", () => {
+  it("still emits an `open` account when both customerMmUserId and adminMmUserId are missing (no allowlist needed; no skip)", () => {
     const warn = vi.fn();
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris" }],
@@ -192,10 +193,12 @@ describe("buildMattermostAccounts", () => {
       undefined,
       warn,
     );
-    expect(accounts["chris-coach"]).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("empty allowlist"),
-    );
+    expect(accounts["chris-coach"]).toEqual({
+      botToken: "tok-chris",
+      groupPolicy: "open",
+      commands: { native: false },
+    });
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 

@@ -184,26 +184,26 @@ export function buildMattermostAccounts(
   customers: ReadonlyArray<MattermostAccountInput>,
   coachTokens: ReadonlyMap<string, string>,
   adminMmUserId?: string | null,
-  warn?: (msg: string) => void,
+  _warn?: (msg: string) => void,
 ): Record<string, MattermostAccountEntry> {
   const accounts: Record<string, MattermostAccountEntry> = {};
   for (const c of customers) {
     const token = coachTokens.get(c.uid);
     if (!token) continue;
+    // Group channels: the coach answers any member of the channels it has been
+    // added to. Mattermost channel membership IS the access boundary (auditable
+    // + revocable in MM, and the coach is only ever added to channels its owner
+    // controls). The prior owner+admin `allowlist` duplicated that boundary and
+    // silently dropped invited guests — breaking shared channels, the headline
+    // feature. `groupAllowFrom` is retained as an advisory seed (ignored under
+    // "open") for a possible future "synced allowlist" mode. See PR.
     const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
-
-if (groupAllowFrom.length === 0) {
-      warn?.(
-        `⚠ skipping ${c.slug}-coach account: no customerMmUserId and no MM_ADMIN_USER_ID — empty allowlist would silently drop every group message. Re-provision with the customer's MM user id to restore.`,
-      );
-      continue;
-    }
     accounts[`${c.slug}-coach`] = {
       botToken: token,
-      groupPolicy: "allowlist",
-      groupAllowFrom,
+      groupPolicy: "open",
+      ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
       commands: { native: false },
     };
   }
