@@ -1,5 +1,6 @@
 export type {
   Project,
+  ProjectRepoSource,
   ProjectVisibility,
   ProjectStatus,
   ProjectProvisioningState,

@@ -1,5 +1,7 @@
 import type { Request, Response } from "express";
 import { giteaApiAs } from "../../lib/gitea.js";
+import { githubContentsApi } from "../../lib/github.js";
+import type { FileTarget } from "../../lib/fileTarget.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 
 export function getCustomerGiteaToken(req: Request): string {
@@ -26,6 +28,20 @@ export async function customerGiteaApi(
   body?: unknown,
 ): Promise<unknown> {
   return giteaApiAs(getCustomerGiteaToken(req), org, path, method, body);
+}
+
+export async function repoContentsApi(
+  req: Request,
+  target: FileTarget,
+  filePath: string,
+): Promise<unknown> {
+  if (target.provider === "github") {
+    return githubContentsApi(target.org, target.repoName, filePath, process.env.GITHUB_TOKEN);
+  }
+  const apiPath = filePath
+    ? `${target.repoName}/contents/${filePath}`
+    : `${target.repoName}/contents`;
+  return customerGiteaApi(req, target.org, apiPath);
 }
 
 export const HIDDEN = new Set([

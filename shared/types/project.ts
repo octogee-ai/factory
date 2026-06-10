@@ -3,6 +3,12 @@ export type ProjectStatus = 'idea' | 'building' | 'launched' | 'paused' | 'archi
 export type ProjectProvisioningState = 'provisioning' | 'active' | 'failed';
 export type ProjectType = 'game' | 'social' | 'planner' | 'trip' | 'other';
 
+export interface ProjectRepoSource {
+  provider: 'github';
+  owner: string;
+  repo: string;
+}
+
 export interface Project {
   
   id: string;
@@ -25,6 +31,7 @@ provisioningError?: string | null;
 
 pendingVisibility?: ProjectVisibility | null;
   giteaRepoName: string | null;
+  repoSource?: ProjectRepoSource | null;
 
 canvasFile: string;
   previewUrl: string | null;

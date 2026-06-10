@@ -6,9 +6,10 @@ import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-n
 export interface FileTarget {
   slug: string;
   projectSlug: string | null;
-  
+  provider: "gitea" | "github";
+
   org: string;
-  
+
   repoName: string;
   gcsPrefix: string;
 }
@@ -46,13 +47,16 @@ export async function resolveFileTarget(input: FileTargetInput): Promise<FileTar
     if (!isOwner && !isMember) {
       return { ok: false, status: 403, error: "Forbidden" };
     }
+    const github =
+      project.repoSource?.provider === "github" ? project.repoSource : null;
     return {
       ok: true,
       target: {
         slug,
         projectSlug,
-        org: workspaceGiteaOrg(slug),
-        repoName: projectRepoName(projectSlug),
+        provider: github ? "github" : "gitea",
+        org: github ? github.owner : workspaceGiteaOrg(slug),
+        repoName: github ? github.repo : projectRepoName(projectSlug),
         gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
       },
     };
@@ -66,6 +70,7 @@ export async function resolveFileTarget(input: FileTargetInput): Promise<FileTar
     target: {
       slug,
       projectSlug: null,
+      provider: "gitea",
       org: workspaceGiteaOrg(slug),
       repoName: workspaceRepoName(),
       gcsPrefix: `customers/${slug}`,
