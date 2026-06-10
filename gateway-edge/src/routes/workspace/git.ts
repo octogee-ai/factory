@@ -1,6 +1,6 @@
 import { Router } from "express";
 import * as path from "node:path";
-import { withFileTarget, type FileTarget } from "../../lib/fileTarget.js";
+import { withGiteaTarget, type FileTarget } from "../../lib/fileTarget.js";
 import {
   gitBranches,
   gitCheckout,
@@ -88,7 +88,7 @@ async function withSlugLimit<T>(
 
 router.get(
   "/git/status",
-  withFileTarget(async (req, res, _next, target) => {
+  withGiteaTarget(async (req, res, _next, target) => {
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
       const dir = await resolveTargetDir(customersRoot(), target);
@@ -109,7 +109,7 @@ router.get(
 
 router.get(
   "/git/diff",
-  withFileTarget(async (req, res, _next, target) => {
+  withGiteaTarget(async (req, res, _next, target) => {
     const start = Date.now();
     const filePath = typeof req.query.path === "string" ? req.query.path : undefined;
     const ref = typeof req.query.ref === "string" ? req.query.ref : undefined;
@@ -140,7 +140,7 @@ router.get(
 
 router.get(
   "/git/commit-diff",
-  withFileTarget(async (req, res, _next, target) => {
+  withGiteaTarget(async (req, res, _next, target) => {
     const start = Date.now();
     const commit = typeof req.query.commit === "string" ? req.query.commit : undefined;
     if (!commit || !isSafeRefName(commit)) {
@@ -166,7 +166,7 @@ router.get(
 
 router.get(
   "/git/log",
-  withFileTarget(async (req, res, _next, target) => {
+  withGiteaTarget(async (req, res, _next, target) => {
     const start = Date.now();
     const limit = req.query.limit ? Number.parseInt(String(req.query.limit), 10) : undefined;
     const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
@@ -193,7 +193,7 @@ router.get(
 
 router.get(
   "/git/branches",
-  withFileTarget(async (req, res, _next, target) => {
+  withGiteaTarget(async (req, res, _next, target) => {
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
       const dir = await resolveTargetDir(customersRoot(), target);
@@ -276,7 +276,7 @@ function resolveCommitAuthor(
 
 router.post(
   "/git/commit",
-  withFileTarget(async (req, res, _next, target) => {
+  withGiteaTarget(async (req, res, _next, target) => {
     if (!ensureWriteAuth(req, res, target)) return;
     const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
     if (!message) {
@@ -308,7 +308,7 @@ router.post(
 
 router.post(
   "/git/push",
-  withFileTarget(async (req, res, _next, target) => {
+  withGiteaTarget(async (req, res, _next, target) => {
     if (!ensureWriteAuth(req, res, target)) return;
     const branch = typeof req.body?.branch === "string" ? req.body.branch : undefined;
     if (branch && !isSafeRefName(branch)) {
@@ -335,7 +335,7 @@ router.post(
 
 router.post(
   "/git/branch/checkout",
-  withFileTarget(async (req, res, _next, target) => {
+  withGiteaTarget(async (req, res, _next, target) => {
     if (!ensureWriteAuth(req, res, target)) return;
     const branch = typeof req.body?.branch === "string" ? req.body.branch : "";
     const create = req.body?.create === true;

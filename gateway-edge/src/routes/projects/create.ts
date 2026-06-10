@@ -11,7 +11,8 @@ import {
 } from "@shared/types/identity.js";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
 import { projectRepoName } from "../../lib/gitea-naming.js";
-import { ensureProjectGiteaRepo } from "./provisioning.js";
+import { provisionProjectRepo } from "./provisioning.js";
+import { isValidGithubRepoSource } from "../../lib/github.js";
 
 const router = Router();
 
@@ -26,6 +27,19 @@ function validateProjectSlug(slug: string): string | null {
   }
   if (RESERVED_PROJECT_SLUGS.has(slug)) return "That slug is reserved.";
   return null;
+}
+
+type RepoSourceResult =
+  | { ok: true; value: { provider: "github"; owner: string; repo: string } | null }
+  | { ok: false; status: number; error: string };
+
+function resolveCreateRepoSource(repoSource: unknown, isAdmin: boolean): RepoSourceResult {
+  if (repoSource === undefined || repoSource === null) return { ok: true, value: null };
+  if (!isAdmin) return { ok: false, status: 403, error: "GitHub-backed projects are operator-only" };
+  if (!isValidGithubRepoSource(repoSource)) {
+    return { ok: false, status: 400, error: "Invalid repoSource (expected { provider: 'github', owner, repo })" };
+  }
+  return { ok: true, value: repoSource };
 }
 
 router.get("/slug-available", async (req: Request, res: Response) => {
@@ -53,7 +67,7 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
   const uid = req.uid!;
 
   try {
-    const { name, slug, tagline, category, projectType, status, visibility } = req.body as {
+    const { name, slug, tagline, category, projectType, status, visibility, repoSource } = req.body as {
       name?: string;
       slug?: string;
       tagline?: string;
@@ -61,6 +75,7 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       projectType?: string;
       status?: string;
       visibility?: string;
+      repoSource?: unknown;
     };
 
     if (!name || name.trim().length === 0) {
@@ -77,6 +92,13 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
       res.status(400).json({ error: slugErr });
       return;
     }
+
+    const rs = resolveCreateRepoSource(repoSource, !!req.isAdmin);
+    if (!rs.ok) {
+      res.status(rs.status).json({ error: rs.error });
+      return;
+    }
+    const ghRepoSource = rs.value;
 
     const userDoc = await db.doc(`users/${uid}`).get();
     const userData = userDoc.data();
@@ -113,6 +135,7 @@ const targetVisibility = visibility || "private";
       canvasFile: "README.md",
       previewUrl: null,
       giteaRepoName,
+      repoSource: ghRepoSource,
       starCount: 0,
       memberCount: 1, // owner
       createdAt: FieldValue.serverTimestamp(),
@@ -242,23 +265,21 @@ try {
       return;
     }
 
-try {
-      await ensureProjectGiteaRepo({
-        workspaceId,
-        slug,
-        name: name.trim(),
-        tagline: (tagline || "").trim(),
-        projectType: projectType ?? null,
-        visibility: targetVisibility,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    const repoErr = await provisionProjectRepo({
+      workspaceId,
+      slug,
+      name: name.trim(),
+      tagline: (tagline || "").trim(),
+      projectType: projectType ?? null,
+      visibility: targetVisibility,
+    });
+    if (repoErr) {
       await projectRef.update({
         provisioningState: "failed",
-        provisioningError: message.slice(0, 500),
+        provisioningError: repoErr.slice(0, 500),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      logger.error(`[projects] Gitea repo creation failed for ${workspaceId}/${slug}:`, { err });
+      logger.error(`[projects] Gitea repo creation failed for ${workspaceId}/${slug}: ${repoErr}`);
       res.status(502).json({
         error: "Project provisioning failed — could not create code repo",
         workspaceId,

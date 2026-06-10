@@ -111,3 +111,16 @@ export function withFileTarget(handler: TargetedHandler): RequestHandler {
     }
   };
 }
+
+export function withGiteaTarget(handler: TargetedHandler): RequestHandler {
+  return withFileTarget(async (req, res, next, target) => {
+    if (target.provider !== "gitea") {
+      res.status(409).json({
+        error: "Not available for GitHub-backed projects",
+        code: "GITHUB_READ_ONLY",
+      });
+      return;
+    }
+    await handler(req, res, next, target);
+  });
+}

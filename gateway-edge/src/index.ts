@@ -12,6 +12,7 @@ import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
+import githubReposRoutes from "./routes/workspace/github-repos.js";
 import deployPreviewRoutes from "./routes/projects/deploy-preview.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
@@ -113,6 +114,7 @@ mountClusterRoutes(app);
 const workspaceLocality = Router();
 workspaceLocality.use(requireAuth);
 workspaceLocality.use(gitRoutes);
+workspaceLocality.use(githubReposRoutes);
 mountApi(app, "/workspace", workspaceLocality);
 
 const projectsLocality = Router();

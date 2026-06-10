@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { storage } from "../../lib/db.js";
-import { withFileTarget } from "../../lib/fileTarget.js";
+import { withGiteaTarget } from "../../lib/fileTarget.js";
 import { removeFromManifest } from "../../lib/manifest.js";
 import { getCustomerGiteaToken, validateWorkspacePath } from "./helpers.js";
 
 const router = Router();
 
-router.post("/delete-blob", withFileTarget(async (req, res, _next, target) => {
+router.post("/delete-blob", withGiteaTarget(async (req, res, _next, target) => {
   const { path: filePath } = req.body as { path?: string };
   if (!filePath) { res.status(400).json({ error: "Missing path" }); return; }
 

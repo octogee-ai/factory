@@ -6,7 +6,7 @@ import { logger } from "../../middleware/logging.js";
 import { projectGeneralChannelName } from "@shared/types/identity.js";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
 import { withProject } from "../../lib/withProject.js";
-import { ensureProjectGiteaRepo } from "./provisioning.js";
+import { provisionProjectRepo } from "./provisioning.js";
 import { projectRepoName } from "../../lib/gitea-naming.js";
 
 const router = Router();
@@ -141,23 +141,21 @@ const restoredVisibility =
       typeof project.pendingVisibility === "string" ? project.pendingVisibility : project.visibility;
     const deterministicGiteaRepo = projectRepoName(pid);
 
-try {
-      await ensureProjectGiteaRepo({
-        workspaceId: wid,
-        slug: pid,
-        name: project.name || pid,
-        tagline: typeof project.tagline === "string" ? project.tagline : "",
-        projectType: typeof project.projectType === "string" ? project.projectType : null,
-        visibility: restoredVisibility,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    const repoErr = await provisionProjectRepo({
+      workspaceId: wid,
+      slug: pid,
+      name: project.name || pid,
+      tagline: typeof project.tagline === "string" ? project.tagline : "",
+      projectType: typeof project.projectType === "string" ? project.projectType : null,
+      visibility: restoredVisibility,
+    });
+    if (repoErr) {
       await projectRef.update({
         provisioningState: "failed",
-        provisioningError: message.slice(0, 500),
+        provisioningError: repoErr.slice(0, 500),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      logger.error(`[projects] Gitea reconcile failed for ${wid}/${pid}:`, { err });
+      logger.error(`[projects] Gitea reconcile failed for ${wid}/${pid}: ${repoErr}`);
       res.status(502).json({ error: "Retry failed — could not reconcile code repo" });
       return;
     }

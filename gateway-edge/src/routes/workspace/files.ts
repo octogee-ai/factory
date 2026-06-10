@@ -83,7 +83,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
     return a.name.localeCompare(b.name);
   });
 
-  res.json({ files });
+  res.json({ files, readOnly: target.provider !== "gitea" });
 }));
 
 router.get("/file", withFileTarget(async (req, res, _next, target) => {

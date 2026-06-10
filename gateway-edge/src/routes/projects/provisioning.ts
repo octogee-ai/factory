@@ -27,3 +27,14 @@ export async function ensureProjectGiteaRepo(input: {
   });
   await giteaWriteFile(org, repoName, "README.md", body, "auto: seed project README");
 }
+
+export async function provisionProjectRepo(
+  input: Parameters<typeof ensureProjectGiteaRepo>[0],
+): Promise<string | null> {
+  try {
+    await ensureProjectGiteaRepo(input);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}

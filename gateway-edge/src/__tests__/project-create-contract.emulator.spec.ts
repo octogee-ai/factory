@@ -184,3 +184,62 @@ describe("project create ↔ SSR project page read contract", () => {
     expect(ssr.visibility).toBe("private");
   });
 });
+
+describe("github-backed project create", () => {
+  const GH_REPO_SOURCE = { provider: "github", owner: "octogee-ai", repo: "octogee" };
+
+  async function promoteToAdmin(): Promise<void> {
+    await db
+      .collection("users")
+      .doc(CALLER_UID)
+      .collection("system")
+      .doc("config")
+      .set({ role: "admin" });
+  }
+
+  it("rejects a non-admin caller (Phase 1 is operator-only) with 403 and writes no doc", async () => {
+    mockMmContextOk();
+    const app = createApp();
+
+    const r = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Octogee", slug: "octogee", visibility: "private", repoSource: GH_REPO_SOURCE });
+    expect(r.status, r.text).toBe(403);
+
+    const snap = await db.doc(`workspaces/${USERNAME}/projects/octogee`).get();
+    expect(snap.exists).toBe(false);
+  });
+
+  it("for an admin: stores repoSource and still provisions the Gitea system repo + chat", async () => {
+    await promoteToAdmin();
+    mockMmContextOk();
+    const app = createApp();
+
+    const r = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Octogee", slug: "octogee", visibility: "private", repoSource: GH_REPO_SOURCE });
+    expect(r.status, r.text).toBe(200);
+
+    const p = (await db.doc(`workspaces/${USERNAME}/projects/octogee`).get()).data()!;
+    expect(p.repoSource).toEqual(GH_REPO_SOURCE);
+    expect(typeof p.giteaRepoName).toBe("string");
+    expect(p.provisioningState).toBe("active");
+
+    expect(mockCreateProjectGiteaRepo).toHaveBeenCalled();
+    expect(mockMmApi).toHaveBeenCalled();
+  });
+
+  it("rejects an invalid repoSource (admin) with 400", async () => {
+    await promoteToAdmin();
+    mockMmContextOk();
+    const app = createApp();
+
+    const r = await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Bad", slug: "badrepo", repoSource: { provider: "github", owner: "bad owner!", repo: "x" } });
+    expect(r.status, r.text).toBe(400);
+  });
+});

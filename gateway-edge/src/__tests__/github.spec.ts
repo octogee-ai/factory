@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { githubContentsUrl, githubHeaders } from '../lib/github.js';
+import { githubContentsUrl, githubHeaders, githubReposUrl, toRepoSummary, isValidGithubRepoSource } from '../lib/github.js';
 
 describe('githubContentsUrl', () => {
   it('builds the contents URL for a file path', () => {
@@ -43,5 +43,59 @@ describe('githubHeaders', () => {
       Accept: 'application/vnd.github.v3+json',
       'User-Agent': 'octogee-workspace',
     });
+  });
+});
+
+describe('githubReposUrl', () => {
+  it('requests owned + collaborator + org repos, one full page', () => {
+    const url = githubReposUrl();
+    expect(url).toContain('https://api.github.com/user/repos');
+    expect(url).toContain('per_page=100');
+    expect(url).toContain('affiliation=owner,collaborator,organization_member');
+  });
+});
+
+describe('toRepoSummary', () => {
+  it('maps the GitHub repo shape to a picker summary', () => {
+    expect(
+      toRepoSummary({
+        name: 'octogee',
+        full_name: 'octogee-ai/octogee',
+        private: true,
+        description: 'the thing',
+        updated_at: '2026-06-10T00:00:00Z',
+        owner: { login: 'octogee-ai' },
+      }),
+    ).toEqual({
+      owner: 'octogee-ai',
+      repo: 'octogee',
+      fullName: 'octogee-ai/octogee',
+      private: true,
+      description: 'the thing',
+      updatedAt: '2026-06-10T00:00:00Z',
+    });
+  });
+});
+
+describe('isValidGithubRepoSource', () => {
+  it('accepts a well-formed github repoSource', () => {
+    expect(isValidGithubRepoSource({ provider: 'github', owner: 'octogee-ai', repo: 'octogee' })).toBe(true);
+  });
+
+  it('rejects a non-github provider', () => {
+    expect(isValidGithubRepoSource({ provider: 'gitlab', owner: 'octogee-ai', repo: 'octogee' })).toBe(false);
+  });
+
+  it('rejects an invalid owner', () => {
+    expect(isValidGithubRepoSource({ provider: 'github', owner: 'bad owner!', repo: 'octogee' })).toBe(false);
+  });
+
+  it('rejects a missing repo', () => {
+    expect(isValidGithubRepoSource({ provider: 'github', owner: 'octogee-ai' })).toBe(false);
+  });
+
+  it('rejects null and non-objects', () => {
+    expect(isValidGithubRepoSource(null)).toBe(false);
+    expect(isValidGithubRepoSource('octogee-ai/octogee')).toBe(false);
   });
 });

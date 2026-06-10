@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import Busboy from "busboy";
 import { storage } from "../../lib/db.js";
 import { validateFilePath } from "../../lib/path-validation.js";
-import { resolveFileTarget, withFileTarget, type FileTarget } from "../../lib/fileTarget.js";
+import { resolveFileTarget, withGiteaTarget, type FileTarget } from "../../lib/fileTarget.js";
 import { updateManifest } from "../../lib/manifest.js";
 import { logger } from "../../middleware/logging.js";
 import {
@@ -16,7 +16,7 @@ import {
 
 const router = Router();
 
-router.post("/upload", withFileTarget(async (req, res, _next, target) => {
+router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {
   const { files } = req.body as {
     files: Array<{ name: string; content: string; path?: string }>;
   };
@@ -131,6 +131,10 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
       return;
     }
     const target: FileTarget = targetResult.target;
+    if (target.provider !== "gitea") {
+      res.status(409).json({ error: "Not available for GitHub-backed projects", code: "GITHUB_READ_ONLY" });
+      return;
+    }
 
     const pathError = validateFilePath(filePath);
     if (pathError) { res.status(400).json({ error: pathError }); return; }
