@@ -3,10 +3,9 @@
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 
 export interface GatewayLastError {
-  jobId: string;
   slug: string;
   message: string;
-  at: unknown; 
+  at: unknown;
 }
 
 export interface GatewayState {
@@ -22,17 +21,11 @@ lastHeartbeatAt: unknown;
 
 mountedCustomers: string[];
 
-inFlightJobId: string | null;
-  
-  lastJobCompletedAt: unknown | null; 
-  
   lastError: GatewayLastError | null;
 
 internalUrl?: string;
 
 startedAt?: number;
-
-failedCustomers?: Record<string, { failCount: number; lastFailedAt: unknown  }>;
 }
 
 export interface CustomerSnapshot {
@@ -55,8 +48,6 @@ export const GATEWAY_HEARTBEAT_INTERVAL_MS = 15_000;
 
 export const GATEWAY_UNREACHABLE_AFTER_MS = 3 * 60_000;
 
-export const JOB_TTL_MS = 6 * 60_000;
-
 export const VERIFY_ACCOUNT_TIMEOUT_MS = 120_000;
 
 export const CONFIG_PATCH_DEADLINE_MS = 90_000;
@@ -67,10 +58,15 @@ export const MIGRATION_QUIESCE_TIMEOUT_MS = 60_000;
 export const MIGRATION_TRANSFER_TIMEOUT_MS = ADD_CUSTOMER_DEADLINE_MS + 30_000;
 export const MIGRATION_UNMOUNT_TIMEOUT_MS = CONFIG_PATCH_DEADLINE_MS + 30_000;
 
+// Window the import-handler's migrating-in pin guards a freshly-imported customer from the
+// reconcile evict direction. Must outlast import→cutover so a slow import never false-evicts;
+// also bounds how long a failed-migration orphan lingers before lazy eviction. See
+// local-coach-wired.ts (the pin) and fleet-provisioner getEvictObservedSlugs (the skip).
+export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
+
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 
 export const GATEWAYS_COLLECTION = "gateways";
-export const RESTORE_JOBS_COLLECTION = "restoreJobs";
 
 export interface MigrationRequestBody {
 
@@ -120,11 +116,3 @@ unmounted: boolean;
 
 export const MIGRATION_ID_HEADER = "X-Migration-Id";
 export const MIGRATION_SLUG_HEADER = "X-Migration-Slug";
-
-const BACKOFF_BASE_MS = 10_000;
-const BACKOFF_CAP_MS = 120 * 60_000;
-
-export function backoffMsForFailCount(failCount: number): number {
-  if (failCount <= 0) return 0;
-  return Math.min(BACKOFF_BASE_MS * Math.pow(2, failCount - 1), BACKOFF_CAP_MS);
-}

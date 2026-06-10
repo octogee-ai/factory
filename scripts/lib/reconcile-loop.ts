@@ -8,8 +8,15 @@ export type EnsureOutcome = "mounted" | "noop";
 
 export interface ReconcileLoopDeps {
   gatewayId: string;
-  /** Observed: the pod's honest on-disk mounted set. */
-  getObserved: () => string[];
+  /** Mount-observed: slugs whose mount is fully COMPLETE (coach wired AND the .mounted
+   *  marker the last ensure-step writes). Drives toMount: a desired slug absent here is
+   *  (re-)ensured — including a coach-wired-but-incomplete one, closing the post-config
+   *  wedge. */
+  getMountObserved: () => string[];
+  /** Evict-observed: the pod's honest on-disk presence (coach-wired dirs). Drives toEvict:
+   *  present-but-undesired → unmount. Broader than mount-observed so a half-mounted,
+   *  unassigned leftover is still drained. */
+  getEvictObserved: () => string[];
   /** Desired: slugs this gateway should host (eligible + assigned here). */
   readDesired: () => Promise<string[]>;
   /** Idempotent mount/restore — safe to call every tick until observed catches up. */
@@ -18,6 +25,11 @@ export interface ReconcileLoopDeps {
   log: (msg: string) => void;
   /** Cap concurrent mounts/evicts so a cold pod doesn't thundering-herd. */
   maxConcurrent?: number;
+  /** Best-effort: an ensure threw. For surfacing a bounded gateways/{id}.lastError mirror.
+   *  MUST NOT throw — the loop guards it, but it should not rely on that. */
+  onEnsureError?: (slug: string, message: string) => void;
+  /** Best-effort: an ensure succeeded — clear any prior lastError for this slug. */
+  onEnsureSuccess?: (slug: string) => void;
 }
 
 const DEFAULT_MAX_CONCURRENT = 4;
@@ -34,12 +46,22 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function fireSafely(deps: ReconcileLoopDeps, fn: (() => void) | undefined): void {
+  if (!fn) return;
+  try {
+    fn();
+  } catch (err) {
+    deps.log(`[reconcile] ${deps.gatewayId}: ⚠ outcome hook threw (ignored): ${errMessage(err)}`);
+  }
+}
+
 export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
-  const observed = new Set(deps.getObserved());
+  const mountObserved = new Set(deps.getMountObserved());
+  const evictObserved = new Set(deps.getEvictObserved());
   const desired = new Set(await deps.readDesired());
 
-  const toMount = [...desired].filter((s) => !observed.has(s) && !inFlight.has(s));
-  const toEvict = [...observed].filter((s) => !desired.has(s) && !inFlight.has(s));
+  const toMount = [...desired].filter((s) => !mountObserved.has(s) && !inFlight.has(s));
+  const toEvict = [...evictObserved].filter((s) => !desired.has(s) && !inFlight.has(s));
 
   if (toMount.length === 0 && toEvict.length === 0) return;
 
@@ -57,8 +79,11 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
       try {
         const outcome = await deps.ensureSlug(slug);
         deps.log(`[reconcile] ${deps.gatewayId}: mounted ${slug} (${outcome})`);
+        fireSafely(deps, () => deps.onEnsureSuccess?.(slug));
       } catch (err) {
-        deps.log(`[reconcile] ${deps.gatewayId}: ⚠ ensure failed for ${slug}: ${errMessage(err)}`);
+        const message = errMessage(err);
+        deps.log(`[reconcile] ${deps.gatewayId}: ⚠ ensure failed for ${slug}: ${message}`);
+        fireSafely(deps, () => deps.onEnsureError?.(slug, message));
       } finally {
         inFlight.delete(slug);
       }

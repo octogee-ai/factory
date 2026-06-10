@@ -8,7 +8,6 @@ interface FakeStore {
   gateways: Record<string, Record<string, unknown>>;
   glmGateways: Record<string, Record<string, unknown>>;
   glmOperations: Array<{ id: string; data: Record<string, unknown> }>;
-  restoreJobs: Array<{ id: string; data: Record<string, unknown> }>;
 }
 
 function emptyStore(): FakeStore {
@@ -18,7 +17,6 @@ function emptyStore(): FakeStore {
     gateways: {},
     glmGateways: {},
     glmOperations: [],
-    restoreJobs: [],
   };
 }
 
@@ -44,12 +42,6 @@ function makeQuery(
         const docs = Object.entries(store.gateways)
           .filter(([, d]) => matches(d))
           .map(([id, data]) => ({ id, data: () => data }));
-        return { docs, size: docs.length };
-      }
-      if (collectionName === "restoreJobs") {
-        const docs = store.restoreJobs
-          .filter((j) => matches(j.data))
-          .map((j) => ({ id: j.id, data: () => j.data }));
         return { docs, size: docs.length };
       }
       if (collectionName === "users") {
@@ -118,20 +110,11 @@ queued.push(() => ref.update(patch));
             const data = store.glmGateways[id];
             return { exists: data !== undefined, data: () => data };
           }
-          if (name === "restoreJobs") {
-            const job = store.restoreJobs.find((j) => j.id === id);
-            return { exists: job !== undefined, data: () => job?.data };
-          }
           return { exists: false, data: () => undefined };
         },
         update: async (patch: Record<string, unknown>) => {
           if (name === "gateways" && store.gateways[id]) {
             store.gateways[id] = { ...store.gateways[id], ...patch };
-            return;
-          }
-          if (name === "restoreJobs") {
-            const job = store.restoreJobs.find((j) => j.id === id);
-            if (job) job.data = { ...job.data, ...patch };
             return;
           }
           if (name === "glmGateways" && store.glmGateways[id]) {
@@ -164,13 +147,6 @@ queued.push(() => ref.update(patch));
           const docs = Object.entries(store.gateways).map(([id, data]) => ({
             id,
             data: () => data,
-          }));
-          return { docs, size: docs.length };
-        }
-        if (name === "restoreJobs") {
-          const docs = store.restoreJobs.map((j) => ({
-            id: j.id,
-            data: () => j.data,
           }));
           return { docs, size: docs.length };
         }
@@ -371,121 +347,4 @@ it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory 
     expect(res.body.reason).toMatch(/csi.*gateway-edge|gateway pod/i);
   });
 
-  describe("POST /api/admin/restore-jobs/:jobId/kick — unstick a stuck customer", () => {
-    function seedStuckJob() {
-      store.gateways["gw-test"] = {
-        gatewayId: "gw-test",
-        status: "ready",
-        inFlightJobId: "job-stuck",
-        mountedCustomers: [],
-      };
-      store.restoreJobs = [
-        {
-          id: "job-stuck",
-          data: {
-            jobId: "job-stuck",
-            gatewayId: "gw-test",
-            state: "dispatched",
-            attempt: 1,
-            createdAt: { toMillis: () => 1_000 },
-            dispatchedAt: { toMillis: () => 1_500 },
-            completedAt: null,
-            error: null,
-            snapshot: { uid: "u-basim", slug: "basim" },
-          },
-        },
-      ];
-    }
-
-    it("returns 401 without auth", async () => {
-      seedStuckJob();
-      const app = createHttpServer(buildDeps(store));
-      const res = await request(app).post("/api/admin/restore-jobs/job-stuck/kick");
-      expect(res.status).toBe(401);
-    });
-
-    it("returns 403 for non-admin", async () => {
-      seedStuckJob();
-      const app = createHttpServer(buildDeps(store));
-      const res = await request(app)
-        .post("/api/admin/restore-jobs/job-stuck/kick")
-        .set("Authorization", "Bearer user-token");
-      expect(res.status).toBe(403);
-    });
-
-    it("returns 404 when the job doesn't exist", async () => {
-      const app = createHttpServer(buildDeps(store));
-      const res = await request(app)
-        .post("/api/admin/restore-jobs/no-such-job/kick")
-        .set("Authorization", "Bearer admin-token");
-      expect(res.status).toBe(404);
-    });
-
-    it("happy path: marks the job failed (operator-kicked) + clears inFlightJobId on the gateway", async () => {
-      seedStuckJob();
-      const app = createHttpServer(buildDeps(store));
-      const res = await request(app)
-        .post("/api/admin/restore-jobs/job-stuck/kick")
-        .set("Authorization", "Bearer admin-token");
-
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({
-        jobId: "job-stuck",
-        gatewayId: "gw-test",
-        slug: "basim",
-      });
-
-const job = store.restoreJobs.find((j) => j.id === "job-stuck");
-      expect(job?.data.state).toBe("failed");
-      expect(job?.data.error).toMatch(/operator-kicked/);
-
-expect(store.gateways["gw-test"].inFlightJobId).toBeNull();
-    });
-
-    it("refuses to kick a job that's already in a terminal state (idempotent / safe)", async () => {
-      seedStuckJob();
-      
-      const job = store.restoreJobs.find((j) => j.id === "job-stuck")!;
-      job.data.state = "done";
-      job.data.completedAt = { toMillis: () => 2_500 };
-      const app = createHttpServer(buildDeps(store));
-      const res = await request(app)
-        .post("/api/admin/restore-jobs/job-stuck/kick")
-        .set("Authorization", "Bearer admin-token");
-      expect(res.status).toBe(409);
-
-expect(res.body.error).toMatch(/not kickable|allowed/i);
-      expect(res.body.state).toBe("done");
-    });
-
-    it("preserves inFlightJobId when it points at a different (newer) job — only clears when it matches the kicked job", async () => {
-
-seedStuckJob();
-      store.gateways["gw-test"].inFlightJobId = "different-job";
-      const app = createHttpServer(buildDeps(store));
-      const res = await request(app)
-        .post("/api/admin/restore-jobs/job-stuck/kick")
-        .set("Authorization", "Bearer admin-token");
-      expect(res.status).toBe(200);
-      const job = store.restoreJobs.find((j) => j.id === "job-stuck");
-      expect(job?.data.state).toBe("failed");
-      
-      expect(store.gateways["gw-test"].inFlightJobId).toBe("different-job");
-    });
-
-    it("rejects (409) when the job state isn't in the kickable allowlist (defense against unknown future states)", async () => {
-      seedStuckJob();
-      
-      const job = store.restoreJobs.find((j) => j.id === "job-stuck")!;
-      job.data.state = "migrating";
-      const app = createHttpServer(buildDeps(store));
-      const res = await request(app)
-        .post("/api/admin/restore-jobs/job-stuck/kick")
-        .set("Authorization", "Bearer admin-token");
-      expect(res.status).toBe(409);
-      expect(res.body.error).toMatch(/not kickable|allowed/i);
-      
-      expect(job.data.state).toBe("migrating");
-    });
-  });
 });

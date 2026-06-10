@@ -207,14 +207,8 @@ async function publishPlatformGatewayReady(
     if (!Array.isArray(existing?.mountedCustomers)) {
       patch.mountedCustomers = [];
     }
-    if (!("inFlightJobId" in (existing ?? {}))) {
-      patch.inFlightJobId = null;
-    }
     if (!("lastError" in (existing ?? {}))) {
       patch.lastError = null;
-    }
-    if (!("failedCustomers" in (existing ?? {}))) {
-      patch.failedCustomers = {};
     }
     txn.set(ref, patch, { merge: true });
   });
@@ -1121,17 +1115,11 @@ async function buildHandlers(
     readGatewayLiveState: async (gatewayId) => {
       const doc = await db.collection("gateways").doc(gatewayId).get();
       if (!doc.exists) return null;
-      const data = doc.data() as
-        | { mountedCustomers?: unknown; inFlightJobId?: unknown }
-        | undefined;
+      const data = doc.data() as { mountedCustomers?: unknown } | undefined;
       const mounted = Array.isArray(data?.mountedCustomers)
         ? (data!.mountedCustomers as unknown[]).filter((s): s is string => typeof s === "string")
         : [];
-      const inFlightJobId =
-        typeof data?.inFlightJobId === "string" && data.inFlightJobId.length > 0
-          ? data.inFlightJobId
-          : null;
-      return { mountedCustomers: mounted, inFlightJobId };
+      return { mountedCustomers: mounted };
     },
     readGlmGatewayId: async (gatewayId) => {
       const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();

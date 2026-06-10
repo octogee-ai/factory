@@ -18,7 +18,6 @@ vi.mock("../lib/db", () => {
       openclawVersion: "v1.2.3",
       mountedCustomers: ["alice", "bob", "christopher"],
       lastHeartbeatAt: { toDate: () => new Date(Date.now() - 2_000) },
-      inFlightJobId: null,
       lastError: null,
     },
     "gw-test-green": {
@@ -28,7 +27,6 @@ vi.mock("../lib/db", () => {
       openclawVersion: "v1.2.3",
       mountedCustomers: ["dana"],
       lastHeartbeatAt: { toDate: () => new Date(Date.now() - 5_000) },
-      inFlightJobId: "job-running",
       lastError: null,
     },
     "gw-test-stale": {
@@ -38,56 +36,7 @@ vi.mock("../lib/db", () => {
       openclawVersion: "v1.2.3",
       mountedCustomers: [],
       lastHeartbeatAt: { toDate: () => new Date(Date.now() - 5 * 60_000) },
-      inFlightJobId: null,
-      lastError: { jobId: "j1", slug: "frodo", message: "git clone timeout", at: { toDate: () => new Date() } },
-    },
-  };
-
-  const now = Date.now();
-  const restoreJobs: Record<string, any> = {
-    "job-running": {
-      jobId: "job-running",
-      gatewayId: "gw-test-green",
-      slug: "dana",
-      state: "running",
-      attempt: 1,
-      createdAt: { toDate: () => new Date(now - 30_000) },
-      dispatchedAt: { toDate: () => new Date(now - 25_000) },
-      completedAt: null,
-      error: null,
-    },
-    "job-stale": {
-      jobId: "job-stale",
-      gatewayId: "gw-test-blue",
-      slug: "stuck",
-      state: "dispatched",
-      attempt: 1,
-      createdAt: { toDate: () => new Date(now - 15 * 60_000) },
-      dispatchedAt: { toDate: () => new Date(now - 14 * 60_000) },
-      completedAt: null,
-      error: null,
-    },
-    "job-pending": {
-      jobId: "job-pending",
-      gatewayId: "gw-test-blue",
-      slug: "queued",
-      state: "pending",
-      attempt: 1,
-      createdAt: { toDate: () => new Date(now - 5_000) },
-      dispatchedAt: null,
-      completedAt: null,
-      error: null,
-    },
-    "job-done": {
-      jobId: "job-done",
-      gatewayId: "gw-test-blue",
-      slug: "alice",
-      state: "done",
-      attempt: 1,
-      createdAt: { toDate: () => new Date(now - 60_000) },
-      dispatchedAt: { toDate: () => new Date(now - 55_000) },
-      completedAt: { toDate: () => new Date(now - 50_000) },
-      error: null,
+      lastError: { slug: "frodo", message: "git clone timeout", at: { toDate: () => new Date() } },
     },
   };
 
@@ -116,10 +65,6 @@ vi.mock("../lib/db", () => {
     }
     if (path === "gateways") {
       const docs = Object.keys(gateways).map((id) => ({ id, data: () => gateways[id] }));
-      return makeQuery(docs);
-    }
-    if (path === "restoreJobs") {
-      const docs = Object.keys(restoreJobs).map((id) => ({ id, data: () => restoreJobs[id] }));
       return makeQuery(docs);
     }
     return makeQuery([]);
@@ -198,7 +143,6 @@ describe("GET /api/admin/gateways", () => {
     const res = await request(app).get("/api/admin/gateways");
     const stale = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-stale");
     expect(stale.lastError).toMatchObject({
-      jobId: "j1",
       slug: "frodo",
       message: "git clone timeout",
     });

@@ -147,13 +147,61 @@ interface FleetRuntime {
   status: "booting" | "ready";
 }
 
-// Observed = the pod's honest on-disk mounted set: customer dirs present whose coach is
-// wired (no Firestore). A dir present but coach NOT wired is a partial mount — excluded
-// here, so the reconcile re-ensures it (idempotent ensure completes the wiring).
-function getLocalMountedSlugs(adapter: CustomerLifecycleAdapter): string[] {
-  const slugs = adapter.listLocalCustomerSlugs?.() ?? [];
-  const wired = adapter.customerCoachWiredInOpenclawConfig;
-  return slugs.filter((s) => !wired || wired(s)).sort((a, b) => a.localeCompare(b));
+// Evict-observed: RAW on-disk dir presence (NOT coach-wired), minus migrating-in. Drives the
+// reconcile's evict direction only. Raw — so a partial/junk dir left by a mount that died
+// before its config patch is still drained once it's unassigned (a coach-wired-only view
+// would never see it). Minus migrating-in — so a freshly-imported customer (present before
+// cutover makes it desired-here) isn't drained mid-migration. This is the ONLY consumer of
+// the migrating-in pin: the heartbeat report and mount-observed are deliberately pin-blind,
+// so a successfully-migrated customer is reported + considered mounted the moment it's
+// coach-wired, not suppressed for the pin's TTL.
+export function getEvictObservedSlugs(adapter: CustomerLifecycleAdapter): string[] {
+  const dirs = adapter.listLocalCustomerDirs?.() ?? adapter.listLocalCustomerSlugs?.() ?? [];
+  const migratingIn = adapter.customerMigratingIn;
+  return dirs.filter((s) => !migratingIn || !migratingIn(s)).sort((a, b) => a.localeCompare(b));
+}
+
+// Mount-observed: coach-wired AND fully COMPLETE (the .mounted marker ensure writes as its
+// last step). Drives the reconcile's mount direction, so a coach-wired-but-incomplete slug
+// (config patch landed, then greeting / mark-complete failed) stays in desired−observed and
+// is re-ensured — closing the post-config wedge. Pin-blind (see getEvictObservedSlugs).
+export function getMountObservedSlugs(adapter: CustomerLifecycleAdapter): string[] {
+  const coachWired = adapter.listLocalCustomerSlugs?.() ?? [];
+  const marked = adapter.customerMountMarked;
+  return coachWired.filter((s) => !marked || marked(s)).sort((a, b) => a.localeCompare(b));
+}
+
+// Bounded, derived lastError mirror (the restoreJobs writer is gone — this is the only
+// writer of gateways/{id}.lastError now). Strictly best-effort: every path swallows its
+// own error so a Firestore blip can never crash the reconcile tick. lastError holds only
+// the MOST RECENT ensure failure; the full history is in the [reconcile] logs.
+function recordReconcileError(opts: StartFleetOptions, slug: string, message: string): void {
+  if (!opts.db) return;
+  opts.db
+    .collection("gateways")
+    .doc(opts.gatewayId)
+    .set(
+      { lastError: { slug, message, at: FieldValue.serverTimestamp() } },
+      { merge: true },
+    )
+    .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError write failed: ${String(err)}`));
+}
+
+// Clear only when the standing lastError is for THIS slug — a success for one slug must
+// not wipe another slug's still-live error (which would otherwise flicker back next tick).
+function clearReconcileError(opts: StartFleetOptions, slug: string): void {
+  const db = opts.db;
+  if (!db) return;
+  const ref = db.collection("gateways").doc(opts.gatewayId);
+  db
+    .runTransaction(async (txn) => {
+      const snap = await txn.get(ref);
+      const current = snap.data()?.lastError as { slug?: string } | null | undefined;
+      if (current && current.slug === slug) {
+        txn.set(ref, { lastError: null }, { merge: true });
+      }
+    })
+    .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError clear failed: ${String(err)}`));
 }
 
 function startMaybeReconcileLoop(params: {
@@ -175,19 +223,29 @@ function startMaybeReconcileLoop(params: {
     // mounts serial until the adapter is request-scoped. See FLEET-RECONCILE-SPEC.
     maxConcurrent: 1,
     log: opts.log,
-    getObserved: () => {
-      const observed = getLocalMountedSlugs(wrappedAdapter);
-      runtime.mountedCustomers = observed; // keep the heartbeat report truthful
-      return observed;
+    getMountObserved: () => {
+      // Heartbeat reports the honest coach-wired set (D2) — pin-blind, so a migrated customer
+      // shows mounted as soon as it's coach-wired, not suppressed for the migrating-in TTL.
+      runtime.mountedCustomers = (wrappedAdapter.listLocalCustomerSlugs?.() ?? [])
+        .slice()
+        .sort((a, b) => a.localeCompare(b));
+      return getMountObservedSlugs(wrappedAdapter);
     },
+    getEvictObserved: () => getEvictObservedSlugs(wrappedAdapter),
     readDesired: () => readAssignedSlugsForGateway(opts.db!, opts.gatewayId),
     ensureSlug: async (slug: string) => {
       const uid = await wrappedAdapter.uidForSlug(slug);
       if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
       const result = await addCustomerToGateway(wrappedAdapter, uid);
       await stampMounted(uid, true);
+      // LAST step (after add succeeds AND the mounted mirror is stamped): write the on-disk
+      // completion marker so mount-observed now includes this slug. Until it lands, a
+      // coach-wired-but-incomplete mount stays in toMount and is re-ensured.
+      wrappedAdapter.writeMountMarker?.(slug);
       return result.newCustomer ? "mounted" : "noop";
     },
+    onEnsureError: (slug, message) => recordReconcileError(opts, slug, message),
+    onEnsureSuccess: (slug) => clearReconcileError(opts, slug),
     unmountSlug: async (slug: string) => {
       const uid = await wrappedAdapter.uidForSlug(slug);
       if (uid) {
@@ -381,6 +439,10 @@ const waitForGatewayReady = async (): Promise<void> => {
       version: opts.version,
       startedAt: PROCESS_STARTED_AT_MS,
       customers: adapter.listLocalCustomerSlugs?.() ?? [],
+      // Slugs mid-migration-import — Cowboy's operator poller skips these as eviction
+      // candidates until cutover moves their assignment (the operator path has no in-pod
+      // reconcile to honor the pin).
+      migratingIn: adapter.listMigratingInSlugs?.() ?? [],
     });
   });
 

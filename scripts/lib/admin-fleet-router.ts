@@ -134,11 +134,11 @@ function indexGlmDocs(docs: ReadonlyArray<FirestoreDocLike>): Map<string, GlmDoc
 }
 
 function projectLastError(raw: unknown):
-  | { jobId?: string; slug?: string; message?: string; at: string | null }
+  | { slug?: string; message?: string; at: string | null }
   | null {
   if (!raw || typeof raw !== "object") return null;
-  const e = raw as { jobId?: string; slug?: string; message?: string; at?: unknown };
-  return { jobId: e.jobId, slug: e.slug, message: e.message, at: toIso(e.at) };
+  const e = raw as { slug?: string; message?: string; at?: unknown };
+  return { slug: e.slug, message: e.message, at: toIso(e.at) };
 }
 
 function projectDesiredStatus(glmDoc: GlmDoc | undefined):

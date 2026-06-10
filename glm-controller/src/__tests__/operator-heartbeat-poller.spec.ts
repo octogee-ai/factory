@@ -41,6 +41,19 @@ describe("parseHealthResponse", () => {
       parseHealthResponse({ status: "ready", customers: [], startedAt: "x" }),
     ).toEqual({ status: "ready", customers: [] });
   });
+
+  it("carries migratingIn (string entries only); omits it when absent or non-array", () => {
+    expect(
+      parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: ["a", 1, "b"] }),
+    ).toEqual({ status: "ready", customers: ["a"], migratingIn: ["a", "b"] });
+    expect(parseHealthResponse({ status: "ready", customers: ["a"] })).toEqual({
+      status: "ready",
+      customers: ["a"],
+    });
+    expect(
+      parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: "a" }),
+    ).toEqual({ status: "ready", customers: ["a"] });
+  });
 });
 
 describe("intersectMounted", () => {
@@ -183,6 +196,29 @@ describe("pollOperatorHeartbeatsOnce — Cowboy-driven local eviction", () => {
     assigned = ["ceckert"]; // departs again
     await pollOperatorHeartbeatsOnce(deps, streaks); // streak back to 1, not 2 → no evict
     expect(deps.evictSlug).not.toHaveBeenCalled();
+  });
+
+  it("never evicts a slug /health flags migrating-in, even when departed past the threshold", async () => {
+    // ghost is present + unassigned (departed) but mid-migration-import: coach-wired on the
+    // target before cutover moves its assignment. Cowboy must not drain the fresh import.
+    const deps = evictDeps({
+      evictAfterStreak: 1,
+      fetchHealth: vi.fn(async () => ({
+        status: "ready",
+        customers: ["ceckert", "ghost"],
+        migratingIn: ["ghost"],
+      })),
+    });
+    const streaks: EvictionStreaks = new Map();
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    expect(deps.evictSlug).not.toHaveBeenCalled();
+    // ...and it's still correctly absent from mountedCustomers (unassigned pre-cutover).
+    expect(deps.writeHeartbeat).toHaveBeenLastCalledWith(
+      "bender",
+      expect.objectContaining({ mountedCustomers: ["ceckert"] }),
+    );
   });
 
   it("does nothing (but still reports) when no evictSlug is configured", async () => {

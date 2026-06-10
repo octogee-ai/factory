@@ -5,7 +5,6 @@ import type { HelmRunner } from "../helm-runner.js";
 
 export interface GatewayLiveState {
   mountedCustomers: string[];
-  inFlightJobId: string | null;
 }
 
 export interface RetireGatewayDeps {
@@ -207,11 +206,6 @@ async function assertGatewayRetirable(
   if (live.mountedCustomers.length > 0) {
     return failure(
       `gateway ${gatewayId} still has ${live.mountedCustomers.length} mounted customer(s): ${live.mountedCustomers.join(", ")}`,
-    );
-  }
-  if (live.inFlightJobId) {
-    return failure(
-      `gateway ${gatewayId} has an in-flight restore job ${live.inFlightJobId}; refusing to retire mid-mount`,
     );
   }
   return null;

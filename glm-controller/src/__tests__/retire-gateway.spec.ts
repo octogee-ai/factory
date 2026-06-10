@@ -31,7 +31,7 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 
 interface FakeState {
   helmInstances: Set<string>;
-  live: Map<string, { mounted: string[]; inFlightJobId: string | null }>;
+  live: Map<string, { mounted: string[] }>;
   glmGatewayIds: Map<string, string>;
   deletedGlm: Set<string>;
   deletedHeartbeat: Set<string>;
@@ -41,7 +41,7 @@ interface FakeState {
 function baseState(overrides: Partial<FakeState> = {}): FakeState {
   return {
     helmInstances: new Set(),
-    live: new Map([["canary", { mounted: [], inFlightJobId: null }]]),
+    live: new Map([["canary", { mounted: [] }]]),
     glmGatewayIds: new Map([["canary", "canary"]]),
     deletedGlm: new Set(),
     deletedHeartbeat: new Set(),
@@ -67,7 +67,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     readGatewayLiveState: vi.fn(async (gatewayId: string) => {
       const live = state.live.get(gatewayId);
       if (!live) return null;
-      return { mountedCustomers: live.mounted, inFlightJobId: live.inFlightJobId };
+      return { mountedCustomers: live.mounted };
     }),
     readGlmGatewayId: vi.fn(async (gatewayId: string) => state.glmGatewayIds.get(gatewayId) ?? null),
     deleteGlmGateway: vi.fn(async (gatewayId: string) => {
@@ -286,7 +286,7 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
   it("refuses when the gateway still has mounted customers (nothing torn down)", async () => {
     const state = baseState({
       helmInstances: new Set(["canary"]),
-      live: new Map([["canary", { mounted: ["alice", "bob"], inFlightJobId: null }]]),
+      live: new Map([["canary", { mounted: ["alice", "bob"] }]]),
     });
     const deps = makeDeps(state);
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
@@ -294,19 +294,6 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/still has 2 mounted/);
     expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
-    expect(deps.deleteAuthTokenSecret).not.toHaveBeenCalled();
-    expect(state.deletedGlm.size).toBe(0);
-  });
-
-  it("refuses when an in-flight restore job is set on the heartbeat (mid-mount)", async () => {
-    const state = baseState({
-      helmInstances: new Set(["canary"]),
-      live: new Map([["canary", { mounted: [], inFlightJobId: "job-restore-7" }]]),
-    });
-    const deps = makeDeps(state);
-    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/in-flight restore job job-restore-7/);
     expect(deps.deleteAuthTokenSecret).not.toHaveBeenCalled();
     expect(state.deletedGlm.size).toBe(0);
   });

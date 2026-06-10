@@ -11,7 +11,6 @@ import {
   type GatewayState,
   type GatewayStatus,
   GATEWAYS_COLLECTION,
-  RESTORE_JOBS_COLLECTION,
 } from "../../shared/types/fleet-controller.js";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -105,7 +104,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Full diagnostic for one customer.",
     args: "<slug>",
     description:
-      "Shows user state, gateway state focused on this slug, drift verdict, recent restoreJobs (latest 5). The verb-shaped version of the ad-hoc fix-ceckert.ts triage script.",
+      "Shows user state, gateway state focused on this slug, drift verdict, and gateways/{id}.lastError when it names this slug. The verb-shaped version of the ad-hoc fix-ceckert.ts triage script.",
     examples: ["fleet --env=prod inspect customer ceckert"],
     writes: false,
   },
@@ -114,21 +113,9 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Full diagnostic for one gateway.",
     args: "<gw-id>",
     description:
-      "Mounted set, failedCustomers backoff, recent restoreJobs across the gateway, pod status. Single-screen state dump.",
+      "Mounted set, lastError, pod status. Single-screen state dump.",
     examples: ["fleet --env=prod inspect gateway default"],
     writes: false,
-  },
-  {
-    verb: "unstick-customer",
-    summary: "Clear stuck-customer backoff + nudge the controller.",
-    args: "<slug> [--apply]",
-    description:
-      "Clears `failedCustomers[slug]` if set and rewrites `users/{uid}.provisioning.openclaw` to fire the `onUserUpdatedForFleet` trigger.\n\nTargeted recovery for the SSH-key-race bug class. Will NOT remove from `mountedCustomers` (that's a forced unmount, separate concern). Refuses if user provisioning is incomplete or no gateway is assigned.\n\nDry-run by default. Pass `--apply` to commit.",
-    examples: [
-      "fleet --env=prod unstick-customer ceckert         # dry-run",
-      "fleet --env=prod unstick-customer ceckert --apply # commit",
-    ],
-    writes: true,
   },
   {
     verb: "add-customer",
@@ -320,17 +307,9 @@ async function readGatewayProfile(gatewayId: string): Promise<GatewayProfile> {
 }
 
 type GatewayDoc =
-  & Omit<
-    GatewayState,
-    "lastHeartbeatAt" | "lastJobCompletedAt" | "failedCustomers"
-  >
+  & Omit<GatewayState, "lastHeartbeatAt">
   & {
     lastHeartbeatAt: FirestoreTs;
-    lastJobCompletedAt: FirestoreTs | null;
-    failedCustomers?: Record<
-      string,
-      { failCount: number; lastFailedAt: FirestoreTs }
-    >;
   };
 
 interface UserDoc {
@@ -440,24 +419,6 @@ async function findUserBySlug(slug: string): Promise<
   return { uid: doc.id, data: doc.data() as UserDoc };
 }
 
-interface RestoreJobDoc {
-  state?: string;
-  gatewayId?: string;
-  slug?: string;
-  createdAt?: { toMillis(): number };
-  error?: { message?: string } | string | null;
-}
-
-async function recentRestoreJobs(
-  slug: string,
-  limit: number,
-): Promise<Array<{ id: string } & RestoreJobDoc>> {
-  const snap = await db.collection(RESTORE_JOBS_COLLECTION).where("slug", "==", slug).get();
-  const all = snap.docs.map((d) => ({ id: d.id, ...(d.data() as RestoreJobDoc) }));
-  all.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
-  return all.slice(0, limit);
-}
-
 async function lsGateways(): Promise<void> {
   const snap = await db.collection(GATEWAYS_COLLECTION).get();
   const rows = snap.docs.map((d) => {
@@ -469,14 +430,11 @@ const pods = allGatewayPods();
       : pods.length === 1
         ? `${pods[0].ready} ${pods[0].phase} (${ageHuman(pods[0].ageS)})`
         : `${pods.length} pods (${pods.filter((p) => p.phase === "Running").length} running)`;
-    const failedCount = Object.keys(gw.failedCustomers ?? {}).length;
     return {
       gatewayId: d.id,
       status: gw.status ?? "?",
       version: (gw.version ?? "-").slice(0, 12),
       mounted: (gw.mountedCustomers ?? []).length,
-      failed: failedCount === 0 ? "-" : failedCount,
-      inFlight: gw.inFlightJobId === null || gw.inFlightJobId === undefined ? "-" : gw.inFlightJobId.slice(0, 8),
       heartbeat: ts(gw.lastHeartbeatAt),
       pods: podSummary,
     };
@@ -594,49 +552,30 @@ async function inspectCustomer(slug: string): Promise<void> {
   }
   const gw = gwSnap.data() as GatewayDoc;
   const mounted = (gw.mountedCustomers ?? []).includes(slug);
-  const failed = gw.failedCustomers?.[slug];
+  const lastErrorForSlug =
+    gw.lastError && gw.lastError.slug === slug ? gw.lastError : null;
   console.log("\n" + bold(`GATEWAY ${oc.gatewayId}`));
   console.log(table([
     { field: "status", value: gw.status ?? "-" },
     { field: "heartbeat", value: ts(gw.lastHeartbeatAt) },
-    { field: "inFlightJobId", value: gw.inFlightJobId ?? "-" },
     { field: `mountedCustomers.includes('${slug}')`, value: mounted ? "true" : "false" },
     {
-      field: `failedCustomers['${slug}']`,
-      value: failed
-        ? `failCount=${failed.failCount}, last=${ts(failed.lastFailedAt)}`
+      field: `lastError (this slug)`,
+      value: lastErrorForSlug
+        ? `${lastErrorForSlug.message} (${ts(lastErrorForSlug.at as FirestoreTs)})`
         : "-",
     },
   ]));
 
 console.log("\n" + bold("DRIFT"));
-  if (oc.status === "complete" && !mounted && !failed) {
-    console.log(red(`${CROSS} MISSING`) + " — assigned + complete but gateway hasn't mounted; trigger may be wedged.");
-    console.log(dim(`  Try: fleet --env=${args.env} unstick-customer ${slug} --apply`));
-  } else if (oc.status === "complete" && !mounted && failed) {
-    console.log(red(`${CROSS} STUCK IN BACKOFF`) + ` — failCount=${failed.failCount}.`);
-    console.log(dim(`  Try: fleet --env=${args.env} unstick-customer ${slug} --apply`));
+  if (oc.status === "complete" && !mounted) {
+    console.log(red(`${CROSS} NOT MOUNTED`) + " — assigned + complete but absent from mountedCustomers.");
+    console.log(dim(`  The gateway reconcile re-checks desired−observed every ~15s and self-heals — no kick needed.`));
+    console.log(dim(`  If it persists, check the gateway pod's [reconcile] logs${lastErrorForSlug ? " + the lastError above" : ""}.`));
   } else if (oc.status !== "complete") {
-    console.log(yellow("·") + " upstream provisioning incomplete; not a fleet-controller issue.");
+    console.log(yellow("·") + " upstream provisioning incomplete; not a fleet issue.");
   } else {
     console.log(green(`${CHECK} healthy`) + " — mounted on the assigned gateway.");
-  }
-
-  const jobs = await recentRestoreJobs(slug, 5);
-  console.log("\n" + bold(`RECENT RESTORE JOBS`) + dim(`  latest 5 of ${jobs.length}`));
-  if (jobs.length === 0) {
-    console.log("(none)");
-  } else {
-    console.log(table(jobs.map((j) => ({
-      id: j.id.slice(0, 12),
-      state: j.state ?? "-",
-      gatewayId: j.gatewayId ?? "-",
-      created: ts(j.createdAt),
-      error:
-        typeof j.error === "string"
-          ? j.error.slice(0, 80)
-          : j.error?.message?.slice(0, 80) ?? "-",
-    }))));
   }
 }
 
@@ -654,7 +593,6 @@ async function inspectGateway(gatewayId: string): Promise<void> {
     { field: "openclawVersion", value: gw.openclawVersion ?? "-" },
     { field: "internalUrl", value: gw.internalUrl ?? "-" },
     { field: "heartbeat", value: ts(gw.lastHeartbeatAt) },
-    { field: "inFlightJobId", value: gw.inFlightJobId ?? "-" },
     { field: "mountedCustomers", value: String((gw.mountedCustomers ?? []).length) },
   ]));
 
@@ -662,38 +600,16 @@ async function inspectGateway(gatewayId: string): Promise<void> {
   console.log("\n" + bold(`MOUNTED`) + dim(`  ${mounted.length}`));
   console.log(mounted.length === 0 ? dim("  (none)") : "  " + mounted.join(", "));
 
-  const failed = gw.failedCustomers ?? {};
-  const failedKeys = Object.keys(failed).sort();
-  console.log("\n" + bold(`FAILED-CUSTOMERS BACKOFF`) + dim(`  ${failedKeys.length}`));
-  if (failedKeys.length === 0) {
-    console.log("(none)");
+  console.log("\n" + bold(`LAST ERROR`) + dim(`  most recent reconcile ensure failure`));
+  if (gw.lastError) {
+    console.log(table([{
+      slug: gw.lastError.slug ?? "-",
+      message: (gw.lastError.message ?? "-").slice(0, 80),
+      at: ts(gw.lastError.at as FirestoreTs),
+    }]));
   } else {
-    console.log(table(failedKeys.map((k) => ({
-      slug: k,
-      failCount: failed[k].failCount,
-      lastFailedAt: ts(failed[k].lastFailedAt),
-    }))));
+    console.log("(none)");
   }
-
-const allJobs = await db
-    .collection("restoreJobs")
-    .where("gatewayId", "==", gatewayId)
-    .get();
-  const jobs = allJobs.docs
-    .map((d) => ({ id: d.id, ...(d.data() as RestoreJobDoc) }))
-    .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
-    .slice(0, 10);
-  console.log("\n" + bold(`RECENT RESTORE JOBS`) + dim(`  latest 10 of ${allJobs.size}`));
-  console.log(table(jobs.map((j) => ({
-    id: j.id.slice(0, 12),
-    slug: j.slug ?? "-",
-    state: j.state ?? "-",
-    created: ts(j.createdAt),
-    error:
-      typeof j.error === "string"
-        ? j.error.slice(0, 60)
-        : j.error?.message?.slice(0, 60) ?? "-",
-  }))));
 
 const pods = allGatewayPods();
   console.log(`\n=== PODS (${pods.length}) ===`);
@@ -703,71 +619,6 @@ const pods = allGatewayPods();
     ready: p.ready,
     age: ageHuman(p.ageS),
   }))));
-}
-
-async function unstickCustomer(slug: string, apply: boolean): Promise<void> {
-  const user = await findUserBySlug(slug);
-  if (!user) {
-    console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
-    process.exit(1);
-  }
-  const oc = user.data.provisioning?.openclaw ?? {};
-  if (oc.status !== "complete") {
-    console.error(
-      `User '${slug}' has provisioning.openclaw.status='${oc.status ?? "-"}' (not 'complete'). The fleet controller will skip them — this is upstream provisioning, not a stuck-restore. Refusing to nudge.`,
-    );
-    process.exit(1);
-  }
-  if (!oc.gatewayId) {
-    console.error(`User '${slug}' has no gatewayId. Run assign-customer-gateway first.`);
-    process.exit(1);
-  }
-
-  const gwRef = db.collection(GATEWAYS_COLLECTION).doc(oc.gatewayId);
-  const gwSnap = await gwRef.get();
-  if (!gwSnap.exists) {
-    console.error(`Gateway doc gateways/${oc.gatewayId} doesn't exist.`);
-    process.exit(1);
-  }
-  const gw = gwSnap.data() as GatewayDoc;
-  const failed = gw.failedCustomers?.[slug];
-  const mounted = (gw.mountedCustomers ?? []).includes(slug);
-
-  console.log(bold(`UNSTICK-CUSTOMER ${slug}`));
-  console.log(`  uid               ${user.uid}`);
-  console.log(`  gatewayId         ${oc.gatewayId}`);
-  console.log(`  gateway status    ${gw.status}`);
-  console.log(`  mountedCustomers  ${mounted ? dim("includes slug (healthy — won't touch)") : yellow("does NOT include slug (pending — will resolve via nudge)")}`);
-  console.log(`  failedCustomers   ${failed ? yellow(`failCount=${failed.failCount} ${ARROW} will CLEAR`) : dim("no entry — nothing to clear")}`);
-  console.log(`  nudge             ${dim(`users/${user.uid} (forces onUserUpdatedForFleet)`)}`);
-
-  if (mounted && !failed) {
-    console.log("\n" + dim(`Customer appears healthy. Unstick will only nudge the trigger; harmless but probably unnecessary.`));
-  }
-
-  if (!apply) {
-    console.log("\n" + dim(`--- DRY RUN (re-run with --apply to commit) ---`));
-    return;
-  }
-
-if (failed) {
-    await gwRef.update({ [`failedCustomers.${slug}`]: FieldValue.delete() });
-    console.log("\n" + green(`${CHECK} gateways/${oc.gatewayId}.failedCustomers.${slug} cleared`));
-  }
-
-await db.collection("users").doc(user.uid).set({
-    provisioning: {
-      openclaw: {
-        status: oc.status,
-        gatewayId: oc.gatewayId,
-        _kickedAt: FieldValue.serverTimestamp(),
-      },
-    },
-  }, { merge: true });
-  console.log(green(`${CHECK} users/${user.uid} nudged`));
-  if (!mounted) {
-    console.log("\n" + dim(`Watch gateways/${oc.gatewayId}.mountedCustomers for '${slug}' to appear within ~30s.`));
-  }
 }
 
 async function addCustomer(slug: string, gatewayId: string, apply: boolean): Promise<void> {
@@ -821,7 +672,7 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   console.log(`  gateway profile     ${gatewayProfile}`);
   console.log(`  gateway status      ${gw.status}`);
   if (current && current !== gatewayId) {
-    console.log("\n" + yellow(`!  moving from '${current}' to '${gatewayId}'. Old gateway will keep ${slug} in mountedCustomers until next reboot or explicit unmount — that's drift until Phase 2 ships /unmount RPC.`));
+    console.log("\n" + yellow(`!  moving from '${current}' to '${gatewayId}'. The old gateway's reconcile drains ${slug} (observed−desired → evict) within ~15s; use migrate-customer for a zero-downtime cutover instead.`));
   }
 
   if (!apply) {
@@ -837,7 +688,7 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   console.log("\n" + green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayId = ${gatewayId}`));
   console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayProfile = ${gatewayProfile}`));
   console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.shellsEnabled = false`));
-  console.log(dim(`  Controller's onUserUpdatedForFleet will fire and pick-next on ${gatewayId}.`));
+  console.log(dim(`  The ${gatewayId} reconcile loop mounts ${slug} within ~15s (desired−observed → ensure); watch gateways/${gatewayId}.mountedCustomers.`));
 }
 
 async function migrateCustomerPlan(
@@ -1002,11 +853,6 @@ async function main(): Promise<void> {
   }
 
   switch (verb) {
-    case "unstick-customer":
-      if (!args.positional[1]) {
-        return missingArg("unstick-customer");
-      }
-      return unstickCustomer(args.positional[1], apply);
     case "add-customer": {
 
 const to = typeof args.flags.to === "string" ? args.flags.to : undefined;

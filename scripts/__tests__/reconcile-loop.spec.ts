@@ -24,7 +24,8 @@ function mkDeps(over: Partial<ReconcileLoopDeps> = {}): Spy {
   const logs: string[] = [];
   return {
     gatewayId: "default",
-    getObserved: () => [],
+    getMountObserved: () => [],
+    getEvictObserved: () => [],
     readDesired: async () => [],
     ensureSlug: async (slug) => {
       ensured.push(slug);
@@ -42,12 +43,17 @@ function mkDeps(over: Partial<ReconcileLoopDeps> = {}): Spy {
   };
 }
 
+/** Both observed views agree — the common case where coach-wired == fully-mounted. */
+function observed(slugs: string[]): Partial<ReconcileLoopDeps> {
+  return { getMountObserved: () => slugs, getEvictObserved: () => slugs };
+}
+
 beforeEach(() => _resetReconcileInFlightForTests());
 
 describe("reconcileFleet — bidirectional desired−observed convergence", () => {
   it("mounts desired−observed and evicts observed−desired in one tick", async () => {
     const d = mkDeps({
-      getObserved: () => ["b", "c", "d"],
+      ...observed(["b", "c", "d"]),
       readDesired: async () => ["a", "b", "c"],
     });
     await reconcileFleet(d);
@@ -57,7 +63,7 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
 
   it("is a no-op when observed already equals desired (no mount, no evict)", async () => {
     const d = mkDeps({
-      getObserved: () => ["a", "b"],
+      ...observed(["a", "b"]),
       readDesired: async () => ["a", "b"],
     });
     await reconcileFleet(d);
@@ -68,7 +74,6 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
   it("self-heals a desired-but-unmounted slug without any push or kick", async () => {
     // The livefixture repro: assigned (desired) but absent on disk (observed) → mounted.
     const d = mkDeps({
-      getObserved: () => [],
       readDesired: async () => ["livefixture"],
     });
     await reconcileFleet(d);
@@ -103,7 +108,6 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     for (const s of slugs) gates.set(s, deferred());
     const d = mkDeps({
       maxConcurrent: 2,
-      getObserved: () => [],
       readDesired: async () => slugs,
       ensureSlug: async (slug) => {
         active++;
@@ -130,7 +134,6 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     const order: string[] = [];
     const d = mkDeps({
       maxConcurrent: 1,
-      getObserved: () => [],
       readDesired: async () => slugs,
       ensureSlug: async (slug) => {
         active++;
@@ -153,7 +156,6 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
 
   it("a failing ensure is logged and does not block the rest (left for the next tick)", async () => {
     const d = mkDeps({
-      getObserved: () => [],
       readDesired: async () => ["bad", "good"],
       ensureSlug: async (slug) => {
         if (slug === "bad") throw new Error("boom");
@@ -169,7 +171,6 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
   it("clears in-flight after a tick so the next tick re-drives a still-missing slug (retry)", async () => {
     let attempt = 0;
     const d = mkDeps({
-      getObserved: () => [],
       readDesired: async () => ["x"],
       ensureSlug: async (slug) => {
         attempt++;
@@ -185,11 +186,84 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
   });
 });
 
+describe("reconcileFleet — split observed (mount keys off completion, evict off presence)", () => {
+  it("re-ensures a wired-but-unmarked desired slug instead of treating it as done", async () => {
+    // The post-config wedge: coach is wired on disk (evict-observed) but the mount never
+    // completed (no .mounted marker → absent from mount-observed). Still desired, so it
+    // belongs in toMount, NOT silently skipped — and must NOT be evicted.
+    const d = mkDeps({
+      getEvictObserved: () => ["wedged"], // coach-wired on disk
+      getMountObserved: () => [], // but not fully mounted (no marker)
+      readDesired: async () => ["wedged"],
+    });
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual(["wedged"]);
+    expect(d.evicted).toEqual([]);
+  });
+
+  it("still evicts an unassigned on-disk customer", async () => {
+    const d = mkDeps({
+      ...observed(["ghost"]),
+      readDesired: async () => [],
+    });
+    await reconcileFleet(d);
+    expect(d.evicted).toEqual(["ghost"]);
+    expect(d.ensured).toEqual([]);
+  });
+
+  it("never evicts a converging customer (desired, not yet on disk at all)", async () => {
+    const d = mkDeps({
+      getEvictObserved: () => [],
+      getMountObserved: () => [],
+      readDesired: async () => ["arriving"],
+    });
+    await reconcileFleet(d);
+    expect(d.evicted).toEqual([]);
+    expect(d.ensured).toEqual(["arriving"]);
+  });
+});
+
+describe("reconcileFleet — ensure outcome surfaced (best-effort lastError mirror)", () => {
+  it("reports success to onEnsureSuccess and failure to onEnsureError", async () => {
+    const succeeded: string[] = [];
+    const failed: Array<{ slug: string; message: string }> = [];
+    const d = mkDeps({
+      readDesired: async () => ["ok", "bad"],
+      ensureSlug: async (slug) => {
+        if (slug === "bad") throw new Error("kaboom");
+        return "mounted";
+      },
+      onEnsureSuccess: (slug) => succeeded.push(slug),
+      onEnsureError: (slug, message) => failed.push({ slug, message }),
+    });
+    await reconcileFleet(d);
+    expect(succeeded).toEqual(["ok"]);
+    expect(failed).toEqual([{ slug: "bad", message: "kaboom" }]);
+  });
+
+  it("a throwing outcome hook never crashes the tick", async () => {
+    const d = mkDeps({
+      readDesired: async () => ["ok", "bad"],
+      ensureSlug: async (slug) => {
+        if (slug === "bad") throw new Error("kaboom");
+        return "mounted";
+      },
+      onEnsureSuccess: () => {
+        throw new Error("hook exploded");
+      },
+      onEnsureError: () => {
+        throw new Error("hook exploded");
+      },
+    });
+    await expect(reconcileFleet(d)).resolves.toBeUndefined();
+  });
+});
+
 describe("startReconcileLoop", () => {
   it("reconciles on each interval tick and stops cleanly", async () => {
     vi.useFakeTimers();
     try {
-      const d = mkDeps({ getObserved: () => [], readDesired: async () => ["a"] });
+      const d = mkDeps({ readDesired: async () => ["a"] });
       const stop = startReconcileLoop({ ...d, intervalMs: 1000 });
       await vi.advanceTimersByTimeAsync(1000);
       await vi.advanceTimersByTimeAsync(1000);

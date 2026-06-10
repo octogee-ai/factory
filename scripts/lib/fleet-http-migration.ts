@@ -585,6 +585,11 @@ const entries = await listTarEntries(tarPath);
 
 await extractTarToDir(tarPath, importDir);
 
+      // Pin BEFORE activation: activation coach-wires the customer here, but cutover hasn't
+      // yet made it desired-on-this-gateway. The pin keeps the reconcile evict direction
+      // from draining the fresh import during that window. Self-expiring (see the pin's TTL).
+      deps.adapter.markCustomerMigratingIn?.(slug);
+
 await deps.adapter.activateImportedCustomer(slug, { signal: controller.signal });
       deps.adapter.onMounted?.(slug);
 

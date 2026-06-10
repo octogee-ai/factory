@@ -17,7 +17,7 @@ import type {
 interface SharedState {
   helmReleases: Map<string, HelmInstanceValue>; 
   glmGateways: Map<string, GatewayDesiredState>; 
-  gateways: Map<string, { mountedCustomers: string[]; inFlightJobId: string | null; lastHeartbeatAt: number }>;
+  gateways: Map<string, { mountedCustomers: string[]; lastHeartbeatAt: number }>;
   operations: Map<string, Operation>;
 }
 
@@ -76,10 +76,7 @@ function adminDeleteGateway(
   if (hb && hb.mountedCustomers.length > 0) {
     return { status: 409, error: "still has mounted customers" };
   }
-  if (hb && hb.inFlightJobId) {
-    return { status: 409, error: "in-flight restore job" };
-  }
-  
+
   const operationId = `op-${state.operations.size + 1}`;
   state.glmGateways.set(gatewayId, { ...glm, desiredStatus: "retired" });
   state.operations.set(operationId, {
@@ -102,7 +99,7 @@ function makeRetireDeps(state: SharedState, helm: ReturnType<typeof makeHelm>) {
     readGatewayLiveState: async (gatewayId: string) => {
       const hb = state.gateways.get(gatewayId);
       if (!hb) return null;
-      return { mountedCustomers: hb.mountedCustomers, inFlightJobId: hb.inFlightJobId };
+      return { mountedCustomers: hb.mountedCustomers };
     },
     readGlmGatewayId: async (gatewayId: string) =>
       state.glmGateways.has(gatewayId) ? gatewayId : null,
@@ -153,7 +150,7 @@ describe("retire-gateway choreography (integration)", () => {
         ],
       ]),
       gateways: new Map([
-        ["default", { mountedCustomers: [], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
+        ["default", { mountedCustomers: [], lastHeartbeatAt: Date.now() }],
       ]),
       operations: new Map(),
     };
@@ -230,7 +227,7 @@ const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
         ],
       ]),
       gateways: new Map([
-        ["default", { mountedCustomers: ["cust-a"], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
+        ["default", { mountedCustomers: ["cust-a"], lastHeartbeatAt: Date.now() }],
       ]),
       operations: new Map(),
     };
@@ -315,7 +312,7 @@ imageTag: "9778420",
         ],
       ]),
       gateways: new Map([
-        ["smoke", { mountedCustomers: [], inFlightJobId: null, lastHeartbeatAt: Date.now() }],
+        ["smoke", { mountedCustomers: [], lastHeartbeatAt: Date.now() }],
       ]),
       operations: new Map(),
     };

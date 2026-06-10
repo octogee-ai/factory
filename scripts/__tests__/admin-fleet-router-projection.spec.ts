@@ -35,6 +35,27 @@ describe("projectGatewaySummary — gatewayId", () => {
   });
 });
 
+describe("projectGatewaySummary — lastError (restoreJobs retired: no jobId)", () => {
+  const now = 1_750_000_000_000;
+
+  it("projects slug/message/at and drops the legacy jobId field", () => {
+    const summary = projectGatewaySummary(
+      gatewayDoc("default", {
+        lastError: { jobId: "legacy-job", slug: "frodo", message: "git clone timeout", at: null },
+      }),
+      undefined,
+      now,
+    );
+    expect(summary.lastError).toEqual({ slug: "frodo", message: "git clone timeout", at: null });
+    expect(summary.lastError).not.toHaveProperty("jobId");
+  });
+
+  it("projects a null lastError as null", () => {
+    const summary = projectGatewaySummary(gatewayDoc("default"), undefined, now);
+    expect(summary.lastError).toBeNull();
+  });
+});
+
 describe("resolveFleetNamespace", () => {
   it("returns K8S_NAMESPACE when set (the env the fleet lives in)", () => {
     expect(resolveFleetNamespace({ K8S_NAMESPACE: "octogee-test" })).toBe("octogee-test");

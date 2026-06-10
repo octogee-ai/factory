@@ -17,7 +17,6 @@ let glmGatewaysDocs: Record<string, Record<string, unknown>> = {};
 let gatewaysDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
 let operatorGatewayReservationsDocs: Record<string, Record<string, unknown>> = {};
-let restoreJobsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
 
 function readNestedField(data: Record<string, unknown>, path: string): unknown {
   let cursor: unknown = data;
@@ -63,12 +62,6 @@ vi.mock("../lib/db", () => {
         if (collectionName === "glmGateways" && !filter) {
           const docs = Object.entries(glmGatewaysDocs).map(([id, data]) => ({ id, data: () => data }));
           return { docs, size: docs.length };
-        }
-        if (collectionName === "restoreJobs") {
-          return {
-            docs: restoreJobsDocs.map((d) => ({ id: d.id, data: () => d.data })),
-            size: restoreJobsDocs.length,
-          };
         }
         if (collectionName === "users" && filter) {
           const matches = Object.entries(usersDocs)
@@ -309,7 +302,6 @@ beforeEach(() => {
   gatewaysDocs = { "canary": { gatewayId: "canary", status: "ready" } };
   usersDocs = {};
   operatorGatewayReservationsDocs = {};
-  restoreJobsDocs = [];
   provisionerCalls.length = 0;
   provisionerNextError = null;
   builderCalls.length = 0;

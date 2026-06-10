@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import {
+  getEvictObservedSlugs,
+  getMountObservedSlugs,
   readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
+import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 
 function mkDb(rows: Array<Record<string, unknown>>): Firestore {
   const docs = rows.map((row) => ({ data: () => row }));
@@ -49,6 +52,56 @@ describe("readMountedCustomersFromAssignedState", () => {
         hasCustomerDir: (slug) => slug === "bob",
       }),
     ).resolves.toEqual(["bob"]);
+  });
+});
+
+function mkObservedAdapter(over: Partial<CustomerLifecycleAdapter>): CustomerLifecycleAdapter {
+  return over as CustomerLifecycleAdapter;
+}
+
+describe("observed split — evict keys off raw presence, mount off completion", () => {
+  it("evict-observed = RAW on-disk dirs (not coach-wired), so a partial/junk dir is drainable", () => {
+    const a = mkObservedAdapter({
+      listLocalCustomerDirs: () => ["alice", "bob", "partial"], // partial: dir present, no coach
+      listLocalCustomerSlugs: () => ["alice", "bob"], // coach-wired subset
+    });
+    expect(getEvictObservedSlugs(a)).toEqual(["alice", "bob", "partial"]);
+  });
+
+  it("evict-observed skips a migrating-in slug (no draining a fresh import pre-cutover)", () => {
+    const a = mkObservedAdapter({
+      listLocalCustomerDirs: () => ["alice", "incoming"],
+      customerMigratingIn: (s) => s === "incoming",
+    });
+    expect(getEvictObservedSlugs(a)).toEqual(["alice"]); // incoming guarded from eviction
+  });
+
+  it("mount-observed excludes a coach-wired-but-unmarked slug (the post-config wedge)", () => {
+    const a = mkObservedAdapter({
+      listLocalCustomerSlugs: () => ["alice", "bob"], // both coach-wired
+      customerMountMarked: (s) => s === "alice", // only alice fully mounted
+    });
+    expect(getMountObservedSlugs(a)).toEqual(["alice"]); // bob still in toMount
+  });
+
+  it("mount-observed counts every coach-wired slug when no marker probe exists", () => {
+    const a = mkObservedAdapter({
+      listLocalCustomerSlugs: () => ["alice"],
+      // no customerMountMarked
+    });
+    expect(getMountObservedSlugs(a)).toEqual(["alice"]);
+  });
+
+  it("mount-observed is PIN-BLIND: a migrated coach-wired+marked slug is observed despite its pin", () => {
+    // Regression guard: the migrating-in pin must NOT suppress mount-observed (or the
+    // post-cutover target would re-ensure every tick for the pin's TTL). The pin only
+    // gates eviction.
+    const a = mkObservedAdapter({
+      listLocalCustomerSlugs: () => ["migrated"],
+      customerMountMarked: () => true,
+      customerMigratingIn: () => true,
+    });
+    expect(getMountObservedSlugs(a)).toEqual(["migrated"]);
   });
 });
 

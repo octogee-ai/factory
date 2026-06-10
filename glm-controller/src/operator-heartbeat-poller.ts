@@ -28,6 +28,9 @@ export interface OperatorGatewayHealth {
   startedAt?: number;
   /** Slugs the pod actually has on disk + coach-wired — reported Firestore-free. */
   customers: string[];
+  /** Slugs mid-migration-import (coach-wired here but cutover hasn't moved their assignment
+   *  yet). Skipped as eviction candidates so a slow import→cutover isn't drained. */
+  migratingIn?: string[];
 }
 
 export interface OperatorHeartbeatRecord {
@@ -91,7 +94,12 @@ export function departedFromAssigned(present: string[], assigned: string[]): str
  */
 export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null {
   if (typeof json !== "object" || json === null) return null;
-  const body = json as { status?: unknown; customers?: unknown; startedAt?: unknown };
+  const body = json as {
+    status?: unknown;
+    customers?: unknown;
+    startedAt?: unknown;
+    migratingIn?: unknown;
+  };
   if (typeof body.status !== "string" || body.status.length === 0) return null;
   if (!Array.isArray(body.customers)) return null;
   const customers = body.customers.filter(
@@ -99,32 +107,44 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
   );
   const health: OperatorGatewayHealth = { status: body.status, customers };
   if (typeof body.startedAt === "number") health.startedAt = body.startedAt;
+  if (Array.isArray(body.migratingIn)) {
+    health.migratingIn = body.migratingIn.filter(
+      (slug): slug is string => typeof slug === "string",
+    );
+  }
   return health;
 }
 
 async function evictDepartedForGateway(
   deps: OperatorHeartbeatPollerDeps,
   gatewayId: string,
-  footprint: string[],
-  assigned: string[],
+  observed: { footprint: string[]; assigned: string[]; migratingIn: string[] },
   state: EvictionState,
 ): Promise<void> {
   if (!deps.evictSlug) return;
+  const { footprint, assigned, migratingIn } = observed;
   const threshold = deps.evictAfterStreak ?? EVICT_AFTER_STREAK;
   const assignedSet = new Set(assigned);
   const onDisk = new Set(footprint);
+  const migratingSet = new Set(migratingIn);
 
   let gatewayStreaks = state.streaks.get(gatewayId);
   if (!gatewayStreaks) {
     gatewayStreaks = new Map();
     state.streaks.set(gatewayId, gatewayStreaks);
   }
-  // A slug that is re-assigned or has dropped off disk is no longer orphaned — reset.
+  // A slug that is re-assigned, has dropped off disk, or is now migrating-in is no longer
+  // orphaned — reset its streak.
   for (const slug of [...gatewayStreaks.keys()]) {
-    if (!onDisk.has(slug) || assignedSet.has(slug)) gatewayStreaks.delete(slug);
+    if (!onDisk.has(slug) || assignedSet.has(slug) || migratingSet.has(slug)) {
+      gatewayStreaks.delete(slug);
+    }
   }
 
   for (const slug of departedFromAssigned(footprint, assigned)) {
+    // A fresh migration import is coach-wired here before cutover moves its assignment —
+    // not an orphan. Skip it so a slow import→cutover isn't drained mid-flight.
+    if (migratingSet.has(slug)) continue;
     const streak = (gatewayStreaks.get(slug) ?? 0) + 1;
     gatewayStreaks.set(slug, streak);
     if (streak < threshold) continue;
@@ -175,8 +195,7 @@ export async function pollOperatorHeartbeatsOnce(
       await evictDepartedForGateway(
         deps,
         gatewayId,
-        health.customers,
-        assigned,
+        { footprint: health.customers, assigned, migratingIn: health.migratingIn ?? [] },
         { streaks, inFlight },
       );
     } catch (err) {
