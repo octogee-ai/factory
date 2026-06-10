@@ -3,7 +3,6 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
 import type { Server } from "http";
 import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "../../shared/types/fleet-controller.js";
-import { ActiveRestoreSet, createRestoreCustomerHandler, IdempotencyCache } from "./fleet-http.js";
 import {
   createExportHandler,
   createImportHandler,
@@ -19,14 +18,14 @@ import {
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
-import { removeCustomerFromGateway } from "./customer-lifecycle.js";
+import { addCustomerToGateway, removeCustomerFromGateway } from "./customer-lifecycle.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
-import { startDrainLoop } from "./drain-loop.js";
+import { startReconcileLoop } from "./reconcile-loop.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
 import { mountByosubDeviceAuth } from "./byosub-device-auth-http.js";
 
-const DRAIN_LOOP_INTERVAL_MS = 15 * 1000;
+const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 
 const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
@@ -148,24 +147,52 @@ interface FleetRuntime {
   status: "booting" | "ready";
 }
 
-function startMaybeDrainLoop(params: {
+// Observed = the pod's honest on-disk mounted set: customer dirs present whose coach is
+// wired (no Firestore). A dir present but coach NOT wired is a partial mount — excluded
+// here, so the reconcile re-ensures it (idempotent ensure completes the wiring).
+function getLocalMountedSlugs(adapter: CustomerLifecycleAdapter): string[] {
+  const slugs = adapter.listLocalCustomerSlugs?.() ?? [];
+  const wired = adapter.customerCoachWiredInOpenclawConfig;
+  return slugs.filter((s) => !wired || wired(s)).sort((a, b) => a.localeCompare(b));
+}
+
+function startMaybeReconcileLoop(params: {
   provision: boolean;
   opts: StartFleetOptions;
   wrappedAdapter: CustomerLifecycleAdapter;
   runtime: FleetRuntime;
+  stampMounted: (uid: string, mounted: boolean) => Promise<void>;
 }): () => void {
-  const { provision, opts, wrappedAdapter, runtime } = params;
+  const { provision, opts, wrappedAdapter, runtime, stampMounted } = params;
   if (!provision || !opts.db) return () => undefined;
-  return startDrainLoop({
+  return startReconcileLoop({
     gatewayId: opts.gatewayId,
-    intervalMs: DRAIN_LOOP_INTERVAL_MS,
+    intervalMs: RECONCILE_LOOP_INTERVAL_MS,
+    // SERIAL (not the default cap): the production lifecycle adapter shares one mutable
+    // `cachedUserData.current` across addCustomerToGateway calls (loadUserSnapshot →
+    // toProvisioningContext → applyConfigPatch), so two concurrent mounts could provision
+    // customer A using customer B's cached user doc / MM identity — tenant-corrupting. Keep
+    // mounts serial until the adapter is request-scoped. See FLEET-RECONCILE-SPEC.
+    maxConcurrent: 1,
     log: opts.log,
-    getMounted: () => runtime.mountedCustomers,
-    readAssignedSlugs: () => readAssignedSlugsForGateway(opts.db!, opts.gatewayId),
+    getObserved: () => {
+      const observed = getLocalMountedSlugs(wrappedAdapter);
+      runtime.mountedCustomers = observed; // keep the heartbeat report truthful
+      return observed;
+    },
+    readDesired: () => readAssignedSlugsForGateway(opts.db!, opts.gatewayId),
+    ensureSlug: async (slug: string) => {
+      const uid = await wrappedAdapter.uidForSlug(slug);
+      if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
+      const result = await addCustomerToGateway(wrappedAdapter, uid);
+      await stampMounted(uid, true);
+      return result.newCustomer ? "mounted" : "noop";
+    },
     unmountSlug: async (slug: string) => {
       const uid = await wrappedAdapter.uidForSlug(slug);
       if (uid) {
         const result = await removeCustomerFromGateway(wrappedAdapter, uid);
+        await stampMounted(uid, false);
         return result.wasMounted ? "drained" : "noop";
       }
 
@@ -280,9 +307,6 @@ export async function startFleetController(
     status: "booting",
   };
 
-  const cache = new IdempotencyCache();
-  const activeRestores = new ActiveRestoreSet();
-
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
 
@@ -304,6 +328,20 @@ const serviceName = `octogee-gateway-${opts.gatewayId}`;
       opts.log(
         `[fleet] ⚠ heartbeat write failed: ${String(err)} — will retry next tick`,
       );
+    }
+  };
+
+  // Derived readiness mirror (D5): stamp on-disk presence onto the user doc for cheap
+  // PWA queries. Nothing branches on it — it mirrors observed, never drives mounting.
+  const stampMounted = async (uid: string, mounted: boolean): Promise<void> => {
+    if (!opts.db) return;
+    try {
+      await opts.db
+        .collection("users")
+        .doc(uid)
+        .update({ "provisioning.openclaw.mounted": mounted });
+    } catch (err) {
+      opts.log(`[reconcile] ⚠ mounted-mirror stamp failed for ${uid}: ${String(err)}`);
     }
   };
 
@@ -373,22 +411,6 @@ const waitForGatewayReady = async (): Promise<void> => {
     next();
   };
 
-  if (caps.provision && stateDeps) {
-    app.post(
-      "/restore-customer/:gatewayId",
-      gatewayIdGuard,
-      createRestoreCustomerHandler({
-        secret: opts.secret,
-        gatewayId: opts.gatewayId,
-        stateDeps,
-        activeRestores,
-        adapter: wrappedAdapter,
-        cache,
-        log: opts.log,
-      }),
-    );
-  }
-
   const migrationDeps = {
     secret: opts.secret,
     gatewayId: opts.gatewayId,
@@ -406,26 +428,27 @@ const waitForGatewayReady = async (): Promise<void> => {
     registerByosubDeviceAuth(app, opts);
   }
 
-  const stopDrainLoop = startMaybeDrainLoop({
+  const stopReconcileLoop = startMaybeReconcileLoop({
     provision: caps.provision,
     opts,
     wrappedAdapter,
     runtime,
+    stampMounted,
   });
 
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
   });
-  const drainLoopStatus = caps.provision ? `${DRAIN_LOOP_INTERVAL_MS}ms` : "disabled";
+  const reconcileLoopStatus = caps.provision ? `${RECONCILE_LOOP_INTERVAL_MS}ms` : "disabled";
   opts.log(
-    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; drain-loop=${drainLoopStatus}`,
+    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; reconcile-loop=${reconcileLoopStatus}`,
   );
 
 return {
     whenReady: waitForGatewayReady(),
     stop: async () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
-      stopDrainLoop();
+      stopReconcileLoop();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

@@ -29,6 +29,7 @@ import {
   type SizingTier,
 } from "../../shared/types/sizing.js";
 import { estimateGatewayMonthlyCost } from "../../shared/types/cost-estimator.js";
+import { GATEWAY_UNREACHABLE_AFTER_MS } from "../../shared/types/fleet-controller.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 
 export interface FleetLogger {
@@ -125,49 +126,11 @@ async function readGatewayProfile(db: Firestore, gatewayId: string): Promise<Gat
 
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike { id: string; data(): GlmDoc }
-interface JobsByGateway { jobsByGateway: Map<string, Array<{ id: string; data: GlmDoc }>>; mounting: number; staleJobs: number; pending: number }
-interface JobsTotals { mounting: number; staleJobs: number; pending: number }
 
 function indexGlmDocs(docs: ReadonlyArray<FirestoreDocLike>): Map<string, GlmDoc> {
   const out = new Map<string, GlmDoc>();
   for (const doc of docs) out.set(doc.id, doc.data());
   return out;
-}
-
-function aggregateJobs(docs: ReadonlyArray<FirestoreDocLike>, now: number): JobsByGateway {
-  const jobsByGateway = new Map<string, Array<{ id: string; data: GlmDoc }>>();
-  let mounting = 0, staleJobs = 0, pending = 0;
-  for (const doc of docs) {
-    const data = doc.data();
-    const gid = typeof data.gatewayId === "string" ? data.gatewayId : "";
-    const arr = jobsByGateway.get(gid) ?? [];
-    arr.push({ id: doc.id, data });
-    jobsByGateway.set(gid, arr);
-    const state = data.state;
-    if (state === "pending") pending++;
-    if (state === "dispatched" || state === "running") {
-      const ageMs = toMillis(data.dispatchedAt) ?? toMillis(data.createdAt);
-      if (ageMs != null && now - ageMs > JOB_TTL_MS) staleJobs++;
-      else mounting++;
-    }
-  }
-  return { jobsByGateway, mounting, staleJobs, pending };
-}
-
-function projectInFlightJob(
-  inFlightJobId: string | null,
-  ownJobs: ReadonlyArray<{ id: string; data: GlmDoc }>,
-  now: number,
-): { jobId: string; slug: unknown; state: unknown; ageMs: number } | null {
-  const raw = inFlightJobId ? ownJobs.find((j) => j.id === inFlightJobId) : null;
-  if (!raw) return null;
-  const dispatchedMs = toMillis(raw.data.dispatchedAt) ?? toMillis(raw.data.createdAt);
-  return {
-    jobId: raw.id,
-    slug: raw.data.slug,
-    state: raw.data.state,
-    ageMs: dispatchedMs == null ? 0 : now - dispatchedMs,
-  };
 }
 
 function projectLastError(raw: unknown):
@@ -188,7 +151,6 @@ function projectDesiredStatus(glmDoc: GlmDoc | undefined):
 
 export function projectGatewaySummary(
   doc: FirestoreDocLike,
-  ownJobs: ReadonlyArray<{ id: string; data: GlmDoc }>,
   glmDoc: GlmDoc | undefined,
   now: number,
 ): {
@@ -198,14 +160,11 @@ export function projectGatewaySummary(
   mountedCustomers: unknown[];
   lastHeartbeatAt: string | null; heartbeatAgeMs: number | null;
   startedAt: string | null; uptimeMs: number | null;
-  inFlightJobId: string | null;
-  inFlightJob: ReturnType<typeof projectInFlightJob>;
   lastError: ReturnType<typeof projectLastError>;
   sizing: ReturnType<typeof resolveSizingForResponse>;
   profile: GatewayProfile;
 } {
   const data = doc.data();
-  const inFlightJobId = typeof data.inFlightJobId === "string" ? data.inFlightJobId : null;
   return {
     gatewayId: typeof data.gatewayId === "string" ? data.gatewayId : doc.id,
     status: typeof data.status === "string" ? data.status : "unknown",
@@ -217,8 +176,6 @@ export function projectGatewaySummary(
     heartbeatAgeMs: ageMsOrNull(toMillis(data.lastHeartbeatAt), now),
     startedAt: toIso(data.startedAt),
     uptimeMs: ageMsOrNull(toMillis(data.startedAt), now),
-    inFlightJobId,
-    inFlightJob: projectInFlightJob(inFlightJobId, ownJobs, now),
     lastError: projectLastError(data.lastError),
     sizing: resolveSizingForResponse(glmDoc),
     profile: normalizeGatewayProfile(glmDoc?.profile),
@@ -227,20 +184,20 @@ export function projectGatewaySummary(
 
 function rollupFleetStats(
   gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>,
-  jobs: JobsTotals,
 ): {
   gateways: { total: number; ready: number; unreachable: number };
   customersMounted: number;
-  inFlight: { mounting: number; unmounting: number; total: number };
-  staleJobs: number;
-  pendingPlacements: number;
   fleetCost: { monthlyUsd: number; byTier: Record<string, { count: number; subtotalUsd: number }> };
 } {
   let ready = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0;
   const byTier: Record<string, { count: number; subtotalUsd: number }> = {};
   for (const g of gateways) {
-    if (g.status === "ready") ready++;
-    if (g.status === "unreachable") unreachable++;
+    // Derived reachability (replaces the deleted Cloud-Function "unreachable" writer):
+    // a gateway whose heartbeat has aged out is unreachable, whatever its last
+    // self-reported status said. See FLEET-RECONCILE-SPEC.
+    const stale = g.heartbeatAgeMs != null && g.heartbeatAgeMs > GATEWAY_UNREACHABLE_AFTER_MS;
+    if (stale) unreachable++;
+    else if (g.status === "ready") ready++;
     customersMounted += g.mountedCustomers.length;
     fleetMonthlyUsd += g.sizing.monthlyCostUsd.compute;
     const entry = byTier[g.sizing.tier] ?? { count: 0, subtotalUsd: 0 };
@@ -251,26 +208,13 @@ function rollupFleetStats(
   return {
     gateways: { total: gateways.length, ready, unreachable },
     customersMounted,
-    inFlight: { mounting: jobs.mounting, unmounting: 0, total: jobs.mounting },
-    staleJobs: jobs.staleJobs,
-    pendingPlacements: jobs.pending,
     fleetCost: { monthlyUsd: fleetMonthlyUsd, byTier },
   };
 }
 
-const JOB_TTL_MS = 10 * 60_000;
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const GATEWAY_IMAGE_REPO_PREFIX =
   "us-central1-docker.pkg.dev/octogee/octogee/";
-const RESTORE_JOB_STATES = [
-  "pending",
-  "dispatched",
-  "running",
-  "done",
-  "failed",
-  "unknown",
-] as const;
-type RestoreJobStateLabel = (typeof RESTORE_JOB_STATES)[number];
 const BUILDS_SERVICE_ALLOWLIST = new Set([
   "octogee-gateway",
   "gateway-edge",
@@ -1018,21 +962,6 @@ function compareOperatorReservations(
   return reservationSortMs(b) - reservationSortMs(a);
 }
 
-async function findInFlightJobId(
-  db: Firestore,
-  gatewayId: string,
-): Promise<string | null> {
-  const heartbeatSnap = await db.collection("gateways").doc(gatewayId).get();
-  if (!heartbeatSnap.exists) return null;
-  const hbData = heartbeatSnap.data() as
-    | { inFlightJobId?: unknown }
-    | undefined;
-  return typeof hbData?.inFlightJobId === "string" &&
-    hbData.inFlightJobId.length > 0
-    ? hbData.inFlightJobId
-    : null;
-}
-
 function resolveCustomerSlug(
   userData: Record<string, unknown>,
   workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"],
@@ -1520,23 +1449,18 @@ router.get(
     "/gateways",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const [gwSnap, jobsSnap, glmSnap] = await Promise.all([
+        const [gwSnap, glmSnap] = await Promise.all([
           db.collection("gateways").get(),
-          db
-            .collection("restoreJobs")
-            .where("state", "in", ["pending", "dispatched", "running"])
-            .get(),
           db.collection(GLM_GATEWAYS_COLLECTION).get(),
         ]);
         const glmByGatewayId = indexGlmDocs(glmSnap.docs);
         const now = Date.now();
-        const { jobsByGateway, mounting, staleJobs, pending } = aggregateJobs(jobsSnap.docs, now);
         const gateways = gwSnap.docs.map((doc) =>
-          projectGatewaySummary(doc, jobsByGateway.get(doc.id) ?? [], glmByGatewayId.get(doc.id), now),
+          projectGatewaySummary(doc, glmByGatewayId.get(doc.id), now),
         );
         res.json({
           gateways,
-          stats: rollupFleetStats(gateways, { mounting, staleJobs, pending }),
+          stats: rollupFleetStats(gateways),
           namespace: resolveFleetNamespace(),
           generatedAt: new Date().toISOString(),
         });
@@ -2327,7 +2251,7 @@ router.post(
         const heartbeatSnap = await db.collection("gateways").doc(id).get();
         if (heartbeatSnap.exists) {
           const hbData = heartbeatSnap.data() as
-            | { mountedCustomers?: unknown; inFlightJobId?: unknown }
+            | { mountedCustomers?: unknown }
             | undefined;
           const mounted = Array.isArray(hbData?.mountedCustomers)
             ? (hbData!.mountedCustomers as unknown[]).filter(
@@ -2340,20 +2264,6 @@ router.post(
                 "gateway still has mounted customers; migrate them off before retiring",
               gatewayId: id,
               mountedCustomers: mounted,
-            });
-            return;
-          }
-          const inFlightJobId =
-            typeof hbData?.inFlightJobId === "string" &&
-            hbData.inFlightJobId.length > 0
-              ? hbData.inFlightJobId
-              : null;
-          if (inFlightJobId) {
-            res.status(409).json({
-              error:
-                "gateway has an in-flight restore job; let it finish (or fail) before retiring",
-              gatewayId: id,
-              inFlightJobId,
             });
             return;
           }
@@ -2400,17 +2310,6 @@ router.post(
           return;
         }
 
-        const inFlightJobId = await findInFlightJobId(db, id);
-        if (inFlightJobId) {
-          res.status(409).json({
-            error:
-              "gateway has an in-flight restore job; let it finish before restarting",
-            gatewayId: id,
-            inFlightJobId,
-          });
-          return;
-        }
-
         const pendingOps = await db
           .collection(GLM_OPERATIONS_COLLECTION)
           .where("status", "in", ["pending", "running"])
@@ -2449,7 +2348,7 @@ router.post(
 
   router.post(
     "/gateways/:id/rollout",
-    // eslint-disable-next-line complexity -- linear preflight after extraction (validateRolloutBody + findInFlightJobId): body validate → exists → no-op → in-flight → conflicting-op → write. Each guard's response shape is distinct.
+    // eslint-disable-next-line complexity -- linear preflight: body validate → exists → no-op → conflicting-op → write. Each guard's response shape is distinct.
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id = req.params.id as string;
@@ -2491,17 +2390,6 @@ router.post(
             imageTag,
             imageRepository: targetRepo,
             profile: targetProfile,
-          });
-          return;
-        }
-
-        const inFlightJobId = await findInFlightJobId(db, id);
-        if (inFlightJobId) {
-          res.status(409).json({
-            error:
-              "gateway has an in-flight restore job; let it finish before rolling out",
-            gatewayId: id,
-            inFlightJobId,
           });
           return;
         }
@@ -2679,167 +2567,6 @@ router.get(
     },
   );
 
-const KICKABLE_STATES = new Set(["pending", "dispatched", "running"]);
-  router.post(
-    "/restore-jobs/:jobId/kick",
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const jobId = req.params.jobId as string;
-        const jobRef = db.collection("restoreJobs").doc(jobId);
-        const actor = req as ActorRequest;
-        const kickedBy = actor.uid ?? "unknown";
-        const errorMsg = `operator-kicked (uid=${kickedBy} at ${new Date().toISOString()})`;
-
-        type Outcome =
-          | { ok: false; status: number; body: Record<string, unknown> }
-          | {
-              ok: true;
-              status: 200;
-              body: {
-                jobId: string;
-                gatewayId: string;
-                slug: string;
-                kickedBy: string;
-                kickedAt: string;
-              };
-            };
-
-        // eslint-disable-next-line complexity -- transaction keeps the restore-job state checks adjacent to the writes they guard.
-        const outcome = await db.runTransaction(async (txn) => {
-          
-          const jobSnap = await txn.get(jobRef);
-          if (!jobSnap.exists) {
-            return {
-              ok: false,
-              status: 404,
-              body: { error: "restore job not found", jobId },
-            } satisfies Outcome;
-          }
-          const data = jobSnap.data() as Record<string, unknown>;
-          const state = typeof data.state === "string" ? data.state : null;
-          if (!state || !KICKABLE_STATES.has(state)) {
-            return {
-              ok: false,
-              status: 409,
-              body: {
-                error: `restore job state=${state ?? "missing"} is not kickable; allowed=[${[...KICKABLE_STATES].join(", ")}]`,
-                jobId,
-                state,
-              },
-            } satisfies Outcome;
-          }
-          const gatewayId =
-            typeof data.gatewayId === "string" ? data.gatewayId : "";
-          const snapshot = (data.snapshot ?? {}) as { slug?: unknown };
-          const slug =
-            typeof snapshot.slug === "string" ? snapshot.slug : "";
-
-let shouldClearGwLock = false;
-          const gwRef = gatewayId
-            ? db.collection("gateways").doc(gatewayId)
-            : null;
-          if (gwRef) {
-            const gwSnap = await txn.get(gwRef);
-            if (gwSnap.exists) {
-              const gwData = gwSnap.data() as
-                | { inFlightJobId?: unknown }
-                | undefined;
-              if (gwData?.inFlightJobId === jobId) {
-                shouldClearGwLock = true;
-              }
-            }
-          }
-
-txn.update(jobRef, {
-            state: "failed",
-            completedAt: FieldValue.serverTimestamp(),
-            error: errorMsg,
-          });
-          if (gwRef && shouldClearGwLock) {
-            txn.update(gwRef, { inFlightJobId: null });
-          }
-
-          return {
-            ok: true,
-            status: 200,
-            body: {
-              jobId,
-              gatewayId,
-              slug,
-              kickedBy,
-              kickedAt: new Date().toISOString(),
-            },
-          } satisfies Outcome;
-        });
-
-        res.status(outcome.status).json(outcome.body);
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
-
-router.get(
-    "/restore-jobs",
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const parsedLimit = parseInt(
-          (req.query.limit as string) ?? "50",
-          10,
-        );
-        const limit = Math.min(
-          200,
-          Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 50),
-        );
-        const snap = await db
-          .collection("restoreJobs")
-          .orderBy("createdAt", "desc")
-          .limit(limit)
-          .get();
-        const normalizeState = (raw: unknown): RestoreJobStateLabel => {
-          if (
-            typeof raw === "string" &&
-            (RESTORE_JOB_STATES as readonly string[]).includes(raw)
-          ) {
-            return raw as RestoreJobStateLabel;
-          }
-          logger.warn(
-            "restoreJobs row has malformed state — surfacing as 'unknown'",
-            { raw },
-          );
-          return "unknown";
-        };
-        const jobs = snap.docs.map((doc) => {
-          const data = doc.data() as Record<string, unknown>;
-          const snapshot = (data.snapshot ?? {}) as {
-            uid?: string;
-            slug?: string;
-          };
-          return {
-            jobId: typeof data.jobId === "string" ? data.jobId : doc.id,
-            gatewayId:
-              typeof data.gatewayId === "string" ? data.gatewayId : "",
-            uid: typeof snapshot.uid === "string" ? snapshot.uid : "",
-            slug: typeof snapshot.slug === "string" ? snapshot.slug : "",
-            state: normalizeState(data.state),
-            attempt:
-              typeof data.attempt === "number" &&
-              Number.isFinite(data.attempt) &&
-              data.attempt >= 1
-                ? data.attempt
-                : 1,
-            createdAt: toIso(data.createdAt),
-            dispatchedAt: toIso(data.dispatchedAt),
-            completedAt: toIso(data.completedAt),
-            error: typeof data.error === "string" ? data.error : null,
-          };
-        });
-        res.json({ jobs, generatedAt: new Date().toISOString() });
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
 
 router.get(
     "/builds",

@@ -179,34 +179,19 @@ describe("GET /api/admin/gateways", () => {
       status: "ready",
       imageTag: "abc1234",
       mountedCustomers: ["alice", "bob", "christopher"],
-      inFlightJobId: null,
     });
     expect(blue.heartbeatAgeMs).toBeGreaterThanOrEqual(0);
     expect(blue.heartbeatAgeMs).toBeLessThan(5_000);
   });
 
-  it("derives in-flight job stats from restoreJobs (mounting count, stale > 10m, pending)", async () => {
+  it("rolls up gateway counts including derived unreachable, and customers mounted", async () => {
+    // unreachable is derived from heartbeat age (gw-test-stale is 5m stale), not a written status.
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
-    const stats = res.body.stats;
-    expect(stats).toMatchObject({
+    expect(res.body.stats).toMatchObject({
       gateways: { total: 3, ready: 2, unreachable: 1 },
       customersMounted: 4,
-      inFlight: { mounting: 1, total: 1 },
-      pendingPlacements: 1,
-      staleJobs: 1,
     });
-  });
-
-  it("attaches in-flight job snapshot to the owning gateway", async () => {
-    const res = await request(app).get("/api/admin/gateways");
-    const green = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-green");
-    expect(green.inFlightJob).toMatchObject({
-      jobId: "job-running",
-      slug: "dana",
-      state: "running",
-    });
-    expect(green.inFlightJob.ageMs).toBeGreaterThanOrEqual(0);
   });
 
   it("surfaces lastError on a gateway when present", async () => {

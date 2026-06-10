@@ -65,8 +65,6 @@ export type {
   GatewayStatus,
   GatewayState,
   GatewayLastError,
-  RestoreJobState,
-  RestoreJob,
   CustomerSnapshot,
 } from './fleet-controller.js';
 export {
@@ -79,7 +77,6 @@ export {
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
-  IDEMPOTENCY_HEADER,
   SIGNATURE_HEADER,
   GATEWAYS_COLLECTION,
   RESTORE_JOBS_COLLECTION,

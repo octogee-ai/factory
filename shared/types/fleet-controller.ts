@@ -35,13 +35,6 @@ startedAt?: number;
 failedCustomers?: Record<string, { failCount: number; lastFailedAt: unknown  }>;
 }
 
-export type RestoreJobState =
-  | "pending"
-  | "dispatched"
-  | "running"
-  | "done"
-  | "failed";
-
 export interface CustomerSnapshot {
   uid: string;
   slug: string;
@@ -56,21 +49,6 @@ export interface CustomerSnapshot {
     kind: string;
     channelId: string;
   }>;
-}
-
-export interface RestoreJob {
-  jobId: string;
-  gatewayId: string;
-  uid: string;
-  slug: string;
-  state: RestoreJobState;
-
-attempt: number;
-  createdAt: unknown; 
-  dispatchedAt: unknown | null; 
-  completedAt: unknown | null; 
-  error: string | null;
-  snapshot: CustomerSnapshot;
 }
 
 export const GATEWAY_HEARTBEAT_INTERVAL_MS = 15_000;
@@ -88,8 +66,6 @@ export const ADD_CUSTOMER_DEADLINE_MS = 300_000;
 export const MIGRATION_QUIESCE_TIMEOUT_MS = 60_000;
 export const MIGRATION_TRANSFER_TIMEOUT_MS = ADD_CUSTOMER_DEADLINE_MS + 30_000;
 export const MIGRATION_UNMOUNT_TIMEOUT_MS = CONFIG_PATCH_DEADLINE_MS + 30_000;
-
-export const IDEMPOTENCY_HEADER = "X-Idempotency-Key";
 
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 

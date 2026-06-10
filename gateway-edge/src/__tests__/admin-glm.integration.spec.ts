@@ -1354,24 +1354,6 @@ const updateIdx = calls.findIndex(
     expect(glmOperationsDocs.find((d) => d.data.kind === "retire-gateway")).toBeUndefined();
   });
 
-  it("returns 409 when an in-flight restore job is set on the heartbeat (mid-mount)", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
-    gatewaysDocs["canary"] = {
-      gatewayId: "canary",
-      status: "ready",
-      mountedCustomers: [],
-      inFlightJobId: "job-restore-7",
-    };
-    const app = buildApp();
-    const res = await request(app).delete("/api/admin/gateways/canary");
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/in-flight restore job/i);
-    expect(res.body.inFlightJobId).toBe("job-restore-7");
-    const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
-    );
-    expect(update).toBeUndefined();
-  });
 });
 
 describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
@@ -1537,25 +1519,6 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
     expect(op).toBeUndefined();
   });
 
-  it("returns 409 when an in-flight restore job is set on the heartbeat", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "oldSha",
-    };
-    gatewaysDocs["default"] = {
-      gatewayId: "default",
-      status: "ready",
-      inFlightJobId: "job-restore-9",
-    };
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/default/rollout")
-      .send({ imageTag: "abcdef1" });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/in-flight restore job/i);
-    expect(res.body.inFlightJobId).toBe("job-restore-9");
-  });
 });
 
 describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl rollout restart", () => {
@@ -1630,26 +1593,6 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
     expect(res.body.operationId).toBe("op-running-99");
   });
 
-  it("returns 409 when an in-flight customer restore job is set on the heartbeat (would kill the restore)", async () => {
-    glmGatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      imageRepository: REPO,
-      imageTag: "abcdef1",
-    };
-    gatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      status: "ready",
-      inFlightJobId: "job-restore-7",
-    };
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/bender/restart")
-      .send({});
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/in-flight restore job/i);
-    expect(res.body.inFlightJobId).toBe("job-restore-7");
-    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
-  });
 });
 
 describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
@@ -1983,176 +1926,6 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
       .send({ gatewayId: "default" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already assigned/);
-  });
-});
-
-describe("GET /api/admin/restore-jobs — provisioner queue", () => {
-  it("returns recent jobs with timestamps serialized to ISO and snapshot fields lifted to top level", async () => {
-    restoreJobsDocs = [
-      {
-        id: "job-newest",
-        data: {
-          jobId: "job-newest",
-          gatewayId: "default",
-          state: "running",
-          attempt: 2,
-          createdAt: { toDate: () => new Date(3_000) },
-          dispatchedAt: { toDate: () => new Date(3_500) },
-          completedAt: null,
-          error: null,
-          snapshot: { uid: "u-1", slug: "alice" },
-        },
-      },
-      {
-        id: "job-older",
-        data: {
-          jobId: "job-older",
-          gatewayId: "default",
-          state: "done",
-          attempt: 1,
-          createdAt: { toDate: () => new Date(1_000) },
-          dispatchedAt: { toDate: () => new Date(1_500) },
-          completedAt: { toDate: () => new Date(2_500) },
-          error: null,
-          snapshot: { uid: "u-2", slug: "bob" },
-        },
-      },
-    ];
-    const app = buildApp();
-    const res = await request(app).get("/api/admin/restore-jobs");
-    expect(res.status).toBe(200);
-    expect(res.body.jobs).toHaveLength(2);
-    expect(res.body.jobs[0]).toMatchObject({
-      jobId: "job-newest",
-      gatewayId: "default",
-      state: "running",
-      attempt: 2,
-      uid: "u-1",
-      slug: "alice",
-    });
-    expect(res.body.jobs[0].createdAt).toBe("1970-01-01T00:00:03.000Z");
-    expect(res.body.jobs[0].dispatchedAt).toBe("1970-01-01T00:00:03.500Z");
-    expect(res.body.jobs[0].completedAt).toBeNull();
-    expect(res.body.generatedAt).toBeTruthy();
-  });
-
-  it("respects ?limit and clamps to 200", async () => {
-    const app = buildApp();
-    const res = await request(app).get("/api/admin/restore-jobs?limit=500");
-    expect(res.status).toBe(200);
-    
-    expect(res.body.jobs).toEqual([]);
-  });
-
-  it("returns an empty list when there are no jobs", async () => {
-    const app = buildApp();
-    const res = await request(app).get("/api/admin/restore-jobs");
-    expect(res.status).toBe(200);
-    expect(res.body.jobs).toEqual([]);
-  });
-
-  it("falls back to limit=50 when ?limit is non-numeric (parseInt returns NaN)", async () => {
-    const app = buildApp();
-    const res = await request(app).get("/api/admin/restore-jobs?limit=abc");
-    expect(res.status).toBe(200);
-    expect(res.body.jobs).toEqual([]);
-  });
-
-  it("serializes epoch=0 timestamps instead of dropping them as 'falsy'", async () => {
-    restoreJobsDocs = [
-      {
-        id: "job-epoch",
-        data: {
-          jobId: "job-epoch",
-          gatewayId: "default",
-          state: "done",
-          attempt: 1,
-          createdAt: 0,
-          dispatchedAt: { toDate: () => new Date(0) },
-          completedAt: null,
-          error: null,
-          snapshot: { uid: "u-1", slug: "alice" },
-        },
-      },
-    ];
-    const app = buildApp();
-    const res = await request(app).get("/api/admin/restore-jobs");
-    expect(res.status).toBe(200);
-    expect(res.body.jobs[0].createdAt).toBe("1970-01-01T00:00:00.000Z");
-    expect(res.body.jobs[0].dispatchedAt).toBe("1970-01-01T00:00:00.000Z");
-  });
-
-  it("guards against NaN attempt values flowing through to the wire", async () => {
-    restoreJobsDocs = [
-      {
-        id: "job-nan",
-        data: {
-          jobId: "job-nan",
-          gatewayId: "default",
-          state: "running",
-          attempt: NaN,
-          createdAt: { toDate: () => new Date(1_000) },
-          dispatchedAt: null,
-          completedAt: null,
-          error: null,
-          snapshot: { uid: "u-2", slug: "bob" },
-        },
-      },
-    ];
-    const app = buildApp();
-    const res = await request(app).get("/api/admin/restore-jobs");
-    expect(res.status).toBe(200);
-    expect(res.body.jobs[0].attempt).toBe(1);
-  });
-
-  it("normalizes a malformed state value to 'unknown' instead of silently coercing to pending", async () => {
-    restoreJobsDocs = [
-      {
-        id: "job-malformed",
-        data: {
-          jobId: "job-malformed",
-          gatewayId: "default",
-          state: "weird-state-not-in-union",
-          attempt: 1,
-          createdAt: { toDate: () => new Date(1_000) },
-          dispatchedAt: null,
-          completedAt: null,
-          error: null,
-          snapshot: { uid: "u-x", slug: "x" },
-        },
-      },
-    ];
-    const app = buildApp();
-    const res = await request(app).get("/api/admin/restore-jobs");
-    expect(res.status).toBe(200);
-    expect(res.body.jobs[0].state).toBe("unknown");
-  });
-
-  it("preserves the error field on failed jobs", async () => {
-    restoreJobsDocs = [
-      {
-        id: "job-failed",
-        data: {
-          jobId: "job-failed",
-          gatewayId: "default",
-          state: "failed",
-          attempt: 3,
-          createdAt: { toDate: () => new Date(1_000) },
-          dispatchedAt: { toDate: () => new Date(1_500) },
-          completedAt: { toDate: () => new Date(2_500) },
-          error: "boot-sync timed out",
-          snapshot: { uid: "u-3", slug: "charlie" },
-        },
-      },
-    ];
-    const app = buildApp();
-    const res = await request(app).get("/api/admin/restore-jobs");
-    expect(res.status).toBe(200);
-    expect(res.body.jobs[0]).toMatchObject({
-      jobId: "job-failed",
-      state: "failed",
-      error: "boot-sync timed out",
-    });
   });
 });
 
