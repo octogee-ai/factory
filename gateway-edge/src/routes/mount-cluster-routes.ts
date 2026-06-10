@@ -3,6 +3,7 @@ import { Express, RequestHandler, Router } from "express";
 import mattermostRoutes from "./mattermost.js";
 import openclawRoutes from "./openclaw.js";
 import billingRoutes from "./billing/index.js";
+import legalAcceptRoutes from "./legal/accept.js";
 import byosubRoutes from "./byosub.js";
 import adminRoutes from "./admin.js";
 import inviteRoutes from "./invites.js";
@@ -86,6 +87,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   app.use("/api/mattermost", mattermostRoutes);
   app.use("/api/openclaw", openclawRoutes);
   app.use("/api/billing", billingRoutes);
+  app.use("/api/legal", legalAcceptRoutes);
   app.use("/api/admin", adminRoutes);
   app.use("/api/invites", inviteRoutes);
   app.use("/api/integrations", integrationRoutes);
