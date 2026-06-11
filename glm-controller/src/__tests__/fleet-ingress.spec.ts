@@ -30,7 +30,7 @@ describe("computeDesiredFleetPaths", () => {
     ]);
   });
 
-  it("emits 6 RPC paths per gateway routed to the per-gateway Service plus /health at the end", () => {
+  it("emits 5 migration RPC paths per gateway routed to the per-gateway Service plus /health at the end", () => {
     const gateways: FleetGateway[] = [
       { gatewayId: "default" },
     ];
@@ -40,7 +40,6 @@ describe("computeDesiredFleetPaths", () => {
       aliasServiceName: ALIAS,
     });
     expect(paths.map((p) => p.path)).toEqual([
-      "/restore-customer/default",
       "/quiesce/default",
       "/export/default",
       "/push-state/default",
@@ -70,11 +69,11 @@ describe("computeDesiredFleetPaths", () => {
       fleetControllerPort: FLEET_PORT,
       aliasServiceName: ALIAS,
     });
-    const restorePaths = paths.filter((p) => p.path.startsWith("/restore-customer/"));
-    expect(restorePaths.map((p) => p.path)).toEqual([
-      "/restore-customer/alpha",
-      "/restore-customer/mike",
-      "/restore-customer/zebra",
+    const quiescePaths = paths.filter((p) => p.path.startsWith("/quiesce/"));
+    expect(quiescePaths.map((p) => p.path)).toEqual([
+      "/quiesce/alpha",
+      "/quiesce/mike",
+      "/quiesce/zebra",
     ]);
   });
 });
@@ -212,7 +211,7 @@ describe("extractIngressPaths", () => {
             http: {
               paths: [
                 {
-                  path: "/restore-customer/gw-x",
+                  path: "/quiesce/gw-x",
                   pathType: "ImplementationSpecific",
                   backend: { service: { name: "octogee-gateway-default", port: { number: 3003 } } },
                 },
@@ -228,7 +227,7 @@ describe("extractIngressPaths", () => {
       },
     };
     expect(extractIngressPaths(json)).toEqual([
-      { path: "/restore-customer/gw-x", pathType: "ImplementationSpecific", serviceName: "octogee-gateway-default", servicePort: 3003 },
+      { path: "/quiesce/gw-x", pathType: "ImplementationSpecific", serviceName: "octogee-gateway-default", servicePort: 3003 },
       { path: "/health", pathType: "ImplementationSpecific", serviceName: "octogee-gateway", servicePort: 3003 },
     ]);
   });
@@ -387,7 +386,6 @@ describe("syncFleetIngressPaths", () => {
       "/spec/rules/1/http/paths/-",
       "/spec/rules/1/http/paths/-",
       "/spec/rules/1/http/paths/-",
-      "/spec/rules/1/http/paths/-",
     ]);
     expect(ops[0]).toEqual({ op: "test", path: "/spec/rules/1/host", value: "fleet.example.com" });
     expect(
@@ -395,7 +393,6 @@ describe("syncFleetIngressPaths", () => {
         .filter((op: { op: string }) => op.op === "add")
         .map((op: { value: { path: string } }) => op.value.path),
     ).toEqual([
-      "/restore-customer/default",
       "/quiesce/default",
       "/export/default",
       "/push-state/default",

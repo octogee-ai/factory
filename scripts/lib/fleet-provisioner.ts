@@ -90,11 +90,11 @@ export interface FleetCapabilities {
   /** Read the assigned roster + write this gateway's own liveness/mounted
    *  heartbeat (observability). Independent of provisioning. */
   reportMounted: boolean;
-  /** Run the write-side platform provisioner: restore-customer, drain loop,
-   *  byosub device-auth. Off inside the locked operator boundary. */
+  /** Run the write-side platform provisioner: the reconcile loop (ensure/evict)
+   *  + byosub device-auth. Off inside the locked operator boundary. */
   provision: boolean;
   /** At least one capability needs Firestore write deps (own heartbeat +
-   *  glmGateways mirror, or restore jobs). */
+   *  glmGateways mirror, or the reconcile loop's roster reads). */
   needsStateDeps: boolean;
 }
 

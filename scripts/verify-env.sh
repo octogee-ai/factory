@@ -477,18 +477,20 @@ else
   done
 fi
 
-# ── 5f. Fleet Controller (control plane) ────────────────────────────────────
-# Checks the fleet-control LB stack that Cloud Tasks pushes through to reach
-# the gateway's POST /restore-customer/{gatewayId} handler. Per-env:
+# ── 5f. Fleet-control LB ─────────────────────────────────────────────────────
+# Checks the fleet-control LB stack that carries the operator / gateway-to-gateway
+# migration RPCs (/quiesce, /export, /push-state, /import, /unmount) + /health.
+# Per-env:
 #   - global static IP exists (fleet-control-ip{-test})
 #   - DNS A record for fleet[-test].octogee.com resolves to that IP
 #   - K8s Secret octogee-fleet-controller exists in the gateway namespace
+#     (FLEET_CONTROLLER_SECRET — HMAC for the migration RPCs)
 #   - BackendConfig octogee-gateway-fleet-control exists (attached via
 #     the gateway Service's cloud.google.com/backend-config annotation)
 #   - Fleet-control Ingress exists (cert state covered in 5c)
-# See docs/GATEWAY-PLATFORM-SPEC.md §Cloud Tasks Routing.
+# See docs/GATEWAY-PLATFORM-SPEC.md §The fleet-control LB.
 set_section infra
-header "5f. Fleet Controller"
+header "5f. Fleet-control LB"
 
 # Derive env-scoped names from the namespace (octogee vs octogee-test).
 case "$NAMESPACE" in
@@ -613,22 +615,6 @@ else
     fail "Deploy SA lacks admin on FLEET_CONTROLLER_SECRET — firebase deploy will 403 (secretAccessor alone is not enough; needs secrets.get)"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
-    fi
-  fi
-
-  # Functions runtime SA also needs cloudtasks.enqueuer on the restore-customer
-  # queue, or every fleet-controller enqueue 403s with "cloudtasks.tasks.create
-  # denied" even after all the secret plumbing is clean.
-  if [[ -n "$FN_SA_NUM" ]]; then
-    FN_SA="${FN_SA_NUM}-compute@developer.gserviceaccount.com"
-    TASK_BINDINGS=$(gcloud tasks queues get-iam-policy restore-customer --location=us-central1 --project="$FIREBASE_PROJECT" --flatten='bindings[].members' --filter='bindings.role=roles/cloudtasks.enqueuer' --format='value(bindings.members)' 2>/dev/null || echo "")
-    if echo "$TASK_BINDINGS" | grep -q "$FN_SA"; then
-      pass "Functions runtime SA has cloudtasks.enqueuer on restore-customer"
-    else
-      fail "Functions runtime SA lacks cloudtasks.enqueuer on restore-customer — every fleet-controller enqueue will 403"
-      if $FIX; then
-        echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
-      fi
     fi
   fi
 

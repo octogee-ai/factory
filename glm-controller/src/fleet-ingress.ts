@@ -11,7 +11,7 @@ export interface IngressPathRule {
   servicePort: number;
 }
 
-const RPC_VERBS = ["restore-customer", "quiesce", "export", "push-state", "import", "unmount"] as const;
+const RPC_VERBS = ["quiesce", "export", "push-state", "import", "unmount"] as const;
 const FLEET_CONTROL_PREFIXES = RPC_VERBS.map((verb) => `/${verb}/`);
 const API_FLEET_PREFIX = "/api/g/";
 const PREVIEW_FLEET_PREFIX = "/g/";

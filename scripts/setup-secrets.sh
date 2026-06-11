@@ -529,23 +529,6 @@ for gw_id in "${GATEWAY_IDS[@]}"; do
     || warn "  Could not grant secretVersionManager on $SECRET_NAME"
 done
 
-# ── 9d. Cloud Tasks enqueuer for functions runtime SA ─────────────────────
-# The fleet controller Cloud Functions call CloudTasksClient.createTask() to
-# push restore jobs onto the `restore-customer` queue. Firebase Functions v2
-# runs under the project compute SA ($FN_SA) — which does NOT get Cloud
-# Tasks permissions by default, so every enqueue fails with a
-# "cloudtasks.tasks.create denied" 403 until this binding exists. Scoped
-# to the one queue, not project-wide.
-if [[ -n "$FN_SA" ]]; then
-  gcloud tasks queues add-iam-policy-binding restore-customer \
-    --location=us-central1 \
-    --project="$FIREBASE_PROJECT" \
-    --member="serviceAccount:$FN_SA" \
-    --role="roles/cloudtasks.enqueuer" --quiet >/dev/null 2>&1 \
-    && ok "  IAM tasks:   $FN_SA → cloudtasks.enqueuer (restore-customer)" \
-    || warn "  Could not grant $FN_SA cloudtasks.enqueuer on restore-customer — fleet controller will 403 every enqueue"
-fi
-
 # ── 10. Stripe secrets ────────────────────────────────────────────────────
 # Required by gateway-edge at startup (not optional). Use placeholder if not
 # configured yet — billing is sandbox mode until real keys are set.

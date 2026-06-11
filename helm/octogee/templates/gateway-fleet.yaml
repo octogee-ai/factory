@@ -188,13 +188,6 @@ spec:
           {{- range .Values.gatewayFleet.instances }}
           {{- $gid := .gatewayId }}
           {{- $svc := printf "octogee-gateway-%s" $gid }}
-          - path: /restore-customer/{{ $gid }}
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $svc }}
-                port:
-                  number: {{ $port }}
           - path: /quiesce/{{ $gid }}
             pathType: ImplementationSpecific
             backend:
