@@ -8,6 +8,7 @@ import byosubRoutes from "./byosub.js";
 import adminRoutes from "./admin.js";
 import inviteRoutes from "./invites.js";
 import integrationRoutes from "./integrations.js";
+import connectRoutes from "./connect.js";
 import discordRoutes from "./discord.js";
 import notificationRoutes from "./notifications.js";
 import sharingRoutes from "./sharing.js";
@@ -91,6 +92,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   app.use("/api/admin", adminRoutes);
   app.use("/api/invites", inviteRoutes);
   app.use("/api/integrations", integrationRoutes);
+  app.use("/api/connect", connectRoutes);
   app.use("/api/byosub", byosubRoutes);
   app.use("/api/discord", discordRoutes);
   app.use("/api/notifications", notificationRoutes);

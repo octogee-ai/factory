@@ -125,7 +125,7 @@ spec:
                 name: {{ $edgeSvc }}
                 port:
                   name: http
-          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "v4" "auth" "openclaw" "billing" "invites" "integrations" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "shells" "admin" }}
+          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "v4" "auth" "openclaw" "billing" "invites" "integrations" "connect" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "shells" "admin" }}
           {{- range $prefix := $octogeeApiPrefixes }}
           - path: /api/{{ $prefix }}/*
             pathType: ImplementationSpecific

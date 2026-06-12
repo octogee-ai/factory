@@ -36,7 +36,7 @@ export async function repoContentsApi(
   filePath: string,
 ): Promise<unknown> {
   if (target.provider === "github") {
-    return githubContentsApi(target.org, target.repoName, filePath, process.env.GITHUB_TOKEN);
+    return githubContentsApi(target.org, target.repoName, filePath, target.githubToken);
   }
   const apiPath = filePath
     ? `${target.repoName}/contents/${filePath}`

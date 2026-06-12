@@ -53,5 +53,8 @@ export function buildOAuthRedirect(
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("&");
   if (!qs) return absolute;
-  return `${absolute}${absolute.includes("?") ? "&" : "?"}${qs}`;
+  const hashIndex = absolute.indexOf("#");
+  const head = hashIndex === -1 ? absolute : absolute.slice(0, hashIndex);
+  const fragment = hashIndex === -1 ? "" : absolute.slice(hashIndex);
+  return `${head}${head.includes("?") ? "&" : "?"}${qs}${fragment}`;
 }

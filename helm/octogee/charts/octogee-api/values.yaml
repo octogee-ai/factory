@@ -31,6 +31,9 @@ env:
   # proxy (/api/v4/*) forwards to.
   API_PUBLIC_URL: "https://api.octogee.com"
   MM_INTERNAL_URL: "http://mattermost.octogee.svc.cluster.local:8065"
+  # Envelope-encryption key for per-user connector tokens (users/{uid}/secrets/*).
+  # TEST override lives in helm/octogee/values.test.yaml.
+  OCTOGEE_KMS_KEY_NAME: "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest"
   # GCLOUD_PROJECT / GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT / FIREBASE_PROJECT_ID
   # are NOT set here — the deployment template wires them all from
   # metadata.namespace via downward API. PROD ns "octogee" = PROD project,
@@ -72,6 +75,18 @@ secrets:
   - envName: MICROSOFT_CLIENT_SECRET
     secretName: microsoft-oauth
     secretKey: client_secret
+    optional: true
+  - envName: GITHUB_CLIENT_ID
+    secretName: github-oauth
+    secretKey: client_id
+    optional: true
+  - envName: GITHUB_CLIENT_SECRET
+    secretName: github-oauth
+    secretKey: client_secret
+    optional: true
+  - envName: CONNECT_STATE_SECRET
+    secretName: connect-state-secret
+    secretKey: secret
     optional: true
   - envName: DISCORD_CLIENT_SECRET
     secretName: discord-secrets

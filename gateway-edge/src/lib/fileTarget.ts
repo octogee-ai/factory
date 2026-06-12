@@ -1,7 +1,9 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { db } from "./db.js";
 import { readProject } from "./firestoreReads.js";
+import { readConnectorAccessToken } from "./connector-tokens.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming.js";
+import { logger } from "../middleware/logging.js";
 
 export interface FileTarget {
   slug: string;
@@ -12,6 +14,7 @@ export interface FileTarget {
 
   repoName: string;
   gcsPrefix: string;
+  githubToken?: string;
 }
 
 export interface FileTargetInput {
@@ -23,10 +26,18 @@ export interface FileTargetInput {
 
 export type FileTargetResult =
   | { ok: true; target: FileTarget }
-  | { ok: false; status: 400 | 403 | 404; error: string };
+  | { ok: false; status: 400 | 403 | 404 | 422; error: string; reason?: string };
 
-export async function resolveFileTarget(input: FileTargetInput): Promise<FileTargetResult> {
+export interface ResolveFileTargetOpts {
+  resolveGithubToken?: boolean;
+}
+
+export async function resolveFileTarget(
+  input: FileTargetInput,
+  opts: ResolveFileTargetOpts = {},
+): Promise<FileTargetResult> {
   const { slug, projectSlug, callerUid, callerWorkspaceSlug } = input;
+  const resolveGithubToken = opts.resolveGithubToken ?? true;
 
   if (!slug) {
     return { ok: false, status: 400, error: "Missing slug" };
@@ -49,14 +60,40 @@ export async function resolveFileTarget(input: FileTargetInput): Promise<FileTar
     }
     const github =
       project.repoSource?.provider === "github" ? project.repoSource : null;
+    if (github) {
+      const githubTarget: FileTarget = {
+        slug,
+        projectSlug,
+        provider: "github",
+        org: github.owner,
+        repoName: github.repo,
+        gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
+      };
+      if (!resolveGithubToken) {
+        return { ok: true, target: githubTarget };
+      }
+      const githubToken = await readConnectorAccessToken(project.ownerUid, "github");
+      if (!githubToken) {
+        return {
+          ok: false,
+          status: 422,
+          error: "GitHub files unavailable",
+          reason: "owner_github_not_connected",
+        };
+      }
+      logger.info(
+        `[fileTarget] owner-brokered github read repo=${github.owner}/${github.repo} caller=${callerUid} tokenOwner=${project.ownerUid}`,
+      );
+      return { ok: true, target: { ...githubTarget, githubToken } };
+    }
     return {
       ok: true,
       target: {
         slug,
         projectSlug,
-        provider: github ? "github" : "gitea",
-        org: github ? github.owner : workspaceGiteaOrg(slug),
-        repoName: github ? github.repo : projectRepoName(projectSlug),
+        provider: "gitea",
+        org: workspaceGiteaOrg(slug),
+        repoName: projectRepoName(projectSlug),
         gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
       },
     };
@@ -91,18 +128,26 @@ export type TargetedHandler = (
   target: FileTarget,
 ) => Promise<void>;
 
-export function withFileTarget(handler: TargetedHandler): RequestHandler {
+export function withFileTarget(
+  handler: TargetedHandler,
+  opts?: ResolveFileTargetOpts,
+): RequestHandler {
   return async (req, res, next) => {
     try {
       const { slug, projectSlug } = readTargetInput(req);
-      const result = await resolveFileTarget({
-        slug,
-        projectSlug,
-        callerUid: req.uid,
-        callerWorkspaceSlug: req.user?.username,
-      });
+      const result = await resolveFileTarget(
+        {
+          slug,
+          projectSlug,
+          callerUid: req.uid,
+          callerWorkspaceSlug: req.user?.username,
+        },
+        opts,
+      );
       if (!result.ok) {
-        res.status(result.status).json({ error: result.error });
+        res
+          .status(result.status)
+          .json({ error: result.error, ...(result.reason ? { reason: result.reason } : {}) });
         return;
       }
       await handler(req, res, next, result.target);
@@ -113,14 +158,17 @@ export function withFileTarget(handler: TargetedHandler): RequestHandler {
 }
 
 export function withGiteaTarget(handler: TargetedHandler): RequestHandler {
-  return withFileTarget(async (req, res, next, target) => {
-    if (target.provider !== "gitea") {
-      res.status(409).json({
-        error: "Not available for GitHub-backed projects",
-        code: "GITHUB_READ_ONLY",
-      });
-      return;
-    }
-    await handler(req, res, next, target);
-  });
+  return withFileTarget(
+    async (req, res, next, target) => {
+      if (target.provider !== "gitea") {
+        res.status(409).json({
+          error: "Not available for GitHub-backed projects",
+          code: "GITHUB_READ_ONLY",
+        });
+        return;
+      }
+      await handler(req, res, next, target);
+    },
+    { resolveGithubToken: false },
+  );
 }
