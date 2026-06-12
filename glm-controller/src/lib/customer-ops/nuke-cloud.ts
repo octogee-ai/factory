@@ -44,8 +44,8 @@ export interface NukeCloudStepResult {
 export interface NukeCloudDeps {
   gitea: GiteaCleanupClient;
   mattermost: MmCleanupClient;
-  
-  nukeUserFirestore: (uid: string) => Promise<void>;
+
+  nukeUserFirestore: (uid: string, slug: string) => Promise<void>;
 
   deleteAvatar: (uid: string) => Promise<void>;
 
@@ -98,7 +98,7 @@ results.push(
 
 results.push(
     await runStep("firestore", log, async () => {
-      await deps.nukeUserFirestore(ctx.uid);
+      await deps.nukeUserFirestore(ctx.uid, ctx.slug);
     }),
   );
 

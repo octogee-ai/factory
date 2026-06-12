@@ -12,6 +12,7 @@ import type {
   NukeCloudStepResult,
 } from "../lib/customer-ops/nuke-cloud.js";
 import { nukeUserCloudSide } from "../lib/customer-ops/nuke-cloud.js";
+import type { UnmountOutcome } from "../lib/customer-ops/unmount-gateway.js";
 
 export interface CustomerCleanupContext {
   uid: string;
@@ -31,11 +32,11 @@ projectSlugs: string[];
 }
 
 export interface DeprovisionCustomerDeps {
-  
+
   loadCleanupContext: (uid: string) => Promise<CustomerCleanupContext | null>;
-  
-  unmountFromGateway: (gatewayId: string, slug: string) => Promise<void>;
-  
+
+  unmountFromGateway: (gatewayId: string, slug: string) => Promise<UnmountOutcome>;
+
   cloudCleanup: NukeCloudDeps;
   
   now: () => number;
@@ -77,10 +78,10 @@ if (cleanup.currentGatewayId) {
       const startedAt = deps.now();
       await reportStep(ctx, { name: "unmount-gateway", status: "running", startedAt });
       try {
-        await deps.unmountFromGateway(cleanup.currentGatewayId, cleanup.slug);
+        const outcome = await deps.unmountFromGateway(cleanup.currentGatewayId, cleanup.slug);
         await reportStep(ctx, {
           name: "unmount-gateway",
-          status: "done",
+          status: outcome === "skipped-no-live-pod" ? "skipped" : "done",
           startedAt,
           completedAt: deps.now(),
         });

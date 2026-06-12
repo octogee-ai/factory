@@ -190,9 +190,9 @@ await nukeUserCloudSide(
 });
 
 describe("nukeUserCloudSide — firestore step", () => {
-  it("calls nukeUserFirestore in the firestore step", async () => {
+  it("passes uid AND slug so the workspace + agent docs get deleted, not just the user subtree", async () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
-    expect(deps.nukeUserFirestore).toHaveBeenCalledWith("uid-alice");
+    expect(deps.nukeUserFirestore).toHaveBeenCalledWith("uid-alice", "alice");
   });
 });

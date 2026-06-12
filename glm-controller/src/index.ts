@@ -63,9 +63,12 @@ import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
 import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
+import { deleteAvatarObjects } from "./lib/customer-ops/avatars.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
 import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
+import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
+import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { signFleetRequest } from "../../scripts/lib/fleet-signature.js";
 import { readAssignedSlugsForGateway } from "../../scripts/lib/assigned-roster.js";
 import {
@@ -746,7 +749,10 @@ export function buildOperatorHeartbeatPollerDeps(
 }
 
 async function main(): Promise<void> {
-  initializeApp({ credential: applicationDefault() });
+  initializeApp({
+    credential: applicationDefault(),
+    storageBucket: resolveDefaultStorageBucket(process.env.GOOGLE_CLOUD_PROJECT),
+  });
   const db = getFirestore();
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
@@ -1144,7 +1150,10 @@ async function buildHandlers(
       await deleteSecret(`gateway-auth-token-${gatewayId}`);
     },
     teardownGatewayServiceAccount: createGatewayServiceAccountTeardown({
-      projectId: process.env.GOOGLE_CLOUD_PROJECT ?? "octogee",
+      projectId: requireEnv(
+        "GOOGLE_CLOUD_PROJECT",
+        "gateway service-account teardown must target this env's GCP project",
+      ),
       log: logFn,
       request: async ({ url, method }) => {
         const auth = new GoogleAuth({
@@ -1234,7 +1243,13 @@ async function buildHandlers(
     log: logFn,
   });
 
-  const deprovisionCustomer = buildDeprovisionCustomerHandler(db, secret, logFn);
+  const deprovisionCustomer = buildDeprovisionCustomerHandler(
+    db,
+    secret,
+    logFn,
+    kubeOps,
+    fleetOps.readGatewayAuthTokenForId,
+  );
 
   const restartGateway = createRestartGatewayHandler({
     kubeOps,
@@ -1253,37 +1268,60 @@ async function buildHandlers(
   };
 }
 
+function requireEnv(name: string, why: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is not set — ${why}. Refusing to start with a guessed default.`);
+  }
+  return value;
+}
+
 function buildDeprovisionCustomerHandler(
   db: Firestore,
   secret: string,
   logFn: (msg: string) => void,
+  kubeOps: Pick<KubeOps, "readAvailableReplicas">,
+  readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>,
 ) {
-  const giteaApiUrl =
-    // eslint-disable-next-line sonarjs/no-clear-text-protocols -- in-cluster ClusterIP service, not internet-facing
-    process.env.GIT_API_URL ?? "http://gitea-http.octogee.svc.cluster.local:3000/api/v1";
-  const giteaToken = process.env.GIT_API_TOKEN ?? "";
-  const mmBaseUrl = process.env.MM_URL ?? "";
-  const mmAdminToken = process.env.MM_ADMIN_TOKEN ?? "";
-
+  const cleanupEnv = (name: string) =>
+    requireEnv(name, "deprovision-customer cloud cleanup requires it");
   const gitea = createGiteaCleanupClient({
-    apiUrl: giteaApiUrl,
-    token: giteaToken,
+    apiUrl: cleanupEnv("GIT_API_URL"),
+    token: cleanupEnv("GIT_API_TOKEN"),
     log: logFn,
   });
   const mattermost = createMmCleanupClient({
-    baseUrl: mmBaseUrl,
-    adminToken: mmAdminToken,
+    baseUrl: cleanupEnv("MM_URL"),
+    adminToken: cleanupEnv("MM_ADMIN_TOKEN"),
     log: logFn,
   });
 
   return createDeprovisionCustomerHandler({
     loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
-    unmountFromGateway: (gatewayId, slug) =>
-      callUnmountRpc(db, { secret, gatewayId, slug, log: logFn }),
+    unmountFromGateway: createUnmountFromGateway({
+      readGatewayProfile: async (gatewayId) => {
+        const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+        if (!doc.exists) return null;
+        const data = doc.data() as GatewayDesiredState | undefined;
+        return data?.profile === "operator" ? "operator" : "standard";
+      },
+      readAvailableReplicas: (gatewayId) =>
+        kubeOps.readAvailableReplicas({
+          namespace: NAMESPACE,
+          name: deploymentNameForInstance(gatewayId),
+        }),
+      fleetSecret: secret,
+      readGatewayAuthToken: readGatewayAuthTokenForId,
+      unmountRpc: ({ gatewayId, slug, secret: rpcSecret }) =>
+        callUnmountRpc(db, { secret: rpcSecret, gatewayId, slug, log: logFn }),
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+      now: () => Date.now(),
+      log: logFn,
+    }),
     cloudCleanup: {
       gitea,
       mattermost,
-      nukeUserFirestore: async (uid) => {
+      nukeUserFirestore: async (uid, slug) => {
         const userRef = db.collection("users").doc(uid);
         await db.recursiveDelete(userRef.collection("secrets"));
         await db.recursiveDelete(userRef.collection("settings"));
@@ -1292,12 +1330,10 @@ function buildDeprovisionCustomerHandler(
         await db.recursiveDelete(userRef.collection("workspaces"));
         await userRef.delete();
         await db.recursiveDelete(db.collection("customerStats").doc(uid));
+        await db.recursiveDelete(db.collection("workspaces").doc(slug));
+        await db.recursiveDelete(db.collection("agents").doc(uid));
       },
-      deleteAvatar: async (uid) => {
-        const file = getStorage().bucket().file(`avatars/${uid}`);
-        const [exists] = await file.exists();
-        if (exists) await file.delete();
-      },
+      deleteAvatar: (uid) => deleteAvatarObjects(getStorage().bucket(), uid),
       deleteAuthUser: async (uid) => {
         try {
           await getAuth().deleteUser(uid);
@@ -1314,7 +1350,10 @@ deleteHostingSites: async (slug, projectSlugs) => {
 
 scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
         });
-        const projectId = process.env.GOOGLE_CLOUD_PROJECT ?? "octogee";
+        const projectId = requireEnv(
+          "GOOGLE_CLOUD_PROJECT",
+          "hosting-site deletion must target this env's Firebase project",
+        );
         const result = await deleteHostingSitesForCustomer(
           {
             projectId,

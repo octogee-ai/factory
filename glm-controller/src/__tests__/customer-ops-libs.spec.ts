@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { deleteAvatarObjects } from "../lib/customer-ops/avatars";
 import { createGiteaCleanupClient, giteaUsername } from "../lib/customer-ops/gitea";
 import { createMmCleanupClient } from "../lib/customer-ops/mattermost";
 
@@ -53,6 +54,10 @@ describe("createGiteaCleanupClient", () => {
     expect(calls[0].url).toBe(`https://gitea.test/api/v1/admin/users/${giteaUsername("alice")}`);
   });
 
+  it("targets the ws-<slug> username the provisioner actually creates — a wrong name 404s and reads as success", async () => {
+    expect(giteaUsername("alice")).toBe("ws-alice");
+  });
+
   it("treats 404 as success on deleteGiteaUser (idempotent)", async () => {
     const { client } = setup([{ status: 404 }]);
     await expect(client.deleteGiteaUser("ghost")).resolves.toBeUndefined();
@@ -82,10 +87,10 @@ describe("createMmCleanupClient", () => {
     return { client, calls };
   }
 
-  it("destroyUser hits DELETE /api/v4/users/<id> with bearer token", async () => {
+  it("destroyUser permanently deletes /api/v4/users/<id> — a deactivated user keeps the username reserved", async () => {
     const { client, calls } = setup([{ status: 200 }]);
     await client.destroyUser("u1");
-    expect(calls[0].url).toBe("https://mm.test/api/v4/users/u1");
+    expect(calls[0].url).toBe("https://mm.test/api/v4/users/u1?permanent=true");
     expect((calls[0].init.headers as Record<string, string>).Authorization).toBe(
       "Bearer tok-admin",
     );
@@ -95,6 +100,26 @@ describe("createMmCleanupClient", () => {
     const { client, calls } = setup([{ status: 404 }]);
     await client.destroyChannel("c1");
     expect(calls[0].url).toBe("https://mm.test/api/v4/channels/c1");
+  });
+
+  it("destroyChannel tolerates MM's undeletable-default-channel refusal — town-square dies with the team", async () => {
+    const { client } = setup([
+      {
+        status: 400,
+        body: JSON.stringify({
+          id: "api.channel.delete_channel.cannot.app_error",
+          message: "Unable to delete the default channel town-square.",
+        }),
+      },
+    ]);
+    await expect(client.destroyChannel("c-town-square")).resolves.toBeUndefined();
+  });
+
+  it("destroyChannel still surfaces other 400s", async () => {
+    const { client } = setup([
+      { status: 400, body: JSON.stringify({ id: "api.some.other.app_error" }) },
+    ]);
+    await expect(client.destroyChannel("c1")).rejects.toThrow(/400/);
   });
 
   it("destroyTeam appends ?permanent=true", async () => {
@@ -123,5 +148,13 @@ describe("createMmCleanupClient", () => {
   it("destroyUser surfaces non-404 errors as thrown Errors", async () => {
     const { client } = setup([{ status: 500, body: "down" }]);
     await expect(client.destroyUser("u1")).rejects.toThrow(/500.*down/);
+  });
+});
+
+describe("deleteAvatarObjects", () => {
+  it("deletes by the avatars/{uid}/ prefix — the gateway-edge upload writes avatars/{uid}/{type}.jpg", async () => {
+    const deleteFiles = vi.fn(async () => undefined);
+    await deleteAvatarObjects({ deleteFiles }, "uid-alice");
+    expect(deleteFiles).toHaveBeenCalledWith({ prefix: "avatars/uid-alice/" });
   });
 });

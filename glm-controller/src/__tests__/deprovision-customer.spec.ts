@@ -51,7 +51,7 @@ function mkCleanup(overrides: Partial<CustomerCleanupContext> = {}): CustomerCle
 function mkDeps(overrides: Partial<DeprovisionCustomerDeps> = {}): DeprovisionCustomerDeps {
   return {
     loadCleanupContext: vi.fn(async () => mkCleanup()),
-    unmountFromGateway: vi.fn(async () => undefined),
+    unmountFromGateway: vi.fn(async () => "unmounted" as const),
     cloudCleanup: {
       gitea: {
         deleteRepo: vi.fn(async () => undefined),
@@ -120,6 +120,23 @@ describe("createDeprovisionCustomerHandler — orphan path (no gateway)", () => 
     expect(ctx.reported[0]).toMatchObject({ name: "unmount-gateway", status: "skipped" });
     
     expect(deps.cloudCleanup.gitea.deleteRepo).toHaveBeenCalled();
+  });
+});
+
+describe("createDeprovisionCustomerHandler — gateway has no live pod", () => {
+  it("reports the unmount step skipped and proceeds with cloud cleanup", async () => {
+    const deps = mkDeps({
+      unmountFromGateway: vi.fn(async () => "skipped-no-live-pod" as const),
+    });
+    const handler = createDeprovisionCustomerHandler(deps);
+    const ctx = mkCtx();
+
+    const result = await handler(mkOp({}), ctx);
+
+    expect(result.success).toBe(true);
+    const unmountSteps = ctx.reported.filter((s) => s.name === "unmount-gateway");
+    expect(unmountSteps.map((s) => s.status)).toEqual(["running", "skipped"]);
+    expect(deps.cloudCleanup.nukeUserFirestore).toHaveBeenCalled();
   });
 });
 

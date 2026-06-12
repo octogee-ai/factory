@@ -56,6 +56,14 @@ spec:
               value: "true"
             - name: MM_SERVICESETTINGS_ENABLELOCALMODE
               value: "true"
+            # Cowboy's deprovision-customer permanently deletes the customer's
+            # team and MM users; both APIs are hard-gated by these flags
+            # (401 not_enabled.for_admin otherwise). User deletion must be
+            # permanent or the username stays reserved after deprovision.
+            - name: MM_SERVICESETTINGS_ENABLEAPITEAMDELETION
+              value: "true"
+            - name: MM_SERVICESETTINGS_ENABLEAPIUSERDELETION
+              value: "true"
             - name: MM_FILESETTINGS_DRIVERNAME
               value: local
             - name: MM_FILESETTINGS_DIRECTORY

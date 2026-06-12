@@ -38,4 +38,13 @@ spec:
       ports:
         - protocol: TCP
           port: 8065
+    # glm-controller (Cowboy): destroys the customer's MM channels/users/
+    # team during the deprovision-customer op.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: glm-controller
+      ports:
+        - protocol: TCP
+          port: 8065
 {{- end }}
