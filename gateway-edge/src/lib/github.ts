@@ -42,6 +42,41 @@ export async function githubContentsApi(
   return resp.json();
 }
 
+export interface GithubContentsPutBody {
+  message: string;
+  contentBase64: string;
+  sha?: string;
+  author?: { name: string; email: string };
+}
+
+export async function githubContentsPut(
+  owner: string,
+  repo: string,
+  path: string,
+  token: string | undefined,
+  body: GithubContentsPutBody,
+): Promise<unknown> {
+  const url = githubContentsUrl(owner, repo, path);
+  const resp = await fetch(url, {
+    method: "PUT",
+    headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: body.message,
+      content: body.contentBase64,
+      ...(body.sha ? { sha: body.sha } : {}),
+      ...(body.author ? { author: body.author } : {}),
+    }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    logger.error(`GitHub API error: ${resp.status} PUT ${url}`, {
+      response: text.slice(0, 500),
+    });
+    throw new Error(`GitHub API ${resp.status}`);
+  }
+  return resp.json();
+}
+
 export interface GithubRepoSummary {
   owner: string;
   repo: string;

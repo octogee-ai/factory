@@ -4,7 +4,7 @@ import { validateFilePath } from "../../lib/path-validation.js";
 import { withFileTarget } from "../../lib/fileTarget.js";
 import { getManifest } from "../../lib/manifest.js";
 import { isOversizeFile } from "../../lib/github.js";
-import { getCustomerGiteaToken, HIDDEN, pathHasReservedOrHiddenSegment, repoContentsApi, requireGiteaToken } from "./helpers.js";
+import { getCustomerGiteaToken, HIDDEN, isTargetPathWritable, pathHasReservedOrHiddenSegment, repoContentsApi, requireGiteaToken } from "./helpers.js";
 
 const router = Router();
 
@@ -138,7 +138,13 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
     return;
   }
   const content = Buffer.from(file.content ?? "", "base64").toString("utf-8");
-  res.json({ content, path, sha: file.sha, source: "git" });
+  res.json({
+    content,
+    path,
+    sha: file.sha,
+    source: "git",
+    writable: isTargetPathWritable(target, path),
+  });
 }));
 
 export default router;

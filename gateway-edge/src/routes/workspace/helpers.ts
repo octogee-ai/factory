@@ -2,7 +2,29 @@ import type { Request, Response } from "express";
 import { giteaApiAs } from "../../lib/gitea.js";
 import { githubContentsApi } from "../../lib/github.js";
 import type { FileTarget } from "../../lib/fileTarget.js";
+import type { CommitAuthor } from "../../lib/workspace-git.js";
 import { validateFilePath } from "../../lib/path-validation.js";
+
+const FLAT_NOTE_RE = /^notes\/[^/]+\.md$/;
+
+export function isGithubWritablePath(path: string, canvasFile: string | undefined): boolean {
+  return FLAT_NOTE_RE.test(path) || path === (canvasFile || "README.md");
+}
+
+export function isTargetPathWritable(target: FileTarget, path: string): boolean {
+  if (target.provider !== "github") return true;
+  return Boolean(target.githubToken) && isGithubWritablePath(path, target.canvasFile);
+}
+
+export function resolveCommitAuthor(
+  user: FirebaseFirestore.DocumentData | undefined,
+  slug: string,
+): CommitAuthor {
+  const data = user as { displayName?: string; email?: string } | undefined;
+  const name = (data?.displayName || "").trim() || slug;
+  const email = (data?.email || "").trim() || `${slug}@octogee.local`;
+  return { name, email };
+}
 
 export function getCustomerGiteaToken(req: Request): string {
   if (req.giteaToken) return req.giteaToken;

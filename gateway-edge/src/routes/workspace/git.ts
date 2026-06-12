@@ -12,9 +12,9 @@ import {
   gitStatus,
   resolveCustomerDir,
   resolveProjectDir,
-  type CommitAuthor,
   type WorkspaceGitError,
 } from "../../lib/workspace-git.js";
+import { resolveCommitAuthor } from "./helpers.js";
 import { logger } from "../../middleware/logging.js";
 
 const router = Router();
@@ -262,16 +262,6 @@ function isSafeRefName(ref: string): boolean {
   if (!ref || ref.length > 250) return false;
   if (ref.startsWith("-")) return false;
   return /^[A-Za-z0-9._/-]+$/.test(ref);
-}
-
-function resolveCommitAuthor(
-  user: FirebaseFirestore.DocumentData | undefined,
-  slug: string,
-): CommitAuthor {
-  const data = user as { displayName?: string; email?: string } | undefined;
-  const name = (data?.displayName || "").trim() || slug;
-  const email = (data?.email || "").trim() || `${slug}@octogee.local`;
-  return { name, email };
 }
 
 router.post(

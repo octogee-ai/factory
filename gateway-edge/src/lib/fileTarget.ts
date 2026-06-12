@@ -15,6 +15,7 @@ export interface FileTarget {
   repoName: string;
   gcsPrefix: string;
   githubToken?: string;
+  canvasFile?: string;
 }
 
 export interface FileTargetInput {
@@ -68,6 +69,7 @@ export async function resolveFileTarget(
         org: github.owner,
         repoName: github.repo,
         gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
+        canvasFile: project.canvasFile,
       };
       if (!resolveGithubToken) {
         return { ok: true, target: githubTarget };

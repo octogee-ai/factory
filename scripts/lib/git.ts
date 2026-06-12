@@ -18,6 +18,7 @@ import {
 import {
   workspaceGiteaOrg, workspaceRepoName, projectRepoName, giteaUsername,
 } from "./gitea-naming.js";
+import { notesWelcomeSeed } from "./projects/playbook-seeds.js";
 
 export { giteaUsername };
 
@@ -437,6 +438,11 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   const repoName = workspaceRepoName();
 
   fs.writeFileSync(path.join(coachDir, ".gitignore"), workspaceGitignore(), "utf-8");
+
+  const welcome = notesWelcomeSeed("this workspace");
+  const welcomeDest = path.join(coachDir, welcome.relPath);
+  fs.mkdirSync(path.dirname(welcomeDest), { recursive: true });
+  if (!fs.existsSync(welcomeDest)) fs.writeFileSync(welcomeDest, welcome.content, "utf-8");
 
   log(`[git] Initializing repo in ${coachDir}`);
   const initResult = gitExec(coachDir, "init -b main");

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { projectPlaybookSeeds } from "../lib/projects/playbook-seeds.js";
+import { notesWelcomeSeed, projectPlaybookSeeds } from "../lib/projects/playbook-seeds.js";
 
 describe("projectPlaybookSeeds", () => {
   const seeds = () => projectPlaybookSeeds("Wild Card", "2026-06-12");
@@ -33,5 +33,24 @@ describe("projectPlaybookSeeds", () => {
   it("done means shipped", () => {
     const done = seeds().find((s) => s.relPath === "runbook/what-done-means.md")!;
     expect(done.content).toMatch(/shipped/i);
+  });
+});
+
+describe("notesWelcomeSeed", () => {
+  const seed = () => notesWelcomeSeed("Wild Card");
+
+  it("seeds a flat welcome note (never README — it would pollute the rail label)", () => {
+    expect(seed().relPath).toBe("notes/welcome.md");
+  });
+
+  it("explains the scratch convention and the promotion ritual in the scope's own name", () => {
+    const content = seed().content;
+    expect(content).toContain("Wild Card");
+    expect(content).toMatch(/scratch|half-formed|thinking/i);
+    expect(content).toMatch(/promote|graduate|decisions log/i);
+  });
+
+  it("invites deletion — a welcome note is not canon", () => {
+    expect(seed().content).toMatch(/delete/i);
   });
 });

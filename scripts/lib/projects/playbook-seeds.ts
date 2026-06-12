@@ -3,6 +3,25 @@ export interface PlaybookSeed {
   content: string;
 }
 
+export function notesWelcomeSeed(scopeName: string): PlaybookSeed {
+  return {
+    relPath: "notes/welcome.md",
+    content: `# Welcome to notes
+
+This is a note — the scratch layer of ${scopeName}. Half-formed thinking
+lives here before it becomes anything official: ideas, open questions,
+drafts you want another set of eyes on. Everyone in ${scopeName} sees the
+same notes, and so does your agent.
+
+When a note hardens into something real, promote it — ask your agent to
+move it into the decisions log or the playbook — and then delete the note.
+Notes that go nowhere just get deleted. That's the point of scratch.
+
+Delete this one whenever you're ready.
+`,
+  };
+}
+
 export function projectPlaybookSeeds(projectName: string, today: string): PlaybookSeed[] {
   return [
     {
