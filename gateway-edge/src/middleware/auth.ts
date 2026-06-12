@@ -32,14 +32,13 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
         req.user = userSnap.data();
       }
       try {
-        const configSnap = await db
-          .collection("users")
-          .doc(decoded.uid)
-          .collection("system")
-          .doc("config")
-          .get();
+        const userRef = db.collection("users").doc(decoded.uid);
+        const [configSnap, giteaSnap] = await Promise.all([
+          userRef.collection("system").doc("config").get(),
+          userRef.collection("secrets").doc("gitea").get(),
+        ]);
         req.isAdmin = configSnap.exists && configSnap.data()?.role === "admin";
-        req.giteaToken = configSnap.data()?.gitea?.token || undefined;
+        req.giteaToken = giteaSnap.data()?.token || undefined;
       } catch {
         req.isAdmin = false;
       }

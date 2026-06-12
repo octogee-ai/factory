@@ -73,13 +73,19 @@ interface ParsedUpload {
 const ALLOWED_FIELDS = new Set(["slug", "project", "path"] as const);
 type AllowedField = typeof ALLOWED_FIELDS extends Set<infer T> ? T : never;
 
-function parseMultipart(req: Request): Promise<ParsedUpload> {
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+export function parseMultipart(
+  req: Request,
+  maxFileBytes = MAX_UPLOAD_BYTES,
+): Promise<ParsedUpload> {
   return new Promise((resolve, reject) => {
-    const bb = Busboy({ headers: req.headers });
+    const bb = Busboy({ headers: req.headers, limits: { fileSize: maxFileBytes, files: 1 } });
     const fields: Record<string, string> = Object.create(null);
     let fileBuffer: Buffer | null = null;
     let filename = "";
     let mimeType = "";
+    let truncated = false;
 
     bb.on("field", (name: string, val: string) => {
       if (ALLOWED_FIELDS.has(name as AllowedField)) fields[name] = val;
@@ -89,9 +95,14 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
       mimeType = info.mimeType;
       const chunks: Buffer[] = [];
       stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      stream.on("limit", () => { truncated = true; });
       stream.on("end", () => { fileBuffer = Buffer.concat(chunks); });
     });
     bb.on("finish", () => {
+      if (truncated) {
+        reject(new Error(`File too large (max ${maxFileBytes} bytes)`));
+        return;
+      }
       if (!fields.slug || !fields.path || !fileBuffer) {
         reject(new Error("Missing required fields: slug, path, file"));
         return;
@@ -124,7 +135,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
       slug: parsed.slug,
       projectSlug: parsed.projectSlug,
       callerUid: req.uid,
-      callerWorkspaceSlug: req.user?.workspaceSlug,
+      callerWorkspaceSlug: req.user?.username,
     });
     if (!targetResult.ok) {
       res.status(targetResult.status).json({ error: targetResult.error });
