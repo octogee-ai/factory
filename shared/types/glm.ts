@@ -205,6 +205,7 @@ export type OperationKind =
   | "migrate-customer"
   | "retire-gateway"
   | "restart-gateway"
+  | "recycle-gateway"
   | "rollout"
   | "deprovision-customer";
 

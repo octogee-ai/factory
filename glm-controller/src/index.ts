@@ -61,6 +61,7 @@ import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
+import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
 import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
 import { deleteAvatarObjects } from "./lib/customer-ops/avatars.js";
@@ -1258,11 +1259,38 @@ async function buildHandlers(
     log: logFn,
   });
 
+  const recycleGateway = createRecycleGatewayHandler({
+    readDesiredStatus: async (gatewayId) => {
+      const v = (
+        await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()
+      ).data()?.desiredStatus;
+      return v === "running" || v === "paused" || v === "draining" || v === "retired" ? v : null;
+    },
+    setDesiredStatus: async (gatewayId, status) => {
+      await db
+        .collection(GLM_GATEWAYS_COLLECTION)
+        .doc(gatewayId)
+        .set({ desiredStatus: status }, { merge: true });
+    },
+    readAvailableReplicas: (gatewayId) =>
+      kubeOps.readAvailableReplicas({
+        namespace: NAMESPACE,
+        name: `octogee-gateway-${gatewayId}`,
+      }),
+    now: () => Date.now(),
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    log: logFn,
+    drainTimeoutMs: 180_000,
+    readyTimeoutMs: 420_000,
+    pollIntervalMs: 5_000,
+  });
+
   return {
     "add-gateway": addGateway,
     "migrate-customer": migrateCustomer,
     "retire-gateway": retireGateway,
     "restart-gateway": restartGateway,
+    "recycle-gateway": recycleGateway,
     rollout,
     "deprovision-customer": deprovisionCustomer,
   };
