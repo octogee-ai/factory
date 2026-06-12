@@ -192,6 +192,28 @@ describe("gateway-rpc", () => {
       expect(result.config).toEqual({ channels: { mattermost: { accounts: { "x-coach": { botToken: "***" } } } } });
     });
 
+    it("includes replacePaths in the wire params when provided; omits the key otherwise", async () => {
+      const capturedParams: any[] = [];
+      server.setHandler("config.patch", (params) => {
+        capturedParams.push(params);
+        return { ok: true, payload: { ok: true, path: "/fake/openclaw.json" } };
+      });
+
+      await client.configPatch({ bindings: [] }, "h1", {
+        replacePaths: ["bindings", "channels.mattermost.accounts.alice-coach.groupAllowFrom"],
+      });
+      expect(capturedParams[0].replacePaths).toEqual([
+        "bindings",
+        "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+      ]);
+
+      await client.configPatch({ bindings: [] }, "h1");
+      expect(capturedParams[1]).not.toHaveProperty("replacePaths");
+
+      await client.configPatch({ bindings: [] }, "h1", { replacePaths: [] });
+      expect(capturedParams[2]).not.toHaveProperty("replacePaths");
+    });
+
     it("throws OpenclawWireError with 'hash-mismatch' code when the server rejects the base hash", async () => {
       server.setHandler("config.patch", () => ({
         ok: false,

@@ -123,5 +123,43 @@ describe("migration activation manifest", () => {
       { agentId: "octogee-bob-coach", keep: true },
       { agentId: "octogee-alice-coach", match: { channel: "mattermost" } },
     ]);
+    // Dropping the stale binding shrinks `bindings` — the OC destructive-array guard
+    // requires the intent confirmed via replacePaths. (No alice-coach account in this
+    // base config, so the derived set is bindings-only.)
+    expect(configPatch.mock.calls[0][2]).toEqual({ replacePaths: ["bindings"] });
+  });
+
+  it("confirms the residual account's arrays when importing over residue (re-import case)", async () => {
+    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+      hash: "h2",
+      config: patch,
+    }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: { list: [] },
+          channels: {
+            mattermost: {
+              accounts: {
+                default: { botToken: "mac" },
+                // Residue from a prior mount of the same slug — its allowlist array must be
+                // confirmed or the merged (possibly shrunk) account fragment trips the guard.
+                "alice-coach": { botToken: "stale-pat", groupAllowFrom: ["mm-old-1", "mm-old-2"] },
+              },
+            },
+          },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest(manifest(), { rpc: rpc as never, log: vi.fn() });
+
+    expect(configPatch.mock.calls[0][2]).toEqual({
+      replacePaths: ["bindings", "channels.mattermost.accounts.alice-coach.groupAllowFrom"],
+    });
   });
 });

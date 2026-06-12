@@ -7,6 +7,11 @@ import {
 
 export interface ApplyConfigPatchArgs {
   buildPatch: (current: unknown) => object;
+  /** Paths to confirm against the gateway's destructive-array guard: config.patch rejects a
+   *  patch whose merge would drop array entries unless each shrunk array's exact path is named
+   *  in replacePaths. Recomputed per attempt against the freshly-fetched config (same contract
+   *  as buildPatch, which it always accompanies on retry). */
+  buildReplacePaths?: (current: unknown) => string[];
   logPrefix?: string;
 }
 
@@ -171,9 +176,14 @@ const signalRef = opts.signal;
         }
 
         const patch = args.buildPatch(config);
+        const replacePaths = args.buildReplacePaths?.(config);
 
         const patchStart = now();
-        const patchResult = await rpc.configPatch(patch, hash);
+        const patchResult = await rpc.configPatch(
+          patch,
+          hash,
+          replacePaths && replacePaths.length > 0 ? { replacePaths } : undefined,
+        );
         const patchMs = now() - patchStart;
 
         updateCacheAfterPatch(cache, patchResult);
@@ -196,6 +206,14 @@ const signalRef = opts.signal;
         ) {
           log(
             `⚠ ${prefix}config.patch ${err.code} (permanent) after ${elapsed}ms — giving up: ${err.message}`,
+          );
+          throw err;
+        }
+
+        if (err.code === "rpc-error" && /would remove entries from array path/i.test(err.message)) {
+          log(
+            `⚠ ${prefix}config.patch rejected by the destructive-array guard (permanent — identical retries cannot pass). ` +
+              `The caller's buildReplacePaths must confirm every shrunk array path: ${err.message}`,
           );
           throw err;
         }
@@ -255,4 +273,44 @@ currentBackoff = Math.min(currentBackoff * 2, maxBackoff);
       } catch {}
     }
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// Mirrors the gateway's collectBaseArrayPaths (openclaw src/gateway/server-methods/config.ts):
+// null-deleting an object via config.patch trips the destructive-array guard for EVERY array
+// anywhere under the deleted object, each named by exact dot-path. Arrays are terminal — the
+// guard does not recurse into their elements — and prototype-pollution keys are skipped,
+// exactly as upstream's isBlockedObjectKey does.
+const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function collectArrayPathsUnder(value: unknown, prefix: string): string[] {
+  if (Array.isArray(value)) return [prefix];
+  if (!isPlainObject(value)) return [];
+  const paths: string[] = [];
+  for (const [key, child] of Object.entries(value)) {
+    if (BLOCKED_OBJECT_KEYS.has(key)) continue;
+    paths.push(...collectArrayPathsUnder(child, `${prefix}.${key}`));
+  }
+  return paths;
+}
+
+/**
+ * The replacePaths set a customer-scoped config patch must confirm: `bindings` (add, remove,
+ * and activation all wholesale-replace it after filtering this agent's entries) plus every
+ * array under the slug's MM account — the remove patch null-deletes the account object, and
+ * the add/activation patches merge a rebuilt account fragment whose arrays (groupAllowFrom)
+ * can legitimately shrink on re-ensure. Derived from `current` so it tracks the account's
+ * actual shape; confirming a path that doesn't shrink is a no-op for the guard, and for
+ * non-id-keyed arrays it does not alter merge semantics.
+ */
+export function customerConfigReplacePaths(current: unknown, slug: string): string[] {
+  const accountId = `${slug}-coach`;
+  const accounts = (
+    current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } } | undefined
+  )?.channels?.mattermost?.accounts;
+  const account = isPlainObject(accounts) ? accounts[accountId] : undefined;
+  return ["bindings", ...collectArrayPathsUnder(account, `channels.mattermost.accounts.${accountId}`)];
 }

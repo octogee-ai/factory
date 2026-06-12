@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { applyConfigPatch } from "../lib/apply-config-patch.js";
+import { applyConfigPatch, customerConfigReplacePaths } from "../lib/apply-config-patch.js";
 import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
 
 function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
@@ -606,5 +606,132 @@ describe("applyConfigPatch — config cache", () => {
     );
 
 expect(cache.hash).toBe("");
+  });
+});
+
+describe("applyConfigPatch — replacePaths threading (OC destructive-array guard)", () => {
+  it("passes buildReplacePaths(current) to rpc.configPatch alongside the patch", async () => {
+    const configPatch = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+    const rpc = makeFakeRpc({
+      configGet: vi.fn(async () => ({ config: { tag: "cfg1" }, hash: "h1" })),
+      configPatch,
+    });
+
+    await applyConfigPatch(
+      {
+        buildPatch: () => ({ bindings: [] }),
+        buildReplacePaths: (current) => ["bindings", (current as { tag: string }).tag],
+      },
+      { ...baseOpts(), rpc },
+    );
+
+    expect(configPatch).toHaveBeenCalledWith(
+      { bindings: [] },
+      "h1",
+      { replacePaths: ["bindings", "cfg1"] },
+    );
+  });
+
+  it("recomputes replacePaths from the re-fetched config on hash-mismatch retry", async () => {
+    const configs = [
+      { config: { tag: "stale-cfg" }, hash: "stale" },
+      { config: { tag: "fresh-cfg" }, hash: "fresh" },
+    ];
+    const configGet = vi.fn(async () => configs.shift()!);
+    const configPatch = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "config changed since last load"))
+      .mockResolvedValueOnce({ ok: true as const, path: "/x" });
+
+    await applyConfigPatch(
+      {
+        buildPatch: () => ({}),
+        buildReplacePaths: (current) => [(current as { tag: string }).tag],
+      },
+      { ...baseOpts(), rpc: makeFakeRpc({ configGet, configPatch }) },
+    );
+
+    expect(configPatch.mock.calls[0][2]).toEqual({ replacePaths: ["stale-cfg"] });
+    expect(configPatch.mock.calls[1][2]).toEqual({ replacePaths: ["fresh-cfg"] });
+  });
+
+  it("omits the third arg entirely when buildReplacePaths is absent or returns []", async () => {
+    const configPatch = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+    await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      { ...baseOpts(), rpc: makeFakeRpc({ configPatch }) },
+    );
+    expect(configPatch.mock.calls[0][2]).toBeUndefined();
+
+    const configPatchEmpty = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+    await applyConfigPatch(
+      { buildPatch: () => ({}), buildReplacePaths: () => [] },
+      { ...baseOpts(), rpc: makeFakeRpc({ configPatch: configPatchEmpty }) },
+    );
+    expect(configPatchEmpty.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it("treats the destructive-array guard rpc-error as permanent — one attempt, no retry burn", async () => {
+    const guardError = new OpenclawWireError(
+      "rpc-error",
+      "config.patch would remove entries from array path(s): bindings. " +
+        "Pass replacePaths with the exact path(s) when this is intentional, or use config.apply for full-config replacement.",
+    );
+    const configPatch = vi.fn(async () => {
+      throw guardError;
+    });
+    const sleep = vi.fn(async () => {});
+    const logs: string[] = [];
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({ bindings: [] }) },
+        { ...baseOpts({ sleep }), log: (m: string) => logs.push(m), rpc: makeFakeRpc({ configPatch }) },
+      ),
+    ).rejects.toThrow(/would remove entries from array path/);
+
+    expect(configPatch).toHaveBeenCalledTimes(1); // permanent — not retried to the deadline
+    expect(sleep).not.toHaveBeenCalled();
+    expect(logs.some((l) => l.includes("buildReplacePaths"))).toBe(true); // points at the fix
+  });
+});
+
+describe("customerConfigReplacePaths — the remove-patch's guard confirmation set", () => {
+  it("always confirms bindings (the filtered array shrink)", () => {
+    expect(customerConfigReplacePaths({}, "alice")).toEqual(["bindings"]);
+  });
+
+  it("confirms every array under the null-deleted account (mirrors OC collectBaseArrayPaths)", () => {
+    const current = {
+      channels: {
+        mattermost: {
+          accounts: {
+            "alice-coach": {
+              botToken: "x",
+              groupAllowFrom: ["mm-user-1", "mm-user-2"],
+              nested: { deep: { list: [1, 2] } },
+            },
+            "bob-coach": { groupAllowFrom: ["mm-user-3"] }, // other accounts untouched
+          },
+        },
+      },
+    };
+    expect(customerConfigReplacePaths(current, "alice")).toEqual([
+      "bindings",
+      "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+      "channels.mattermost.accounts.alice-coach.nested.deep.list",
+    ]);
+  });
+
+  it("handles an absent or non-object account (just bindings — nothing else to confirm)", () => {
+    expect(
+      customerConfigReplacePaths({ channels: { mattermost: { accounts: {} } } }, "alice"),
+    ).toEqual(["bindings"]);
+    expect(
+      customerConfigReplacePaths(
+        { channels: { mattermost: { accounts: { "alice-coach": "garbage" } } } },
+        "alice",
+      ),
+    ).toEqual(["bindings"]);
   });
 });

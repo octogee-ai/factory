@@ -103,7 +103,11 @@ export interface CronAddResult {
 
 export interface GatewayRpcClient {
   configGet(): Promise<ConfigGetResult>;
-  configPatch(patch: object, baseHash: string): Promise<ConfigPatchResult>;
+  configPatch(
+    patch: object,
+    baseHash: string,
+    opts?: { replacePaths?: readonly string[] },
+  ): Promise<ConfigPatchResult>;
   channelsStatus(): Promise<unknown>;
   secretsReload(): Promise<SecretsReloadResult>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
@@ -215,11 +219,14 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       return { config: snap.config, hash: snap.hash };
     },
 
-    async configPatch(patch, baseHash) {
+    async configPatch(patch, baseHash, opts) {
       try {
         const payload = await call("config.patch", {
           raw: JSON.stringify(patch),
           baseHash,
+          ...(opts?.replacePaths && opts.replacePaths.length > 0
+            ? { replacePaths: [...opts.replacePaths] }
+            : {}),
         });
         if (!payload || typeof payload !== "object") {
           throw new OpenclawWireError("invalid-response", "config.patch returned non-object payload");

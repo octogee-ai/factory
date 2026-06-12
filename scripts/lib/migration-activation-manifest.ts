@@ -1,7 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CONFIG_PATCH_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
-import { applyConfigPatch, type ConfigCache } from "./apply-config-patch.js";
+import {
+  applyConfigPatch,
+  customerConfigReplacePaths,
+  type ConfigCache,
+} from "./apply-config-patch.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
@@ -183,6 +187,10 @@ export async function applyOpenClawActivationManifest(
           },
         };
       },
+      // Rebuilding the agent's bindings can shrink the array (stale entries dropped), and
+      // importing over residue merges an account fragment whose arrays can shrink too — the
+      // gateway's destructive-array guard requires both confirmed.
+      buildReplacePaths: (current) => customerConfigReplacePaths(current, manifest.slug),
       logPrefix: `[import:${manifest.slug}]`,
     },
     {
