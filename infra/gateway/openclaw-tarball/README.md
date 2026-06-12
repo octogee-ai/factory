@@ -933,24 +933,24 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.5 GA (current) the fork carries **five logical essential patches across seven commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the Hunk A allowlist extension; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs.
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.6 GA (current) the fork carries **five logical essential patches across seven commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the Hunk A allowlist extension; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — audited this cycle for the "drop any diag/traceability-only" sweep and explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
 
-Live short SHAs at v2026.6.5 GA (top of current's integration branch is `f827aaf8`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
-- `f827aaf8` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
-- `cc8ff444` — mattermost connect log: ✅ marker for operator visibility on GW startup
-- `9ab5192d` — activity harness-signal Hunk B: session-correlated execution-phase
-- `7cc53a2d` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
-- `cde7d99d` — env-gated isControlUiVisible override
-- `d4ffac09` — config.patch returns post-write hash
-- `d3a99f17` — per-account surgical channel reload
+Live short SHAs at v2026.6.6 GA (top of current's integration branch is `90656fba`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `90656fba` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
+- `632f46fe` — mattermost connect log: ✅ marker for operator visibility on GW startup
+- `242d7486` — activity harness-signal Hunk B: session-correlated execution-phase
+- `6ffdce47` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+- `1c092430` — env-gated isControlUiVisible override
+- `674a1b19` — config.patch returns post-write hash
+- `561e6e09` — per-account surgical channel reload
 
 Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.6.5 (GA) | `f827aaf8` |
-| previous | 2026.5.28 (GA) | `7442c5fc` |
-| preview | _(empty — awaiting next upstream hand-curated beta)_ | — |
+| current | 2026.6.6 (GA) | `90656fba` |
+| previous | 2026.6.5 (GA) | `f827aaf8` |
+| preview | _(empty — awaiting next upstream hand-curated beta on the 6.7 line)_ | — |
 
 **Essential:**
 
