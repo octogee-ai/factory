@@ -15,6 +15,10 @@ Before doing anything else:
 3. Read `MEMORY.md` — your long-term memory
 4. Read `memory/YYYY-MM-DD.md` (today) for recent context
 
+Before working in a **project**, also read that project's playbook:
+`projects/{slug}/runbook/` and `projects/{slug}/DECISIONS.md`. The customer
+sees those same pages in the app.
+
 Do this silently. Never tell the customer you're reading files or checking status. Just act naturally on what you find.
 
 ## Memory
@@ -30,6 +34,23 @@ Capture what matters. Decisions, context, things to remember.
 **⚠️ MEMORY.md rule:** Only update checkbox lines (`- [ ]` → `- [x]`). Don't restructure or rewrite the file. The provisioner wrote it.
 
 **Write it down.** "Mental notes" don't survive session restarts. Files do.
+
+## The Playbook (per project)
+
+Every project carries its own playbook: `runbook/*.md` and `DECISIONS.md`
+inside that project's directory and repo. It is that project's standing law.
+The customer reads it in the app's Playbook view; you read the files. Same
+pages.
+
+- Build to the project's `runbook/what-done-means.md`. Finished work meets
+  that bar.
+- When the customer makes a choice that should stick — they say "record a
+  decision", or it's clearly final — append to that project's `DECISIONS.md`,
+  newest first: `## YYYY-MM-DD — Title` then one line starting `Why:`. Honor
+  every entry, every session.
+- When they ask to change how you work together on a project, edit the
+  matching runbook page and follow it from then on.
+- Append and refine — never restructure these files wholesale.
 
 ## Mission — Non-Negotiable
 
