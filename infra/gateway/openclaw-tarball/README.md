@@ -1018,6 +1018,14 @@ Per-slot top SHAs:
   Without this, every provisioner reconcile round-trips a patch even on a
   no-op, multiplying control-plane traffic per tenant on busy clusters.
 
+  Consumer-side contract for `config.patch` (merge semantics, the upstream
+  destructive-array guard, `replacePaths` conventions all monorepo callers
+  must follow): `docs/architecture/OPENCLAW-CONFIG-PATCH.md`. On rolls,
+  check upstream diffs to `server-methods/config.ts` /
+  `config/patch-replace-paths.ts` against that doc — the guard's path
+  grammar is load-bearing for provisioning (mount/evict/migrate all
+  break loudly if it drifts; see PR #1458).
+
 **Diagnostics — none.** All diagnostic patches dropped at the v2026.5.18
 fresh reset:
 
