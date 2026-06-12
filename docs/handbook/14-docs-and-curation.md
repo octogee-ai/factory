@@ -65,9 +65,9 @@ memory; we don't rebuild it, and we don't let either memory substitute for repo 
   the rule* in one line ("the `mama` teardown left a 20Gi PVC behind — hence structural
   teardown deps"), not in a separate war-stories file.
 - **Dual audience is a frontmatter fact.** Handbook chapters declare `audience:`; humans
-  get the same truth in-app (**Admin → Handbook**). Editing `docs/handbook/*.md` requires
-  regenerating the bundle — `cd app && npm run build:handbook` — and committing
-  `app/src/admin/handbook/handbookContent.ts`, or the bundle-drift CI guard fails.
+  and agents read the same repo files. (The former Admin → Handbook bundle and its
+  regen step are retired — the Playbook surface renders docs straight from the repo,
+  so there is no second copy to drift.)
 
 ## The curation ritual
 
