@@ -174,7 +174,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
   },
   {
     id: 'anthropic',
-    tagline: 'Claude API key — subscription soon',
+    tagline: 'Claude subscription or API key',
     displayName: 'Anthropic',
     family: 'ai',
     captureMethods: ['pat'],

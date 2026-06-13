@@ -47,6 +47,7 @@ import {
   restoreOauthStoreForSlug,
   applyCoachModelPatch,
   syncByotForCustomer,
+  markerProviderForSlot,
 } from "../lib/byot-sync-runtime";
 import { codexAuthJsonPath, codexAgentDir } from "../lib/byosub-restore.js";
 import { readAuthProfileStore } from "../lib/auth-profile-sqlite.js";
@@ -120,6 +121,20 @@ describe("deriveDesiredByotState — recognizes every PROVIDERS-registry provide
       model: undefined,
     });
   });
+
+  it("BYOS oauth provider claude-cli (Claude subscription) is recognized — rides the same sync path", () => {
+    const { enabled, input } = deriveDesiredByotState({
+      ...ON,
+      systemConfig: { byot: { provider: "claude-cli" } },
+    });
+    expect(enabled).toBe(true);
+    expect(input).toEqual({
+      slug: "tester-70",
+      provider: "claude-cli",
+      baseUrl: undefined,
+      model: undefined,
+    });
+  });
 });
 
 describe("triggerSecretsReload — in-process RPC, no subprocess", () => {
@@ -148,6 +163,20 @@ describe("triggerSecretsReload — in-process RPC, no subprocess", () => {
     secretsReloadSpy.mockRejectedValueOnce(new Error("auth-failed"));
     await triggerSecretsReload();
     expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("markerProviderForSlot — byosub slot → PROVIDERS-registry oauth provider", () => {
+  const agentId = "octogee-a-coach";
+  it("anthropic slot → claude-cli; openai slot → openai-codex; absent → openai-codex", () => {
+    expect(markerProviderForSlot({ [agentId]: { provider: "anthropic", secretName: "s" } }, agentId)).toBe(
+      "claude-cli",
+    );
+    expect(markerProviderForSlot({ [agentId]: { provider: "openai", secretName: "s" } }, agentId)).toBe(
+      "openai-codex",
+    );
+    expect(markerProviderForSlot(undefined, agentId)).toBe("openai-codex");
+    expect(markerProviderForSlot({}, agentId)).toBe("openai-codex");
   });
 });
 
@@ -268,6 +297,17 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
       agents: {
         list: [{ id, model: "openai/gpt-5.5" }],
         defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+      },
+    });
+  });
+
+  it("claude-cli (Claude subscription) → coach model Opus 4.8 + agentRuntime:claude-cli registry pin", () => {
+    expect(byosCoachConfigPatch({ slug: "tester-70", provider: "claude-cli" })).toEqual({
+      agents: {
+        list: [{ id, model: "anthropic/claude-opus-4-8" }],
+        defaults: {
+          models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } } },
+        },
       },
     });
   });

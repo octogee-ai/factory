@@ -3,7 +3,10 @@ import {
   buildByotConfigForProvider,
   buildCodexAuthProfilesStore,
   buildCodexAuthJsonFromStore,
+  buildClaudeCliAuthProfilesStore,
+  claudeCliRuntimeConfig,
   codexRuntimeConfig,
+  CLAUDE_CLI_DEFAULT_PROFILE_ID,
   type ByotConfigInput,
 } from "../lib/byot-multi-provider-config.js";
 
@@ -265,5 +268,71 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
         }),
       ),
     ).toBeNull(); 
+  });
+});
+
+describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION coach model + agentRuntime:claude-cli", () => {
+  it("pins agentRuntime:{id:claude-cli} on Opus 4.8 so a per-agent override routes through the Claude CLI sub, not the platform anthropic API key", () => {
+    expect(claudeCliRuntimeConfig()).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      modelsDef: {
+        "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+      },
+    });
+  });
+});
+
+describe("buildClaudeCliAuthProfilesStore — claude-cli per-agent OAuth profile from a setup-token", () => {
+  const NOW = 1_700_000_000_000;
+  const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+
+  it("maps a setup-token bearer into the anthropic:claude-cli OAuthCredential (no refresh — the sub token has none)", () => {
+    expect(buildClaudeCliAuthProfilesStore("sk-ant-oat01-abc", NOW)).toEqual({
+      version: 1,
+      profiles: {
+        [CLAUDE_CLI_DEFAULT_PROFILE_ID]: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "sk-ant-oat01-abc",
+          expires: NOW + ONE_YEAR_MS,
+          copyToAgents: true,
+        },
+      },
+    });
+  });
+
+  it("CLAUDE_CLI_DEFAULT_PROFILE_ID is the claude-cli profile key", () => {
+    expect(CLAUDE_CLI_DEFAULT_PROFILE_ID).toBe("anthropic:claude-cli");
+  });
+
+  it("fail-loud on an empty token (a useless credential)", () => {
+    expect(() => buildClaudeCliAuthProfilesStore("", NOW)).toThrow();
+    expect(() => buildClaudeCliAuthProfilesStore("   ", NOW)).toThrow();
+  });
+
+  it("expires is stable for a given mint time (1yr out) — not boot-volatile when the same now is threaded", () => {
+    const a = buildClaudeCliAuthProfilesStore("sk-ant-oat01-x", NOW);
+    const b = buildClaudeCliAuthProfilesStore("sk-ant-oat01-x", NOW);
+    expect(a.profiles[CLAUDE_CLI_DEFAULT_PROFILE_ID].expires).toBe(
+      b.profiles[CLAUDE_CLI_DEFAULT_PROFILE_ID].expires,
+    );
+  });
+});
+
+describe("buildByotConfigForProvider — claude-cli (Claude subscription) at parity with codex", () => {
+  const base: ByotConfigInput = { slug: "acme", provider: "claude-cli" };
+
+  it("emits an oauth profile (no keyRef) — the credential is the per-agent claude-cli store", () => {
+    const out = buildByotConfigForProvider(base);
+    expect(out.authProfiles).toEqual({
+      profiles: { "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" } },
+    });
+    expect(out.models).toBeNull();
+  });
+
+  it("overrides the agent model to Opus 4.8 (the sub-routed model)", () => {
+    expect(buildByotConfigForProvider(base).agentModelOverride).toBe(
+      "anthropic/claude-opus-4-8",
+    );
   });
 });

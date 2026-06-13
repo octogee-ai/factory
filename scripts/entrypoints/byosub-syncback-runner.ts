@@ -45,7 +45,12 @@ async function loadTargets(): Promise<SyncBackTarget[]> {
     byosub,
     openclawDir: OPENCLAW_DIR,
     logFn: log,
-  }).map((p) => ({ agentId: p.agentId, authPath: p.targetPath }));
+  })
+    // Only codex has a rotating on-disk auth.json (targetPath) to observe + sync
+    // back. claude-cli's setup-token is a static bearer with no targetPath —
+    // nothing to watch.
+    .filter((p): p is typeof p & { targetPath: string } => typeof p.targetPath === "string")
+    .map((p) => ({ agentId: p.agentId, authPath: p.targetPath }));
 }
 
 async function main(): Promise<void> {

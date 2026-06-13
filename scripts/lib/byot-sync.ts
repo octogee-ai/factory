@@ -3,6 +3,7 @@ import * as path from "path";
 import {
   buildByotConfigForProvider,
   codexRuntimeConfig,
+  claudeCliRuntimeConfig,
   isOauthProvider,
   PROVIDERS,
   type Provider,
@@ -33,11 +34,13 @@ const BYOT_MARKER = ".byot-managed";
 
 export type ByotInput = ByotConfigInput;
 
-type CodexModelsDef = Record<string, { agentRuntime: { id: "codex" } }>;
+// Pins agentRuntime so a per-agent BYOS model override routes through the right
+// harness (codex / claude-cli) rather than the platform provider key.
+type RuntimeModelsDef = Record<string, { agentRuntime: { id: string } }>;
 export interface CoachModelPatch {
   agents: {
     list: Array<{ id: string; model: string }>;
-    defaults?: { models: CodexModelsDef };
+    defaults?: { models: RuntimeModelsDef };
   };
 }
 
@@ -54,6 +57,8 @@ export function byosCoachConfigPatch(
   };
   if (input.provider === "openai-codex") {
     patch.agents.defaults = { models: codexRuntimeConfig().modelsDef };
+  } else if (input.provider === "claude-cli") {
+    patch.agents.defaults = { models: claudeCliRuntimeConfig().modelsDef };
   }
   return patch;
 }

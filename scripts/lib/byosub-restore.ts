@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   buildCodexAuthProfilesStore,
+  buildClaudeCliAuthProfilesStore,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./byot-multi-provider-config.js";
 import {
@@ -22,9 +23,10 @@ export interface ByosubRestorePlanItem {
   agentId: string;
   provider: ByosubProvider;
   secretName: string;
-  targetPath: string;
-
-openclawDir: string;
+  // codex writes a codex-home auth.json here; claude-cli has no file (the
+  // credential lives only in the SQLite auth-profile store), so it's optional.
+  targetPath?: string;
+  openclawDir: string;
 }
 
 export function agentIdsFromConfig(config: unknown): string[] {
@@ -163,9 +165,13 @@ export function planByosubRestores(opts: {
         openclawDir: opts.openclawDir,
       });
     } else if (ref.provider === "anthropic") {
-      log(
-        `byosub: ${agentId} provider=anthropic deferred to Chunk E — skipping`,
-      );
+      // Claude SUBSCRIPTION (claude-cli) — store-only, no auth.json targetPath.
+      plan.push({
+        agentId,
+        provider: "anthropic",
+        secretName: ref.secretName,
+        openclawDir: opts.openclawDir,
+      });
     } else {
       log(
         `byosub: ${agentId} unknown provider ${JSON.stringify(ref.provider)} — skipping`,
@@ -185,7 +191,6 @@ export async function restoreByosubCredentials(opts: {
   let failed = 0;
   let skipped = 0;
   for (const item of opts.plan) {
-    const tmp = `${item.targetPath}.tmp`;
     const agentDir = codexAgentDir(item.openclawDir, item.agentId);
 
     if (item.provider === "openai") {
@@ -206,23 +211,34 @@ export async function restoreByosubCredentials(opts: {
         continue;
       }
     }
+    let tmp: string | undefined;
     try {
       const payload = await opts.fetchSecret(item.secretName);
 
-      const codexStore =
-        item.provider === "openai" ? buildCodexAuthProfilesStore(payload) : null;
+      if (item.provider === "anthropic") {
+        // Claude SUBSCRIPTION: the credential is the SQLite oauth profile only —
+        // no auth.json file (openclaw's claude-cli runtime reads the store).
+        writeAuthProfileStore(
+          agentDir,
+          buildClaudeCliAuthProfilesStore(payload, Date.now()),
+        );
+        restored++;
+        log(`byosub: restored claude-cli credential for ${item.agentId}`);
+        continue;
+      }
 
-      fs.mkdirSync(path.dirname(item.targetPath), { recursive: true });
+      const targetPath = item.targetPath!;
+      tmp = `${targetPath}.tmp`;
+      const codexStore = buildCodexAuthProfilesStore(payload);
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.writeFileSync(tmp, payload, { mode: 0o600 });
       fs.chmodSync(tmp, 0o600);
-      if (codexStore) {
-        // Write SQLite BEFORE promoting codex-home — preserves cross-pair
-        // atomicity (the Copilot #989 invariant): if the auth-profiles
-        // store can't be written, codex-home stays unpromoted, so we
-        // never half-flip routing.
-        writeAuthProfileStore(agentDir, codexStore);
-      }
-      fs.renameSync(tmp, item.targetPath);
+      // Write SQLite BEFORE promoting codex-home — preserves cross-pair
+      // atomicity (the Copilot #989 invariant): if the auth-profiles store
+      // can't be written, codex-home stays unpromoted, so we never half-flip
+      // routing.
+      writeAuthProfileStore(agentDir, codexStore);
+      fs.renameSync(tmp, targetPath);
       restored++;
       log(`byosub: restored ${item.provider} credential for ${item.agentId}`);
     } catch (e) {
@@ -230,10 +246,12 @@ export async function restoreByosubCredentials(opts: {
       log(
         `byosub: WARN failed to restore ${item.agentId} (${item.secretName}) — ${(e as Error).message}`,
       );
-      try {
-        fs.rmSync(tmp, { force: true });
-      } catch {
-        // best-effort temp cleanup
+      if (tmp) {
+        try {
+          fs.rmSync(tmp, { force: true });
+        } catch {
+          // best-effort temp cleanup
+        }
       }
     }
   }

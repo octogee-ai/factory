@@ -4,7 +4,8 @@ export type Provider =
   | "anthropic"
   | "openai"
   | "openai-compatible"
-  | "openai-codex";
+  | "openai-codex"
+  | "claude-cli";
 
 export type CredentialMode = "api_key" | "oauth";
 
@@ -74,12 +75,23 @@ export const PROVIDERS: Record<Provider, ProviderSpec> = {
     defaultModel: "openai/gpt-5",
   },
   "openai-codex": {
-    
+
     mode: "oauth",
     shape: "profile",
     profileKey: "openai-codex",
     authProvider: "openai-codex",
     defaultModel: "openai/gpt-5.5",
+  },
+  "claude-cli": {
+    // Claude SUBSCRIPTION (claude setup-token) — distinct from `anthropic`
+    // (api_key). Routes the agent through the claude-cli runtime on the
+    // customer's own sub. Opus 4.8 is a distinct model id from the shared-pool
+    // Sonnet default, so the global runtime mapping is per-customer-safe.
+    mode: "oauth",
+    shape: "profile",
+    profileKey: "anthropic:claude-cli",
+    authProvider: "claude-cli",
+    defaultModel: "anthropic/claude-opus-4-8",
   },
   "openai-compatible": {
     mode: "api_key",
@@ -211,6 +223,14 @@ export function codexRuntimeConfig(): {
   return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
 }
 
+export function claudeCliRuntimeConfig(): {
+  model: string;
+  modelsDef: Record<string, { agentRuntime: { id: "claude-cli" } }>;
+} {
+  const model = PROVIDERS["claude-cli"].defaultModel!;
+  return { model, modelsDef: { [model]: { agentRuntime: { id: "claude-cli" } } } };
+}
+
 export interface OAuthCredential {
   type: "oauth";
   provider: string;
@@ -230,6 +250,34 @@ export interface AuthProfilesStoreV1 {
 }
 
 export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+export const CLAUDE_CLI_DEFAULT_PROFILE_ID = "anthropic:claude-cli";
+const CLAUDE_CLI_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+
+// Claude SUBSCRIPTION (claude setup-token) → the per-agent claude-cli OAuth
+// profile. The credential is a single long-lived bearer (sk-ant-oat01-…) with
+// NO refresh token, so — unlike codex — there is no JWT to parse and nothing to
+// refresh; stamp a 1-year horizon from the mint time so openclaw uses it rather
+// than treating expires:0 as refresh-needed. Real death surfaces reactively as
+// a 401 → needs_reauth.
+export function buildClaudeCliAuthProfilesStore(
+  token: string,
+  nowMs: number,
+): AuthProfilesStoreV1 {
+  if (!token || !token.trim()) {
+    throw new Error("claude-cli credential: empty setup-token");
+  }
+  const profile: OAuthCredential = {
+    type: "oauth",
+    provider: "claude-cli",
+    access: token,
+    expires: nowMs + CLAUDE_CLI_TOKEN_TTL_MS,
+    copyToAgents: true,
+  };
+  return {
+    version: 1,
+    profiles: { [CLAUDE_CLI_DEFAULT_PROFILE_ID]: profile },
+  };
+}
 
 function codexStr(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;

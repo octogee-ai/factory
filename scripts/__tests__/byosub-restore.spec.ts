@@ -199,16 +199,20 @@ describe("planByosubRestores", () => {
     expect(logs.join("\n")).toMatch(/octogee-ghost-coach.*not present|not on this gateway/i);
   });
 
-  it("defers anthropic (Chunk E) — skips + logs, does not plan", () => {
-    const logs: string[] = [];
+  it("plans anthropic as a claude-cli SQLite-store restore (no auth.json file — openclaw's claude-cli runtime reads the store)", () => {
     const plan = planByosubRestores({
       agentIds: ["octogee-a-coach"],
       byosub: { "octogee-a-coach": { provider: "anthropic", secretName: "byosub-a-anthropic" } },
       openclawDir: OC,
-      logFn: (m) => logs.push(m),
     });
-    expect(plan).toEqual([]);
-    expect(logs.join("\n")).toMatch(/anthropic/i);
+    expect(plan).toEqual([
+      {
+        agentId: "octogee-a-coach",
+        provider: "anthropic",
+        secretName: "byosub-a-anthropic",
+        openclawDir: OC,
+      },
+    ]);
   });
 
   it("skips + logs an unknown provider", () => {
@@ -323,6 +327,36 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
 });
 
 describe("restoreByosubCredentials", () => {
+  it("anthropic → materializes a claude-cli OAuth profile into the SQLite store, no auth.json file", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const item = {
+      agentId,
+      provider: "anthropic" as const,
+      secretName: "byosub-a-anthropic",
+      openclawDir: oc,
+    };
+    const r = await restoreByosubCredentials({
+      plan: [item],
+      fetchSecret: async () => "sk-ant-oat01-livetoken",
+    });
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
+    // No codex-home auth.json — the claude-cli credential lives only in the store.
+    expect(
+      fs.existsSync(path.join(oc, "agents", agentId, "agent", "codex-home", "auth.json")),
+    ).toBe(false);
+    const store = apReadFor(oc, agentId) as {
+      version: number;
+      profiles: Record<string, { type: string; provider: string; access: string }>;
+    };
+    expect(store.version).toBe(1);
+    expect(store.profiles["anthropic:claude-cli"]).toMatchObject({
+      type: "oauth",
+      provider: "claude-cli",
+      access: "sk-ant-oat01-livetoken",
+    });
+  });
+
   it("atomically writes auth.json (0600) into the agent codex-home, creating dirs", async () => {
     const oc = mkTmp();
     const item = {

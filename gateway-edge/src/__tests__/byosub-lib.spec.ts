@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   byosubSecretName,
   validateCodexCredential,
+  validateClaudeCliToken,
   gatewayDeviceAuthClient,
   byosubConnectionView,
   isSafeGatewayId,
@@ -55,6 +56,34 @@ describe("validateCodexCredential — privileged write surface", () => {
       tokens: { access_token: "a".repeat(40_000), refresh_token: "r" },
     });
     expect(validateCodexCredential(huge).ok).toBe(false);
+  });
+});
+
+describe("validateClaudeCliToken — Claude subscription setup-token (privileged write surface)", () => {
+  it("accepts a well-formed sk-ant-oat setup-token", () => {
+    expect(validateClaudeCliToken("sk-ant-oat01-abcDEF123")).toEqual({ ok: true });
+  });
+
+  it("trims paste whitespace/newlines before checking", () => {
+    expect(validateClaudeCliToken("  sk-ant-oat01-abc\n")).toEqual({ ok: true });
+  });
+
+  it("rejects empty / whitespace-only", () => {
+    expect(validateClaudeCliToken("").ok).toBe(false);
+    expect(validateClaudeCliToken("   ").ok).toBe(false);
+  });
+
+  it("rejects an API key (sk-ant-api…) — a subscription token is sk-ant-oat…, not the API key", () => {
+    expect(validateClaudeCliToken("sk-ant-api03-deadbeef").ok).toBe(false);
+  });
+
+  it("rejects junk / wrong-provider tokens", () => {
+    expect(validateClaudeCliToken("ghp_whatever").ok).toBe(false);
+    expect(validateClaudeCliToken("just-text").ok).toBe(false);
+  });
+
+  it("rejects an oversized blob (no attacker-controlled blobs into the credential sink)", () => {
+    expect(validateClaudeCliToken("sk-ant-oat01-" + "a".repeat(40_000)).ok).toBe(false);
   });
 });
 

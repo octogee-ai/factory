@@ -9,6 +9,7 @@ import {
 import {
   byosubSecretName,
   validateCodexCredential,
+  validateClaudeCliToken,
   coachAgentId,
   gatewayDeviceAuthClient,
   byosubConnectionView,
@@ -46,9 +47,11 @@ router.post(
       const uid = req.uid!;
       const provider = String((req.body || {}).provider ?? "openai");
       if (provider === "anthropic") {
-        res
-          .status(400)
-          .json({ error: "Anthropic BYO-subscription is deferred to Chunk E" });
+        // Anthropic has no device-auth flow — the Claude subscription is captured
+        // by pasting a `claude setup-token` to POST /byosub/subscription.
+        res.status(400).json({
+          error: "Anthropic Claude subscription uses POST /byosub/subscription (paste a setup-token), not the device-auth /connect flow",
+        });
         return;
       }
       if (provider !== "openai") {
@@ -151,13 +154,19 @@ res.json(byosubConnectionView(ref));
   },
 );
 
-async function flipUnifiedByosSignal(uid: string): Promise<void> {
+// signalProvider is the PROVIDERS-registry key byot-sync reads to drive
+// materialization + the coach-model patch: "openai-codex" for ChatGPT Plus,
+// "claude-cli" for a Claude subscription.
+async function flipUnifiedByosSignal(
+  uid: string,
+  signalProvider: "openai-codex" | "claude-cli",
+): Promise<void> {
   await db
     .collection("users")
     .doc(uid)
     .collection("system")
     .doc("config")
-    .set({ byot: { provider: "openai-codex" } }, { merge: true });
+    .set({ byot: { provider: signalProvider } }, { merge: true });
   await db.collection("users").doc(uid).set({ byotActive: true }, { merge: true });
 }
 
@@ -206,6 +215,64 @@ router.post(
   },
 );
 
+// Claude SUBSCRIPTION capture — paste-token, no device-auth ceremony. The Builder
+// runs `claude setup-token` themselves and pastes the bearer here; we validate,
+// store it owner-scoped in Secret Manager, write the glmGateways ref, and flip the
+// unified BYOS signal to claude-cli. The pod's byot-sync watcher reacts to the
+// signal: materializes the per-agent claude-cli store from SM and patches the
+// coach model to Opus 4.8 on the customer's own subscription. User-authed (the
+// token is provided directly), unlike codex's internal /capture callback.
+router.post(
+  "/subscription",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = req.uid!;
+      const b = (req.body || {}) as { provider?: string; token?: string };
+      const provider = String(b.provider ?? "anthropic");
+      if (provider !== "anthropic") {
+        res.status(400).json({
+          error: `Unsupported subscription provider: ${provider}`,
+          supported: ["anthropic"],
+        });
+        return;
+      }
+      if (typeof b.token !== "string") {
+        res.status(400).json({ error: "token required" });
+        return;
+      }
+      const v = validateClaudeCliToken(b.token);
+      if (!v.ok) {
+        res.status(400).json({ error: `invalid token: ${v.reason}` });
+        return;
+      }
+      const resolved = await resolveUserGateway(uid);
+      if (!resolved) {
+        res.status(400).json({ error: "No provisioned workspace/gateway for this user" });
+        return;
+      }
+      const agentId = coachAgentId(resolved.slug);
+      const secretName = byosubSecretName(uid, "anthropic");
+      await writeSecret({
+        name: secretName,
+        value: b.token.trim(),
+        labels: { byosub: "true", provider: "anthropic" },
+      });
+      await db
+        .collection("glmGateways")
+        .doc(resolved.gatewayId)
+        .set(
+          { byosub: { [agentId]: { provider: "anthropic", secretName, status: "connected" } } },
+          { merge: true },
+        );
+      await flipUnifiedByosSignal(uid, "claude-cli");
+      res.json({ ok: true, secretName });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 router.post(
   "/capture",
   requireInternalServiceAuth,
@@ -231,7 +298,7 @@ router.post(
 
 if (flow.consumedAt) {
 
-await flipUnifiedByosSignal(flow.uid);
+await flipUnifiedByosSignal(flow.uid, "openai-codex");
         res.json({ ok: true, secretName, alreadyConsumed: true });
         return;
       }
@@ -262,7 +329,7 @@ await flipUnifiedByosSignal(flow.uid);
           { merge: true },
         );
 
-await flipUnifiedByosSignal(flow.uid);
+await flipUnifiedByosSignal(flow.uid, "openai-codex");
 
 await db
         .collection("byosubFlows")

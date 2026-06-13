@@ -52,6 +52,30 @@ export function validateCodexCredential(
   return { ok: true };
 }
 
+// The Claude SUBSCRIPTION token from `claude setup-token` — a single long-lived
+// bearer (sk-ant-oat…). NOT an API key (sk-ant-api…): the oat prefix is what
+// distinguishes the subscription from a BYOT key, and routing them differently
+// matters (sub → claude-cli runtime, key → anthropic api_key profile).
+const CLAUDE_OAT_PREFIX = "sk-ant-oat";
+
+export function validateClaudeCliToken(
+  raw: string,
+): { ok: true } | { ok: false; reason: string } {
+  const token = (raw ?? "").trim();
+  if (!token) return { ok: false, reason: "empty token" };
+  if (token.length > MAX_CREDENTIAL_BYTES) {
+    return { ok: false, reason: "token too large" };
+  }
+  if (!token.startsWith(CLAUDE_OAT_PREFIX)) {
+    return {
+      ok: false,
+      reason:
+        "not a Claude subscription token — expected an sk-ant-oat… token from `claude setup-token`",
+    };
+  }
+  return { ok: true };
+}
+
 export type ByosubStatus = "connected" | "needs_reauth";
 export interface ByosubConnectionView {
   connected: boolean;

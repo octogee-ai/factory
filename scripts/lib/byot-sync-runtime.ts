@@ -89,6 +89,13 @@ export interface OauthStoreRestoreResult {
   present: boolean;
 }
 
+export function markerProviderForSlot(
+  byosub: Record<string, ByosubRef> | undefined,
+  agentId: string,
+): "claude-cli" | "openai-codex" {
+  return byosub?.[agentId]?.provider === "anthropic" ? "claude-cli" : "openai-codex";
+}
+
 export async function restoreOauthStoreForSlug(
   slug: string,
   deps?: {
@@ -122,20 +129,21 @@ export async function restoreOauthStoreForSlug(
         return readSecret(name);
       });
     const ocDir = deps?.openclawDir ?? OPENCLAW_DIR;
+    const byosub = await fetchGlmByosub();
     const r = await restoreByosubForAgents({
       agentIds: [agentId],
-      byosub: await fetchGlmByosub(),
+      byosub,
       openclawDir: ocDir,
       fetchSecret,
       logFn,
     });
 
 if (r.restored > 0) {
-      applyByotState(
-        slug,
-        { slug, provider: "openai-codex" },
-        path.join(ocDir, "agents"),
-      );
+      // The byosub slot maps to the PROVIDERS-registry oauth provider so the
+      // marker/log reflect the real subscription (marker-only for oauth, but the
+      // label must be honest).
+      const provider = markerProviderForSlot(byosub, agentId);
+      applyByotState(slug, { slug, provider }, path.join(ocDir, "agents"));
     }
 
 return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0 };
