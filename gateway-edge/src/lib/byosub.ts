@@ -1,5 +1,6 @@
 import { coachAgentId } from "../../../scripts/lib/byosub-onboarding.js";
 import { isValidGatewayId } from "../../../shared/types/glm.js";
+import { deriveCodexAuthHealth } from "../../../scripts/lib/codex-auth-health.js";
 import { internalFetch } from "./internal-fetch.js";
 
 export { coachAgentId };
@@ -67,6 +68,48 @@ export function byosubConnectionView(
   const status: ByosubStatus =
     ref.status === "needs_reauth" ? "needs_reauth" : "connected";
   return { connected: status === "connected", provider: ref.provider, status };
+}
+
+// The DEEP byosub health: byosubConnectionView reads only the Firestore ref
+// (the "a credential was provisioned" pointer), which survives a reroll/
+// relocation whether or not the destination pod actually re-materialized a
+// working credential. This crosses that expectation with pod REALITY — is the
+// auth-profile store actually present on this pod, and does codex consider it
+// alive — so a silent boot-sync materialization failure surfaces as `missing`
+// instead of a false `connected`. Used by /api/byosub/health on the customer's
+// own pod (the durability harness's real proof) and to fix the product
+// false-"connected" the ref-only read can't catch.
+export type ByosubHealthStatus =
+  | "healthy"
+  | "needs_reauth"
+  | "missing"
+  | "not_connected"
+  | "not_on_this_pod";
+
+export interface ByosubHealthView {
+  connected: boolean;
+  status: ByosubHealthStatus;
+  provider?: string;
+}
+
+export function deriveByosubHealth(input: {
+  mountedHere: boolean;
+  refProvider: string | null;
+  storePresent: boolean;
+  authStateText: string | null;
+  profileId: string;
+  now: number;
+}): ByosubHealthView {
+  if (!input.mountedHere) return { connected: false, status: "not_on_this_pod" };
+  if (!input.refProvider) return { connected: false, status: "not_connected" };
+  if (!input.storePresent) {
+    return { connected: false, status: "missing", provider: input.refProvider };
+  }
+  const health = deriveCodexAuthHealth(input.authStateText, input.profileId, input.now);
+  if (health === "needs_reauth") {
+    return { connected: false, status: "needs_reauth", provider: input.refProvider };
+  }
+  return { connected: true, status: "healthy", provider: input.refProvider };
 }
 
 export interface DeviceAuthStart {

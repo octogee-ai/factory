@@ -14,6 +14,7 @@ import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
 import githubReposRoutes from "./routes/workspace/github-repos.js";
 import deployPreviewRoutes from "./routes/projects/deploy-preview.js";
+import byosubHealthRoutes from "./routes/byosub-health.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
@@ -121,6 +122,14 @@ const projectsLocality = Router();
 projectsLocality.use(requireAuth);
 projectsLocality.use(deployPreviewRoutes);
 mountApi(app, "/projects", projectsLocality);
+
+// Deep byosub health runs on the customer's own pod (reached via the
+// /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
+// auth-profile store — the proof /api/byosub/connection's ref-read can't give.
+const byosubLocality = Router();
+byosubLocality.use(requireAuth);
+byosubLocality.use(byosubHealthRoutes);
+mountApi(app, "/byosub", byosubLocality);
 
 app.use(errorHandler);
 

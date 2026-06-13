@@ -6,7 +6,6 @@ import {
   writeSecret,
   addSecretVersionIfExists,
 } from "../../../scripts/lib/secret-manager.js";
-import { primaryWorkspaceSlug } from "../../../scripts/lib/workspace-slugs.js";
 import {
   byosubSecretName,
   validateCodexCredential,
@@ -15,29 +14,10 @@ import {
   byosubConnectionView,
   isSafeGatewayId,
 } from "../lib/byosub.js";
+import { resolveUserGateway } from "../lib/user-gateway.js";
 import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
 
 const router = Router();
-
-interface ResolvedGateway {
-  slug: string;
-  gatewayId: string;
-}
-
-async function resolveUserGateway(uid: string): Promise<ResolvedGateway | null> {
-  const snap = await db.collection("users").doc(uid).get();
-  if (!snap.exists) return null;
-  const data = (snap.data() || {}) as {
-    username?: string | null;
-    provisioning?: {
-      openclaw?: { slug?: string | null; gatewayId?: unknown } | null;
-    } | null;
-  };
-  const slug = primaryWorkspaceSlug(data);
-  const gatewayId = data?.provisioning?.openclaw?.gatewayId;
-  if (!slug || typeof gatewayId !== "string" || !gatewayId) return null;
-  return { slug, gatewayId };
-}
 
 interface FlowDoc {
   uid: string;
