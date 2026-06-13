@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { db } from "./db.js";
-import { readProject } from "./firestoreReads.js";
+import { readProject, readWorkspace } from "./firestoreReads.js";
+import { USERNAME_RE } from "@shared/types/identity.js";
 import { readConnectorAccessToken } from "./connector-tokens.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming.js";
 import { logger } from "../middleware/logging.js";
@@ -15,6 +16,7 @@ export interface FileTarget {
   repoName: string;
   gcsPrefix: string;
   githubToken?: string;
+  giteaToken?: string;
   canvasFile?: string;
 }
 
@@ -31,6 +33,7 @@ export type FileTargetResult =
 
 export interface ResolveFileTargetOpts {
   resolveGithubToken?: boolean;
+  allowWorkspaceMembers?: boolean;
 }
 
 export async function resolveFileTarget(
@@ -84,7 +87,7 @@ export async function resolveFileTarget(
         };
       }
       logger.info(
-        `[fileTarget] owner-brokered github read repo=${github.owner}/${github.repo} caller=${callerUid} tokenOwner=${project.ownerUid}`,
+        `[fileTarget] owner-brokered github token repo=${github.owner}/${github.repo} caller=${callerUid} tokenOwner=${project.ownerUid}`,
       );
       return { ok: true, target: { ...githubTarget, githubToken } };
     }
@@ -101,20 +104,55 @@ export async function resolveFileTarget(
     };
   }
 
-  if (callerWorkspaceSlug !== slug) {
+  const workspaceTarget: FileTarget = {
+    slug,
+    projectSlug: null,
+    provider: "gitea",
+    org: workspaceGiteaOrg(slug),
+    repoName: workspaceRepoName(),
+    gcsPrefix: `customers/${slug}`,
+    canvasFile: "README.md",
+  };
+
+  if (callerWorkspaceSlug === slug) {
+    return { ok: true, target: workspaceTarget };
+  }
+  if (!opts.allowWorkspaceMembers || !callerUid) {
     return { ok: false, status: 403, error: "Forbidden" };
   }
-  return {
-    ok: true,
-    target: {
-      slug,
-      projectSlug: null,
-      provider: "gitea",
-      org: workspaceGiteaOrg(slug),
-      repoName: workspaceRepoName(),
-      gcsPrefix: `customers/${slug}`,
-    },
-  };
+  return resolveWorkspaceMemberTarget(workspaceTarget, slug, callerUid);
+}
+
+async function resolveWorkspaceMemberTarget(
+  workspaceTarget: FileTarget,
+  slug: string,
+  callerUid: string,
+): Promise<FileTargetResult> {
+  if (!USERNAME_RE.test(slug)) {
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
+  const memberDoc = await db.doc(`workspaces/${slug}/members/${callerUid}`).get();
+  if (!memberDoc.exists) {
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
+  const ownerUid = (await readWorkspace(slug))?.ownerUid;
+  if (!ownerUid) {
+    return { ok: false, status: 404, error: "Workspace not found" };
+  }
+  const tokenSnap = await db.doc(`users/${ownerUid}/secrets/gitea`).get();
+  const giteaToken = tokenSnap.data()?.token as string | undefined;
+  if (!giteaToken) {
+    return {
+      ok: false,
+      status: 422,
+      error: "Workspace files unavailable",
+      reason: "owner_gitea_not_provisioned",
+    };
+  }
+  logger.info(
+    `[fileTarget] owner-brokered gitea token workspace=${slug} caller=${callerUid} tokenOwner=${ownerUid}`,
+  );
+  return { ok: true, target: { ...workspaceTarget, giteaToken } };
 }
 
 function readTargetInput(req: Request): { slug: string | null; projectSlug: string | null } {

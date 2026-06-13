@@ -7,26 +7,33 @@ import { validateFilePath } from "../../lib/path-validation.js";
 
 const FLAT_NOTE_RE = /^notes\/[^/]+\.md$/;
 
-export function isGithubWritablePath(path: string, canvasFile: string | undefined): boolean {
+export function isBrokeredWritablePath(path: string, canvasFile: string | undefined): boolean {
   return FLAT_NOTE_RE.test(path) || path === (canvasFile || "README.md");
 }
 
 export function isTargetPathWritable(target: FileTarget, path: string): boolean {
-  if (target.provider !== "github") return true;
-  return Boolean(target.githubToken) && isGithubWritablePath(path, target.canvasFile);
+  if (target.provider === "github") {
+    return Boolean(target.githubToken) && isBrokeredWritablePath(path, target.canvasFile);
+  }
+  if (target.giteaToken) {
+    return isBrokeredWritablePath(path, target.canvasFile);
+  }
+  return true;
 }
 
 export function resolveCommitAuthor(
   user: FirebaseFirestore.DocumentData | undefined,
   slug: string,
 ): CommitAuthor {
-  const data = user as { displayName?: string; email?: string } | undefined;
-  const name = (data?.displayName || "").trim() || slug;
-  const email = (data?.email || "").trim() || `${slug}@octogee.local`;
+  const data = user as { displayName?: string; email?: string; username?: string } | undefined;
+  const fallback = (data?.username || "").trim() || slug;
+  const name = (data?.displayName || "").trim() || fallback;
+  const email = (data?.email || "").trim() || `${fallback}@octogee.local`;
   return { name, email };
 }
 
-export function getCustomerGiteaToken(req: Request): string {
+export function getCustomerGiteaToken(req: Request, target?: FileTarget): string {
+  if (target?.giteaToken) return target.giteaToken;
   if (req.giteaToken) return req.giteaToken;
   throw new Error("Gitea access not configured for this user");
 }
@@ -52,6 +59,16 @@ export async function customerGiteaApi(
   return giteaApiAs(getCustomerGiteaToken(req), org, path, method, body);
 }
 
+export async function targetGiteaApi(
+  req: Request,
+  target: FileTarget,
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<unknown> {
+  return giteaApiAs(getCustomerGiteaToken(req, target), target.org, path, method, body);
+}
+
 export async function repoContentsApi(
   req: Request,
   target: FileTarget,
@@ -63,7 +80,7 @@ export async function repoContentsApi(
   const apiPath = filePath
     ? `${target.repoName}/contents/${filePath}`
     : `${target.repoName}/contents`;
-  return customerGiteaApi(req, target.org, apiPath);
+  return targetGiteaApi(req, target, apiPath);
 }
 
 export const HIDDEN = new Set([

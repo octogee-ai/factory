@@ -2,11 +2,11 @@ import { Router } from "express";
 import { withFileTarget } from "../../lib/fileTarget.js";
 import { githubContentsApi, githubContentsPut } from "../../lib/github.js";
 import {
-  customerGiteaApi,
-  isGithubWritablePath,
+  isBrokeredWritablePath,
   isTextFile,
   requireGiteaToken,
   resolveCommitAuthor,
+  targetGiteaApi,
   validateWorkspacePath,
 } from "./helpers.js";
 import { logger } from "../../middleware/logging.js";
@@ -49,10 +49,10 @@ router.post("/save", withFileTarget(async (req, res, _next, target) => {
   const start = Date.now();
 
   if (target.provider === "github") {
-    if (!isGithubWritablePath(path, target.canvasFile)) {
+    if (!isBrokeredWritablePath(path, target.canvasFile)) {
       res.status(403).json({
-        error: "Only notes and the canvas home file are writable on GitHub-backed projects",
-        code: "GITHUB_PATH_NOT_WRITABLE",
+        error: "Only notes and the canvas home file are writable with a brokered token",
+        code: "PATH_NOT_WRITABLE",
       });
       return;
     }
@@ -78,16 +78,23 @@ router.post("/save", withFileTarget(async (req, res, _next, target) => {
     return;
   }
 
-  if (!requireGiteaToken(req, res)) return;
+  if (target.giteaToken && !isBrokeredWritablePath(path, target.canvasFile)) {
+    res.status(403).json({
+      error: "Only notes and the canvas home file are writable with a brokered token",
+      code: "PATH_NOT_WRITABLE",
+    });
+    return;
+  }
+  if (!target.giteaToken && !requireGiteaToken(req, res)) return;
   const apiPath = `${target.repoName}/contents/${path}`;
   let sha: string | undefined;
   try {
-    const existing = (await customerGiteaApi(req, target.org, apiPath)) as { sha?: string };
+    const existing = (await targetGiteaApi(req, target, apiPath)) as { sha?: string };
     sha = existing.sha;
   } catch (e) {
     rethrowUnlessNotFound(e);
   }
-  const out = (await customerGiteaApi(req, target.org, apiPath, "PUT", {
+  const out = (await targetGiteaApi(req, target, apiPath, "PUT", {
     message,
     content: contentBase64,
     ...(sha ? { sha } : {}),
@@ -97,6 +104,6 @@ router.post("/save", withFileTarget(async (req, res, _next, target) => {
     `save gitea repo=${target.org}/${target.repoName} path=${path} dur=${Date.now() - start}ms`,
   );
   res.json({ ok: true, sha: out.content?.sha ?? null, provider: "gitea" });
-}));
+}, { allowWorkspaceMembers: true }));
 
 export default router;

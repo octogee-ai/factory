@@ -39,6 +39,7 @@ setupEmulatorTest();
 const ALICE_UID = "alice-uid";
 const BOB_UID = "bob-uid";
 const CARL_UID = "carl-uid";
+const DORA_UID = "dora-uid";
 
 async function authHeader(uid: string): Promise<{ Authorization: string }> {
   const token = await getIdTokenForUid(uid);
@@ -60,6 +61,16 @@ async function seedAll(): Promise<void> {
   await seedUser(ALICE_UID, "alice", "Alice A", "alice@x.test");
   await seedUser(BOB_UID, "bob", "Bob B", "bob@x.test");
   await seedUser(CARL_UID, "carl", "Carl C", "carl@x.test");
+  await seedUser(DORA_UID, "dora", "Dora D", "dora@x.test");
+  await db.doc(`users/${DORA_UID}/secrets/gitea`).delete();
+
+  // Workspace docs — bob is a member of alice's workspace; carl is not.
+  await db.doc("workspaces/alice").set({ slug: "alice", ownerUid: ALICE_UID });
+  await db.doc(`workspaces/alice/members/${BOB_UID}`).set({ role: "member" });
+  await db.doc("workspaces/carl").set({ slug: "carl", ownerUid: CARL_UID });
+  // dora's workspace: bob is a member, but dora has no gitea token to broker.
+  await db.doc("workspaces/dora").set({ slug: "dora", ownerUid: DORA_UID });
+  await db.doc(`workspaces/dora/members/${BOB_UID}`).set({ role: "member" });
 
   // Gitea-backed project owned by alice; bob is a member.
   await db.doc("workspaces/alice/projects/zine").set({
@@ -143,10 +154,10 @@ describe("POST /api/workspace/save — gitea targets", () => {
     expect((put[4] as Record<string, unknown>).sha).toBe("existing-sha");
   });
 
-  it("rejects a non-owner caller on a workspace target", async () => {
+  it("rejects a caller who is neither owner nor member on a workspace target", async () => {
     const res = await request(app)
       .post("/api/workspace/save")
-      .set(await authHeader(BOB_UID))
+      .set(await authHeader(CARL_UID))
       .send({ slug: "alice", path: "notes/idea.md", content: "x" });
 
     expect(res.status).toBe(403);
@@ -245,7 +256,7 @@ describe("POST /api/workspace/save — github targets (brokered, allowlisted)", 
       .send({ slug: "alice", project: "octogee", path: "src/index.ts", content: "evil" });
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe("GITHUB_PATH_NOT_WRITABLE");
+    expect(res.body.code).toBe("PATH_NOT_WRITABLE");
     expect(mockGithubPut).not.toHaveBeenCalled();
   });
 
@@ -256,7 +267,7 @@ describe("POST /api/workspace/save — github targets (brokered, allowlisted)", 
       .send({ slug: "alice", project: "octogee", path: "notes/sub/x.md", content: "x" });
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe("GITHUB_PATH_NOT_WRITABLE");
+    expect(res.body.code).toBe("PATH_NOT_WRITABLE");
   });
 
   it("422s when the owner has not connected GitHub", async () => {
@@ -294,6 +305,153 @@ describe("POST /api/workspace/save — input validation", () => {
       .set(await authHeader(ALICE_UID))
       .send({ slug: "alice", path: "notes/x.md" });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("workspace targets — member access, brokered through the owner's token", () => {
+  it("lets a workspace member list notes via the owner's gitea token", async () => {
+    mockGiteaApiAs.mockImplementation(async (_tok, _org, apiPath) => {
+      if (String(apiPath).endsWith("contents/notes")) {
+        return [
+          { name: "welcome.md", path: "notes/welcome.md", type: "file", size: 1 },
+        ];
+      }
+      throw new Error("Gitea API 404");
+    });
+
+    const res = await request(app)
+      .get("/api/workspace/files?slug=alice&path=notes")
+      .set(await authHeader(BOB_UID));
+
+    expect(res.status).toBe(200);
+    expect(res.body.files.map((f: { name: string }) => f.name)).toEqual(["welcome.md"]);
+    const listCall = mockGiteaApiAs.mock.calls.find((c) => String(c[2]).endsWith("contents/notes"))!;
+    expect(listCall[0]).toBe("alice-gitea-token");
+  });
+
+  it("lets a member read a note, marked writable", async () => {
+    mockGiteaApiAs.mockResolvedValue({
+      content: Buffer.from("# W", "utf8").toString("base64"),
+      sha: "s",
+      encoding: "base64",
+    });
+
+    const res = await request(app)
+      .get("/api/workspace/file?slug=alice&path=notes/welcome.md")
+      .set(await authHeader(BOB_UID));
+
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe("# W");
+    expect(res.body.writable).toBe(true);
+    expect(mockGiteaApiAs.mock.calls[0][0]).toBe("alice-gitea-token");
+  });
+
+  it("marks the canvas home writable for a member but other paths read-only", async () => {
+    mockGiteaApiAs.mockResolvedValue({
+      content: Buffer.from("x", "utf8").toString("base64"),
+      sha: "s",
+      encoding: "base64",
+    });
+
+    const home = await request(app)
+      .get("/api/workspace/file?slug=alice&path=README.md")
+      .set(await authHeader(BOB_UID));
+    expect(home.status).toBe(200);
+    expect(home.body.writable).toBe(true);
+
+    const other = await request(app)
+      .get("/api/workspace/file?slug=alice&path=docs/plan.md")
+      .set(await authHeader(BOB_UID));
+    expect(other.status).toBe(200);
+    expect(other.body.writable).toBe(false);
+  });
+
+  it("saves a member's note through the owner's token with the member as author", async () => {
+    mockGiteaApiAs.mockImplementation(async (_tok, _org, _path, method) => {
+      if (method === undefined || method === "GET") throw new Error("Gitea API 404");
+      return { content: { sha: "ws-sha-1" } };
+    });
+
+    const res = await request(app)
+      .post("/api/workspace/save")
+      .set(await authHeader(BOB_UID))
+      .send({ slug: "alice", path: "notes/from-bob.md", content: "# Bob's idea" });
+
+    expect(res.status).toBe(200);
+    const put = mockGiteaApiAs.mock.calls.find((c) => c[3] === "PUT")!;
+    expect(put[0]).toBe("alice-gitea-token");
+    expect(put[2]).toBe("workspace/contents/notes/from-bob.md");
+    expect((put[4] as Record<string, unknown>).author).toEqual({ name: "Bob B", email: "bob@x.test" });
+  });
+
+  it("lets a member edit the canvas home file", async () => {
+    mockGiteaApiAs.mockImplementation(async (_tok, _org, _path, method) => {
+      if (method === undefined || method === "GET") return { sha: "old" };
+      return { content: { sha: "ws-sha-2" } };
+    });
+
+    const res = await request(app)
+      .post("/api/workspace/save")
+      .set(await authHeader(BOB_UID))
+      .send({ slug: "alice", path: "README.md", content: "# Home v2" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("403s a member save outside the knowledge-store allowlist", async () => {
+    const res = await request(app)
+      .post("/api/workspace/save")
+      .set(await authHeader(BOB_UID))
+      .send({ slug: "alice", path: "docs/plan.md", content: "p" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("PATH_NOT_WRITABLE");
+    expect(mockGiteaApiAs).not.toHaveBeenCalled();
+  });
+
+  it("still 403s a non-member on workspace files", async () => {
+    const read = await request(app)
+      .get("/api/workspace/file?slug=alice&path=notes/welcome.md")
+      .set(await authHeader(CARL_UID));
+    expect(read.status).toBe(403);
+
+    const save = await request(app)
+      .post("/api/workspace/save")
+      .set(await authHeader(CARL_UID))
+      .send({ slug: "alice", path: "notes/x.md", content: "x" });
+    expect(save.status).toBe(403);
+  });
+
+  it("keeps upload owner-only — membership does not widen other write routes", async () => {
+    const res = await request(app)
+      .post("/api/workspace/upload")
+      .set(await authHeader(BOB_UID))
+      .send({ slug: "alice", files: [{ name: "x.md", content: "eA==" }] });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("403s a malformed slug at the member boundary instead of touching odd doc paths", async () => {
+    const res = await request(app)
+      .get("/api/workspace/file?slug=alice/projects/zine&path=notes/x.md")
+      .set(await authHeader(BOB_UID));
+    expect(res.status).toBe(403);
+
+    const res2 = await request(app)
+      .post("/api/workspace/save")
+      .set(await authHeader(BOB_UID))
+      .send({ slug: "alice/projects", path: "notes/x.md", content: "x" });
+    expect(res2.status).toBe(403);
+  });
+
+  it("422s when the workspace owner has no gitea token to broker", async () => {
+    const res = await request(app)
+      .post("/api/workspace/save")
+      .set(await authHeader(BOB_UID))
+      .send({ slug: "dora", path: "notes/x.md", content: "x" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe("owner_gitea_not_provisioned");
   });
 });
 

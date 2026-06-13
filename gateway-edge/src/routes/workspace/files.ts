@@ -9,7 +9,7 @@ import { getCustomerGiteaToken, HIDDEN, isTargetPathWritable, pathHasReservedOrH
 const router = Router();
 
 router.get("/files", withFileTarget(async (req, res, _next, target) => {
-  if (target.provider === "gitea" && !requireGiteaToken(req, res)) return;
+  if (target.provider === "gitea" && !target.giteaToken && !requireGiteaToken(req, res)) return;
   const path = (req.query.path as string) ?? "";
   const bustCache = req.query.nocache === "1";
 
@@ -57,7 +57,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
     }));
 
   if (target.provider !== "github") {
-    const manifest = await getManifest(getCustomerGiteaToken(req), target.org, target.repoName, bustCache);
+    const manifest = await getManifest(getCustomerGiteaToken(req, target), target.org, target.repoName, bustCache);
     const gitPaths = new Set(gitFiles.map((f) => f.path));
     const prefix = path ? path + "/" : "";
 
@@ -84,10 +84,10 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
   });
 
   res.json({ files, readOnly: target.provider !== "gitea" });
-}));
+}, { allowWorkspaceMembers: true }));
 
 router.get("/file", withFileTarget(async (req, res, _next, target) => {
-  if (target.provider === "gitea" && !requireGiteaToken(req, res)) return;
+  if (target.provider === "gitea" && !target.giteaToken && !requireGiteaToken(req, res)) return;
   const path = req.query.path as string;
   if (!path) { res.status(400).json({ error: "Missing path" }); return; }
 
@@ -100,7 +100,7 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
   }
 
   if (target.provider !== "github") {
-    const manifest = await getManifest(getCustomerGiteaToken(req), target.org, target.repoName);
+    const manifest = await getManifest(getCustomerGiteaToken(req, target), target.org, target.repoName);
     const blobEntry = manifest[path];
 
     if (blobEntry) {
@@ -145,6 +145,6 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
     source: "git",
     writable: isTargetPathWritable(target, path),
   });
-}));
+}, { allowWorkspaceMembers: true }));
 
 export default router;
