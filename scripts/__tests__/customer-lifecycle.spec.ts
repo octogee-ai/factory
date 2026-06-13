@@ -39,9 +39,6 @@ giteaRegisteredPubKey: string | null;
 
 giteaReadShouldThrow: boolean;
 
-persistedGiteaToken: string | null;
-
-persistGiteaTokenShouldFail: boolean;
   blobSyncShouldFail: boolean;
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
@@ -66,13 +63,6 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
 
     setProvisioningStatus: async (_uid, status) => write("provisioning.openclaw.status", status),
     setRepoUrl: async (_uid, repoUrl) => write("provisioning.git.repoUrl", repoUrl),
-    persistGiteaToken: async (_uid, username, token) => {
-      if (state.persistGiteaTokenShouldFail) {
-        throw new Error("persistGiteaToken failed (test)");
-      }
-      write("system/config.gitea", { username, token });
-      state.persistedGiteaToken = token;
-    },
     setMattermostFields: async (_uid, fields) => write("mattermost.*", fields),
     setGreetingResult: async (_uid, result) =>
       write("provisioning.openclaw.greeting", result),
@@ -139,7 +129,6 @@ return "ssh-pubkey";
       }
 
 state.giteaRegisteredPubKey = pubKey;
-      return "gitea-pat-token";
     },
     ensureGiteaOrg: async () => {
       record("ensureGiteaOrg");
@@ -155,8 +144,6 @@ state.giteaRegisteredPubKey = pubKey;
       record("deleteCustomerSshKey");
       state.disk.sshKey = false;
     },
-    hasPersistedGiteaToken: async () =>
-      typeof state.persistedGiteaToken === "string" && state.persistedGiteaToken.length > 0,
 
     blobSyncForSlug: async () => {
       record("blobSyncForSlug");
@@ -255,8 +242,6 @@ function makeState(snapshot: UserSnapshot | null, disk: DiskState): MockState {
     giteaRegisterShouldFail: false,
     giteaRegisteredPubKey: null,
     giteaReadShouldThrow: false,
-    persistedGiteaToken: null,
-    persistGiteaTokenShouldFail: false,
     blobSyncShouldFail: false,
     healthy: true,
     pendingProjects: [],
@@ -758,7 +743,6 @@ const adapter = makeAdapter(state);
       
       await orig(slug, pubKey);
       state.giteaRegisteredPubKey = null;
-      return "gitea-pat-token";
     };
 
     await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow(
@@ -799,7 +783,7 @@ expect(state.calls).toContain("createGiteaUser");
     expect(state.giteaRegisteredPubKey).toBe("ssh-pubkey");
   });
 
-  it("does NOT resync when local + Gitea keys match AND PAT is persisted (healthy state)", async () => {
+  it("does NOT resync when local + Gitea keys match (healthy state)", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -818,42 +802,12 @@ expect(state.calls).toContain("createGiteaUser");
     );
     
     state.giteaRegisteredPubKey = "ssh-pubkey";
-    state.persistedGiteaToken = "gitea-pat-token";
 
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.steps).not.toContain("ssh-key");
     expect(result.steps).not.toContain("ssh-key-resync");
     expect(state.calls).not.toContain("createGiteaUser");
-  });
-
-  it("RESYNCS when keys match but PAT is missing in Firestore (mid-flight persist failure recovery)", async () => {
-
-const state = makeState(
-      snap({
-        status: "complete",
-        repoUrl: "http://gitea/octogee/test-workspace",
-        mattermostUserId: "mm-user",
-        greetingPosted: true,
-      }),
-      {
-        ...emptyDisk(),
-        customerDir: true,
-        workspaceGitDir: true,
-        gitRemote: true,
-        sshKey: true,
-        repoHasCommits: true,
-      },
-    );
-    state.giteaRegisteredPubKey = "ssh-pubkey"; 
-    state.persistedGiteaToken = null; 
-
-    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
-
-    expect(result.steps).toContain("ssh-key-resync");
-    expect(state.calls).toContain("createGiteaUser");
-    
-    expect(state.persistedGiteaToken).toBe("gitea-pat-token");
   });
 
   it("treats transient Gitea-read failure as ERROR, not as 'key absent' (no spurious resync)", async () => {
@@ -873,7 +827,6 @@ const state = makeState(
       },
     );
     state.giteaRegisteredPubKey = "ssh-pubkey";
-    state.persistedGiteaToken = "gitea-pat-token";
     state.giteaReadShouldThrow = true;
 
     await expect(
@@ -881,27 +834,6 @@ const state = makeState(
     ).rejects.toThrow(/Gitea key read failed/);
     
     expect(state.calls).not.toContain("createGiteaUser");
-  });
-
-  it("rolls back local key when persistGiteaToken fails on first-time mount", async () => {
-
-const state = makeState(
-      snap({
-        status: "complete",
-        repoUrl: "http://gitea/octogee/test-workspace",
-      }),
-      emptyDisk(),
-    );
-    state.persistGiteaTokenShouldFail = true;
-
-    await expect(
-      addCustomerToGateway(makeAdapter(state), "uid-test"),
-    ).rejects.toThrow(/SSH key registration failed/);
-
-    expect(state.calls).toContain("deleteCustomerSshKey");
-    expect(state.disk.sshKey).toBe(false);
-    
-    expect(state.persistedGiteaToken).toBeNull();
   });
 
   it("clones project repos that have giteaRepoName but no on-disk clone", async () => {
@@ -1222,7 +1154,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     loadUserSnapshot: false,
     setProvisioningStatus: false,
     setRepoUrl: false,
-    persistGiteaToken: false,
     setMattermostFields: false,
     setGreetingResult: false,
     setAgentIds: false,
@@ -1241,7 +1172,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     readLocalCustomerPubKey: false,
     readGiteaCustomerPubKey: false,
     deleteCustomerSshKey: false,
-    hasPersistedGiteaToken: false,
     blobSyncForSlug: false,
     restoreByosubForAgent: false,
     listProjectsNeedingClone: false,
@@ -1331,7 +1261,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
           repoHasCommits: true,
         });
         s.giteaRegisteredPubKey = "ssh-pubkey";
-        s.persistedGiteaToken = "gitea-pat-token";
         s.pendingProjects = [{ projectSlug: "p1", giteaRepoName: "test-p1" }];
         return s;
       },

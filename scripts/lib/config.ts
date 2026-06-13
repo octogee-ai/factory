@@ -25,12 +25,11 @@ export const TEMPLATES_DIR = process.env.OCTOGEE_TEMPLATES_DIR || path.resolve(_
 
 // eslint-disable-next-line sonarjs/no-clear-text-protocols -- in-cluster ClusterIP, not internet-exposed
 export const GIT_API_URL = process.env.GIT_API_URL || "http://gitea-http.octogee.svc.cluster.local:3000/api/v1";
-export const GIT_API_TOKEN = process.env.GIT_API_TOKEN || "";
 export const GIT_ORG = process.env.GIT_ORG || "octogee";
 export const GIT_SSH_HOST = "gitea";
 export const GIT_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
-export const GITHUB_TOKEN = process.env.GIT_API_TOKEN || process.env.GITHUB_TOKEN || "";
+export const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 
 export const GITHUB_ORG = process.env.GIT_ORG || process.env.GITHUB_ORG || "octogee";
 

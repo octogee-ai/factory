@@ -19,6 +19,7 @@ import internalBillingRoutes from "./routes/internal/billing.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
 import internalSiteDeployRoutes from "./routes/internal/site-deploy.js";
+import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 
 import {
@@ -97,6 +98,10 @@ app.use("/internal/billing", internalBillingRoutes);
 // this path; their publishing is CI/CD-owned. Kept fail-closed behind internal auth
 // for any trusted caller that explicitly configures OCTOGEE_API_URL.
 app.use("/internal/site", internalSiteDeployRoutes);
+// Gitea admin broker for the in-pod provisioner (localhost-only; not exposed via the
+// /api/g/<id>/* ingress seam). Lets the shell-bearing openclaw container drop the Gitea
+// admin token — the provisioner calls these instead of holding GIT_API_TOKEN itself.
+app.use("/internal/gitea", internalGiteaAdminRoutes);
 // builder-shell has two caller shapes: redeem is pod-local (the in-pod bridge,
 // bare path), kill is cross-pod (octogee-api → the owner pod via the
 // /api/g/<id>/* fleet seam). The HTTP server hands Express the raw url without

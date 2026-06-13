@@ -1,6 +1,6 @@
 import { logger } from "../middleware/logging.js";
 
-const GITEA_URL =
+export const GITEA_URL =
   process.env.GITEA_URL ||
   `http://octogee-gitea-http.${process.env.K8S_NAMESPACE || "octogee"}.svc.cluster.local:3000`;
 
@@ -8,7 +8,7 @@ const GITEA_HOST = (() => {
   try { return new URL(GITEA_URL).host; } catch { return ""; }
 })();
 
-function assertGiteaUrl(url: string): void {
+export function assertGiteaUrl(url: string): void {
   let host: string;
   try { host = new URL(url).host; } catch { throw new Error(`Invalid Gitea URL: ${url}`); }
   if (!GITEA_HOST || host !== GITEA_HOST) {
@@ -16,7 +16,7 @@ function assertGiteaUrl(url: string): void {
   }
 }
 
-function getToken(): string {
+export function getToken(): string {
   const token = process.env.GITEA_TOKEN;
   if (!token) throw new Error("GITEA_TOKEN not configured");
   return token;

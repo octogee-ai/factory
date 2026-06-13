@@ -7,33 +7,25 @@
 // operator owns, or on-disk listings of already-provisioned customer
 // directories (syncAllWorkspaces). isValidUsername() at that entry point
 // is the path-traversal defense.
+//
+// Gitea ADMIN operations (create user, register the SSH key, create
+// orgs/repos, repo-exists, archive) are NOT performed here. The provisioner
+// runs in the shell-bearing openclaw container, which holds no Gitea admin
+// token; those calls go through the no-shell gateway-edge sidecar via
+// gitea-admin-broker-client (PLATFORM-CREDENTIAL-BROKERING). What stays here
+// is local git on the per-customer SSH key — clone/init/commit/push.
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import * as crypto from "crypto";
 import {
-  log, dlog, GIT_API_URL, GIT_API_TOKEN, GIT_SSH_HOST,
+  log, dlog, GIT_API_URL, GIT_SSH_HOST,
   CUSTOMERS_DIR, CUSTOMER_KEYS_DIR,
 } from "./config.js";
 import {
-  workspaceGiteaOrg, workspaceRepoName, projectRepoName, giteaUsername,
+  workspaceGiteaOrg, workspaceRepoName, projectRepoName,
 } from "./gitea-naming.js";
+import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { notesWelcomeSeed } from "./projects/playbook-seeds.js";
-
-export { giteaUsername };
-
-interface GiteaKey {
-  id?: number;
-  title?: string;
-  key?: string;
-}
-
-interface GiteaToken {
-  id?: number;
-  name?: string;
-  sha1?: string;
-  token?: string;
-}
 
 export function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -50,14 +42,6 @@ export function execErrStderr(err: unknown): string {
     return (err as { stderr: { toString: () => string } }).stderr.toString().trim();
   }
   return "";
-}
-
-function adminHeaders(includeContentType = true): Record<string, string> {
-  return {
-    Authorization: `token ${GIT_API_TOKEN}`,
-    Accept: "application/json",
-    ...(includeContentType ? { "Content-Type": "application/json" } : {}),
-  };
 }
 
 export function customerSshKeyPath(slug: string): string {
@@ -96,26 +80,11 @@ export function generateCustomerSshKey(slug: string): string {
   return fs.readFileSync(pubPath, "utf-8").trim();
 }
 
+// Reads the Gitea-registered "octogee-gateway" pubkey via the gateway-edge
+// admin broker — used by the mount flow to detect SSH-key drift. Returns null
+// when the user/key is absent.
 export async function readGiteaCustomerPubKey(slug: string): Promise<string | null> {
-  if (!GIT_API_TOKEN) return null;
-  const username = giteaUsername(slug);
-  const resp = await fetch(`${GIT_API_URL}/users/${username}/keys`, {
-    headers: adminHeaders(false),
-  });
-  if (resp.status === 404) return null;
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => "<no body>");
-    throw new Error(
-      `Gitea key read for ${username} returned ${resp.status}: ${body.slice(0, 200)}`,
-    );
-  }
-  const keys = (await resp.json()) as GiteaKey[];
-  for (const k of keys) {
-    if (k.title === "octogee-gateway" && typeof k.key === "string") {
-      return k.key.trim();
-    }
-  }
-  return null;
+  return giteaBroker.readGiteaUserPubKey(slug);
 }
 
 export async function deleteCustomerSshKey(slug: string): Promise<void> {
@@ -132,156 +101,15 @@ export function readLocalCustomerPubKey(slug: string): string | null {
   }
 }
 
-export async function createGiteaUser(slug: string, pubKey: string): Promise<string | null> {
-  if (!GIT_API_TOKEN) return null;
-
-  const username = giteaUsername(slug);
-  const password = crypto.randomBytes(32).toString("hex");
-  const headers = adminHeaders();
-
-  const userOk = await createGiteaUserRequest(username, slug, password, headers);
-  if (!userOk) return null;
-
-  await replaceExistingGitKey(username, headers);
-  await registerGitKey(username, pubKey, headers);
-
-  return await mintGatewayPat(username, headers);
-}
-
-async function createGiteaUserRequest(
-  username: string,
-  slug: string,
-  password: string,
-  headers: Record<string, string>,
-): Promise<boolean> {
-  const createResp = await fetch(`${GIT_API_URL}/admin/users`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      username,
-      email: `${slug}@octogee.local`,
-      password,
-      must_change_password: false,
-      visibility: "private",
-    }),
-  });
-  if (createResp.ok) {
-    log(`[git] Gitea user created: ${username}`);
-    return true;
-  }
-  if (createResp.status === 422) {
-    log(`[git] Gitea user already exists: ${username}`);
-    return true;
-  }
-  const body = await createResp.text();
-  log(`⚠ [git] Failed to create Gitea user ${username}: ${createResp.status} ${body}`);
-  return false;
-}
-
-async function replaceExistingGitKey(
-  username: string,
-  headers: Record<string, string>,
-): Promise<void> {
-  const keysResp = await fetch(`${GIT_API_URL}/users/${username}/keys`, { headers });
-  if (!keysResp.ok) return;
-  const keys = (await keysResp.json()) as GiteaKey[];
-  for (const key of keys) {
-    if (key.title !== "octogee-gateway" || typeof key.id !== "number") continue;
-    await fetch(`${GIT_API_URL}/admin/users/${username}/keys/${key.id}`, {
-      method: "DELETE",
-      headers,
-    });
-  }
-}
-
-async function registerGitKey(
-  username: string,
-  pubKey: string,
-  headers: Record<string, string>,
-): Promise<void> {
-  const keyResp = await fetch(`${GIT_API_URL}/admin/users/${username}/keys`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ title: "octogee-gateway", key: pubKey }),
-  });
-  if (keyResp.ok) {
-    log(`[git] SSH key registered for ${username}`);
-    return;
-  }
-  const body = await keyResp.text();
-  log(`⚠ [git] Failed to register SSH key for ${username}: ${keyResp.status} ${body}`);
-}
-
-async function mintGatewayPat(
-  username: string,
-  headers: Record<string, string>,
-): Promise<string | null> {
-  const sudoHeaders = { ...headers, Sudo: username };
-
-  const tokensResp = await fetch(`${GIT_API_URL}/users/${username}/tokens`, {
-    method: "GET",
-    headers: sudoHeaders,
-  });
-  if (tokensResp.ok) {
-    const tokens = (await tokensResp.json()) as GiteaToken[];
-    for (const t of tokens) {
-      if (t.name !== "gateway-edge" || typeof t.id !== "number") continue;
-      await fetch(`${GIT_API_URL}/users/${username}/tokens/${t.id}`, {
-        method: "DELETE",
-        headers: sudoHeaders,
-      });
-    }
-  }
-
-  const tokenResp = await fetch(`${GIT_API_URL}/users/${username}/tokens`, {
-    method: "POST",
-    headers: sudoHeaders,
-    body: JSON.stringify({
-      name: "gateway-edge",
-      scopes: ["write:repository"],
-    }),
-  });
-  if (!tokenResp.ok) {
-    log(`[git] PAT skipped for ${username} (Gitea admin-sudo limitation on /users/${username}/tokens) — SSH is the primary auth path`);
-    return null;
-  }
-
-  const tokenData = (await tokenResp.json()) as GiteaToken;
-  const token = tokenData.sha1 || tokenData.token || "";
-  if (!token) {
-    log(`⚠ [git] Token created but no value returned for ${username}`);
-    return null;
-  }
-
-  log(`[git] API token created for ${username}`);
-  return token;
-}
-
-export async function deleteGiteaUser(slug: string): Promise<void> {
-  if (!GIT_API_TOKEN) return;
-
-  const username = giteaUsername(slug);
-  const resp = await fetch(`${GIT_API_URL}/admin/users/${username}`, {
-    method: "DELETE",
-    headers: adminHeaders(false),
-  });
-
-  if (resp.ok || resp.status === 404) {
-    log(`[git] Gitea user deleted: ${username}`);
-  } else {
-    const body = await resp.text();
-    log(`⚠ [git] Failed to delete Gitea user ${username}: ${resp.status} ${body}`);
-  }
+// Ensures the per-customer Gitea user exists and its SSH key is registered.
+// The admin work happens in the gateway-edge sidecar; this is the provisioner's
+// thin call into it. Throws (loud) on failure — the mount retries.
+export async function createGiteaUser(slug: string, pubKey: string): Promise<void> {
+  await giteaBroker.ensureGiteaUser(slug, pubKey);
 }
 
 function sshRemoteUrl(org: string, repoName: string): string {
   return `git@${GIT_SSH_HOST}:${org}/${repoName}.git`;
-}
-
-function httpCloneUrl(org: string, repoName: string): string {
-  const gitHost = new URL(GIT_API_URL).origin;
-  const authPrefix = `://octogee-admin:${GIT_API_TOKEN}@`;
-  return `${gitHost.replace("://", authPrefix)}/${org}/${repoName}.git`;
 }
 
 export function gitExec(cwd: string, args: string, sshKeyPath?: string): string | null {
@@ -309,48 +137,38 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
   }
 }
 
+// Workspace + project clones run over the per-customer SSH key. The key is
+// registered (createGiteaUser) before any clone in the mount flow, so there is
+// no admin-token HTTP fallback: a missing key is a loud failure the reconcile
+// heals by regenerating + re-registering. Repo existence is checked through the
+// admin broker (no admin token on this container).
 export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promise<boolean> {
   const dest = path.join(CUSTOMERS_DIR, slug);
   const gitDir = path.join(dest, ".git");
 
   if (fs.existsSync(gitDir)) return true;
 
-  if (!GIT_API_TOKEN) {
-    log(`[git] Cannot clone ${slug} — GIT_API_TOKEN not set`);
-    return false;
-  }
-
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
   const sshKey = customerSshKeyPath(slug);
-  const hasCustomerKey = fs.existsSync(sshKey);
-
-  try {
-    const resp = await fetch(`${GIT_API_URL}/repos/${org}/${repoName}`, {
-      headers: adminHeaders(false),
-    });
-    if (!resp.ok) {
-      log(`[git] Repo ${org}/${repoName} not found on Gitea (${resp.status}) — skipping clone`);
-      return false;
-    }
-  } catch (err: unknown) {
-    log(`⚠ [git] Gitea API check failed for ${org}/${repoName}: ${errMessage(err)}`);
+  if (!fs.existsSync(sshKey)) {
+    log(`⚠ [git] Cannot clone ${slug} — per-customer SSH key missing (registered before clone in the mount flow)`);
     return false;
   }
 
-  let result: string | null;
-  if (hasCustomerKey) {
-    const cloneUrl = sshRemoteUrl(org, repoName);
-    result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`, sshKey);
-  } else {
-    const cloneUrl = httpCloneUrl(org, repoName);
-    log(`[git] Cloning ${slug} via HTTP (no per-customer SSH key yet)`);
-    result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${slug}`);
-    if (result !== null) {
-      gitExec(dest, `remote set-url origin ${sshRemoteUrl(org, repoName)}`);
-    }
+  let exists: boolean;
+  try {
+    exists = await giteaBroker.repoExists(org, repoName);
+  } catch (err: unknown) {
+    log(`⚠ [git] Gitea repo-exists check failed for ${org}/${repoName}: ${errMessage(err)}`);
+    return false;
+  }
+  if (!exists) {
+    log(`[git] Repo ${org}/${repoName} not found on Gitea — skipping clone`);
+    return false;
   }
 
+  const result = gitExec(path.dirname(dest), `clone ${sshRemoteUrl(org, repoName)} ${slug}`, sshKey);
   if (result === null) {
     log(`⚠ [git] Clone failed for ${slug}`);
     try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
@@ -376,43 +194,28 @@ export async function cloneProjectRepo(
 
   if (fs.existsSync(gitDir)) return true;
 
-  if (!GIT_API_TOKEN) {
-    log(`[git] Cannot clone ${slug}/${projectSlug} — GIT_API_TOKEN not set`);
+  const org = workspaceGiteaOrg(slug);
+  const sshKey = customerSshKeyPath(slug);
+  if (!fs.existsSync(sshKey)) {
+    log(`⚠ [git] Cannot clone ${slug}/${projectSlug} — per-customer SSH key missing`);
     return false;
   }
 
-  const org = workspaceGiteaOrg(slug);
-  const sshKey = customerSshKeyPath(slug);
-  const hasCustomerKey = fs.existsSync(sshKey);
-
+  let exists: boolean;
   try {
-    const resp = await fetch(`${GIT_API_URL}/repos/${org}/${giteaRepoName}`, {
-      headers: adminHeaders(false),
-    });
-    if (!resp.ok) {
-      log(`[git] Project repo ${org}/${giteaRepoName} not found on Gitea (${resp.status}) — skipping clone`);
-      return false;
-    }
+    exists = await giteaBroker.repoExists(org, giteaRepoName);
   } catch (err: unknown) {
-    log(`⚠ [git] Gitea API check failed for ${org}/${giteaRepoName}: ${errMessage(err)}`);
+    log(`⚠ [git] Gitea repo-exists check failed for ${org}/${giteaRepoName}: ${errMessage(err)}`);
+    return false;
+  }
+  if (!exists) {
+    log(`[git] Project repo ${org}/${giteaRepoName} not found on Gitea — skipping clone`);
     return false;
   }
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
 
-  let result: string | null;
-  if (hasCustomerKey) {
-    const cloneUrl = sshRemoteUrl(org, giteaRepoName);
-    result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${projectSlug}`, sshKey);
-  } else {
-    const cloneUrl = httpCloneUrl(org, giteaRepoName);
-    log(`[git] Cloning ${slug}/${projectSlug} via HTTP (no per-customer SSH key yet)`);
-    result = gitExec(path.dirname(dest), `clone ${cloneUrl} ${projectSlug}`);
-    if (result !== null) {
-      gitExec(dest, `remote set-url origin ${sshRemoteUrl(org, giteaRepoName)}`);
-    }
-  }
-
+  const result = gitExec(path.dirname(dest), `clone ${sshRemoteUrl(org, giteaRepoName)} ${projectSlug}`, sshKey);
   if (result === null) {
     log(`⚠ [git] Clone failed for ${slug}/${projectSlug}`);
     try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
@@ -429,11 +232,6 @@ export async function cloneProjectRepo(
 }
 
 export async function initWorkspaceRepo(coachDir: string, slug: string): Promise<string | null> {
-  if (!GIT_API_TOKEN) {
-    log(`[git] Skipping repo init for ${slug} — GIT_API_TOKEN not set`);
-    return null;
-  }
-
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
 
@@ -457,24 +255,9 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   setRepoSshCommand(coachDir, slug);
 
   try {
-    const resp = await fetch(`${GIT_API_URL}/orgs/${org}/repos`, {
-      method: "POST",
-      headers: adminHeaders(),
-      body: JSON.stringify({
-        name: repoName,
-        private: true,
-        description: `Octogee workspace for ${slug}`,
-        auto_init: false,
-      }),
-    });
-
-    if (!resp.ok && resp.status !== 409) {
-      const body = await resp.text();
-      log(`⚠ [git] Failed to create repo ${org}/${repoName}: ${resp.status} ${body}`);
-      return null;
-    }
+    await giteaBroker.ensureWorkspaceRepo(slug);
   } catch (err) {
-    log(`⚠ [git] Gitea API error creating repo: ${err}`);
+    log(`⚠ [git] Failed to create repo ${org}/${repoName}: ${errMessage(err)}`);
     return null;
   }
 
@@ -550,11 +333,6 @@ export async function initProjectRepo(
   committerName = "Octogee",
   committerEmail = "octo@octogee.com",
 ): Promise<string | null> {
-  if (!GIT_API_TOKEN) {
-    log(`[git] Skipping project repo init for ${slug}/${projectName} — GIT_API_TOKEN not set`);
-    return null;
-  }
-
   const org = workspaceGiteaOrg(slug);
   const repoName = projectRepoName(projectName);
   const sshKey = customerSshKeyPath(slug);
@@ -576,24 +354,9 @@ export async function initProjectRepo(
   }
 
   try {
-    const resp = await fetch(`${GIT_API_URL}/orgs/${org}/repos`, {
-      method: "POST",
-      headers: adminHeaders(),
-      body: JSON.stringify({
-        name: repoName,
-        private: true,
-        description: `Octogee project: ${projectName} for ${slug}`,
-        auto_init: false,
-      }),
-    });
-
-    if (!resp.ok && resp.status !== 409) {
-      const body = await resp.text();
-      log(`⚠ [git] Failed to create project repo ${org}/${repoName}: ${resp.status} ${body}`);
-      return null;
-    }
+    await giteaBroker.ensureProjectRepo(slug, projectName);
   } catch (err) {
-    log(`⚠ [git] Gitea API error creating project repo: ${err}`);
+    log(`⚠ [git] Failed to create project repo ${org}/${repoName}: ${errMessage(err)}`);
     return null;
   }
 
@@ -741,43 +504,33 @@ function syncOneWorkspace(slug: string): void {
   }
 }
 
+// Workspace auto-sync is pure SSH/git on the per-customer key — no admin token.
+// The provisioner decides whether this runs (see local-provisioner); this loops
+// the on-disk customers and pushes their local changes.
 export async function syncAllWorkspaces(): Promise<void> {
-  if (!GIT_API_TOKEN) return;
   for (const slug of listOnDiskCustomerSlugs()) {
     syncOneWorkspace(slug);
   }
 }
 
 export async function archiveWorkspaceRepo(slug: string): Promise<void> {
-  if (!GIT_API_TOKEN) return;
-
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
   try {
-    await fetch(`${GIT_API_URL}/repos/${org}/${repoName}`, {
-      method: "PATCH",
-      headers: adminHeaders(),
-      body: JSON.stringify({ archived: true }),
-    });
+    await giteaBroker.archiveRepo(org, repoName);
     log(`[git] Archived repo: ${org}/${repoName}`);
   } catch (err) {
-    log(`⚠ [git] Failed to archive repo ${org}/${repoName}: ${err}`);
+    log(`⚠ [git] Failed to archive repo ${org}/${repoName}: ${errMessage(err)}`);
   }
 }
 
 export async function archiveProjectRepo(slug: string, projectName: string): Promise<void> {
-  if (!GIT_API_TOKEN) return;
-
   const org = workspaceGiteaOrg(slug);
   const repoName = projectRepoName(projectName);
   try {
-    await fetch(`${GIT_API_URL}/repos/${org}/${repoName}`, {
-      method: "PATCH",
-      headers: adminHeaders(),
-      body: JSON.stringify({ archived: true }),
-    });
+    await giteaBroker.archiveRepo(org, repoName);
     log(`[git] Archived project repo: ${org}/${repoName}`);
   } catch (err) {
-    log(`⚠ [git] Failed to archive project repo ${org}/${repoName}: ${err}`);
+    log(`⚠ [git] Failed to archive project repo ${org}/${repoName}: ${errMessage(err)}`);
   }
 }

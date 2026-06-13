@@ -584,12 +584,27 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(dep).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
   });
 
-  it("keeps platform Mattermost + Gitea tokens on the standard gateway container", () => {
+  it("keeps the Mattermost bot token on the standard gateway container but NOT the Gitea admin token (de-admined — provisioner brokers Gitea via the sidecar)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
     const gw = containerBlock(dep ?? "", "gateway");
     expect(gw).toMatch(/name:\s*MM_BOT_TOKEN\b/);
-    expect(gw).toMatch(/name:\s*GIT_API_TOKEN\b/);
+    expect(gw).not.toMatch(/name:\s*GIT_API_TOKEN\b/);
+    // The Gitea admin token now lives ONLY on the no-shell gateway-edge sidecar.
+    const edge = containerBlock(dep ?? "", "gateway-edge");
+    expect(edge).toMatch(/name:\s*GITEA_TOKEN\b/);
+  });
+
+  it("pins GATEWAY_EDGE_INTERNAL_URL on the gateway container to the gateway-edge port (survives a port override)", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-default", { "gatewayEdge.port": "9090" }),
+      "Deployment",
+      "octogee-gateway-default",
+    );
+    expect(dep).not.toBeNull();
+    const gw = containerBlock(dep ?? "", "gateway");
+    expect(gw).toMatch(/name:\s*GATEWAY_EDGE_INTERNAL_URL/);
+    expect(gw).toMatch(/value:\s*["']?http:\/\/127\.0\.0\.1:9090["']?/);
   });
 
   it("omits platform tokens from operator gateway + gateway-edge containers", () => {

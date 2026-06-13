@@ -298,12 +298,16 @@ spec:
                 secretKeyRef:
                   name: octogee-anthropic
                   key: api_key
-            - name: GIT_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: gitea-token
-                  key: token
-                  optional: true
+            # GIT_API_TOKEN intentionally absent: this shell-bearing container
+            # holds no Gitea admin token. The in-pod provisioner brokers Gitea
+            # admin ops (create user, register SSH key, create org/repo) through
+            # the no-shell gateway-edge sidecar — which holds GITEA_TOKEN — over
+            # localhost. A danger-full-access agent here can no longer read an
+            # admin token from its own env (PLATFORM-CREDENTIAL-BROKERING).
+            # Where the in-pod provisioner reaches that sidecar broker. Pinned to the
+            # chart's gateway-edge port so a port override can't silently break it.
+            - name: GATEWAY_EDGE_INTERNAL_URL
+              value: "http://127.0.0.1:{{ .Values.gatewayEdge.port }}"
             - name: BRAVE_API_KEY
               valueFrom:
                 secretKeyRef:
