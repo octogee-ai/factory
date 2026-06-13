@@ -28,6 +28,32 @@ export function buildRecycleOperation(input: BuildRecycleOperationInput): Operat
   };
 }
 
+export interface BuildMigrateOperationInput {
+  id: string;
+  uid: string;
+  toGatewayId: string;
+  createdBy: string;
+  now: number;
+}
+
+// Leg 2 (relocation): move a customer to another gateway via a migrate-customer
+// Operation Cowboy reconciles. The harness relocates the fixture to a STANDING
+// operator-profile gateway and back to `default` — no per-run gateway
+// provision/retire, so no ghost-fleet risk and no reaper needed.
+export function buildMigrateOperation(input: BuildMigrateOperationInput): Operation {
+  return {
+    id: input.id,
+    kind: "migrate-customer",
+    status: "pending",
+    createdBy: input.createdBy,
+    createdAt: input.now,
+    startedAt: null,
+    completedAt: null,
+    input: { uid: input.uid, toGatewayId: input.toGatewayId },
+    steps: [],
+  };
+}
+
 export type OperationOutcome = "pending" | "succeeded" | "failed";
 
 export function classifyOperation(op: { status?: OperationStatus | string }): OperationOutcome {
