@@ -1,4 +1,4 @@
-import { giteaApiAs, giteaApiAsAllowNotFound } from "./gitea.js";
+import { giteaApiAsUser, giteaApiAsUserAllowNotFound } from "./gitea.js";
 import { logger } from "../middleware/logging.js";
 
 export interface ManifestEntry {
@@ -27,7 +27,7 @@ function cacheKey(org: string, repoName: string): string {
 }
 
 export async function getManifest(
-  token: string,
+  sudoUser: string,
   org: string,
   repoName: string,
   bustCache = false,
@@ -38,8 +38,8 @@ export async function getManifest(
     if (cached && Date.now() - cached.ts < MANIFEST_TTL_MS) return cached.data;
   }
   try {
-    const resp = (await giteaApiAs(
-      token,
+    const resp = (await giteaApiAsUser(
+      sudoUser,
       org,
       `${repoName}/contents/${MANIFEST_PATH}`,
     )) as { content?: string };
@@ -57,10 +57,10 @@ interface RawManifest {
   sha: string | undefined;
 }
 
-async function fetchRawManifest(token: string, org: string, repoName: string): Promise<RawManifest> {
+async function fetchRawManifest(sudoUser: string, org: string, repoName: string): Promise<RawManifest> {
   try {
-    const existing = (await giteaApiAs(
-      token,
+    const existing = (await giteaApiAsUser(
+      sudoUser,
       org,
       `${repoName}/contents/${MANIFEST_PATH}`,
     )) as { sha?: string; content?: string };
@@ -76,12 +76,12 @@ async function fetchRawManifest(token: string, org: string, repoName: string): P
 }
 
 async function fetchRawManifestAllowNotFound(
-  token: string,
+  sudoUser: string,
   org: string,
   repoName: string,
 ): Promise<RawManifest | null> {
-  const existing = (await giteaApiAsAllowNotFound(
-    token,
+  const existing = (await giteaApiAsUserAllowNotFound(
+    sudoUser,
     org,
     `${repoName}/contents/${MANIFEST_PATH}`,
   )) as { sha?: string; content?: string } | null;
@@ -95,15 +95,15 @@ async function fetchRawManifestAllowNotFound(
 }
 
 export async function updateManifest(
-  token: string,
+  sudoUser: string,
   org: string,
   repoName: string,
   entries: Record<string, unknown>,
 ): Promise<void> {
-  const { manifest, sha } = await fetchRawManifest(token, org, repoName);
+  const { manifest, sha } = await fetchRawManifest(sudoUser, org, repoName);
   Object.assign(manifest, entries);
   const content = Buffer.from(JSON.stringify(manifest, null, 2)).toString("base64");
-  await giteaApiAs(token, org, `${repoName}/contents/${MANIFEST_PATH}`, "PUT", {
+  await giteaApiAsUser(sudoUser, org, `${repoName}/contents/${MANIFEST_PATH}`, "PUT", {
     message: `blob: update manifest`,
     content,
     ...(sha ? { sha } : {}),
@@ -112,7 +112,7 @@ export async function updateManifest(
 }
 
 export async function removeFromManifest(
-  token: string,
+  sudoUser: string,
   org: string,
   repoName: string,
   paths: string | string[],
@@ -120,7 +120,7 @@ export async function removeFromManifest(
 ): Promise<void> {
   const toRemove = Array.isArray(paths) ? paths : [paths];
   try {
-    const raw = await fetchRawManifestAllowNotFound(token, org, repoName);
+    const raw = await fetchRawManifestAllowNotFound(sudoUser, org, repoName);
     if (!raw) return;
     let changed = false;
     for (const p of toRemove) {
@@ -131,7 +131,7 @@ export async function removeFromManifest(
     }
     if (!changed) return;
     const content = Buffer.from(JSON.stringify(raw.manifest, null, 2)).toString("base64");
-    await giteaApiAs(token, org, `${repoName}/contents/${MANIFEST_PATH}`, "PUT", {
+    await giteaApiAsUser(sudoUser, org, `${repoName}/contents/${MANIFEST_PATH}`, "PUT", {
       message: commitMessage ?? `blob: remove ${toRemove.join(", ")}`,
       content,
       sha: raw.sha,

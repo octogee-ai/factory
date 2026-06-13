@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { db } from "./db.js";
-import { readProject, readWorkspace } from "./firestoreReads.js";
+import { readProject } from "./firestoreReads.js";
 import { USERNAME_RE } from "@shared/types/identity.js";
 import { readConnectorAccessToken } from "./connector-tokens.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming.js";
@@ -16,7 +16,14 @@ export interface FileTarget {
   repoName: string;
   gcsPrefix: string;
   githubToken?: string;
-  giteaToken?: string;
+  // Gitea: the username to impersonate via admin Sudo (no per-user PAT). The caller's
+  // own gitea identity where they hold real ACL (owner / project collaborator), or the
+  // workspace owner's when brokering for a workspace member who has no repo access.
+  sudoUser?: string;
+  // Writes restricted to the knowledge-store allowlist (notes/* + canvasFile): true for
+  // workspace members (brokered as the owner) and all GitHub targets; false for the
+  // owner / project collaborators who get unrestricted write.
+  brokered?: boolean;
   canvasFile?: string;
 }
 
@@ -89,8 +96,11 @@ export async function resolveFileTarget(
       logger.info(
         `[fileTarget] owner-brokered github token repo=${github.owner}/${github.repo} caller=${callerUid} tokenOwner=${project.ownerUid}`,
       );
-      return { ok: true, target: { ...githubTarget, githubToken } };
+      return { ok: true, target: { ...githubTarget, githubToken, brokered: true } };
     }
+    // Gitea project: act as the caller's own gitea identity (owner or collaborator —
+    // both hold real repo ACL, so Gitea enforces their permissions and authors commits
+    // as them). Unrestricted write, as today.
     return {
       ok: true,
       target: {
@@ -100,6 +110,9 @@ export async function resolveFileTarget(
         org: workspaceGiteaOrg(slug),
         repoName: projectRepoName(projectSlug),
         gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
+        sudoUser: `ws-${callerWorkspaceSlug ?? slug}`,
+        brokered: false,
+        canvasFile: project.canvasFile,
       },
     };
   }
@@ -111,6 +124,8 @@ export async function resolveFileTarget(
     org: workspaceGiteaOrg(slug),
     repoName: workspaceRepoName(),
     gcsPrefix: `customers/${slug}`,
+    sudoUser: `ws-${slug}`,
+    brokered: false,
     canvasFile: "README.md",
   };
 
@@ -123,6 +138,11 @@ export async function resolveFileTarget(
   return resolveWorkspaceMemberTarget(workspaceTarget, slug, callerUid);
 }
 
+// Workspace members have no direct ACL on the workspace repo (no collaborator wiring —
+// only projects get that). We broker: impersonate the workspace OWNER (ws-${slug}) and
+// cap writes to the knowledge-store allowlist (brokered=true). No owner PAT to read,
+// so the old owner_gitea_not_provisioned failure mode is gone — the admin token always
+// backs the Sudo.
 async function resolveWorkspaceMemberTarget(
   workspaceTarget: FileTarget,
   slug: string,
@@ -135,24 +155,8 @@ async function resolveWorkspaceMemberTarget(
   if (!memberDoc.exists) {
     return { ok: false, status: 403, error: "Forbidden" };
   }
-  const ownerUid = (await readWorkspace(slug))?.ownerUid;
-  if (!ownerUid) {
-    return { ok: false, status: 404, error: "Workspace not found" };
-  }
-  const tokenSnap = await db.doc(`users/${ownerUid}/secrets/gitea`).get();
-  const giteaToken = tokenSnap.data()?.token as string | undefined;
-  if (!giteaToken) {
-    return {
-      ok: false,
-      status: 422,
-      error: "Workspace files unavailable",
-      reason: "owner_gitea_not_provisioned",
-    };
-  }
-  logger.info(
-    `[fileTarget] owner-brokered gitea token workspace=${slug} caller=${callerUid} tokenOwner=${ownerUid}`,
-  );
-  return { ok: true, target: { ...workspaceTarget, giteaToken } };
+  logger.info(`[fileTarget] brokered gitea sudo workspace=${slug} caller=${callerUid} as=ws-${slug}`);
+  return { ok: true, target: { ...workspaceTarget, brokered: true } };
 }
 
 function readTargetInput(req: Request): { slug: string | null; projectSlug: string | null } {

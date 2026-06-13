@@ -2,7 +2,7 @@ import { Router } from "express";
 import { storage } from "../../lib/db.js";
 import { withGiteaTarget } from "../../lib/fileTarget.js";
 import { removeFromManifest } from "../../lib/manifest.js";
-import { getCustomerGiteaToken, validateWorkspacePath } from "./helpers.js";
+import { giteaSudoUser, validateWorkspacePath } from "./helpers.js";
 
 const router = Router();
 
@@ -24,7 +24,7 @@ router.post("/delete-blob", withGiteaTarget(async (req, res, _next, target) => {
   if (thumbExists) await thumbFile.delete();
 
   await removeFromManifest(
-    getCustomerGiteaToken(req),
+    giteaSudoUser(target),
     target.org,
     target.repoName,
     filePath,

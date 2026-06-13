@@ -3,11 +3,10 @@ import JSZip from "jszip";
 import { storage } from "../../lib/db.js";
 import { logger } from "../../middleware/logging.js";
 import { updateManifest, removeFromManifest } from "../../lib/manifest.js";
+import { giteaApiAsUser } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
 import {
-  customerGiteaApi,
   ensureSlug,
-  getCustomerGiteaToken,
   getExtension,
   getMimeType,
   isTextFile,
@@ -30,6 +29,7 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
     const bucket = storage.bucket();
     const gcsZipPath = `customers/${slug}/${zipPath}`;
     const org = workspaceGiteaOrg(slug);
+    const sudoUser = `ws-${slug}`;
     const repoName = workspaceRepoName();
 
     const zipFile = bucket.file(gcsZipPath);
@@ -93,11 +93,11 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
         const content = fileBuffer.toString("base64");
         let sha: string | undefined;
         try {
-          const existing = (await customerGiteaApi(req, org, `${repoName}/contents/${targetPath}`)) as { sha?: string };
+          const existing = (await giteaApiAsUser(sudoUser, org, `${repoName}/contents/${targetPath}`)) as { sha?: string };
           sha = existing.sha;
         } catch { /* ignore */ }
 
-        await customerGiteaApi(req, org, `${repoName}/contents/${targetPath}`, "PUT", {
+        await giteaApiAsUser(sudoUser, org, `${repoName}/contents/${targetPath}`, "PUT", {
           message: `zip-extract: ${relativePath}`,
           content,
           ...(sha ? { sha } : {}),
@@ -119,7 +119,7 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
     }
 
     if (Object.keys(manifestEntries).length > 0) {
-      await updateManifest(getCustomerGiteaToken(req), org, repoName, manifestEntries);
+      await updateManifest(sudoUser, org, repoName, manifestEntries);
     }
 
     try { await zipFile.delete(); } catch (e) {
@@ -128,7 +128,7 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
     }
 
     await removeFromManifest(
-      getCustomerGiteaToken(req),
+      sudoUser,
       org,
       repoName,
       zipPath,

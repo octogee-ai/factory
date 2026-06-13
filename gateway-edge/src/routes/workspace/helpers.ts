@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { giteaApiAs } from "../../lib/gitea.js";
+import { giteaApiAsUser } from "../../lib/gitea.js";
 import { githubContentsApi } from "../../lib/github.js";
 import type { FileTarget } from "../../lib/fileTarget.js";
 import type { CommitAuthor } from "../../lib/workspace-git.js";
@@ -12,10 +12,7 @@ export function isBrokeredWritablePath(path: string, canvasFile: string | undefi
 }
 
 export function isTargetPathWritable(target: FileTarget, path: string): boolean {
-  if (target.provider === "github") {
-    return Boolean(target.githubToken) && isBrokeredWritablePath(path, target.canvasFile);
-  }
-  if (target.giteaToken) {
+  if (target.brokered) {
     return isBrokeredWritablePath(path, target.canvasFile);
   }
   return true;
@@ -32,45 +29,23 @@ export function resolveCommitAuthor(
   return { name, email };
 }
 
-export function getCustomerGiteaToken(req: Request, target?: FileTarget): string {
-  if (target?.giteaToken) return target.giteaToken;
-  if (req.giteaToken) return req.giteaToken;
-  throw new Error("Gitea access not configured for this user");
+export function giteaSudoUser(target: FileTarget): string {
+  if (!target.sudoUser) throw new Error("gitea target missing sudoUser");
+  return target.sudoUser;
 }
 
-export function requireGiteaToken(req: Request, res: Response): string | null {
-  if (req.giteaToken) return req.giteaToken;
-  if (!res.headersSent) {
-    res.status(422).json({
-      error: "Workspace files unavailable",
-      reason: "gitea_not_provisioned",
-    });
-  }
-  return null;
-}
-
-export async function customerGiteaApi(
-  req: Request,
-  org: string,
-  path: string,
-  method = "GET",
-  body?: unknown,
-): Promise<unknown> {
-  return giteaApiAs(getCustomerGiteaToken(req), org, path, method, body);
-}
-
+// Act on the gitea workspace/project repo AS the impersonated user (admin Sudo —
+// Gitea enforces their ACL). Replaces the per-user PAT path.
 export async function targetGiteaApi(
-  req: Request,
   target: FileTarget,
   path: string,
   method = "GET",
   body?: unknown,
 ): Promise<unknown> {
-  return giteaApiAs(getCustomerGiteaToken(req, target), target.org, path, method, body);
+  return giteaApiAsUser(giteaSudoUser(target), target.org, path, method, body);
 }
 
 export async function repoContentsApi(
-  req: Request,
   target: FileTarget,
   filePath: string,
 ): Promise<unknown> {
@@ -80,7 +55,7 @@ export async function repoContentsApi(
   const apiPath = filePath
     ? `${target.repoName}/contents/${filePath}`
     : `${target.repoName}/contents`;
-  return targetGiteaApi(req, target, apiPath);
+  return targetGiteaApi(target, apiPath);
 }
 
 export const HIDDEN = new Set([

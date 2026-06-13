@@ -6,8 +6,8 @@ import { resolveFileTarget, withGiteaTarget, type FileTarget } from "../../lib/f
 import { updateManifest } from "../../lib/manifest.js";
 import { logger } from "../../middleware/logging.js";
 import {
-  customerGiteaApi,
-  getCustomerGiteaToken,
+  targetGiteaApi,
+  giteaSudoUser,
   getExtension,
   getMimeType,
   IMAGE_EXTENSIONS,
@@ -22,7 +22,7 @@ router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {
   };
   if (!files?.length) { res.status(400).json({ error: "Missing files" }); return; }
 
-  const { org, repoName } = target;
+  const { repoName } = target;
   const results: Array<{ name: string; status: string }> = [];
 
   for (const file of files) {
@@ -37,12 +37,12 @@ router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {
 
     let sha: string | undefined;
     try {
-      const existing = (await customerGiteaApi(req, org, `${repoName}/contents/${filePath}`)) as { sha?: string };
+      const existing = (await targetGiteaApi(target, `${repoName}/contents/${filePath}`)) as { sha?: string };
       sha = existing.sha;
     } catch { /* ignore */ }
 
     try {
-      await customerGiteaApi(req, org, `${repoName}/contents/${filePath}`, "PUT", {
+      await targetGiteaApi(target, `${repoName}/contents/${filePath}`, "PUT", {
         message: `upload: ${filePath}`,
         content: file.content,
         ...(sha ? { sha } : {}),
@@ -179,7 +179,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
     }
 
     const { org, repoName } = target;
-    await updateManifest(getCustomerGiteaToken(req), org, repoName, {
+    await updateManifest(giteaSudoUser(target), org, repoName, {
       [filePath]: {
         type: "blob",
         gcsPath,

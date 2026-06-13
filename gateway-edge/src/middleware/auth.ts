@@ -10,7 +10,6 @@ declare global {
       uid?: string;
       user?: FirebaseFirestore.DocumentData;
       isAdmin?: boolean;
-      giteaToken?: string;
     }
   }
 }
@@ -32,13 +31,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
         req.user = userSnap.data();
       }
       try {
-        const userRef = db.collection("users").doc(decoded.uid);
-        const [configSnap, giteaSnap] = await Promise.all([
-          userRef.collection("system").doc("config").get(),
-          userRef.collection("secrets").doc("gitea").get(),
-        ]);
+        const configSnap = await db.collection("users").doc(decoded.uid).collection("system").doc("config").get();
         req.isAdmin = configSnap.exists && configSnap.data()?.role === "admin";
-        req.giteaToken = giteaSnap.data()?.token || undefined;
       } catch {
         req.isAdmin = false;
       }

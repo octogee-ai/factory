@@ -1,10 +1,10 @@
-import type { Request } from 'express';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  getCustomerGiteaToken,
+  giteaSudoUser,
   pathHasReservedOrHiddenSegment,
   validateWorkspacePath,
 } from '../routes/workspace/helpers.js';
+import type { FileTarget } from '../lib/fileTarget.js';
 
 describe('validateWorkspacePath', () => {
   it('accepts a normal nested path', () => {
@@ -83,25 +83,23 @@ describe('pathHasReservedOrHiddenSegment', () => {
   });
 });
 
-describe('getCustomerGiteaToken — P1-5 fail-closed', () => {
-  const origEnv = process.env.GITEA_TOKEN;
+describe('giteaSudoUser — fail loud if a gitea target has no impersonation identity', () => {
+  const base: FileTarget = {
+    slug: 'alice',
+    projectSlug: null,
+    provider: 'gitea',
+    org: 'alice',
+    repoName: 'workspace',
+    gcsPrefix: 'customers/alice',
+    sudoUser: 'ws-alice',
+  };
 
-  beforeEach(() => {
-    process.env.GITEA_TOKEN = 'global-admin-token-must-not-leak';
+  it('returns the impersonation user when set', () => {
+    expect(giteaSudoUser(base)).toBe('ws-alice');
   });
 
-  afterEach(() => {
-    if (origEnv === undefined) delete process.env.GITEA_TOKEN;
-    else process.env.GITEA_TOKEN = origEnv;
-  });
-
-  it('returns the per-user token when present', () => {
-    const req = { giteaToken: 'per-user-token' } as unknown as Request;
-    expect(getCustomerGiteaToken(req)).toBe('per-user-token');
-  });
-
-  it('throws (does NOT fall back to process.env.GITEA_TOKEN) when per-user token is missing', () => {
-    const req = { giteaToken: undefined } as unknown as Request;
-    expect(() => getCustomerGiteaToken(req)).toThrowError(/not configured/i);
+  it('throws (never silently acts as raw admin) when sudoUser is missing', () => {
+    const { sudoUser: _omit, ...noSudo } = base;
+    expect(() => giteaSudoUser(noSudo as FileTarget)).toThrowError(/sudoUser/i);
   });
 });

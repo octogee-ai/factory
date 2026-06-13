@@ -4,7 +4,6 @@ import { githubContentsApi, githubContentsPut } from "../../lib/github.js";
 import {
   isBrokeredWritablePath,
   isTextFile,
-  requireGiteaToken,
   resolveCommitAuthor,
   targetGiteaApi,
   validateWorkspacePath,
@@ -48,14 +47,17 @@ router.post("/save", withFileTarget(async (req, res, _next, target) => {
   const contentBase64 = Buffer.from(content, "utf8").toString("base64");
   const start = Date.now();
 
+  // Brokered targets (workspace members impersonating the owner; all GitHub targets)
+  // may only write the knowledge store. Owners / project collaborators are unrestricted.
+  if (target.brokered && !isBrokeredWritablePath(path, target.canvasFile)) {
+    res.status(403).json({
+      error: "Only notes and the canvas home file are writable with a brokered token",
+      code: "PATH_NOT_WRITABLE",
+    });
+    return;
+  }
+
   if (target.provider === "github") {
-    if (!isBrokeredWritablePath(path, target.canvasFile)) {
-      res.status(403).json({
-        error: "Only notes and the canvas home file are writable with a brokered token",
-        code: "PATH_NOT_WRITABLE",
-      });
-      return;
-    }
     let sha: string | undefined;
     try {
       const existing = (await githubContentsApi(
@@ -78,23 +80,15 @@ router.post("/save", withFileTarget(async (req, res, _next, target) => {
     return;
   }
 
-  if (target.giteaToken && !isBrokeredWritablePath(path, target.canvasFile)) {
-    res.status(403).json({
-      error: "Only notes and the canvas home file are writable with a brokered token",
-      code: "PATH_NOT_WRITABLE",
-    });
-    return;
-  }
-  if (!target.giteaToken && !requireGiteaToken(req, res)) return;
   const apiPath = `${target.repoName}/contents/${path}`;
   let sha: string | undefined;
   try {
-    const existing = (await targetGiteaApi(req, target, apiPath)) as { sha?: string };
+    const existing = (await targetGiteaApi(target, apiPath)) as { sha?: string };
     sha = existing.sha;
   } catch (e) {
     rethrowUnlessNotFound(e);
   }
-  const out = (await targetGiteaApi(req, target, apiPath, "PUT", {
+  const out = (await targetGiteaApi(target, apiPath, "PUT", {
     message,
     content: contentBase64,
     ...(sha ? { sha } : {}),

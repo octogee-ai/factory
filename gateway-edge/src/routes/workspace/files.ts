@@ -4,12 +4,11 @@ import { validateFilePath } from "../../lib/path-validation.js";
 import { withFileTarget } from "../../lib/fileTarget.js";
 import { getManifest } from "../../lib/manifest.js";
 import { isOversizeFile } from "../../lib/github.js";
-import { getCustomerGiteaToken, HIDDEN, isTargetPathWritable, pathHasReservedOrHiddenSegment, repoContentsApi, requireGiteaToken } from "./helpers.js";
+import { giteaSudoUser, HIDDEN, isTargetPathWritable, pathHasReservedOrHiddenSegment, repoContentsApi } from "./helpers.js";
 
 const router = Router();
 
 router.get("/files", withFileTarget(async (req, res, _next, target) => {
-  if (target.provider === "gitea" && !target.giteaToken && !requireGiteaToken(req, res)) return;
   const path = (req.query.path as string) ?? "";
   const bustCache = req.query.nocache === "1";
 
@@ -30,7 +29,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
   }
   let contents: RepoContentEntry[];
   try {
-    const raw = await repoContentsApi(req, target, path);
+    const raw = await repoContentsApi(target, path);
     contents = (Array.isArray(raw) ? raw : [raw]) as RepoContentEntry[];
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -57,7 +56,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
     }));
 
   if (target.provider !== "github") {
-    const manifest = await getManifest(getCustomerGiteaToken(req, target), target.org, target.repoName, bustCache);
+    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName, bustCache);
     const gitPaths = new Set(gitFiles.map((f) => f.path));
     const prefix = path ? path + "/" : "";
 
@@ -87,7 +86,6 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
 }, { allowWorkspaceMembers: true }));
 
 router.get("/file", withFileTarget(async (req, res, _next, target) => {
-  if (target.provider === "gitea" && !target.giteaToken && !requireGiteaToken(req, res)) return;
   const path = req.query.path as string;
   if (!path) { res.status(400).json({ error: "Missing path" }); return; }
 
@@ -100,7 +98,7 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
   }
 
   if (target.provider !== "github") {
-    const manifest = await getManifest(getCustomerGiteaToken(req, target), target.org, target.repoName);
+    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
     const blobEntry = manifest[path];
 
     if (blobEntry) {
@@ -122,7 +120,7 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
     }
   }
 
-  const file = (await repoContentsApi(req, target, path)) as {
+  const file = (await repoContentsApi(target, path)) as {
     content?: string;
     sha?: string;
     encoding?: string;

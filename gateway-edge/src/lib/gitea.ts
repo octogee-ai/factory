@@ -29,7 +29,14 @@ async function giteaFetch(
   method: string,
   body: unknown | undefined,
   allow404: boolean,
+  sudo?: string,
 ): Promise<unknown | null> {
+  // Defense at the impersonation sink: the Sudo header carries a privileged identity,
+  // so reject anything that isn't a clean Gitea username (no CRLF/space → no header
+  // injection), regardless of how callers derived it.
+  if (sudo !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sudo)) {
+    throw new Error(`Refusing Gitea Sudo with unsafe identity: ${JSON.stringify(sudo)}`);
+  }
   const url = `${GITEA_URL}/api/v1/repos/${org}/${path}`;
   assertGiteaUrl(url);
   const resp = await fetch(url, {
@@ -37,6 +44,7 @@ async function giteaFetch(
     headers: {
       Authorization: `token ${token}`,
       Accept: "application/json",
+      ...(sudo ? { Sudo: sudo } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -69,6 +77,31 @@ async function giteaApiAllowNotFound(org: string, path: string, method = "GET", 
 
 export async function giteaApiAsAllowNotFound(token: string, org: string, path: string, method = "GET", body?: unknown): Promise<unknown | null> {
   return giteaFetch(token, org, path, method, body, true);
+}
+
+// First-party impersonation: act on Gitea AS the workspace user via the platform
+// admin token + Sudo header — Gitea enforces the impersonated user's repo ACL
+// (validated live, PLATFORM-CREDENTIAL-BROKERING-SPEC §Tier 1). Replaces the
+// per-user PAT: nothing to mint, store, or rotate. `sudoUser` is the gitea
+// username, e.g. `ws-${slug}`.
+export async function giteaApiAsUser(
+  sudoUser: string,
+  org: string,
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<unknown> {
+  return giteaFetch(getToken(), org, path, method, body, false, sudoUser) as Promise<unknown>;
+}
+
+export async function giteaApiAsUserAllowNotFound(
+  sudoUser: string,
+  org: string,
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<unknown | null> {
+  return giteaFetch(getToken(), org, path, method, body, true, sudoUser);
 }
 
 export async function giteaDeleteRepo(org: string, repo: string): Promise<void> {

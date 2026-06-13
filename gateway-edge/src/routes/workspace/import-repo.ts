@@ -1,11 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { storage } from "../../lib/db.js";
 import { updateManifest } from "../../lib/manifest.js";
+import { giteaApiAsUser } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
 import {
-  customerGiteaApi,
   ensureSlug,
-  getCustomerGiteaToken,
   getExtension,
   getMimeType,
   isTextFile,
@@ -40,6 +39,7 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
       return;
     }
     const org = workspaceGiteaOrg(slug);
+    const sudoUser = `ws-${slug}`;
     const workspaceRepo = workspaceRepoName();
     const ghToken = process.env.GITHUB_TOKEN;
 
@@ -100,11 +100,11 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
       if (isTextFile(blob.path)) {
         let sha: string | undefined;
         try {
-          const existing = (await customerGiteaApi(req, org, `${workspaceRepo}/contents/${targetPath}`)) as { sha?: string };
+          const existing = (await giteaApiAsUser(sudoUser, org, `${workspaceRepo}/contents/${targetPath}`)) as { sha?: string };
           sha = existing.sha;
         } catch { /* ignore */ }
 
-        await customerGiteaApi(req, org, `${workspaceRepo}/contents/${targetPath}`, "PUT", {
+        await giteaApiAsUser(sudoUser, org, `${workspaceRepo}/contents/${targetPath}`, "PUT", {
           message: `import: ${blob.path} from ${owner}/${repo}`,
           content: blobData.content,
           ...(sha ? { sha } : {}),
@@ -126,7 +126,7 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
     }
 
     if (Object.keys(manifestEntries).length > 0) {
-      await updateManifest(getCustomerGiteaToken(req), org, workspaceRepo, manifestEntries);
+      await updateManifest(sudoUser, org, workspaceRepo, manifestEntries);
     }
 
     res.json({ success: true, targetDir: destDir, fileCount });

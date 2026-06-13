@@ -7,12 +7,15 @@ import {
   getIdTokenForUid,
 } from "@shared/test-helpers/firestore-emulator.js";
 
+// Positional mock for the Sudo client: giteaApiAsUser(sudoUser, org, path, method, body).
+// c[0]=sudoUser (was token in the PAT era), c[2]=path, c[3]=method, c[4]=body.
 const mockGiteaApiAs = vi.fn();
 vi.mock("../lib/gitea", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/gitea.js")>();
   return {
     ...actual,
-    giteaApiAs: (...args: unknown[]) => mockGiteaApiAs(...args),
+    giteaApiAsUser: (...args: unknown[]) => mockGiteaApiAs(...args),
+    giteaApiAsUserAllowNotFound: (...args: unknown[]) => mockGiteaApiAs(...args),
   };
 });
 
@@ -128,8 +131,8 @@ describe("POST /api/workspace/save — gitea targets", () => {
 
     const put = mockGiteaApiAs.mock.calls.find((c) => c[3] === "PUT");
     expect(put).toBeDefined();
-    const [token, org, apiPath, , body] = put as [string, string, string, string, Record<string, unknown>];
-    expect(token).toBe("alice-gitea-token");
+    const [sudoUser, org, apiPath, , body] = put as [string, string, string, string, Record<string, unknown>];
+    expect(sudoUser).toBe("ws-alice");
     expect(org).toBe("alice");
     expect(apiPath).toBe("workspace/contents/notes/idea.md");
     expect(body.content).toBe(Buffer.from("# Idea\n", "utf8").toString("base64"));
@@ -180,8 +183,8 @@ describe("POST /api/workspace/save — gitea targets", () => {
     expect(put[1]).toBe("alice");
     expect(put[2]).toBe("zine/contents/notes/from-bob.md");
     expect((put[4] as Record<string, unknown>).author).toEqual({ name: "Bob B", email: "bob@x.test" });
-    // Member writes ride the member's own Gitea token.
-    expect(put[0]).toBe("bob-gitea-token");
+    // Project members hold real collaborator ACL — impersonate their OWN gitea identity.
+    expect(put[0]).toBe("ws-bob");
   });
 
   it("allows gitea saves outside notes/ (the files surface already does)", async () => {
@@ -326,7 +329,7 @@ describe("workspace targets — member access, brokered through the owner's toke
     expect(res.status).toBe(200);
     expect(res.body.files.map((f: { name: string }) => f.name)).toEqual(["welcome.md"]);
     const listCall = mockGiteaApiAs.mock.calls.find((c) => String(c[2]).endsWith("contents/notes"))!;
-    expect(listCall[0]).toBe("alice-gitea-token");
+    expect(listCall[0]).toBe("ws-alice");
   });
 
   it("lets a member read a note, marked writable", async () => {
@@ -343,7 +346,7 @@ describe("workspace targets — member access, brokered through the owner's toke
     expect(res.status).toBe(200);
     expect(res.body.content).toBe("# W");
     expect(res.body.writable).toBe(true);
-    expect(mockGiteaApiAs.mock.calls[0][0]).toBe("alice-gitea-token");
+    expect(mockGiteaApiAs.mock.calls[0][0]).toBe("ws-alice");
   });
 
   it("marks the canvas home writable for a member but other paths read-only", async () => {
@@ -379,8 +382,10 @@ describe("workspace targets — member access, brokered through the owner's toke
 
     expect(res.status).toBe(200);
     const put = mockGiteaApiAs.mock.calls.find((c) => c[3] === "PUT")!;
-    expect(put[0]).toBe("alice-gitea-token");
+    // Workspace member: brokered as the OWNER (ws-alice — no member ACL on the workspace repo)…
+    expect(put[0]).toBe("ws-alice");
     expect(put[2]).toBe("workspace/contents/notes/from-bob.md");
+    // …but still authored as the editing member.
     expect((put[4] as Record<string, unknown>).author).toEqual({ name: "Bob B", email: "bob@x.test" });
   });
 
@@ -444,14 +449,23 @@ describe("workspace targets — member access, brokered through the owner's toke
     expect(res2.status).toBe(403);
   });
 
-  it("422s when the workspace owner has no gitea token to broker", async () => {
+  it("a member saves even when the owner has NO per-user token — the Sudo broker needs none (bug class retired)", async () => {
+    // dora's workspace owner has no users/{uid}/secrets/gitea token. Under the old PAT
+    // model this 422'd (owner_gitea_not_provisioned — the ceckert/Bender incident).
+    // Sudo rides the platform admin token, so membership alone is enough.
+    mockGiteaApiAs.mockImplementation(async (_sudo, _org, _path, method) => {
+      if (method === undefined || method === "GET") throw new Error("Gitea API 404");
+      return { content: { sha: "dora-sha" } };
+    });
+
     const res = await request(app)
       .post("/api/workspace/save")
       .set(await authHeader(BOB_UID))
       .send({ slug: "dora", path: "notes/x.md", content: "x" });
 
-    expect(res.status).toBe(422);
-    expect(res.body.reason).toBe("owner_gitea_not_provisioned");
+    expect(res.status).toBe(200);
+    const put = mockGiteaApiAs.mock.calls.find((c) => c[3] === "PUT")!;
+    expect(put[0]).toBe("ws-dora");
   });
 });
 

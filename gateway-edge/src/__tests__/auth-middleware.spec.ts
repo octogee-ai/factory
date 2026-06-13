@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
-const { mockDocs, verifyIdToken } = vi.hoisted(() => ({
+const { mockDocs, reads, verifyIdToken } = vi.hoisted(() => ({
   mockDocs: new Map<string, Record<string, unknown> | undefined>(),
+  reads: [] as string[],
   verifyIdToken: vi.fn(),
 }));
 
 function snap(path: string) {
+  reads.push(path);
   const data = mockDocs.get(path);
   return { exists: data !== undefined, data: () => data };
 }
@@ -45,31 +47,31 @@ function runAuth(): Promise<{ req: Request; nextCalled: boolean; status?: number
   });
 }
 
-describe('requireAuth — Gitea token comes from the client-blocked secrets/ doc', () => {
+describe('requireAuth — admin role only; no per-user gitea secret read (retired for Sudo broker)', () => {
   beforeEach(() => {
     mockDocs.clear();
+    reads.length = 0;
     verifyIdToken.mockReset().mockResolvedValue({ uid: 'u1' });
     mockDocs.set('users/u1', { username: 'alice' });
   });
 
-  it('attaches req.giteaToken from users/{uid}/secrets/gitea', async () => {
+  it('attaches isAdmin from system/config and does NOT touch secrets/gitea', async () => {
     mockDocs.set('users/u1/system/config', { role: 'admin' });
+    // A token in the old location must NOT be read — gitea access is now admin-Sudo.
     mockDocs.set('users/u1/secrets/gitea', { username: 'alice', token: 'tok-from-secrets' });
 
     const { req, nextCalled } = await runAuth();
 
     expect(nextCalled).toBe(true);
-    expect(req.giteaToken).toBe('tok-from-secrets');
     expect(req.isAdmin).toBe(true);
+    expect((req as Record<string, unknown>).giteaToken).toBeUndefined();
+    expect(reads).not.toContain('users/u1/secrets/gitea');
   });
 
-  it('does NOT read the token from the client-readable system/config', async () => {
-    // Stale token in the OLD location; secrets/gitea is absent.
-    mockDocs.set('users/u1/system/config', { role: 'user', gitea: { token: 'leaky-old-token' } });
-
+  it('non-admin user resolves isAdmin=false', async () => {
+    mockDocs.set('users/u1/system/config', { role: 'user' });
     const { req, nextCalled } = await runAuth();
-
     expect(nextCalled).toBe(true);
-    expect(req.giteaToken).toBeUndefined();
+    expect(req.isAdmin).toBe(false);
   });
 });
