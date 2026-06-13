@@ -21,6 +21,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@aws-sdk/client-sts": "^3.1068.0",
     "@google-cloud/kms": "^5.5.0",
     "@google-cloud/secret-manager": "^6.1.2",
     "busboy": "^1.6.0",

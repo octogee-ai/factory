@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM node:26-slim
 
 # helm + kubectl unpinned — ride latest stable. helm-runner.ts uses
 # `--server-side=true --force-conflicts` (v4 string-flag syntax); any v4+
