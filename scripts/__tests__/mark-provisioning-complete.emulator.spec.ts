@@ -62,8 +62,8 @@ const fullMmUpdate = (slug: string) => ({
   "mattermost.coachUserId": `mm-coach-${slug}`,
 });
 
-describe("markProvisioningComplete — system/config snapshot", () => {
-  it("writes role / approved / tier / selectedTier and the provisioning.openclaw object", async () => {
+describe("markProvisioningComplete — system/config (privilege fields only)", () => {
+  it("writes role + updatedAt only — operational/entitlement fields are NOT mirrored here", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
@@ -74,41 +74,13 @@ describe("markProvisioningComplete — system/config snapshot", () => {
     );
 
     const cfg = await readDoc(`users/${uid}/system/config`);
-    expect(cfg).toMatchObject({
-      role: "user",
-      approved: true,
-      tier: "pro",
-      selectedTier: "pro",
-      provisioning: {
-        openclaw: {
-          status: "complete",
-          version: "v1",
-          slug,
-          agentIds: [`octogee-${slug}-coach`],
-          activatedAgents: ["coach"],
-          customerDir: `/octogee/customers/${slug}`,
-        },
-      },
-    });
-    expect(cfg?.provisioning.openclaw.provisionedAt).toBeDefined();
+    expect(cfg).toMatchObject({ role: "user" });
     expect(cfg?.updatedAt).toBeDefined();
-  });
-
-  it("flattens mattermost.* update keys onto system/config (drops the prefix)", async () => {
-    const { uid, slug } = freshIds();
-    await seedUser(uid, { username: slug });
-
-    await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
-
-    const cfg = await readDoc(`users/${uid}/system/config`);
-    expect(cfg?.mattermost).toMatchObject({
-      userId: `mm-user-${slug}`,
-      teamId: `mm-team-${slug}`,
-      channelId: `mm-coach-dm-${slug}`,
-      generalChannelId: `mm-general-${slug}`,
-      adminChannelId: `mm-admin-${slug}`,
-      coachUserId: `mm-coach-${slug}`,
-    });
+    expect(cfg?.provisioning).toBeUndefined();
+    expect(cfg?.mattermost).toBeUndefined();
+    expect(cfg?.approved).toBeUndefined();
+    expect(cfg?.tier).toBeUndefined();
+    expect(cfg?.selectedTier).toBeUndefined();
   });
 
   it("sets trialExpiresAt 7 days out for tier=trial", async () => {
@@ -136,26 +108,20 @@ describe("markProvisioningComplete — system/config snapshot", () => {
     const cfg = await readDoc(`users/${uid}/system/config`);
     expect(cfg?.trialExpiresAt).toBeUndefined();
   });
+});
 
-  it("mirrors provisioning.openclaw.greeting from mmUpdate onto system/config", async () => {
+describe("markProvisioningComplete — top-level user doc (canonical operational fields)", () => {
+  it("writes tier but NOT selectedTier — provisioning must not default-mask a later paid subscription.tier", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
-    await markProvisioningComplete(
-      baseCtx(uid, slug),
-      {
-        ...fullMmUpdate(slug),
-        "provisioning.openclaw.greeting": { ok: true, postId: "post-1", at: 1700000000000 },
-      },
-      [],
-    );
+    await markProvisioningComplete(baseCtx(uid, slug, "pro"), fullMmUpdate(slug), []);
 
-    const cfg = await readDoc(`users/${uid}/system/config`);
-    expect(cfg?.provisioning.openclaw.greeting).toMatchObject({ ok: true, postId: "post-1" });
+    const user = await readDoc(`users/${uid}`);
+    expect(user?.tier).toBe("pro");
+    expect(user?.selectedTier).toBeUndefined();
   });
-});
 
-describe("markProvisioningComplete — user-doc mirror (per-dot-path writes)", () => {
   it("preserves orchestrator-set gatewayId — the TEST 2026-04-22 chris-test11 regression", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, {
@@ -204,15 +170,37 @@ expect(user?.provisioning?.openclaw?.status).toBe("provisioning");
     expect(oc?.provisionedAt).toBeDefined();
   });
 
-  it("mirrors mattermost.userId + mattermost.username onto the user doc when present", async () => {
+  it("writes ALL mattermost.* subfields onto the user doc, incl. coachUserId (the milestones fix)", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
     await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
 
     const user = await readDoc(`users/${uid}`);
-    expect(user?.mattermost?.userId).toBe(`mm-user-${slug}`);
-    expect(user?.mattermost?.username).toBe(slug);
+    expect(user?.mattermost).toMatchObject({
+      userId: `mm-user-${slug}`,
+      username: slug,
+      teamId: `mm-team-${slug}`,
+      channelId: `mm-coach-dm-${slug}`,
+      coachUserId: `mm-coach-${slug}`,
+    });
+  });
+
+  it("writes provisioning.openclaw.greeting onto the user doc when present", async () => {
+    const { uid, slug } = freshIds();
+    await seedUser(uid, { username: slug });
+
+    await markProvisioningComplete(
+      baseCtx(uid, slug),
+      {
+        ...fullMmUpdate(slug),
+        "provisioning.openclaw.greeting": { ok: true, postId: "post-1", at: 1700000000000 },
+      },
+      [],
+    );
+
+    const user = await readDoc(`users/${uid}`);
+    expect(user?.provisioning?.openclaw?.greeting).toMatchObject({ ok: true, postId: "post-1" });
   });
 });
 
