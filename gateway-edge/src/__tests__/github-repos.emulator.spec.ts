@@ -8,7 +8,11 @@ import {
 
 import { createApp } from "../index.js";
 import { db } from "../lib/db.js";
-import { _setKmsClientForTesting, type KmsClient } from "../lib/kms.js";
+
+const mockReadConnectorAccessToken = vi.hoisted(() => vi.fn());
+vi.mock("../lib/connector-tokens", () => ({
+  readConnectorAccessToken: mockReadConnectorAccessToken,
+}));
 
 setupEmulatorTest({
   env: {
@@ -20,43 +24,17 @@ setupEmulatorTest({
 const UID = "gh-repos-uid";
 const USERNAME = "ghreposowner";
 
-function deterministicMockKms(): KmsClient {
-  return {
-    encrypt: vi.fn(async ({ plaintext }) => [
-      { ciphertext: Buffer.concat([Buffer.from("ENC:"), Buffer.from(plaintext)]) },
-    ] as [{ ciphertext: Buffer }]) as unknown as KmsClient["encrypt"],
-    decrypt: vi.fn(async ({ ciphertext }) => [
-      { plaintext: Buffer.from(ciphertext).slice(4) },
-    ] as [{ plaintext: Buffer }]) as unknown as KmsClient["decrypt"],
-  };
-}
-
 async function seed(role: "user" | "admin"): Promise<void> {
   await db.collection("workspaces").doc(USERNAME).set({ id: USERNAME, slug: USERNAME, ownerUid: UID });
   await db.collection("users").doc(UID).set({ uid: UID, username: USERNAME, workspaceId: USERNAME });
   await db.collection("users").doc(UID).collection("system").doc("config").set({ role });
 }
 
-async function seedGithubConnection(): Promise<void> {
-  await db.collection("users").doc(UID).collection("secrets").doc("github").set({
-    provider: "github",
-    tokens: {
-      encryptedAccessToken: Buffer.concat([
-        Buffer.from("ENC:"),
-        Buffer.from("gho_callers_own_token"),
-      ]).toString("base64"),
-      encryptedRefreshToken: null,
-      tokenType: "bearer",
-    },
-  });
-}
-
 beforeEach(() => {
-  _setKmsClientForTesting(deterministicMockKms());
+  mockReadConnectorAccessToken.mockReset().mockResolvedValue(null);
 });
 
 afterEach(() => {
-  _setKmsClientForTesting(null);
   vi.restoreAllMocks();
 });
 
@@ -83,9 +61,9 @@ describe("GET /workspace/github/repos — mounted + caller's own connection", ()
     expect(r.body.reason).toBe("github_not_connected");
   });
 
-  it("lists repos with the caller's own decrypted token", async () => {
+  it("lists repos with the caller's own brokered token", async () => {
     await seed("admin");
-    await seedGithubConnection();
+    mockReadConnectorAccessToken.mockResolvedValue("gho_callers_own_token");
 
     const realFetch: typeof fetch = globalThis.fetch.bind(globalThis);
     let seenAuth: string | undefined;
@@ -118,6 +96,7 @@ describe("GET /workspace/github/repos — mounted + caller's own connection", ()
       .set("Authorization", `Bearer ${token}`);
 
     expect(r.status, r.text).toBe(200);
+    expect(mockReadConnectorAccessToken).toHaveBeenCalledWith(UID, "github");
     expect(seenAuth).toBe("Bearer gho_callers_own_token");
     expect(r.body.repos).toEqual([
       {

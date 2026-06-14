@@ -50,10 +50,10 @@ function nonBlank(value: string | undefined): string | null {
 
 export function runtimeBrokerBaseUrlFromEnv(
   env: Record<string, string | undefined> = process.env,
-): string | null {
+): string {
   const explicit = nonBlank(env.OPENCLAW_RUNTIME_BROKER_URL);
   if (explicit) return explicit;
-  return null;
+  throw new Error("OPENCLAW_RUNTIME_BROKER_URL is required");
 }
 
 async function readJsonOrNull(res: Response): Promise<Record<string, unknown> | null> {
@@ -233,11 +233,9 @@ export function createOpenClawRuntimeBroker(opts: {
 
 export function createOpenClawRuntimeBrokerFromEnv(
   env: Record<string, string | undefined> = process.env,
-): OpenClawRuntimeBroker | null {
+): OpenClawRuntimeBroker {
   const baseUrl = runtimeBrokerBaseUrlFromEnv(env);
   const gatewayId = nonBlank(env.GATEWAY_ID);
-  // Temporary rollout bridge: returning null sends callers to the legacy direct
-  // Firestore path. Remove this once TEST and PROD run the brokered bundle.
-  if (!baseUrl || !gatewayId) return null;
+  if (!gatewayId) throw new Error("GATEWAY_ID is required for OpenClaw runtime broker");
   return createOpenClawRuntimeBroker({ baseUrl, gatewayId });
 }

@@ -30,6 +30,11 @@ vi.mock("../lib/github", async (importOriginal) => {
   };
 });
 
+const mockReadConnectorAccessToken = vi.hoisted(() => vi.fn());
+vi.mock("../lib/connector-tokens", () => ({
+  readConnectorAccessToken: mockReadConnectorAccessToken,
+}));
+
 vi.mock("../lib/kms", () => ({
   decryptSecret: async (s: string) => s.replace(/^enc:/, ""),
   encryptSecret: async (s: string) => `enc:${s}`,
@@ -109,6 +114,10 @@ beforeEach(async () => {
   mockGiteaApiAs.mockReset();
   mockGithubGet.mockReset();
   mockGithubPut.mockReset();
+  mockReadConnectorAccessToken.mockReset();
+  mockReadConnectorAccessToken.mockImplementation(async (uid: string) =>
+    uid === ALICE_UID ? "gh-tok" : null,
+  );
   await seedAll();
 });
 
@@ -219,6 +228,12 @@ describe("POST /api/workspace/save — github targets (brokered, allowlisted)", 
       string, string, string, string, Record<string, unknown>,
     ];
     expect([owner, repo, path, token]).toEqual(["octogee-ai", "octogee", "notes/wild-card.md", "gh-tok"]);
+    expect(mockReadConnectorAccessToken).toHaveBeenCalledWith(ALICE_UID, "github", {
+      kind: "project",
+      requestingUid: BOB_UID,
+      workspaceSlug: "alice",
+      projectSlug: "octogee",
+    });
     expect(body.message).toBe("notes: edit notes/wild-card.md — Bob B via Octogee Canvas");
     expect(body.author).toEqual({ name: "Bob B", email: "bob@x.test" });
     expect(body.contentBase64).toBe(Buffer.from("# WC", "utf8").toString("base64"));

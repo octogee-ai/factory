@@ -47,7 +47,7 @@ async function readConnectorAccessTokenViaBroker(
   access?: ConnectorTokenAccessContext,
 ): Promise<string | null> {
   const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
-  if (!baseUrl) return null;
+  if (!baseUrl) throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
   const gatewayId = nonBlank(process.env.GATEWAY_ID);
   if (!gatewayId) {
     throw new Error("CONNECTOR_TOKEN_BROKER_URL is set but GATEWAY_ID is missing");
@@ -85,16 +85,7 @@ export async function readConnectorAccessToken(
   connectorId: string,
   access?: ConnectorTokenAccessContext,
 ): Promise<string | null> {
-  if (connectorTokenBrokerBaseUrlFromEnv()) {
-    return readConnectorAccessTokenViaBroker(uid, connectorId, access);
-  }
-  // Temporary rollout bridge: direct Firestore/KMS reads are broken on hardened
-  // cattle pods. Remove this fallback after TEST and PROD run the brokered bundle.
-  const snap = await db.doc(`users/${uid}/secrets/${connectorId}`).get();
-  const enc = (snap.data() as { tokens?: { encryptedAccessToken?: unknown } } | undefined)
-    ?.tokens?.encryptedAccessToken;
-  if (typeof enc !== "string" || enc.length === 0) return null;
-  return decryptSecret(enc);
+  return readConnectorAccessTokenViaBroker(uid, connectorId, access);
 }
 
 export interface ConnectorClientCreds {

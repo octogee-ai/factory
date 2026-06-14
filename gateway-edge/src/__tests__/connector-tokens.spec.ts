@@ -54,42 +54,30 @@ afterEach(() => {
 });
 
 describe('readConnectorAccessToken', () => {
-  it('decrypts the stored access token for the given user + connector', async () => {
+  it('fails closed when CONNECTOR_TOKEN_BROKER_URL is unset', async () => {
     firestoreData['users/u-alice/secrets/github'] = {
       provider: 'github',
       tokens: { encryptedAccessToken: 'ENC:gho_plain', encryptedRefreshToken: null },
     };
 
-    await expect(readConnectorAccessToken('u-alice', 'github')).resolves.toBe('gho_plain');
-    expect(decryptSecret).toHaveBeenCalledWith('ENC:gho_plain');
-  });
-
-  it('returns null when the secret doc does not exist (never calls KMS)', async () => {
-    await expect(readConnectorAccessToken('u-alice', 'github')).resolves.toBeNull();
+    await expect(readConnectorAccessToken('u-alice', 'github')).rejects.toThrow(
+      'CONNECTOR_TOKEN_BROKER_URL is required',
+    );
+    expect(internalFetch).not.toHaveBeenCalled();
     expect(decryptSecret).not.toHaveBeenCalled();
   });
 
-  it('returns null when the doc has no encryptedAccessToken', async () => {
-    firestoreData['users/u-alice/secrets/github'] = { provider: 'github', tokens: {} };
-    await expect(readConnectorAccessToken('u-alice', 'github')).resolves.toBeNull();
+  it('fails closed when the broker is configured without GATEWAY_ID', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+
+    await expect(readConnectorAccessToken('u-alice', 'github')).rejects.toThrow(
+      'CONNECTOR_TOKEN_BROKER_URL is set but GATEWAY_ID is missing',
+    );
+    expect(internalFetch).not.toHaveBeenCalled();
     expect(decryptSecret).not.toHaveBeenCalled();
   });
 
-  it('propagates KMS decrypt failures (no silent fallback)', async () => {
-    firestoreData['users/u-alice/secrets/github'] = {
-      tokens: { encryptedAccessToken: 'corrupted' },
-    };
-    await expect(readConnectorAccessToken('u-alice', 'github')).rejects.toThrow('bad ciphertext');
-  });
-
-  it('is connector-generic — reads the doc keyed by the connector id', async () => {
-    firestoreData['users/u-alice/secrets/gitlab'] = {
-      tokens: { encryptedAccessToken: 'ENC:glpat_plain' },
-    };
-    await expect(readConnectorAccessToken('u-alice', 'gitlab')).resolves.toBe('glpat_plain');
-  });
-
-  it('uses the connector token broker when configured, avoiding local Firestore and KMS', async () => {
+  it('uses the connector token broker, avoiding local Firestore and KMS', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
     process.env.GATEWAY_ID = 'default';
     vi.mocked(internalFetch).mockResolvedValue(
@@ -108,6 +96,29 @@ describe('readConnectorAccessToken', () => {
         body: JSON.stringify({ gatewayId: 'default', uid: 'u-alice', connectorId: 'github' }),
       }),
       expect.any(Object),
+    );
+    expect(decryptSecret).not.toHaveBeenCalled();
+  });
+
+  it('returns null when the broker returns 404', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'default';
+    vi.mocked(internalFetch).mockResolvedValue(new Response(JSON.stringify({ error: 'not_found' }), { status: 404 }));
+
+    await expect(readConnectorAccessToken('u-alice', 'github')).resolves.toBeNull();
+    expect(decryptSecret).not.toHaveBeenCalled();
+  });
+
+  it('propagates broker failures without local fallback', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'default';
+    firestoreData['users/u-alice/secrets/github'] = {
+      tokens: { encryptedAccessToken: 'ENC:local-token-must-not-be-used' },
+    };
+    vi.mocked(internalFetch).mockResolvedValue(new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }));
+
+    await expect(readConnectorAccessToken('u-alice', 'github')).rejects.toThrow(
+      'connector token broker failed: forbidden',
     );
     expect(decryptSecret).not.toHaveBeenCalled();
   });
