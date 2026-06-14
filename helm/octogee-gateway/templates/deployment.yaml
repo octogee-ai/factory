@@ -371,6 +371,10 @@ spec:
               value: {{ .Values.env.mmInternalUrl | quote }}
             - name: FIREBASE_PROJECT
               value: {{ .Values.env.firebaseProjectId | quote }}
+            - name: OPENCLAW_RUNTIME_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: CONNECTOR_TOKEN_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             # NOTE: GCP_PROJECT_ID + GITEA_ORG are NOT set here — the
             # .Values.gatewayEdge.env range below already provides the
             # non-secret project/org identifiers. Platform secrets are not

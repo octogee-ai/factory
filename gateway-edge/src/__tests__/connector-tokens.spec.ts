@@ -25,6 +25,10 @@ vi.mock('../lib/kms', () => ({
   encryptSecret: vi.fn(async (plain: string) => `ENC:${plain}`),
 }));
 
+vi.mock('../lib/internal-fetch', () => ({
+  internalFetch: vi.fn(),
+}));
+
 import {
   readConnectorAccessToken,
   readConnectorClientCreds,
@@ -32,17 +36,21 @@ import {
 } from '../lib/connector-tokens.js';
 import { getConnector } from '../lib/connectors/index.js';
 import { decryptSecret } from '../lib/kms.js';
+import { internalFetch } from '../lib/internal-fetch.js';
 
 beforeEach(() => {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];
   docWrites.length = 0;
   vi.mocked(decryptSecret).mockClear();
+  vi.mocked(internalFetch).mockReset();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.GOOGLE_CLIENT_ID;
   delete process.env.GOOGLE_CLIENT_SECRET;
+  delete process.env.CONNECTOR_TOKEN_BROKER_URL;
+  delete process.env.GATEWAY_ID;
 });
 
 describe('readConnectorAccessToken', () => {
@@ -79,6 +87,68 @@ describe('readConnectorAccessToken', () => {
       tokens: { encryptedAccessToken: 'ENC:glpat_plain' },
     };
     await expect(readConnectorAccessToken('u-alice', 'gitlab')).resolves.toBe('glpat_plain');
+  });
+
+  it('uses the connector token broker when configured, avoiding local Firestore and KMS', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'default';
+    vi.mocked(internalFetch).mockResolvedValue(
+      new Response(JSON.stringify({ accessToken: 'gho_brokered' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(readConnectorAccessToken('u-alice', 'github')).resolves.toBe('gho_brokered');
+
+    expect(internalFetch).toHaveBeenCalledWith(
+      'http://octogee-api.octogee-test.svc.cluster.local:3001/internal/connectors/access-token',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ gatewayId: 'default', uid: 'u-alice', connectorId: 'github' }),
+      }),
+      expect.any(Object),
+    );
+    expect(decryptSecret).not.toHaveBeenCalled();
+  });
+
+  it('forwards project access context to the connector token broker', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'member-gw';
+    vi.mocked(internalFetch).mockResolvedValue(
+      new Response(JSON.stringify({ accessToken: 'gho_brokered' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(
+      readConnectorAccessToken('u-alice', 'github', {
+        kind: 'project',
+        requestingUid: 'u-bob',
+        workspaceSlug: 'alice',
+        projectSlug: 'octo',
+      }),
+    ).resolves.toBe('gho_brokered');
+
+    expect(internalFetch).toHaveBeenCalledWith(
+      'http://octogee-api.octogee-test.svc.cluster.local:3001/internal/connectors/access-token',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          gatewayId: 'member-gw',
+          uid: 'u-alice',
+          connectorId: 'github',
+          access: {
+            kind: 'project',
+            requestingUid: 'u-bob',
+            workspaceSlug: 'alice',
+            projectSlug: 'octo',
+          },
+        }),
+      }),
+      expect.any(Object),
+    );
   });
 });
 

@@ -71,6 +71,7 @@ function app(opts: {
   const handler = (_req: express.Request, res: express.Response) => res.json({ ok: true });
   a.post("/internal/probe", enforcement, handler);
   a.post("/internal/probe/:uid", enforcement, handler);
+  a.post("/internal/connectors/access-token", enforcement, handler);
   return a;
 }
 
@@ -123,6 +124,37 @@ describe("tenant enforcement middleware", () => {
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
+  });
+
+  it("lets the connector-token broker perform its own project-membership authorization", async () => {
+    const ownedGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/connectors/access-token")
+      .send({
+        gatewayId: "bender",
+        uid: "victim",
+        access: {
+          kind: "project",
+          requestingUid: "owner-bender",
+          workspaceSlug: "victim",
+          projectSlug: "octo",
+        },
+      });
+
+    const foreignGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/connectors/access-token")
+      .send({
+        gatewayId: "other",
+        uid: "victim",
+        access: {
+          kind: "project",
+          requestingUid: "owner-bender",
+          workspaceSlug: "victim",
+          projectSlug: "octo",
+        },
+      });
+
+    expect(ownedGateway.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
   });
 
   it("allows a gateway-bound caller to target only slugs assigned to that gateway", async () => {

@@ -58,6 +58,11 @@ import {
   createBridgeBootStatus,
   bridgeHealthBody,
 } from "./openclaw/bridge-boot-status.js";
+import {
+  createOpenClawRuntimeBrokerFromEnv,
+  OpenClawRuntimeBrokerError,
+  type OpenClawRuntimeBroker,
+} from "./openclaw/runtime-broker.js";
 
 if (process.env.NODE_ENV !== "test") {
   if (!process.env.MM_INTERNAL_URL) {
@@ -358,6 +363,46 @@ function getOpenClawIdentity(): DeviceIdentity {
   return openclawIdentity;
 }
 
+let openclawRuntimeBroker: OpenClawRuntimeBroker | null | undefined;
+function getOpenClawRuntimeBroker(): OpenClawRuntimeBroker | null {
+  if (openclawRuntimeBroker === undefined) {
+    openclawRuntimeBroker = createOpenClawRuntimeBrokerFromEnv();
+  }
+  return openclawRuntimeBroker;
+}
+
+function watchBrokerGatewayIdChange(
+  broker: OpenClawRuntimeBroker,
+  uid: string,
+  initialGatewayId: string,
+  onChange: (newGatewayId: string | null) => void,
+): () => void {
+  let fired = false;
+  const timer = setInterval(() => {
+    if (fired) return;
+    broker.getUserGatewayId(uid)
+      .then((newGatewayId) => {
+        if (!newGatewayId || newGatewayId === initialGatewayId || fired) return;
+        fired = true;
+        onChange(newGatewayId);
+      })
+      .catch((err) => {
+        if (err instanceof OpenClawRuntimeBrokerError && err.status === 403 && !fired) {
+          fired = true;
+          onChange(null);
+          return;
+        }
+        console.warn(
+          `[proxy] OC WS: broker gatewayId watch failed for uid=${uid}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+  }, 30_000);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 if (!admin.apps.length) {
   if (SA_KEY_PATH) {
     const fs = await import("node:fs");
@@ -443,7 +488,7 @@ export async function chatProxyHandleRequest(
     return;
   }
 
-const urlPath = applyGatewayPrefixStripInPlace(req);
+  const urlPath = applyGatewayPrefixStripInPlace(req);
 
   if (urlPath === "/healthz" || urlPath === "/health" || urlPath === "/_health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -452,8 +497,7 @@ const urlPath = applyGatewayPrefixStripInPlace(req);
   }
 
   if (urlPath === "/healthz/bridge") {
-
-res.writeHead(200, { "Content-Type": "application/json" });
+    res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(bridgeHealthBody(bridgeBootStatus.snapshot(), Date.now())));
     return;
   }
@@ -579,49 +623,65 @@ function handleOpenClawWsUpgrade(
 
   (async () => {
     try {
-      const redeemed = await redeemTicket({
-        ticketId: ticket,
-        purpose: "openclaw-ws",
-        // Legacy: the OC WS re-resolves the gateway from the user doc below
-        // (resolveGatewayUrl), so the ticket's gatewayId isn't the binding source.
-        expectedGatewayId: null,
-      });
-      if (!redeemed) {
-        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-      const uid = redeemed.uid;
-
+      const runtimeBroker = getOpenClawRuntimeBroker();
+      let uid: string;
       let gatewayUrl: string;
       let gatewayId: string;
-      let userData: Record<string, unknown>;
-      try {
-        const resolved = await resolveGatewayUrl({ db, uid });
-        gatewayUrl = resolved.url;
-        gatewayId = resolved.gatewayId;
-        userData = resolved.userData;
-      } catch (e) {
-        if (e instanceof GatewayResolveError) {
-          console.log(`[proxy] OC WS: resolve failed — ${e.code}: ${e.message}`);
-          socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-        throw e;
-      }
-
       let expectedAgentId: string;
-      try {
-        expectedAgentId = deriveExpectedAgentId(uid, userData);
-      } catch (e) {
-        if (e instanceof ExpectedAgentIdError) {
-          console.error(`[proxy] OC WS: expectedAgentId derive failed — ${e.message}`);
-          socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
+
+      if (runtimeBroker) {
+        const redeemed = await runtimeBroker.redeemOpenClawWs(ticket);
+        if (!redeemed) {
+          socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
           socket.destroy();
           return;
         }
-        throw e;
+        uid = redeemed.uid;
+        gatewayUrl = redeemed.gatewayUrl;
+        gatewayId = redeemed.gatewayId;
+        expectedAgentId = redeemed.expectedAgentId;
+      } else {
+        const redeemed = await redeemTicket({
+          ticketId: ticket,
+          purpose: "openclaw-ws",
+          // Legacy: the OC WS re-resolves the gateway from the user doc below
+          // (resolveGatewayUrl), so the ticket's gatewayId isn't the binding source.
+          expectedGatewayId: null,
+        });
+        if (!redeemed) {
+          socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        uid = redeemed.uid;
+
+        let userData: Record<string, unknown>;
+        try {
+          const resolved = await resolveGatewayUrl({ db, uid });
+          gatewayUrl = resolved.url;
+          gatewayId = resolved.gatewayId;
+          userData = resolved.userData;
+        } catch (e) {
+          if (e instanceof GatewayResolveError) {
+            console.log(`[proxy] OC WS: resolve failed — ${e.code}: ${e.message}`);
+            socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          throw e;
+        }
+
+        try {
+          expectedAgentId = deriveExpectedAgentId(uid, userData);
+        } catch (e) {
+          if (e instanceof ExpectedAgentIdError) {
+            console.error(`[proxy] OC WS: expectedAgentId derive failed — ${e.message}`);
+            socket.write("HTTP/1.1 502 Not Provisioned\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          throw e;
+        }
       }
 
       const outcome = await establishUpstreamWithRotation(gatewayId, gatewayUrl);
@@ -637,21 +697,33 @@ function handleOpenClawWsUpgrade(
       wss.handleUpgrade(req, socket, head, (clientWs) => {
         ocWsConnectionsActive.inc();
 
-const stopGatewayWatch = watchGatewayIdChange(
-          db,
-          uid,
-          gatewayId,
-          (newGatewayId) => {
-            console.log(
-              `[proxy] OC WS: gatewayId changed for uid=${uid}: ${gatewayId} → ${newGatewayId}; forcing reconnect`,
+        const stopGatewayWatch = runtimeBroker
+          ? watchBrokerGatewayIdChange(runtimeBroker, uid, gatewayId, (newGatewayId) => {
+              const destination = newGatewayId ?? "not-assigned-here";
+              console.log(
+                `[proxy] OC WS: gatewayId changed for uid=${uid}: ${gatewayId} → ${destination}; forcing reconnect`,
+              );
+              try {
+                clientWs.close(1001, "gatewayId-changed");
+              } catch {
+                // best-effort
+              }
+            })
+          : watchGatewayIdChange(
+              db,
+              uid,
+              gatewayId,
+              (newGatewayId) => {
+                console.log(
+                  `[proxy] OC WS: gatewayId changed for uid=${uid}: ${gatewayId} → ${newGatewayId}; forcing reconnect`,
+                );
+                try {
+                  clientWs.close(1001, "gatewayId-changed");
+                } catch {
+                  // best-effort
+                }
+              },
             );
-            try {
-              clientWs.close(1001, "gatewayId-changed");
-            } catch {
-              // best-effort
-            }
-          },
-        );
 
         clientWs.on("message", (data, isBinary) => {
           if (upstream.readyState !== WebSocket.OPEN) return;
@@ -729,6 +801,7 @@ const stopGatewayWatch = watchGatewayIdChange(
 
 export function _clearCaches(): void {
   mmUserIdCache.clear();
+  openclawRuntimeBroker = undefined;
 }
 
 export function gatewayHealthUrl(
@@ -741,13 +814,12 @@ export function attachChatProxyWsUpgrade(server: http.Server) {
   const wss = new WebSocketServer({ noServer: true });
   const mmWss = new WebSocketServer({ noServer: true });
 
-const wsRouter = new WsUpgradeRouter();
+  const wsRouter = new WsUpgradeRouter();
 
   server.on("upgrade", (req, socket, head) => {
-    
     const originalUrl = req.url ?? "(none)";
 
-const urlPath = applyGatewayPrefixStripInPlace(req);
+    const urlPath = applyGatewayPrefixStripInPlace(req);
     if (urlPath.startsWith("/api/openclaw/ws/")) {
       handleOpenClawWsUpgrade(wss, req, socket, head);
       return;
@@ -777,7 +849,7 @@ const urlPath = applyGatewayPrefixStripInPlace(req);
     }
     if (wsRouter.dispatch(req, socket, head)) return;
 
-const redactWsPath = (p: string) => p.replace(/[A-Za-z0-9_-]{16,}/g, "<redacted>");
+    const redactWsPath = (p: string) => p.replace(/[A-Za-z0-9_-]{16,}/g, "<redacted>");
     console.warn(
       `[ws-upgrade] no route matched — 404 strippedPath=${redactWsPath(urlPath)} originalUrl=${redactWsPath(originalUrl)}`,
     );
@@ -785,7 +857,7 @@ const redactWsPath = (p: string) => p.replace(/[A-Za-z0-9_-]{16,}/g, "<redacted>
     socket.destroy();
   });
 
-(server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
+  (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
 }
 
 export async function attachBuilderShellRoute(server: http.Server): Promise<void> {
@@ -819,7 +891,7 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
       internalServiceKey: upstreamInternalServiceKey,
     }),
 
-allowedOrigins: isAllowedWsOrigin,
+    allowedOrigins: isAllowedWsOrigin,
     onEvent: (e) => {
       if (e.kind === "session-attached") {
         // Presence flip happens HERE, not at redeem-time — the upstream
@@ -902,7 +974,7 @@ async function buildEditDiffFetcher() {
   }
   const ns = process.env.K8S_NAMESPACE || 'octogee';
 
-const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
+  const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
   const giteaPublicBaseUrl = process.env.GITEA_PUBLIC_BASE_URL || undefined;
   const { createGiteaEditDiffFetcher } = await import('./openclaw/gitea-edit-diff-fetcher.js');
   return createGiteaEditDiffFetcher({
@@ -921,6 +993,31 @@ function observePluginLookupSample(sample: PluginLookupSample): void {
   ocPluginLookupDurationMs.observe({ stage: 'total' }, sample.totalMs);
 }
 
+function buildMountedCustomersReader(
+  reconcileGatewayId: string | null,
+): (() => Promise<string[] | null>) | undefined {
+  if (!reconcileGatewayId) return undefined;
+  // Local-derived, no Firestore: this pod's coach-wired PVC dirs plus OpenClaw
+  // config are the bridge's own mounted-customer source of truth.
+  return async (): Promise<string[] | null> => {
+    try {
+      if (!fs.existsSync(COACH_RECONCILE_CUSTOMERS_DIR)) return null;
+      const config = readOpenclawConfig(COACH_RECONCILE_OPENCLAW_CONFIG);
+      if (!config) return null;
+      return listLocalCoachWiredSlugs(COACH_RECONCILE_CUSTOMERS_DIR, (slug) =>
+        coachWiredInParsedConfig(config, slug),
+      );
+    } catch (err) {
+      console.warn(
+        `[chat-proxy] local coach-wired read failed for reconcile: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
+  };
+}
+
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
@@ -935,36 +1032,12 @@ export async function startChatProxyBackground(): Promise<void> {
   void (async () => {
     const gatewayIdResult = resolveBridgeGatewayId(process.env);
     const reconcileGatewayId = gatewayIdResult.ok ? gatewayIdResult.gatewayId : null;
-    // The bridge reconciles its tracked coaches against this gateway's mounted
-    // set each sweep, untracking the coaches of unmounted customers (Copilot #2)
-    // so the per-coach WS set can't grow monotonically over the pod lifetime.
-    // Read failure → null → fail-safe keep.
-    const getMountedCustomers = reconcileGatewayId
-      ? async (): Promise<string[] | null> => {
-          // Local-derived, no Firestore: the operator pod holds no platform creds, so
-          // reading gateways/{id}.mountedCustomers would 403. The pod's own coach-wired
-          // set (PVC dirs ∩ openclaw config) is the honest — and more direct — answer:
-          // the bridge is reconciling its OWN coaches against what's locally present.
-          // dir/config-unreadable → null = fail-safe keep (don't untrack on an indeterminate read).
-          // Parse the openclaw config ONCE per sweep, then check each slug against it.
-          try {
-            if (!fs.existsSync(COACH_RECONCILE_CUSTOMERS_DIR)) return null;
-            const config = readOpenclawConfig(COACH_RECONCILE_OPENCLAW_CONFIG);
-            if (!config) return null;
-            return listLocalCoachWiredSlugs(COACH_RECONCILE_CUSTOMERS_DIR, (slug) =>
-              coachWiredInParsedConfig(config, slug),
-            );
-          } catch (err) {
-            console.warn(
-              `[chat-proxy] local coach-wired read failed for reconcile: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-            return null;
-          }
-        }
-      : undefined;
+    const getMountedCustomers = buildMountedCustomersReader(reconcileGatewayId);
     const { wireActivityBridge, connectBridgeUpstream, createResyncFloor } = await import('./openclaw/bridge-boot.js');
+    const runtimeBroker = getOpenClawRuntimeBroker();
+    if (runtimeBroker) {
+      console.log('[chat-proxy] OpenClaw runtime Firestore broker enabled');
+    }
     // One forced-reconnect cooldown floor for the bridge's whole life: it must outlive
     // any single WS so SEQ_GAP_COOLDOWN_MS actually spaces the reconnects it triggers
     // (a forced close resets the per-connection window, but not this).
@@ -973,6 +1046,7 @@ export async function startChatProxyBackground(): Promise<void> {
     try {
       wired = wireActivityBridge({
         db: db as unknown as Parameters<typeof wireActivityBridge>[0]['db'],
+        runtimeBroker: runtimeBroker ?? undefined,
         upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
         gatewayToken: '',
         identity: getOpenClawIdentity(),

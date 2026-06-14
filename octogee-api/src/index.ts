@@ -14,6 +14,8 @@ import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parse
 import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
 import { createSiteDeployRoutes } from "./routes/site-deploy.js";
+import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
+import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
 import { db } from "../../gateway-edge/src/lib/db.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
@@ -158,6 +160,12 @@ const route = req.route?.path || "unmatched";
   // octogee-api-only: Gitea admin broker. Gateway provisioners call this with
   // their projected gateway KSA token; octogee-api holds the Gitea admin token.
   app.use("/internal/gitea", internalGiteaAdminRoutes);
+  // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
+  // dependencies so cattle pods do not need ADC/datastore reach.
+  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
+  // octogee-api-only: broker sidecar GitHub/GitLab file-browser token reads
+  // so cattle pods do not need Firestore or KMS access to user secrets.
+  app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db }));
   // octogee-api-only: the Hosting-deploy broker. Mounted after the tenant-binding
   // middleware so req.boundTenant is attached; never mounted on the in-pod gateway-edge.
   app.use("/api/site/hosting-deploy", createSiteDeployRoutes({ db }));

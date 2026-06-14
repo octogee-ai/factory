@@ -24,7 +24,7 @@ image:
   # emergency hotfix.
   tag: ""
 
-serviceAccountName: octogee-gateway
+serviceAccountName: ""
 serviceAccount:
   create: false
   annotations: {}

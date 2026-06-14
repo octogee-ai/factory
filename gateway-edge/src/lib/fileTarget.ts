@@ -84,7 +84,12 @@ export async function resolveFileTarget(
       if (!resolveGithubToken) {
         return { ok: true, target: githubTarget };
       }
-      const githubToken = await readConnectorAccessToken(project.ownerUid, "github");
+      const githubToken = await readConnectorAccessToken(project.ownerUid, "github", {
+        kind: "project",
+        requestingUid: callerUid!,
+        workspaceSlug: slug,
+        projectSlug,
+      });
       if (!githubToken) {
         return {
           ok: false,

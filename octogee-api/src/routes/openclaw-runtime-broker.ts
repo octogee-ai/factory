@@ -1,0 +1,610 @@
+import { Router, type Request, type Response } from "express";
+import type { Firestore } from "firebase-admin/firestore";
+
+import { isValidUsername } from "../../../shared/types/identity.js";
+import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
+import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
+type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
+
+interface AgentIdentity {
+  agentId: string;
+  uid: string;
+  coachMmUserId: string;
+  coachToken: string;
+  primaryChannelId: string;
+  activityChannelId: string;
+  channelDocPath: string;
+  workspaceSlug: string;
+  projectSlug: string;
+}
+
+interface ChannelPair {
+  primaryChannelId: string;
+  activityChannelId: string;
+  channelDocPath: string;
+}
+
+interface ApprovalRecord {
+  approvalId: string;
+  kind: "exec" | "plugin";
+  channelId: string;
+  runId: string;
+  expiresAt: number;
+  nonce: string;
+  agentId: string;
+  postId: string;
+  dispatched: boolean;
+  createdAt: number;
+}
+
+type MarkDispatchedResult =
+  | { outcome: "dispatched" }
+  | { outcome: "already-dispatched" }
+  | { outcome: "not-found" };
+
+const TICKETS = "gatewayTickets";
+const APPROVALS = "ocApprovals";
+const FORBIDDEN = { error: "forbidden" } as const;
+
+function boundGateway(req: Request, res: Response): GatewayBinding | null {
+  const bound = req.boundTenant;
+  if (!bound || bound.kind !== "gateway") {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  const claimed = (req.body as { gatewayId?: unknown } | undefined)?.gatewayId;
+  if (typeof claimed === "string" && claimed.length > 0 && claimed !== bound.gatewayId) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  return bound;
+}
+
+function stringBody(req: Request, key: string): string {
+  const value = (req.body as Record<string, unknown> | undefined)?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
+  let cur: unknown = obj;
+  for (const part of dotted.split(".")) {
+    if (!cur || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+function extractRefPath(ref: unknown): string | null {
+  if (!ref || typeof ref !== "object") return null;
+  const direct = (ref as { path?: unknown }).path;
+  if (typeof direct === "string" && direct.length > 0) return direct;
+
+  const segments: string[] = [];
+  let cur: unknown = ref;
+  while (cur && typeof cur === "object") {
+    const node = cur as { id?: unknown; parent?: unknown };
+    if (typeof node.id === "string" && node.id.length > 0) segments.unshift(node.id);
+    cur = node.parent;
+  }
+  return segments.length > 0 ? segments.join("/") : null;
+}
+
+function workspaceSlugFromChannelPath(path: string | null): string | null {
+  if (!path) return null;
+  const parts = path.split("/").filter(Boolean);
+  if (parts[0] !== "workspaces") return null;
+  return isValidUsername(parts[1]) ? parts[1] : null;
+}
+
+function usernameFromAgentId(agentId: string): string | null {
+  const prefix = "octogee-";
+  const suffix = "-coach";
+  if (!agentId.startsWith(prefix) || !agentId.endsWith(suffix)) return null;
+  const slug = agentId.slice(prefix.length, agentId.length - suffix.length);
+  return isValidUsername(slug) ? slug : null;
+}
+
+async function assignedHere(db: Firestore, gatewayId: string, slug: string): Promise<boolean> {
+  const assigned = await readAssignedSlugsForGateway(db, gatewayId);
+  return assigned.includes(slug);
+}
+
+async function userGatewayId(
+  db: Firestore,
+  uid: string,
+): Promise<{ gatewayId: string; userData: Record<string, unknown> } | null> {
+  const snap = await db.doc(`users/${uid}`).get();
+  if (!snap.exists) return null;
+  const userData = snap.data() ?? {};
+  const gatewayId = readPath(userData, "provisioning.openclaw.gatewayId");
+  return typeof gatewayId === "string" && gatewayId.length > 0
+    ? { gatewayId, userData }
+    : null;
+}
+
+function forbidden(res: Response): void {
+  res.status(403).json(FORBIDDEN);
+}
+
+async function resolveUidBySlug(db: Firestore, slug: string): Promise<string | null> {
+  const snap = await db.collection("users").where("username", "==", slug).get();
+  return snap.docs[0]?.id ?? null;
+}
+
+interface CoachSecret {
+  coachToken: string;
+  coachMmUserId: string;
+}
+
+interface CoachChannelPair {
+  primaryChannelId: string;
+  activityChannelId: string;
+}
+
+function readCoachSecret(data: Record<string, unknown>): CoachSecret | null {
+  const coachToken = typeof data.personalToken === "string" ? data.personalToken : "";
+  const coachMmUserId = typeof data.coachMmUserId === "string" ? data.coachMmUserId : "";
+  return coachToken && coachMmUserId ? { coachToken, coachMmUserId } : null;
+}
+
+function readCoachChannelPair(data: Record<string, unknown>): CoachChannelPair | null {
+  const primaryChannelId = readPath(data, "mattermost.channelId");
+  const activityChannelId = readPath(data, "mattermost.activityChannelId");
+  return typeof primaryChannelId === "string" &&
+    primaryChannelId.length > 0 &&
+    typeof activityChannelId === "string" &&
+    activityChannelId.length > 0
+    ? { primaryChannelId, activityChannelId }
+    : null;
+}
+
+async function resolveAgentIdentity(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+): Promise<AgentIdentity | null | "forbidden"> {
+  const slug = usernameFromAgentId(agentId);
+  if (!slug) return null;
+  if (!(await assignedHere(db, gatewayId, slug))) return "forbidden";
+
+  const uid = await resolveUidBySlug(db, slug);
+  if (!uid) return null;
+
+  const [tokenSnap, channelSnap] = await Promise.all([
+    db.doc(`users/${uid}/secrets/coachMattermost`).get(),
+    db.doc(`workspaces/${slug}/channels/coach-dm`).get(),
+  ]);
+  if (!tokenSnap.exists || !channelSnap.exists) return null;
+  const secret = readCoachSecret(tokenSnap.data() ?? {});
+  const channel = readCoachChannelPair(channelSnap.data() ?? {});
+  if (!secret || !channel) return null;
+  return {
+    agentId,
+    uid,
+    coachMmUserId: secret.coachMmUserId,
+    coachToken: secret.coachToken,
+    primaryChannelId: channel.primaryChannelId,
+    activityChannelId: channel.activityChannelId,
+    channelDocPath: `workspaces/${slug}/channels/coach-dm`,
+    workspaceSlug: slug,
+    projectSlug: "workspace",
+  };
+}
+
+function trimTrailingSlashes(value: string): string {
+  let out = value;
+  while (out.endsWith("/")) out = out.slice(0, -1);
+  return out;
+}
+
+async function resolveChannelPair(
+  db: Firestore,
+  gatewayId: string,
+  primaryChannelId: string,
+): Promise<ChannelPair | null | "forbidden"> {
+  if (!primaryChannelId) return null;
+  const snap = await db
+    .collectionGroup("channels")
+    .where("mattermost.channelId", "==", primaryChannelId)
+    .get();
+  const doc = snap.docs[0];
+  if (!doc) return null;
+  const channelDocPath = extractRefPath((doc as { ref?: unknown }).ref);
+  const slug = workspaceSlugFromChannelPath(channelDocPath);
+  if (!slug) return null;
+  if (!(await assignedHere(db, gatewayId, slug))) return "forbidden";
+  const data = doc.data() ?? {};
+  const activityChannelId = readPath(data, "mattermost.activityChannelId");
+  if (typeof activityChannelId !== "string" || !activityChannelId) return null;
+  return { primaryChannelId, activityChannelId, channelDocPath: channelDocPath! };
+}
+
+function validateRunLiveWrite(
+  body: Record<string, unknown>,
+): { path: string; slug: string; doc: Record<string, unknown> } | null {
+  const path = typeof body.path === "string" ? body.path : "";
+  const doc = body.doc && typeof body.doc === "object" ? body.doc as Record<string, unknown> : null;
+  const slug = typeof body.workspaceSlug === "string" ? body.workspaceSlug : "";
+  if (!path || !doc || !isValidUsername(slug)) return null;
+  const runId = typeof doc.runId === "string" ? doc.runId : "";
+  const workspaceId = typeof doc.workspaceId === "string" ? doc.workspaceId : "";
+  const channelPath = typeof doc.channelPath === "string" ? doc.channelPath : "";
+  if (!runId || workspaceId !== slug || !channelPath.startsWith(`workspaces/${slug}/`)) return null;
+  if (path !== `${trimTrailingSlashes(channelPath)}/liveRuns/${runId}`) return null;
+  return { path, slug, doc };
+}
+
+function slugFromRunLivePath(path: string): string | null {
+  const parts = path.split("/").filter(Boolean);
+  if (parts[0] !== "workspaces") return null;
+  if (!isValidUsername(parts[1])) return null;
+  if (!parts.includes("liveRuns")) return null;
+  return parts[1];
+}
+
+async function resolveChannelOwnerUid(
+  db: Firestore,
+  gatewayId: string,
+  channelId: string,
+): Promise<string | null | "forbidden"> {
+  for (const field of ["mattermost.channelId", "mattermost.activityChannelId"]) {
+    const snap = await db.collectionGroup("channels").where(field, "==", channelId).get();
+    const doc = snap.docs[0];
+    if (!doc) continue;
+    const channelPath = extractRefPath((doc as { ref?: unknown }).ref);
+    const slug = workspaceSlugFromChannelPath(channelPath);
+    if (!slug) return null;
+    if (!(await assignedHere(db, gatewayId, slug))) return "forbidden";
+    const ownerPath = channelPath?.slice(0, channelPath.lastIndexOf("/channels/"));
+    if (!ownerPath) return null;
+    const ownerSnap = await db.doc(ownerPath).get();
+    const ownerUid = ownerSnap.data()?.ownerUid;
+    return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
+  }
+  return null;
+}
+
+async function resolveUidByMmUser(
+  db: Firestore,
+  gatewayId: string,
+  mmUserId: string,
+): Promise<string | null | "forbidden"> {
+  if (!mmUserId) return null;
+  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).get();
+  const doc = snap.docs[0];
+  if (!doc) return null;
+  const uid = doc.id;
+  const data = doc.data() ?? {};
+  const slug = typeof data.username === "string" ? data.username : "";
+  if (!slug || !(await assignedHere(db, gatewayId, slug))) return "forbidden";
+  return uid;
+}
+
+function requiredString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function optionalString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function approvalKind(value: unknown): ApprovalRecord["kind"] | null {
+  return value === "exec" || value === "plugin" ? value : null;
+}
+
+function approvalRecordFromBody(body: Record<string, unknown>): ApprovalRecord | null {
+  const record = body.record;
+  if (!record || typeof record !== "object") return null;
+  const r = record as Record<string, unknown>;
+  const approvalId = requiredString(r.approvalId);
+  const kind = approvalKind(r.kind);
+  const channelId = requiredString(r.channelId);
+  const runId = requiredString(r.runId);
+  const expiresAt = finiteNumber(r.expiresAt);
+  const nonce = requiredString(r.nonce);
+  const agentId = requiredString(r.agentId);
+  const createdAt = finiteNumber(r.createdAt);
+  if (!approvalId || !kind || !channelId || !runId || expiresAt === null || !nonce || !agentId || createdAt === null) {
+    return null;
+  }
+  return {
+    approvalId,
+    kind,
+    channelId,
+    runId,
+    expiresAt,
+    nonce,
+    agentId,
+    postId: optionalString(r.postId),
+    dispatched: r.dispatched === true,
+    createdAt,
+  };
+}
+
+async function approvalAssigned(
+  db: Firestore,
+  gatewayId: string,
+  record: ApprovalRecord,
+): Promise<boolean> {
+  const slug = usernameFromAgentId(record.agentId);
+  return !!slug && assignedHere(db, gatewayId, slug);
+}
+
+function mountUserAndWsRoutes(router: Router, db: Firestore): void {
+  router.post("/users/gateway-id", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const uid = stringBody(req, "uid");
+    const resolved = uid ? await userGatewayId(db, uid) : null;
+    if (!resolved) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    if (resolved.gatewayId !== bound.gatewayId) {
+      forbidden(res);
+      return;
+    }
+    res.json({ gatewayId: resolved.gatewayId });
+  });
+
+  router.post("/ws/redeem", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const ticketId = stringBody(req, "ticketId");
+    if (!ticketId) {
+      res.status(400).json({ error: "ticketId required" });
+      return;
+    }
+
+    const result = await db.runTransaction<{
+      status: number;
+      body: Record<string, unknown>;
+    }>(async (tx) => {
+      const ticketRef = db.collection(TICKETS).doc(ticketId);
+      const ticketSnap = await tx.get(ticketRef);
+      if (!ticketSnap.exists) return { status: 401, body: { error: "unauthorized" } };
+      const ticket = ticketSnap.data() ?? {};
+      const uid = typeof ticket.uid === "string" ? ticket.uid : "";
+      const purpose = ticket.purpose;
+      const expiresAt = ticket.expiresAt;
+      if (!uid || purpose !== "openclaw-ws" || typeof expiresAt !== "number" || expiresAt < Date.now()) {
+        return { status: 401, body: { error: "unauthorized" } };
+      }
+
+      const userRef = db.doc(`users/${uid}`);
+      const userSnap = await tx.get(userRef);
+      const userData = userSnap.data() ?? {};
+      const gatewayId = readPath(userData, "provisioning.openclaw.gatewayId");
+      if (gatewayId !== bound.gatewayId) {
+        return { status: 403, body: FORBIDDEN };
+      }
+      const gwRef = db.doc(`gateways/${bound.gatewayId}`);
+      const gwSnap = await tx.get(gwRef);
+      const gatewayUrl = gwSnap.data()?.internalUrl;
+      if (typeof gatewayUrl !== "string" || gatewayUrl.length === 0) {
+        return { status: 502, body: { error: "gateway-url-unresolved" } };
+      }
+      let expectedAgentId: string;
+      try {
+        expectedAgentId = deriveExpectedAgentId(uid, userData);
+      } catch {
+        return { status: 502, body: { error: "expected-agent-unresolved" } };
+      }
+      tx.delete(ticketRef);
+      return {
+        status: 200,
+        body: { uid, gatewayId: bound.gatewayId, gatewayUrl, expectedAgentId },
+      };
+    });
+    res.status(result.status).json(result.body);
+  });
+}
+
+function mountActivityRoutes(router: Router, db: Firestore): void {
+  router.post("/activity/agent-identity", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const identity = await resolveAgentIdentity(db, bound.gatewayId, stringBody(req, "agentId"));
+    if (identity === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!identity) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ identity });
+  });
+
+  router.post("/activity/channel-pair", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const pair = await resolveChannelPair(db, bound.gatewayId, stringBody(req, "primaryChannelId"));
+    if (pair === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!pair) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ pair });
+  });
+
+  router.post("/activity/run-live", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const valid = validateRunLiveWrite((req.body ?? {}) as Record<string, unknown>);
+    if (!valid) {
+      res.status(400).json({ error: "invalid_run_live_doc" });
+      return;
+    }
+    if (!(await assignedHere(db, bound.gatewayId, valid.slug))) {
+      forbidden(res);
+      return;
+    }
+    await db.doc(valid.path).set(valid.doc, { merge: true });
+    res.status(204).end();
+  });
+
+  router.post("/activity/run-live/delete", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const path = stringBody(req, "path");
+    const slug = slugFromRunLivePath(path);
+    if (!slug) {
+      res.status(400).json({ error: "invalid_run_live_path" });
+      return;
+    }
+    if (!(await assignedHere(db, bound.gatewayId, slug))) {
+      forbidden(res);
+      return;
+    }
+    await db.doc(path).delete();
+    res.status(204).end();
+  });
+
+  router.post("/activity/channel-owner", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const ownerUid = await resolveChannelOwnerUid(db, bound.gatewayId, stringBody(req, "channelId"));
+    if (ownerUid === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!ownerUid) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ ownerUid });
+  });
+
+  router.post("/activity/user-by-mm", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const uid = await resolveUidByMmUser(db, bound.gatewayId, stringBody(req, "mmUserId"));
+    if (uid === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!uid) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ uid });
+  });
+}
+
+function mountApprovalRoutes(router: Router, db: Firestore): void {
+  router.post("/activity/approval/register", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const record = approvalRecordFromBody((req.body ?? {}) as Record<string, unknown>);
+    if (!record) {
+      res.status(400).json({ error: "invalid_approval_record" });
+      return;
+    }
+    if (!(await approvalAssigned(db, bound.gatewayId, record))) {
+      forbidden(res);
+      return;
+    }
+    await db.runTransaction(async (tx) => {
+      const ref = db.doc(`${APPROVALS}/${record.approvalId}`);
+      const snap = await tx.get(ref);
+      if (!snap.exists) tx.set(ref, record as unknown as Record<string, unknown>);
+    });
+    res.status(204).end();
+  });
+
+  router.post("/activity/approval/lookup", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const approvalId = stringBody(req, "approvalId");
+    const snap = approvalId ? await db.doc(`${APPROVALS}/${approvalId}`).get() : null;
+    if (!snap?.exists) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const record = snap.data() as unknown as ApprovalRecord;
+    if (!(await approvalAssigned(db, bound.gatewayId, record))) {
+      forbidden(res);
+      return;
+    }
+    res.json({ record });
+  });
+
+  router.post("/activity/approval/attach-post", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const approvalId = stringBody(req, "approvalId");
+    const postId = stringBody(req, "postId");
+    const ref = db.doc(`${APPROVALS}/${approvalId}`);
+    const snap = approvalId ? await ref.get() : null;
+    if (!snap?.exists || !postId) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
+      forbidden(res);
+      return;
+    }
+    await ref.update({ postId });
+    res.status(204).end();
+  });
+
+  router.post("/activity/approval/mark-dispatched", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const approvalId = stringBody(req, "approvalId");
+    const ref = db.doc(`${APPROVALS}/${approvalId}`);
+    const snap = approvalId ? await ref.get() : null;
+    if (!snap?.exists) {
+      res.json({ outcome: "not-found" satisfies MarkDispatchedResult["outcome"] });
+      return;
+    }
+    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
+      forbidden(res);
+      return;
+    }
+    const result = await db.runTransaction<MarkDispatchedResult>(async (tx) => {
+      const txSnap = await tx.get(ref);
+      if (!txSnap.exists) return { outcome: "not-found" };
+      const data = txSnap.data() ?? {};
+      if (data.dispatched === true) return { outcome: "already-dispatched" };
+      tx.update(ref, { dispatched: true });
+      return { outcome: "dispatched" };
+    });
+    res.json(result);
+  });
+
+  router.post("/activity/approval/reset-dispatched", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const approvalId = stringBody(req, "approvalId");
+    const ref = db.doc(`${APPROVALS}/${approvalId}`);
+    const snap = approvalId ? await ref.get() : null;
+    if (!snap?.exists) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
+      forbidden(res);
+      return;
+    }
+    await ref.update({ dispatched: false });
+    res.status(204).end();
+  });
+}
+
+export function createOpenClawRuntimeBrokerRoutes(opts: { db: Firestore }): Router {
+  const router = Router();
+  const { db } = opts;
+  mountUserAndWsRoutes(router, db);
+  mountActivityRoutes(router, db);
+  mountApprovalRoutes(router, db);
+  return router;
+}

@@ -1,14 +1,95 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { db } from "./db.js";
+import { internalFetch } from "./internal-fetch.js";
 import { decryptSecret, encryptSecret } from "./kms.js";
 import type { ConnectorDef } from "./connectors/def.js";
 
 const FRESHNESS_MARGIN_MS = 60_000;
 
+function nonBlank(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function trimBaseUrl(baseUrl: string): string {
+  let out = baseUrl.trim();
+  while (out.endsWith("/")) out = out.slice(0, -1);
+  return out;
+}
+
+export function connectorTokenBrokerBaseUrlFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  return nonBlank(env.CONNECTOR_TOKEN_BROKER_URL);
+}
+
+async function readJsonOrNull(res: Response): Promise<Record<string, unknown> | null> {
+  try {
+    const body = (await res.json()) as unknown;
+    return body && typeof body === "object" ? (body as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ConnectorTokenProjectAccessContext {
+  kind: "project";
+  requestingUid: string;
+  workspaceSlug: string;
+  projectSlug: string;
+}
+
+export type ConnectorTokenAccessContext = ConnectorTokenProjectAccessContext;
+
+async function readConnectorAccessTokenViaBroker(
+  uid: string,
+  connectorId: string,
+  access?: ConnectorTokenAccessContext,
+): Promise<string | null> {
+  const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
+  if (!baseUrl) return null;
+  const gatewayId = nonBlank(process.env.GATEWAY_ID);
+  if (!gatewayId) {
+    throw new Error("CONNECTOR_TOKEN_BROKER_URL is set but GATEWAY_ID is missing");
+  }
+
+  const res = await internalFetch(
+    `${trimBaseUrl(baseUrl)}/internal/connectors/access-token`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        gatewayId,
+        uid,
+        connectorId,
+        ...(access ? { access } : {}),
+      }),
+    },
+    {},
+  );
+  if (res.status === 404) return null;
+  const body = await readJsonOrNull(res);
+  if (!res.ok) {
+    const error = typeof body?.error === "string" ? body.error : `broker HTTP ${res.status}`;
+    throw new Error(`connector token broker failed: ${error}`);
+  }
+  const accessToken = body?.accessToken;
+  if (typeof accessToken !== "string" || accessToken.length === 0) {
+    throw new Error("connector token broker returned malformed response");
+  }
+  return accessToken;
+}
+
 export async function readConnectorAccessToken(
   uid: string,
   connectorId: string,
+  access?: ConnectorTokenAccessContext,
 ): Promise<string | null> {
+  if (connectorTokenBrokerBaseUrlFromEnv()) {
+    return readConnectorAccessTokenViaBroker(uid, connectorId, access);
+  }
+  // Temporary rollout bridge: direct Firestore/KMS reads are broken on hardened
+  // cattle pods. Remove this fallback after TEST and PROD run the brokered bundle.
   const snap = await db.doc(`users/${uid}/secrets/${connectorId}`).get();
   const enc = (snap.data() as { tokens?: { encryptedAccessToken?: unknown } } | undefined)
     ?.tokens?.encryptedAccessToken;

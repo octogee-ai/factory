@@ -70,6 +70,30 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).not.toBeNull();
   });
 
+  it("standard profile derives a per-gateway ServiceAccount instead of the shared platform KSA", () => {
+    const out = helmTemplate();
+    const sa = findDoc(out, "ServiceAccount", "octogee-gw-default");
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+
+    expect(sa).not.toBeNull();
+    expect(sa).not.toMatch(/iam\.gke\.io\/gcp-service-account/);
+    expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-default/);
+    expect(dep).not.toMatch(/serviceAccountName:\s*octogee-gateway\b/);
+  });
+
+  it("standard profile treats an explicit legacy shared ServiceAccount as unsafe and derives per-gateway identity", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "standard",
+      serviceAccountName: "octogee-gateway",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
+
+    expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
+    expect(dep).not.toMatch(/serviceAccountName:\s*octogee-gateway\b/);
+    expect(findDoc(out, "ServiceAccount", "octogee-gw-bender")).not.toBeNull();
+  });
+
   it("can render the generated per-operator ServiceAccount without a Workload Identity annotation", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
@@ -141,6 +165,8 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(gw).toMatch(/name:\s*GITEA_ADMIN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(gw).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\s*\n\s*value:\s*"\/var\/run\/secrets\/octogee-gateway-broker\/token"/);
     expect(gw).toMatch(/name:\s*gateway-broker-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-gateway-broker\s*\n\s*readOnly:\s*true/);
+    expect(edge).toMatch(/name:\s*OPENCLAW_RUNTIME_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
+    expect(edge).toMatch(/name:\s*CONNECTOR_TOKEN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
     expect(dep).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*projected:\s*\n\s*sources:\s*\n\s*-\s*serviceAccountToken:\s*\n\s*path:\s*token\s*\n\s*audience:\s*octogee-api\s*\n\s*expirationSeconds:\s*3600/);
     expect(dep).toMatch(/name:\s*gateway-broker-sa-token\s*\n\s*projected:\s*\n\s*sources:\s*\n\s*-\s*serviceAccountToken:\s*\n\s*path:\s*token\s*\n\s*audience:\s*octogee-api\s*\n\s*expirationSeconds:\s*3600/);
@@ -162,6 +188,8 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(gw).not.toMatch(/mountPath:\s*\/var\/run\/secrets\/octogee-api/);
     expect(gw).toMatch(/name:\s*GITEA_ADMIN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(gw).toMatch(/name:\s*gateway-broker-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-gateway-broker\s*\n\s*readOnly:\s*true/);
+    expect(edge).toMatch(/name:\s*OPENCLAW_RUNTIME_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
+    expect(edge).toMatch(/name:\s*CONNECTOR_TOKEN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
   });
 

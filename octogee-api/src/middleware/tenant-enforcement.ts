@@ -117,6 +117,9 @@ async function gatewayBindingAuthorized(
   if (gatewayIds.length > 0 && gatewayIds.some((gatewayId) => gatewayId !== bound.gatewayId)) {
     return false;
   }
+  if (req.path === "/internal/connectors/access-token") {
+    return true;
+  }
   if (gatewayIds.length > 0) return true;
 
   const flowId = requestedFlowId(req);

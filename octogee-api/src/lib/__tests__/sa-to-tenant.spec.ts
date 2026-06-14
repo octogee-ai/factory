@@ -90,20 +90,31 @@ describe("mapSaToTenant", () => {
     expect(result).toEqual({ attached: false, result: "ns_mismatch" });
   });
 
-  it("soft-fails missing or incomplete gateway docs as unknown tenants", async () => {
+  it("soft-fails missing gateway docs as unknown tenants", async () => {
     const missing = await mapSaToTenant(
       fakeDb({}),
       { namespace: "octogee", saName: "octogee-gw-bender" },
       "octogee",
     );
-    const incomplete = await mapSaToTenant(
-      fakeDb({ bender: {} }),
-      { namespace: "octogee", saName: "octogee-gw-bender" },
+
+    expect(missing).toEqual({ attached: false, result: "unknown_tenant" });
+  });
+
+  it("binds ownerless gateway docs for gateway-scoped brokers", async () => {
+    const result = await mapSaToTenant(
+      fakeDb({ default: { profile: "standard" } }),
+      { namespace: "octogee", saName: "octogee-gw-default" },
       "octogee",
     );
 
-    expect(missing).toEqual({ attached: false, result: "unknown_tenant" });
-    expect(incomplete).toEqual({ attached: false, result: "unknown_tenant" });
+    expect(result).toEqual({
+      attached: true,
+      result: "ok",
+      tenant: {
+        kind: "gateway",
+        gatewayId: "default",
+      },
+    });
   });
 
   it("classifies the legacy shared gateway KSA without tenant-binding it", async () => {
