@@ -450,16 +450,16 @@ gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET \
 ksecret octogee-fleet-controller --from-literal=secret="$FLEET_CONTROLLER_SECRET"
 
 # ── 9c. Gateway auth token secret shell + IAM ────────────────────────────
-# The gateway pod PUBLISHES a fresh auth token to
-# `gateway-auth-token-{gatewayId}` on every boot (see
-# scripts/publish-gateway-token.mjs). chat-proxy READS the latest version
-# at upstream-WS-connect time. We pre-create the secret SHELL here with
-# proper IAM so the first gateway boot can successfully addVersion, and
-# chat-proxy can successfully access.
+# Legacy compatibility shell for the old Secret Manager OpenClaw-token path.
+# Normal Kubernetes gateway pods keep gateway auth pod-local now:
+# gateway-edge receives the same per-gateway OPENCLAW_GATEWAY_TOKEN env
+# exception, pairs once with OpenClaw, then uses a sidecar-local device token.
+# The Secret Manager publisher is opt-in via
+# GATEWAY_AUTH_SECRET_MANAGER_PUBLISH=true for rollback/legacy deployments.
 #
-# Why NOT pre-populate the value here: rotation-on-every-boot means any
-# value we'd seed gets overwritten within seconds. A shell with IAM is
-# the actual contract; the value arrives at boot.
+# Why NOT pre-populate the live value here: the normal runtime does not use SM
+# for gateway auth. Legacy opt-in publishing overwrites the placeholder at
+# boot if explicitly enabled.
 #
 # Per-gatewayId naming future-proofs multi-pod fleets — a second gateway
 # pod (`gw-a`, `gw-b`) gets its own secret so chat-proxy can route users
@@ -473,10 +473,9 @@ case "$ENV" in
   custom)    GATEWAY_IDS=("default") ;;
 esac
 
-# Gateway + chat-proxy both run on this SA via Workload Identity (see
-# helm/octogee/charts/{gateway,chat-proxy}/values.yaml serviceAccountName).
-# One SA, two roles per secret: versionAdder (gateway publishes) +
-# secretAccessor (chat-proxy reads).
+# Legacy opt-in publisher/reader roles. These are resource-scoped to the
+# per-gateway auth-token secret and should be removed once the SM rollback path
+# is deleted.
 GATEWAY_SA="octogee-gateway@${FIREBASE_PROJECT}.iam.gserviceaccount.com"
 
 for gw_id in "${GATEWAY_IDS[@]}"; do

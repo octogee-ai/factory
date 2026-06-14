@@ -112,7 +112,7 @@ spec:
                 set +a
               fi
               if [ -z "${MM_ADMIN_PAT:-}" ]; then
-                echo "mac-ops-bootstrap: MM_ADMIN_PAT unavailable; preserving template bot token"
+                echo "mac-ops-bootstrap: MM_ADMIN_PAT unavailable; leaving template bot token blank"
                 exit 0
               fi
               if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
@@ -131,11 +131,6 @@ spec:
               value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.gatewayId .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
               value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
-            - name: MM_BOT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: bot_token
             - name: MM_ADMIN_PAT
               valueFrom:
                 secretKeyRef:
@@ -260,14 +255,6 @@ spec:
               value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
             - name: SITE_BUILD_API_PORT
               value: {{ .Values.env.siteBuildApiPort | default "3004" | quote }}
-            {{- if ne .Values.profile "operator" }}
-            - name: FLEET_CONTROLLER_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: octogee-fleet-controller
-                  key: secret
-                  optional: true
-            {{- end }}
             {{- if .Values.preview.host }}
             # Public-facing host the gateway's preview-proxy returns in
             # URLs to the app. Must match the umbrella's
@@ -279,83 +266,20 @@ spec:
             {{- end }}
             - name: PREVIEW_REQUIRE_GATEWAY_ID
               value: "true"
-            {{- if ne .Values.profile "operator" }}
-            # Operator-profile gateway runtime is tenant-untrusted until the
-            # reservation/billing/tenant-identity boundary explicitly unlocks
-            # shells. Keep platform-wide secrets out of the shell-inheritable
-            # gateway container. gateway-edge also omits platform secrets on
-            # operator pods; platform-authoritative routes fail closed here or
-            # are served by the singleton API.
-            #
-            # ANTHROPIC_API_KEY also beats Claude subscription OAuth at
-            # runtime, silently shadowing per-account `claude auth login`
-            # and per-agent BYOS credentials (BYO-SUBSCRIPTION-OAUTH-SPEC
-            # §3b: "BYOT does not work at all without stripping it").
-            # Cattle keeps it for the new-Builder welcome path + L3-throttle
-            # platform fallback (§9.4).
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: octogee-anthropic
-                  key: api_key
-            # GIT_API_TOKEN intentionally absent: this shell-bearing container
-            # holds no Gitea admin token. The in-pod provisioner brokers Gitea
-            # admin ops (create user, register SSH key, create org/repo) through
-            # the no-shell gateway-edge sidecar — which holds GITEA_TOKEN — over
-            # localhost. A danger-full-access agent here can no longer read an
-            # admin token from its own env (PLATFORM-CREDENTIAL-BROKERING).
-            # Where the in-pod provisioner reaches that sidecar broker. Pinned to the
-            # chart's gateway-edge port so a port override can't silently break it.
+            # Where legacy in-pod callers reach gateway-edge. The platform
+            # INTERNAL_SERVICE_KEY is intentionally not present in this
+            # shell-bearing container; callers that still require it fail closed
+            # until they move behind octogee-api/Cowboy.
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://127.0.0.1:{{ .Values.gatewayEdge.port }}"
-            - name: BRAVE_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: octogee-brave
-                  key: key
-                  optional: true
-            - name: MM_BOT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: bot_token
-            - name: MM_ADMIN_USER
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: admin_user
-            - name: MM_ADMIN_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: admin_pass
-            - name: MM_COMMUNITY_TEAM_ID
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: team_id
-            - name: MM_BOT_USER_ID
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: bot_user_id
-            - name: MM_ADMIN_USER_ID
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: admin_user_id
-            - name: DISCORD_OPS_WEBHOOK_URL
-              valueFrom:
-                secretKeyRef:
-                  name: discord-ops-webhook
-                  key: url
-                  optional: true
-            - name: INTERNAL_SERVICE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: internal-service-key
-                  key: key
-            {{- end }}
+            # Gitea admin lifecycle operations are brokered by octogee-api,
+            # which holds the Gitea admin token. The shell-bearing gateway
+            # presents only its projected gateway KSA token; octogee-api
+            # TokenReview + tenant enforcement bind it back to this gateway.
+            - name: GITEA_ADMIN_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: OCTOGEE_API_SA_TOKEN_PATH
+              value: "/var/run/secrets/octogee-gateway-broker/token"
             # Same per-gateway K8s secret as init + gateway-edge (see init
             # container env block for the rationale). Pinned via the chart
             # so kubectl-set-env side-channels can't drift the value out
@@ -368,16 +292,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
-            # Operator excluded: the gateway container is shell-bearing (BuilderShell +
-            # the yolo agent), so it must NOT hold the octogee-api KSA token — the shell
-            # could read/replay/exfiltrate the gateway identity. Operator gateways do not
-            # run site-build-api publishing; site deploys are owned by trusted CI/CD.
-            # Standard gateways are not shell-bearing and mount the token directly.
-            {{- if ne .Values.profile "operator" }}
-            - name: octogee-api-sa-token
-              mountPath: /var/run/secrets/octogee-api
+            - name: gateway-broker-sa-token
+              mountPath: /var/run/secrets/octogee-gateway-broker
               readOnly: true
-            {{- end }}
+            # No platform secrets are mounted here. The projected token above
+            # is this gateway's KSA identity for tenant-bound broker calls.
           # Startup probe is HTTP GET /healthz (not TCP) — gates
           # liveness/readiness until openclaw is actually serving HTTP,
           # not just port-bound. Unrouted paths fall through to openclaw's
@@ -434,10 +353,14 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: K8S_SERVICE_ACCOUNT_NAME
+              value: {{ include "octogee-gateway.serviceAccountName" . | quote }}
             - name: OPENCLAW_GATEWAY_URL
               value: "http://127.0.0.1:18789"
             - name: GATEWAY_API_URL
               value: "http://127.0.0.1:18789"
+            - name: OPENCLAW_GATEWAY_DEVICE_TOKEN_PATH
+              value: "/var/run/octogee/openclaw-device-auth/token"
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
             - name: GATEWAY_PROFILE
@@ -449,25 +372,14 @@ spec:
             - name: FIREBASE_PROJECT
               value: {{ .Values.env.firebaseProjectId | quote }}
             # NOTE: GCP_PROJECT_ID + GITEA_ORG are NOT set here — the
-            # .Values.gatewayEdge.env range below already provides them.
-            # For cattle, GITEA_TOKEN comes from the secrets range below;
-            # operator gateway-edge omits that platform token. Setting any
-            # of these names explicitly too renders duplicate env names,
-            # which fails `helm upgrade`'s in-place Deployment patch
-            # ("$setElementOrder list mismatch") and blocks the gateway roll.
+            # .Values.gatewayEdge.env range below already provides the
+            # non-secret project/org identifiers. Platform secrets are not
+            # expanded into this sidecar.
             - name: OCTOGEE_ALLOWED_WS_ORIGINS
               value: {{ .Values.env.allowedWsOrigins | default "" | quote }}
             {{- if .Values.env.giteaPublicBaseUrl }}
             - name: GITEA_PUBLIC_BASE_URL
               value: {{ .Values.env.giteaPublicBaseUrl | quote }}
-            {{- end }}
-            {{- if ne .Values.profile "operator" }}
-            - name: MM_ADMIN_PAT
-              valueFrom:
-                secretKeyRef:
-                  name: mattermost-gateway
-                  key: admin_token
-                  optional: true
             {{- end }}
             # Every gateway needs this: wireActivityBridge() requires it for
             # approval-callback HMAC, independent of the admin PAT. Operator
@@ -488,34 +400,19 @@ spec:
                 secretKeyRef:
                   name: gateway-auth-token-{{ .Values.gatewayId }}
                   key: token
-            {{- /* For cattle, INTERNAL_SERVICE_KEY, GITEA_TOKEN, and
-                GCP_PROJECT_ID are NOT set here — the
-                .Values.gatewayEdge.{env,secrets} ranges below provide them.
-                For operator, gateway-edge intentionally omits platform
-                secrets; locality routes that need platform authority fail
-                closed or are served by octogee-api, while builder-shell uses
-                the per-gateway token. Adding these env names explicitly here
-                creates duplicate env entries that break the helm-upgrade
-                strategic-merge patch (root cause of #1131 / gw-bender). */}}
+            {{- /* Platform secrets are intentionally absent. Locality routes
+                that still need platform authority fail closed or are served by
+                octogee-api/Cowboy, while builder-shell uses the per-gateway
+                token and TokenReview paths. */}}
             {{- if eq .Values.profile "operator" }}
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"
             {{- end }}
             {{- range $key, $val := .Values.gatewayEdge.env }}
-            {{- $omitOperatorKms := and (eq $.Values.profile "operator") (eq $key "OCTOGEE_KMS_KEY_NAME") -}}
-            {{- if and $val (not $omitOperatorKms) }}
+            {{- $omitKms := eq $key "OCTOGEE_KMS_KEY_NAME" -}}
+            {{- if and $val (not $omitKms) }}
             - name: {{ $key }}
               value: {{ $val | quote }}
-            {{- end }}
-            {{- end }}
-            {{- if ne .Values.profile "operator" }}
-            {{- range .Values.gatewayEdge.secrets }}
-            - name: {{ .envName }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .secretName }}
-                  key: {{ .secretKey }}
-                  optional: {{ .optional | default false }}
             {{- end }}
             {{- end }}
           resources:
@@ -523,8 +420,13 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            - name: openclaw-device-auth
+              mountPath: /var/run/octogee/openclaw-device-auth
             - name: octogee-api-sa-token
               mountPath: /var/run/secrets/octogee-api
+              readOnly: true
+            - name: k8s-api-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
           readinessProbe:
             httpGet:
@@ -554,3 +456,23 @@ spec:
                   path: token
                   audience: octogee-api
                   expirationSeconds: 3600
+        - name: gateway-broker-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600
+        - name: openclaw-device-auth
+          emptyDir: {}
+        - name: k8s-api-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt

@@ -69,14 +69,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            {{- $serviceAccountAnnotations := .Values.serviceAccount.annotations | default dict }}
-            {{- $gatewayServiceAccount := index $serviceAccountAnnotations "iam.gke.io/gcp-service-account" | default "" }}
-            {{- if $gatewayServiceAccount }}
+            {{- if .Values.gatewayServiceAccount }}
             # Admin fleet fulfillment provisions per-gateway auth-token
-            # Secret Manager shells for gateway pods. Keep this in lockstep
-            # with the Workload Identity GSA octogee-api runs as.
+            # Secret Manager shells for gateway pods. This is the cattle
+            # gateway-pod consumer GSA, not octogee-api's own Workload Identity.
             - name: GATEWAY_SERVICE_ACCOUNT
-              value: {{ $gatewayServiceAccount | quote }}
+              value: {{ .Values.gatewayServiceAccount | quote }}
             {{- end }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}

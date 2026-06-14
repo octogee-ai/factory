@@ -55,6 +55,12 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
 }
 
 export function requireInternalServiceAuth(req: Request, res: Response, next: NextFunction): void {
+  const boundTenant = (req as Request & { boundTenant?: { kind?: unknown } }).boundTenant;
+  if (boundTenant?.kind === "gateway") {
+    next();
+    return;
+  }
+
   const configuredSecret = process.env.INTERNAL_SERVICE_KEY;
 
   if (!configuredSecret) {
@@ -147,4 +153,3 @@ export function requireAgentKeyForUser(
       });
   };
 }
-

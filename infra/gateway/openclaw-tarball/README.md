@@ -933,9 +933,10 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.6 GA (current) the fork carries **five logical essential patches across seven commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the Hunk A allowlist extension; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — audited this cycle for the "drop any diag/traceability-only" sweep and explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.6 GA (current) the fork carries **six logical essential patches across eight commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the backend `gateway-client` device-token pairing fix; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — audited this cycle for the "drop any diag/traceability-only" sweep and explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
 
-Live short SHAs at v2026.6.6 GA (top of current's integration branch is `90656fba`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+Live short SHAs at v2026.6.6 GA (top of current's integration branch is `ccd5b76e`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `ccd5b76e` — backend `gateway-client` local pairing now creates the paired-device record needed to mint `auth.deviceToken`
 - `90656fba` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
 - `632f46fe` — mattermost connect log: ✅ marker for operator visibility on GW startup
 - `242d7486` — activity harness-signal Hunk B: session-correlated execution-phase
@@ -948,7 +949,7 @@ Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.6.6 (GA) | `90656fba` |
+| current | 2026.6.6 (GA) | `ccd5b76e` |
 | previous | 2026.6.5 (GA) | `f827aaf8` |
 | preview | _(empty — awaiting next upstream hand-curated beta on the 6.7 line)_ | — |
 

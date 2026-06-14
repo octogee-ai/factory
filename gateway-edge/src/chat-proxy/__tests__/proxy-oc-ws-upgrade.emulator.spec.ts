@@ -112,16 +112,21 @@ vi.mock('../openclaw/frame-filter.js', () => ({
 
 vi.mock('../openclaw/gateway-token.js', () => ({
   GatewayTokenError: h.GatewayTokenError,
-  fetchGatewayToken: async ({ skipCache }: { skipCache?: boolean }) =>
-    h.ctl.fetchToken(!!skipCache),
+  fetchGatewayAuth: async ({ skipCache }: { skipCache?: boolean }) => ({
+    source: 'legacy-token',
+    token: h.ctl.fetchToken(!!skipCache),
+  }),
   invalidateGatewayToken: (gatewayId: string) => {
     h.ctl.invalidatedGateways.push(gatewayId);
   },
+  persistGatewayDeviceToken: async () => {},
+  clearGatewayDeviceToken: async () => {},
 }));
 
 vi.mock('../openclaw/upstream.js', () => ({
   OpenclawWireError: h.OpenclawWireError,
-  openUpstream: async ({ token }: { token: string }) => h.ctl.openUpstream(token),
+  openUpstream: async ({ token, deviceToken }: { token?: string; deviceToken?: string }) =>
+    h.ctl.openUpstream(deviceToken ?? token ?? ''),
 }));
 
 vi.mock('../openclaw/gateway-id-watcher.js', () => ({

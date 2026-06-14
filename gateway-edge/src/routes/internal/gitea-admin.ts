@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from "express";
 
 import { isValidProjectId, isValidUsername } from "@shared/types/identity.js";
+import { readAssignedSlugsForGateway } from "../../../../scripts/lib/assigned-roster.js";
+import { db } from "../../lib/db.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";
 import {
@@ -14,17 +16,16 @@ import {
 } from "../../lib/gitea-admin.js";
 
 // Gitea ADMIN broker for the in-pod provisioner. The provisioner runs in the shell-bearing
-// openclaw container and no longer holds the admin token; it calls these localhost-only
-// endpoints on the no-shell gateway-edge sidecar (which holds GITEA_TOKEN) to mint users,
-// register the per-customer SSH key, and create orgs/repos. Local git (SSH clone/init/push)
-// stays in the provisioner. Service-key guarded; never exposed via the ingress.
+// openclaw container and no longer holds the admin token; it calls octogee-api with its
+// projected gateway KSA token so the API singleton performs the admin operation. Local git
+// (SSH clone/init/push) stays in the provisioner. The legacy gateway-edge mount stays
+// fail-closed unless a trusted caller presents a supported internal identity.
 //
 // Every path-bound input is re-validated HERE because this HTTP boundary is a new entry
-// point that bypasses the provisioner's upstream isValidUsername gate — and INTERNAL_SERVICE_KEY
-// still lives in the shell-bearing container, so a compromised agent could reach these. Strict
-// validation blocks path traversal / injection into the privileged Gitea paths. (Cross-tenant
-// scoping + getting the service key off the shell container are the longer-term hardening,
-// tracked with the Tier-2 ensureCredentials work — see PLATFORM-CREDENTIAL-BROKERING-SPEC.)
+// point that bypasses the provisioner's upstream isValidUsername gate. Strict validation blocks
+// path traversal / injection into the privileged Gitea paths. The assigned-roster guard below is
+// defense-in-depth over octogee-api tenant enforcement: it blocks cross-tenant Gitea key
+// replacement / repo mutation before any admin call is attempted.
 
 const router = Router();
 router.use(requireInternalServiceAuth);
@@ -47,6 +48,41 @@ function validSlug(res: Response, slug: unknown): slug is string {
   return false;
 }
 
+function gatewayIdForRequest(req: Request): string | null {
+  const boundTenant = (req as Request & {
+    boundTenant?: { kind?: unknown; gatewayId?: unknown };
+  }).boundTenant;
+  if (boundTenant?.kind === "gateway" && typeof boundTenant.gatewayId === "string") {
+    const gatewayId = boundTenant.gatewayId.trim();
+    if (gatewayId) return gatewayId;
+  }
+
+  const gatewayId = process.env.GATEWAY_ID?.trim();
+  return gatewayId ? gatewayId : null;
+}
+
+async function requireAssignedHere(req: Request, res: Response, slug: string): Promise<boolean> {
+  const gatewayId = gatewayIdForRequest(req);
+  if (!gatewayId) {
+    logger.error("internal/gitea assignment guard failed: no gateway identity is configured");
+    res.status(500).json({ error: "gateway assignment guard is not configured" });
+    return false;
+  }
+
+  try {
+    const assigned = await readAssignedSlugsForGateway(db, gatewayId);
+    if (!assigned.includes(slug)) {
+      res.status(403).json({ error: "slug is not assigned to this gateway" });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    logger.error("internal/gitea assignment guard lookup failed", { err, gatewayId, slug });
+    res.status(502).json({ error: "gateway assignment lookup failed" });
+    return false;
+  }
+}
+
 async function broker(res: Response, op: string, fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
@@ -64,12 +100,14 @@ router.post("/ensure-user", async (req: Request, res: Response) => {
     res.status(400).json({ error: "pubKey must be a valid SSH public key" });
     return;
   }
+  if (!(await requireAssignedHere(req, res, slug))) return;
   await broker(res, "ensure-user", () => ensureGiteaUser(slug, pubKey));
 });
 
 router.get("/user-pubkey", async (req: Request, res: Response) => {
   const { slug } = req.query;
   if (!validSlug(res, slug)) return;
+  if (!(await requireAssignedHere(req, res, slug))) return;
   try {
     const pubKey = await readGiteaUserPubKey(slug);
     res.json({ pubKey });
@@ -82,12 +120,14 @@ router.get("/user-pubkey", async (req: Request, res: Response) => {
 router.post("/ensure-org", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
+  if (!(await requireAssignedHere(req, res, slug))) return;
   await broker(res, "ensure-org", () => ensureGiteaOrgForWorkspace(slug));
 });
 
 router.post("/ensure-workspace-repo", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
+  if (!(await requireAssignedHere(req, res, slug))) return;
   await broker(res, "ensure-workspace-repo", () => ensureWorkspaceRepo(slug));
 });
 
@@ -98,6 +138,7 @@ router.post("/ensure-project-repo", async (req: Request, res: Response) => {
     res.status(400).json({ error: "projectName must be a valid project id" });
     return;
   }
+  if (!(await requireAssignedHere(req, res, slug))) return;
   await broker(res, "ensure-project-repo", () => ensureProjectRepo(slug, projectName));
 });
 
@@ -107,6 +148,7 @@ router.get("/repo-exists", async (req: Request, res: Response) => {
     res.status(400).json({ error: "org must be a valid workspace username and repo a valid repo name" });
     return;
   }
+  if (!(await requireAssignedHere(req, res, org))) return;
   try {
     const exists = await repoExists(org, repo);
     res.json({ exists });
@@ -122,6 +164,7 @@ router.post("/archive-repo", async (req: Request, res: Response) => {
     res.status(400).json({ error: "org must be a valid workspace username and repo a valid repo name" });
     return;
   }
+  if (!(await requireAssignedHere(req, res, org))) return;
   await broker(res, "archive-repo", () => archiveRepo(org, repo));
 });
 

@@ -72,6 +72,7 @@ describe("infra/gateway/entrypoint.sh — OPENCLAW_GATEWAY_TOKEN platform-owned 
 function runPublishBlock(opts: {
   profile?: string;
   nodeExit?: number;
+  publish?: string;
 }): {
   status: number | null;
   stderr: string;
@@ -95,6 +96,7 @@ function runPublishBlock(opts: {
       export GATEWAY_ID=gw-test
       export GCP_PROJECT_ID=octogee-test
       export GATEWAY_PROFILE="${opts.profile ?? ""}"
+      export GATEWAY_AUTH_SECRET_MANAGER_PUBLISH="${opts.publish ?? ""}"
       export OPENCLAW_GATEWAY_TOKEN=token-for-test
       eval "$(sed -n '/^# Publish the fresh gateway auth token/,/^# ── Provision ops-agent/p' "${ENTRYPOINT}")"
     `;
@@ -115,15 +117,22 @@ function runPublishBlock(opts: {
 }
 
 describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish boundary", () => {
-  it("skips Secret Manager publish on operator gateways (locked KSA has no SM access)", () => {
+  it("skips Secret Manager publish by default on standard gateways", () => {
+    const result = runPublishBlock({ profile: "standard", nodeExit: 2 });
+    expect(result.status).toBe(0);
+    expect(result.calledNode).toBe(false);
+    expect(result.stderr).toMatch(/skipping gateway auth token Secret Manager publish/);
+  });
+
+  it("skips Secret Manager publish by default on operator gateways", () => {
     const result = runPublishBlock({ profile: "operator", nodeExit: 2 });
     expect(result.status).toBe(0);
     expect(result.calledNode).toBe(false);
-    expect(result.stderr).toMatch(/operator profile: skipping gateway auth token Secret Manager publish/);
+    expect(result.stderr).toMatch(/skipping gateway auth token Secret Manager publish/);
   });
 
-  it("still publishes to Secret Manager for cattle gateways", () => {
-    const result = runPublishBlock({ profile: "standard", nodeExit: 0 });
+  it("publishes to Secret Manager only when explicitly requested", () => {
+    const result = runPublishBlock({ profile: "standard", nodeExit: 0, publish: "true" });
     expect(result.status).toBe(0);
     expect(result.calledNode).toBe(true);
     expect(result.stderr).toMatch(/gateway auth token published to Secret Manager/);

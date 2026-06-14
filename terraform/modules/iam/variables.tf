@@ -14,9 +14,15 @@ variable "namespace" {
 }
 
 variable "gateway_sa_name" {
-  description = "Service account ID for the gateway"
+  description = "Service account ID for cattle gateways"
   type        = string
   default     = "octogee-gateway"
+}
+
+variable "api_sa_name" {
+  description = "Service account ID for octogee-api"
+  type        = string
+  default     = "octogee-api"
 }
 
 variable "cloudsql_project_id" {

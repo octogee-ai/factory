@@ -3,7 +3,16 @@ import request from "supertest";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import * as giteaAdmin from "../lib/gitea-admin.js";
+import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
 import giteaAdminRoutes from "../routes/internal/gitea-admin.js";
+
+vi.mock("../lib/db.js", () => ({
+  db: {},
+}));
+
+vi.mock("../../../scripts/lib/assigned-roster.js", () => ({
+  readAssignedSlugsForGateway: vi.fn(async () => ["acme"]),
+}));
 
 vi.mock("../lib/gitea-admin.js", () => ({
   ensureGiteaUser: vi.fn(async () => {}),
@@ -17,9 +26,19 @@ vi.mock("../lib/gitea-admin.js", () => ({
 
 const KEY = "test-internal-key";
 
-function app() {
+function app(boundGatewayId?: string) {
   const a = express();
   a.use(express.json());
+  if (boundGatewayId) {
+    a.use((req, _res, next) => {
+      req.boundTenant = {
+        kind: "gateway",
+        gatewayId: boundGatewayId,
+        ownerUid: `owner-${boundGatewayId}`,
+      };
+      next();
+    });
+  }
   a.use("/internal/gitea", giteaAdminRoutes);
   return a;
 }
@@ -31,7 +50,9 @@ function authed(req: request.Test) {
 describe("internal gitea-admin route", () => {
   beforeEach(() => {
     process.env.INTERNAL_SERVICE_KEY = KEY;
+    process.env.GATEWAY_ID = "bender";
     vi.clearAllMocks();
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValue(["acme"]);
   });
 
   it("rejects requests without the internal service key (401)", async () => {
@@ -45,7 +66,48 @@ describe("internal gitea-admin route", () => {
       request(app()).post("/internal/gitea/ensure-user"),
     ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
     expect(res.status).toBe(204);
+    expect(readAssignedSlugsForGateway).toHaveBeenCalledWith(expect.anything(), "bender");
     expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+  });
+
+  it("uses the bound gateway identity from octogee-api TokenReview instead of GATEWAY_ID env", async () => {
+    delete process.env.GATEWAY_ID;
+    delete process.env.INTERNAL_SERVICE_KEY;
+
+    const res = await request(app("bender"))
+      .post("/internal/gitea/ensure-user")
+      .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(204);
+    expect(readAssignedSlugsForGateway).toHaveBeenCalledWith(expect.anything(), "bender");
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+  });
+
+  it("ensure-user → 403 when slug is not assigned to this gateway, before touching Gitea", async () => {
+    const res = await authed(
+      request(app()).post("/internal/gitea/ensure-user"),
+    ).send({ slug: "victim", pubKey: "ssh-ed25519 AAA" });
+    expect(res.status).toBe(403);
+    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+  });
+
+  it("ensure-user → 500 when GATEWAY_ID is missing, before touching Gitea", async () => {
+    delete process.env.GATEWAY_ID;
+    const res = await authed(
+      request(app()).post("/internal/gitea/ensure-user"),
+    ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+    expect(res.status).toBe(500);
+    expect(readAssignedSlugsForGateway).not.toHaveBeenCalled();
+    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+  });
+
+  it("ensure-user → 502 when assignment lookup fails, before touching Gitea", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockRejectedValueOnce(new Error("firestore down"));
+    const res = await authed(
+      request(app()).post("/internal/gitea/ensure-user"),
+    ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+    expect(res.status).toBe(502);
+    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
   });
 
   it("ensure-user → 400 when pubKey missing", async () => {
@@ -100,6 +162,12 @@ describe("internal gitea-admin route", () => {
     const res = await authed(request(app()).post("/internal/gitea/archive-repo")).send({ org: "acme", repo: "workspace" });
     expect(res.status).toBe(204);
     expect(giteaAdmin.archiveRepo).toHaveBeenCalledWith("acme", "workspace");
+  });
+
+  it("archive-repo → 403 when org is not assigned to this gateway, before touching Gitea", async () => {
+    const res = await authed(request(app()).post("/internal/gitea/archive-repo")).send({ org: "victim", repo: "workspace" });
+    expect(res.status).toBe(403);
+    expect(giteaAdmin.archiveRepo).not.toHaveBeenCalled();
   });
 
   it("→ 502 when the lib throws (fail loud, no silent success)", async () => {

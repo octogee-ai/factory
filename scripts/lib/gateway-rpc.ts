@@ -38,7 +38,9 @@ export interface ConnectTrace {
 export interface GatewayRpcClientOptions {
   url?: string;
   token?: string;
+  deviceToken?: string;
   openclawConfigPath?: string;
+  allowLegacyGatewayTokenFallback?: boolean;
   onConnectTrace?: (trace: ConnectTrace) => void;
   connectTimeoutMs?: number;
   callTimeoutMs?: number;
@@ -119,7 +121,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   const url =
     opts.url ??
     `ws://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || 18789}`;
-  const token = resolveGatewayToken(opts);
+  const auth = resolveGatewayAuth(opts);
   const connectTimeoutMs = opts.connectTimeoutMs ?? 30_000;
   const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
   const scopes = opts.scopes ?? ["operator.admin"];
@@ -191,7 +193,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   async function call(method: string, params: unknown): Promise<unknown> {
     const ws = await openAndConnect({
       url,
-      token,
+      ...auth,
       connectTimeoutMs,
       identity: resolveIdentity(),
       scopes,
@@ -295,7 +297,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       try {
         const ws = await openAndConnect({
           url,
-          token,
+          ...auth,
           connectTimeoutMs: t,
           identity: resolveIdentity(),
           scopes,
@@ -314,11 +316,21 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   };
 }
 
-function resolveGatewayToken(opts: GatewayRpcClientOptions): string {
-  if (typeof opts.token === "string" && opts.token.length > 0) return opts.token;
+interface GatewayRpcAuth {
+  token?: string;
+  deviceToken?: string;
+}
+
+function resolveGatewayAuth(opts: GatewayRpcClientOptions): GatewayRpcAuth {
+  if (typeof opts.deviceToken === "string" && opts.deviceToken.length > 0) {
+    return { deviceToken: opts.deviceToken };
+  }
+  if (typeof opts.token === "string" && opts.token.length > 0) return { token: opts.token };
+  if (!opts.allowLegacyGatewayTokenFallback) return {};
   const fromEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
-  if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
-  return readTokenFromOpenClawJson(opts.openclawConfigPath);
+  if (typeof fromEnv === "string" && fromEnv.length > 0) return { token: fromEnv };
+  const fromFile = readTokenFromOpenClawJson(opts.openclawConfigPath);
+  return fromFile ? { token: fromFile } : {};
 }
 
 function readTokenFromOpenClawJson(configPath?: string): string {
@@ -338,7 +350,8 @@ const PROTOCOL_VERSION = OPENCLAW_PROTOCOL_VERSION;
 
 interface OpenAndConnectParams {
   url: string;
-  token: string;
+  token?: string;
+  deviceToken?: string;
   connectTimeoutMs: number;
   identity: DeviceIdentity;
   scopes: string[];
@@ -398,9 +411,14 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
       role: "operator",
       scopes: params.scopes,
       nonce,
-      token: params.token || null,
+      token: params.deviceToken || params.token || null,
       platform: clientInfo.platform,
     });
+    const auth = params.deviceToken
+      ? { deviceToken: params.deviceToken }
+      : params.token
+        ? { token: params.token }
+        : undefined;
     const connectStart = Date.now();
     await sendWsRequest(
       ws,
@@ -413,7 +431,7 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
         role: "operator",
         scopes: params.scopes,
         device,
-        ...(params.token ? { auth: { token: params.token } } : {}),
+        ...(auth ? { auth } : {}),
       },
       params.connectTimeoutMs,
       true,
@@ -431,4 +449,3 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
 
   return ws;
 }
-

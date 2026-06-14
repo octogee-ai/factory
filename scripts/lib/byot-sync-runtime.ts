@@ -58,6 +58,7 @@ export async function applyCoachModelPatch(
 
 export async function triggerSecretsReload(): Promise<void> {
   const rpc = createGatewayRpc({
+    allowLegacyGatewayTokenFallback: true,
     connectTimeoutMs: 10_000,
     callTimeoutMs: 10_000,
   });

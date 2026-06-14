@@ -5,7 +5,7 @@ image:
 connectionName: "octogee:us-central1:octogee-pg"
 usePrivateIp: true
 
-serviceAccountName: octogee-gateway
+serviceAccountName: octogee-api
 
 resources:
   requests:

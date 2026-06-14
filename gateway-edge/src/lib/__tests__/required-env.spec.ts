@@ -2,9 +2,7 @@ import { describe, it, expect } from "vitest";
 import { validateRequiredEnv, REQUIRED_ENV } from "../required-env.js";
 
 const full = {
-  INTERNAL_SERVICE_KEY: "k",
   GCP_PROJECT_ID: "octogee",
-  GITEA_TOKEN: "t",
 };
 
 describe("validateRequiredEnv", () => {
@@ -25,15 +23,20 @@ describe("validateRequiredEnv", () => {
     ).toContain("GCP_PROJECT_ID");
   });
 
-  it("treats whitespace-only as missing (a blank cred/ID fails the same at runtime)", () => {
+  it("treats whitespace-only as missing (a blank project ID fails the same at runtime)", () => {
     expect(
-      validateRequiredEnv({ ...full, GITEA_TOKEN: "   " }, { isProd: true }).missing,
-    ).toContain("GITEA_TOKEN");
+      validateRequiredEnv({ ...full, GCP_PROJECT_ID: "   " }, { isProd: true }).missing,
+    ).toContain("GCP_PROJECT_ID");
   });
 
   it("does NOT require GITEA_ORG — gateway-edge never reads it from env", () => {
     expect(validateRequiredEnv(full, { isProd: true }).missing).toEqual([]);
     expect([...REQUIRED_ENV]).not.toContain("GITEA_ORG");
+  });
+
+  it("does NOT require platform secrets in the gateway pod runtime", () => {
+    expect([...REQUIRED_ENV]).not.toContain("INTERNAL_SERVICE_KEY");
+    expect([...REQUIRED_ENV]).not.toContain("GITEA_TOKEN");
   });
 
   it("lists ALL missing at once so one crash names every gap", () => {
@@ -42,14 +45,9 @@ describe("validateRequiredEnv", () => {
     );
   });
 
-  it("does not require platform gateway-edge secrets for operator profile", () => {
-    expect(validateRequiredEnv({}, { isProd: true, profile: "operator" }).missing).toEqual([]);
-  });
-
-  it("still requires platform gateway-edge secrets when profile is standard", () => {
-    expect(validateRequiredEnv({}, { isProd: true, profile: "standard" }).missing.sort()).toEqual(
-      [...REQUIRED_ENV].sort(),
-    );
+  it("applies the same non-secret runtime requirements to standard and operator profiles", () => {
+    expect(validateRequiredEnv({}, { isProd: true, profile: "operator" }).missing).toEqual(["GCP_PROJECT_ID"]);
+    expect(validateRequiredEnv({}, { isProd: true, profile: "standard" }).missing).toEqual(["GCP_PROJECT_ID"]);
   });
 
   it("is a no-op in non-prod (dev/test/local legitimately lack them)", () => {

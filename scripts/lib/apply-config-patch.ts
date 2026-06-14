@@ -134,7 +134,9 @@ const signalRef = opts.signal;
         );
       }));
 
-  const rpc = opts.rpc ?? createGatewayRpc();
+  const rpc = opts.rpc ?? createGatewayRpc({
+    allowLegacyGatewayTokenFallback: true,
+  });
   const ownsRpc = !opts.rpc;
 
   const startedAt = now();

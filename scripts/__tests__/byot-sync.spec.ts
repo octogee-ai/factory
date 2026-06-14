@@ -1,7 +1,18 @@
 import { describe, it, test, expect, beforeEach, afterEach, vi } from "vitest";
 
-const secretsReloadSpy = vi.fn(async () => ({ ok: true, warningCount: 0 }));
-const closeSpy = vi.fn(async () => {});
+const { secretsReloadSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
+  const secretsReloadSpy = vi.fn(async () => ({ ok: true, warningCount: 0 }));
+  const closeSpy = vi.fn(async () => {});
+  const createGatewayRpcSpy = vi.fn(() => ({
+    secretsReload: secretsReloadSpy,
+    close: closeSpy,
+    configGet: vi.fn(),
+    configPatch: vi.fn(),
+    channelsStatus: vi.fn(),
+    isGatewayUp: vi.fn(async () => true),
+  }));
+  return { secretsReloadSpy, closeSpy, createGatewayRpcSpy };
+});
 
 vi.mock("../lib/gateway-rpc", () => ({
   OpenclawWireError: class OpenclawWireError extends Error {
@@ -12,14 +23,7 @@ vi.mock("../lib/gateway-rpc", () => ({
       this.name = "OpenclawWireError";
     }
   },
-  createGatewayRpc: () => ({
-    secretsReload: secretsReloadSpy,
-    close: closeSpy,
-    configGet: vi.fn(),
-    configPatch: vi.fn(),
-    channelsStatus: vi.fn(),
-    isGatewayUp: vi.fn(async () => true),
-  }),
+  createGatewayRpc: createGatewayRpcSpy,
 }));
 
 const SUBPROCESS_GUARD = (name: string) => () => {
@@ -141,6 +145,7 @@ describe("triggerSecretsReload — in-process RPC, no subprocess", () => {
   beforeEach(() => {
     secretsReloadSpy.mockClear();
     closeSpy.mockClear();
+    createGatewayRpcSpy.mockClear();
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -149,6 +154,13 @@ describe("triggerSecretsReload — in-process RPC, no subprocess", () => {
   test("calls gateway-rpc.secretsReload() and closes the client", async () => {
     secretsReloadSpy.mockResolvedValueOnce({ ok: true, warningCount: 0 });
     await triggerSecretsReload();
+    expect(createGatewayRpcSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowLegacyGatewayTokenFallback: true,
+        callTimeoutMs: 10_000,
+        connectTimeoutMs: 10_000,
+      }),
+    );
     expect(secretsReloadSpy).toHaveBeenCalledTimes(1);
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });

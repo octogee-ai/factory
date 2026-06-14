@@ -485,6 +485,38 @@ server.setHandler("config.patch", () => ({ ok: true, payload: null }));
   });
 
   describe("connect frame", () => {
+    function verifyCapturedDeviceSignature(captured: any, authToken: string): boolean {
+      const payload = [
+        "v3",
+        captured.device.id,
+        captured.client.id,
+        captured.client.mode,
+        captured.role,
+        captured.scopes.join(","),
+        String(captured.device.signedAt),
+        authToken,
+        captured.device.nonce,
+        (captured.client.platform ?? "").toLowerCase(),
+        "", // deviceFamily left unset
+      ].join("|");
+      const sigBuf = Buffer.from(
+        captured.device.signature.replaceAll("-", "+").replaceAll("_", "/") +
+          "=".repeat((4 - (captured.device.signature.length % 4)) % 4),
+        "base64",
+      );
+      const pubRaw = Buffer.from(
+        captured.device.publicKey.replaceAll("-", "+").replaceAll("_", "/") +
+          "=".repeat((4 - (captured.device.publicKey.length % 4)) % 4),
+        "base64",
+      );
+      const pubKey = crypto.createPublicKey({
+        key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), pubRaw]),
+        type: "spki",
+        format: "der",
+      });
+      return crypto.verify(null, Buffer.from(payload, "utf8"), pubKey, sigBuf);
+    }
+
     it("requests operator.admin scope, signs the challenge nonce with the device identity, and identifies itself in `client.displayName`", async () => {
       let captured: any = null;
       server.setConnectHandler((params) => {
@@ -519,35 +551,42 @@ expect(captured.device).toBeTruthy();
       expect(typeof captured.device.signedAt).toBe("number");
       expect(typeof captured.device.nonce).toBe("string");
 
-const payload = [
-        "v3",
-        captured.device.id,
-        captured.client.id,
-        captured.client.mode,
-        captured.role,
-        captured.scopes.join(","),
-        String(captured.device.signedAt),
-        captured.auth?.token ?? "",
-        captured.device.nonce,
-        (captured.client.platform ?? "").toLowerCase(),
-        "", // deviceFamily left unset
-      ].join("|");
-      const sigBuf = Buffer.from(
-        captured.device.signature.replaceAll("-", "+").replaceAll("_", "/") +
-          "=".repeat((4 - (captured.device.signature.length % 4)) % 4),
-        "base64",
-      );
-      const pubRaw = Buffer.from(
-        captured.device.publicKey.replaceAll("-", "+").replaceAll("_", "/") +
-          "=".repeat((4 - (captured.device.publicKey.length % 4)) % 4),
-        "base64",
-      );
-      const pubKey = crypto.createPublicKey({
-        key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), pubRaw]),
-        type: "spki",
-        format: "der",
+      expect(verifyCapturedDeviceSignature(captured, captured.auth?.token ?? "")).toBe(true);
+    });
+
+    it("uses auth.deviceToken and signs with the device token when provided", async () => {
+      let captured: any = null;
+      server.setConnectHandler((params) => {
+        captured = params;
+        return {
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            protocol: 4,
+            server: { version: "test", connId: "c1" },
+            features: { methods: [], events: [] },
+            snapshot: {},
+            policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+          },
+        };
       });
-      expect(crypto.verify(null, Buffer.from(payload, "utf8"), pubKey, sigBuf)).toBe(true);
+
+      const rpc = createGatewayRpc({
+        url: server.url,
+        deviceToken: "device-token-abc123",
+        connectTimeoutMs: 500,
+        callTimeoutMs: 500,
+        identity: makeTestIdentity(),
+      });
+      try {
+        await rpc.isGatewayUp(500);
+      } finally {
+        await rpc.close();
+      }
+
+      expect(captured?.auth).toEqual({ deviceToken: "device-token-abc123" });
+      expect(captured?.auth?.token).toBeUndefined();
+      expect(verifyCapturedDeviceSignature(captured, "device-token-abc123")).toBe(true);
     });
   });
 
@@ -680,7 +719,7 @@ describe("token resolution", () => {
     else process.env.OPENCLAW_GATEWAY_TOKEN = origEnv;
   });
 
-  it("reads gateway.auth.token from openclaw.json when env is unset (captures auth.token in connect frame)", async () => {
+  it("does not read OPENCLAW_GATEWAY_TOKEN or openclaw.json by default", async () => {
     const fs = require("node:fs") as typeof import("node:fs");
     fs.writeFileSync(
       configPath,
@@ -688,6 +727,7 @@ describe("token resolution", () => {
         gateway: { auth: { mode: "token", token: "from-file-abc123" } },
       }),
     );
+    process.env.OPENCLAW_GATEWAY_TOKEN = "from-env-abc123";
 
     const srv = await startMockGateway();
     let captured: any = null;
@@ -721,10 +761,55 @@ describe("token resolution", () => {
       await srv.close();
     }
 
+    expect(captured?.auth).toBeUndefined();
+  });
+
+  it("reads gateway.auth.token from openclaw.json only when legacy fallback is explicit", async () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { auth: { mode: "token", token: "from-file-abc123" } },
+      }),
+    );
+
+    const srv = await startMockGateway();
+    let captured: any = null;
+    srv.setConnectHandler((params) => {
+      captured = params;
+      return {
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          server: { version: "test", connId: "c1" },
+          features: { methods: [], events: [] },
+          snapshot: {},
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        },
+      };
+    });
+    srv.setHandler("channels.status", () => ({ ok: true, payload: {} }));
+
+    const rpc = createGatewayRpc({
+      url: srv.url,
+      openclawConfigPath: configPath,
+      allowLegacyGatewayTokenFallback: true,
+      connectTimeoutMs: 500,
+      callTimeoutMs: 500,
+      identity: makeTestIdentity(),
+    });
+    try {
+      await rpc.isGatewayUp(500);
+    } finally {
+      await rpc.close();
+      await srv.close();
+    }
+
     expect(captured?.auth?.token).toBe("from-file-abc123");
   });
 
-  it("prefers the OPENCLAW_GATEWAY_TOKEN env var over openclaw.json", async () => {
+  it("legacy fallback prefers the OPENCLAW_GATEWAY_TOKEN env var over openclaw.json", async () => {
     const fs = require("node:fs") as typeof import("node:fs");
     fs.writeFileSync(
       configPath,
@@ -753,6 +838,7 @@ describe("token resolution", () => {
     const rpc = createGatewayRpc({
       url: srv.url,
       openclawConfigPath: configPath,
+      allowLegacyGatewayTokenFallback: true,
       connectTimeoutMs: 500,
       callTimeoutMs: 500,
       identity: makeTestIdentity(),
@@ -806,10 +892,11 @@ describe("token resolution", () => {
 expect(captured?.auth).toBeUndefined();
   });
 
-  it("silently tolerates a missing/malformed openclaw.json", async () => {
+  it("silently tolerates a missing/malformed openclaw.json when legacy fallback is enabled", async () => {
     const rpc = createGatewayRpc({
       url: "ws://127.0.0.1:1",
       openclawConfigPath: "/does/not/exist.json",
+      allowLegacyGatewayTokenFallback: true,
       connectTimeoutMs: 100,
       callTimeoutMs: 100,
       identity: makeTestIdentity(),

@@ -49,9 +49,6 @@ end-to-end on first real exercise.
 */}}
 {{- define "octogee-gateway.requireIdentity" -}}
 {{- $_ := required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId -}}
-{{- if ne .Values.profile "operator" -}}
-{{- include "octogee-gateway.requireGatewayEdgeSecret" (dict "Values" .Values "envName" "INTERNAL_SERVICE_KEY" "purpose" "cross-service auth (chat-proxy → openclaw, gateway-edge admin endpoints)") -}}
-{{- end -}}
 {{- end }}
 
 {{/*

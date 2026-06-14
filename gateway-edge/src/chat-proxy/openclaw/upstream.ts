@@ -29,10 +29,12 @@ const DEFAULT_OPERATOR_SCOPES = [
 
 export interface OpenUpstreamParams {
   url: string;
-  token: string;
+  token?: string;
+  deviceToken?: string;
   identity: DeviceIdentity;
   scopes?: string[];
   timeoutMs?: number;
+  onDeviceToken?: (auth: { deviceToken: string; role?: string; scopes?: string[] }) => void | Promise<void>;
 }
 
 export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocket> {
@@ -63,11 +65,16 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
       role: "operator",
       scopes,
       nonce,
-      token: params.token || null,
+      token: params.deviceToken || params.token || null,
       platform: clientInfo.platform,
     });
+    const auth = params.deviceToken
+      ? { deviceToken: params.deviceToken }
+      : params.token
+        ? { token: params.token }
+        : undefined;
 
-    await sendWsRequest(
+    const helloOk = await sendWsRequest(
       ws,
       randomUUID(),
       "connect",
@@ -78,11 +85,23 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
         role: "operator",
         scopes,
         device,
-        ...(params.token ? { auth: { token: params.token } } : {}),
+        ...(auth ? { auth } : {}),
       },
       timeoutMs,
       true,
     );
+    const authInfo = helloOk && typeof helloOk === "object"
+      ? (helloOk as { auth?: { deviceToken?: unknown; role?: unknown; scopes?: unknown } }).auth
+      : undefined;
+    if (typeof authInfo?.deviceToken === "string" && authInfo.deviceToken.trim()) {
+      await params.onDeviceToken?.({
+        deviceToken: authInfo.deviceToken,
+        role: typeof authInfo.role === "string" ? authInfo.role : undefined,
+        scopes: Array.isArray(authInfo.scopes)
+          ? authInfo.scopes.filter((scope): scope is string => typeof scope === "string")
+          : undefined,
+      });
+    }
 
     return ws;
   } catch (err) {
@@ -94,4 +113,3 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
     throw err;
   }
 }
-

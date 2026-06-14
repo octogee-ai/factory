@@ -1,9 +1,7 @@
 
 
 export const REQUIRED_ENV = [
-  "INTERNAL_SERVICE_KEY",
   "GCP_PROJECT_ID",
-  "GITEA_TOKEN",
 ] as const;
 
 export type RequiredEnvKey = (typeof REQUIRED_ENV)[number];
@@ -24,7 +22,6 @@ export function validateRequiredEnv(
   opts: ValidateRequiredEnvOpts,
 ): RequiredEnvResult {
   if (!opts.isProd) return { missing: [] };
-  if (opts.profile === "operator") return { missing: [] };
   const missing = REQUIRED_ENV.filter((key) => {
     const value = env[key];
 

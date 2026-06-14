@@ -1,13 +1,15 @@
 import { internalFetch } from "./internal-fetch.js";
 
-// In-pod provisioner → gateway-edge sidecar broker for Gitea ADMIN operations.
+// In-pod provisioner → octogee-api broker for Gitea ADMIN operations.
 // The provisioner runs in the shell-bearing openclaw container and holds NO Gitea admin
-// token (GIT_API_TOKEN dropped, PLATFORM-CREDENTIAL-BROKERING). It calls these localhost
-// endpoints on the no-shell gateway-edge sidecar, which holds GITEA_TOKEN. internalFetch
-// attaches X-Internal-Service-Key from env. Every call fails loud on a non-2xx response —
+// token (GIT_API_TOKEN dropped, PLATFORM-CREDENTIAL-BROKERING). It calls octogee-api,
+// which holds GITEA_TOKEN, through internalFetch. internalFetch attaches the projected
+// gateway KSA token from disk; no shared INTERNAL_SERVICE_KEY is required in the gateway.
+// Every call fails loud on a non-2xx response —
 // the reconcile loop retries; nothing is swallowed.
 
 function baseUrl(): string {
+  if (process.env.GITEA_ADMIN_BROKER_URL) return process.env.GITEA_ADMIN_BROKER_URL;
   return process.env.GATEWAY_EDGE_INTERNAL_URL || "http://127.0.0.1:3001";
 }
 

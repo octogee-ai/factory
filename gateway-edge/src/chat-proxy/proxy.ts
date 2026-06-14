@@ -19,9 +19,12 @@ import {
 import { redeemTicket } from "../lib/gateway-ticket.js";
 import { watchGatewayIdChange } from "./openclaw/gateway-id-watcher.js";
 import {
-  fetchGatewayToken,
+  clearGatewayDeviceToken,
+  fetchGatewayAuth,
   invalidateGatewayToken,
+  persistGatewayDeviceToken,
   GatewayTokenError,
+  type GatewayOpenClawAuth,
 } from "./openclaw/gateway-token.js";
 import { resolveBridgeGatewayId } from "./openclaw/bridge-gateway-id.js";
 import { startBridgeUpstreamReconnectLoop } from "./openclaw/bridge-reconnect.js";
@@ -479,22 +482,30 @@ async function establishUpstreamWithRotation(
   gatewayId: string,
   gatewayUrl: string,
 ): Promise<UpstreamOutcome> {
-  let token: string;
+  let auth: GatewayOpenClawAuth;
   try {
-    token = await fetchGatewayToken({ gatewayId });
+    auth = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
   } catch (e) {
     if (e instanceof GatewayTokenError) {
-      console.error(`[proxy] OC WS: token fetch failed — ${e.code}: ${e.message}`);
+      console.error(`[proxy] OC WS: gateway auth fetch failed — ${e.code}: ${e.message}`);
       return { ok: false, httpStatus: "503 Service Unavailable" };
     }
     throw e;
   }
 
-  const tryOpen = (authToken: string) =>
-    openUpstream({ url: gatewayUrl, token: authToken, identity: getOpenClawIdentity() });
+  const tryOpen = (openAuth: GatewayOpenClawAuth) =>
+    openUpstream({
+      url: gatewayUrl,
+      token: openAuth.token,
+      deviceToken: openAuth.deviceToken,
+      identity: getOpenClawIdentity(),
+      onDeviceToken: async (issued) => {
+        await persistGatewayDeviceToken({ token: issued.deviceToken });
+      },
+    });
 
   try {
-    const upstream = await tryOpen(token);
+    const upstream = await tryOpen(auth);
     ocWsHandshakeTotal.inc({ outcome: "ok" });
     return { ok: true, upstream };
   } catch (e) {
@@ -505,15 +516,19 @@ async function establishUpstreamWithRotation(
       return { ok: false, httpStatus: "502 Bad Gateway" };
     }
 
-    invalidateGatewayToken(gatewayId);
-    let fresh: string;
+    if (auth.source === "legacy-token") {
+      invalidateGatewayToken(gatewayId);
+    } else {
+      await clearGatewayDeviceToken();
+    }
+    let fresh: GatewayOpenClawAuth;
     try {
-      fresh = await fetchGatewayToken({ gatewayId, skipCache: true });
+      fresh = await fetchGatewayAuth({ gatewayId, skipCache: true, allowLegacyFallback: true });
     } catch (fetchErr) {
       const fetchCode =
         fetchErr instanceof GatewayTokenError ? fetchErr.code : "unknown";
       console.error(
-        `[proxy] OC WS: token re-fetch during rotation failed — ${fetchCode}`,
+        `[proxy] OC WS: gateway auth re-fetch during rotation failed — ${fetchCode}`,
       );
       ocWsHandshakeTotal.inc({ outcome: `fail:refetch:${fetchCode}` });
       return { ok: false, httpStatus: "503 Service Unavailable" };
@@ -787,15 +802,21 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
   const { buildConnectUpstream } = await import("./builder-shell/upstream.js");
   const { attachBuilderShellUpgrade } = await import("./builder-shell/upgrade.js");
   const router = (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter;
+  const redeemAuth =
+    internalAuth.headerName === "x-k8s-sa-token"
+      ? { k8sServiceAccountToken: internalAuth.value }
+      : { internalServiceKey: internalAuth.value };
+  const upstreamInternalServiceKey =
+    internalAuth.headerName === "x-internal-service-key" ? internalAuth.value : undefined;
   attachBuilderShellUpgrade(server, {
     router,
     redeem: buildRedeemFetcher({
       baseUrl: gatewayEdgeUrl,
-      internalServiceKey: internalAuth.value,
+      ...redeemAuth,
     }),
     connectUpstream: buildConnectUpstream({
       namespace,
-      internalServiceKey: internalAuth.value,
+      internalServiceKey: upstreamInternalServiceKey,
     }),
 
 allowedOrigins: isAllowedWsOrigin,
@@ -1080,14 +1101,18 @@ export async function startChatProxyBackground(): Promise<void> {
       probeReady: () => probeGatewayReady(healthUrl),
       probeIntervalMs: 500,
       openOnce: async () => {
-        let tokenResolved: string;
+        let authResolved: GatewayOpenClawAuth;
         let ws: Awaited<ReturnType<typeof openUpstream>>;
         try {
-          tokenResolved = await fetchGatewayToken({ gatewayId });
+          authResolved = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
           ws = await openUpstream({
             url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
-            token: tokenResolved,
+            token: authResolved.token,
+            deviceToken: authResolved.deviceToken,
             identity: getOpenClawIdentity(),
+            onDeviceToken: async (issued) => {
+              await persistGatewayDeviceToken({ token: issued.deviceToken });
+            },
           });
         } catch (err) {
           const code = err instanceof OpenclawWireError ? err.code : undefined;

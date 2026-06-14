@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   __resetGatewayTokenCacheForTest,
+  clearGatewayDeviceToken,
+  fetchGatewayAuth,
   GatewayTokenError,
   fetchGatewayToken,
   invalidateGatewayToken,
+  persistGatewayDeviceToken,
 } from "../openclaw/gateway-token.js";
 import { GATEWAY_TOKEN_PLACEHOLDER } from "../openclaw/gateway-token-constants.js";
 
@@ -15,9 +21,20 @@ function makeClient(result: unknown, throws?: Error): any {
   return { accessSecretVersion };
 }
 
+const tempDirs: string[] = [];
+
+async function tokenFile(body: string): Promise<string> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "gateway-auth-"));
+  tempDirs.push(dir);
+  const file = path.join(dir, "token");
+  await writeFile(file, body);
+  return file;
+}
+
 beforeEach(() => {
   __resetGatewayTokenCacheForTest();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_DEVICE_TOKEN_PATH;
   delete process.env.GATEWAY_ID;
   delete process.env.GATEWAY_PROFILE;
   process.env.GCP_PROJECT_ID = "octogee-test";
@@ -26,9 +43,14 @@ beforeEach(() => {
 afterEach(() => {
   __resetGatewayTokenCacheForTest();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_DEVICE_TOKEN_PATH;
   delete process.env.GATEWAY_ID;
   delete process.env.GATEWAY_PROFILE;
   delete process.env.GCP_PROJECT_ID;
+});
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 describe("fetchGatewayToken", () => {
@@ -101,9 +123,41 @@ describe("fetchGatewayToken", () => {
     ).rejects.toMatchObject({ code: "fetch-failed" });
   });
 
+  it("uses the local same-gateway OPENCLAW_GATEWAY_TOKEN env before Secret Manager", async () => {
+    process.env.GATEWAY_ID = "gw-test";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "local-gateway-token";
+    const client = makeClient({
+      payload: { data: Buffer.from("sm-value", "utf8") },
+    });
+    const token = await fetchGatewayToken({ gatewayId: "gw-test", client });
+    expect(token).toBe("local-gateway-token");
+    expect(client.accessSecretVersion).not.toHaveBeenCalled();
+  });
+
+  it("local env fallback is same-gateway only", async () => {
+    process.env.GATEWAY_ID = "gw-local";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "local-gateway-token";
+    const client = makeClient({
+      payload: { data: Buffer.from("sm-value", "utf8") },
+    });
+    const token = await fetchGatewayToken({ gatewayId: "gw-other", client });
+    expect(token).toBe("sm-value");
+    expect(client.accessSecretVersion).toHaveBeenCalledWith({
+      name: "projects/octogee-test/secrets/gateway-auth-token-gw-other/versions/latest",
+    });
+  });
+
   it("falls back to OPENCLAW_GATEWAY_TOKEN env when SM is unreachable (code=14)", async () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "dev-token";
     const err = Object.assign(new Error("14 UNAVAILABLE"), { code: 14 });
+    const client = makeClient(undefined, err);
+    const token = await fetchGatewayToken({ gatewayId: "gw-test", client });
+    expect(token).toBe("dev-token");
+  });
+
+  it("falls back to OPENCLAW_GATEWAY_TOKEN env when SM times out (code=4)", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "dev-token";
+    const err = Object.assign(new Error("4 DEADLINE_EXCEEDED"), { code: 4 });
     const client = makeClient(undefined, err);
     const token = await fetchGatewayToken({ gatewayId: "gw-test", client });
     expect(token).toBe("dev-token");
@@ -198,5 +252,69 @@ describe("fetchGatewayToken", () => {
       ).rejects.toMatchObject({ code: "invalid-gateway-id" });
     }
     expect(client.accessSecretVersion).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchGatewayAuth", () => {
+  it("prefers a sidecar-local OpenClaw device token file over legacy token sources", async () => {
+    const client = makeClient({
+      payload: { data: Buffer.from("legacy-token", "utf8") },
+    });
+
+    const auth = await fetchGatewayAuth({
+      gatewayId: "gw-test",
+      client,
+      allowLegacyFallback: true,
+      deviceTokenPath: await tokenFile("device-token\n"),
+    });
+
+    expect(auth).toEqual({ source: "device-token-file", deviceToken: "device-token" });
+    expect(client.accessSecretVersion).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the legacy shared token only when explicitly enabled", async () => {
+    const client = makeClient({
+      payload: { data: Buffer.from("legacy-token", "utf8") },
+    });
+
+    const auth = await fetchGatewayAuth({
+      gatewayId: "gw-test",
+      client,
+      allowLegacyFallback: true,
+      deviceTokenPath: path.join(os.tmpdir(), "missing-device-token-" + Math.random()),
+    });
+
+    expect(auth).toEqual({ source: "legacy-token", token: "legacy-token" });
+  });
+
+  it("fails closed when the device token file is missing and legacy fallback is disabled", async () => {
+    const client = makeClient({
+      payload: { data: Buffer.from("legacy-token", "utf8") },
+    });
+
+    await expect(
+      fetchGatewayAuth({
+        gatewayId: "gw-test",
+        client,
+        deviceTokenPath: path.join(os.tmpdir(), "missing-device-token-" + Math.random()),
+      }),
+    ).rejects.toMatchObject({ code: "not-configured" });
+    expect(client.accessSecretVersion).not.toHaveBeenCalled();
+  });
+
+  it("persists and clears an issued device token at the configured path", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "gateway-auth-persist-"));
+    tempDirs.push(dir);
+    const deviceTokenPath = path.join(dir, "nested", "token");
+
+    await persistGatewayDeviceToken({ token: "issued-token", deviceTokenPath });
+    await expect(
+      fetchGatewayAuth({ gatewayId: "gw-test", deviceTokenPath }),
+    ).resolves.toEqual({ source: "device-token-file", deviceToken: "issued-token" });
+
+    await clearGatewayDeviceToken(deviceTokenPath);
+    await expect(
+      fetchGatewayAuth({ gatewayId: "gw-test", deviceTokenPath }),
+    ).rejects.toMatchObject({ code: "not-configured" });
   });
 });

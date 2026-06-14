@@ -143,14 +143,15 @@ fi
 # Secret rotation / reconciliation (env-sync) happens later via pre-boot-config.ts
 # — nothing else fixed up here. The template is canonical; don't re-derive.
 
-# Publish the fresh gateway auth token to Secret Manager so cattle chat-proxy
-# can open authenticated upstream WS connections.
+# Publish the fresh gateway auth token to Secret Manager only when explicitly
+# requested. The normal Kubernetes path keeps gateway auth pod-local:
+# gateway-edge gets the same per-gateway OPENCLAW_GATEWAY_TOKEN env exception,
+# uses it once to pair with OpenClaw, then persists a sidecar-only device token.
 #
-# Operator gateways intentionally run without platform Secret Manager access.
-# Their gateway-edge sidecar is in the same pod and receives the same
-# OPENCLAW_GATEWAY_TOKEN from the per-gateway K8s secret, so it authenticates
-# locally from env instead of requiring the shell-bearing gateway container to
-# mint/read platform SM versions at boot.
+# The shell-bearing gateway container must not need platform Secret Manager
+# reach under the platform-credential floor. Leaving this publisher as opt-in
+# preserves a rollback hook for legacy deployments without making normal boots
+# block on ADC/metadata or requiring a secretmanager role on the cattle GSA.
 #
 # Exit-code contract with publish-gateway-token.mjs:
 #   0 — published successfully; boot continues
@@ -161,33 +162,37 @@ fi
 #   1 — transient SM error (UNAVAILABLE, DNS blip). WARN + continue;
 #       the next boot retries. Ops agents keep working.
 #
-# Skipped when GCP_PROJECT_ID is unset (docker-compose local dev), or when the
-# operator profile is active (locked KSA, no platform SM access).
-if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
-  log "operator profile: skipping gateway auth token Secret Manager publish; gateway-edge uses the in-pod OPENCLAW_GATEWAY_TOKEN"
-elif [ -n "${GCP_PROJECT_ID:-}" ]; then
-  set +e
-  node /octogee/scripts/publish-gateway-token.mjs
-  PUBLISH_RC=$?
-  set -e
-  case "$PUBLISH_RC" in
-    0)
-      log "gateway auth token published to Secret Manager (gateway-auth-token-${GATEWAY_ID})"
-      ;;
-    2)
-      log "████████████████████████████████████████████████████████████████"
-      log "FATAL: GATEWAY_AUTH_PUBLISH_FAILED (setup-incomplete). Secret"
-      log "shell missing, IAM missing, or Workload Identity misconfigured."
-      log "Gateway cannot be authenticated by chat-proxy until this is fixed."
-      log "Run: ./scripts/setup-secrets.sh --env=<env> to provision."
-      log "Crash-looping pod so the failure surfaces in kubectl events."
-      log "████████████████████████████████████████████████████████████████"
-      exit 1
-      ;;
-    *)
-      log "WARN: publish-gateway-token.mjs exit=${PUBLISH_RC} (transient) — chat-proxy will reject upstream WS until the next successful publish; not crash-looping since gateway can serve ops traffic meanwhile"
-      ;;
-  esac
+# Skipped unless GATEWAY_AUTH_SECRET_MANAGER_PUBLISH=true/1 and GCP_PROJECT_ID
+# is set.
+if [ "${GATEWAY_AUTH_SECRET_MANAGER_PUBLISH:-}" = "true" ] || [ "${GATEWAY_AUTH_SECRET_MANAGER_PUBLISH:-}" = "1" ]; then
+  if [ -z "${GCP_PROJECT_ID:-}" ]; then
+    log "gateway auth token Secret Manager publish requested but GCP_PROJECT_ID is unset; skipping"
+  else
+    set +e
+    node /octogee/scripts/publish-gateway-token.mjs
+    PUBLISH_RC=$?
+    set -e
+    case "$PUBLISH_RC" in
+      0)
+        log "gateway auth token published to Secret Manager (gateway-auth-token-${GATEWAY_ID})"
+        ;;
+      2)
+        log "████████████████████████████████████████████████████████████████"
+        log "FATAL: GATEWAY_AUTH_PUBLISH_FAILED (setup-incomplete). Secret"
+        log "shell missing, IAM missing, or Workload Identity misconfigured."
+        log "Gateway cannot be authenticated by chat-proxy until this is fixed."
+        log "Run: ./scripts/setup-secrets.sh --env=<env> to provision."
+        log "Crash-looping pod so the failure surfaces in kubectl events."
+        log "████████████████████████████████████████████████████████████████"
+        exit 1
+        ;;
+      *)
+        log "WARN: publish-gateway-token.mjs exit=${PUBLISH_RC} (transient) — chat-proxy will reject upstream WS until the next successful publish; not crash-looping since gateway can serve ops traffic meanwhile"
+        ;;
+    esac
+  fi
+else
+  log "skipping gateway auth token Secret Manager publish; gateway-edge uses the in-pod OPENCLAW_GATEWAY_TOKEN/device token"
 fi
 
 # ── Provision ops-agent workspace + agent dirs ──────────────────────────────

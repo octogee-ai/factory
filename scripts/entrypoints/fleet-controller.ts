@@ -14,7 +14,9 @@ const MY_GATEWAY_ID = GATEWAY_ID === "local" ? "default" : GATEWAY_ID;
 
 async function main(): Promise<void> {
   log(bootBanner("fleet-controller"));
-  const rpc = createGatewayRpc();
+  const rpc = createGatewayRpc({
+    allowLegacyGatewayTokenFallback: true,
+  });
   const openclawVersion = probeOpenClawVersion({
     execFile: execFileSync,
     binaryPath: "/usr/local/bin/openclaw",

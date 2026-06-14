@@ -1,0 +1,175 @@
+import * as crypto from "node:crypto";
+import type { NextFunction, Request, Response } from "express";
+import type { Firestore } from "firebase-admin/firestore";
+import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
+import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
+
+type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
+
+export interface TenantEnforcementOptions {
+  db?: Pick<Firestore, "collection">;
+  internalServiceKey?: string;
+}
+
+const FORBIDDEN = { error: "forbidden" } as const;
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(stringValue).filter((v): v is string => !!v) : [];
+}
+
+function body(req: Request): Record<string, unknown> {
+  return req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+}
+
+function validPlatformKey(req: Request, expected: string | undefined): boolean {
+  if (!expected) return false;
+  const provided = req.headers["x-internal-service-key"];
+  if (typeof provided !== "string") return false;
+  try {
+    return (
+      provided.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(expected, "utf8"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function requestedGatewayIds(req: Request): string[] {
+  const b = body(req);
+  return [
+    stringValue(b.gatewayId),
+    stringValue(req.params?.gatewayId),
+    stringValue(req.query?.gatewayId),
+  ].filter((v): v is string => !!v);
+}
+
+function requestedFlowId(req: Request): string | null {
+  return stringValue(body(req).flowId);
+}
+
+function requestedUids(req: Request): string[] {
+  const b = body(req);
+  return [
+    stringValue(b.uid),
+    stringValue(b.ownerUid),
+    stringValue(b.actorUid),
+    stringValue(req.params?.uid),
+    ...stringArray(b.targetUserIds),
+  ].filter((v): v is string => !!v);
+}
+
+function requestedSlugs(req: Request): string[] {
+  const b = body(req);
+  return [
+    stringValue(b.slug),
+    stringValue(b.workspaceSlug),
+    stringValue(b.org),
+    stringValue(req.params?.slug),
+    stringValue(req.query?.slug),
+    stringValue(req.query?.org),
+  ].filter((v): v is string => !!v);
+}
+
+async function uidBelongsToGateway(
+  db: Pick<Firestore, "collection">,
+  uid: string,
+  gatewayId: string,
+): Promise<boolean> {
+  const snap = await db.collection("users").doc(uid).get();
+  if (!snap.exists) return false;
+  const data = snap.data() as Record<string, unknown> | undefined;
+  const provisioning = data?.provisioning as Record<string, unknown> | undefined;
+  const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
+  return openclaw?.gatewayId === gatewayId;
+}
+
+async function flowBelongsToGateway(
+  db: Pick<Firestore, "collection">,
+  flowId: string,
+  gatewayId: string,
+): Promise<boolean> {
+  const snap = await db.collection("byosubFlows").doc(flowId).get();
+  if (!snap.exists) return false;
+  const data = snap.data() as Record<string, unknown> | undefined;
+  return data?.gatewayId === gatewayId;
+}
+
+async function slugBelongsToGateway(
+  db: Pick<Firestore, "collection">,
+  slug: string,
+  gatewayId: string,
+): Promise<boolean> {
+  const slugs = await readAssignedSlugsForGateway(db as Firestore, gatewayId);
+  return slugs.includes(slug);
+}
+
+async function gatewayBindingAuthorized(
+  db: Pick<Firestore, "collection">,
+  bound: GatewayBinding,
+  req: Request,
+): Promise<boolean> {
+  const gatewayIds = requestedGatewayIds(req);
+  if (gatewayIds.length > 0 && gatewayIds.some((gatewayId) => gatewayId !== bound.gatewayId)) {
+    return false;
+  }
+  if (gatewayIds.length > 0) return true;
+
+  const flowId = requestedFlowId(req);
+  if (flowId) {
+    return flowBelongsToGateway(db, flowId, bound.gatewayId);
+  }
+
+  const uids = requestedUids(req);
+  if (uids.length > 0) {
+    for (const uid of uids) {
+      if (!(await uidBelongsToGateway(db, uid, bound.gatewayId))) return false;
+    }
+    return true;
+  }
+
+  const slugs = requestedSlugs(req);
+  if (slugs.length > 0) {
+    for (const slug of slugs) {
+      if (!(await slugBelongsToGateway(db, slug, bound.gatewayId))) return false;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+export function createTenantEnforcementMiddleware(
+  opts: TenantEnforcementOptions = {},
+): (req: Request, res: Response, next: NextFunction) => void {
+  const db = opts.db ?? defaultDb;
+  return (req, res, next) => {
+    const platformKey = opts.internalServiceKey ?? process.env.INTERNAL_SERVICE_KEY;
+    if (validPlatformKey(req, platformKey)) {
+      next();
+      return;
+    }
+
+    const bound = req.boundTenant;
+    if (!bound || bound.kind !== "gateway") {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+
+    gatewayBindingAuthorized(db, bound, req)
+      .then((allowed) => {
+        if (!allowed) {
+          res.status(403).json(FORBIDDEN);
+          return;
+        }
+        next();
+      })
+      .catch(() => {
+        res.status(403).json(FORBIDDEN);
+      });
+  };
+}

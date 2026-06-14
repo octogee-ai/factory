@@ -9,6 +9,7 @@ import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
 import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middleware/security.js";
 
 import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
+import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/gitea-admin.js";
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
@@ -23,6 +24,7 @@ import {
   createTenantBindingMiddleware,
   createTenantBindingMetrics,
 } from "./middleware/tenant-binding.js";
+import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TENANT_BOUND_API_ROUTES = new Set([
@@ -50,6 +52,15 @@ export function shouldAttemptTenantBinding(path: string): boolean {
     return true;
   }
   return false;
+}
+
+export function shouldEnforceTenantBinding(req: Request): boolean {
+  if (!shouldAttemptTenantBinding(req.path)) return false;
+  return Boolean(
+    req.boundTenant ||
+      req.get("x-k8s-sa-token") ||
+      req.get("x-internal-service-key"),
+  );
 }
 
 export function createApp(opts: CreateAppOptions = {}) {
@@ -81,6 +92,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     reviewer: tenantBindingReviewer,
     metrics: tenantBindingMetrics,
   });
+  const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({ db });
   startTenantBindingSelfCheck(tenantBindingHealth, {
     reviewer: tenantBindingReviewer,
     ...opts.tenantBindingSelfCheck,
@@ -132,10 +144,20 @@ const route = req.route?.path || "unmatched";
     }
     tenantBindingMiddleware(req, res, next);
   });
+  app.use((req, res, next) => {
+    if (!shouldEnforceTenantBinding(req)) {
+      next();
+      return;
+    }
+    tenantEnforcementMiddleware(req, res, next);
+  });
   mountClusterRoutes(app, {
     mmRestProxyHandler,
     mattermostMintRoutes,
   });
+  // octogee-api-only: Gitea admin broker. Gateway provisioners call this with
+  // their projected gateway KSA token; octogee-api holds the Gitea admin token.
+  app.use("/internal/gitea", internalGiteaAdminRoutes);
   // octogee-api-only: the Hosting-deploy broker. Mounted after the tenant-binding
   // middleware so req.boundTenant is attached; never mounted on the in-pod gateway-edge.
   app.use("/api/site/hosting-deploy", createSiteDeployRoutes({ db }));

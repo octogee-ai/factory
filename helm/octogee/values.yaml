@@ -46,7 +46,7 @@ cloud-sql-proxy:
     tag: "2.11.4"
   connectionName: "octogee:us-central1:octogee-pg"
   usePrivateIp: true
-  serviceAccountName: octogee-gateway
+  serviceAccountName: octogee-api
   resources:
     requests:
       cpu: 50m
@@ -211,6 +211,13 @@ gatewayFleet:
   aliasService:
     enabled: true
   networkPolicy:
+    enabled: true
+  # Platform-owned TokenReview capability for dynamic gateway KSAs.
+  # Per-gateway releases are installed by Cowboy and intentionally remain
+  # namespace-scoped; this umbrella binding is cluster-scoped but grants only
+  # authentication.k8s.io/tokenreviews.create to service accounts in the
+  # release namespace.
+  tokenReviewRbac:
     enabled: true
   fleetControlIngress:
     enabled: false
