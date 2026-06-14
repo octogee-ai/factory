@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { auth, db } from "../lib/db.js";
+import { resolveCanonicalWorkspaceSlug } from "../lib/canonical-workspace.js";
 import { logger } from "./logging.js";
 
 declare global {
@@ -9,6 +10,7 @@ declare global {
     interface Request {
       uid?: string;
       user?: FirebaseFirestore.DocumentData;
+      workspaceSlug?: string | null;
       isAdmin?: boolean;
     }
   }
@@ -28,7 +30,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       req.uid = decoded.uid;
       const userSnap = await db.collection("users").doc(decoded.uid).get();
       if (userSnap.exists) {
-        req.user = userSnap.data();
+        const userData = userSnap.data();
+        req.user = userData;
+        req.workspaceSlug = await resolveCanonicalWorkspaceSlug(decoded.uid, userData);
       }
       try {
         const configSnap = await db.collection("users").doc(decoded.uid).collection("system").doc("config").get();

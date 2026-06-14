@@ -37,7 +37,11 @@ async function authHeader(uid: string = CALLER_UID): Promise<{ Authorization: st
 }
 
 async function seedCaller(uid: string, username = "alice", workspaceId = "alice"): Promise<void> {
-  await db.collection("users").doc(uid).set({ username, workspaceId });
+  await db.collection("users").doc(uid).set({
+    username,
+    workspaceId,
+    provisioning: { openclaw: { slug: workspaceId } },
+  });
   await db
     .collection("users")
     .doc(uid)
@@ -468,6 +472,21 @@ describe("GET /api/projects/slug-available", () => {
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(false);
   });
+
+  it("uses the server-managed workspace slug, not forged mutable username/workspaceId fields", async () => {
+    await db.collection("users").doc(CALLER_UID).set({
+      username: "victim",
+      workspaceId: "victim",
+      provisioning: { openclaw: { slug: "alice" } },
+    });
+    await seedProject("victim", "mygame", { id: "mygame" });
+    const app = createApp();
+    const res = await request(app)
+      .get("/api/projects/slug-available?slug=mygame")
+      .set(await authHeader());
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(true);
+  });
 });
 
 describe("POST /api/projects — MM channel failure is hard-failure", () => {
@@ -600,6 +619,36 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       expect.stringContaining("My Game"),
       expect.any(String),
     );
+  });
+
+  it("creates under the server-managed workspace slug when mutable identity fields are forged", async () => {
+    await db.collection("users").doc(CALLER_UID).set({
+      username: "victim",
+      workspaceId: "victim",
+      provisioning: { openclaw: { slug: "alice" } },
+    });
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: CALLER_UID,
+      slug: "alice",
+      teamId: "team-abc",
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    mockMmApi.mockResolvedValue({ id: "ch-new-123" });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects")
+      .set(await authHeader())
+      .send({ name: "My Game", slug: "mygame", visibility: "public" });
+
+    expect(res.status).toBe(200);
+    expect(await getProject("alice", "mygame")).toBeDefined();
+    expect(await getProject("victim", "mygame")).toBeUndefined();
   });
 
   it("returns 502 + marks failed when callerCtx.userId is null (owner not provisioned)", async () => {

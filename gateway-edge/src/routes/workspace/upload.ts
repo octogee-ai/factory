@@ -135,7 +135,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
       slug: parsed.slug,
       projectSlug: parsed.projectSlug,
       callerUid: req.uid,
-      callerWorkspaceSlug: req.user?.username,
+      callerWorkspaceSlug: req.workspaceSlug,
     });
     if (!targetResult.ok) {
       res.status(targetResult.status).json({ error: targetResult.error });

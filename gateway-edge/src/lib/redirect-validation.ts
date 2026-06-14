@@ -18,7 +18,7 @@ export function sanitizeReturnUrl(
 
   const trimmed = returnUrl.trim();
 
-  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !trimmed.startsWith("/\\")) {
     return trimmed;
   }
 

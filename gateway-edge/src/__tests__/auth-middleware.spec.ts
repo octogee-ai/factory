@@ -24,7 +24,10 @@ function colRef(path: string): any {
 
 vi.mock('../lib/db', () => ({
   auth: { verifyIdToken },
-  db: { collection: (c: string) => colRef(c) },
+  db: {
+    collection: (c: string) => colRef(c),
+    doc: (path: string) => docRef(path),
+  },
 }));
 vi.mock('../middleware/logging', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -53,6 +56,7 @@ describe('requireAuth — admin role only; no per-user gitea secret read (retire
     reads.length = 0;
     verifyIdToken.mockReset().mockResolvedValue({ uid: 'u1' });
     mockDocs.set('users/u1', { username: 'alice' });
+    mockDocs.set('workspaces/alice', { ownerUid: 'u1' });
   });
 
   it('attaches isAdmin from system/config and does NOT touch secrets/gitea', async () => {
@@ -64,6 +68,7 @@ describe('requireAuth — admin role only; no per-user gitea secret read (retire
 
     expect(nextCalled).toBe(true);
     expect(req.isAdmin).toBe(true);
+    expect(req.workspaceSlug).toBe('alice');
     expect((req as Record<string, unknown>).giteaToken).toBeUndefined();
     expect(reads).not.toContain('users/u1/secrets/gitea');
   });

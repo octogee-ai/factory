@@ -189,7 +189,7 @@ export function withFileTarget(
           slug,
           projectSlug,
           callerUid: req.uid,
-          callerWorkspaceSlug: req.user?.username,
+          callerWorkspaceSlug: req.workspaceSlug,
         },
         opts,
       );

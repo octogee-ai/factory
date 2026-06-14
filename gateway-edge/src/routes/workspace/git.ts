@@ -40,7 +40,7 @@ function ensureWriteAuth(
   target: FileTarget,
 ): boolean {
   if (target.projectSlug) return true;
-  if (req.user?.username !== target.slug) {
+  if (req.workspaceSlug !== target.slug) {
     res.status(403).json({
       error: "Workspace owner only",
       code: "OWNER_ONLY",

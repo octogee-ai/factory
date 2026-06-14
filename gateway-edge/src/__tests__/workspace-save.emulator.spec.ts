@@ -60,7 +60,13 @@ async function seedUser(
   displayName: string,
   email: string,
 ): Promise<void> {
-  await db.collection("users").doc(uid).set({ username, displayName, email, workspaceId: username });
+  await db.collection("users").doc(uid).set({
+    username,
+    displayName,
+    email,
+    workspaceId: username,
+    provisioning: { openclaw: { slug: username } },
+  });
   await db.doc(`users/${uid}/system/config`).set({ role: "user" });
   await db.doc(`users/${uid}/secrets/gitea`).set({ token: `${username}-gitea-token` });
 }

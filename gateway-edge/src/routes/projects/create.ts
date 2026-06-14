@@ -43,7 +43,6 @@ function resolveCreateRepoSource(repoSource: unknown, isAdmin: boolean): RepoSou
 }
 
 router.get("/slug-available", async (req: Request, res: Response) => {
-  const uid = req.uid!;
   const slug = String(req.query.slug ?? "").trim();
 
   const err = validateProjectSlug(slug);
@@ -52,8 +51,7 @@ router.get("/slug-available", async (req: Request, res: Response) => {
     return;
   }
 
-  const userDoc = await db.doc(`users/${uid}`).get();
-  const workspaceId = userDoc.data()?.workspaceId ?? userDoc.data()?.username;
+  const workspaceId = req.workspaceSlug;
   if (!workspaceId) {
     res.status(422).json({ error: "Workspace not provisioned" });
     return;
@@ -100,9 +98,8 @@ router.post("/", strictRateLimit, async (req: Request, res: Response) => {
     }
     const ghRepoSource = rs.value;
 
-    const userDoc = await db.doc(`users/${uid}`).get();
-    const userData = userDoc.data();
-    const workspaceId = userData?.workspaceId ?? userData?.username;
+    const userData = req.user;
+    const workspaceId = req.workspaceSlug;
     if (!workspaceId) {
       res.status(422).json({ error: "Workspace not provisioned" });
       return;

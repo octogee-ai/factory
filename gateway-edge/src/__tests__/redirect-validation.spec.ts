@@ -42,4 +42,9 @@ describe('sanitizeReturnUrl — existing contract pins', () => {
   it('rejects offsite absolute URLs', () => {
     expect(sanitizeReturnUrl('https://evil.com/phish')).toBe('/dashboard');
   });
+
+  it('rejects backslash-prefixed protocol-relative bypasses', () => {
+    expect(sanitizeReturnUrl('/\\evil.com')).toBe('/dashboard');
+    expect(sanitizeReturnUrl('/\\\\evil.com')).toBe('/dashboard');
+  });
 });

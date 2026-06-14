@@ -114,7 +114,7 @@ export function ensureSlug(req: Request, res: Response): string | null {
     res.status(400).json({ error: "Missing slug" });
     return null;
   }
-  if (req.user?.username !== slug) {
+  if (req.workspaceSlug !== slug) {
     res.status(403).json({ error: "Forbidden" });
     return null;
   }

@@ -9,7 +9,6 @@ import {
 } from "../../billing/provider-key-format.js";
 import { probeProviderKey } from "../../billing/provider-probe.js";
 import { writeSecret, archiveSecret } from "../../../../scripts/lib/secret-manager.js";
-import { primaryWorkspaceSlug } from "../../../../scripts/lib/workspace-slugs.js";
 import { triggerSecretsReload } from "../../../../scripts/lib/byot-sync-runtime.js";
 import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers.js";
 
@@ -91,9 +90,7 @@ const probe = await probeProviderKey({ provider, apiKey: key, baseUrl: body.base
       return;
     }
 
-const userDoc = await db.collection("users").doc(uid).get();
-    const userData = userDoc.data() || {};
-    const slug = primaryWorkspaceSlug(userData);
+    const slug = req.workspaceSlug;
     if (!slug) {
       res.status(400).json({ error: "Customer has no provisioned workspace — cannot register BYOT" });
       return;
@@ -164,9 +161,7 @@ await db.collection("users").doc(uid).update({
 router.delete("/byot-key", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
-    const userDoc = await db.collection("users").doc(uid).get();
-    const userData = userDoc.data() || {};
-    const slug = primaryWorkspaceSlug(userData);
+    const slug = req.workspaceSlug;
     if (!slug) {
       res.status(400).json({ error: "No BYOT key to remove" });
       return;
