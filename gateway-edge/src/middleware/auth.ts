@@ -58,25 +58,24 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
   });
 }
 
-export function requireInternalServiceAuth(req: Request, res: Response, next: NextFunction): void {
-  const boundTenant = (req as Request & { boundTenant?: { kind?: unknown } }).boundTenant;
-  if (boundTenant?.kind === "gateway") {
-    next();
-    return;
-  }
-
+function validateInternalServiceKey(req: Request, res: Response): boolean {
   const configuredSecret = process.env.INTERNAL_SERVICE_KEY;
 
   if (!configuredSecret) {
     logger.error("INTERNAL_SERVICE_KEY is not set — refusing internal request");
     res.status(503).json({ error: "Internal auth unavailable" });
-    return;
+    return false;
   }
 
-  const provided = req.headers["x-internal-service-key"] as string | undefined;
+  const provided = req.headers["x-internal-service-key"];
   if (!provided) {
     res.status(401).json({ error: "X-Internal-Service-Key header required" });
-    return;
+    return false;
+  }
+  if (typeof provided !== "string") {
+    logger.warn(`Internal service auth rejected from ${req.ip} — invalid key`);
+    res.status(401).json({ error: "Invalid internal service key" });
+    return false;
   }
 
   let valid = false;
@@ -94,10 +93,27 @@ export function requireInternalServiceAuth(req: Request, res: Response, next: Ne
   if (!valid) {
     logger.warn(`Internal service auth rejected from ${req.ip} — invalid key`);
     res.status(401).json({ error: "Invalid internal service key" });
+    return false;
+  }
+
+  return true;
+}
+
+export function requireInternalServiceKey(req: Request, res: Response, next: NextFunction): void {
+  if (!validateInternalServiceKey(req, res)) {
+    return;
+  }
+  next();
+}
+
+export function requireInternalServiceAuth(req: Request, res: Response, next: NextFunction): void {
+  const boundTenant = (req as Request & { boundTenant?: { kind?: unknown } }).boundTenant;
+  if (boundTenant?.kind === "gateway") {
+    next();
     return;
   }
 
-  next();
+  requireInternalServiceKey(req, res, next);
 }
 
 export function requireAgentKeyForUser(

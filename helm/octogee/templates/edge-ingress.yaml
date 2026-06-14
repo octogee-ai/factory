@@ -111,42 +111,15 @@ spec:
                 name: {{ $glmSvc }}
                 port:
                   name: http
-          - path: /api/workspace/git/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $edgeSvc }}
-                port:
-                  name: http
-          - path: /api/workspace/git
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $edgeSvc }}
-                port:
-                  name: http
-          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "v4" "auth" "openclaw" "billing" "invites" "integrations" "connect" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "shells" "admin" }}
-          {{- range $prefix := $octogeeApiPrefixes }}
-          - path: /api/{{ $prefix }}/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $apiSvc }}
-                port:
-                  name: http
-          - path: /api/{{ $prefix }}
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $apiSvc }}
-                port:
-                  name: http
-          {{- end }}
+          # Cluster API default. Gateway-local locality routes must use the
+          # per-instance /api/g/<gatewayId>/* seam; bare /api/* goes to the
+          # singleton octogee-api so newly mounted cluster routes cannot fall
+          # through to the gateway-edge sidecar.
           - path: /api/*
             pathType: ImplementationSpecific
             backend:
               service:
-                name: {{ $edgeSvc }}
+                name: {{ $apiSvc }}
                 port:
                   name: http
           - path: /health

@@ -59,36 +59,17 @@ spec:
           {{- $svc := .Values.ingress.targetService | default "gateway-edge" }}
           {{- $glm := .Values.ingress.glmService | default "glm-controller" }}
           {{- $api := .Values.ingress.octogeeApiService | default "octogee-api" }}
-          {{- /* Cluster prefixes lifted from gateway-edge → octogee-api per
-              docs/specs/POST-BENDER-CLEANUP-SPEC.md §2. GCE Ingress
-              evaluates rules in document order; these must precede the
-              /api/* catch-all that lands on gateway-edge. Each prefix
-              renders BOTH `/api/<p>/*` and `/api/<p>` because GCE
-              `/foo/*` does not match the bare `/foo`.
+          {{- /* Cluster API default: every bare /api/* request lands on
+              octogee-api, which mounts the full cluster route bundle via
+              mountClusterRoutes(). Gateway-local locality surfaces must use
+              the per-instance /api/g/<gatewayId>/* seam; the gateway-edge
+              alias Service round-robins across standard gateway pods and is
+              never a correct target for bare workspace/git or preview calls.
 
-              Locality sub-routes are handled in two ways:
-                - /api/workspace/git/STAR — carved out below (more-specific
-                  rule placed BEFORE the workspace migration so GCE picks
-                  the carve first). Stays on workspace-api because git
-                  ops read/write /home/node/.openclaw/customers (pod-local
-                  FS).
-                - projects/:wid/:pid/deploy-preview — GCE doesn't match
-                  wildcard middles, so the app calls this via the
-                  gateway-scoped /api/g/:gid/projects/... seam
-                  (workspace-api-fleet-ingress). All of /api/projects on
-                  THIS ingress safely goes to octogee-api.
-
-              The /api/admin/* catch-all is included; the more-specific
-              glm-controller admin paths above keep their precedence
-              because they appear earlier in the rules list. */}}
-          {{- /* v4 = MM REST proxy (/api/v4/*), auth = credential mint
-              (/api/auth/mattermost) — both relocated from the chat-proxy
-              sidecar to octogee-api (POST-BENDER-CLEANUP-SPEC §2.7). The
-              long-lived MM WebSocket is NOT here: provisioned users reach
-              it via the fleet seam (/api/g/<gw>/api/v4/websocket →
-              gateway-edge home pod), so the bare /api/v4/* → octogee-api
-              is REST-only. */}}
-          {{- $octogeeApiPrefixes := list "workspace" "projects" "sharing" "entities" "mattermost" "v4" "auth" "openclaw" "billing" "invites" "integrations" "byosub" "discord" "notifications" "profile" "onboarding" "posts" "agents" "builder" "shells" "admin" }}
+              GCE evaluates path rules in document order. The more-specific
+              glm-controller admin routes below must stay before the /api/*
+              octogee-api catch-all so the admin fleet surfaces remain live
+              even when no gateway pods are booted. */}}
           # Cowboy HTTP — fleet routes served from glm-controller so the
           # admin Gateways tab keeps responding when no gateway pods are
           # booted. GCE URL maps prefer most-specific path; these rules
@@ -204,67 +185,15 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
-          # ── workspace/git locality carve-out ────────────────────
-          # Must precede the /api/workspace/* rule below so GCE picks
-          # the more-specific match first. git ops use the gateway-local
-          # /home/node/.openclaw/customers FS; octogee-api can't serve
-          # them. App calls these via gatewayPath() so the request lands
-          # on the user's home pod via /api/g/:gid/workspace/git/* (the
-          # fleet-ingress). This bare /api/workspace/git/* rule covers
-          # the legacy round-robin fallback path.
-          - path: /api/workspace/git/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $svc }}
-                port:
-                  name: http
-          - path: /api/workspace/git
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $svc }}
-                port:
-                  name: http
-          # ── octogee-api cluster prefixes ────────────────────────
-          # Rendered AFTER the glm-controller specifics + workspace/git
-          # carve above (so the more-specific rules win) and BEFORE the
-          # /api/* catch-all (so cluster routes don't fall through to
-          # gateway-edge).
-          {{- range $prefix := $octogeeApiPrefixes }}
-          - path: /api/{{ $prefix }}/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $api }}
-                port:
-                  name: http
-          - path: /api/{{ $prefix }}
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $api }}
-                port:
-                  name: http
-          {{- end }}
-          # ── catch-all → gateway-edge ──────────────────────────
-          # After PR #1115, /api/workspace/* and /api/projects/* are
-          # in the octogee-api migration list above, and the explicit
-          # /api/workspace/git/* carve sends git ops to gateway-edge.
-          # projects/.../deploy-preview cannot be Ingress-carved (GCE
-          # doesn't match wildcard middles); the app uses the gateway-
-          # scoped /api/g/:gid/projects/.../deploy-preview seam served
-          # by the fleet-ingress instead.
-          # This catch-all now backstops only unrecognized /api/* paths
-          # — anything not matched by one of the explicit rules above.
-          # Kept as defense in depth so an unknown route 404s on
-          # gateway-edge with a familiar error shape rather than
-          # GCE's default 404 page.
+          # ── /api/* cluster default → octogee-api ────────────────
+          # octogee-api serves the full cluster API bundle. Gateway-local
+          # routes are intentionally not carved out here; callers must use
+          # /api/g/<gatewayId>/* so they reach the correct gateway pod.
           - path: /api/*
             pathType: ImplementationSpecific
             backend:
               service:
-                name: {{ $svc }}
+                name: {{ $api }}
                 port:
                   name: http
           - path: /health

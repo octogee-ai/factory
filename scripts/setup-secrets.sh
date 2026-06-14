@@ -310,9 +310,9 @@ fi
 # helm/octogee/charts/gateway-edge/values.yaml, and this script's
 # Firebase-function pre-create list.
 
-# ── 9. Internal service key (gateway-edge ↔ gateway ↔ CronJob) ─────────
-# Used by requireInternalServiceAuth() on /internal/billing/* routes.
-# One shared secret across gateway-edge, gateway, and the trial-expiry CronJob.
+# ── 9. Internal service key (octogee-api ↔ gateway-edge/gateway ↔ jobs) ─
+# Used by requireInternalServiceAuth() on /internal/* and key-guarded producer routes.
+# One shared secret across octogee-api, gateway-edge, gateways, CronJobs, and Functions.
 # Precedence: Secret Manager > existing K8s secret > newly-generated.
 # Rotating this value breaks cron jobs until pods restart, so we only
 # generate a new one on first install (both SM and K8s empty).
@@ -644,6 +644,7 @@ SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octo
 
 # Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy
 for sm_secret in \
+  INTERNAL_SERVICE_KEY \
   MM_ADMIN_TOKEN \
   GITEA_TOKEN \
   STRIPE_SECRET_KEY \
