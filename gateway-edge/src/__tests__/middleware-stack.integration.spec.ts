@@ -32,6 +32,8 @@ vi.mock('../../../gateway-edge/src/lib/stripe', () => ({
 
 import { createApp } from '../index.js';
 
+const createSidecarApp = () => createApp({ surface: 'sidecar' });
+
 describe('gateway-edge middleware stack', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -43,7 +45,7 @@ describe('gateway-edge middleware stack', () => {
   });
 
   it('sets CORS headers for allowed localhost origin', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app)
       .get('/health')
       .set('Origin', 'http://localhost:4321');
@@ -54,7 +56,7 @@ describe('gateway-edge middleware stack', () => {
   });
 
   it('does not set allow-origin header for disallowed origin', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app)
       .get('/health')
       .set('Origin', 'https://evil.example.com');
@@ -64,7 +66,7 @@ describe('gateway-edge middleware stack', () => {
   });
 
   it('handles CORS preflight on public route', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app)
       .options('/api/workspace')
       .set('Origin', 'https://octogee.web.app')
@@ -75,7 +77,7 @@ describe('gateway-edge middleware stack', () => {
   });
 
   it('exposes metrics endpoint', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/metrics');
 
     expect(res.status).toBe(200);
@@ -84,7 +86,7 @@ describe('gateway-edge middleware stack', () => {
   });
 
   it('keeps health endpoint working without auth', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/api/health');
 
     expect(res.status).toBe(200);
@@ -92,22 +94,21 @@ describe('gateway-edge middleware stack', () => {
     expect(res.body.service).toBe('gateway-edge');
   });
 
-it.each(['capture', 'sync-back', 'auth-state'])(
-    'mounts the in-pod byosub internal route /api/byosub/%s (never 404)',
+  it.each(['capture', 'sync-back', 'auth-state'])(
+    'does not mount cluster byosub route /api/byosub/%s on the sidecar',
     async (path) => {
       process.env.INTERNAL_SERVICE_KEY = 'byosub-mount-test-key';
-      const app = createApp();
+      const app = createSidecarApp();
       const res = await request(app).post(`/api/byosub/${path}`).send({});
 
-      expect(res.status).not.toBe(404);
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(404);
     },
   );
 
   it('mounts /internal/builder-shell on THIS sidecar (locality) — the in-pod shell bridge redeems via localhost:3001', async () => {
 
 process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app)
       .post('/internal/builder-shell/redeem')
       .set('X-Internal-Service-Key', 'redeem-mount-test-key')
@@ -118,7 +119,7 @@ process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
 
   it('also mounts /internal/builder-shell on the fleet seam — cross-pod kill reaches the handler via /api/g/:gatewayId/internal/builder-shell/kill (404 = the prefix never reached the mount)', async () => {
     process.env.INTERNAL_SERVICE_KEY = 'kill-scoped-mount-test-key';
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app)
       .post('/api/g/gw-bender/internal/builder-shell/kill')
       .set('X-Internal-Service-Key', 'kill-scoped-mount-test-key')
@@ -127,43 +128,43 @@ process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
     expect(res.body).toEqual({ error: 'invalid shellId' });
   });
 
-  it('keeps the mountApi locality routes on the same fleet seam — scoped /api/g/:gatewayId/workspace reaches requireAuth, never 404', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/g/gw-bender/workspace/anything');
+  it('keeps the mountApi locality routes on the same fleet seam — scoped git locality reaches requireAuth, never 404', async () => {
+    const app = createSidecarApp();
+    const res = await request(app).get('/api/g/gw-bender/workspace/git/status');
     expect(res.status).not.toBe(404);
     expect(res.status).toBe(401);
   });
 
   it('sets X-Content-Type-Options: nosniff on all responses', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/api/health');
 
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
   it('sets X-Frame-Options: SAMEORIGIN on all responses', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/api/health');
 
     expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
   });
 
   it('sets Strict-Transport-Security header', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/api/health');
 
     expect(res.headers['strict-transport-security']).toMatch(/max-age=/);
   });
 
   it('sets Referrer-Policy header', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/api/health');
 
     expect(res.headers['referrer-policy']).toBeDefined();
   });
 
   it('sets a lockdown CSP header (default-src none, no scripts/forms/frames)', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/api/health');
 
     const csp = res.headers['content-security-policy'];
@@ -175,7 +176,7 @@ process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
   });
 
   it('health endpoint is exempt from rate limiting (no RateLimit header)', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/health');
 
     expect(res.status).toBe(200);
@@ -183,7 +184,7 @@ process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
   });
 
   it('metrics endpoint is exempt from rate limiting', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/metrics');
 
     expect(res.status).toBe(200);
@@ -191,7 +192,7 @@ process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
   });
 
   it('non-exempt endpoints include RateLimit response headers', async () => {
-    const app = createApp();
+    const app = createSidecarApp();
     const res = await request(app).get('/api/leads');
 
     expect(res.headers['ratelimit-limit'] ?? res.headers['ratelimit']).toBeDefined();

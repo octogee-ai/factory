@@ -1,4 +1,4 @@
-import express, { Request, Response, Router } from "express";
+import express, { Express, Request, Response, Router } from "express";
 import http from "node:http";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 import { corsMiddleware } from "./middleware/cors.js";
@@ -35,7 +35,16 @@ import { validateRequiredEnv } from "./lib/required-env.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
-export function createApp() {
+export type GatewayEdgeSurface = "sidecar" | "cluster";
+
+export interface CreateAppOptions {
+  surface?: GatewayEdgeSurface;
+}
+
+export function createApp(opts: CreateAppOptions = {}) {
+// Keep createApp() as the legacy cluster harness for route tests; the module
+// entrypoint below explicitly boots the production sidecar surface.
+const surface = opts.surface ?? "cluster";
 const app = express();
 
 const metricsRegistry = new Registry();
@@ -93,15 +102,6 @@ const healthHandler = (_req: Request, res: Response) => {
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
-app.use("/internal/billing", internalBillingRoutes);
-// Hosting-deploy broker route. Operator gateways no longer wire site-build-api to
-// this path; their publishing is CI/CD-owned. Kept fail-closed behind internal auth
-// for any trusted caller that explicitly configures OCTOGEE_API_URL.
-app.use("/internal/site", internalSiteDeployRoutes);
-// Gitea admin broker for the in-pod provisioner (localhost-only; not exposed via the
-// /api/g/<id>/* ingress seam). Lets the shell-bearing openclaw container drop the Gitea
-// admin token — the provisioner calls these instead of holding GIT_API_TOKEN itself.
-app.use("/internal/gitea", internalGiteaAdminRoutes);
 // builder-shell has two caller shapes: redeem is pod-local (the in-pod bridge,
 // bare path), kill is cross-pod (octogee-api → the owner pod via the
 // /api/g/<id>/* fleet seam). The HTTP server hands Express the raw url without
@@ -109,39 +109,56 @@ app.use("/internal/gitea", internalGiteaAdminRoutes);
 app.use("/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal/builder-shell", internalBuilderShellRoutes);
 
-// mountClusterRoutes goes FIRST so its public /api/projects routes
-// (readme) and explicit-auth sequencing aren't shadowed by the locality
-// routers' blanket `Router.use(requireAuth)`. Express tries handlers in
-// mount order; locality routers are gateway-edge-only and only match
-// their specific paths (git, deploy-preview), so falling through to them
-// AFTER the cluster mount is correct.
-mountClusterRoutes(app);
+if (surface === "cluster") {
+  mountClusterSurface(app);
+}
 
-const workspaceLocality = Router();
-workspaceLocality.use(requireAuth);
-workspaceLocality.use(gitRoutes);
-workspaceLocality.use(githubReposRoutes);
-mountApi(app, "/workspace", workspaceLocality);
-
-const projectsLocality = Router();
-projectsLocality.use(requireAuth);
-projectsLocality.use(deployPreviewRoutes);
-mountApi(app, "/projects", projectsLocality);
-
-// Deep byosub health runs on the customer's own pod (reached via the
-// /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
-// auth-profile store — the proof /api/byosub/connection's ref-read can't give.
-const byosubLocality = Router();
-byosubLocality.use(requireAuth);
-byosubLocality.use(byosubHealthRoutes);
-mountApi(app, "/byosub", byosubLocality);
+mountSidecarLocalitySurface(app);
 
 app.use(errorHandler);
 
 return app;
 }
 
-const app = createApp();
+function mountClusterSurface(app: Express): void {
+  app.use("/internal/billing", internalBillingRoutes);
+  // Hosting-deploy broker route. Operator gateways no longer wire site-build-api to
+  // this path; their publishing is CI/CD-owned. Kept fail-closed behind internal auth
+  // for any trusted caller that explicitly configures OCTOGEE_API_URL.
+  app.use("/internal/site", internalSiteDeployRoutes);
+  // Legacy in-process Gitea broker surface. The durable broker lives on octogee-api;
+  // the gateway-edge sidecar surface intentionally does not mount this.
+  app.use("/internal/gitea", internalGiteaAdminRoutes);
+
+  // mountClusterRoutes goes FIRST so its public /api/projects routes
+  // (readme) and explicit-auth sequencing aren't shadowed by the locality
+  // routers. Express tries handlers in mount order; locality routers are
+  // gateway-edge-only and only match their specific paths.
+  mountClusterRoutes(app);
+}
+
+function mountSidecarLocalitySurface(app: Express): void {
+  const workspaceLocality = Router();
+  workspaceLocality.use("/git", requireAuth);
+  workspaceLocality.use(gitRoutes);
+  workspaceLocality.use(githubReposRoutes);
+  mountApi(app, "/workspace", workspaceLocality);
+
+  const projectsLocality = Router();
+  projectsLocality.use("/:wid/:pid/deploy-preview", requireAuth);
+  projectsLocality.use(deployPreviewRoutes);
+  mountApi(app, "/projects", projectsLocality);
+
+  // Deep byosub health runs on the customer's own pod (reached via the
+  // /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
+  // auth-profile store — the proof /api/byosub/connection's ref-read can't give.
+  const byosubLocality = Router();
+  byosubLocality.use("/health", requireAuth);
+  byosubLocality.use(byosubHealthRoutes);
+  mountApi(app, "/byosub", byosubLocality);
+}
+
+const app = createApp({ surface: "sidecar" });
 
 export function dispatchGatewayEdgeRequest(
   req: http.IncomingMessage,

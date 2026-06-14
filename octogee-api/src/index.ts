@@ -9,6 +9,7 @@ import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
 import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middleware/security.js";
 
 import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
+import internalBillingRoutes from "../../gateway-edge/src/routes/internal/billing.js";
 import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/gitea-admin.js";
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
@@ -157,6 +158,9 @@ const route = req.route?.path || "unmatched";
     mmRestProxyHandler,
     mattermostMintRoutes,
   });
+  // octogee-api-only: trusted singleton billing maintenance. CronJobs call this
+  // directly with INTERNAL_SERVICE_KEY instead of routing through a gateway sidecar.
+  app.use("/internal/billing", internalBillingRoutes);
   // octogee-api-only: Gitea admin broker. Gateway provisioners call this with
   // their projected gateway KSA token; octogee-api holds the Gitea admin token.
   app.use("/internal/gitea", internalGiteaAdminRoutes);
