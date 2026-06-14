@@ -187,8 +187,9 @@
         "enabled": true,
         "config": {
           "appServer": {
-            "approvalPolicy": "never",
-            "sandbox": "danger-full-access"
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
+            "sandbox": "workspace-write"
           }
         }
       },
