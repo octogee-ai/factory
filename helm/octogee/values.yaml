@@ -113,6 +113,12 @@ mattermost:
 # `gitea` dependency version in Chart.yaml is the single version knob — Renovate
 # bumps the chart and the matching binary rides along (.github/renovate.json5).
 gitea:
+  # The chart's helm-test hook (a busybox wget → gitea:3000) can't pass under the
+  # networkPolicy below, which intentionally blocks arbitrary pods — and it adds
+  # no signal over gitea's own readiness probe + the deploy's `helm --wait` gate.
+  # Disabled so releases don't leave a failed test-connection pod behind.
+  test:
+    enabled: false
   networkPolicy:
     enabled: true
   ingress:
