@@ -146,11 +146,17 @@ describe("connect — auth-url", () => {
     }
   });
 
-  it("503s for an oauth-capable connector whose platform client is not provisioned (gitlab)", async () => {
-    const res = await request(createApp())
-      .get("/api/connect/gitlab/auth-url")
-      .set("Authorization", auth.bearer());
-    expect(res.status).toBe(503);
+  it("503s for an oauth-capable connector whose platform client is not provisioned", async () => {
+    const saved = process.env.MICROSOFT_CLIENT_ID;
+    delete process.env.MICROSOFT_CLIENT_ID;
+    try {
+      const res = await request(createApp())
+        .get("/api/connect/microsoft/auth-url")
+        .set("Authorization", auth.bearer());
+      expect(res.status).toBe(503);
+    } finally {
+      if (saved !== undefined) process.env.MICROSOFT_CLIENT_ID = saved;
+    }
   });
 
   it("builds the provider authorize URL with a signed state and persists the single-use flow doc", async () => {

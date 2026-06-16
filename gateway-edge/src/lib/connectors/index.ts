@@ -6,7 +6,6 @@ import { microsoftConnector } from "./microsoft.js";
 import { vercelConnector } from "./vercel.js";
 import { cloudflareConnector } from "./cloudflare.js";
 import { geminiConnector } from "./gemini.js";
-import { gitlabConnector } from "./gitlab.js";
 import { netlifyConnector } from "./netlify.js";
 import { npmConnector } from "./npm.js";
 import { dockerConnector } from "./docker.js";
@@ -28,7 +27,6 @@ const IMPLEMENTED: Partial<Record<ConnectorId, ConnectorDef>> = {
   vercel: vercelConnector,
   cloudflare: cloudflareConnector,
   gemini: geminiConnector,
-  gitlab: gitlabConnector,
   netlify: netlifyConnector,
   npm: npmConnector,
   docker: dockerConnector,

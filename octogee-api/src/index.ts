@@ -167,7 +167,7 @@ const route = req.route?.path || "unmatched";
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
   app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
-  // octogee-api-only: broker sidecar GitHub/GitLab file-browser token reads
+  // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
   app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db }));
   // octogee-api-only: the Hosting-deploy broker. Mounted after the tenant-binding

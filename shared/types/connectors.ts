@@ -14,7 +14,6 @@ export type ConnectorFamily =
 
 export type ConnectorId =
   | 'github'
-  | 'gitlab'
   | 'vercel'
   | 'netlify'
   | 'cloudflare'
@@ -89,17 +88,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     consumption: 'platform-read',
     clientSource: 'platform',
     scopes: ['repo'],
-    implemented: true,
-  },
-  {
-    id: 'gitlab',
-    tagline: 'GitLab repos for your projects',
-    displayName: 'GitLab',
-    family: 'code-hosting',
-    captureMethods: ['oauth-web', 'pat'],
-    consumption: 'platform-read',
-    clientSource: 'platform',
-    scopes: ['read_repository'],
     implemented: true,
   },
   {

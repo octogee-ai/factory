@@ -54,7 +54,7 @@ describe('connector catalog (shared)', () => {
 
   it('marks exactly the registry-implemented connectors', () => {
     const implemented = CONNECTOR_CATALOG.filter((m) => m.implemented).map((m) => m.id).sort();
-    expect(implemented).toEqual(['aws', 'azure', 'cloudflare', 'docker', 'gcp', 'gemini', 'github', 'gitlab', 'google', 'microsoft', 'netlify', 'npm', 'vercel']);
+    expect(implemented).toEqual(['aws', 'azure', 'cloudflare', 'docker', 'gcp', 'gemini', 'github', 'google', 'microsoft', 'netlify', 'npm', 'vercel']);
   });
 });
 
@@ -249,16 +249,7 @@ describe('PAT connector identities (vercel, cloudflare, gemini)', () => {
   });
 });
 
-describe('PAT connector identities (gitlab, netlify, npm)', () => {
-  it('gitlab: GET /api/v4/user, username as accountLabel (PAT or OAuth token)', async () => {
-    mockFetchJson([
-      { url: /gitlab\.com\/api\/v4\/user$/, auth: 'Bearer glpat-x', body: { username: 'chris' } },
-    ]);
-    await expect(getConnector('gitlab')!.fetchIdentity('glpat-x')).resolves.toEqual({
-      accountLabel: 'chris',
-    });
-  });
-
+describe('PAT connector identities (netlify, npm)', () => {
   it('netlify: GET /api/v1/user, email as accountLabel', async () => {
     mockFetchJson([
       { url: /api\.netlify\.com\/api\/v1\/user$/, auth: 'Bearer nf-tok', body: { email: 'c@x.com' } },
