@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "provision": "tsx entrypoints/local-provisioner.ts",
+    "provision": "tsx entrypoints/fleet-controller.ts",
     "fleet": "tsx ops/fleet.ts",
     "bump-gateway-imagetag": "tsx ops/bump-gateway-imagetag.ts",
     "test": "npx vitest run __tests__",

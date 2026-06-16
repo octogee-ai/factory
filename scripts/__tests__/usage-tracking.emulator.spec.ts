@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -11,7 +11,7 @@ const admin = adminMod.default;
 if (admin.apps.length === 0) admin.initializeApp({ projectId: "octogee-test" });
 const db = admin.firestore();
 
-const { reportUsage, readWorkspaceId } = await import("../lib/usage-tracking.js");
+const { reportUsage } = await import("../lib/usage-tracking.js");
 
 async function recursiveClear(coll: string): Promise<void> {
 
@@ -32,12 +32,8 @@ afterAll(async () => {
   await Promise.all(admin.apps.map((app) => app?.delete()));
 });
 
-function makeAgentDir(slug: string | null): string {
+function makeAgentDir(_slug: string | null): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-test-"));
-  fs.writeFileSync(
-    path.join(dir, "customer-config.json"),
-    JSON.stringify(slug === null ? {} : { slug }),
-  );
   return dir;
 }
 
@@ -346,14 +342,13 @@ it("session + model + summary docs carry (role, model, slug, gateway, tokens, co
     expect(usage.throttleLevel).not.toBe(2);
   });
 
-  it("skips workspace-scoped writes when customer-config.json has no slug", async () => {
+  it("skips workspace-scoped writes when user state and agent id cannot identify a workspace", async () => {
     await seedUser("eckert-uid", { selectedTier: "pro", usage: {} });
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-test-"));
-    fs.writeFileSync(path.join(dir, "customer-config.json"), JSON.stringify({}));
+    const dir = makeAgentDir(null);
 
     await reportUsage({
       db: db as never,
-      agentId: "octogee-eckert-coach",
+      agentId: "badagent",
       role: "coach",
       agentDir: dir,
       usage: {
@@ -366,7 +361,7 @@ it("session + model + summary docs carry (role, model, slug, gateway, tokens, co
         model: "anthropic/claude-haiku-4-5",
         costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      agentToUid: new Map([["octogee-eckert-coach", "eckert-uid"]]),
+      agentToUid: new Map([["badagent", "eckert-uid"]]),
       log: () => {},
       gatewayId: "gw-test",
     });
@@ -654,101 +649,5 @@ describe("reportUsage — privacy invariants (no key-fingerprint fields)", () =>
       expect(doc).not.toHaveProperty("keyFingerprints");
       expect(doc).not.toHaveProperty("lastKeyFingerprint");
     }
-  });
-});
-
-describe("readWorkspaceId", () => {
-  const created: string[] = [];
-
-  function makeRoleDir(): { roleDir: string; agentRoot: string } {
-    const agentRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rwid-"));
-    created.push(agentRoot);
-    const roleDir = path.join(agentRoot, "coach");
-    fs.mkdirSync(roleDir);
-    return { roleDir, agentRoot };
-  }
-
-  afterEach(() => {
-    while (created.length) {
-      const dir = created.pop()!;
-      try {
-        fs.chmodSync(dir, 0o700);
-      } catch {
-        // may not exist or already writable
-      }
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("returns slug from direct customer-config.json", () => {
-    const { roleDir } = makeRoleDir();
-    fs.writeFileSync(
-      path.join(roleDir, "customer-config.json"),
-      JSON.stringify({ slug: "acme" }),
-    );
-    expect(readWorkspaceId(roleDir)).toBe("acme");
-  });
-
-  it("falls back to shared/customer-config.json when direct is missing (ENOENT)", () => {
-    const { roleDir, agentRoot } = makeRoleDir();
-    fs.mkdirSync(path.join(agentRoot, "shared"));
-    fs.writeFileSync(
-      path.join(agentRoot, "shared", "customer-config.json"),
-      JSON.stringify({ slug: "shared-acme" }),
-    );
-    expect(readWorkspaceId(roleDir)).toBe("shared-acme");
-  });
-
-  it("returns null when corrupt direct file exists — does NOT fall through to shared/", () => {
-    const { roleDir, agentRoot } = makeRoleDir();
-    fs.writeFileSync(path.join(roleDir, "customer-config.json"), "{not json");
-    fs.mkdirSync(path.join(agentRoot, "shared"));
-    fs.writeFileSync(
-      path.join(agentRoot, "shared", "customer-config.json"),
-      JSON.stringify({ slug: "shared-acme" }),
-    );
-    expect(readWorkspaceId(roleDir)).toBeNull();
-  });
-
-  it("returns null when direct customer-config.json is JSON null (does not crash on .slug access)", () => {
-    const { roleDir, agentRoot } = makeRoleDir();
-    fs.writeFileSync(path.join(roleDir, "customer-config.json"), "null");
-    fs.mkdirSync(path.join(agentRoot, "shared"));
-    fs.writeFileSync(
-      path.join(agentRoot, "shared", "customer-config.json"),
-      JSON.stringify({ slug: "shared-acme" }),
-    );
-    expect(readWorkspaceId(roleDir)).toBeNull();
-  });
-
-  it("returns null when direct is unreadable (EISDIR: path is a directory, not a file)", () => {
-    const { roleDir, agentRoot } = makeRoleDir();
-    fs.mkdirSync(path.join(roleDir, "customer-config.json"));
-    fs.mkdirSync(path.join(agentRoot, "shared"));
-    fs.writeFileSync(
-      path.join(agentRoot, "shared", "customer-config.json"),
-      JSON.stringify({ slug: "shared-acme" }),
-    );
-    expect(readWorkspaceId(roleDir)).toBeNull();
-  });
-
-  it("returns null when direct file has empty slug", () => {
-    const { roleDir } = makeRoleDir();
-    fs.writeFileSync(path.join(roleDir, "customer-config.json"), JSON.stringify({}));
-    expect(readWorkspaceId(roleDir)).toBeNull();
-  });
-
-  it("returns null when neither direct nor shared exists", () => {
-    const { roleDir } = makeRoleDir();
-    expect(readWorkspaceId(roleDir)).toBeNull();
-  });
-
-  it("returns null when slug is non-string (e.g. number)", () => {
-    const { roleDir } = makeRoleDir();
-    fs.writeFileSync(
-      path.join(roleDir, "customer-config.json"),
-      JSON.stringify({ slug: 42 }),
-    );
-    expect(readWorkspaceId(roleDir)).toBeNull();
   });
 });

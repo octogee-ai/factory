@@ -138,36 +138,3 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("Hello dave\n");
   });
 });
-
-describe("writeCustomerConfig — write-if-missing (cattle recovery)", () => {
-  function ctxFor(dir: string, slug = "alice") {
-    return { uid: "u1", slug, tier: "hobby", customerDir: dir } as never;
-  }
-
-  it("does not clobber an existing customer-config.json", async () => {
-    const dir = customerDir("eve");
-    fs.writeFileSync(
-      path.join(dir, "customer-config.json"),
-      JSON.stringify({ preserved: true, dataApiKey: "old-key" }),
-      "utf-8",
-    );
-
-    const { writeCustomerConfig } = await load();
-    writeCustomerConfig(ctxFor(dir, "eve"), "new-key");
-
-    const parsed = JSON.parse(fs.readFileSync(path.join(dir, "customer-config.json"), "utf-8"));
-    expect(parsed.preserved).toBe(true);
-    expect(parsed.dataApiKey).toBe("old-key");
-  });
-
-  it("writes customer-config.json when missing", async () => {
-    const dir = customerDir("frank");
-
-    const { writeCustomerConfig } = await load();
-    writeCustomerConfig(ctxFor(dir, "frank"), "fresh-key");
-
-    const parsed = JSON.parse(fs.readFileSync(path.join(dir, "customer-config.json"), "utf-8"));
-    expect(parsed.slug).toBe("frank");
-    expect(parsed.dataApiKey).toBe("fresh-key");
-  });
-});

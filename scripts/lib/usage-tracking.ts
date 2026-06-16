@@ -8,6 +8,7 @@ import {
   windowBudgetUsdForTier,
 } from "../../shared/types/billing.js";
 import { computeThrottleLevel } from "../../shared/types/throttle.js";
+import { isValidUsername } from "../../shared/types/identity.js";
 
 export type LogFn = (msg: string) => void;
 
@@ -42,45 +43,24 @@ export function extractRole(agentId: string): string {
   return "coach";
 }
 
-type ReadResult<T> =
-  | { kind: "ok"; value: T }
-  | { kind: "missing" }       
-  | { kind: "unreadable" }    
-  | { kind: "corrupt" };       
-
-function readJson<T>(filePath: string): ReadResult<T> {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, "utf-8");
-  } catch (err) {
-    return (err as NodeJS.ErrnoException)?.code === "ENOENT"
-      ? { kind: "missing" }
-      : { kind: "unreadable" };
+function workspaceIdFromAgentId(agentId: string): string | null {
+  for (const role of ["coach", "alex", "morgan", "riley", "robert"]) {
+    const suffix = `-${role}`;
+    if (!agentId.endsWith(suffix)) continue;
+    const withoutRole = agentId.slice(0, -suffix.length);
+    const slug = withoutRole.startsWith("octogee-")
+      ? withoutRole.slice("octogee-".length)
+      : withoutRole;
+    return isValidUsername(slug) ? slug : null;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { kind: "corrupt" };
-  }
-  if (parsed === null || typeof parsed !== "object") {
-    return { kind: "corrupt" };
-  }
-  return { kind: "ok", value: parsed as T };
+  return null;
 }
 
-export function readWorkspaceId(agentDir: string): string | null {
-  const direct = readJson<{ slug?: unknown }>(path.join(agentDir, "customer-config.json"));
-  if (direct.kind === "ok") {
-    return typeof direct.value.slug === "string" && direct.value.slug ? direct.value.slug : null;
-  }
-  if (direct.kind === "corrupt" || direct.kind === "unreadable") return null;
-
-  const shared = readJson<{ slug?: unknown }>(
-    path.join(path.dirname(agentDir), "shared", "customer-config.json"),
-  );
-  if (shared.kind !== "ok") return null;
-  return typeof shared.value.slug === "string" && shared.value.slug ? shared.value.slug : null;
+function workspaceIdFromUserData(data: Record<string, unknown>, agentId: string): string | null {
+  const provisioning = data.provisioning as { openclaw?: { slug?: unknown } } | undefined;
+  const slug = provisioning?.openclaw?.slug ?? data.username;
+  if (typeof slug === "string" && isValidUsername(slug)) return slug;
+  return workspaceIdFromAgentId(agentId);
 }
 
 function parseLineForUsage(line: string): UsageData | null {
@@ -210,19 +190,20 @@ function decideThrottle(args: {
 }
 
 export async function reportUsage(input: ReportUsageInput): Promise<void> {
-  const { db, agentId, role, agentDir, usage, agentToUid, log, gatewayId } = input;
+  const { db, agentId, role, usage, agentToUid, log, gatewayId } = input;
   const uid = agentToUid.get(agentId);
   if (!uid) return;
 
   const userRef = db.collection("users").doc(uid);
   const today   = new Date().toISOString().slice(0, 10);
   const logRef  = userRef.collection("usage_logs").doc(today);
-  const workspaceId = readWorkspaceId(agentDir);
+  let workspaceId: string | null = null;
 
   try {
     await db.runTransaction(async (t) => {
       const userDoc = await t.get(userRef);
       const data = userDoc.data() || {};
+      workspaceId = workspaceIdFromUserData(data, agentId);
       const usageData = data.usage || {};
       const tier = data.selectedTier || data.subscription?.tier || "trial";
       const subscriptionStatus = data.subscription?.status ?? "active";

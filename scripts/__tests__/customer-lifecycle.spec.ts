@@ -17,7 +17,6 @@ interface DiskState {
   gitRemote: boolean;
   sshKey: boolean;
   templatesWritten: boolean;
-  customerConfigWritten: boolean;
 
 repoHasCommits: boolean;
 }
@@ -79,12 +78,6 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     writeCustomerTemplateFiles: async () => {
       record("writeCustomerTemplateFiles");
       state.disk.templatesWritten = true;
-
-return { dataApiKey: "test-data-api-key" };
-    },
-    writeCustomerConfig: () => {
-      record("writeCustomerConfig");
-      state.disk.customerConfigWritten = true;
     },
     deleteCustomerDir: async () => {
       record("deleteCustomerDir");
@@ -225,7 +218,6 @@ function emptyDisk(): DiskState {
     gitRemote: false,
     sshKey: false,
     templatesWritten: false,
-    customerConfigWritten: false,
     repoHasCommits: false,
   };
 }
@@ -419,7 +411,6 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
 
     expect(result.steps).toContain("write-templates");
     expect(state.calls).toContain("writeCustomerTemplateFiles");
-    expect(state.calls).toContain("writeCustomerConfig");
   });
 
   it("does NOT re-provision Mattermost or re-schedule the greeting cron", async () => {
@@ -545,7 +536,6 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
         gitRemote: true,
         sshKey: true,
         templatesWritten: true,
-        customerConfigWritten: true,
         repoHasCommits: true,
       },
     );
@@ -643,7 +633,6 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
         gitRemote: true,
         sshKey: true, // ← SSH key on disk from prior interrupted run
         templatesWritten: true,
-        customerConfigWritten: true,
         repoHasCommits: true,
       },
     );
@@ -678,7 +667,6 @@ describe("addCustomerToGateway — idempotent re-add", () => {
         gitRemote: true,
         sshKey: true,
         templatesWritten: true,
-        customerConfigWritten: true,
         repoHasCommits: true,
       },
     );
@@ -916,7 +904,6 @@ describe("removeCustomerFromGateway", () => {
         sshKey: true,
         templatesWritten: true,
         repoHasCommits: true,
-        customerConfigWritten: true,
       },
     );
 
@@ -959,7 +946,6 @@ describe("unmount + re-add round trip", () => {
         sshKey: true,
         repoHasCommits: true,
         templatesWritten: true,
-        customerConfigWritten: true,
       },
     );
     const adapter = makeAdapter(state);
@@ -1163,7 +1149,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     repoHasCommits: false,
     ensureCustomerDirectories: false,
     writeCustomerTemplateFiles: false,
-    writeCustomerConfig: false,
     deleteCustomerDir: false,
     hasCustomerSshKey: false,
     generateCustomerSshKey: false,
@@ -1275,7 +1260,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
           gitRemote: true,
           sshKey: true,
           templatesWritten: true,
-          customerConfigWritten: true,
           repoHasCommits: true,
         }),
       expectRepoTouch: false,

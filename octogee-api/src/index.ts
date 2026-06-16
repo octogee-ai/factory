@@ -17,6 +17,7 @@ import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-pr
 import { createSiteDeployRoutes } from "./routes/site-deploy.js";
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
+import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { db } from "../../gateway-edge/src/lib/db.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
@@ -167,6 +168,10 @@ const route = req.route?.path || "unmatched";
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
   app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
+  // octogee-api-only: broker standard gateway fleet-mount Firestore/MM
+  // operations. The shell-bearing gateway sees only assigned roster snapshots
+  // and assigned-scoped mutation endpoints for its own KSA-bound identity.
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
   app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db }));

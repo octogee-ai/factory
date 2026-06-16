@@ -17,9 +17,6 @@ Your workspace root is the current directory. Everything lives here:
 ### Media/Images
 Save to `~/.openclaw/media/` before sending. Workspace paths are blocked for media.
 
-### Data API
-Query customer data: check `customer-config.json` for UID and endpoint details.
-
 ### Firebase Milestone Updates
 
 Do NOT use `npx tsx` or `update-onboarding.ts` — you don't have exec permissions.

@@ -36,8 +36,6 @@ export const GITHUB_ORG = process.env.GIT_ORG || process.env.GITHUB_ORG || "octo
 export const BLOB_SYNC_MAX_CONCURRENT = 10;
 export const BLOB_SYNC_MAX_SIZE = 100 * 1024 * 1024;
 
-export const DATA_API_URL = "https://dataapi-p57h3jzwfq-uc.a.run.app/data";
-
 export function log(msg: string): void {
   const ts = new Date().toISOString().replace("Z", "+00:00");
   console.log(`${ts} [provisioner] ${msg}`);

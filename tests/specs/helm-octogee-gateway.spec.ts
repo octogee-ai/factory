@@ -163,6 +163,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
 
     expect(gw).not.toMatch(/mountPath:\s*\/var\/run\/secrets\/octogee-api/);
     expect(gw).toMatch(/name:\s*GITEA_ADMIN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
+    expect(gw).toMatch(/name:\s*FLEET_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(gw).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\s*\n\s*value:\s*"\/var\/run\/secrets\/octogee-gateway-broker\/token"/);
     expect(gw).toMatch(/name:\s*gateway-broker-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-gateway-broker\s*\n\s*readOnly:\s*true/);
     expect(edge).toMatch(/name:\s*OPENCLAW_RUNTIME_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);

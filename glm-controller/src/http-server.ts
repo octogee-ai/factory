@@ -48,7 +48,7 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
     );
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Agent-Key, X-Internal-Service-Key",
+      "Content-Type, Authorization, X-Internal-Service-Key",
     );
   }
   if (req.method === "OPTIONS") {

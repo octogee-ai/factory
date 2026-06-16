@@ -278,6 +278,8 @@ spec:
             # TokenReview + tenant enforcement bind it back to this gateway.
             - name: GITEA_ADMIN_BROKER_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: FLEET_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: OCTOGEE_API_SA_TOKEN_PATH
               value: "/var/run/secrets/octogee-gateway-broker/token"
             # Same per-gateway K8s secret as init + gateway-edge (see init

@@ -28,11 +28,9 @@ describe("advisory mode removal", () => {
     expect(content).not.toContain("advisoryMode");
   });
 
-  it("no isAdvisoryMode in orchestrator", () => {
-    const orchestratorPath = path.resolve(__dirname, "..", "entrypoints", "local-provisioner.ts");
-    const content = fs.readFileSync(orchestratorPath, "utf-8");
-    expect(content).not.toContain("isAdvisoryMode");
-    expect(content).not.toContain("syncAdvisorySlugs");
+  it("no Firebase-backed local provisioner entrypoint remains", () => {
+    const provisionerPath = path.resolve(__dirname, "..", "entrypoints", "local-provisioner.ts");
+    expect(fs.existsSync(provisionerPath)).toBe(false);
   });
 });
 

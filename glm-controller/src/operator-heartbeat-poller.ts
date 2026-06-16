@@ -1,12 +1,10 @@
 /**
- * Pull-model fleet reporting + eviction for operator gateways
- * (OPERATOR-GATEWAY-PULL-REPORTING).
+ * Pull-model fleet reporting + eviction for db-less gateways.
  *
- * Operator gateways are customer-controlled and run the agent with a
- * danger-full-access sandbox, so they hold NO platform Firestore credentials. The
- * pod cannot read the assigned roster or write its own heartbeat. Instead, Cowboy
- * (the trusted fleet authority) polls each operator gateway's `/health` for its
- * locally-present coach-wired customers, and does the trusted-side roster work:
+ * Gateway pods hold NO platform Firestore credentials. The pod cannot read the
+ * assigned roster directly or write its own heartbeat. Instead, Cowboy (the
+ * trusted fleet authority) polls each gateway's `/health` for its locally-present
+ * coach-wired customers, and does the trusted-side roster work:
  *  - reporting: writes gateways/{id}.mountedCustomers = present ∩ assigned;
  *  - eviction: tears down a departed customer's LOCAL footprint (present − assigned)
  *    by calling the pod's existing /unmount RPC — a local-only teardown that needs
@@ -41,8 +39,8 @@ export interface OperatorHeartbeatRecord {
 }
 
 export interface OperatorHeartbeatPollerDeps {
-  /** Operator-profile gateways Cowboy should report for (running/desired-live). */
-  listOperatorGatewayIds: () => Promise<string[]>;
+  /** Gateways Cowboy should report for (running/desired-live). */
+  listGatewayIds: () => Promise<string[]>;
   /** GET the gateway's /health; null when unreachable (do not clobber the doc). */
   fetchHealth: (gatewayId: string) => Promise<OperatorGatewayHealth | null>;
   /** Slugs assigned to this gateway in Firestore (users gatewayId==id, complete). */
@@ -175,9 +173,9 @@ export async function pollOperatorHeartbeatsOnce(
 ): Promise<void> {
   let gatewayIds: string[];
   try {
-    gatewayIds = await deps.listOperatorGatewayIds();
+    gatewayIds = await deps.listGatewayIds();
   } catch (err) {
-    deps.log(`[operator-poll] ⚠ failed to list operator gateways: ${errMsg(err)}`);
+    deps.log(`[operator-poll] ⚠ failed to list gateways: ${errMsg(err)}`);
     return;
   }
 

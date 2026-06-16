@@ -1,9 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import * as crypto from "crypto";
-import { FieldValue } from "firebase-admin/firestore";
 import { uniqueNamesGenerator, adjectives, animals } from "unique-names-generator";
-import { db } from "./firebase.js";
 
 export function slugify(name: string): string {
   return name
@@ -20,18 +17,6 @@ export function generatePersonalSlug(): string {
     style: "lowerCase",
     length: 2,
   });
-}
-
-export async function ensureDataApiKey(uid: string): Promise<string> {
-  const ref = db.doc(`users/${uid}/settings/api`);
-  const snap = await ref.get();
-  const existing = snap.exists
-    ? (snap.data() as { apiKey?: unknown } | undefined)?.apiKey
-    : undefined;
-  if (typeof existing === "string" && existing.length > 0) return existing;
-  const apiKey = crypto.randomBytes(32).toString("hex");
-  await ref.set({ apiKey, createdAt: FieldValue.serverTimestamp() }, { merge: true });
-  return apiKey;
 }
 
 export function copyDirSync(src: string, dest: string): void {

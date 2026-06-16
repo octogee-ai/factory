@@ -58,25 +58,31 @@ if (mounted === undefined || mounted.length === 0) {
   return out;
 }
 
-function resolveOperatorHelmKnobs(d: GatewayDesiredState): Pick<
+function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
   HelmInstanceValue,
   "serviceAccountName" | "serviceAccount" | "operatorAccess"
 > {
   let serviceAccountName = d.serviceAccountName;
   let serviceAccount = d.serviceAccount;
-  const generatedOperatorServiceAccountName = operatorGatewayServiceAccountName(d.gatewayId);
+  const generatedGatewayServiceAccountName = operatorGatewayServiceAccountName(d.gatewayId);
   if (
-    d.profile === "operator" &&
     (!serviceAccountName || serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME)
   ) {
-    serviceAccountName = generatedOperatorServiceAccountName;
+    serviceAccountName = generatedGatewayServiceAccountName;
   }
   if (
     d.profile === "operator" &&
-    serviceAccountName === generatedOperatorServiceAccountName &&
+    serviceAccountName === generatedGatewayServiceAccountName &&
     !serviceAccount
   ) {
     serviceAccount = OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT;
+  }
+  if (
+    d.profile !== "operator" &&
+    serviceAccountName === generatedGatewayServiceAccountName &&
+    !serviceAccount
+  ) {
+    serviceAccount = { create: true };
   }
   const operatorAccess =
     d.profile === "operator"
@@ -90,7 +96,7 @@ function buildHelmInstanceValue(
   chartFingerprint?: string,
 ): HelmInstanceValue {
   const persistence = resolveGatewayPersistence(d.profile, d.persistence);
-  const { serviceAccountName, serviceAccount, operatorAccess } = resolveOperatorHelmKnobs(d);
+  const { serviceAccountName, serviceAccount, operatorAccess } = resolveGatewayHelmKnobs(d);
   return {
     enabled: true,
     image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },

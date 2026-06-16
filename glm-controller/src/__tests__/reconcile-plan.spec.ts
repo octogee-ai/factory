@@ -59,6 +59,8 @@ describe("buildInstancesMap", () => {
         image: { repository: REPO, tag: "abc" },
         gatewayId: "default",
         replicas: 1,
+        serviceAccountName: "octogee-gw-default",
+        serviceAccount: { create: true },
       },
     });
   });
@@ -174,6 +176,18 @@ describe("buildInstancesMap", () => {
     ]);
     expect(map.bender.serviceAccountName).toBe("custom-operator-ksa");
     expect(map.bender.serviceAccount).toBeUndefined();
+  });
+
+  it("defaults standard gateways to a generated ServiceAccount with no platform annotation values", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        gatewayId: "default",
+        profile: "standard",
+        serviceAccountName: "octogee-gateway",
+      }),
+    ]);
+    expect(map.default.serviceAccountName).toBe("octogee-gw-default");
+    expect(map.default.serviceAccount).toEqual({ create: true });
   });
 
   it("defaults operator-profile gateways to durable home persistence when not explicitly configured", () => {

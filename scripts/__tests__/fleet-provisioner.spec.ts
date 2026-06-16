@@ -133,6 +133,17 @@ describe("resolveFleetCapabilities — observability vs provisioning seam", () =
   it("the two axes are independent: provision without reporting", () => {
     expect(
       resolveFleetCapabilities({ platformState: true, reportState: false, hasDb: true }),
-    ).toEqual({ reportMounted: false, provision: true, needsStateDeps: true });
+    ).toEqual({ reportMounted: false, provision: true, needsStateDeps: false });
+  });
+
+  it("brokered standard gateway: provisions local mounts without Firestore state deps", () => {
+    expect(
+      resolveFleetCapabilities({
+        platformState: true,
+        reportState: false,
+        hasDb: false,
+        hasBrokeredRoster: true,
+      }),
+    ).toEqual({ reportMounted: false, provision: true, needsStateDeps: false });
   });
 });

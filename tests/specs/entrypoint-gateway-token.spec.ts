@@ -186,7 +186,7 @@ function runRunnerBlock(profile: string): {
 }
 
 describe("infra/gateway/entrypoint.sh — locked operator platform provisioner boundary", () => {
-  it("does not start platform-authoritative provisioner runners on operator gateways", () => {
+  it("starts only the db-less controller and neutral side runners on operator gateways", () => {
     const result = runRunnerBlock("operator");
     expect(result.status).toBe(0);
     expect(result.runners).toContain("fleet-controller");
@@ -194,15 +194,14 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     expect(result.runners).not.toContain("provisioner");
     expect(result.runners).not.toContain("site-build");
     expect(result.runners).not.toContain("byosub-syncback");
-    expect(result.stderr).toMatch(/Operator platform provisioner disabled/);
     expect(result.stderr).toMatch(/Operator site-build-api disabled/);
   });
 
-  it("keeps provisioner and byosub syncback running on cattle gateways", () => {
+  it("starts the db-less fleet controller and cattle side runners on standard gateways", () => {
     const result = runRunnerBlock("standard");
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
-      "provisioner",
+      "fleet-controller",
       "site-build",
       "preview-proxy",
       "byosub-syncback",

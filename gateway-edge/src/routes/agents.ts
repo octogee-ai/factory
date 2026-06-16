@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth, requireAgentKeyForUser, requireAdmin } from "../middleware/auth.js";
+import { requireAuth, requireAdmin } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue } from "../lib/db.js";
 import { readAgent } from "../lib/firestoreReads.js";
@@ -71,9 +71,18 @@ const AGENT_ID_RE = /^octogee-([a-z0-9-]+)-(coach|alex|morgan|riley|robert)$/;
 const SLUG_PREFIX_RE = /^octogee-([a-z0-9-]+)$/;
 const ALL_ROLES = ["coach", "alex", "morgan", "riley", "robert"] as const;
 
-router.post("/activate", requireAgentKeyForUser((req) => (req.body as { uid?: string })?.uid), async (req: Request, res: Response, next: NextFunction) => {
+router.post("/activate", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { uid, role, requestedBy } = req.body as { uid?: string; role?: string; requestedBy?: string };
+    const targetUid = req.isAdmin && uid ? uid : req.uid;
+    if (!targetUid) {
+      res.status(401).json({ error: "unauthenticated" });
+      return;
+    }
+    if (uid && uid !== targetUid) {
+      res.status(403).json({ error: "cannot_activate_other_user" });
+      return;
+    }
 
 if (!role) {
       res.status(400).json({ error: "missing_fields", required: ["role"] });
@@ -85,9 +94,9 @@ if (!role) {
       return;
     }
 
-    const userSnap = await db.doc(`users/${uid}`).get();
+    const userSnap = await db.doc(`users/${targetUid}`).get();
     if (!userSnap.exists) {
-      res.status(404).json({ error: "user_not_found", uid });
+      res.status(404).json({ error: "user_not_found", uid: targetUid });
       return;
     }
     const userData = userSnap.data()!;
@@ -106,7 +115,7 @@ if (!role) {
       return;
     }
 
-    await db.doc(`users/${uid}`).update({
+    await db.doc(`users/${targetUid}`).update({
       "provisioning.pendingActivations": FieldValue.arrayUnion(role),
       "provisioning.pendingActivationRequestedAt": FieldValue.serverTimestamp(),
       "provisioning.pendingActivationRequestedBy": requestedBy ?? "coach",

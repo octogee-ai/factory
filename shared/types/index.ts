@@ -101,6 +101,16 @@ export {
 } from './fleet-controller.js';
 
 export type {
+  FleetBrokerProvisioningStatus,
+  FleetBrokerMattermostUpdate,
+  FleetBrokerGreetingResult,
+  FleetBrokerChannelBinding,
+  FleetBrokerProjectRestore,
+  FleetBrokerCoachIdentity,
+  FleetBrokerUserSnapshot,
+} from './fleet-broker.js';
+
+export type {
   GatewayDesiredStatus,
   GatewayDesiredState,
   GatewayProfile,

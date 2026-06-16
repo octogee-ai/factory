@@ -9,6 +9,10 @@ const entrypoint = readFileSync(
   path.join(repoRoot, "infra/gateway/entrypoint.sh"),
   "utf8",
 );
+const fleetController = readFileSync(
+  path.join(repoRoot, "scripts/entrypoints/fleet-controller.ts"),
+  "utf8",
+);
 
 describe("infra/gateway/entrypoint.sh — per-gateway Mac ops bootstrap (#998)", () => {
   it("invokes bootstrap-mac-ops.mjs BEFORE OpenClaw starts so accounts.default.botToken is patched", () => {
@@ -78,9 +82,9 @@ expect(stamperRegion).toMatch(/\[\s*-f\s+/);
 });
 
 describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", () => {
-  it("routes the cattle runners through supervise-runner", () => {
+  it("routes the db-less fleet controller and cattle side runners through supervise-runner", () => {
     const runners: Record<string, string> = {
-      provisioner: "5000",
+      "fleet-controller": "5000",
       "site-build": "5000",
       "preview-proxy": "5000",
       "byosub-syncback": "30000",
@@ -90,6 +94,11 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
         new RegExp(`supervise_runner\\s+${runner}\\s+${restartDelayMs}\\b`),
       );
     }
+  });
+
+  it("does not start the Firebase-backed local provisioner in gateway pods", () => {
+    expect(entrypoint).not.toMatch(/supervise_runner\s+provisioner\b/);
+    expect(entrypoint).not.toMatch(/entrypoints\/local-provisioner\.ts/);
   });
 
   it("skips site-build-api on operator gateways", () => {
@@ -132,11 +141,19 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
   it("supervise_runner keeps a thin shell guard so a dead supervisor restarts", () => {
     const fnRegion = entrypoint.slice(
       entrypoint.indexOf("supervise_runner() {"),
-      entrypoint.indexOf("supervise_runner provisioner"),
+      entrypoint.indexOf("supervise_runner fleet-controller"),
     );
     expect(fnRegion).toMatch(/while true/);
     expect(fnRegion).toMatch(/\$SUPERVISE/);
     expect(fnRegion).toMatch(/--restart-delay-ms=\$\{_restart_delay_ms\}/);
     expect(entrypoint).toMatch(/SUPERVISE=[^\n]*supervise-runner\.ts/);
+  });
+});
+
+describe("scripts/entrypoints/fleet-controller.ts — db-less local persistence loops", () => {
+  it("keeps credential-free workspace git autosave wired into the live gateway controller", () => {
+    expect(fleetController).toMatch(/startWorkspaceAutosaveLoop/);
+    expect(fleetController).toMatch(/syncAllWorkspaces/);
+    expect(fleetController).toMatch(/GIT_SYNC_INTERVAL_MS/);
   });
 });

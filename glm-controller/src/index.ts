@@ -180,8 +180,12 @@ function versionFromImageTag(imageTag: string | undefined): string {
   return buildSha || imageTag;
 }
 
+function isRunningGateway(gateway: GatewayDesiredState): boolean {
+  return gateway.desiredStatus !== "paused" && gateway.desiredStatus !== "retired";
+}
+
 function isRunningOperatorGateway(gateway: GatewayDesiredState): boolean {
-  return gateway.profile === "operator" && gateway.desiredStatus !== "paused" && gateway.desiredStatus !== "retired";
+  return gateway.profile === "operator" && isRunningGateway(gateway);
 }
 
 async function publishPlatformGatewayReady(
@@ -710,11 +714,11 @@ export function buildOperatorHeartbeatPollerDeps(
   readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>,
 ): OperatorHeartbeatPollerDeps {
   return {
-    listOperatorGatewayIds: async () => {
+    listGatewayIds: async () => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
       return snap.docs
         .map((doc) => doc.data() as GatewayDesiredState)
-        .filter(isRunningOperatorGateway)
+        .filter(isRunningGateway)
         .map((gateway) => gateway.gatewayId);
     },
     fetchHealth: async (gatewayId) => {

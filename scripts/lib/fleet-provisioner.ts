@@ -74,6 +74,14 @@ export interface StartFleetOptions {
   // platformState stays false. See OPERATOR-GATEWAY-DURABILITY-SPEC §4.
   reportState?: boolean;
   enableDeviceAuthRoutes?: boolean;
+  /** Credential-less local mount reconcile: trusted octogee-api returns the
+   * assigned roster for this gateway identity. */
+  readDesiredSlugs?: () => Promise<string[]>;
+  /** Trusted-side mounted mirror writer used when the pod has no Firestore. */
+  stampMounted?: (uid: string, mounted: boolean) => Promise<void>;
+  /** Trusted-side reconcile error mirror used when the pod has no Firestore. */
+  recordReconcileError?: (slug: string, message: string) => Promise<void>;
+  clearReconcileError?: (slug: string) => Promise<void>;
   
   openclawDir?: string;
 
@@ -94,7 +102,7 @@ export interface FleetCapabilities {
    *  + byosub device-auth. Off inside the locked operator boundary. */
   provision: boolean;
   /** At least one capability needs Firestore write deps (own heartbeat +
-   *  glmGateways mirror, or the reconcile loop's roster reads). */
+   *  glmGateways mirror). Brokered local reconcile can provision without it. */
   needsStateDeps: boolean;
 }
 
@@ -105,13 +113,14 @@ export function resolveFleetCapabilities(opts: {
   platformState: boolean;
   reportState: boolean;
   hasDb: boolean;
+  hasBrokeredRoster?: boolean;
 }): FleetCapabilities {
   const reportMounted = opts.reportState && opts.hasDb;
-  const provision = opts.platformState && opts.hasDb;
+  const provision = opts.platformState && (opts.hasDb || opts.hasBrokeredRoster === true);
   return {
     reportMounted,
     provision,
-    needsStateDeps: reportMounted || provision,
+    needsStateDeps: reportMounted,
   };
 }
 
@@ -176,6 +185,12 @@ export function getMountObservedSlugs(adapter: CustomerLifecycleAdapter): string
 // own error so a Firestore blip can never crash the reconcile tick. lastError holds only
 // the MOST RECENT ensure failure; the full history is in the [reconcile] logs.
 function recordReconcileError(opts: StartFleetOptions, slug: string, message: string): void {
+  if (opts.recordReconcileError) {
+    opts
+      .recordReconcileError(slug, message)
+      .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError write failed: ${String(err)}`));
+    return;
+  }
   if (!opts.db) return;
   opts.db
     .collection("gateways")
@@ -190,6 +205,12 @@ function recordReconcileError(opts: StartFleetOptions, slug: string, message: st
 // Clear only when the standing lastError is for THIS slug — a success for one slug must
 // not wipe another slug's still-live error (which would otherwise flicker back next tick).
 function clearReconcileError(opts: StartFleetOptions, slug: string): void {
+  if (opts.clearReconcileError) {
+    opts
+      .clearReconcileError(slug)
+      .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError clear failed: ${String(err)}`));
+    return;
+  }
   const db = opts.db;
   if (!db) return;
   const ref = db.collection("gateways").doc(opts.gatewayId);
@@ -212,7 +233,10 @@ function startMaybeReconcileLoop(params: {
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
 }): () => void {
   const { provision, opts, wrappedAdapter, runtime, stampMounted } = params;
-  if (!provision || !opts.db) return () => undefined;
+  const readDesired =
+    opts.readDesiredSlugs ??
+    (opts.db ? () => readAssignedSlugsForGateway(opts.db!, opts.gatewayId) : null);
+  if (!provision || !readDesired) return () => undefined;
   return startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: RECONCILE_LOOP_INTERVAL_MS,
@@ -232,7 +256,7 @@ function startMaybeReconcileLoop(params: {
       return getMountObservedSlugs(wrappedAdapter);
     },
     getEvictObserved: () => getEvictObservedSlugs(wrappedAdapter),
-    readDesired: () => readAssignedSlugsForGateway(opts.db!, opts.gatewayId),
+    readDesired,
     ensureSlug: async (slug: string) => {
       const uid = await wrappedAdapter.uidForSlug(slug);
       if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
@@ -274,7 +298,7 @@ function startMaybeReconcileLoop(params: {
 function createStateDeps(opts: StartFleetOptions, needsState: boolean): FleetStateDeps | null {
   if (!needsState) return null;
   if (!opts.db) {
-    throw new Error("[fleet] db is required when platformState or reportState is enabled");
+    throw new Error("[fleet] db is required when reportState is enabled");
   }
   return {
     db: opts.db as unknown as FleetStateFirestore,
@@ -356,7 +380,12 @@ export async function startFleetController(
 ): Promise<StartedFleetController> {
   const platformState = opts.platformState !== false;
   const reportState = opts.reportState !== false;
-  const caps = resolveFleetCapabilities({ platformState, reportState, hasDb: !!opts.db });
+  const caps = resolveFleetCapabilities({
+    platformState,
+    reportState,
+    hasDb: !!opts.db,
+    hasBrokeredRoster: !!opts.readDesiredSlugs,
+  });
   const stateDeps = createStateDeps(opts, caps.needsStateDeps);
   const adapter = buildFleetAdapter(opts);
 
@@ -392,6 +421,10 @@ const serviceName = `octogee-gateway-${opts.gatewayId}`;
   // Derived readiness mirror (D5): stamp on-disk presence onto the user doc for cheap
   // PWA queries. Nothing branches on it — it mirrors observed, never drives mounting.
   const stampMounted = async (uid: string, mounted: boolean): Promise<void> => {
+    if (opts.stampMounted) {
+      await opts.stampMounted(uid, mounted);
+      return;
+    }
     if (!opts.db) return;
     try {
       await opts.db

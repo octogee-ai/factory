@@ -77,7 +77,7 @@ function makeDeps(
   over: Partial<OperatorHeartbeatPollerDeps> = {},
 ): OperatorHeartbeatPollerDeps {
   return {
-    listOperatorGatewayIds: vi.fn(async () => ["bender"]),
+    listGatewayIds: vi.fn(async () => ["bender"]),
     fetchHealth: vi.fn(async () => ({
       status: "ready",
       customers: ["ceckert", "ghost"],
@@ -123,7 +123,7 @@ describe("pollOperatorHeartbeatsOnce", () => {
 
   it("isolates per-gateway failures so one bad gateway does not block the rest", async () => {
     const deps = makeDeps({
-      listOperatorGatewayIds: vi.fn(async () => ["bad", "good"]),
+      listGatewayIds: vi.fn(async () => ["bad", "good"]),
       fetchHealth: vi.fn(async (id: string) => {
         if (id === "bad") throw new Error("connection refused");
         return { status: "ready", customers: ["x"] };
@@ -139,15 +139,15 @@ describe("pollOperatorHeartbeatsOnce", () => {
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("bad"));
   });
 
-  it("logs and returns without writing when listing operator gateways fails", async () => {
+  it("logs and returns without writing when listing gateways fails", async () => {
     const deps = makeDeps({
-      listOperatorGatewayIds: vi.fn(async () => {
+      listGatewayIds: vi.fn(async () => {
         throw new Error("firestore unavailable");
       }),
     });
     await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).not.toHaveBeenCalled();
-    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("operator gateways"));
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("gateways"));
   });
 });
 

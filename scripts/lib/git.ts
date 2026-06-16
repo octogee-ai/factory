@@ -289,7 +289,6 @@ function workspaceGitignore(): string {
     "PROJECTS.md",
     "HEARTBEAT.md",
     "_throttle.json",
-    "customer-config.json",
     "crew-webhooks.json",
     "_pending_*.json",
     ".byot-managed",
@@ -505,7 +504,7 @@ function syncOneWorkspace(slug: string): void {
 }
 
 // Workspace auto-sync is pure SSH/git on the per-customer key — no admin token.
-// The provisioner decides whether this runs (see local-provisioner); this loops
+// The fleet controller decides whether this runs; this loops
 // the on-disk customers and pushes their local changes.
 export async function syncAllWorkspaces(): Promise<void> {
   for (const slug of listOnDiskCustomerSlugs()) {
