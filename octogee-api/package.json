@@ -36,6 +36,7 @@
     "resend": "^6.12.3",
     "sharp": "^0.34.5",
     "stripe": "^22.1.1",
+    "unique-names-generator": "^4.7.1",
     "ws": "^8.21.0"
   },
   "devDependencies": {
