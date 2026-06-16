@@ -161,7 +161,7 @@ case "$SECRET" in
   list)
     echo "  Rotatable via this script (test + prod only):"
     echo "    anthropic             — ANTHROPIC_API_KEY, consumer: octogee-gateway"
-    echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: gateway-edge, octogee-gateway, cron jobs"
+    echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: octogee-api, cron jobs, social functions"
     echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: gateway-edge, chat-proxy, octogee-gateway"
     echo "    gitea-pat             — Gitea API token, consumers: octogee-gateway, gateway-edge"
     echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: octogee-gateway"
@@ -216,7 +216,7 @@ case "$SECRET" in
 
   # ── Internal service key ────────────────────────────────────────────────
   internal-service-key)
-    confirm "Rotate INTERNAL_SERVICE_KEY in $FIREBASE_PROJECT (gateway-edge + gateway + cron jobs must restart)?" || { info "Cancelled"; exit 0; }
+    confirm "Rotate INTERNAL_SERVICE_KEY in $FIREBASE_PROJECT (octogee-api + cron jobs must use the new value)?" || { info "Cancelled"; exit 0; }
 
     NEW_VALUE=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
 
@@ -235,10 +235,11 @@ case "$SECRET" in
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     ok "K8s secret internal-service-key updated"
 
-    info "Restarting octogee-gateway-default (gateway-edge + chat-proxy are sidecars in the same pod)..."
-    rollout_restart octogee-gateway-default
+    info "Restarting octogee-api so its env picks up the new internal-service-key Secret..."
+    rollout_restart octogee-api
 
     info "Cron jobs read the secret on each invocation — no restart needed."
+    info "Social Cloud Functions read the Secret Manager value; redeploy functions only if warm instances keep using an old version."
     ok "Rotation complete"
     ;;
 

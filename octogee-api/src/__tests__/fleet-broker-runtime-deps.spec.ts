@@ -26,11 +26,20 @@ const DECLARED = new Set(
   Object.keys({ ...apiPkg.dependencies, ...apiPkg.devDependencies }),
 );
 
-function resolveRelative(fromFile: string, spec: string): string | null {
-  const base = resolve(dirname(fromFile), spec);
+function resolveSource(base: string, spec: string): string | null {
   const candidates = [base, `${base}.ts`, `${base}.js`, join(base, "index.ts")];
   if (spec.endsWith(".js")) candidates.push(base.replace(/\.js$/, ".ts"));
   return candidates.find((c) => !c.endsWith("/") && existsSync(c)) ?? null;
+}
+
+function resolveImport(fromFile: string, spec: string): string | null {
+  if (spec.startsWith(".")) {
+    return resolveSource(resolve(dirname(fromFile), spec), spec);
+  }
+  if (spec.startsWith("@shared/")) {
+    return resolveSource(join(REPO, "shared", spec.slice("@shared/".length)), spec);
+  }
+  return null;
 }
 
 function packageName(spec: string): string {
@@ -63,9 +72,9 @@ function externalPackages(entry: string): Map<string, string> {
       while ((m = re.exec(src))) specs.push(m[1]);
     }
     for (const spec of specs) {
-      if (spec.startsWith(".")) {
-        const next = resolveRelative(file, spec);
-        if (next) walk(next);
+      const next = resolveImport(file, spec);
+      if (next) {
+        walk(next);
       } else if (!BUILTINS.has(spec)) {
         external.set(packageName(spec), file.replace(`${REPO}/`, ""));
       }
@@ -81,10 +90,8 @@ function dynamicImportTargets(file: string): string[] {
   const targets = new Set<string>();
   let m: RegExpExecArray | null;
   while ((m = re.exec(src))) {
-    if (m[1].startsWith(".")) {
-      const resolved = resolveRelative(file, m[1]);
-      if (resolved) targets.add(resolved);
-    }
+    const resolved = resolveImport(file, m[1]);
+    if (resolved) targets.add(resolved);
   }
   return [...targets];
 }
