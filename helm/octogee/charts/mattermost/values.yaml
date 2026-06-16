@@ -1,6 +1,6 @@
 image:
   repository: mattermost/mattermost-team-edition
-  tag: "11.6.1"
+  tag: "11.8.1"
 
 db:
   user: mattermost
