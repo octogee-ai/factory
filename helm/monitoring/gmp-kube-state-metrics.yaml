@@ -156,6 +156,6 @@ spec:
       metricRelabeling:
         - action: keep
           sourceLabels: [__name__]
-          regex: kube_(pod|persistentvolumeclaim|deployment|statefulset|daemonset|node|namespace|replicaset)(_.+)?
+          regex: kube_(pod|persistentvolumeclaim|deployment|statefulset|daemonset|node|namespace|replicaset|cronjob|job)(_.+)?
   targetLabels:
     metadata: []
