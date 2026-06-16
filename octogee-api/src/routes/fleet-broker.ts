@@ -1,13 +1,17 @@
 import { Router, type Request, type Response } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
+import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { isValidUsername } from "../../../shared/types/identity.js";
 import type {
+  FleetBrokerBlobSignedUrl,
   FleetBrokerChannelBinding,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
+  FleetBrokerProjectCreateInput,
   FleetBrokerProjectRestore,
   FleetBrokerProvisioningStatus,
+  FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
 } from "../../../shared/types/fleet-broker.js";
 import {
@@ -19,6 +23,41 @@ import { slugFromAssignedUser } from "../../../scripts/lib/assigned-roster.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 const FORBIDDEN = { error: "forbidden" } as const;
+const OPENCLAW_GATEWAY_ID_FIELD = "provisioning.openclaw.gatewayId";
+
+type AgentProjectActor = {
+  uid: string;
+  userData: Record<string, unknown>;
+  workspaceId: string;
+  isAdmin: false;
+  source: "agent";
+};
+
+type CreateProjectForActor = (
+  actor: AgentProjectActor,
+  input: FleetBrokerProjectCreateInput,
+) => Promise<{ status: number; body: Record<string, unknown> }>;
+
+type ApplyMilestoneSignal = (input: {
+  db: Firestore;
+  uid: string;
+  slug: string;
+  milestones: Record<string, unknown>;
+}) => Promise<void>;
+
+type RecordUsageEvent = (input: {
+  db: Firestore;
+  uid: string;
+  agentId: string;
+  usage: FleetBrokerUsageData;
+  gatewayId: string;
+}) => Promise<void>;
+
+type CreateBlobSignedUrl = (input: {
+  gcsPath: string;
+  action: "read" | "write";
+  contentType?: string;
+}) => Promise<FleetBrokerBlobSignedUrl>;
 
 interface FleetBrokerRouteDeps {
   provisionMattermost?: (input: {
@@ -34,7 +73,14 @@ interface FleetBrokerRouteDeps {
     uid: string;
     userData: Record<string, unknown>;
   }) => Promise<void>;
+  createProjectForActor?: CreateProjectForActor;
+  applyMilestoneSignal?: ApplyMilestoneSignal;
+  recordUsageEvent?: RecordUsageEvent;
+  createBlobSignedUrl?: CreateBlobSignedUrl;
 }
+
+const BLOB_SIGNED_URL_TTL_MS = 10 * 60 * 1000;
+const BLOB_SYNC_MAX_SIZE = 100 * 1024 * 1024;
 
 async function defaultProvisionMattermost(input: {
   uid: string;
@@ -67,6 +113,104 @@ async function defaultNotifyOpsOfSignup(input: {
   );
   await notifyOpsOfSignup(buildProvisioningContext(input.uid, input.userData));
 }
+
+const defaultCreateProjectForActor: CreateProjectForActor = async (actor, input) => {
+  const { createProjectForActor } = await import(
+    "../../../gateway-edge/src/lib/project-create-service.js"
+  );
+  return createProjectForActor(actor, input);
+};
+
+const defaultApplyMilestoneSignal: ApplyMilestoneSignal = async (input) => {
+  const { mmApi } = await import("../../../gateway-edge/src/lib/mattermost.js");
+  const userUpdate: Record<string, unknown> = {
+    "onboarding.updatedAt": FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  for (const [key, value] of Object.entries(input.milestones)) {
+    if (key === "coachName" || key === "coachPersonality" || key === "avatarEmoji") {
+      continue;
+    }
+    userUpdate[`onboarding.${key}`] = value;
+  }
+  if (input.milestones.complete === true) {
+    userUpdate["onboarding.complete"] = true;
+  }
+  await input.db.collection("users").doc(input.uid).update(userUpdate);
+
+  const agentUpdate: Record<string, unknown> = {};
+  if (typeof input.milestones.coachName === "string" && input.milestones.coachName) {
+    agentUpdate.name = input.milestones.coachName;
+  }
+  if (typeof input.milestones.coachPersonality === "string") {
+    agentUpdate.persona = input.milestones.coachPersonality;
+  }
+  if (typeof input.milestones.avatarEmoji === "string" && input.milestones.avatarEmoji) {
+    agentUpdate.avatarEmoji = input.milestones.avatarEmoji;
+  }
+  if (Object.keys(agentUpdate).length > 0) {
+    agentUpdate.id = input.uid;
+    agentUpdate.updatedAt = FieldValue.serverTimestamp();
+    await input.db.doc(`agents/${input.uid}`).set(agentUpdate, { merge: true });
+  }
+
+  if (typeof input.milestones.coachName === "string" && input.milestones.coachName) {
+    try {
+      const [sysDoc, userDoc] = await Promise.all([
+        input.db.doc(`users/${input.uid}/system/config`).get(),
+        input.db.collection("users").doc(input.uid).get(),
+      ]);
+      const coachMmUserId =
+        stringAt(sysDoc.data() as Record<string, unknown> | undefined, "mattermost.coachUserId") ||
+        stringAt(userDoc.data() as Record<string, unknown> | undefined, "mattermost.coachUserId");
+      if (coachMmUserId) {
+        await mmApi("PUT", `/bots/${coachMmUserId}`, {
+          display_name: input.milestones.coachName,
+        });
+      }
+    } catch (err) {
+      logger.warn("[milestones] failed to patch coach Mattermost display", {
+        slug: input.slug,
+        err,
+      });
+    }
+  }
+};
+
+const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
+  const { extractRole, reportUsageForUid } = await import(
+    "../../../scripts/lib/usage-tracking.js"
+  );
+  await reportUsageForUid({
+    db: input.db,
+    uid: input.uid,
+    agentId: input.agentId,
+    role: extractRole(input.agentId),
+    usage: input.usage,
+    gatewayId: input.gatewayId,
+    log: (msg) => logger.info(`[usage-broker] ${msg}`),
+  });
+};
+
+const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
+  const { getStorage } = await import("firebase-admin/storage");
+  const expires = Date.now() + BLOB_SIGNED_URL_TTL_MS;
+  const [url] = await getStorage()
+    .bucket()
+    .file(input.gcsPath)
+    .getSignedUrl({
+      version: "v4",
+      action: input.action,
+      expires,
+      ...(input.action === "write" ? { contentType: input.contentType } : {}),
+    });
+  return {
+    url,
+    method: input.action === "read" ? "GET" : "PUT",
+    gcsPath: input.gcsPath,
+    expiresAt: new Date(expires).toISOString(),
+  };
+};
 
 function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
@@ -130,6 +274,141 @@ function validAgentIds(value: unknown): string[] | null {
   return ids.length === value.length ? ids : null;
 }
 
+function validAgentId(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 160) return "";
+  return /^[A-Za-z0-9._:-]+$/.test(trimmed) ? trimmed : "";
+}
+
+function finiteNonNegative(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function validUsageData(value: unknown): FleetBrokerUsageData | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const cost = data.costBreakdown;
+  if (!cost || typeof cost !== "object" || Array.isArray(cost)) return null;
+  const costBreakdown = cost as Record<string, unknown>;
+  const input = finiteNonNegative(data.input);
+  const output = finiteNonNegative(data.output);
+  const cacheRead = finiteNonNegative(data.cacheRead);
+  const cacheWrite = finiteNonNegative(data.cacheWrite);
+  const totalTokens = finiteNonNegative(data.totalTokens);
+  const costUsd = finiteNonNegative(data.costUsd);
+  const model = typeof data.model === "string" ? data.model.trim() : "";
+  const costInput = finiteNonNegative(costBreakdown.input);
+  const costOutput = finiteNonNegative(costBreakdown.output);
+  const costCacheRead = finiteNonNegative(costBreakdown.cacheRead);
+  const costCacheWrite = finiteNonNegative(costBreakdown.cacheWrite);
+  if (
+    input === null ||
+    output === null ||
+    cacheRead === null ||
+    cacheWrite === null ||
+    totalTokens === null ||
+    costUsd === null ||
+    model.length === 0 ||
+    model.length > 200 ||
+    costInput === null ||
+    costOutput === null ||
+    costCacheRead === null ||
+    costCacheWrite === null
+  ) {
+    return null;
+  }
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    costUsd,
+    model,
+    costBreakdown: {
+      input: costInput,
+      output: costOutput,
+      cacheRead: costCacheRead,
+      cacheWrite: costCacheWrite,
+    },
+  };
+}
+
+function validBlobRelativePath(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const p = value.trim();
+  if (p.length === 0 || p.length > 1024) return "";
+  if (p.startsWith("/") || p.includes("\\") || p.includes("\0")) return "";
+  const parts = p.split("/");
+  if (parts.some((part) => part.length === 0 || part === "." || part === ".." || part.startsWith("."))) {
+    return "";
+  }
+  return p;
+}
+
+function validContentType(value: unknown): string {
+  if (typeof value !== "string") return "application/octet-stream";
+  const p = value.trim();
+  if (p.length === 0 || p.length > 200 || /[\r\n]/.test(p)) {
+    return "application/octet-stream";
+  }
+  return p;
+}
+
+function validMilestoneValue(value: unknown): boolean {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function validMilestones(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, milestoneValue] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^\w{1,64}$/.test(key)) return null;
+    if (!validMilestoneValue(milestoneValue)) return null;
+    out[key] = milestoneValue;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function gcsPathForBlob(slug: string, relativePath: string): string {
+  return `customers/${slug}/${relativePath}`;
+}
+
+function agentBelongsToAssignedWorkspace(
+  data: Record<string, unknown>,
+  agentId: string,
+): boolean {
+  const legacyAgentId = stringAt(data, "provisioning.openclaw.agentId");
+  if (legacyAgentId === agentId) return true;
+  const agentIds = stringArray(readPath(data, "provisioning.openclaw.agentIds"));
+  return agentIds.includes(agentId);
+}
+
+async function findAssignedUserByAgentId(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+): Promise<{ uid: string; data: Record<string, unknown> } | null> {
+  const snap = await db
+    .collection("users")
+    .where(OPENCLAW_GATEWAY_ID_FIELD, "==", gatewayId)
+    .get();
+  for (const doc of snap.docs) {
+    const data = doc.data() as Record<string, unknown> | undefined;
+    if (!data || data.approved !== true) continue;
+    if (agentBelongsToAssignedWorkspace(data, agentId)) {
+      return { uid: doc.id, data };
+    }
+  }
+  return null;
+}
+
 async function requireAssignedUser(
   db: Firestore,
   req: Request,
@@ -168,6 +447,41 @@ async function requireAssignedSlug(
     return null;
   }
   return { bound, uid, slug };
+}
+
+async function requireAssignedAgentWorkspace(
+  db: Firestore,
+  req: Request,
+  res: Response,
+): Promise<{
+  uid: string;
+  slug: string;
+  data: Record<string, unknown>;
+} | null> {
+  const bound = boundGateway(req, res);
+  if (!bound) return null;
+  const body = objectBody(req);
+  const slug = typeof body.workspaceSlug === "string" ? body.workspaceSlug : "";
+  if (!isValidUsername(slug)) {
+    res.status(400).json({ error: "invalid_workspace_slug" });
+    return null;
+  }
+  const agentId = validAgentId(body.agentId);
+  if (!agentId) {
+    res.status(400).json({ error: "invalid_agent_id" });
+    return null;
+  }
+  const uid = await findAssignedUidBySlug(db, bound.gatewayId, slug);
+  if (!uid) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  const data = await isAssignedToGateway(db, bound.gatewayId, uid);
+  if (!data || !agentBelongsToAssignedWorkspace(data, agentId)) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  return { uid, slug, data };
 }
 
 async function runBrokered(
@@ -234,7 +548,7 @@ async function isAssignedToGateway(
     data ??
     ((await db.collection("users").doc(uid).get()).data() as Record<string, unknown> | undefined);
   if (!userData || userData.approved !== true) return null;
-  return stringAt(userData, "provisioning.openclaw.gatewayId") === gatewayId ? userData : null;
+  return stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) === gatewayId ? userData : null;
 }
 
 async function loadSnapshot(
@@ -259,7 +573,7 @@ async function loadSnapshot(
     uid,
     slug,
     tier: stringAt(data, "tier") || stringAt(data, "subscription.tier") || "trial",
-    gatewayId: stringAt(data, "provisioning.openclaw.gatewayId"),
+    gatewayId: stringAt(data, OPENCLAW_GATEWAY_ID_FIELD),
     status: status === "provisioning" || status === "complete" ? status : "",
     agentIds: stringArray(readPath(data, "provisioning.openclaw.agentIds")),
     repoUrl: stringAt(data, "provisioning.git.repoUrl"),
@@ -291,7 +605,7 @@ async function findAssignedUidBySlug(
 ): Promise<string | null> {
   const snap = await db
     .collection("users")
-    .where("provisioning.openclaw.gatewayId", "==", gatewayId)
+    .where(OPENCLAW_GATEWAY_ID_FIELD, "==", gatewayId)
     .get();
   for (const doc of snap.docs) {
     const data = doc.data() as Record<string, unknown> | undefined;
@@ -308,6 +622,12 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
   const markProvisioningComplete =
     opts.markProvisioningComplete ?? defaultMarkProvisioningComplete;
   const notifyOpsOfSignup = opts.notifyOpsOfSignup ?? defaultNotifyOpsOfSignup;
+  const createProjectForActor =
+    opts.createProjectForActor ?? defaultCreateProjectForActor;
+  const applyMilestoneSignal =
+    opts.applyMilestoneSignal ?? defaultApplyMilestoneSignal;
+  const recordUsageEvent = opts.recordUsageEvent ?? defaultRecordUsageEvent;
+  const createBlobSignedUrl = opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl;
 
   router.post("/assigned-users", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -315,7 +635,7 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
     const completeOnly = req.body?.completeOnly === true;
     const snap = await db
       .collection("users")
-      .where("provisioning.openclaw.gatewayId", "==", bound.gatewayId)
+      .where(OPENCLAW_GATEWAY_ID_FIELD, "==", bound.gatewayId)
       .get();
     const users: FleetBrokerUserSnapshot[] = [];
     for (const doc of snap.docs) {
@@ -525,6 +845,120 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
     if (!assigned) return;
     await runBrokered(res, async () => {
       await notifyOpsOfSignup({ uid: assigned.uid, userData: assigned.data });
+      res.status(204).end();
+    });
+  });
+
+  router.post("/usage-event", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const body = objectBody(req);
+    const agentId = validAgentId(body.agentId);
+    if (!agentId) {
+      res.status(400).json({ error: "invalid_agent_id" });
+      return;
+    }
+    const usage = validUsageData(body.usage);
+    if (!usage) {
+      res.status(400).json({ error: "invalid_usage" });
+      return;
+    }
+    const assigned = await findAssignedUserByAgentId(db, bound.gatewayId, agentId);
+    if (!assigned) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    await runBrokered(res, async () => {
+      await recordUsageEvent({
+        db,
+        uid: assigned.uid,
+        agentId,
+        usage,
+        gatewayId: bound.gatewayId,
+      });
+      res.status(204).end();
+    });
+  });
+
+  router.post("/blob/download-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(db, req, res);
+    if (!assigned) return;
+    const relativePath = validBlobRelativePath(objectBody(req).path);
+    if (!relativePath) {
+      res.status(400).json({ error: "invalid_path" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const signed = await createBlobSignedUrl({
+        gcsPath: gcsPathForBlob(assigned.slug, relativePath),
+        action: "read",
+      });
+      res.json(signed);
+    });
+  });
+
+  router.post("/blob/upload-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(db, req, res);
+    if (!assigned) return;
+    const body = objectBody(req);
+    const relativePath = validBlobRelativePath(body.path);
+    if (!relativePath) {
+      res.status(400).json({ error: "invalid_path" });
+      return;
+    }
+    const size = finiteNonNegative(body.size);
+    if (size === null || size > BLOB_SYNC_MAX_SIZE) {
+      res.status(400).json({ error: "invalid_size" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const signed = await createBlobSignedUrl({
+        gcsPath: gcsPathForBlob(assigned.slug, relativePath),
+        action: "write",
+        contentType: validContentType(body.mimeType),
+      });
+      res.json(signed);
+    });
+  });
+
+  router.post("/agent/create-project", async (req, res) => {
+    const assigned = await requireAssignedAgentWorkspace(db, req, res);
+    if (!assigned) return;
+    const project = recordBodyValue(objectBody(req).project);
+    if (!project) {
+      res.status(400).json({ error: "invalid_project" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const result = await createProjectForActor(
+        {
+          uid: assigned.uid,
+          userData: assigned.data,
+          workspaceId: assigned.slug,
+          isAdmin: false,
+          source: "agent",
+        },
+        project as FleetBrokerProjectCreateInput,
+      );
+      res.status(result.status).json(result.body);
+    });
+  });
+
+  router.post("/agent/apply-milestones", async (req, res) => {
+    const assigned = await requireAssignedAgentWorkspace(db, req, res);
+    if (!assigned) return;
+    const milestones = validMilestones(objectBody(req).milestones);
+    if (!milestones) {
+      res.status(400).json({ error: "invalid_milestones" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      await applyMilestoneSignal({
+        db,
+        uid: assigned.uid,
+        slug: assigned.slug,
+        milestones,
+      });
       res.status(204).end();
     });
   });

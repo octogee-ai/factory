@@ -1,47 +1,19 @@
 import { Firestore, FieldValue } from "firebase-admin/firestore";
-import * as fs from "fs";
-import * as path from "path";
-import * as readline from "readline";
 import { formatUsageLogLine } from "./usage-log-line.js";
+import {
+  extractRole,
+  startUsageEventTailer,
+  type LogFn,
+  type UsageData,
+} from "./usage-log-tailer.js";
 import {
   WINDOW_LENGTH_HOURS,
   windowBudgetUsdForTier,
 } from "../../shared/types/billing.js";
 import { computeThrottleLevel } from "../../shared/types/throttle.js";
 import { isValidUsername } from "../../shared/types/identity.js";
-
-export type LogFn = (msg: string) => void;
-
-interface WatchedFile {
-  path: string;
-  position: number;
-  agentId: string;
-  role: string;
-}
-
-interface UsageData {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  costUsd: number;
-  model: string;
-  costBreakdown: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
-}
-
-export function extractRole(agentId: string): string {
-  const knownRoles = ["coach"];
-  for (const role of knownRoles) {
-    if (agentId.endsWith(`-${role}`)) return role;
-  }
-  return "coach";
-}
+export { extractRole, findSessionFiles, parseLineForUsage } from "./usage-log-tailer.js";
+export type { LogFn, UsageData, UsageEvent } from "./usage-log-tailer.js";
 
 function workspaceIdFromAgentId(agentId: string): string | null {
   for (const role of ["coach", "alex", "morgan", "riley", "robert"]) {
@@ -63,36 +35,6 @@ function workspaceIdFromUserData(data: Record<string, unknown>, agentId: string)
   return workspaceIdFromAgentId(agentId);
 }
 
-function parseLineForUsage(line: string): UsageData | null {
-  try {
-    const data = JSON.parse(line);
-    if (data.type !== "message") return null;
-    if (data.message?.role !== "assistant") return null;
-    if (!data.message?.usage) return null;
-
-    const usage = data.message.usage;
-    const cost = usage.cost || {};
-
-    return {
-      input:        usage.input      || 0,
-      output:       usage.output     || 0,
-      cacheRead:    usage.cacheRead  || 0,
-      cacheWrite:   usage.cacheWrite || 0,
-      totalTokens:  usage.totalTokens || 0,
-      costUsd:      cost.total       || 0,
-      model:        data.message.model || "unknown",
-      costBreakdown: {
-        input:      cost.input      || 0,
-        output:     cost.output     || 0,
-        cacheRead:  cost.cacheRead  || 0,
-        cacheWrite: cost.cacheWrite || 0,
-      },
-    };
-  } catch {
-    return null;
-  }
-}
-
 function modelKey(model: string): string {
   return model.replace(/\//g, "_").slice(0, 100);
 }
@@ -106,6 +48,25 @@ export interface ReportUsageInput {
   agentToUid: Map<string, string>;
   log: LogFn;
   gatewayId: string;
+}
+
+export interface ReportUsageForUidInput {
+  db: Firestore;
+  uid: string;
+  agentId: string;
+  role?: string;
+  usage: UsageData;
+  log: LogFn;
+  gatewayId: string;
+}
+
+export interface StartUsageTrackingOptions {
+  db: Firestore;
+  agentPrefix: string;
+  agentsDir: string;
+  agentToUid: Map<string, string>;
+  log: LogFn;
+  gatewayId?: string;
 }
 
 type FirestoreUpdate = Record<string, unknown>;
@@ -189,10 +150,9 @@ function decideThrottle(args: {
   return { level, reason: state.reason };
 }
 
-export async function reportUsage(input: ReportUsageInput): Promise<void> {
-  const { db, agentId, role, usage, agentToUid, log, gatewayId } = input;
-  const uid = agentToUid.get(agentId);
-  if (!uid) return;
+export async function reportUsageForUid(input: ReportUsageForUidInput): Promise<void> {
+  const { db, uid, agentId, usage, log, gatewayId } = input;
+  const role = input.role ?? extractRole(agentId);
 
   const userRef = db.collection("users").doc(uid);
   const today   = new Date().toISOString().slice(0, 10);
@@ -324,97 +284,38 @@ const e = err as { code?: string; stack?: string };
   }
 }
 
-async function processFile(
-  filePath: string,
-  watchedFiles: Map<string, WatchedFile>,
-  db: Firestore,
-  agentToUid: Map<string, string>,
-  _agentPrefix: string,
-  log: LogFn,
-  gatewayId: string,
-): Promise<void> {
-  const parts    = filePath.split(path.sep);
-  const agentIdx = parts.findIndex(p => p === "agents") + 1;
-  const agentId  = parts[agentIdx] || "unknown";
-  const agentDir = parts.slice(0, agentIdx + 1).join(path.sep);
-  const role     = extractRole(agentId);
+export async function reportUsage(input: ReportUsageInput): Promise<void> {
+  const { db, agentId, role, usage, agentToUid, log, gatewayId } = input;
+  const uid = agentToUid.get(agentId);
+  if (!uid) return;
+  await reportUsageForUid({ db, uid, agentId, role, usage, log, gatewayId });
+}
 
-  let watched = watchedFiles.get(filePath);
-
-  if (!watched) {
-    const stats = fs.statSync(filePath);
-    watched = { path: filePath, position: stats.size, agentId, role };
-    watchedFiles.set(filePath, watched);
-    log(`usage: watching ${agentId} (${path.basename(filePath)})`);
-    return;
-  }
-
-  const stats = fs.statSync(filePath);
-  if (stats.size <= watched.position) return;
-
-  const stream = fs.createReadStream(filePath, {
-    start:    watched.position,
-    encoding: "utf-8",
+export function startUsageTracking(options: StartUsageTrackingOptions): NodeJS.Timeout {
+  const {
+    db,
+    agentPrefix,
+    agentsDir,
+    agentToUid,
+    log,
+    gatewayId = "local",
+  } = options;
+  return startUsageEventTailer({
+    agentPrefix,
+    agentsDir,
+    submit: async (event) => {
+      await reportUsage({
+        db,
+        agentId: event.agentId,
+        role: event.role,
+        agentDir: event.agentDir,
+        usage: event.usage,
+        agentToUid,
+        log,
+        gatewayId,
+      });
+    },
+    log,
+    gatewayId,
   });
-  const rl = readline.createInterface({ input: stream });
-
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    const usage = parseLineForUsage(line);
-    if (usage) {
-      await reportUsage({ db, agentId, role, agentDir, usage, agentToUid, log, gatewayId });
-    }
-  }
-
-  watched.position = stats.size;
-}
-
-function findSessionFiles(agentsDir: string, agentPrefix: string): string[] {
-  const files: string[] = [];
-  if (!fs.existsSync(agentsDir)) return files;
-
-  for (const agent of fs.readdirSync(agentsDir)) {
-    if (!agent.startsWith(agentPrefix)) continue;
-    const sessionsDir = path.join(agentsDir, agent, "sessions");
-    if (!fs.existsSync(sessionsDir)) continue;
-    for (const sf of fs.readdirSync(sessionsDir)) {
-      if (sf.endsWith(".jsonl") && !sf.endsWith(".lock")) {
-        files.push(path.join(sessionsDir, sf));
-      }
-    }
-  }
-  return files;
-}
-
-export function startUsageTracking(
-  db: Firestore,
-  agentPrefix: string,
-  agentsDir: string,
-  agentToUid: Map<string, string>,
-  log: LogFn,
-  gatewayId: string = "local",
-): void {
-  const POLL_INTERVAL_MS = 30_000;
-  const watchedFiles: Map<string, WatchedFile> = new Map();
-  let lastPollFileCount: number | null = null;
-
-  log(`usage-tracker: starting \u2014 agents dir: ${agentsDir}, prefix: ${agentPrefix}, gateway: ${gatewayId}`);
-
-  async function poll() {
-    const pollFiles = findSessionFiles(agentsDir, agentPrefix);
-    if (pollFiles.length > 0 && pollFiles.length !== lastPollFileCount) {
-      log(`usage-poll: tracking ${pollFiles.length} session files`);
-    }
-    lastPollFileCount = pollFiles.length;
-    for (const file of pollFiles) {
-      try {
-        await processFile(file, watchedFiles, db, agentToUid, agentPrefix, log, gatewayId);
-      } catch (err) {
-        log(`usage: error processing ${file}: ${err}`);
-      }
-    }
-  }
-
-  poll().catch(err => log(`usage: initial poll error: ${err}`));
-  setInterval(() => poll().catch(err => log(`usage: poll error: ${err}`)), POLL_INTERVAL_MS);
 }

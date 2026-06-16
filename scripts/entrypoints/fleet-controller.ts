@@ -1,4 +1,6 @@
 import {
+  AGENT_PREFIX,
+  AGENTS_DIR,
   bootBanner,
   GATEWAY_ID,
   GATEWAY_PROFILE,
@@ -11,9 +13,13 @@ import { createGatewayRpc } from "../lib/gateway-rpc.js";
 import { syncAllWorkspaces } from "../lib/git.js";
 import { buildLocalMigrationAdapter } from "../lib/fleet-local-migration-adapter.js";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
+import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
+import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
+import { startCustomerSignalScanLoop } from "../lib/customer-signal-broker-runner.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { startFleetController } from "../lib/fleet-provisioner.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
+import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
 import { startWorkspaceAutosaveLoop } from "../lib/workspace-autosave-runner.js";
 import { execFileSync } from "node:child_process";
 
@@ -81,14 +87,38 @@ async function main(): Promise<void> {
       envValue: process.env.WORKSPACE_AUTOSAVE_ENABLED,
       isOperatorGateway,
       syncWorkspaces: syncAllWorkspaces,
+      syncBlobs: operator
+        ? undefined
+        : () => blobSyncAllWithOptions({
+            storeForSlug: () => createBrokeredBlobStore(brokerClient!),
+          }),
       log,
     },
     GIT_SYNC_INTERVAL_MS,
   );
+  const usageTimer = operator
+    ? null
+    : startUsageEventTailer({
+        agentPrefix: AGENT_PREFIX,
+        agentsDir: AGENTS_DIR,
+        submit: async (event) => {
+          await brokerClient!.recordUsageEvent({
+            agentId: event.agentId,
+            usage: event.usage,
+          });
+        },
+        log,
+        gatewayId: MY_GATEWAY_ID,
+      });
+  const signalScanTimer = operator
+    ? null
+    : startCustomerSignalScanLoop({ client: brokerClient!, log });
 
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
     if (autosaveTimer) clearInterval(autosaveTimer);
+    if (usageTimer) clearInterval(usageTimer);
+    if (signalScanTimer) clearInterval(signalScanTimer);
     try { await fleetHandle.stop(); } catch {}
     try { await rpc.close(); } catch {}
   };

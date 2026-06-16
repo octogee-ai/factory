@@ -22,6 +22,52 @@ export interface FleetBrokerCoachIdentity {
   emoji: string;
 }
 
+export interface FleetBrokerProjectCreateInput {
+  name?: string;
+  slug?: string;
+  tagline?: string;
+  category?: string;
+  projectType?: string;
+  status?: string;
+  visibility?: string;
+  repoSource?: unknown;
+}
+
+export interface FleetBrokerProjectCreateSuccess {
+  success: true;
+  workspaceId: string;
+  slug: string;
+  channelId: string;
+}
+
+export interface FleetBrokerUsageData {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  costUsd: number;
+  model: string;
+  costBreakdown: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+}
+
+export interface FleetBrokerUsageEvent {
+  agentId: string;
+  usage: FleetBrokerUsageData;
+}
+
+export interface FleetBrokerBlobSignedUrl {
+  url: string;
+  method: "GET" | "PUT";
+  gcsPath: string;
+  expiresAt: string;
+}
+
 export interface FleetBrokerUserSnapshot {
   uid: string;
   slug: string;

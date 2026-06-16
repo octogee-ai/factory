@@ -59,6 +59,8 @@ import {
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
+import { blobSyncForSlug } from "./blob-sync.js";
+import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
   applyOpenClawActivationManifest,
   extractOpenClawActivationManifest,
@@ -486,7 +488,7 @@ export function buildBrokeredLifecycleAdapter(
     readGiteaCustomerPubKey,
     deleteCustomerSshKey,
     blobSyncForSlug: async (slug) => {
-      opts.log(`[blob-sync] ${slug}: skipped in db-less gateway (GCS read broker pending)`);
+      await blobSyncForSlug(slug, { store: createBrokeredBlobStore(opts.client) });
     },
     restoreByosubForAgent: async () => ({ restored: false, present: false }),
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),

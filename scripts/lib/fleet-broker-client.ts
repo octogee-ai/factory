@@ -1,7 +1,11 @@
 import type {
+  FleetBrokerBlobSignedUrl,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
+  FleetBrokerProjectCreateInput,
+  FleetBrokerProjectCreateSuccess,
   FleetBrokerProvisioningStatus,
+  FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
 import { internalFetch } from "./internal-fetch.js";
@@ -55,6 +59,30 @@ export interface FleetBrokerClient {
   recordReconcileError(slug: string, message: string): Promise<void>;
   clearReconcileError(slug: string): Promise<void>;
   notifySignup(uid: string): Promise<void>;
+  createProjectFromAgent(input: {
+    agentId: string;
+    workspaceSlug: string;
+    project: FleetBrokerProjectCreateInput;
+  }): Promise<FleetBrokerProjectCreateSuccess>;
+  applyMilestoneSignal(input: {
+    agentId: string;
+    workspaceSlug: string;
+    milestones: Record<string, unknown>;
+  }): Promise<void>;
+  recordUsageEvent(input: {
+    agentId: string;
+    usage: FleetBrokerUsageData;
+  }): Promise<void>;
+  blobDownloadUrl(input: {
+    slug: string;
+    path: string;
+  }): Promise<FleetBrokerBlobSignedUrl>;
+  blobUploadUrl(input: {
+    slug: string;
+    path: string;
+    mimeType: string;
+    size: number;
+  }): Promise<FleetBrokerBlobSignedUrl>;
 }
 
 export function createFleetBrokerClient(gatewayId: string): FleetBrokerClient {
@@ -140,6 +168,33 @@ export function createFleetBrokerClient(gatewayId: string): FleetBrokerClient {
     },
     notifySignup(uid) {
       return postNoContent("/internal/fleet/notify-signup", { gatewayId, uid });
+    },
+    async createProjectFromAgent(input) {
+      return postJson<FleetBrokerProjectCreateSuccess>(
+        "/internal/fleet/agent/create-project",
+        { gatewayId, ...input },
+      );
+    },
+    applyMilestoneSignal(input) {
+      return postNoContent("/internal/fleet/agent/apply-milestones", {
+        gatewayId,
+        ...input,
+      });
+    },
+    recordUsageEvent(input) {
+      return postNoContent("/internal/fleet/usage-event", { gatewayId, ...input });
+    },
+    blobDownloadUrl(input) {
+      return postJson<FleetBrokerBlobSignedUrl>(
+        "/internal/fleet/blob/download-url",
+        { gatewayId, ...input },
+      );
+    },
+    blobUploadUrl(input) {
+      return postJson<FleetBrokerBlobSignedUrl>(
+        "/internal/fleet/blob/upload-url",
+        { gatewayId, ...input },
+      );
     },
   };
 }

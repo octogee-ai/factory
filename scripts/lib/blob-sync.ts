@@ -1,6 +1,5 @@
 import * as fs from "fs";
 import * as path from "path";
-import { getStorage } from "firebase-admin/storage";
 import { log, CUSTOMERS_DIR, BLOB_SYNC_MAX_CONCURRENT, BLOB_SYNC_MAX_SIZE } from "./config.js";
 import { MIME_TYPES } from "./helpers.js";
 
@@ -19,6 +18,33 @@ export interface LocalFile {
   path: string;
   mtimeMs: number;
   size: number;
+}
+
+export interface BlobStore {
+  download(input: {
+    slug: string;
+    relativePath: string;
+    gcsPath: string;
+    destination: string;
+  }): Promise<void>;
+  upload(input: {
+    slug: string;
+    relativePath: string;
+    gcsPath: string;
+    localPath: string;
+    mimeType: string;
+    size: number;
+  }): Promise<void>;
+}
+
+export type BlobStoreFactory = (slug: string) => BlobStore | Promise<BlobStore>;
+
+export interface BlobSyncOptions {
+  store?: BlobStore;
+}
+
+export interface BlobSyncAllOptions {
+  storeForSlug?: BlobStoreFactory;
 }
 
 export interface BlobSyncActions {
@@ -122,6 +148,13 @@ function statOrNull(filePath: string): fs.Stats | null {
   }
 }
 
+function mimeTypeForPath(relativePath: string): string {
+  const ext = path.extname(relativePath).toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MIME_TYPES, ext)
+    ? MIME_TYPES[ext as keyof typeof MIME_TYPES]
+    : "application/octet-stream";
+}
+
 export function listFilesRecursive(dir: string, base: string): string[] {
   if (!pathExists(dir)) return [];
   const results: string[] = [];
@@ -154,10 +187,7 @@ function recordUpload(
   slug: string,
   size: number,
 ): void {
-  const ext = path.extname(relativePath).toLowerCase();
-  const mimeType = Object.prototype.hasOwnProperty.call(MIME_TYPES, ext)
-    ? MIME_TYPES[ext as keyof typeof MIME_TYPES]
-    : "application/octet-stream";
+  const mimeType = mimeTypeForPath(relativePath);
   Object.defineProperty(manifest, relativePath, {
     value: {
       type: "blob",
@@ -172,7 +202,24 @@ function recordUpload(
   });
 }
 
+async function firebaseAdminBlobStore(): Promise<BlobStore> {
+  const { getStorage } = await import("firebase-admin/storage");
+  const bucket = getStorage().bucket();
+  return {
+    async download(input) {
+      await bucket.file(input.gcsPath).download({ destination: input.destination });
+    },
+    async upload(input) {
+      await bucket.upload(input.localPath, { destination: input.gcsPath });
+    },
+  };
+}
+
 export async function blobSyncAll(): Promise<void> {
+  return blobSyncAllWithOptions();
+}
+
+export async function blobSyncAllWithOptions(opts: BlobSyncAllOptions = {}): Promise<void> {
   if (!pathExists(CUSTOMERS_DIR)) return;
 
   const slugs = fs.readdirSync(CUSTOMERS_DIR).filter(d => {
@@ -181,7 +228,9 @@ export async function blobSyncAll(): Promise<void> {
 
   for (const slug of slugs) {
     try {
-      await blobSyncForSlug(slug);
+      await blobSyncForSlug(slug, {
+        store: opts.storeForSlug ? await opts.storeForSlug(slug) : undefined,
+      });
     } catch (err) {
       log(`⚠ [blob-sync] ${slug}: ${err}`);
     }
@@ -216,7 +265,7 @@ function pathsForSlug(slug: string): SyncPaths {
   };
 }
 
-export async function blobSyncForSlug(slug: string): Promise<void> {
+export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}): Promise<void> {
   const paths = pathsForSlug(slug);
 
   const manifest = loadManifest(slug, paths.manifestPath);
@@ -235,9 +284,9 @@ export async function blobSyncForSlug(slug: string): Promise<void> {
     log(`⚠ [blob-sync] ${slug}: skipping upload ${p} (${mb(size)}MB > ${mb(BLOB_SYNC_MAX_SIZE)}MB)`);
   }
 
-  const bucket = getStorage().bucket();
-  const downloadCount = await runDownloads(slug, paths.blobsDir, actions.toDownload, bucket);
-  const uploadCount = await runUploads(slug, paths.blobsDir, actions.toUpload, manifest, bucket);
+  const store = opts.store ?? await firebaseAdminBlobStore();
+  const downloadCount = await runDownloads(slug, paths.blobsDir, actions.toDownload, store);
+  const uploadCount = await runUploads(slug, paths.blobsDir, actions.toUpload, manifest, store);
   const cleanupCount = runCleanup(paths.blobsDir, actions.toDelete);
 
   if (uploadCount > 0) {
@@ -257,7 +306,7 @@ async function runDownloads(
   slug: string,
   blobsDir: string,
   queue: BlobSyncActions["toDownload"],
-  bucket: ReturnType<ReturnType<typeof getStorage>["bucket"]>,
+  store: BlobStore,
 ): Promise<number> {
   let count = 0;
   for (let i = 0; i < queue.length; i += BLOB_SYNC_MAX_CONCURRENT) {
@@ -266,7 +315,12 @@ async function runDownloads(
       const localPath = path.join(blobsDir, blobPath);
       mkdirP(path.dirname(localPath));
       try {
-        await bucket.file(entry.gcsPath).download({ destination: localPath });
+        await store.download({
+          slug,
+          relativePath: blobPath,
+          gcsPath: entry.gcsPath,
+          destination: localPath,
+        });
         count++;
       } catch (err) {
         log(`⚠ [blob-sync] ${slug}: failed to download ${blobPath}: ${err}`);
@@ -281,7 +335,7 @@ async function runUploads(
   blobsDir: string,
   queue: string[],
   manifest: Manifest,
-  bucket: ReturnType<ReturnType<typeof getStorage>["bucket"]>,
+  store: BlobStore,
 ): Promise<number> {
   let count = 0;
   for (const relativePath of queue) {
@@ -289,8 +343,9 @@ async function runUploads(
     const stats = statOrNull(localPath);
     if (!stats) continue;
     const gcsPath = `customers/${slug}/${relativePath}`;
+    const mimeType = mimeTypeForPath(relativePath);
     try {
-      await bucket.upload(localPath, { destination: gcsPath });
+      await store.upload({ slug, relativePath, gcsPath, localPath, mimeType, size: stats.size });
       recordUpload(manifest, relativePath, slug, stats.size);
       count++;
     } catch (err) {
