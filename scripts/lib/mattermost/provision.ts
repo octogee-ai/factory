@@ -11,7 +11,7 @@ import {
   computeWorkspaceDisplayName,
   WORKSPACE_CHANNEL_DISPLAY_NAMES,
 } from "../../../shared/types/display-names.js";
-import { mmApiCall } from "./client.js";
+import { mmApiCall, assertMattermostConfigured } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
 import { mintAndPersistCoachToken } from "./coach-pat.js";
 import { createOrRestoreChannel } from "./channels.js";
@@ -25,10 +25,7 @@ export async function provisionMattermostUser(
   const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
   const MM_COMMUNITY_TEAM_ID = process.env.MM_COMMUNITY_TEAM_ID;
 
-  if (!process.env.MM_URL || !process.env.MM_BOT_TOKEN) {
-    log(`[mattermost] skipping — MM env vars not set`);
-    return {};
-  }
+  assertMattermostConfigured();
 
   const generatePassword = (): string => {
 

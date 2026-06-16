@@ -6,6 +6,17 @@ const IDEMPOTENT_MM_ERROR_IDS = new Set<string>([
 
 let _mmAdminToken: string | null = null;
 
+export function assertMattermostConfigured(): void {
+  const hasUrl = !!process.env.MM_URL;
+  const hasToken = !!process.env.MM_ADMIN_TOKEN || !!process.env.MM_BOT_TOKEN;
+  if (!hasUrl || !hasToken) {
+    throw new Error(
+      "[mattermost] not configured for provisioning — need MM_URL and MM_ADMIN_TOKEN (or MM_BOT_TOKEN): " +
+        `MM_URL=${hasUrl ? "set" : "MISSING"} adminToken=${hasToken ? "set" : "MISSING"}`,
+    );
+  }
+}
+
 export async function getMmAdminToken(): Promise<string | null> {
   if (_mmAdminToken) return _mmAdminToken;
 

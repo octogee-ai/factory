@@ -26,7 +26,9 @@ gatewayServiceAccount: octogee-gateway@octogee.iam.gserviceaccount.com
 env:
   GITEA_URL: ""  # auto-computed from K8S_NAMESPACE
   GITEA_ORG: "octogee"
-  MM_URL: ""  # auto-computed from K8S_NAMESPACE
+  # In-cluster Mattermost base for the trusted-side provisioning broker
+  # (provisionMattermostUser reads MM_URL). TEST overrides in values.test.yaml.
+  MM_URL: "http://mattermost.octogee.svc.cluster.local:8065"
   APP_URL: "https://app.octogee.com"
   SITE_URL: "https://octogee.com"
   # Single public host (POST-BENDER-CLEANUP-SPEC §2.7). API_PUBLIC_URL is

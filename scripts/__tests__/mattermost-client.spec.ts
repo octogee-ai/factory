@@ -87,3 +87,40 @@ describe("mmApiCall — error log routing", () => {
     expect(logMock).not.toHaveBeenCalled();
   });
 });
+
+describe("assertMattermostConfigured — fail loud when MM is not wired", () => {
+  beforeEach(() => {
+    delete process.env.MM_URL;
+    delete process.env.MM_ADMIN_TOKEN;
+    delete process.env.MM_BOT_TOKEN;
+  });
+  afterEach(() => {
+    delete process.env.MM_BOT_TOKEN;
+  });
+
+  it("throws when MM_URL is missing (the octogee-api broker gap that 502'd provisioning)", async () => {
+    process.env.MM_ADMIN_TOKEN = "admin";
+    const { assertMattermostConfigured } = await import("../lib/mattermost/client.js");
+    expect(() => assertMattermostConfigured()).toThrow(/MM_URL/);
+  });
+
+  it("throws when neither an admin nor a bot token is present", async () => {
+    process.env.MM_URL = "http://mm.test";
+    const { assertMattermostConfigured } = await import("../lib/mattermost/client.js");
+    expect(() => assertMattermostConfigured()).toThrow(/token/i);
+  });
+
+  it("passes with MM_URL + MM_ADMIN_TOKEN (how octogee-api authenticates)", async () => {
+    process.env.MM_URL = "http://mm.test";
+    process.env.MM_ADMIN_TOKEN = "admin";
+    const { assertMattermostConfigured } = await import("../lib/mattermost/client.js");
+    expect(() => assertMattermostConfigured()).not.toThrow();
+  });
+
+  it("passes with MM_URL + MM_BOT_TOKEN (the legacy in-pod fallback token)", async () => {
+    process.env.MM_URL = "http://mm.test";
+    process.env.MM_BOT_TOKEN = "bot";
+    const { assertMattermostConfigured } = await import("../lib/mattermost/client.js");
+    expect(() => assertMattermostConfigured()).not.toThrow();
+  });
+});
