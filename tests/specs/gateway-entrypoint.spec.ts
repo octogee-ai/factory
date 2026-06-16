@@ -24,14 +24,14 @@ const bootstrapIdx = entrypoint.indexOf("bootstrap-mac-ops.mjs");
     expect(bootstrapIdx).toBeLessThan(openclawStartIdx);
   });
 
-  it("guards on MM_URL + MM_ADMIN_PAT + openclaw.json so a misconfigured pod doesn't even try", () => {
+  it("guards on explicit opt-in + openclaw.json so the runtime gateway does not duplicate init bootstrap", () => {
     const bootstrapBlock = entrypoint.slice(
       entrypoint.indexOf("Pre-boot: per-gateway Mac ops"),
       entrypoint.indexOf("bootstrap-mac-ops.mjs") + 200,
     );
-    expect(bootstrapBlock).toMatch(/MM_URL/);
-    expect(bootstrapBlock).toMatch(/MM_ADMIN_PAT/);
+    expect(bootstrapBlock).toMatch(/MAC_OPS_BOOTSTRAP_ENABLED/);
     expect(bootstrapBlock).toMatch(/openclaw\.json/);
+    expect(bootstrapBlock).not.toMatch(/MM_ADMIN_PAT/);
   });
 
   it("invocation is non-fatal so a transient MM error doesn't crash the boot", () => {

@@ -385,7 +385,7 @@ for t in tokens:
       ok "Admin PAT created"
     else
       warn "Failed to create admin PAT: $PAT_RESP"
-      warn "gateway-edge /admin-token route will return 503 without this!"
+      warn "octogee-api Mattermost broker routes will fail without this!"
     fi
   fi
 
@@ -559,7 +559,7 @@ else
     save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
     ok "Admin PAT created"
   else
-    warn "Failed to create admin PAT — gateway-edge /admin-token will 503!"
+    warn "Failed to create admin PAT — octogee-api Mattermost broker routes will fail!"
   fi
 
   # Bot
@@ -655,7 +655,7 @@ echo -e "${CYAN}Mattermost bootstrap summary${NC}"
 status "MM_ADMIN_USER set" "${MM_ADMIN_USER:-}"
 status "MM_ADMIN_PASS set" "${MM_ADMIN_PASS:-}"
 status "MM_ADMIN_USER_ID set" "${MM_ADMIN_USER_ID:-}"
-status "MM_ADMIN_PAT set (required for gateway-edge /admin-token)" "${MM_ADMIN_PAT:-}"
+status "MM_ADMIN_PAT set (required for octogee-api Mattermost broker)" "${MM_ADMIN_PAT:-}"
 status "MM_TEAM_ID set" "${MM_TEAM_ID:-}"
 status "MM_BOT_USER_ID set" "${MM_BOT_USER_ID:-}"
 status "MM_BOT_TOKEN set (required for chat-proxy)" "${MM_BOT_TOKEN:-}"
@@ -669,15 +669,15 @@ if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_BOT_USER_ID:-}"
   echo "    5. ./scripts/setup-secrets.sh --env=$ENV   # Phase 2 — re-materialize with real MM/Gitea values"
   echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE   # pods pick up new secret env"
   echo ""
-  echo "  chat-proxy is a sidecar of octogee-gateway under Option C — restart"
-  echo "  the gateway deployment, not chat-proxy directly. gateway-edge is a"
-  echo "  separate deployment that reads the same secret."
+  echo "  octogee-api and glm-controller read mattermost-gateway directly."
+  echo "  Gateway Mac ops bot tokens are minted through the fleet broker; gateway"
+  echo "  pods do not receive the Mattermost admin PAT."
 else
   warn "Mattermost bootstrap is still incomplete"
   echo ""
   echo "  Expected healthy state includes:"
-  echo "    - admin PAT for gateway-edge"
-  echo "    - bot token + bot user id + team id for chat-proxy"
+  echo "    - admin PAT for octogee-api Mattermost broker routes"
+  echo "    - bot token + bot user id + team id for setup/verification and bridge callers"
   echo ""
   echo "  Next steps:"
   echo "    1. Review warnings above"

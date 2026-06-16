@@ -637,8 +637,8 @@ fi
 
 # ── Firebase / Cloud Functions secrets (must exist before firebase deploy) ───
 # Firebase prompts interactively if these secrets don't exist in Secret Manager.
-# Pre-create them with placeholder values — the real values are set at runtime:
-#   MM_ADMIN_TOKEN: overwritten by provisioner on every gateway startup
+# Pre-create them with placeholder values; runtime services read the canonical
+# K8s secrets directly where possible.
 info "Pre-creating Firebase function secrets in Secret Manager (suppress deploy prompts)..."
 SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octogee-test for test, octogee for prod)
 

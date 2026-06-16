@@ -56,9 +56,19 @@ function findDoc(out: string, kind: string, name: string): string | null {
   );
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function containerBlock(dep: string, name: string): string {
+  const escaped = escapeRegex(name);
   return (
-    dep.match(new RegExp(`- name:\\s*${name}[\\s\\S]*?(?=\\n {8}- name:|\\n {6}volumes:)`))?.[0] ??
+    dep.match(
+      new RegExp(
+        `^ {8}- name:\\s*${escaped}\\s*(?:\\n|$)[\\s\\S]*?(?=\\n {8}- name:|\\n {6}volumes:)`,
+        "m",
+      ),
+    )?.[0] ??
     ""
   );
 }
@@ -255,7 +265,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).not.toMatch(/name:\s*OCTOGEE_API_URL\b/);
   });
 
-  it("operator profile still wires OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge — the bridge needs it; only MM_ADMIN_PAT is operator-excluded", () => {
+  it("operator profile still wires OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge without MM_ADMIN_PAT", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", {
@@ -267,13 +277,11 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       ) ?? "";
     const edge = containerBlock(dep, "gateway-edge");
     // wireActivityBridge() requires OCTOGEE_APPROVAL_SIGNING_SECRET (approval-callback
-    // HMAC) on EVERY gateway. Operator gateways run the bridge admin-PAT-free, so the
-    // signing secret must NOT be lumped into the operator-excluded MM_ADMIN_PAT block
-    // (regression: bender crash-looped on the empty secret after the per-coach rework).
+    // HMAC) on every gateway. It must remain explicit while MM_ADMIN_PAT stays absent.
     expect(edge).toMatch(
       /name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*approval-signing\s*\n\s*key:\s*secret/,
     );
-    // The platform admin PAT stays operator-excluded (operator gateways never get it).
+    // The platform admin PAT is not rendered into gateway pods.
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
   });
 
@@ -422,10 +430,10 @@ describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
     const out = helmTemplate("octogee-gw-default", { imageTag: "cafef00d" });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
 
-const gatewayBlock = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
-    const wsApiBlock = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
-    expect(gatewayBlock?.[0]).toMatch(/image:\s*"[^"]*octogee-gateway:cafef00d"/);
-    expect(wsApiBlock?.[0]).toMatch(/image:\s*"[^"]*gateway-edge:cafef00d"/);
+    const gatewayBlock = containerBlock(dep, "gateway");
+    const wsApiBlock = containerBlock(dep, "gateway-edge");
+    expect(gatewayBlock).toMatch(/image:\s*"[^"]*octogee-gateway:cafef00d"/);
+    expect(wsApiBlock).toMatch(/image:\s*"[^"]*gateway-edge:cafef00d"/);
     expect(dep).not.toMatch(/octogee-chat-proxy/);
   });
 
@@ -435,11 +443,11 @@ const gatewayBlock = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}
       "gatewayEdge.image.tag": "hotfix-ge-99",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const ge = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
-    expect(ge?.[0]).toMatch(/image:\s*"[^"]*gateway-edge:hotfix-ge-99"/);
+    const ge = containerBlock(dep, "gateway-edge");
+    expect(ge).toMatch(/image:\s*"[^"]*gateway-edge:hotfix-ge-99"/);
     
-    const gw = dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
-    expect(gw?.[0]).toMatch(/image:\s*"[^"]*octogee-gateway:abc1234"/);
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/image:\s*"[^"]*octogee-gateway:abc1234"/);
   });
 });
 
@@ -447,26 +455,25 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
   it("renders gateway + gateway-edge containers; no separate chat-proxy container", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    expect(dep).toMatch(/- name:\s*gateway/);
-    expect(dep).toMatch(/- name:\s*gateway-edge/);
+    expect(dep).toMatch(/^ {8}- name:\s*gateway\s*$/m);
+    expect(dep).toMatch(/^ {8}- name:\s*gateway-edge\s*$/m);
     expect(dep).not.toMatch(/- name:\s*chat-proxy\b/);
   });
 
   it("gateway-edge container exposes one port (chat-proxy folded onto 3001) — no separate chat/metrics ports", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const ge = dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/);
-    expect(ge?.[0]).toMatch(/name:\s*gateway-edge/);
+    const ge = containerBlock(dep, "gateway-edge");
+    expect(ge).toMatch(/name:\s*gateway-edge/);
 
-expect(ge?.[0]).not.toMatch(/name:\s*chat-proxy/);
-    expect(ge?.[0]).not.toMatch(/name:\s*cp-metrics/);
+    expect(ge).not.toMatch(/name:\s*chat-proxy/);
+    expect(ge).not.toMatch(/name:\s*cp-metrics/);
   });
 
   it("gateway-edge sidecar exposes port 3001 and probes /health", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const wsBlock =
-      dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
+    const wsBlock = containerBlock(dep, "gateway-edge");
     expect(wsBlock).toMatch(/containerPort:\s*3001/);
     expect(wsBlock).toMatch(/path:\s*\/health/);
   });
@@ -474,8 +481,7 @@ expect(ge?.[0]).not.toMatch(/name:\s*chat-proxy/);
   it("cattle gateway-edge sidecar does not wire platform secrets from the chart's secrets list", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const wsBlock =
-      dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
+    const wsBlock = containerBlock(dep, "gateway-edge");
 
     expect(wsBlock).not.toMatch(/INTERNAL_SERVICE_KEY/);
     expect(wsBlock).not.toMatch(/STRIPE_SECRET_KEY/);
@@ -557,13 +563,15 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(gw).not.toMatch(/- name:\s*MM_ADMIN_PAT\b/);
   });
 
-  it("uses an init container for per-gateway Mattermost bot bootstrap, so the admin PAT is not present at shell runtime", () => {
+  it("uses a brokered init container for per-gateway Mattermost bot bootstrap, with no admin PAT in the pod", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const bootstrap = containerBlock(dep, "mac-ops-bootstrap");
     expect(bootstrap).toMatch(/node \/octogee\/scripts\/bootstrap-mac-ops\.mjs/);
-    expect(bootstrap).toMatch(
-      /- name:\s*MM_ADMIN_PAT[\s\S]*?name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token[\s\S]*?optional:\s*true/,
-    );
+    expect(bootstrap).toMatch(/name:\s*FLEET_BROKER_URL\b/);
+    expect(bootstrap).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\b/);
+    expect(bootstrap).toMatch(/name:\s*gateway-broker-sa-token[\s\S]*?mountPath:\s*\/var\/run\/secrets\/octogee-gateway-broker/);
+    expect(dep).not.toMatch(/name:\s*MM_ADMIN_PAT\b/);
+    expect(dep).not.toMatch(/name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token/);
   });
 
   it("omits the Mattermost admin-PAT bootstrap init container on operator gateways", () => {
@@ -621,9 +629,7 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
   it("startup probe is HTTP GET /healthz; liveness + readiness stay TCP; all on 18789", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const gw =
-      dep.match(/- name:\s*gateway[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ??
-      "";
+    const gw = containerBlock(dep, "gateway");
 
 expect(gw).toMatch(
       /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/,
@@ -1059,11 +1065,7 @@ describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () =
   const SECRET_NAME = "gateway-auth-token-default";
 
   function envBlock(dep: string, containerName: "gateway" | "gateway-edge"): string {
-    return (
-      dep.match(
-        new RegExp(`- name:\\s*${containerName}[\\s\\S]*?(?=\\n {8}- name:|\\n {6}volumes:)`),
-      )?.[0] ?? ""
-    );
+    return containerBlock(dep, containerName);
   }
 
   function initContainerBlock(dep: string): string {
@@ -1152,8 +1154,7 @@ describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () =
 describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
   it("renders GCP_PROJECT_ID on the gateway-edge container for cattle profile (no kubectl-set workaround needed)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
-    const ge =
-      dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
+    const ge = containerBlock(dep, "gateway-edge");
     expect(ge).toMatch(/- name:\s*GCP_PROJECT_ID[\s\S]*?value:\s*"octogee"/);
   });
 
@@ -1164,8 +1165,7 @@ describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";
-    const ge =
-      dep.match(/- name:\s*gateway-edge[\s\S]*?(?=\n {8}- name:|\n {6}volumes:)/)?.[0] ?? "";
+    const ge = containerBlock(dep, "gateway-edge");
     expect(ge).toMatch(/- name:\s*GCP_PROJECT_ID/);
   });
 });

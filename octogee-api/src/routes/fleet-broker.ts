@@ -7,6 +7,7 @@ import type {
   FleetBrokerBlobSignedUrl,
   FleetBrokerChannelBinding,
   FleetBrokerGreetingResult,
+  FleetBrokerMacOpsToken,
   FleetBrokerMattermostUpdate,
   FleetBrokerProjectCreateInput,
   FleetBrokerProjectRestore,
@@ -59,6 +60,10 @@ type CreateBlobSignedUrl = (input: {
   contentType?: string;
 }) => Promise<FleetBrokerBlobSignedUrl>;
 
+type MintMacOpsToken = (input: {
+  gatewayId: string;
+}) => Promise<FleetBrokerMacOpsToken>;
+
 interface FleetBrokerRouteDeps {
   provisionMattermost?: (input: {
     uid: string;
@@ -77,10 +82,12 @@ interface FleetBrokerRouteDeps {
   applyMilestoneSignal?: ApplyMilestoneSignal;
   recordUsageEvent?: RecordUsageEvent;
   createBlobSignedUrl?: CreateBlobSignedUrl;
+  mintMacOpsToken?: MintMacOpsToken;
 }
 
 const BLOB_SIGNED_URL_TTL_MS = 10 * 60 * 1000;
 const BLOB_SYNC_MAX_SIZE = 100 * 1024 * 1024;
+const MAC_OPS_PAT_DESCRIPTION = "Octogee Mac ops agent (OpenClaw)";
 
 async function defaultProvisionMattermost(input: {
   uid: string;
@@ -209,6 +216,91 @@ const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
     method: input.action === "read" ? "GET" : "PUT",
     gcsPath: input.gcsPath,
     expiresAt: new Date(expires).toISOString(),
+  };
+};
+
+function mattermostBaseUrl(): string {
+  return (
+    process.env.MM_URL ||
+    process.env.MM_INTERNAL_URL ||
+    `http://mattermost.${process.env.K8S_NAMESPACE || "octogee"}.svc.cluster.local:8065`
+  );
+}
+
+async function mmAdminCall(
+  method: string,
+  endpoint: string,
+  body?: unknown,
+): Promise<Record<string, unknown> | Record<string, unknown>[] | null> {
+  const token = process.env.MM_ADMIN_TOKEN;
+  if (!token) throw new Error("MM_ADMIN_TOKEN not configured");
+  const resp = await fetch(`${mattermostBaseUrl()}/api/v4${endpoint}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (resp.status >= 500) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`MM ${method} ${endpoint} -> ${resp.status} ${text.slice(0, 200)}`);
+  }
+  if (!resp.ok || resp.status === 204) return null;
+  return (await resp.json()) as Record<string, unknown> | Record<string, unknown>[];
+}
+
+async function provisionMacOpsBot(gatewayId: string): Promise<{
+  mmUserId: string;
+  username: string;
+}> {
+  const username = `mac-${gatewayId}`;
+  const created = await mmAdminCall("POST", "/bots", {
+    username,
+    display_name: "Mac",
+    description: `Octogee ops agent for ${gatewayId}`,
+  });
+  if (!Array.isArray(created)) {
+    const id = stringAt(created ?? undefined, "user_id") || stringAt(created ?? undefined, "id");
+    if (id) return { mmUserId: id, username };
+  }
+
+  const existing = await mmAdminCall("GET", `/users/username/${username}`);
+  if (!Array.isArray(existing)) {
+    const id = stringAt(existing ?? undefined, "id");
+    if (id) return { mmUserId: id, username };
+  }
+  throw new Error(`Mac ops bot ${username} not found or created`);
+}
+
+async function revokeStaleMacOpsTokens(mmUserId: string): Promise<void> {
+  const existing = await mmAdminCall("GET", `/users/${mmUserId}/tokens`);
+  if (!Array.isArray(existing)) return;
+  for (const token of existing) {
+    if (
+      token.description === MAC_OPS_PAT_DESCRIPTION &&
+      typeof token.id === "string" &&
+      token.id.length > 0
+    ) {
+      await mmAdminCall("POST", "/users/tokens/revoke", { token_id: token.id });
+    }
+  }
+}
+
+const defaultMintMacOpsToken: MintMacOpsToken = async ({ gatewayId }) => {
+  const bot = await provisionMacOpsBot(gatewayId);
+  await revokeStaleMacOpsTokens(bot.mmUserId);
+  const minted = await mmAdminCall("POST", `/users/${bot.mmUserId}/tokens`, {
+    description: MAC_OPS_PAT_DESCRIPTION,
+  });
+  if (Array.isArray(minted) || typeof minted?.token !== "string" || !minted.token) {
+    throw new Error(`Mac ops token mint failed for ${bot.username}`);
+  }
+  return {
+    gatewayId,
+    username: bot.username,
+    mmUserId: bot.mmUserId,
+    token: minted.token,
   };
 };
 
@@ -628,6 +720,7 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
     opts.applyMilestoneSignal ?? defaultApplyMilestoneSignal;
   const recordUsageEvent = opts.recordUsageEvent ?? defaultRecordUsageEvent;
   const createBlobSignedUrl = opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl;
+  const mintMacOpsToken = opts.mintMacOpsToken ?? defaultMintMacOpsToken;
 
   router.post("/assigned-users", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -846,6 +939,15 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
     await runBrokered(res, async () => {
       await notifyOpsOfSignup({ uid: assigned.uid, userData: assigned.data });
       res.status(204).end();
+    });
+  });
+
+  router.post("/mac-ops-token", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    await runBrokered(res, async () => {
+      const token = await mintMacOpsToken({ gatewayId: bound.gatewayId });
+      res.json(token);
     });
   });
 

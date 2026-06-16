@@ -1,6 +1,7 @@
 import type {
   FleetBrokerBlobSignedUrl,
   FleetBrokerGreetingResult,
+  FleetBrokerMacOpsToken,
   FleetBrokerMattermostUpdate,
   FleetBrokerProjectCreateInput,
   FleetBrokerProjectCreateSuccess,
@@ -59,6 +60,7 @@ export interface FleetBrokerClient {
   recordReconcileError(slug: string, message: string): Promise<void>;
   clearReconcileError(slug: string): Promise<void>;
   notifySignup(uid: string): Promise<void>;
+  macOpsToken(): Promise<FleetBrokerMacOpsToken>;
   createProjectFromAgent(input: {
     agentId: string;
     workspaceSlug: string;
@@ -168,6 +170,11 @@ export function createFleetBrokerClient(gatewayId: string): FleetBrokerClient {
     },
     notifySignup(uid) {
       return postNoContent("/internal/fleet/notify-signup", { gatewayId, uid });
+    },
+    macOpsToken() {
+      return postJson<FleetBrokerMacOpsToken>("/internal/fleet/mac-ops-token", {
+        gatewayId,
+      });
     },
     async createProjectFromAgent(input) {
       return postJson<FleetBrokerProjectCreateSuccess>(

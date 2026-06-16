@@ -61,6 +61,13 @@ export interface FleetBrokerUsageEvent {
   usage: FleetBrokerUsageData;
 }
 
+export interface FleetBrokerMacOpsToken {
+  gatewayId: string;
+  username: string;
+  mmUserId: string;
+  token: string;
+}
+
 export interface FleetBrokerBlobSignedUrl {
   url: string;
   method: "GET" | "PUT";

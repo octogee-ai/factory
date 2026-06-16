@@ -229,7 +229,7 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
 
   status "mattermost-gateway admin_user present" "mattermost-gateway admin_user missing" "$MM_ADMIN_USER"
   status "mattermost-gateway admin_pass present" "mattermost-gateway admin_pass missing" "$MM_ADMIN_PASS"
-  status "mattermost-gateway admin_token present" "mattermost-gateway admin_token missing (gateway-edge /admin-token will fail)" "$MM_ADMIN_TOKEN"
+  status "mattermost-gateway admin_token present" "mattermost-gateway admin_token missing (octogee-api Mattermost broker will fail)" "$MM_ADMIN_TOKEN"
   status "mattermost-gateway admin_user_id present" "mattermost-gateway admin_user_id missing" "$MM_ADMIN_USER_ID"
   status "mattermost-gateway bot_token present" "mattermost-gateway bot_token missing (MM WS bridge will fail)" "$MM_BOT_TOKEN"
   status "mattermost-gateway bot_user_id present" "mattermost-gateway bot_user_id missing" "$MM_BOT_USER_ID"

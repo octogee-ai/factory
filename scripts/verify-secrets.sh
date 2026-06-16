@@ -70,11 +70,11 @@ esac
 #   helm/octogee/charts/chat-proxy/values.yaml
 #   helm/octogee/charts/gateway-edge/templates/cronjob-trial-expiry.yaml
 REQUIRED_SECRETS=(
-  "octogee-anthropic"       # gateway: ANTHROPIC_API_KEY
-  "internal-service-key"    # gateway + gateway-edge + trial-expiry CronJob
-  "mattermost-gateway"      # chat-proxy + gateway-edge: MM_ADMIN_TOKEN (no longer optional)
+  "octogee-anthropic"       # setup/legacy only; gateway pods do not mount it
+  "internal-service-key"    # octogee-api + CronJobs; gateway pods do not mount it
+  "mattermost-gateway"      # octogee-api + glm-controller; gateway pods do not mount admin_token
   "stripe-secrets"          # gateway-edge: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-  "gitea-token"             # gateway-edge: GITEA_TOKEN (not optional in deployment template)
+  "gitea-token"             # octogee-api + glm-controller
   "approval-signing"        # chat-proxy: OCTOGEE_APPROVAL_SIGNING_SECRET (HMAC for approval buttons)
 )
 
