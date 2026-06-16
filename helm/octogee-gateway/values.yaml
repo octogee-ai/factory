@@ -301,83 +301,16 @@ gatewayEdge:
     # if missing (no silent plaintext fallback). See
     # gateway-edge/src/lib/kms.ts.
     OCTOGEE_KMS_KEY_NAME: ""
-  secrets:
-    - envName: STRIPE_SECRET_KEY
-      secretName: stripe-secrets
-      secretKey: secret_key
-      optional: true
-    - envName: STRIPE_WEBHOOK_SECRET
-      secretName: stripe-secrets
-      secretKey: webhook_secret
-      optional: true
-    - envName: GITEA_TOKEN
-      secretName: gitea-token
-      secretKey: token
-      optional: true
-    - envName: MM_ADMIN_TOKEN
-      secretName: mattermost-gateway
-      secretKey: admin_token
-      optional: true
-    - envName: GOOGLE_CLIENT_ID
-      secretName: google-oauth
-      secretKey: client_id
-      optional: true
-    - envName: GOOGLE_CLIENT_SECRET
-      secretName: google-oauth
-      secretKey: client_secret
-      optional: true
-    - envName: MICROSOFT_CLIENT_ID
-      secretName: microsoft-oauth
-      secretKey: client_id
-      optional: true
-    - envName: MICROSOFT_CLIENT_SECRET
-      secretName: microsoft-oauth
-      secretKey: client_secret
-      optional: true
-    - envName: DISCORD_CLIENT_SECRET
-      secretName: discord-secrets
-      secretKey: client_secret
-      optional: true
-    - envName: DISCORD_COACH_TOKEN
-      secretName: discord-secrets
-      secretKey: coach_token
-      optional: true
-    - envName: DISCORD_MAC_TOKEN
-      secretName: discord-secrets
-      secretKey: mac_token
-      optional: true
-    - envName: OCTOGEE_GUILD_ID
-      secretName: discord-secrets
-      secretKey: guild_id
-      optional: true
-    - envName: INTERNAL_SERVICE_KEY
-      secretName: internal-service-key
-      secretKey: key
-      optional: false
-    - envName: INVITE_SECRET
-      secretName: invite-secret
-      secretKey: secret
-      optional: true
-    - envName: RESEND_API_KEY
-      secretName: resend-secrets
-      secretKey: api_key
-      optional: true
-    - envName: RESEND_FROM_EMAIL
-      secretName: resend-secrets
-      secretKey: from_email
-      optional: true
-    - envName: RESEND_FROM_NAME
-      secretName: resend-secrets
-      secretKey: from_name
-      optional: true
-    - envName: RESEND_WEBHOOK_SECRET
-      secretName: resend-secrets
-      secretKey: webhook_secret
-      optional: true
-    - envName: EMAIL_UNSUBSCRIBE_SECRET
-      secretName: resend-secrets
-      secretKey: unsubscribe_secret
-      optional: true
+  # Platform secrets (GITEA_TOKEN, MM_ADMIN_TOKEN, INTERNAL_SERVICE_KEY,
+  # OAuth/Discord/Resend/Stripe/INVITE_SECRET, …) are intentionally NOT mounted on
+  # the gateway-edge sidecar or the shell-bearing gateway pod — the agent runs
+  # arbitrary code there, so platform credentials must stay off it. Nothing rendered
+  # this list anyway (the deployment injects only gatewayEdge.env); the cluster
+  # gateway-edge and the no-shell broker sidecar hold what's needed. See
+  # credential-brokering #1480 / #1478 / #1493 / #1494. Do NOT add a
+  # `range .Values.gatewayEdge.secrets` env loop here — it re-introduces the exact
+  # exposure those PRs removed. (Dead block + unused requireGatewayEdgeSecret helper
+  # removed 2026-06-15.)
   resources:
     requests:
       cpu: 100m

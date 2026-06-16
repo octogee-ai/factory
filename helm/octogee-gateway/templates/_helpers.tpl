@@ -52,17 +52,6 @@ end-to-end on first real exercise.
 {{- end }}
 
 {{/*
-Render-time assertion: an envName MUST appear in `.Values.gatewayEdge.secrets`.
-
-Replaces prose-only "intentionally omitted here — provided by the
-.Values.gatewayEdge.secrets range" comments with a render-time guard for
-cattle gateways. Operator gateway-edge intentionally omits platform secrets;
-its profile-aware boot check and locality routes must not depend on this list.
-
-Caller passes `Values`, `envName`, and a short `purpose` string used in
-the error message. Returns no text.
-*/}}
-{{/*
 Resolve the effective sizing tier for this gateway instance.
 
 Precedence:
@@ -97,17 +86,4 @@ tier isn't declared in `.Values.tiers`.
 {{- fail (printf "no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
 {{- end -}}
 {{- $preset | toYaml -}}
-{{- end }}
-
-{{- define "octogee-gateway.requireGatewayEdgeSecret" -}}
-{{- $envName := .envName -}}
-{{- $found := false -}}
-{{- range .Values.gatewayEdge.secrets -}}
-  {{- if eq .envName $envName -}}
-    {{- $found = true -}}
-  {{- end -}}
-{{- end -}}
-{{- if not $found -}}
-  {{- fail (printf "gatewayEdge.secrets must include an entry with envName=%s — platform-required for %s. Add it back to values.yaml (or your override values file)." $envName .purpose) -}}
-{{- end -}}
 {{- end }}

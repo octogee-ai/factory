@@ -1113,7 +1113,7 @@ describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
 // Gateway-edge platform secrets are no longer render-required. Routes that still
 // need platform authority fail closed until they move behind octogee-api/Cowboy.
 describe("helm/octogee-gateway/ — platform secret render assertions", () => {
-  function templateWithSecretsListReplaced(extra: Record<string, string> = {}): {
+  function templateWithLegacyGatewayEdgeSecrets(extra: Record<string, string> = {}): {
     status: number | null;
     stderr: string;
   } {
@@ -1130,7 +1130,7 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
       "env.mmInternalUrl=http://x",
       "--set",
       "env.mmSiteUrl=https://x",
-      // Replace gatewayEdge.secrets with a one-entry list missing INTERNAL_SERVICE_KEY.
+      // Legacy footgun: the chart no longer owns or renders gatewayEdge.secrets.
       "--set-json",
       'gatewayEdge.secrets=[{"envName":"STRIPE_SECRET_KEY","secretName":"stripe-secrets","secretKey":"secret_key","optional":true}]',
     ];
@@ -1139,13 +1139,13 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
     return { status: result.status, stderr: result.stderr };
   }
 
-  it("renders operator profile when gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
-    const result = templateWithSecretsListReplaced({ profile: "operator" });
+  it("renders operator profile when legacy gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
+    const result = templateWithLegacyGatewayEdgeSecrets({ profile: "operator" });
     expect(result.status).toBe(0);
   });
 
-  it("renders cattle profile when gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
-    const result = templateWithSecretsListReplaced();
+  it("renders cattle profile when legacy gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
+    const result = templateWithLegacyGatewayEdgeSecrets();
     expect(result.status).toBe(0);
   });
 });
@@ -1153,11 +1153,10 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
 // ── values.schema.json defense-in-depth ────────────────────────────────────
 // Helm validates values.schema.json before rendering — so structurally bad
 // inputs (missing required top-level keys, wrong types) fail BEFORE template
-// logic runs. This is layered defense alongside the render-time `required`
-// helpers above: the schema catches shape errors, the helpers catch semantic
-// ones.
+// logic runs. The removed gatewayEdge.secrets block is intentionally not part
+// of the schema; owned values such as gatewayEdge.env remain shape-checked.
 describe("helm/octogee-gateway/ — values.schema.json", () => {
-  it("rejects a values file with gatewayEdge.secrets as the wrong type", () => {
+  it("rejects a values file with gatewayEdge.env as the wrong type", () => {
     const args = [
       "template",
       "octogee-gw-default",
@@ -1172,7 +1171,7 @@ describe("helm/octogee-gateway/ — values.schema.json", () => {
       "--set",
       "env.mmSiteUrl=https://x",
       "--set-json",
-      'gatewayEdge.secrets="not-an-array"',
+      'gatewayEdge.env="not-an-object"',
     ];
     const result = spawnSync("helm", args, { encoding: "utf-8" });
     expect(result.status).not.toBe(0);
