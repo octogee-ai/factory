@@ -1014,7 +1014,6 @@ export async function startChatProxyBackground(): Promise<void> {
     const { startMmCoachEventListeners } = await import('./openclaw/mm-event-listener.js');
     const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
     const { handleReplyAsSteer } = await import('./openclaw/reply-handler.js');
-    const { resolveChannelOwnerUid, resolveOctogeeUidByMmUser } = await import('./openclaw/owner-resolution.js');
     const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
       const wiredAny = wired as unknown as {
         __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
@@ -1023,10 +1022,8 @@ export async function startChatProxyBackground(): Promise<void> {
     };
     // Owner/uid resolvers, hoisted so both onReply and onReaction share them
     // (and stay out of the deep callback nesting).
-    const ownerOf = (channelId: string) =>
-      resolveChannelOwnerUid(channelId, { db: db as never, log: bridgeLog });
-    const uidOf = (mmUserId: string) =>
-      resolveOctogeeUidByMmUser(mmUserId, { db: db as never, log: bridgeLog });
+    const ownerOf = (channelId: string) => runtimeBroker.resolveChannelOwnerUid(channelId);
+    const uidOf = (mmUserId: string) => runtimeBroker.resolveOctogeeUidByMmUser(mmUserId);
     const coachListeners = startMmCoachEventListeners({
       mmWsUrl,
       log: bridgeLog,
