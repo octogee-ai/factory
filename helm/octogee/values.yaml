@@ -109,11 +109,10 @@ mattermost:
 # ── gitea (upstream chart) ──────────────────────────────────────────────────
 # networkPolicy is managed in the parent chart (templates/gitea-network-policy.yaml)
 # because Gitea is a packaged upstream chart — can't inject templates into .tgz
-# image.tag is pinned explicitly so chart-version bumps don't silently change
-# the Gitea binary; bump in lockstep with Chart.yaml `gitea` dependency.
+# We do NOT pin gitea.image.tag: it defaults to the chart's appVersion, so the
+# `gitea` dependency version in Chart.yaml is the single version knob — Renovate
+# bumps the chart and the matching binary rides along (.github/renovate.json5).
 gitea:
-  image:
-    tag: "1.25.5"
   networkPolicy:
     enabled: true
   ingress:
