@@ -924,6 +924,66 @@ expect(open).toMatch(/port:\s*18789/);
     const out = helmTemplate("octogee-gw-default", { profile: "operator" });
     expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
   });
+
+  it("is NOT rendered when NetworkPolicy is explicitly disabled", () => {
+    const out = helmTemplate("octogee-gw-default", {
+      profile: "operator",
+      "operatorAccess.shellsEnabled": "true",
+      "networkPolicy.enabled": "false",
+    });
+    expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
+  });
+});
+
+describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolicy", () => {
+  const policyName = "octogee-gateway-metadata-egress-bender";
+
+  it("is NOT rendered by default for locked operator gateways", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "operator",
+    });
+    expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
+  });
+
+  it("is NOT rendered for standard-profile gateways even when the carve-out flag is set", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      "operatorAccess.platformMetadataEgress": "true",
+    });
+    expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
+  });
+
+  it("is NOT rendered when NetworkPolicy is explicitly disabled", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "operator",
+      "operatorAccess.platformMetadataEgress": "true",
+      "networkPolicy.enabled": "false",
+    });
+    expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
+  });
+
+  it("renders only the bender pod metadata-server egress path when enabled", () => {
+    const np = findDoc(
+      helmTemplate("octogee-gw-bender", {
+        gatewayId: "bender",
+        profile: "operator",
+        "operatorAccess.platformMetadataEgress": "true",
+      }),
+      "NetworkPolicy",
+      policyName,
+    );
+    expect(np).not.toBeNull();
+    expect(np).toMatch(/policyTypes:\s*\n\s*-\s*Egress/);
+    expect(np).toMatch(/podSelector:[\s\S]*?app:\s*octogee-gateway/);
+    expect(np).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*bender/);
+    expect(np).toMatch(/cidr:\s*169\.254\.169\.254\/32/);
+    expect(np).toMatch(/protocol:\s*TCP/);
+    expect(np).toMatch(/port:\s*80/);
+    expect(np).not.toMatch(/0\.0\.0\.0\/0/);
+    expect(np).not.toMatch(/port:\s*443/);
+  });
 });
 
 describe("helm/octogee-gateway/ — required value validation", () => {
