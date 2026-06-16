@@ -41,6 +41,11 @@ export function getConnector(id: string): ConnectorDef | undefined {
   return IMPLEMENTED[id as ConnectorId];
 }
 
+export function isConnectorTokenBrokerable(id: string): boolean {
+  const def = getConnector(id);
+  return def?.meta.consumption === "platform-read" && def.meta.family === "code-hosting";
+}
+
 export function connectorRedirectUri(def: ConnectorDef): string {
   if (!def.oauth) {
     throw new Error(`Connector ${def.meta.id} has no oauth-web config`);

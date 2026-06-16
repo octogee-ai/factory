@@ -51,6 +51,7 @@ afterEach(() => {
   delete process.env.GOOGLE_CLIENT_SECRET;
   delete process.env.CONNECTOR_TOKEN_BROKER_URL;
   delete process.env.GATEWAY_ID;
+  delete process.env.CONNECTOR_TOKEN_AUTHORITY;
 });
 
 describe('readConnectorAccessToken', () => {
@@ -160,6 +161,68 @@ describe('readConnectorAccessToken', () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it('reads directly from Firestore+KMS when it is the connector-token authority (broker host, no broker URL)', async () => {
+    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+    firestoreData['users/u-alice/secrets/github'] = {
+      provider: 'github',
+      tokens: { encryptedAccessToken: 'ENC:gho_direct', encryptedRefreshToken: null },
+    };
+
+    await expect(readConnectorAccessToken('u-alice', 'github')).resolves.toBe('gho_direct');
+    expect(internalFetch).not.toHaveBeenCalled();
+    expect(decryptSecret).toHaveBeenCalledWith('ENC:gho_direct');
+  });
+
+  it('authority direct-read returns null when the user has no stored token', async () => {
+    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+
+    await expect(readConnectorAccessToken('u-nobody', 'github')).resolves.toBeNull();
+    expect(decryptSecret).not.toHaveBeenCalled();
+  });
+
+  it('the broker URL takes precedence over the authority flag (a gateway never reads direct)', async () => {
+    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'default';
+    firestoreData['users/u-alice/secrets/github'] = {
+      tokens: { encryptedAccessToken: 'ENC:local-must-not-be-read' },
+    };
+    vi.mocked(internalFetch).mockResolvedValue(
+      new Response(JSON.stringify({ accessToken: 'gho_brokered' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(readConnectorAccessToken('u-alice', 'github')).resolves.toBe('gho_brokered');
+    expect(decryptSecret).not.toHaveBeenCalled();
+  });
+
+  it('broker URL + authority but no GATEWAY_ID fails closed — never degrades to a direct read', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+    firestoreData['users/u-alice/secrets/github'] = {
+      tokens: { encryptedAccessToken: 'ENC:local-must-not-be-read' },
+    };
+
+    await expect(readConnectorAccessToken('u-alice', 'github')).rejects.toThrow(
+      'CONNECTOR_TOKEN_BROKER_URL is set but GATEWAY_ID is missing',
+    );
+    expect(decryptSecret).not.toHaveBeenCalled();
+  });
+
+  it('the authority direct-read enforces the brokerable allowlist (only code-hosting platform-read)', async () => {
+    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+    firestoreData['users/u-dan/secrets/google'] = {
+      tokens: { encryptedAccessToken: 'ENC:ya29_must_not_be_read' },
+    };
+
+    await expect(readConnectorAccessToken('u-dan', 'google')).rejects.toThrow(
+      'connector not brokerable: google',
+    );
+    expect(decryptSecret).not.toHaveBeenCalled();
   });
 });
 

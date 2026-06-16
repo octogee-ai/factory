@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 
-import { getConnector } from "../../../gateway-edge/src/lib/connectors/index.js";
+import { isConnectorTokenBrokerable } from "../../../gateway-edge/src/lib/connectors/index.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
@@ -110,11 +110,6 @@ async function readEncryptedAccessToken(
   return typeof enc === "string" && enc.length > 0 ? enc : null;
 }
 
-function connectorAllowedForSidecar(connectorId: string): boolean {
-  const def = getConnector(connectorId);
-  return def?.meta.consumption === "platform-read" && def.meta.family === "code-hosting";
-}
-
 export function createConnectorTokenBrokerRoutes(opts: { db: Firestore }): Router {
   const router = Router();
   const { db } = opts;
@@ -129,7 +124,7 @@ export function createConnectorTokenBrokerRoutes(opts: { db: Firestore }): Route
       res.status(400).json({ error: "uid and connectorId required" });
       return;
     }
-    if (!connectorAllowedForSidecar(connectorId)) {
+    if (!isConnectorTokenBrokerable(connectorId)) {
       res.status(403).json(FORBIDDEN);
       return;
     }

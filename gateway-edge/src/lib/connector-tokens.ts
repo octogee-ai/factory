@@ -2,6 +2,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { db } from "./db.js";
 import { internalFetch } from "./internal-fetch.js";
 import { decryptSecret, encryptSecret } from "./kms.js";
+import { isConnectorTokenBrokerable } from "./connectors/index.js";
 import type { ConnectorDef } from "./connectors/def.js";
 
 const FRESHNESS_MARGIN_MS = 60_000;
@@ -23,6 +24,13 @@ export function connectorTokenBrokerBaseUrlFromEnv(
   return nonBlank(env.CONNECTOR_TOKEN_BROKER_URL);
 }
 
+export function connectorTokenAuthorityFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const value = nonBlank(env.CONNECTOR_TOKEN_AUTHORITY);
+  return value === "1" || value === "true";
+}
+
 async function readJsonOrNull(res: Response): Promise<Record<string, unknown> | null> {
   try {
     const body = (await res.json()) as unknown;
@@ -42,12 +50,11 @@ export interface ConnectorTokenProjectAccessContext {
 export type ConnectorTokenAccessContext = ConnectorTokenProjectAccessContext;
 
 async function readConnectorAccessTokenViaBroker(
+  baseUrl: string,
   uid: string,
   connectorId: string,
   access?: ConnectorTokenAccessContext,
 ): Promise<string | null> {
-  const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
-  if (!baseUrl) throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
   const gatewayId = nonBlank(process.env.GATEWAY_ID);
   if (!gatewayId) {
     throw new Error("CONNECTOR_TOKEN_BROKER_URL is set but GATEWAY_ID is missing");
@@ -80,12 +87,29 @@ async function readConnectorAccessTokenViaBroker(
   return accessToken;
 }
 
+async function readConnectorAccessTokenDirect(
+  uid: string,
+  connectorId: string,
+): Promise<string | null> {
+  if (!isConnectorTokenBrokerable(connectorId)) {
+    throw new Error(`connector not brokerable: ${connectorId}`);
+  }
+  const snap = await db.doc(`users/${uid}/secrets/${connectorId}`).get();
+  const enc = (snap.data() as { tokens?: { encryptedAccessToken?: unknown } } | undefined)
+    ?.tokens?.encryptedAccessToken;
+  if (typeof enc !== "string" || enc.length === 0) return null;
+  return decryptSecret(enc);
+}
+
 export async function readConnectorAccessToken(
   uid: string,
   connectorId: string,
   access?: ConnectorTokenAccessContext,
 ): Promise<string | null> {
-  return readConnectorAccessTokenViaBroker(uid, connectorId, access);
+  const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
+  if (baseUrl) return readConnectorAccessTokenViaBroker(baseUrl, uid, connectorId, access);
+  if (connectorTokenAuthorityFromEnv()) return readConnectorAccessTokenDirect(uid, connectorId);
+  throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
 }
 
 export interface ConnectorClientCreds {
