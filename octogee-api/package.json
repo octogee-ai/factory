@@ -58,7 +58,11 @@
     "fast-xml-builder": "^1.1.7",
     "glob": "^13.0.0",
     "ip-address": "^10.1.1",
-    "protobufjs": "^7.5.6",
-    "uuid": "^14.0.0"
+    "protobufjs": "^7.6.3",
+    "uuid": "^14.0.0",
+    "tar": "^7.5.16",
+    "js-yaml": "^4.2.0",
+    "@opentelemetry/core": "^2.8.0",
+    "esbuild": "^0.28.1"
   }
 }
