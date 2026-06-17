@@ -1098,6 +1098,65 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     stop();
   });
 
+  it("also refreshes the ready record (live SHA) for available STANDARD gateways", async () => {
+    const snapCbs: Array<() => void> = [];
+    const gatewayDocs: Record<string, Record<string, unknown>> = {};
+    const helm = makeFakeHelm({
+      read: async () => ({
+        default: {
+          enabled: true,
+          image: { repository: "repo", tag: "abc-oc2026.5.28" },
+          gatewayId: "default",
+          profile: "standard",
+          replicas: 1,
+        },
+      }),
+    });
+    const kubeOps = makeFakeKubeOps({
+      readReplicas: async () => 1,
+      readAvailableReplicas: async () => 1,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "default",
+          imageRepository: "repo",
+          imageTag: "abc-oc2026.5.28",
+          profile: "standard",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      gatewayDocs,
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      kubeOps,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log: vi.fn(),
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(kubeOps!.readAvailableReplicas).toHaveBeenCalledWith({
+      namespace: expect.any(String),
+      name: "octogee-gateway-default",
+    });
+    expect(gatewayDocs["default"]).toMatchObject({
+      gatewayId: "default",
+      status: "ready",
+      version: "abc",
+    });
+    stop();
+  });
+
   it("recovers a running operator add-gateway op once the reconciler sees the deployment ready", async () => {
     const snapCbs: Array<() => void> = [];
     const gatewayDocs: Record<string, Record<string, unknown>> = {};

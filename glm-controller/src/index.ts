@@ -405,19 +405,19 @@ async function syncFleetIngressIfConfigured(
   }
 }
 
-interface ReadyOperatorGateway {
+interface ReadyGateway {
   gatewayId: string;
   imageTag: string;
 }
 
-async function refreshOperatorGatewayReadiness(
+async function refreshGatewayReadiness(
   deps: ControllerDeps,
   desired: GatewayDesiredState[],
-): Promise<ReadyOperatorGateway[]> {
+): Promise<ReadyGateway[]> {
   const kubeOps = deps.kubeOps;
   if (!kubeOps) return [];
   const results = await Promise.all(
-    desired.filter(isRunningOperatorGateway).map(async (gateway) => {
+    desired.filter(isRunningGateway).map(async (gateway) => {
       if (!gateway.gatewayId) return null;
       try {
         const available = await kubeOps.readAvailableReplicas({
@@ -437,13 +437,13 @@ async function refreshOperatorGatewayReadiness(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         deps.log(
-          `[glm-controller] ⚠ operator readiness refresh failed for ${gateway.gatewayId}: ${msg}`,
+          `[glm-controller] ⚠ readiness refresh failed for ${gateway.gatewayId}: ${msg}`,
         );
         return null;
       }
     }),
   );
-  return results.filter((gateway): gateway is ReadyOperatorGateway => gateway != null);
+  return results.filter((gateway): gateway is ReadyGateway => gateway != null);
 }
 
 function markStepDone(
@@ -489,7 +489,7 @@ function isRecoverableOperatorAddGatewayOperation(
 
 async function completeRecoveredOperatorAddGatewayOps(
   deps: ControllerDeps,
-  readyGateways: ReadyOperatorGateway[],
+  readyGateways: ReadyGateway[],
 ): Promise<void> {
   if (readyGateways.length === 0) return;
   const readyGatewayIds = new Set(readyGateways.map((gateway) => gateway.gatewayId));
@@ -545,9 +545,9 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
   });
   await applyTargetChanges(deps, targetVsActual, desired.length, Object.keys(actualMap).length);
-  const readyOperatorGateways = await refreshOperatorGatewayReadiness(deps, desired);
+  const readyGateways = await refreshGatewayReadiness(deps, desired);
   await syncFleetIngressIfConfigured(deps, desired);
-  await completeRecoveredOperatorAddGatewayOps(deps, readyOperatorGateways);
+  await completeRecoveredOperatorAddGatewayOps(deps, readyGateways);
 }
 
 function clearTimer(timer: NodeJS.Timeout | null): null {
