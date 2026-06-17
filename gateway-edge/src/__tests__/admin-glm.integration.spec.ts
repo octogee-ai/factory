@@ -1111,6 +1111,86 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     expect(res.body.stats.fleetCost.monthlyUsd).toBe(running.sizing.monthlyCostUsd.compute);
   });
 
+  it("projects PVC storage and the PROD operator on-demand reservation default", async () => {
+    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
+    gatewaysDocs["bender"] = { gatewayId: "bender", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["bender"] = {
+      gatewayId: "bender",
+      gatewayClass: "operator",
+      sizingTier: "nano",
+      desiredStatus: "running",
+      persistence: {
+        enabled: true,
+        storageClassName: "premium-rwo",
+        size: "20Gi",
+        accessModes: ["ReadWriteOnce"],
+      },
+    };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways");
+    const bender = res.body.gateways.find((g: any) => g.gatewayId === "bender");
+    expect(bender.storage).toEqual({
+      mode: "pvc",
+      pvcName: "octogee-gateway-bender-data",
+      size: "20Gi",
+      storageClassName: "premium-rwo",
+      accessModes: ["ReadWriteOnce"],
+    });
+    expect(bender.reservation).toMatchObject({
+      type: "on-demand",
+      computeClass: "octogee-gateway",
+    });
+    expect(bender.sizing.monthlyCostUsd.compute).toBe(
+      bender.sizing.monthlyCostUsd.onDemandCompute,
+    );
+    expect(res.body.stats.fleetCost.savingsUsd).toBe(0);
+  });
+
+  it("keeps on-demand pricing when a gateway is explicitly on the on-demand compute class", async () => {
+    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
+    gatewaysDocs["dedicated"] = { gatewayId: "dedicated", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["dedicated"] = {
+      gatewayId: "dedicated",
+      sizingTier: "nano",
+      desiredStatus: "running",
+      computeClass: "octogee-gateway",
+    };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways");
+    const dedicated = res.body.gateways.find((g: any) => g.gatewayId === "dedicated");
+    expect(dedicated.storage).toMatchObject({ mode: "emptyDir", pvcName: null });
+    expect(dedicated.reservation).toMatchObject({
+      type: "on-demand",
+      computeClass: "octogee-gateway",
+    });
+    expect(dedicated.sizing.monthlyCostUsd.compute).toBe(
+      dedicated.sizing.monthlyCostUsd.onDemandCompute,
+    );
+    expect(dedicated.sizing.monthlyCostUsd.savings).toBe(0);
+  });
+
+  it("defaults shared gateways to Spot pricing", async () => {
+    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
+    gatewaysDocs["shared"] = { gatewayId: "shared", status: "ready", mountedCustomers: [] };
+    glmGatewaysDocs["shared"] = {
+      gatewayId: "shared",
+      sizingTier: "nano",
+      desiredStatus: "running",
+      gatewayClass: "shared",
+    };
+    const app = buildApp();
+    const res = await request(app).get("/api/admin/gateways");
+    const shared = res.body.gateways.find((g: any) => g.gatewayId === "shared");
+    expect(shared.reservation).toMatchObject({
+      type: "spot",
+      computeClass: "octogee-gateway-spot",
+    });
+    expect(shared.sizing.monthlyCostUsd.compute).toBeLessThan(
+      shared.sizing.monthlyCostUsd.onDemandCompute,
+    );
+    expect(res.body.stats.fleetCost.savingsUsd).toBeGreaterThan(0);
+  });
+
   it("rolls up stats.fleetCost.byTier and stats.fleetCost.monthlyUsd across the fleet", async () => {
     // Reset the beforeEach seed so we exercise exactly the two fixtures we set up below.
     for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];

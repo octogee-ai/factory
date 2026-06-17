@@ -36,7 +36,11 @@ import {
   resolveSizingTier,
   type SizingTier,
 } from "../../shared/types/sizing.js";
-import { estimateGatewayMonthlyCost } from "../../shared/types/cost-estimator.js";
+import {
+  SPOT_PRICE_MULTIPLIER,
+  estimateGatewayMonthlyCost,
+  type GatewayPricingMode,
+} from "../../shared/types/cost-estimator.js";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "../../shared/types/fleet-controller.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 
@@ -68,12 +72,20 @@ type ActorRequest = Request & {
 
 function resolveSizingForResponse(
   glmDoc: Record<string, unknown> | undefined,
+  reservation: ReturnType<typeof projectGatewayReservation>,
 ): {
   tier: SizingTier;
   resolvedFrom: "explicit" | "class-default" | "profile-default";
   resources: { requests: { cpu: string; memory: string }; limits: { cpu: string; memory: string } };
   capacity: { targetActiveBuilders: number; typicalBuilders: number };
-  monthlyCostUsd: { compute: number; perBuilderAtTarget: number; perBuilderAtTypical: number };
+  monthlyCostUsd: {
+    compute: number;
+    onDemandCompute: number;
+    savings: number;
+    pricingMode: GatewayPricingMode;
+    perBuilderAtTarget: number;
+    perBuilderAtTypical: number;
+  };
 } {
   const sizingTier =
     typeof glmDoc?.sizingTier === "string" && (SIZING_TIERS as readonly string[]).includes(glmDoc.sizingTier)
@@ -91,8 +103,15 @@ function resolveSizingForResponse(
   // so the operator sees real cost, not nameplate.
   const isPaused = glmDoc?.desiredStatus === "paused";
   const cost = isPaused
-    ? { computeUsd: 0, perBuilderAtTarget: 0, perBuilderAtTypical: 0 }
-    : estimateGatewayMonthlyCost(resolved.tier);
+    ? {
+        computeUsd: 0,
+        onDemandComputeUsd: 0,
+        savingsUsd: 0,
+        pricingMode: reservation.type,
+        perBuilderAtTarget: 0,
+        perBuilderAtTypical: 0,
+      }
+    : estimateGatewayMonthlyCost(resolved.tier, { pricingMode: reservation.type });
   return {
     tier: resolved.tier,
     resolvedFrom: resolved.resolvedFrom,
@@ -109,6 +128,9 @@ function resolveSizingForResponse(
     capacity: resolved.preset.capacity,
     monthlyCostUsd: {
       compute: cost.computeUsd,
+      onDemandCompute: cost.onDemandComputeUsd,
+      savings: cost.savingsUsd,
+      pricingMode: cost.pricingMode,
       perBuilderAtTarget: cost.perBuilderAtTarget,
       perBuilderAtTypical: cost.perBuilderAtTypical,
     },
@@ -175,6 +197,113 @@ function projectDesiredStatus(glmDoc: GlmDoc | undefined):
   return null;
 }
 
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function stringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+type ProjectedGatewayStorage = {
+  mode: "emptyDir" | "pvc";
+  pvcName: string | null;
+  size: string | null;
+  storageClassName: string | null;
+  accessModes: string[];
+};
+
+function emptyDirGatewayStorage(): ProjectedGatewayStorage {
+  return {
+    mode: "emptyDir",
+    pvcName: null,
+    size: null,
+    storageClassName: null,
+    accessModes: [],
+  };
+}
+
+function pvcNameForGateway(
+  gatewayId: string,
+  persistence: Record<string, unknown>,
+): string {
+  if (typeof persistence.existingClaim === "string" && persistence.existingClaim.length > 0) {
+    return persistence.existingClaim;
+  }
+  return `octogee-gateway-${gatewayId}-data`;
+}
+
+function projectGatewayStorage(
+  gatewayId: string,
+  glmDoc: GlmDoc | undefined,
+): ProjectedGatewayStorage {
+  const persistence = isPlainRecord(glmDoc?.persistence) ? glmDoc.persistence : undefined;
+  if (persistence?.enabled !== true) return emptyDirGatewayStorage();
+  return {
+    mode: "pvc",
+    pvcName: pvcNameForGateway(gatewayId, persistence),
+    size: typeof persistence.size === "string" ? persistence.size : null,
+    storageClassName:
+      typeof persistence.storageClassName === "string"
+        ? persistence.storageClassName
+        : null,
+    accessModes: stringArray(persistence.accessModes),
+  };
+}
+
+function gatewayComputeClassBase(): string {
+  return resolveFleetNamespace() === "octogee-test"
+    ? "octogee-gateway-test"
+    : "octogee-gateway";
+}
+
+function gatewayClassFromGlmDoc(glmDoc: GlmDoc | undefined): GatewayClass {
+  const gatewayClass = isGatewayClass(glmDoc?.gatewayClass)
+    ? glmDoc.gatewayClass
+    : undefined;
+  const profile = isGatewayProfile(glmDoc?.profile)
+    ? glmDoc.profile
+    : undefined;
+  const imageProfile =
+    typeof glmDoc?.imageProfile === "string" &&
+    (GATEWAY_IMAGE_PROFILES as readonly string[]).includes(glmDoc.imageProfile)
+      ? (glmDoc.imageProfile as GatewayImageProfile)
+      : undefined;
+  return resolveGatewayClass({ gatewayClass, profile, imageProfile });
+}
+
+function defaultGatewayScheduling(gatewayClass: GatewayClass): GatewayPricingMode {
+  if (resolveFleetNamespace() !== "octogee-test" && gatewayClass === "operator") {
+    return "on-demand";
+  }
+  return "spot";
+}
+
+function projectGatewayReservation(
+  glmDoc: GlmDoc | undefined,
+): {
+  type: GatewayPricingMode;
+  computeClass: string;
+  priceMultiplier: number;
+} {
+  const explicitComputeClass =
+    typeof glmDoc?.computeClass === "string" && glmDoc.computeClass.length > 0
+      ? glmDoc.computeClass
+      : null;
+  const scheduling =
+    glmDoc?.scheduling === "on-demand" || glmDoc?.scheduling === "spot"
+      ? glmDoc.scheduling
+      : defaultGatewayScheduling(gatewayClassFromGlmDoc(glmDoc));
+  const base = gatewayComputeClassBase();
+  const computeClass = explicitComputeClass ?? (scheduling === "spot" ? `${base}-spot` : base);
+  const type: GatewayPricingMode = computeClass.includes("spot") ? "spot" : "on-demand";
+  return {
+    type,
+    computeClass,
+    priceMultiplier: type === "spot" ? SPOT_PRICE_MULTIPLIER : 1,
+  };
+}
+
 export function projectGatewaySummary(
   doc: FirestoreDocLike,
   glmDoc: GlmDoc | undefined,
@@ -188,13 +317,17 @@ export function projectGatewaySummary(
   startedAt: string | null; uptimeMs: number | null;
   lastError: ReturnType<typeof projectLastError>;
   sizing: ReturnType<typeof resolveSizingForResponse>;
+  storage: ReturnType<typeof projectGatewayStorage>;
+  reservation: ReturnType<typeof projectGatewayReservation>;
   profile: GatewayProfile;
   gatewayClass: GatewayClass;
   imageProfile: GatewayImageProfile;
 } {
   const data = doc.data();
+  const gatewayId = typeof data.gatewayId === "string" ? data.gatewayId : doc.id;
+  const reservation = projectGatewayReservation(glmDoc);
   return {
-    gatewayId: typeof data.gatewayId === "string" ? data.gatewayId : doc.id,
+    gatewayId,
     status: typeof data.status === "string" ? data.status : "unknown",
     desiredStatus: projectDesiredStatus(glmDoc),
     imageTag: typeof data.version === "string" ? data.version : null,
@@ -205,7 +338,9 @@ export function projectGatewaySummary(
     startedAt: toIso(data.startedAt),
     uptimeMs: ageMsOrNull(toMillis(data.startedAt), now),
     lastError: projectLastError(data.lastError),
-    sizing: resolveSizingForResponse(glmDoc),
+    sizing: resolveSizingForResponse(glmDoc, reservation),
+    storage: projectGatewayStorage(gatewayId, glmDoc),
+    reservation,
     profile: normalizeGatewayProfile(glmDoc?.profile),
     gatewayClass: normalizeGatewayClass(glmDoc),
     imageProfile: normalizeGatewayImageProfile(glmDoc),
@@ -217,10 +352,27 @@ function rollupFleetStats(
 ): {
   gateways: { total: number; ready: number; unreachable: number };
   customersMounted: number;
-  fleetCost: { monthlyUsd: number; byTier: Record<string, { count: number; subtotalUsd: number }> };
+  fleetCost: {
+    monthlyUsd: number;
+    onDemandMonthlyUsd: number;
+    savingsUsd: number;
+    byTier: Record<string, {
+      count: number;
+      subtotalUsd: number;
+      onDemandSubtotalUsd: number;
+      spotCount: number;
+      onDemandCount: number;
+    }>;
+  };
 } {
-  let ready = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0;
-  const byTier: Record<string, { count: number; subtotalUsd: number }> = {};
+  let ready = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0, fleetOnDemandUsd = 0;
+  const byTier: Record<string, {
+    count: number;
+    subtotalUsd: number;
+    onDemandSubtotalUsd: number;
+    spotCount: number;
+    onDemandCount: number;
+  }> = {};
   for (const g of gateways) {
     // Derived reachability (replaces the deleted Cloud-Function "unreachable" writer):
     // a gateway whose heartbeat has aged out is unreachable, whatever its last
@@ -230,15 +382,30 @@ function rollupFleetStats(
     else if (g.status === "ready") ready++;
     customersMounted += g.mountedCustomers.length;
     fleetMonthlyUsd += g.sizing.monthlyCostUsd.compute;
-    const entry = byTier[g.sizing.tier] ?? { count: 0, subtotalUsd: 0 };
+    fleetOnDemandUsd += g.sizing.monthlyCostUsd.onDemandCompute;
+    const entry = byTier[g.sizing.tier] ?? {
+      count: 0,
+      subtotalUsd: 0,
+      onDemandSubtotalUsd: 0,
+      spotCount: 0,
+      onDemandCount: 0,
+    };
     entry.count += 1;
     entry.subtotalUsd += g.sizing.monthlyCostUsd.compute;
+    entry.onDemandSubtotalUsd += g.sizing.monthlyCostUsd.onDemandCompute;
+    if (g.reservation.type === "spot") entry.spotCount += 1;
+    else entry.onDemandCount += 1;
     byTier[g.sizing.tier] = entry;
   }
   return {
     gateways: { total: gateways.length, ready, unreachable },
     customersMounted,
-    fleetCost: { monthlyUsd: fleetMonthlyUsd, byTier },
+    fleetCost: {
+      monthlyUsd: fleetMonthlyUsd,
+      onDemandMonthlyUsd: fleetOnDemandUsd,
+      savingsUsd: Math.max(0, fleetOnDemandUsd - fleetMonthlyUsd),
+      byTier,
+    },
   };
 }
 

@@ -6,44 +6,89 @@ import {
 
 // Approximate GKE Autopilot c2d on-demand pricing (us-central1, 2026-05).
 // Anchored to public rates; rounds up conservatively. Excludes egress, LB,
-// GCS, Firestore — those are app-level metering territory (Phase 5a).
+// GCS, Firestore - those are app-level metering territory (Phase 5a).
 export const C2D_AUTOPILOT_VCPU_USD_PER_HR = 0.0335;
 export const C2D_AUTOPILOT_GIB_USD_PER_HR = 0.00408;
 export const HOURS_PER_MONTH = 730;
+// Conservative Spot estimate for the gateway ComputeClass. Specs model Spot
+// at roughly 70-90% off; use 70% off so the dashboard does not overstate
+// savings.
+export const SPOT_PRICE_MULTIPLIER = 0.3;
+
+export type GatewayPricingMode = "on-demand" | "spot";
 
 export interface GatewayMonthlyCost {
   computeUsd: number;
+  onDemandComputeUsd: number;
+  savingsUsd: number;
+  pricingMode: GatewayPricingMode;
   perBuilderAtTarget: number;
   perBuilderAtTypical: number;
 }
 
 export interface FleetMonthlyCost {
   totalUsd: number;
-  byTier: Partial<Record<SizingTier, { count: number; subtotalUsd: number }>>;
+  onDemandTotalUsd: number;
+  savingsUsd: number;
+  byTier: Partial<Record<SizingTier, {
+    count: number;
+    subtotalUsd: number;
+    onDemandSubtotalUsd: number;
+    spotCount: number;
+    onDemandCount: number;
+  }>>;
 }
 
-export function estimateGatewayMonthlyCost(tier: SizingTier): GatewayMonthlyCost {
+export function estimateGatewayMonthlyCost(
+  tier: SizingTier,
+  opts: { pricingMode?: GatewayPricingMode } = {},
+): GatewayMonthlyCost {
   const preset = TIER_PRESETS[tier];
-  const compute = computeMonthlyUsd(preset);
+  const pricingMode = opts.pricingMode ?? "on-demand";
+  const onDemandCompute = computeMonthlyUsd(preset);
+  const compute = onDemandCompute * priceMultiplierFor(pricingMode);
   return {
     computeUsd: Math.round(compute),
+    onDemandComputeUsd: Math.round(onDemandCompute),
+    savingsUsd: Math.max(0, Math.round(onDemandCompute) - Math.round(compute)),
+    pricingMode,
     perBuilderAtTarget: Math.round(compute / preset.capacity.targetActiveBuilders),
     perBuilderAtTypical: Math.round(compute / preset.capacity.typicalBuilders),
   };
 }
 
-export function estimateFleetMonthlyCost(tiers: SizingTier[]): FleetMonthlyCost {
+export function estimateFleetMonthlyCost(
+  inputs: Array<SizingTier | { tier: SizingTier; pricingMode?: GatewayPricingMode }>,
+): FleetMonthlyCost {
   const byTier: FleetMonthlyCost["byTier"] = {};
   let total = 0;
-  for (const tier of tiers) {
-    const cost = estimateGatewayMonthlyCost(tier).computeUsd;
-    total += cost;
-    const entry = byTier[tier] ?? { count: 0, subtotalUsd: 0 };
+  let onDemandTotal = 0;
+  for (const input of inputs) {
+    const tier = typeof input === "string" ? input : input.tier;
+    const pricingMode = typeof input === "string" ? "on-demand" : input.pricingMode;
+    const cost = estimateGatewayMonthlyCost(tier, { pricingMode });
+    total += cost.computeUsd;
+    onDemandTotal += cost.onDemandComputeUsd;
+    const entry = byTier[tier] ?? {
+      count: 0,
+      subtotalUsd: 0,
+      onDemandSubtotalUsd: 0,
+      spotCount: 0,
+      onDemandCount: 0,
+    };
     entry.count += 1;
-    entry.subtotalUsd += cost;
+    entry.subtotalUsd += cost.computeUsd;
+    entry.onDemandSubtotalUsd += cost.onDemandComputeUsd;
+    if (cost.pricingMode === "spot") entry.spotCount += 1;
+    else entry.onDemandCount += 1;
     byTier[tier] = entry;
   }
-  return { totalUsd: total, byTier };
+  return {
+    totalUsd: total,
+    onDemandTotalUsd: onDemandTotal,
+    savingsUsd: Math.max(0, onDemandTotal - total),
+    byTier,
+  };
 }
 
 function computeMonthlyUsd(preset: SizingTierPreset): number {
@@ -53,6 +98,10 @@ function computeMonthlyUsd(preset: SizingTierPreset): number {
     vcpu * C2D_AUTOPILOT_VCPU_USD_PER_HR * HOURS_PER_MONTH +
     gib * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH
   );
+}
+
+function priceMultiplierFor(mode: GatewayPricingMode): number {
+  return mode === "spot" ? SPOT_PRICE_MULTIPLIER : 1;
 }
 
 function parseMillicores(s: string): number {
