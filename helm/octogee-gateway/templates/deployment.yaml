@@ -199,6 +199,23 @@ spec:
             {{- end }}
             - name: OPERATOR_SHELLS_ENABLED
               value: {{ ternary "true" "false" $operatorShellsEnabled | quote }}
+            {{- if ne .Values.profile "operator" }}
+            # Standard/cattle gateways fall back to the shared platform Anthropic
+            # key when a Builder has no BYOK/BYOS profile (openclaw's
+            # auth.profiles.anthropic:default slot + the L3-throttle fallback).
+            # NEVER on operator gateways — their BuilderShell users must use their
+            # own BYOT/BYOS key, never the platform key. Shared-compute (not
+            # cross-tenant) credential, agent-readable by design; per-env unique +
+            # rotatable. Documented exception to #1482 (see DECISIONS.md).
+            # optional: a missing secret degrades to the agent's own no-key error,
+            # never a pod crash-loop.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-anthropic
+                  key: api_key
+                  optional: true
+            {{- end }}
             {{- if eq .Values.profile "operator" }}
             # Operator gateway shells run inside the tenant shell container,
             # which intentionally does not inherit the platform-wide

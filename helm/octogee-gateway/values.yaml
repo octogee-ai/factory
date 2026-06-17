@@ -53,8 +53,9 @@ replicas: 1
 # chart gates profile-conditional resources on this. Operator gateways
 # skip shell-inheritable platform secrets in the gateway container and
 # only expose builder-shell when `operatorAccess.shellsEnabled=true`.
-# See docs/specs/BYO-SUBSCRIPTION-OAUTH-SPEC.md §3b for the Claude auth
-# reason behind omitting the shared ANTHROPIC_API_KEY.
+# Standard/cattle gateways wire ANTHROPIC_API_KEY (octogee-anthropic secret)
+# as the BYOK/BYOS platform fallback; operator gateways NEVER do — their
+# BuilderShell users must use their own BYOT/BYOS key. See DECISIONS.md.
 profile: ""
 
 # Workspace auto-commit toggle. Unset (default) lets the gateway code

@@ -160,7 +160,7 @@ case "$SECRET" in
 
   list)
     echo "  Rotatable via this script (test + prod only):"
-    echo "    anthropic             — ANTHROPIC_API_KEY, setup/legacy only (not mounted in gateway pods)"
+    echo "    anthropic             — ANTHROPIC_API_KEY, standard/cattle BYOK/BYOS fallback (octogee-anthropic; standard gateways only, never operator)"
     echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: octogee-api, cron jobs, social functions"
     echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: octogee-api, glm-controller"
     echo "    gitea-pat             — Gitea API token, consumers: octogee-api, glm-controller"
@@ -189,7 +189,7 @@ case "$SECRET" in
     [[ -z "$NEW_VALUE" ]] && fail "No value provided"
     [[ "$NEW_VALUE" =~ ^sk-ant-(api03|oat01)- ]] || warn "Key does not start with sk-ant-api03-/oat01- — proceeding anyway"
 
-    confirm "Rotate ANTHROPIC_API_KEY in $FIREBASE_PROJECT and restart gateway?" || { info "Cancelled"; exit 0; }
+    confirm "Rotate ANTHROPIC_API_KEY in $FIREBASE_PROJECT and restart the standard gateway?" || { info "Cancelled"; exit 0; }
 
     info "Writing new version to Secret Manager ($FIREBASE_PROJECT)..."
     echo -n "$NEW_VALUE" | gcloud secrets versions add ANTHROPIC_API_KEY \
@@ -206,11 +206,19 @@ case "$SECRET" in
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     ok "K8s secret octogee-anthropic updated"
 
-    info "Restarting gateway (classifier model reload ~90s)..."
-    rollout_restart octogee-gateway
+    # Every standard/non-operator gateway mounts the fallback key (the helm
+    # gate is `ne .Values.profile "operator"`), so restart them all — not just
+    # the default pool. Operator gateways never mount it (BuilderShell users
+    # bring their own BYOT/BYOS key). See DECISIONS.md.
+    info "Restarting all standard (non-operator) gateways (classifier reload ~90s)..."
+    STANDARD_GWS=$(kubectl get deploy -n "$K8S_NAMESPACE" \
+      -l 'app=octogee-gateway,gateway-profile!=operator' \
+      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null)
+    [[ -n "$STANDARD_GWS" ]] && rollout_restart $STANDARD_GWS || warn "No standard gateways found to restart"
 
     info "Verifying gateway startup..."
-    kubectl logs -n "$K8S_NAMESPACE" deploy/octogee-gateway --tail=30 | grep -iE 'anthropic|auth|error' || true
+    kubectl logs -n "$K8S_NAMESPACE" -l 'app=octogee-gateway,gateway-profile!=operator' \
+      --tail=15 --max-log-requests=20 2>/dev/null | grep -iE 'anthropic|auth|error' || true
     ok "Rotation complete"
     ;;
 

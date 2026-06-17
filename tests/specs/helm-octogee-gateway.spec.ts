@@ -641,14 +641,15 @@ expect(gw).toMatch(
 });
 
 describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
-  it("omits ANTHROPIC_API_KEY from the gateway container for the standard profile", () => {
+  it("renders the platform ANTHROPIC_API_KEY fallback on the standard gateway container (from octogee-anthropic)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
     const gw = containerBlock(dep ?? "", "gateway");
-    expect(gw).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).toMatch(/secretKeyRef:\s*\n\s*name:\s*octogee-anthropic\s*\n\s*key:\s*api_key/);
   });
 
-  it("omits ANTHROPIC_API_KEY when profile is explicitly standard", () => {
+  it("renders ANTHROPIC_API_KEY when profile is explicitly standard (cattle BYOK/BYOS platform fallback)", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", { profile: "standard" }),
       "Deployment",
@@ -656,7 +657,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     );
     expect(dep).not.toBeNull();
     const gw = containerBlock(dep ?? "", "gateway");
-    expect(gw).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
   });
 
   it("OMITS ANTHROPIC_API_KEY when profile is operator (operator uses `claude auth login` instead)", () => {
@@ -690,7 +691,10 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
       "MM_ADMIN_USER_ID",
       "DISCORD_OPS_WEBHOOK_URL",
       "INTERNAL_SERVICE_KEY",
-      "ANTHROPIC_API_KEY",
+      // ANTHROPIC_API_KEY is the one deliberate exception — a shared-compute
+      // (not cross-tenant) platform fallback, standard/cattle only, never
+      // operator. Its presence + gating is pinned by the dedicated
+      // ANTHROPIC_API_KEY tests above.
     ]) {
       expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
     }

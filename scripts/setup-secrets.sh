@@ -287,7 +287,10 @@ fi
 # ── 6. Anthropic API key ──────────────────────────────────────────────────
 info "octogee-anthropic"
 set +u; ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"; set -u
-[[ -z "$ANTHROPIC_API_KEY" ]] && ANTHROPIC_API_KEY=$(sm_get ANTHROPIC_API_KEY octogee 2>/dev/null || echo "")
+# Per-env UNIQUE key — read from this env's own SM project (where
+# rotate-secret.sh anthropic writes), NOT the shared octogee project, so a
+# rotated test key isn't clobbered by the prod key on re-run.
+[[ -z "$ANTHROPIC_API_KEY" ]] && ANTHROPIC_API_KEY=$(sm_get ANTHROPIC_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -n "$ANTHROPIC_API_KEY" ]] || fail "ANTHROPIC_API_KEY not found in .env or Secret Manager"
 ksecret octogee-anthropic --from-literal=api_key="$ANTHROPIC_API_KEY"
 
