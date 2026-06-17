@@ -82,6 +82,16 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     });
   });
 
+  it("ensureSystemConfigRepo POSTs slug", async () => {
+    mockFetch.mockResolvedValueOnce(reply(204));
+    await broker.ensureSystemConfigRepo("acme");
+    expect(lastCall()).toMatchObject({
+      url: `${DEFAULT_BASE}/internal/gitea/ensure-system-config-repo`,
+      method: "POST",
+      body: { slug: "acme" },
+    });
+  });
+
   it("ensureProjectRepo POSTs slug + projectName", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
     await broker.ensureProjectRepo("acme", "mygame");

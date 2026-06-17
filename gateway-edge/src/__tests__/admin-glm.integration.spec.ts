@@ -365,13 +365,9 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     );
     expect(gwWrite?.data).toMatchObject({
       profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
       sizingTier: "large",
-      persistence: {
-        enabled: true,
-        storageClassName: "premium-rwo",
-        size: "20Gi",
-        accessModes: ["ReadWriteOnce"],
-      },
       operatorAccess: {
         shellsEnabled: false,
         reason: "operator-trust-boundary-not-provisioned",
@@ -428,7 +424,62 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     });
   });
 
-  it("rejects reservation fields on non-operator gateways before side effects", async () => {
+  it("creates a builder-class standard gateway for a real owner without operator access", async () => {
+    usersDocs["uid-jack"] = {
+      username: "jack",
+      provisioning: { openclaw: { slug: "jack" } },
+    };
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "jack",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      gatewayClass: "builder",
+      ownerUid: "uid-jack",
+    });
+    expect(res.status).toBe(202);
+
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite?.data).toMatchObject({
+      gatewayId: "jack",
+      gatewayClass: "builder",
+      ownerUid: "uid-jack",
+      builderSlug: "jack",
+    });
+    expect(gwWrite?.data).not.toHaveProperty("imageProfile");
+    expect(gwWrite?.data).not.toHaveProperty("operatorAccess");
+    expect(gwWrite?.data).not.toHaveProperty("serviceAccountName");
+    expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
+
+    const opWrite = calls.find((c) => c.collection === "glmOperations");
+    expect(opWrite?.data?.input).toMatchObject({
+      gatewayId: "jack",
+      gatewayClass: "builder",
+      ownerUid: "uid-jack",
+      builderSlug: "jack",
+    });
+  });
+
+  it("rejects builder-class gateways without an owner before side effects", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "jack",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      gatewayClass: "builder",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/ownerUid/);
+    expect(provisionerCalls).toEqual([]);
+    const gwWrite = calls.find(
+      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+    );
+    expect(gwWrite).toBeUndefined();
+  });
+
+  it("rejects owner fields on shared gateways before side effects", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "canary",
@@ -437,7 +488,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       ownerUid: "uid-jack",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/profile=operator/);
+    expect(res.body.error).toMatch(/gatewayClass=builder or gatewayClass=operator/);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
       (c) => c.collection === "glmGateways" && c.op === "doc.set",
@@ -777,6 +828,8 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     expect(gwWrite?.data).toMatchObject({
       gatewayId: "alice",
       profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
       ownerUid: "admin-user",
       builderSlug: "alice",
       sizingTier: "large",
@@ -786,12 +839,6 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       },
       serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },
-      persistence: {
-        enabled: true,
-        storageClassName: "premium-rwo",
-        size: "20Gi",
-        accessModes: ["ReadWriteOnce"],
-      },
     });
 
     const userUpdates = calls.filter(
@@ -909,6 +956,8 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       imageTag: "abc1234",
       desiredStatus: "running",
       profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
       ownerUid: "uid-alice",
       builderSlug: "alice",
       sizingTier: "medium",
@@ -918,12 +967,6 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       },
       serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },
-      persistence: {
-        enabled: true,
-        storageClassName: "premium-rwo",
-        size: "20Gi",
-        accessModes: ["ReadWriteOnce"],
-      },
       operatorReservation: {
         status: "provisioning",
         reservedAt: 1_234,
@@ -1040,14 +1083,14 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     expect(bender.desiredStatus).toBe("running");
   });
 
-  it("falls back to profile-default tier when sizingTier is unset (resolvedFrom='profile-default')", async () => {
+  it("falls back to class-default tier when sizingTier is unset (resolvedFrom='class-default')", async () => {
     gatewaysDocs["default"] = { gatewayId: "default", status: "ready", mountedCustomers: [] };
     glmGatewaysDocs["default"] = { gatewayId: "default", profile: "operator", desiredStatus: "running" };
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const g = res.body.gateways.find((x: any) => x.gatewayId === "default");
     expect(g.sizing.tier).toBe("small");
-    expect(g.sizing.resolvedFrom).toBe("profile-default");
+    expect(g.sizing.resolvedFrom).toBe("class-default");
   });
 
   it("reports compute=0 for paused gateways (no replicas → no node consumption)", async () => {

@@ -63,3 +63,75 @@ spec:
   # customer-facing runtime.
   whenUnsatisfiable: ScaleUpAnyway
 {{- end }}
+{{- if .Values.gatewayFleet.computeClass.spotName }}
+---
+# Sibling Spot compute class for standard/shared gateway pods. This keeps the
+# existing on-demand class available for operator/Bender until the operator
+# emptyDir + Spot proof lands, while shared gateways can take the Spot cost win
+# immediately.
+apiVersion: cloud.google.com/v1
+kind: ComputeClass
+metadata:
+  name: {{ .Values.gatewayFleet.computeClass.spotName }}
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  priorities:
+    - machineType: c2d-standard-4
+      spot: true
+    - machineType: n2d-standard-4
+      spot: true
+    - machineType: n2-standard-4
+      spot: true
+    - machineType: c2d-standard-8
+      spot: true
+    - machineType: n2d-standard-8
+      spot: true
+    - machineType: n2-standard-8
+      spot: true
+    - machineType: c2d-standard-16
+      spot: true
+    - machineType: n2d-standard-16
+      spot: true
+    - machineType: n2-standard-16
+      spot: true
+    - machineType: c2d-standard-32
+      spot: true
+    - machineType: n2d-standard-32
+      spot: true
+    - machineType: n2-standard-32
+      spot: true
+    - machineType: n2d-standard-48
+      spot: true
+    - machineType: n2-standard-48
+      spot: true
+    - machineType: c2d-standard-56
+      spot: true
+    - machineType: n2d-standard-64
+      spot: true
+    - machineType: n2-standard-64
+      spot: true
+    # On-demand fallback: availability beats strict Spot purity for the runtime.
+    - machineType: c2d-standard-4
+    - machineType: n2d-standard-4
+    - machineType: n2-standard-4
+    - machineType: c2d-standard-8
+    - machineType: n2d-standard-8
+    - machineType: n2-standard-8
+    - machineType: c2d-standard-16
+    - machineType: n2d-standard-16
+    - machineType: n2-standard-16
+    - machineType: c2d-standard-32
+    - machineType: n2d-standard-32
+    - machineType: n2-standard-32
+    - machineType: n2d-standard-48
+    - machineType: n2-standard-48
+    - machineType: c2d-standard-56
+    - machineType: n2d-standard-64
+    - machineType: n2-standard-64
+  activeMigration:
+    optimizeRulePriority: true
+  nodePoolAutoCreation:
+    enabled: true
+  whenUnsatisfiable: ScaleUpAnyway
+{{- end }}

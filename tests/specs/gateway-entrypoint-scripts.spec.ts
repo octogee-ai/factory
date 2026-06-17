@@ -22,6 +22,15 @@ function entrypointScripts(): string[] {
   return [...out].sort();
 }
 
+function entrypointInfraGatewayScripts(): string[] {
+  const re = /\/octogee\/infra\/gateway\/([A-Za-z0-9_.\-/]+\.(?:mjs|js|sh|json))\b/g;
+  const out = new Set<string>();
+  for (const m of entrypoint.matchAll(re)) {
+    out.add(`infra/gateway/${m[1]}`);
+  }
+  return [...out].sort();
+}
+
 function dockerCoverage(): { files: Set<string>; dirs: string[] } {
   const files = new Set<string>();
   const dirs: string[] = [];
@@ -34,6 +43,17 @@ function dockerCoverage(): { files: Set<string>; dirs: string[] } {
     }
   }
   return { files, dirs };
+}
+
+function dockerInfraGatewayFiles(): Set<string> {
+  const files = new Set<string>();
+  for (const line of dockerfile.split("\n")) {
+    if (!/^\s*COPY\b/.test(line) || !line.includes("/octogee/infra/gateway")) continue;
+    for (const tok of line.match(/\binfra\/gateway\/[A-Za-z0-9_.\-/]+/g) ?? []) {
+      files.add(tok.replace(/\*$/, ""));
+    }
+  }
+  return files;
 }
 
 const { files, dirs } = dockerCoverage();
@@ -61,6 +81,24 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
       (p) => !existsSync(path.join(repoRoot, p)),
     );
     expect(missing, `entrypoint.sh references nonexistent scripts: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("standard-image infra/gateway scripts the entrypoint runs exist and are COPYed into the standard gateway image", () => {
+    const scripts = entrypointInfraGatewayScripts();
+    const copied = dockerInfraGatewayFiles();
+    const missing = scripts.filter((p) => !existsSync(path.join(repoRoot, p)));
+    const standardImageRequired = scripts.filter(
+      (p) =>
+        !p.endsWith("stamp-claude-first-run.mjs") &&
+        !p.endsWith("apply-operator-codex-sandbox.mjs"),
+    );
+    const uncopied = standardImageRequired.filter((p) => !copied.has(p));
+
+    expect(missing, `entrypoint.sh references nonexistent infra/gateway files: ${missing.join(", ")}`).toEqual([]);
+    expect(
+      uncopied,
+      `entrypoint.sh runs these but infra/gateway/Dockerfile never COPYs them: ${uncopied.join(", ")}`,
+    ).toEqual([]);
   });
 
 it("does not reinstate the unconditional openclaw file-log mirror", () => {

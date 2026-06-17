@@ -53,6 +53,10 @@ export async function ensureWorkspaceRepo(slug: string): Promise<void> {
   await postVoid("/internal/gitea/ensure-workspace-repo", { slug });
 }
 
+export async function ensureSystemConfigRepo(slug: string): Promise<void> {
+  await postVoid("/internal/gitea/ensure-system-config-repo", { slug });
+}
+
 export async function ensureProjectRepo(slug: string, projectName: string): Promise<void> {
   await postVoid("/internal/gitea/ensure-project-repo", { slug, projectName });
 }

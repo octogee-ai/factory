@@ -141,7 +141,7 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
 
 function runnerBlockSource(): string {
   const src = fs.readFileSync(ENTRYPOINT, "utf8");
-  const start = src.indexOf("TSX=/octogee/scripts/node_modules/.bin/tsx");
+  const start = src.indexOf("# ── In-pod runners:");
   const end = src.indexOf("# ── Runner metrics exporter", start);
   if (start < 0 || end < 0) {
     throw new Error("could not locate runner startup block in entrypoint.sh");
@@ -165,12 +165,15 @@ function runRunnerBlock(profile: string, opts: { operatorShellsEnabled?: string 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "entrypoint-runners-"));
   try {
     const marker = path.join(tmp, "runners");
+    const gatewayClass = profile === "operator" ? "operator" : "shared";
     const script = `
       set -e
       log() { echo "$*" >&2; }
       export GATEWAY_PROFILE="${profile}"
+      export GATEWAY_CLASS_EFFECTIVE="${gatewayClass}"
       export OPERATOR_SHELLS_ENABLED="${opts.operatorShellsEnabled ?? ""}"
       export RUNNER_MARKER="${marker}"
+      TSX=/octogee/scripts/node_modules/.bin/tsx
       ${runnerBlockSource()}
     `;
     const r = spawnSync("sh", ["-c", script], {

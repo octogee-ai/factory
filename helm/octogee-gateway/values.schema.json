@@ -12,6 +12,12 @@
       "maxLength": 32,
       "description": "Bare logical gateway identity (e.g. `default`, `bender`). Used in Firestore heartbeats, the per-gateway K8s auth-token secret name, and as the DNS-friendly suffix for per-instance K8s resource names (Deployment, Service, PVC)."
     },
+    "builderSlug": {
+      "type": "string",
+      "pattern": "^(?:|[a-z0-9]+(?:-[a-z0-9]+)*)$",
+      "maxLength": 24,
+      "description": "Dedicated builder/operator owner slug. Empty on shared gateways; when set, non-shared gateways restore openclaw.json from the builder's system_config repo."
+    },
     "imageTag": {
       "type": "string",
       "minLength": 1
@@ -19,7 +25,17 @@
     "profile": {
       "type": "string",
       "enum": ["", "standard", "operator"],
-      "description": "Capability profile. Empty + 'standard' are equivalent cattle behavior; 'operator' enables pet-home defaults and platform-secret withholding. Shells require operatorAccess.shellsEnabled."
+      "description": "Legacy image/capability profile. Empty + 'standard' are equivalent standard image behavior; 'operator' selects the operator image. New callers should set gatewayClass + imageProfile."
+    },
+    "gatewayClass": {
+      "type": "string",
+      "enum": ["", "shared", "builder", "operator"],
+      "description": "Product/security class. Empty derives from legacy profile. shared=multi-builder exec-off, builder=one-builder exec-on no BuilderShell, operator=one-builder operator image + BuilderShell gate."
+    },
+    "imageProfile": {
+      "type": "string",
+      "enum": ["", "standard", "operator"],
+      "description": "Installed image/tooling profile. Empty derives from gatewayClass/legacy profile."
     },
     "replicas": {
       "type": "integer",
@@ -29,23 +45,34 @@
     },
     "sizingTier": {
       "type": "string",
-      "enum": ["", "nano", "small", "medium", "large", "xlarge", "2xlarge"],
-      "description": "Per-pod sizing tier. Empty = fall back to profileDefaults[profile]."
+      "enum": ["", "micro", "nano", "small", "medium", "large", "xlarge", "2xlarge"],
+      "description": "Per-pod sizing tier. Empty = fall back to classDefaults[gatewayClass], then profileDefaults[imageProfile]."
+    },
+    "classDefaults": {
+      "type": "object",
+      "description": "Gateway class → default tier mapping. Used when sizingTier is unset.",
+      "required": ["shared", "builder", "operator"],
+      "properties": {
+        "shared": { "type": "string", "enum": ["micro", "nano", "small", "medium", "large", "xlarge", "2xlarge"] },
+        "builder": { "type": "string", "enum": ["micro", "nano", "small", "medium", "large", "xlarge", "2xlarge"] },
+        "operator": { "type": "string", "enum": ["micro", "nano", "small", "medium", "large", "xlarge", "2xlarge"] }
+      },
+      "additionalProperties": { "type": "string" }
     },
     "profileDefaults": {
       "type": "object",
-      "description": "Profile → default tier mapping. Used when sizingTier is unset. `standard` is required — the effectiveTier helper falls back to it as the last-resort default.",
+      "description": "Legacy image-profile → default tier mapping. Used when sizingTier is unset and classDefaults is absent. `standard` is required — the effectiveTier helper falls back to it as the last-resort default.",
       "required": ["standard"],
       "properties": {
-        "standard": { "type": "string", "enum": ["nano", "small", "medium", "large", "xlarge", "2xlarge"] },
-        "operator": { "type": "string", "enum": ["nano", "small", "medium", "large", "xlarge", "2xlarge"] }
+        "standard": { "type": "string", "enum": ["micro", "nano", "small", "medium", "large", "xlarge", "2xlarge"] },
+        "operator": { "type": "string", "enum": ["micro", "nano", "small", "medium", "large", "xlarge", "2xlarge"] }
       },
       "additionalProperties": { "type": "string" }
     },
     "tiers": {
       "type": "object",
       "description": "Tier preset matrix — resources + Node runtime tuning per tier. Mirrored in shared/types/sizing.ts. All six tier keys are required so a typo or trim doesn't leave effectiveTier pointing at a missing preset.",
-      "required": ["nano", "small", "medium", "large", "xlarge", "2xlarge"],
+      "required": ["micro", "nano", "small", "medium", "large", "xlarge", "2xlarge"],
       "additionalProperties": {
         "type": "object",
         "required": ["resources", "nodejs"],
@@ -100,6 +127,15 @@
     },
     "computeClass": {
       "type": "string"
+    },
+    "computeClassByClass": {
+      "type": "object",
+      "properties": {
+        "shared": { "type": "string" },
+        "builder": { "type": "string" },
+        "operator": { "type": "string" }
+      },
+      "additionalProperties": { "type": "string" }
     },
     "machineFamily": {
       "type": "string"

@@ -241,6 +241,7 @@ gatewayFleet:
   # .Values.computeClass matches.
   computeClass:
     name: ""
+    spotName: ""
 
 # ── Service Account ──────────────────────────────────────────────────────────
 serviceAccount:

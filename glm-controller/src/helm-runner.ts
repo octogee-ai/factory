@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import type {
+  GatewayClass,
+  GatewayImageProfile,
   GatewayProfile,
   HelmInstancesMap,
 } from "../../shared/types/glm.js";
@@ -13,6 +15,7 @@ readDeployedInstances(opts: { namespace: string }): Promise<HelmInstancesMap>;
 upsertInstance(opts: {
     namespace: string;
     gatewayId: string;
+    builderSlug?: string;
     imageRepository: string;
     imageTag: string;
     serviceAccountName?: string;
@@ -27,6 +30,8 @@ upsertInstance(opts: {
 chartFingerprint?: string;
 
 profile?: GatewayProfile;
+gatewayClass?: GatewayClass;
+imageProfile?: GatewayImageProfile;
 
 sizingTier?: SizingTier;
 
@@ -99,6 +104,7 @@ interface HelmListItem {
 
 interface PerReleaseValues {
   gatewayId?: unknown;
+  builderSlug?: unknown;
   imageTag?: unknown;
   image?: { repository?: unknown; tag?: unknown };
   chartFingerprint?: unknown;
@@ -108,6 +114,8 @@ interface PerReleaseValues {
   persistence?: unknown;
   operatorAccess?: unknown;
   profile?: unknown;
+  gatewayClass?: unknown;
+  imageProfile?: unknown;
   sizingTier?: unknown;
   replicas?: unknown;
 }
@@ -177,6 +185,7 @@ async function readInstanceValue(
     enabled: true,
     image: { repository: imageRepo, tag: imageTag },
     gatewayId,
+    ...(typeof v.builderSlug === "string" && v.builderSlug.length > 0 ? { builderSlug: v.builderSlug } : {}),
     ...(chartFingerprint ? { chartFingerprint } : {}),
     ...readPersonalKnobs(v),
   };
@@ -204,6 +213,18 @@ function readPersonalKnobs(
   if (typeof v.profile === "string" && (v.profile === "standard" || v.profile === "operator")) {
     out.profile = v.profile;
   }
+  if (
+    typeof v.gatewayClass === "string" &&
+    (v.gatewayClass === "shared" || v.gatewayClass === "builder" || v.gatewayClass === "operator")
+  ) {
+    out.gatewayClass = v.gatewayClass;
+  }
+  if (
+    typeof v.imageProfile === "string" &&
+    (v.imageProfile === "standard" || v.imageProfile === "operator")
+  ) {
+    out.imageProfile = v.imageProfile;
+  }
   if (typeof v.sizingTier === "string" && (SIZING_TIERS as readonly string[]).includes(v.sizingTier)) {
     out.sizingTier = v.sizingTier as SizingTier;
   }
@@ -230,11 +251,14 @@ interface BuildUpgradeArgsOpts {
   chartPath: string;
   namespace: string;
   gatewayId: string;
+  builderSlug?: string;
   imageTag: string;
   imageRepository: string;
   upgradeTimeout: string;
   chartFingerprint?: string;
   profile?: string;
+  gatewayClass?: GatewayClass;
+  imageProfile?: GatewayImageProfile;
   sizingTier?: SizingTier;
   replicas?: number;
   serviceAccountName?: string;
@@ -281,7 +305,10 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     `image.repository=${opts.imageRepository}`,
   ];
   if (opts.chartFingerprint) args.push(HELM_SET_STRING, `chartFingerprint=${opts.chartFingerprint}`);
+  if (opts.builderSlug) args.push(HELM_SET_STRING, `builderSlug=${opts.builderSlug}`);
   if (opts.profile) args.push(HELM_SET_STRING, `profile=${opts.profile}`);
+  if (opts.gatewayClass) args.push(HELM_SET_STRING, `gatewayClass=${opts.gatewayClass}`);
+  if (opts.imageProfile) args.push(HELM_SET_STRING, `imageProfile=${opts.imageProfile}`);
   if (opts.sizingTier) args.push(HELM_SET_STRING, `sizingTier=${opts.sizingTier}`);
   if (opts.replicas !== undefined) args.push(HELM_SET, `replicas=${opts.replicas}`);
   if (opts.serviceAccountName) args.push(HELM_SET_STRING, `serviceAccountName=${opts.serviceAccountName}`);

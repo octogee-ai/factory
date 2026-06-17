@@ -1,6 +1,7 @@
-import type { GatewayProfile } from './glm.js';
+import type { GatewayClass, GatewayProfile } from './glm.js';
 
 export const SIZING_TIERS = [
+  'micro',
   'nano',
   'small',
   'medium',
@@ -43,6 +44,15 @@ export interface SizingTierPreset {
 }
 
 export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
+  micro: {
+    description: 'One-builder floor — Spot/emptyDir active session',
+    resources: {
+      requests: { cpu: '500m', memory: '2Gi', 'ephemeral-storage': '4Gi' },
+      limits: { cpu: '500m', memory: '2Gi', 'ephemeral-storage': '4Gi' },
+    },
+    nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '1536' },
+    capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },
+  },
   nano: {
     description: 'F&F floor — light shared use',
     resources: {
@@ -104,12 +114,19 @@ export const PROFILE_DEFAULT_TIER: Record<GatewayProfile, SizingTier> = {
   operator: 'small',
 };
 
+export const GATEWAY_CLASS_DEFAULT_TIER: Record<GatewayClass, SizingTier> = {
+  shared: 'small',
+  builder: 'micro',
+  operator: 'small',
+};
+
 export const FALLBACK_DEFAULT_TIER: SizingTier = 'small';
 
-export type TierResolvedFrom = 'explicit' | 'profile-default';
+export type TierResolvedFrom = 'explicit' | 'class-default' | 'profile-default';
 
 export interface ResolveSizingTierInput {
   sizingTier?: SizingTier;
+  gatewayClass?: GatewayClass;
   profile?: GatewayProfile;
 }
 
@@ -126,6 +143,10 @@ export function resolveSizingTier(input: ResolveSizingTierInput): ResolvedSizing
       resolvedFrom: 'explicit',
       preset: TIER_PRESETS[input.sizingTier],
     };
+  }
+  if (input.gatewayClass) {
+    const tier = GATEWAY_CLASS_DEFAULT_TIER[input.gatewayClass];
+    return { tier, resolvedFrom: 'class-default', preset: TIER_PRESETS[tier] };
   }
   const tier = input.profile ? PROFILE_DEFAULT_TIER[input.profile] : FALLBACK_DEFAULT_TIER;
   return { tier, resolvedFrom: 'profile-default', preset: TIER_PRESETS[tier] };

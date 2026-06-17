@@ -1,7 +1,9 @@
 {{- include "octogee-gateway.requireIdentity" . -}}
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $preset := index .Values.tiers $tier -}}
-{{- $operatorShellsEnabled := and (eq .Values.profile "operator") (.Values.operatorAccess.shellsEnabled | default false) -}}
+{{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
+{{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
+{{- $operatorShellsEnabled := and (eq $gatewayClass "operator") (.Values.operatorAccess.shellsEnabled | default false) -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
 {{- end -}}
@@ -11,7 +13,8 @@ metadata:
   name: octogee-gateway-{{ .Values.gatewayId }}
   labels:
     app: octogee-gateway
-    gateway-profile: {{ .Values.profile | default "standard" | quote }}
+    gateway-class: {{ $gatewayClass | quote }}
+    gateway-profile: {{ $imageProfile | quote }}
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
   # Use kindIs to distinguish "explicit 0 (paused)" from "unset (default to 1)" —
@@ -28,10 +31,11 @@ spec:
       labels:
         app: octogee-gateway
         gateway-instance: {{ .Values.gatewayId }}
+        gateway-class: {{ $gatewayClass | quote }}
         # Profile label lets the umbrella gateway-edge alias Service
         # safely exclude operator pods in a follow-up rollout after every
         # gateway pod has this label.
-        gateway-profile: {{ .Values.profile | default "standard" | quote }}
+        gateway-profile: {{ $imageProfile | quote }}
         # Per-pod sizing tier — stamped on the pod (and matching PVC) so
         # GCP Billing Export can roll up cost by tier for the chargeback
         # surface (GATEWAY-PLATFORM-SPEC §Phase 5a).
@@ -44,7 +48,7 @@ spec:
         gateway-image: {{ .Values.image.tag | default .Values.imageTag | quote }}
     spec:
       nodeSelector:
-        cloud.google.com/compute-class: {{ .Values.computeClass | default "Performance" | quote }}
+        cloud.google.com/compute-class: {{ include "octogee-gateway.computeClass" . | quote }}
         {{- if .Values.machineFamily }}
         cloud.google.com/machine-family: {{ .Values.machineFamily | quote }}
         {{- end }}
@@ -63,12 +67,11 @@ spec:
             - -c
             - |
               # First-boot seed: copy shell defaults (.bashrc, .profile,
-              # .bash_logout) into the PVC the first time the home is
+              # .bash_logout) into the data volume the first time home is
               # empty. `cp -an` is archive + no-clobber → idempotent, so
-              # subsequent boots leave operator customizations alone.
-              # PVC scope is the whole home for operator/pet gateways
-              # (Mac Studio parity); the OS still flows through the
-              # image every reschedule.
+              # subsequent boots leave existing local files alone. Durable
+              # state must come from the substrate; this volume is a cache
+              # unless a gateway explicitly opts into legacy persistence.
               cp -an /etc/skel/. /home/node/ 2>/dev/null || true
               chown -R 1000:1000 /home/node || true
               mkdir -p /home/node/.npm-cache && chown -R 1000:1000 /home/node/.npm-cache || true
@@ -95,7 +98,7 @@ spec:
             requests:
               cpu: "50m"
               memory: "32Mi"
-        {{- if ne .Values.profile "operator" }}
+        {{- if ne $gatewayClass "operator" }}
         - name: mac-ops-bootstrap
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           command:
@@ -182,12 +185,15 @@ spec:
               value: {{ .Values.env.agentPrefix | quote }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
-            # Capability profile (cattle vs operator) — read by
+            - name: GATEWAY_BUILDER_SLUG
+              value: {{ .Values.builderSlug | quote }}
+            # Image profile (standard vs operator) — read by
             # entrypoint.sh to gate operator-only boot steps such as the
-            # Claude Code first-run stamper. Cattle renders this as "",
-            # so the entrypoint's `= "operator"` check is a no-op.
+            # Claude Code first-run stamper.
             - name: GATEWAY_PROFILE
-              value: {{ .Values.profile | quote }}
+              value: {{ $imageProfile | quote }}
+            - name: GATEWAY_CLASS
+              value: {{ $gatewayClass | quote }}
             {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
             {{- if ne $autosave "" }}
             # Override; unset → gateway code defaults from profile
@@ -199,14 +205,12 @@ spec:
             {{- end }}
             - name: OPERATOR_SHELLS_ENABLED
               value: {{ ternary "true" "false" $operatorShellsEnabled | quote }}
-            {{- if ne .Values.profile "operator" }}
-            # Standard/cattle gateways fall back to the shared platform Anthropic
+            {{- if eq $gatewayClass "shared" }}
+            # Shared gateways fall back to the shared platform Anthropic
             # key when a Builder has no BYOK/BYOS profile (openclaw's
             # auth.profiles.anthropic:default slot + the L3-throttle fallback).
-            # NEVER on operator gateways — their BuilderShell users must use their
-            # own BYOT/BYOS key, never the platform key. Shared-compute (not
-            # cross-tenant) credential, agent-readable by design; per-env unique +
-            # rotatable. Documented exception to #1482 (see DECISIONS.md).
+            # NEVER on builder/operator gateways — they are exec-capable and must
+            # use a per-gateway capped key or BYOS/BYOT.
             # optional: a missing secret degrades to the agent's own no-key error,
             # never a pod crash-loop.
             - name: ANTHROPIC_API_KEY
@@ -215,8 +219,19 @@ spec:
                   name: octogee-anthropic
                   key: api_key
                   optional: true
+            {{- else if eq $gatewayClass "builder" }}
+            # Builder-class gateways are exec-capable, so they must not receive
+            # the shared platform key. This optional per-gateway secret is the
+            # capped-key/BYOS seam; if absent, BYOS/BYOT auth paths handle model
+            # access and the pod still boots.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-model-key-{{ .Values.gatewayId }}
+                  key: anthropic_api_key
+                  optional: true
             {{- end }}
-            {{- if eq .Values.profile "operator" }}
+            {{- if eq $gatewayClass "operator" }}
             # Operator gateway shells run inside the tenant shell container,
             # which intentionally does not inherit the platform-wide
             # INTERNAL_SERVICE_KEY. The builder-shell port is exposed only
@@ -384,8 +399,12 @@ spec:
               value: "/var/run/octogee/openclaw-device-auth/token"
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
+            - name: GATEWAY_BUILDER_SLUG
+              value: {{ .Values.builderSlug | quote }}
             - name: GATEWAY_PROFILE
-              value: {{ .Values.profile | quote }}
+              value: {{ $imageProfile | quote }}
+            - name: GATEWAY_CLASS
+              value: {{ $gatewayClass | quote }}
             - name: MM_INTERNAL_URL
               value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — the folded chat-proxy WS bridge + activity bridge use it)" .Values.env.mmInternalUrl | quote }}
             - name: MM_PUBLIC_URL
@@ -429,7 +448,7 @@ spec:
                 that still need platform authority fail closed or are served by
                 octogee-api/Cowboy, while builder-shell uses the per-gateway
                 token and TokenReview paths. */}}
-            {{- if eq .Values.profile "operator" }}
+            {{- if eq $gatewayClass "operator" }}
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"
             {{- end }}

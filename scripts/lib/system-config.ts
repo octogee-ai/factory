@@ -1,0 +1,204 @@
+import * as fs from "fs";
+import * as path from "path";
+
+import { isValidUsername } from "../../shared/types/identity.js";
+import {
+  log as defaultLog,
+  OPENCLAW_DIR,
+  TEMPLATES_DIR,
+  GIT_SSH_HOST,
+} from "./config.js";
+import {
+  createGiteaUser,
+  generateCustomerSshKey,
+  gitExec,
+  customerSshKeyPath,
+  setRepoSshCommand,
+} from "./git.js";
+import {
+  systemConfigRepoName,
+  workspaceGiteaOrg,
+} from "./gitea-naming.js";
+import {
+  ensureGiteaOrgForWorkspace,
+  ensureSystemConfigRepo,
+} from "./gitea-admin-broker-client.js";
+
+const ENV_PLACEHOLDER_RE = /\$\{([A-Za-z_]\w*)\}/g;
+type UnknownRecord = Record<string, unknown>;
+
+export interface SystemConfigRestoreResult {
+  skipped?: string;
+  seeded: boolean;
+  restored: boolean;
+}
+
+interface SystemConfigRestoreOptions {
+  openclawDir?: string;
+  runtimeConfigPath?: string;
+  templatePath?: string;
+  env?: NodeJS.ProcessEnv;
+  log?: (msg: string) => void;
+}
+
+export function systemConfigDir(openclawDir = OPENCLAW_DIR): string {
+  return path.join(openclawDir, "system_config");
+}
+
+export function expandEnvPlaceholders(
+  input: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return input.replace(ENV_PLACEHOLDER_RE, (_match, name: string) => env[name] ?? "");
+}
+
+function remoteUrl(slug: string): string {
+  return `git@${GIT_SSH_HOST}:${workspaceGiteaOrg(slug)}/${systemConfigRepoName()}.git`;
+}
+
+function atomicWrite(filePath: string, contents: string, mode = 0o600): void {
+  const tmp = `${filePath}.tmp`;
+  const fd = fs.openSync(
+    tmp,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC,
+    mode,
+  );
+  try {
+    fs.writeFileSync(fd, contents);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, filePath);
+}
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as UnknownRecord
+    : null;
+}
+
+function readJsonFile(filePath: string): UnknownRecord | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return asRecord(value);
+  } catch {
+    return null;
+  }
+}
+
+function preserveDefaultMattermostBotToken(
+  restored: UnknownRecord,
+  currentRuntime: UnknownRecord | null,
+): void {
+  const currentChannels = asRecord(currentRuntime?.channels);
+  const currentMattermost = asRecord(currentChannels?.mattermost);
+  const currentAccounts = asRecord(currentMattermost?.accounts);
+  const currentDefault = asRecord(currentAccounts?.default);
+  const currentToken = currentDefault?.botToken;
+  if (typeof currentToken !== "string" || currentToken.length === 0) return;
+
+  const restoredChannels = asRecord(restored.channels);
+  const restoredMattermost = asRecord(restoredChannels?.mattermost);
+  if (!restoredMattermost) return;
+
+  const accounts = asRecord(restoredMattermost.accounts) ?? {};
+  const defaultAccount = asRecord(accounts.default) ?? {};
+  defaultAccount.botToken = currentToken;
+  accounts.default = defaultAccount;
+  restoredMattermost.accounts = accounts;
+}
+
+async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): Promise<void> {
+  const pubKey = generateCustomerSshKey(slug);
+  await createGiteaUser(slug, pubKey);
+  await ensureGiteaOrgForWorkspace(slug);
+  await ensureSystemConfigRepo(slug);
+  log(`[system_config] broker ensured Gitea user/org/${systemConfigRepoName()} for ${slug}`);
+}
+
+function cloneOrReuseSystemConfigRepo(slug: string, dir: string, log: (msg: string) => void): boolean {
+  if (fs.existsSync(path.join(dir, ".git"))) {
+    setRepoSshCommand(dir, slug);
+    return true;
+  }
+  if (fs.existsSync(dir)) {
+    log(`[system_config] ${dir} exists but is not a git repo; leaving it untouched`);
+    return false;
+  }
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const sshKey = customerSshKeyPath(slug);
+  const result = gitExec(path.dirname(dir), `clone ${remoteUrl(slug)} ${path.basename(dir)}`, sshKey);
+  if (result === null) {
+    log(`[system_config] clone failed for ${slug}/${systemConfigRepoName()}`);
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    return false;
+  }
+  gitExec(dir, `config user.email "${slug}@octogee.com"`);
+  gitExec(dir, `config user.name "Octo (${slug})"`);
+  setRepoSshCommand(dir, slug);
+  log(`[system_config] cloned ${slug}/${systemConfigRepoName()} -> ${dir}`);
+  return true;
+}
+
+function seedSystemConfigIfMissing(
+  slug: string,
+  repoDir: string,
+  templatePath: string,
+  log: (msg: string) => void,
+): boolean {
+  const configPath = path.join(repoDir, "openclaw.json");
+  if (fs.existsSync(configPath)) return false;
+  const template = fs.readFileSync(templatePath, "utf-8");
+  JSON.parse(template);
+  fs.writeFileSync(configPath, template.endsWith("\n") ? template : `${template}\n`, "utf-8");
+  gitExec(repoDir, `add openclaw.json`);
+  const committed = gitExec(repoDir, `commit -m "initial system_config openclaw template"`);
+  if (committed === null) {
+    log(`[system_config] initial commit failed for ${slug}; restore will continue from local template`);
+    return true;
+  }
+  const pushed = gitExec(repoDir, "push -u origin main", customerSshKeyPath(slug));
+  if (pushed === null) {
+    log(`[system_config] initial push failed for ${slug}; boot continues and the next restore will retry`);
+  } else {
+    log(`[system_config] seeded ${slug}/${systemConfigRepoName()} with openclaw.json template`);
+  }
+  return true;
+}
+
+function restoreOpenClawConfig(
+  repoConfigPath: string,
+  runtimeConfigPath: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  const expanded = expandEnvPlaceholders(fs.readFileSync(repoConfigPath, "utf-8"), env);
+  const restored = JSON.parse(expanded) as Record<string, unknown>;
+  const currentRuntime = readJsonFile(runtimeConfigPath);
+  preserveDefaultMattermostBotToken(restored, currentRuntime);
+  atomicWrite(runtimeConfigPath, `${JSON.stringify(restored, null, 2)}\n`);
+}
+
+export async function restoreSystemConfigForSlug(
+  slug: string,
+  opts: SystemConfigRestoreOptions = {},
+): Promise<SystemConfigRestoreResult> {
+  const log = opts.log ?? defaultLog;
+  if (!isValidUsername(slug)) {
+    return { skipped: "invalid-builder-slug", seeded: false, restored: false };
+  }
+
+  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const repoDir = systemConfigDir(openclawDir);
+  const runtimeConfigPath = opts.runtimeConfigPath ?? path.join(openclawDir, "openclaw.json");
+  const templatePath = opts.templatePath ?? path.join(TEMPLATES_DIR, "..", "infra", "gateway", "openclaw.template.json");
+
+  await ensureIdentityAndRepo(slug, log);
+  if (!cloneOrReuseSystemConfigRepo(slug, repoDir, log)) {
+    return { skipped: "checkout-unavailable", seeded: false, restored: false };
+  }
+
+  const seeded = seedSystemConfigIfMissing(slug, repoDir, templatePath, log);
+  restoreOpenClawConfig(path.join(repoDir, "openclaw.json"), runtimeConfigPath, opts.env ?? process.env);
+  log(`[system_config] restored openclaw.json from ${slug}/${systemConfigRepoName()}`);
+  return { seeded, restored: true };
+}

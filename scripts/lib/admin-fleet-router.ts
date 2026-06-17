@@ -6,18 +6,26 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { type Firestore } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  GATEWAY_CLASSES,
+  GATEWAY_IMAGE_PROFILES,
   GATEWAY_ID_REQUIREMENT,
   GATEWAY_PROFILES,
   OPERATOR_GATEWAY_RESERVATIONS_COLLECTION,
   OPERATOR_GATEWAY_LOCKED_ACCESS,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   isValidGatewayId,
+  isGatewayClass,
+  isGatewayProfile,
   operatorGatewayServiceAccountName,
+  resolveGatewayClass,
+  resolveGatewayImageProfile,
   resolveGatewayPersistence,
+  type GatewayClass,
+  type GatewayImageProfile,
   type GatewayProfile,
   type OperatorGatewayReservationSpec,
   type OperatorGatewayReservationRequest,
@@ -62,7 +70,7 @@ function resolveSizingForResponse(
   glmDoc: Record<string, unknown> | undefined,
 ): {
   tier: SizingTier;
-  resolvedFrom: "explicit" | "profile-default";
+  resolvedFrom: "explicit" | "class-default" | "profile-default";
   resources: { requests: { cpu: string; memory: string }; limits: { cpu: string; memory: string } };
   capacity: { targetActiveBuilders: number; typicalBuilders: number };
   monthlyCostUsd: { compute: number; perBuilderAtTarget: number; perBuilderAtTypical: number };
@@ -71,11 +79,13 @@ function resolveSizingForResponse(
     typeof glmDoc?.sizingTier === "string" && (SIZING_TIERS as readonly string[]).includes(glmDoc.sizingTier)
       ? (glmDoc.sizingTier as SizingTier)
       : undefined;
-  const profile =
-    typeof glmDoc?.profile === "string" && (GATEWAY_PROFILES as readonly string[]).includes(glmDoc.profile)
-      ? (glmDoc.profile as GatewayProfile)
-      : undefined;
-  const resolved = resolveSizingTier({ sizingTier, profile });
+  const profile = isGatewayProfile(glmDoc?.profile) ? glmDoc.profile : undefined;
+  const gatewayClass = resolveGatewayClass({
+    gatewayClass: isGatewayClass(glmDoc?.gatewayClass) ? glmDoc.gatewayClass : undefined,
+    profile,
+    imageProfile: isGatewayProfile(glmDoc?.imageProfile) ? glmDoc.imageProfile : undefined,
+  });
+  const resolved = resolveSizingTier({ sizingTier, gatewayClass, profile });
   // Paused pods are scaled to 0 replicas → no node consumption → no compute
   // bill. Reflect that in both the per-gateway surface and the fleet roll-up
   // so the operator sees real cost, not nameplate.
@@ -107,6 +117,22 @@ function resolveSizingForResponse(
 
 function normalizeGatewayProfile(profile: unknown): GatewayProfile {
   return profile === "operator" ? "operator" : "standard";
+}
+
+function normalizeGatewayClass(doc: GlmDoc | undefined): GatewayClass {
+  return resolveGatewayClass({
+    gatewayClass: isGatewayClass(doc?.gatewayClass) ? doc.gatewayClass : undefined,
+    profile: isGatewayProfile(doc?.profile) ? doc.profile : undefined,
+    imageProfile: isGatewayProfile(doc?.imageProfile) ? doc.imageProfile : undefined,
+  });
+}
+
+function normalizeGatewayImageProfile(doc: GlmDoc | undefined): GatewayImageProfile {
+  return resolveGatewayImageProfile({
+    gatewayClass: isGatewayClass(doc?.gatewayClass) ? doc.gatewayClass : undefined,
+    profile: isGatewayProfile(doc?.profile) ? doc.profile : undefined,
+    imageProfile: isGatewayProfile(doc?.imageProfile) ? doc.imageProfile : undefined,
+  });
 }
 
 function isTruthyQueryFlag(value: unknown): boolean {
@@ -163,6 +189,8 @@ export function projectGatewaySummary(
   lastError: ReturnType<typeof projectLastError>;
   sizing: ReturnType<typeof resolveSizingForResponse>;
   profile: GatewayProfile;
+  gatewayClass: GatewayClass;
+  imageProfile: GatewayImageProfile;
 } {
   const data = doc.data();
   return {
@@ -179,6 +207,8 @@ export function projectGatewaySummary(
     lastError: projectLastError(data.lastError),
     sizing: resolveSizingForResponse(glmDoc),
     profile: normalizeGatewayProfile(glmDoc?.profile),
+    gatewayClass: normalizeGatewayClass(glmDoc),
+    imageProfile: normalizeGatewayImageProfile(glmDoc),
   };
 }
 
@@ -282,6 +312,8 @@ interface AddGatewayBody {
   imageRepository: string;
   imageTag: string;
   profile: string;
+  gatewayClass: string;
+  imageProfile: string;
   sizingTier: string;
   ownerUid: string;
   builderSlug: string;
@@ -292,6 +324,8 @@ interface AddGatewayCreate {
   imageRepository: string;
   imageTag: string;
   profile?: GatewayProfile;
+  gatewayClass?: GatewayClass;
+  imageProfile?: GatewayImageProfile;
   sizingTier?: SizingTier;
   ownerUid?: string;
   builderSlug?: string;
@@ -389,6 +423,8 @@ interface RolloutBodyOk {
   imageTag: string;
   imageRepository: string | null;
   profile?: GatewayProfile;
+  gatewayClass?: GatewayClass;
+  imageProfile?: GatewayImageProfile;
 }
 
 // A PATCH may move a gateway between running/paused/draining, but NOT to
@@ -430,8 +466,15 @@ export function validateDesiredStatusPatch(
   return { ok: desiredStatus };
 }
 
+// eslint-disable-next-line complexity -- Linear API validation keeps each field's error response local.
 export function validateRolloutBody(
-  body: Partial<{ imageTag: string; imageRepository: string; profile: string }>,
+  body: Partial<{
+    imageTag: string;
+    imageRepository: string;
+    profile: string;
+    gatewayClass: string;
+    imageProfile: string;
+  }>,
 ): { error: RolloutBodyError } | { ok: RolloutBodyOk } {
   if (!body.imageTag || typeof body.imageTag !== "string") {
     return { error: { status: 400, body: { error: "missing imageTag" } } };
@@ -467,8 +510,7 @@ export function validateRolloutBody(
   }
   if (
     body.profile != null &&
-    (typeof body.profile !== "string" ||
-      !(GATEWAY_PROFILES as readonly string[]).includes(body.profile))
+    (typeof body.profile !== "string" || !isGatewayProfile(body.profile))
   ) {
     return {
       error: {
@@ -480,12 +522,46 @@ export function validateRolloutBody(
       },
     };
   }
+  if (
+    body.gatewayClass != null &&
+    (typeof body.gatewayClass !== "string" || !isGatewayClass(body.gatewayClass))
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: `gatewayClass must be one of: ${GATEWAY_CLASSES.join(", ")}`,
+          got: body.gatewayClass,
+        },
+      },
+    };
+  }
+  if (
+    body.imageProfile != null &&
+    (typeof body.imageProfile !== "string" || !isGatewayProfile(body.imageProfile))
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: `imageProfile must be one of: ${GATEWAY_IMAGE_PROFILES.join(", ")}`,
+          got: body.imageProfile,
+        },
+      },
+    };
+  }
   return {
     ok: {
       imageTag: body.imageTag,
       imageRepository: body.imageRepository ?? null,
       ...(body.profile != null
         ? { profile: body.profile as GatewayProfile }
+        : {}),
+      ...(body.gatewayClass != null
+        ? { gatewayClass: body.gatewayClass as GatewayClass }
+        : {}),
+      ...(body.imageProfile != null
+        ? { imageProfile: body.imageProfile as GatewayImageProfile }
         : {}),
     },
   };
@@ -536,11 +612,16 @@ function validateAddGatewayRequiredFields(
 
 function validateAddGatewayProfile(
   body: Partial<AddGatewayBody>,
-): { error: RolloutBodyError } | { ok: { profile?: GatewayProfile } } {
-  if (
-    body.profile !== undefined &&
-    !(GATEWAY_PROFILES as readonly string[]).includes(body.profile)
-  ) {
+): {
+  error: RolloutBodyError;
+} | {
+  ok: {
+    profile?: GatewayProfile;
+    gatewayClass?: GatewayClass;
+    imageProfile?: GatewayImageProfile;
+  };
+} {
+  if (body.profile !== undefined && !isGatewayProfile(body.profile)) {
     return {
       error: {
         status: 400,
@@ -551,8 +632,34 @@ function validateAddGatewayProfile(
       },
     };
   }
+  if (body.gatewayClass !== undefined && !isGatewayClass(body.gatewayClass)) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: `gatewayClass must be one of: ${GATEWAY_CLASSES.join(", ")}`,
+          got: body.gatewayClass,
+        },
+      },
+    };
+  }
+  if (body.imageProfile !== undefined && !isGatewayProfile(body.imageProfile)) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: `imageProfile must be one of: ${GATEWAY_IMAGE_PROFILES.join(", ")}`,
+          got: body.imageProfile,
+        },
+      },
+    };
+  }
   return {
-    ok: body.profile ? { profile: body.profile as GatewayProfile } : {},
+    ok: {
+      ...(body.profile ? { profile: body.profile as GatewayProfile } : {}),
+      ...(body.gatewayClass ? { gatewayClass: body.gatewayClass as GatewayClass } : {}),
+      ...(body.imageProfile ? { imageProfile: body.imageProfile as GatewayImageProfile } : {}),
+    },
   };
 }
 
@@ -578,9 +685,9 @@ function validateAddGatewaySizing(
   };
 }
 
-function validateAddGatewayReservationFields(
+function validateAddGatewayOwnerFields(
   body: Partial<AddGatewayBody>,
-  profile: GatewayProfile | undefined,
+  gatewayClass: GatewayClass,
 ): { error: RolloutBodyError } | {
   ok: { ownerUid?: string; builderSlug?: string };
 } {
@@ -602,12 +709,23 @@ function validateAddGatewayReservationFields(
   }
   if (
     (body.ownerUid !== undefined || body.builderSlug !== undefined) &&
-    profile !== "operator"
+    gatewayClass === "shared"
   ) {
     return {
       error: {
         status: 400,
-        body: { error: "operator gateway reservation requires profile=operator" },
+        body: {
+          error:
+            "dedicated gateway ownership requires gatewayClass=builder or gatewayClass=operator",
+        },
+      },
+    };
+  }
+  if (gatewayClass === "builder" && body.ownerUid === undefined) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "builder gateway requires ownerUid" },
       },
     };
   }
@@ -651,21 +769,24 @@ function validateAddGatewayBody(
   if ("error" in required) return required;
   const profile = validateAddGatewayProfile(body);
   if ("error" in profile) return profile;
+  const gatewayClass = resolveGatewayClass(profile.ok);
   const sizing = validateAddGatewaySizing(body);
   if ("error" in sizing) return sizing;
-  const reservation = validateAddGatewayReservationFields(
+  const owner = validateAddGatewayOwnerFields(
     body,
-    profile.ok.profile,
+    gatewayClass,
   );
-  if ("error" in reservation) return reservation;
+  if ("error" in owner) return owner;
   const repoError = validateAddGatewayRepository(required.ok.imageRepository);
   if (repoError) return { error: repoError };
   return {
     ok: {
       ...required.ok,
       ...profile.ok,
+      gatewayClass,
+      imageProfile: resolveGatewayImageProfile(profile.ok),
       ...sizing.ok,
-      ...reservation.ok,
+      ...owner.ok,
     },
   };
 }
@@ -874,12 +995,23 @@ function validateOperatorGatewayOwnership(opts: {
   reservation: ActivatableOperatorReservation;
   gatewayData: Record<string, unknown>;
 }): RolloutBodyError | null {
-  if (opts.gatewayData.profile !== "operator") {
+  if (resolveGatewayClass({
+    gatewayClass: isGatewayClass(opts.gatewayData.gatewayClass)
+      ? opts.gatewayData.gatewayClass
+      : undefined,
+    profile: isGatewayProfile(opts.gatewayData.profile)
+      ? opts.gatewayData.profile
+      : undefined,
+    imageProfile: isGatewayProfile(opts.gatewayData.imageProfile)
+      ? opts.gatewayData.imageProfile
+      : undefined,
+  }) !== "operator") {
     return {
       status: 409,
       body: {
-        error: "reserved gateway is not operator profile",
+        error: "reserved gateway is not operator class",
         gatewayId: opts.reservation.gatewayId,
+        gatewayClass: opts.gatewayData.gatewayClass,
         profile: opts.gatewayData.profile,
       },
     };
@@ -1186,7 +1318,7 @@ async function ensureGatewayCreateIsUnique(
   return { ok: true };
 }
 
-async function resolveOperatorReservation(opts: {
+async function resolveDedicatedGatewayOwner(opts: {
   db: Firestore;
   body: AddGatewayCreate;
   createdBy: string;
@@ -1203,7 +1335,11 @@ async function resolveOperatorReservation(opts: {
     }
 > {
   const { body } = opts;
-  if (body.profile !== "operator" || body.ownerUid === undefined) {
+  const gatewayClass = resolveGatewayClass(body);
+  if (
+    (gatewayClass !== "builder" && gatewayClass !== "operator") ||
+    body.ownerUid === undefined
+  ) {
     return { ok: {} };
   }
 
@@ -1240,12 +1376,16 @@ async function resolveOperatorReservation(opts: {
     ok: {
       ownerUid: body.ownerUid,
       builderSlug,
-      operatorReservation: {
-        status: "reserved",
-        reservedAt: opts.now,
-        reservedBy: opts.createdBy,
-        billingStatus: "manual",
-      },
+      ...(gatewayClass === "operator"
+        ? {
+            operatorReservation: {
+              status: "reserved" as const,
+              reservedAt: opts.now,
+              reservedBy: opts.createdBy,
+              billingStatus: "manual" as const,
+            },
+          }
+        : {}),
     },
   };
 }
@@ -1257,6 +1397,8 @@ function operatorGatewayDesiredStateFromReservation(opts: {
   now: number;
 }): Record<string, unknown> {
   const profile: GatewayProfile = "operator";
+  const gatewayClass: GatewayClass = "operator";
+  const imageProfile: GatewayImageProfile = "operator";
   const persistence = resolveGatewayPersistence(profile, undefined);
   return {
     gatewayId: opts.body.gatewayId,
@@ -1266,6 +1408,8 @@ function operatorGatewayDesiredStateFromReservation(opts: {
     createdBy: opts.createdBy,
     createdAt: opts.now,
     profile,
+    gatewayClass,
+    imageProfile,
     ...(persistence ? { persistence } : {}),
     operatorAccess: OPERATOR_GATEWAY_LOCKED_ACCESS,
     serviceAccountName: operatorGatewayServiceAccountName(opts.body.gatewayId),
@@ -2021,6 +2165,8 @@ router.post(
           gatewayId: body.gatewayId,
           imageTag: body.imageTag,
           profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           sizingTier: reservation.ok.requestedSizingTier,
           builderSlug: reservation.ok.builderSlug,
           source: "operator-gateway-reservation",
@@ -2097,15 +2243,15 @@ router.post(
           return;
         }
 
-        const reservation = await resolveOperatorReservation({
+        const owner = await resolveDedicatedGatewayOwner({
           db,
           body,
           createdBy,
           now,
           workspaceSlugsForUser: deps.workspaceSlugsForUser,
         });
-        if ("error" in reservation) {
-          res.status(reservation.error.status).json(reservation.error.body);
+        if ("error" in owner) {
+          res.status(owner.error.status).json(owner.error.body);
           return;
         }
 
@@ -2131,9 +2277,11 @@ router.post(
           });
           return;
         }
-        const persistence = resolveGatewayPersistence(body.profile, undefined);
+        const gatewayClass = resolveGatewayClass(body);
+        const imageProfile = resolveGatewayImageProfile(body);
+        const persistence = resolveGatewayPersistence(imageProfile, undefined);
         const operatorDefaults =
-          body.profile === "operator"
+          gatewayClass === "operator"
             ? {
                 operatorAccess: OPERATOR_GATEWAY_LOCKED_ACCESS,
                 serviceAccountName: operatorGatewayServiceAccountName(body.gatewayId),
@@ -2151,9 +2299,11 @@ router.post(
             createdBy,
             createdAt: now,
             ...(body.profile ? { profile: body.profile } : {}),
+            gatewayClass,
+            ...(imageProfile !== "standard" ? { imageProfile } : {}),
             ...(persistence ? { persistence } : {}),
             ...operatorDefaults,
-            ...reservation.ok,
+            ...owner.ok,
             ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),
           });
         const operationId = await createOperation(db, {
@@ -2163,9 +2313,11 @@ router.post(
             gatewayId: body.gatewayId,
             imageTag: body.imageTag,
             ...(body.profile ? { profile: body.profile } : {}),
+            gatewayClass,
+            ...(imageProfile !== "standard" ? { imageProfile } : {}),
             ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),
-            ...(reservation.ok.ownerUid ? { ownerUid: reservation.ok.ownerUid } : {}),
-            ...(reservation.ok.builderSlug ? { builderSlug: reservation.ok.builderSlug } : {}),
+            ...(owner.ok.ownerUid ? { ownerUid: owner.ok.ownerUid } : {}),
+            ...(owner.ok.builderSlug ? { builderSlug: owner.ok.builderSlug } : {}),
           },
         });
         res
@@ -2357,13 +2509,15 @@ router.post(
             imageTag: string;
             imageRepository: string;
             profile: string;
+            gatewayClass: string;
+            imageProfile: string;
           }>,
         );
         if ("error" in validation) {
           res.status(validation.error.status).json(validation.error.body);
           return;
         }
-        const { imageTag, imageRepository, profile } = validation.ok;
+        const { imageTag, imageRepository, profile, gatewayClass, imageProfile } = validation.ok;
 
         const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
         const snap = await ref.get();
@@ -2374,15 +2528,27 @@ router.post(
           return;
         }
         const data = snap.data() as
-          | { imageTag?: string; imageRepository?: string; profile?: string }
+          | {
+              imageTag?: string;
+              imageRepository?: string;
+              profile?: string;
+              gatewayClass?: string;
+              imageProfile?: string;
+            }
           | undefined;
         const targetRepo = imageRepository ?? data?.imageRepository ?? "";
-        const currentProfile = data?.profile ?? "standard";
+        const currentProfile = isGatewayProfile(data?.profile) ? data.profile : "standard";
+        const currentGatewayClass = normalizeGatewayClass(data);
+        const currentImageProfile = normalizeGatewayImageProfile(data);
         const targetProfile = profile ?? currentProfile;
+        const targetGatewayClass = gatewayClass ?? currentGatewayClass;
+        const targetImageProfile = imageProfile ?? profile ?? currentImageProfile;
         if (
           data?.imageTag === imageTag &&
           data.imageRepository === targetRepo &&
-          targetProfile === currentProfile
+          targetProfile === currentProfile &&
+          targetGatewayClass === currentGatewayClass &&
+          targetImageProfile === currentImageProfile
         ) {
           res.status(409).json({
             error: "gateway already on requested image — no-op rollout",
@@ -2390,6 +2556,8 @@ router.post(
             imageTag,
             imageRepository: targetRepo,
             profile: targetProfile,
+            gatewayClass: targetGatewayClass,
+            imageProfile: targetImageProfile,
           });
           return;
         }
@@ -2423,9 +2591,13 @@ router.post(
           imageTag: string;
           imageRepository?: string;
           profile?: GatewayProfile;
+          gatewayClass?: GatewayClass;
+          imageProfile?: GatewayImageProfile;
         } = { gatewayId: id, imageTag };
         if (imageRepository) input.imageRepository = imageRepository;
         if (profile) input.profile = profile;
+        if (gatewayClass) input.gatewayClass = gatewayClass;
+        if (imageProfile) input.imageProfile = imageProfile;
         const operationId = await createOperation(db, {
           kind: "rollout",
           createdBy: actor.uid ?? "unknown",

@@ -50,6 +50,8 @@ describe("computeBootstrapWrites", () => {
           gatewayId: "bender",
           imageRepository: REPO,
           imageTag: "00750cf",
+          gatewayClass: "shared",
+          imageProfile: "standard",
           desiredStatus: "running",
           createdBy: "controller-bootstrap",
         },
@@ -74,6 +76,8 @@ describe("computeBootstrapWrites", () => {
       gatewayId: "default",
       imageRepository: REPO,
       imageTag: "00750cf",
+      gatewayClass: "shared",
+      imageProfile: "standard",
       desiredStatus: "running",
       createdBy: "controller-bootstrap",
     });

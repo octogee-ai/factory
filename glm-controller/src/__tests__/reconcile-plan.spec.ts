@@ -96,6 +96,16 @@ describe("buildInstancesMap", () => {
     expect(map.canary).toMatchObject({ gatewayId: "canary", image: { tag: "def" } });
   });
 
+  it("propagates builderSlug for dedicated builder/operator config restore", () => {
+    const map = buildInstancesMap([
+      mkDesired({ gatewayId: "jack", gatewayClass: "builder", builderSlug: "jack" }),
+    ]);
+    expect(map.jack).toMatchObject({
+      gatewayClass: "builder",
+      builderSlug: "jack",
+    });
+  });
+
   it("preserves personal gateway helm knobs from desired state", () => {
     const map = buildInstancesMap([
       mkDesired({
@@ -190,16 +200,11 @@ describe("buildInstancesMap", () => {
     expect(map.default.serviceAccount).toEqual({ create: true });
   });
 
-  it("defaults operator-profile gateways to durable home persistence when not explicitly configured", () => {
+  it("does not default operator-profile gateways to PVC persistence", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "bender", profile: "operator" }),
     ]);
-    expect(map.bender.persistence).toEqual({
-      enabled: true,
-      storageClassName: "premium-rwo",
-      size: "20Gi",
-      accessModes: ["ReadWriteOnce"],
-    });
+    expect(map.bender.persistence).toBeUndefined();
   });
 
   it("preserves an explicit persistence override on operator-profile gateways", () => {
@@ -213,10 +218,12 @@ describe("buildInstancesMap", () => {
     expect(map.scratch.persistence).toEqual({ enabled: false });
   });
 
-  it("omits profile when desired state has none (cattle default — chart sees profile=\"\")", () => {
+  it("omits default shared/standard class/profile fields from helm values", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "default" }),
     ]);
+    expect(map.default).not.toHaveProperty("gatewayClass");
+    expect(map.default).not.toHaveProperty("imageProfile");
     expect(map.default).not.toHaveProperty("profile");
   });
 });
@@ -319,6 +326,15 @@ describe("diffInstancesMap", () => {
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
       { kind: "update", gatewayId: "default", from: actual.default, to: desired.default },
+    ]);
+  });
+
+  it("reports an update when builderSlug changes", () => {
+    const actual: HelmInstancesMap = { jack: { ...baseInstance("abc"), builderSlug: "jack" } };
+    const desired: HelmInstancesMap = { jack: { ...baseInstance("abc"), builderSlug: "jill" } };
+    const changes = diffInstancesMap(actual, desired);
+    expect(changes).toEqual<ReconcileChange[]>([
+      { kind: "update", gatewayId: "jack", from: actual.jack, to: desired.jack },
     ]);
   });
 

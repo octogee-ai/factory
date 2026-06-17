@@ -355,12 +355,7 @@ state.helmInstances.set("bender", { repository: OPERATOR_REPO, tag: "sha1" });
 
     expect(result.success).toBe(true);
     expect(state.specs.get("bender")?.profile).toBe("operator");
-    expect(state.specs.get("bender")?.persistence).toMatchObject({
-      enabled: true,
-      storageClassName: "premium-rwo",
-      size: "20Gi",
-      accessModes: ["ReadWriteOnce"],
-    });
+    expect(state.specs.get("bender")?.persistence).toBeUndefined();
     expect(state.specs.get("bender")?.serviceAccountName).toBe("octogee-gw-bender");
     expect(state.specs.get("bender")?.serviceAccount).toMatchObject({ create: true });
     expect(state.specs.get("bender")?.operatorAccess).toMatchObject({

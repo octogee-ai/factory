@@ -1,4 +1,4 @@
-{{- $operatorShellsEnabled := and (eq .Values.profile "operator") (.Values.operatorAccess.shellsEnabled | default false) -}}
+{{- $operatorShellsEnabled := and (eq (include "octogee-gateway.gatewayClass" .) "operator") (.Values.operatorAccess.shellsEnabled | default false) -}}
 apiVersion: v1
 kind: Service
 metadata:

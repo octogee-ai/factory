@@ -10,10 +10,15 @@ import {
   ensureGiteaOrgForWorkspace,
   ensureGiteaUser,
   ensureProjectRepo,
+  ensureSystemConfigRepo,
   ensureWorkspaceRepo,
   readGiteaUserPubKey,
   repoExists,
 } from "../../lib/gitea-admin.js";
+import {
+  systemConfigRepoName,
+  workspaceRepoName,
+} from "../../lib/gitea-naming.js";
 
 // Gitea ADMIN broker for the in-pod provisioner. The provisioner runs in the shell-bearing
 // openclaw container and no longer holds the admin token; it calls octogee-api with its
@@ -30,8 +35,9 @@ import {
 const router = Router();
 router.use(requireInternalServiceAuth);
 
-// Our Gitea repo names are always either the fixed "workspace" or a project slug — both
-// satisfy isValidProjectId (^[a-z0-9]+$). Orgs are workspace slugs (isValidUsername).
+// Our Gitea repo names are fixed platform repos or project slugs. Keep the
+// system_config underscore as an exact-name exception instead of relaxing
+// arbitrary repo input.
 function isSshPublicKey(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -46,6 +52,14 @@ function validSlug(res: Response, slug: unknown): slug is string {
   if (isValidUsername(slug)) return true;
   res.status(400).json({ error: "slug must be a valid workspace username" });
   return false;
+}
+
+function validRepoName(value: unknown): value is string {
+  return (
+    value === workspaceRepoName() ||
+    value === systemConfigRepoName() ||
+    isValidProjectId(value)
+  );
 }
 
 function gatewayIdForRequest(req: Request): string | null {
@@ -131,6 +145,13 @@ router.post("/ensure-workspace-repo", async (req: Request, res: Response) => {
   await broker(res, "ensure-workspace-repo", () => ensureWorkspaceRepo(slug));
 });
 
+router.post("/ensure-system-config-repo", async (req: Request, res: Response) => {
+  const { slug } = (req.body ?? {}) as { slug?: unknown };
+  if (!validSlug(res, slug)) return;
+  if (!(await requireAssignedHere(req, res, slug))) return;
+  await broker(res, "ensure-system-config-repo", () => ensureSystemConfigRepo(slug));
+});
+
 router.post("/ensure-project-repo", async (req: Request, res: Response) => {
   const { slug, projectName } = (req.body ?? {}) as { slug?: unknown; projectName?: unknown };
   if (!validSlug(res, slug)) return;
@@ -144,7 +165,7 @@ router.post("/ensure-project-repo", async (req: Request, res: Response) => {
 
 router.get("/repo-exists", async (req: Request, res: Response) => {
   const { org, repo } = req.query;
-  if (!isValidUsername(org) || !isValidProjectId(repo)) {
+  if (!isValidUsername(org) || !validRepoName(repo)) {
     res.status(400).json({ error: "org must be a valid workspace username and repo a valid repo name" });
     return;
   }
@@ -160,7 +181,7 @@ router.get("/repo-exists", async (req: Request, res: Response) => {
 
 router.post("/archive-repo", async (req: Request, res: Response) => {
   const { org, repo } = (req.body ?? {}) as { org?: unknown; repo?: unknown };
-  if (!isValidUsername(org) || !isValidProjectId(repo)) {
+  if (!isValidUsername(org) || !validRepoName(repo)) {
     res.status(400).json({ error: "org must be a valid workspace username and repo a valid repo name" });
     return;
   }

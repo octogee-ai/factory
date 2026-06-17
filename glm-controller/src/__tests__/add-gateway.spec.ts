@@ -203,6 +203,36 @@ describe("createAddGatewayHandler — happy path", () => {
       "fleet-ingress:done",
     ]);
   });
+
+  it("waits for self-heartbeat on builder-class gateways", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
+      heartbeats: new Map([["canary", 1]]),
+      platformReady: new Set(),
+    };
+    const deps = makeDeps(state);
+    const ctx = makeCtx();
+
+    const result = await createAddGatewayHandler(deps)(
+      mkOp({ input: { gatewayId: "canary", imageTag: "abc", gatewayClass: "builder" } }),
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(state.platformReady.has("canary")).toBe(false);
+    expect(deps.readGatewayHeartbeat).toHaveBeenCalledWith("canary");
+    expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
+      "helm-render:running",
+      "helm-render:done",
+      "deployment-ready:running",
+      "deployment-ready:done",
+      "gateway-heartbeat:running",
+      "gateway-heartbeat:done",
+      "fleet-ingress:running",
+      "fleet-ingress:done",
+    ]);
+  });
 });
 
 describe("createAddGatewayHandler — failures", () => {

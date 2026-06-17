@@ -175,6 +175,24 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
     });
   });
 
+  describe("ensureSystemConfigRepo", () => {
+    it("creates the private system_config repo with auto_init false", async () => {
+      fetchMock.mockResolvedValueOnce(res(201, {}));
+      const { ensureSystemConfigRepo } = await import("../gitea-admin.js");
+      await ensureSystemConfigRepo("acme");
+
+      const c = callsTo(fetchMock)[0];
+      expect(c).toMatchObject({ url: `${BASE}/orgs/acme/repos`, method: "POST" });
+      expect(c.body).toMatchObject({ name: "system_config", private: true, auto_init: false });
+    });
+
+    it("treats 409 (already exists) as success", async () => {
+      fetchMock.mockResolvedValueOnce(res(409, {}));
+      const { ensureSystemConfigRepo } = await import("../gitea-admin.js");
+      await expect(ensureSystemConfigRepo("acme")).resolves.toBeUndefined();
+    });
+  });
+
   describe("ensureProjectRepo", () => {
     it("creates the private project repo named after the project", async () => {
       fetchMock.mockResolvedValueOnce(res(201, {}));

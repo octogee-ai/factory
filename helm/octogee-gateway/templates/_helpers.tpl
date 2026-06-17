@@ -36,6 +36,39 @@ octogee-gw-{{ required "gatewayId is required (Cowboy must pass --set gatewayId=
 {{- end }}
 
 {{/*
+Resolve the product/security class for this gateway.
+
+New desired state passes `.Values.gatewayClass`. Legacy releases only have
+`.Values.profile`; `profile=operator` remains operator class, everything else
+defaults to shared.
+*/}}
+{{- define "octogee-gateway.gatewayClass" -}}
+{{- if .Values.gatewayClass -}}
+{{- .Values.gatewayClass -}}
+{{- else if eq ((.Values.imageProfile | default .Values.profile) | default "") "operator" -}}
+operator
+{{- else -}}
+shared
+{{- end -}}
+{{- end }}
+
+{{/*
+Resolve the installed image/tooling profile. Shared and builder classes both
+use the standard image; operator class uses the operator image.
+*/}}
+{{- define "octogee-gateway.imageProfile" -}}
+{{- if .Values.imageProfile -}}
+{{- .Values.imageProfile -}}
+{{- else if .Values.profile -}}
+{{- .Values.profile -}}
+{{- else if eq (include "octogee-gateway.gatewayClass" .) "operator" -}}
+operator
+{{- else -}}
+standard
+{{- end -}}
+{{- end }}
+
+{{/*
 Validate required values up front so a typo in Cowboy's --set call
 fails at helm render rather than producing a half-rendered Deployment.
 
@@ -52,23 +85,39 @@ end-to-end on first real exercise.
 {{- end }}
 
 {{/*
+Resolve the GKE ComputeClass. Env values can map class -> compute class so
+shared/builder move to Spot without moving operator/Bender yet. Falls back to
+the legacy single `.Values.computeClass`.
+*/}}
+{{- define "octogee-gateway.computeClass" -}}
+{{- $class := include "octogee-gateway.gatewayClass" . -}}
+{{- if and .Values.computeClassByClass (index .Values.computeClassByClass $class) -}}
+{{- index .Values.computeClassByClass $class -}}
+{{- else -}}
+{{- .Values.computeClass | default "Performance" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Resolve the effective sizing tier for this gateway instance.
 
 Precedence:
   1. `.Values.sizingTier` if set (Cowboy passed it explicitly).
-  2. `.Values.profileDefaults[<profile>]` if profile is set.
-  3. `.Values.profileDefaults.standard` as the last-resort default.
+  2. `.Values.classDefaults[<gatewayClass>]` if declared.
+  3. `.Values.profileDefaults[<imageProfile>]` for legacy values.
+  4. `.Values.profileDefaults.standard` as the last-resort default.
 
-The result is a string — one of "cattle-light", "cattle-shared",
-"cattle-heavy", "operator", "operator-plus". The schema rejects any
+The result is a string — one of the declared sizing tiers. The schema rejects any
 other value before this helper runs, so callers can trust the lookup
 into `.Values.tiers` will succeed.
 */}}
 {{- define "octogee-gateway.effectiveTier" -}}
 {{- if .Values.sizingTier -}}
 {{- .Values.sizingTier -}}
-{{- else if and .Values.profile (index .Values.profileDefaults .Values.profile) -}}
-{{- index .Values.profileDefaults .Values.profile -}}
+{{- else if and .Values.classDefaults (index .Values.classDefaults (include "octogee-gateway.gatewayClass" .)) -}}
+{{- index .Values.classDefaults (include "octogee-gateway.gatewayClass" .) -}}
+{{- else if and .Values.profileDefaults (index .Values.profileDefaults (include "octogee-gateway.imageProfile" .)) -}}
+{{- index .Values.profileDefaults (include "octogee-gateway.imageProfile" .) -}}
 {{- else -}}
 {{- .Values.profileDefaults.standard -}}
 {{- end -}}

@@ -3,11 +3,17 @@ import {
   OPERATOR_GATEWAY_LOCKED_ACCESS,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   operatorGatewayServiceAccountName,
+  resolveGatewayClass,
+  resolveGatewayImageProfile,
   resolveGatewayPersistence,
+  isGatewayClass,
+  isGatewayProfile,
   type Operation,
   type OperationStep,
   type StepStatus,
   type GatewayProfile,
+  type GatewayClass,
+  type GatewayImageProfile,
   type GatewayPersistenceSpec,
   type GatewayServiceAccountSpec,
   type OperatorGatewayAccessSpec,
@@ -26,6 +32,9 @@ export interface CurrentGatewaySpec {
   imageRepository: string;
   imageTag: string;
   profile?: GatewayProfile;
+  gatewayClass?: GatewayClass;
+  imageProfile?: GatewayImageProfile;
+  builderSlug?: string;
   persistence?: GatewayPersistenceSpec;
   serviceAccountName?: string;
   serviceAccount?: GatewayServiceAccountSpec;
@@ -37,6 +46,9 @@ export interface RolloutGatewaySpecUpdate {
   imageRepository: string;
   imageTag: string;
   profile: GatewayProfile;
+  gatewayClass: GatewayClass;
+  imageProfile: GatewayImageProfile;
+  builderSlug: string | undefined;
   persistence: GatewayPersistenceSpec | undefined;
   serviceAccountName: string | undefined;
   serviceAccount: GatewayServiceAccountSpec | undefined;
@@ -66,6 +78,8 @@ interface RolloutInput {
   imageTag?: unknown;
   imageRepository?: unknown;
   profile?: unknown;
+  gatewayClass?: unknown;
+  imageProfile?: unknown;
 }
 
 interface PollResult {
@@ -81,6 +95,9 @@ interface RolloutTarget {
   imageTag: string;
   newRepository: string;
   newProfile: GatewayProfile;
+  newGatewayClass: GatewayClass;
+  newImageProfile: GatewayImageProfile;
+  builderSlug: string | undefined;
   newPersistence: GatewayPersistenceSpec | undefined;
   newServiceAccountName: string | undefined;
   newServiceAccount: GatewayServiceAccountSpec | undefined;
@@ -117,8 +134,11 @@ async function resolveRolloutTarget(
   const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
   const imageRepositoryOverride =
     typeof input.imageRepository === "string" ? input.imageRepository : undefined;
-  const profileOverride =
-    typeof input.profile === "string" ? (input.profile as GatewayProfile) : undefined;
+  const profileOverride = isGatewayProfile(input.profile) ? input.profile : undefined;
+  const gatewayClassOverride = isGatewayClass(input.gatewayClass) ? input.gatewayClass : undefined;
+  const imageProfileOverride = isGatewayProfile(input.imageProfile)
+    ? input.imageProfile
+    : undefined;
 
   if (!gatewayId) return { error: "missing gatewayId in op.input" };
   if (!imageTag) return { error: "missing imageTag in op.input" };
@@ -129,18 +149,31 @@ async function resolveRolloutTarget(
   }
   const newRepository = imageRepositoryOverride ?? current.imageRepository;
   const currentProfile: GatewayProfile = current.profile ?? "standard";
-  const newProfile: GatewayProfile = profileOverride ?? currentProfile;
-  const newPersistence = resolveGatewayPersistence(newProfile, current.persistence);
+  const currentGatewayClass = resolveGatewayClass(current);
+  const currentImageProfile = resolveGatewayImageProfile(current);
+  const requestedGatewayClass =
+    gatewayClassOverride ??
+    (profileOverride || imageProfileOverride
+      ? resolveGatewayClass({
+          profile: profileOverride,
+          imageProfile: imageProfileOverride,
+        })
+      : undefined);
+  const newGatewayClass: GatewayClass = requestedGatewayClass ?? currentGatewayClass;
+  const newImageProfile: GatewayImageProfile =
+    imageProfileOverride ?? profileOverride ?? currentImageProfile;
+  const newProfile: GatewayProfile = newImageProfile;
+  const newPersistence = resolveGatewayPersistence(newImageProfile, current.persistence);
   const generatedOperatorServiceAccountName = operatorGatewayServiceAccountName(gatewayId);
   const shouldUseLockedOperatorServiceAccount =
-    newProfile === "operator" &&
+    newGatewayClass === "operator" &&
     (!current.serviceAccountName ||
       current.serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME);
   const newServiceAccountName = shouldUseLockedOperatorServiceAccount
     ? generatedOperatorServiceAccountName
     : current.serviceAccountName;
   const shouldCreateLockedOperatorServiceAccount =
-    newProfile === "operator" &&
+    newGatewayClass === "operator" &&
     newServiceAccountName === generatedOperatorServiceAccountName &&
     !current.serviceAccount;
   const newServiceAccount =
@@ -148,17 +181,18 @@ async function resolveRolloutTarget(
       ? OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT
       : current.serviceAccount;
   const newOperatorAccess =
-    newProfile === "operator"
+    newGatewayClass === "operator"
       ? current.operatorAccess ?? OPERATOR_GATEWAY_LOCKED_ACCESS
       : current.operatorAccess;
   const resolvedRepository = resolveGatewayImageRepository({
+    gatewayClass: newGatewayClass,
+    imageProfile: newImageProfile,
     profile: newProfile,
     imageRepository: newRepository,
   });
   const operatorSafetyDefaultsMissing =
-    newProfile === "operator" &&
-    (!current.persistence ||
-      shouldUseLockedOperatorServiceAccount ||
+    newGatewayClass === "operator" &&
+    (shouldUseLockedOperatorServiceAccount ||
       shouldCreateLockedOperatorServiceAccount ||
       !current.operatorAccess);
 
@@ -166,6 +200,8 @@ async function resolveRolloutTarget(
     newRepository === current.imageRepository &&
     imageTag === current.imageTag &&
     newProfile === currentProfile &&
+    newGatewayClass === currentGatewayClass &&
+    newImageProfile === currentImageProfile &&
     !operatorSafetyDefaultsMissing;
   if (desiredMatchesRequest) {
     const deployedMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
@@ -176,7 +212,7 @@ async function resolveRolloutTarget(
       deployed.image.tag === imageTag;
     if (actualMatchesRequest) {
       return {
-        error: `gateway ${gatewayId} already on ${newRepository}:${imageTag} (${newProfile}) — no-op rollout`,
+        error: `gateway ${gatewayId} already on ${newRepository}:${imageTag} (${newGatewayClass}/${newImageProfile}) — no-op rollout`,
       };
     }
     deps.log(
@@ -189,6 +225,9 @@ async function resolveRolloutTarget(
       imageTag,
       newRepository,
       newProfile,
+      newGatewayClass,
+      newImageProfile,
+      builderSlug: current.builderSlug,
       newPersistence,
       newServiceAccountName,
       newServiceAccount,
@@ -209,6 +248,9 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
       imageTag,
       newRepository,
       newProfile,
+      newGatewayClass,
+      newImageProfile,
+      builderSlug,
       newPersistence,
       newServiceAccountName,
       newServiceAccount,
@@ -225,6 +267,9 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
         imageRepository: newRepository,
         imageTag,
         profile: newProfile,
+        gatewayClass: newGatewayClass,
+        imageProfile: newImageProfile,
+        builderSlug,
         persistence: newPersistence,
         serviceAccountName: newServiceAccountName,
         serviceAccount: newServiceAccount,

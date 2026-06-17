@@ -19,6 +19,7 @@ vi.mock("../lib/gitea-admin.js", () => ({
   readGiteaUserPubKey: vi.fn(async () => "ssh-ed25519 KEY octogee"),
   ensureGiteaOrgForWorkspace: vi.fn(async () => {}),
   ensureWorkspaceRepo: vi.fn(async () => {}),
+  ensureSystemConfigRepo: vi.fn(async () => {}),
   ensureProjectRepo: vi.fn(async () => {}),
   repoExists: vi.fn(async () => true),
   archiveRepo: vi.fn(async () => {}),
@@ -142,6 +143,12 @@ describe("internal gitea-admin route", () => {
     expect(giteaAdmin.ensureWorkspaceRepo).toHaveBeenCalledWith("acme");
   });
 
+  it("ensure-system-config-repo → 204", async () => {
+    const res = await authed(request(app()).post("/internal/gitea/ensure-system-config-repo")).send({ slug: "acme" });
+    expect(res.status).toBe(204);
+    expect(giteaAdmin.ensureSystemConfigRepo).toHaveBeenCalledWith("acme");
+  });
+
   it("ensure-project-repo → 204 with slug + projectName", async () => {
     const res = await authed(request(app()).post("/internal/gitea/ensure-project-repo")).send({
       slug: "acme",
@@ -156,6 +163,15 @@ describe("internal gitea-admin route", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ exists: true });
     expect(giteaAdmin.repoExists).toHaveBeenCalledWith("acme", "workspace");
+  });
+
+  it("repo-exists accepts only the fixed system_config repo underscore exception", async () => {
+    const ok = await authed(request(app()).get("/internal/gitea/repo-exists").query({ org: "acme", repo: "system_config" }));
+    expect(ok.status).toBe(200);
+    expect(giteaAdmin.repoExists).toHaveBeenCalledWith("acme", "system_config");
+
+    const bad = await authed(request(app()).get("/internal/gitea/repo-exists").query({ org: "acme", repo: "not_config" }));
+    expect(bad.status).toBe(400);
   });
 
   it("archive-repo → 204 with org + repo", async () => {

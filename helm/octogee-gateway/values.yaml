@@ -13,6 +13,12 @@
 # route to. Must be a lowercase DNS-safe id that fits every rendered suffix.
 gatewayId: ""
 
+# Dedicated builder/operator owner slug. Shared gateways leave this empty.
+# When present on builder/operator classes, the gateway restores durable
+# openclaw.json from that builder's Gitea system_config repo before OpenClaw
+# starts.
+builderSlug: ""
+
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take
 # precedence when set, but the operator workflow is single-SHA.
@@ -53,15 +59,18 @@ operatorAccess:
 # needed — TEST is always paused unless an operator explicitly resumes).
 replicas: 1
 
-# Capability profile — Cowboy passes `--set profile=<id>` for non-default
-# profiles (`operator` today). Empty default preserves cattle behavior
-# (welcome path for new Builders + L3-throttle platform fallback). The
-# chart gates profile-conditional resources on this. Operator gateways
-# skip shell-inheritable platform secrets in the gateway container and
-# only expose builder-shell when `operatorAccess.shellsEnabled=true`.
-# Standard/cattle gateways wire ANTHROPIC_API_KEY (octogee-anthropic secret)
-# as the BYOK/BYOS platform fallback; operator gateways NEVER do — their
-# BuilderShell users must use their own BYOT/BYOS key. See DECISIONS.md.
+# Product/security class. Empty keeps legacy behavior: profile=operator derives
+# operator; otherwise shared. Builder is one-builder, standard image, exec-on,
+# no BuilderShell. Operator is one-builder/platform-owner, operator image,
+# BuilderShell-gated, no shared platform model key.
+gatewayClass: ""
+
+# Installed image/tooling profile. Empty derives from gatewayClass/legacy
+# profile: shared+builder => standard, operator => operator.
+imageProfile: ""
+
+# Legacy overloaded capability/image profile. Keep for existing desired-state
+# docs and clients; new callers should set gatewayClass + imageProfile.
 profile: ""
 
 # Workspace auto-commit toggle. Unset (default) lets the gateway code
@@ -89,6 +98,7 @@ gatewayContainerSecurityContext:
 # where model warmup blocked the loop for 25-30s (TEST 2026-05-13); per-core
 # perf on the standard fast families is ≈ 30-50% faster than E2.
 computeClass: "Performance"
+computeClassByClass: {}
 
 # Machine-family pin for the bare built-in Performance class. Leave EMPTY
 # when computeClass is a custom class (values.{prod,test}.yaml) — that class
@@ -158,10 +168,18 @@ persistence:
 # Per-pod sizing tier. Operator-facing enum that maps to the matching
 # .Values.tiers entry below — drives resources + node-runtime tuning
 # together. Cowboy passes `--set sizingTier=<tier>` per gateway; when
-# empty the chart falls back to .Values.profileDefaults[profile].
+# empty the chart falls back to .Values.classDefaults[gatewayClass],
+# then legacy .Values.profileDefaults[imageProfile].
 sizingTier: ""
 
-# Profile → default tier mapping. Used when sizingTier is unset.
+# Class → default tier mapping. Used when sizingTier is unset.
+classDefaults:
+  shared: "small"
+  builder: "micro"
+  operator: "small"
+
+# Legacy image-profile → default tier mapping. Used when classDefaults is
+# absent on old releases.
 profileDefaults:
   standard: "small"
   operator: "small"
@@ -171,6 +189,19 @@ profileDefaults:
 # tests/specs/helm-octogee-gateway-sizing.spec.ts asserts the two stay
 # in lockstep. Edit both sides together.
 tiers:
+  micro:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "2Gi"
+        ephemeral-storage: "4Gi"
+      limits:
+        cpu: "500m"
+        memory: "2Gi"
+        ephemeral-storage: "4Gi"
+    nodejs:
+      uvThreadpoolSize: "4"
+      maxOldSpaceSizeMb: "1536"
   nano:
     resources:
       requests:
@@ -286,9 +317,10 @@ probes:
 
 pdb:
   enabled: true
-  # operator pets (profile=operator) — disruptionsAllowed:0, pins the live session
+  # Legacy only; kept for schema/backward compatibility. The chart now uses
+  # maxUnavailable for every gateway class.
   minAvailable: 1
-  # cattle — disruptionsAllowed:1 so the ComputeClass activeMigration right-sizing runs
+  # all classes — disruptionsAllowed:1 so ComputeClass activeMigration can right-size
   maxUnavailable: 1
 
 

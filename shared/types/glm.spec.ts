@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isValidGatewayId, operatorGatewayServiceAccountName } from "./glm";
+import {
+  isValidGatewayId,
+  operatorGatewayServiceAccountName,
+  resolveGatewayClass,
+  resolveGatewayImageProfile,
+} from "./glm";
 
 describe("operatorGatewayServiceAccountName", () => {
   it("prefixes the bare gateway id with the operator KSA prefix", () => {
@@ -39,5 +44,27 @@ describe("isValidGatewayId", () => {
     ]) {
       expect(isValidGatewayId(bad)).toBe(false);
     }
+  });
+});
+
+describe("gateway class/profile resolution", () => {
+  it("keeps legacy profile=operator compatible for class and image", () => {
+    expect(resolveGatewayClass({ profile: "operator" })).toBe("operator");
+    expect(resolveGatewayImageProfile({ profile: "operator" })).toBe("operator");
+  });
+
+  it("defaults missing legacy profile to shared class + standard image", () => {
+    expect(resolveGatewayClass({})).toBe("shared");
+    expect(resolveGatewayImageProfile({})).toBe("standard");
+  });
+
+  it("derives the operator image from explicit operator class", () => {
+    expect(resolveGatewayClass({ gatewayClass: "operator", profile: "standard" })).toBe("operator");
+    expect(resolveGatewayImageProfile({ gatewayClass: "operator", profile: "standard" })).toBe("operator");
+  });
+
+  it("lets explicit imageProfile override the class-derived image", () => {
+    expect(resolveGatewayImageProfile({ gatewayClass: "builder", imageProfile: "operator" })).toBe("operator");
+    expect(resolveGatewayImageProfile({ gatewayClass: "operator", imageProfile: "standard" })).toBe("standard");
   });
 });

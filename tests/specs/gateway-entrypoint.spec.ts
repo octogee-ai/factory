@@ -43,6 +43,26 @@ const bootstrapIdx = entrypoint.indexOf("bootstrap-mac-ops.mjs");
   });
 });
 
+describe("infra/gateway/entrypoint.sh — system_config restore", () => {
+  it("restores dedicated gateway system_config before OpenClaw starts", () => {
+    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
+    expect(restoreIdx).toBeGreaterThan(-1);
+    const openclawStartIdx = entrypoint.indexOf("openclaw gateway run");
+    expect(openclawStartIdx).toBeGreaterThan(-1);
+    expect(restoreIdx).toBeLessThan(openclawStartIdx);
+  });
+
+  it("gates system_config restore on non-shared class and explicit builder slug", () => {
+    const restoreBlock = entrypoint.slice(
+      entrypoint.indexOf("Dedicated gateway system_config restore"),
+      entrypoint.indexOf("apply-gateway-class-policy.mjs"),
+    );
+    expect(restoreBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
+    expect(restoreBlock).toMatch(/!= "shared"/);
+    expect(restoreBlock).toMatch(/GATEWAY_BUILDER_SLUG/);
+  });
+});
+
 describe("infra/gateway/entrypoint.sh — operator-profile boot hooks", () => {
   it("invokes the Claude first-run stamper when GATEWAY_PROFILE=operator AND the script exists", () => {
 
@@ -101,25 +121,25 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(entrypoint).not.toMatch(/entrypoints\/local-provisioner\.ts/);
   });
 
-  it("skips site-build-api on operator gateways", () => {
+  it("skips site-build-api on operator-class gateways", () => {
     const siteBuildIdx = entrypoint.indexOf("supervise_runner site-build");
     expect(siteBuildIdx).toBeGreaterThan(0);
     const guardBlock = entrypoint.slice(
       entrypoint.lastIndexOf("if [", siteBuildIdx),
       siteBuildIdx,
     );
-    expect(guardBlock).toMatch(/GATEWAY_PROFILE/);
+    expect(guardBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
     expect(guardBlock).toMatch(/!= "operator"/);
   });
 
-  it("gates builder-shell behind operator profile and explicit shell unlock", () => {
+  it("gates builder-shell behind operator class and explicit shell unlock", () => {
     expect(entrypoint).toMatch(/supervise_runner\s+builder-shell\s+5000\b/);
     const builderIdx = entrypoint.indexOf("supervise_runner builder-shell");
     const guardBlock = entrypoint.slice(
       entrypoint.lastIndexOf("if [", builderIdx),
       builderIdx,
     );
-    expect(guardBlock).toMatch(/GATEWAY_PROFILE/);
+    expect(guardBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
     expect(guardBlock).toMatch(/operator/);
     expect(guardBlock).toMatch(/OPERATOR_SHELLS_ENABLED/);
     expect(guardBlock).toMatch(/true/);

@@ -124,8 +124,12 @@ export type {
   Operation,
   HelmInstanceValue,
   HelmInstancesMap,
+  GatewayClass,
+  GatewayImageProfile,
 } from './glm.js';
 export {
+  GATEWAY_CLASSES,
+  GATEWAY_IMAGE_PROFILES,
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
@@ -133,8 +137,13 @@ export {
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX,
   OPERATOR_GATEWAY_DEFAULT_PERSISTENCE,
+  isGatewayClass,
+  isGatewayClassShellAccessEnabled,
+  isGatewayProfile,
   isOperatorGatewayShellAccessEnabled,
   operatorGatewayServiceAccountName,
+  resolveGatewayClass,
+  resolveGatewayImageProfile,
   resolveGatewayPersistence,
 } from './glm.js';
 
@@ -151,6 +160,7 @@ export type {
 export {
   SIZING_TIERS,
   TIER_PRESETS,
+  GATEWAY_CLASS_DEFAULT_TIER,
   PROFILE_DEFAULT_TIER,
   FALLBACK_DEFAULT_TIER,
   resolveSizingTier,

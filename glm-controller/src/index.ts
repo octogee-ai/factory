@@ -4,6 +4,10 @@ import { getFirestore, FieldValue, type Firestore } from "firebase-admin/firesto
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  isGatewayClass,
+  isGatewayProfile,
+  resolveGatewayClass,
+  resolveGatewayImageProfile,
   type GatewayDesiredState,
   type HelmInstancesMap,
   type Operation,
@@ -178,10 +182,6 @@ function isRunningGateway(gateway: GatewayDesiredState): boolean {
   return gateway.desiredStatus !== "paused" && gateway.desiredStatus !== "retired";
 }
 
-function isRunningOperatorGateway(gateway: GatewayDesiredState): boolean {
-  return gateway.profile === "operator" && isRunningGateway(gateway);
-}
-
 async function publishPlatformGatewayReady(
   db: Firestore,
   input: {
@@ -270,6 +270,8 @@ async function applyChanges(
       persistence: change.to.persistence,
       operatorAccess: change.to.operatorAccess,
       profile: change.to.profile,
+      gatewayClass: change.to.gatewayClass,
+      imageProfile: change.to.imageProfile,
       sizingTier: change.to.sizingTier,
       replicas: change.to.replicas,
       chartPath: GATEWAY_CHART,
@@ -483,7 +485,15 @@ function isRecoverableOperatorAddGatewayOperation(
   if (!op) return false;
   if (op.kind !== "add-gateway" || op.status !== "running") return false;
   if (op.input?.gatewayId !== gatewayId) return false;
-  return op.input?.profile === "operator";
+  return resolveGatewayClass({
+    gatewayClass: isGatewayClass(op.input?.gatewayClass)
+      ? op.input.gatewayClass
+      : undefined,
+    profile: isGatewayProfile(op.input?.profile) ? op.input.profile : undefined,
+    imageProfile: isGatewayProfile(op.input?.imageProfile)
+      ? op.input.imageProfile
+      : undefined,
+  }) === "operator";
 }
 
 async function completeRecoveredOperatorAddGatewayOps(
@@ -1007,7 +1017,7 @@ async function readGatewayProfileFromFirestore(
 ): Promise<"standard" | "operator"> {
   const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
   const data = doc.data() as GatewayDesiredState | undefined;
-  return data?.profile === "operator" ? "operator" : "standard";
+  return resolveGatewayImageProfile(data ?? {}) === "operator" ? "operator" : "standard";
 }
 
 function createMigrationClientBuilder(
@@ -1022,6 +1032,7 @@ function createMigrationClientBuilder(
     });
 }
 
+// eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
 async function buildHandlers(
   db: Firestore,
   logFn: (msg: string) => void,
@@ -1163,6 +1174,9 @@ async function buildHandlers(
         imageRepository: data.imageRepository,
         imageTag: data.imageTag,
         profile: data.profile,
+        gatewayClass: data.gatewayClass,
+        imageProfile: data.imageProfile,
+        builderSlug: data.builderSlug,
         persistence: data.persistence,
         serviceAccountName: data.serviceAccountName,
         serviceAccount: data.serviceAccount,
@@ -1174,6 +1188,9 @@ async function buildHandlers(
       imageRepository,
       imageTag,
       profile,
+      gatewayClass,
+      imageProfile,
+      builderSlug,
       persistence,
       serviceAccountName,
       serviceAccount,
@@ -1182,7 +1199,10 @@ async function buildHandlers(
       const update: Record<string, unknown> = {
         imageRepository,
         imageTag,
+        ...(builderSlug ? { builderSlug } : {}),
         profile: profile === "standard" ? FieldValue.delete() : profile,
+        gatewayClass,
+        imageProfile: imageProfile === "standard" ? FieldValue.delete() : imageProfile,
       };
       if (persistence) {
         update.persistence = persistence;
@@ -1307,7 +1327,7 @@ function buildDeprovisionCustomerHandler(
         const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
         if (!doc.exists) return null;
         const data = doc.data() as GatewayDesiredState | undefined;
-        return data?.profile === "operator" ? "operator" : "standard";
+        return resolveGatewayImageProfile(data ?? {}) === "operator" ? "operator" : "standard";
       },
       readAvailableReplicas: (gatewayId) =>
         kubeOps.readAvailableReplicas({

@@ -8,16 +8,10 @@ metadata:
     app: octogee-gateway
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
-  # Per-profile policy — see DECISIONS "Gateway PDB policy is per-profile".
-  {{- if eq .Values.profile "operator" }}
-  # Operator pet: minAvailable:1 / replicas:1 => disruptionsAllowed:0 — blocks
-  # opportunistic eviction so the live session isn't churned (hand-sized via roll).
-  minAvailable: {{ .Values.pdb.minAvailable }}
-  {{- else }}
-  # Cattle: maxUnavailable:1 => disruptionsAllowed:1 — lets the ComputeClass's
-  # activeMigration right-size + node drains evict gracefully (minAvailable:1 blocks both).
+  # All gateway classes are cattle: maxUnavailable:1 => disruptionsAllowed:1.
+  # This lets ComputeClass activeMigration right-size + node drains evict
+  # gracefully. Durability is substrate-backed, not PDB/PVC-backed.
   maxUnavailable: {{ .Values.pdb.maxUnavailable }}
-  {{- end }}
   selector:
     matchLabels:
       app: octogee-gateway

@@ -27,7 +27,6 @@ export function getAdminAuth(): admin.auth.Auth {
   return admin.auth();
 }
 
-const getDb = getAdminDb;
 const getAuth = getAdminAuth;
 
 export async function resetEmulator(): Promise<void> {

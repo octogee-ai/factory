@@ -3,6 +3,8 @@ import {
   OPERATOR_GATEWAY_LOCKED_ACCESS,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   operatorGatewayServiceAccountName,
+  resolveGatewayClass,
+  resolveGatewayImageProfile,
   resolveGatewayPersistence,
   type GatewayDesiredState,
   type HelmInstanceValue,
@@ -62,6 +64,7 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
   HelmInstanceValue,
   "serviceAccountName" | "serviceAccount" | "operatorAccess"
 > {
+  const gatewayClass = resolveGatewayClass(d);
   let serviceAccountName = d.serviceAccountName;
   let serviceAccount = d.serviceAccount;
   const generatedGatewayServiceAccountName = operatorGatewayServiceAccountName(d.gatewayId);
@@ -71,21 +74,21 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
     serviceAccountName = generatedGatewayServiceAccountName;
   }
   if (
-    d.profile === "operator" &&
+    gatewayClass === "operator" &&
     serviceAccountName === generatedGatewayServiceAccountName &&
     !serviceAccount
   ) {
     serviceAccount = OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT;
   }
   if (
-    d.profile !== "operator" &&
+    gatewayClass !== "operator" &&
     serviceAccountName === generatedGatewayServiceAccountName &&
     !serviceAccount
   ) {
     serviceAccount = { create: true };
   }
   const operatorAccess =
-    d.profile === "operator"
+    gatewayClass === "operator"
       ? d.operatorAccess ?? OPERATOR_GATEWAY_LOCKED_ACCESS
       : d.operatorAccess;
   return { serviceAccountName, serviceAccount, operatorAccess };
@@ -95,12 +98,15 @@ function buildHelmInstanceValue(
   d: GatewayDesiredState,
   chartFingerprint?: string,
 ): HelmInstanceValue {
-  const persistence = resolveGatewayPersistence(d.profile, d.persistence);
+  const gatewayClass = resolveGatewayClass(d);
+  const imageProfile = resolveGatewayImageProfile(d);
+  const persistence = resolveGatewayPersistence(imageProfile, d.persistence);
   const { serviceAccountName, serviceAccount, operatorAccess } = resolveGatewayHelmKnobs(d);
   return {
     enabled: true,
     image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
     gatewayId: d.gatewayId,
+    ...(d.builderSlug ? { builderSlug: d.builderSlug } : {}),
     replicas: d.desiredStatus === "paused" ? 0 : 1,
     ...(chartFingerprint ? { chartFingerprint } : {}),
     ...(serviceAccountName ? { serviceAccountName } : {}),
@@ -110,7 +116,8 @@ function buildHelmInstanceValue(
       : {}),
     ...(persistence ? { persistence } : {}),
     ...(operatorAccess ? { operatorAccess } : {}),
-    ...(d.profile ? { profile: d.profile } : {}),
+    ...(gatewayClass !== "shared" ? { gatewayClass } : {}),
+    ...(imageProfile !== "standard" ? { imageProfile, profile: imageProfile } : {}),
     ...(isSizingTier(d.sizingTier) ? { sizingTier: d.sizingTier } : {}),
   };
 }
@@ -156,16 +163,18 @@ function instanceEqual(
     [a.image.repository, b.image.repository],
     [a.image.tag, b.image.tag],
     [a.gatewayId, b.gatewayId],
-    [a.serviceAccountName, b.serviceAccountName],
-    [a.profile, b.profile],
+    [a.builderSlug, b.builderSlug],
+    [effectiveServiceAccountName(a), effectiveServiceAccountName(b)],
     [a.sizingTier, b.sizingTier],
     [a.replicas, b.replicas],
   ];
   for (const [x, y] of scalars) if (x !== y) return false;
+  if (resolveGatewayClass(a) !== resolveGatewayClass(b)) return false;
+  if (resolveGatewayImageProfile(a) !== resolveGatewayImageProfile(b)) return false;
   if (compareChartFingerprint && a.chartFingerprint !== b.chartFingerprint) return false;
   const objects: ReadonlyArray<[unknown, unknown]> = [
     [a.gatewayContainerSecurityContext, b.gatewayContainerSecurityContext],
-    [a.serviceAccount, b.serviceAccount],
+    [effectiveServiceAccount(a), effectiveServiceAccount(b)],
     [a.persistence, b.persistence],
     [a.operatorAccess, b.operatorAccess],
   ];
@@ -182,13 +191,15 @@ export function isReplicasOnlyUpdate(c: ReconcileChange): boolean {
   if (c.from.image.repository !== c.to.image.repository) return false;
   if (c.from.image.tag !== c.to.image.tag) return false;
   if (c.from.gatewayId !== c.to.gatewayId) return false;
-  if (c.from.serviceAccountName !== c.to.serviceAccountName) return false;
-  if (c.from.profile !== c.to.profile) return false;
+  if (c.from.builderSlug !== c.to.builderSlug) return false;
+  if (effectiveServiceAccountName(c.from) !== effectiveServiceAccountName(c.to)) return false;
+  if (resolveGatewayClass(c.from) !== resolveGatewayClass(c.to)) return false;
+  if (resolveGatewayImageProfile(c.from) !== resolveGatewayImageProfile(c.to)) return false;
   if (c.from.sizingTier !== c.to.sizingTier) return false;
   if (c.from.chartFingerprint !== c.to.chartFingerprint) return false;
   const objects: ReadonlyArray<[unknown, unknown]> = [
     [c.from.gatewayContainerSecurityContext, c.to.gatewayContainerSecurityContext],
-    [c.from.serviceAccount, c.to.serviceAccount],
+    [effectiveServiceAccount(c.from), effectiveServiceAccount(c.to)],
     [c.from.persistence, c.to.persistence],
     [c.from.operatorAccess, c.to.operatorAccess],
   ];
@@ -196,6 +207,27 @@ export function isReplicasOnlyUpdate(c: ReconcileChange): boolean {
     if (!stableEqual(x, y)) return false;
   }
   return true;
+}
+
+function effectiveServiceAccountName(v: HelmInstanceValue): string | undefined {
+  if (!v.gatewayId) return v.serviceAccountName;
+  const requested = v.serviceAccountName ?? "";
+  if (requested === "" || requested === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME) {
+    return operatorGatewayServiceAccountName(v.gatewayId);
+  }
+  return requested;
+}
+
+function effectiveServiceAccount(v: HelmInstanceValue): HelmInstanceValue["serviceAccount"] {
+  if (v.serviceAccount) return v.serviceAccount;
+  if (
+    resolveGatewayClass(v) !== "operator" &&
+    v.gatewayId &&
+    effectiveServiceAccountName(v) === operatorGatewayServiceAccountName(v.gatewayId)
+  ) {
+    return { create: true };
+  }
+  return undefined;
 }
 
 function stableStringify(v: unknown): string {

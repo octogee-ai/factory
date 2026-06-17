@@ -380,28 +380,25 @@ const out = helmTemplate();
     expect(pdb).toMatch(/gateway-instance:\s*default/);
   });
 
-  // PDB policy is per-profile because it feeds or fights the ComputeClass's
-  // activeMigration right-sizing (DECISIONS "Gateway PDB policy is per-profile").
-  // Cattle: maxUnavailable:1 (disruptionsAllowed:1) so activeMigration can evict +
-  // right-size onto a cheaper node. Operator pet: minAvailable:1
-  // (disruptionsAllowed:0) so the live session isn't churned. A uniform
-  // minAvailable:1 silently blocked the self-heal fleet-wide. Anchored regexes —
-  // the rendered comments mention the other field's name.
-  it("cattle gateway PDB allows one voluntary disruption (maxUnavailable:1) so activeMigration can right-size", () => {
+  // PDB policy is now class-uniform cattle behavior: maxUnavailable:1
+  // (disruptionsAllowed:1) so activeMigration can evict + right-size onto a
+  // cheaper node. A uniform minAvailable:1 silently blocked self-heal.
+  // Anchored regexes — the rendered comments mention the other field's name.
+  it("shared gateway PDB allows one voluntary disruption (maxUnavailable:1) so activeMigration can right-size", () => {
     const pdb = findDoc(helmTemplate(), "PodDisruptionBudget", "octogee-gateway-default") ?? "";
     expect(pdb).toMatch(/^\s*maxUnavailable:\s*1\s*$/m);
     expect(pdb).not.toMatch(/^\s*minAvailable:/m);
   });
 
-  it("operator gateway PDB pins the pet (minAvailable:1 => disruptionsAllowed:0, blocks opportunistic eviction)", () => {
+  it("operator gateway PDB uses the same cattle maxUnavailable policy", () => {
     const pdb =
       findDoc(
         helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "operator" }),
         "PodDisruptionBudget",
         "octogee-gateway-bender",
       ) ?? "";
-    expect(pdb).toMatch(/^\s*minAvailable:\s*1\s*$/m);
-    expect(pdb).not.toMatch(/^\s*maxUnavailable:/m);
+    expect(pdb).toMatch(/^\s*maxUnavailable:\s*1\s*$/m);
+    expect(pdb).not.toMatch(/^\s*minAvailable:/m);
   });
 
   it("pdb.enabled=false renders no PodDisruptionBudget", () => {
@@ -589,7 +586,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(init).not.toMatch(/name:\s*MM_BOT_TOKEN\b/);
   });
 
-  it("renders an init container that runs as root to seed + chown /home/node (operator pet-home parity)", () => {
+  it("renders an init container that runs as root to seed + chown /home/node", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/initContainers:[\s\S]*?- name:\s*fix-perms/);
@@ -600,7 +597,7 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     expect(dep).not.toMatch(/chown -R 1000:1000 \/home\/node\/\.openclaw\b/);
   });
 
-  it("mounts the data PVC at /home/node (the whole operator home, not just .openclaw)", () => {
+  it("mounts the data volume at /home/node (whole home, not just .openclaw)", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
 
@@ -609,7 +606,7 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     expect(dep).not.toMatch(/mountPath:\s*\/home\/node\/\.openclaw\b/);
   });
 
-  it("operator gateways mount the data PVC only on fix-perms, gateway, and gateway-edge", () => {
+  it("operator gateways mount the data volume only on fix-perms, gateway, and gateway-edge", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-default", { profile: "operator" }),
@@ -799,8 +796,27 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
 const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const cattleGateway = containerBlock(cattleDep, "gateway");
     const cattleEdge = containerBlock(cattleDep, "gateway-edge");
-    expect(cattleGateway).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*""/);
-    expect(cattleEdge).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*""/);
+    expect(cattleGateway).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"standard"/);
+    expect(cattleGateway).toMatch(/- name:\s*GATEWAY_CLASS[\s\S]*?value:\s*"shared"/);
+    expect(cattleEdge).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"standard"/);
+    expect(cattleEdge).toMatch(/- name:\s*GATEWAY_CLASS[\s\S]*?value:\s*"shared"/);
+  });
+
+  it("threads builderSlug into gateway runtime env for dedicated class config restore", () => {
+    const dep =
+      findDoc(
+        helmTemplate("octogee-gw-jack", {
+          gatewayId: "jack",
+          gatewayClass: "builder",
+          builderSlug: "jack",
+        }),
+        "Deployment",
+        "octogee-gateway-jack",
+      ) ?? "";
+    const gateway = containerBlock(dep, "gateway");
+    const edge = containerBlock(dep, "gateway-edge");
+    expect(gateway).toMatch(/- name:\s*GATEWAY_BUILDER_SLUG[\s\S]*?value:\s*"jack"/);
+    expect(edge).toMatch(/- name:\s*GATEWAY_BUILDER_SLUG[\s\S]*?value:\s*"jack"/);
   });
 });
 
@@ -838,7 +854,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     ).toBeNull();
   });
 
-  it("persistence.enabled renders a PVC that survives `helm uninstall` (pet volume must not be reclaimed)", () => {
+  it("persistence.enabled renders a PVC that survives `helm uninstall` (legacy explicit volume must not be reclaimed)", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       "persistence.enabled": "true",

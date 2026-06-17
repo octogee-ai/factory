@@ -2,15 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   SIZING_TIERS,
   PROFILE_DEFAULT_TIER,
+  GATEWAY_CLASS_DEFAULT_TIER,
   TIER_PRESETS,
   resolveSizingTier,
   type SizingTier,
 } from './sizing.js';
-import { GATEWAY_PROFILES } from './glm.js';
+import { GATEWAY_CLASSES, GATEWAY_PROFILES } from './glm.js';
 
 describe('sizing-tier SSOT', () => {
-  it('declares exactly six tiers in ascending size order', () => {
+  it('declares tiers in ascending size order', () => {
     expect(SIZING_TIERS).toEqual([
+      'micro',
       'nano',
       'small',
       'medium',
@@ -58,6 +60,19 @@ describe('sizing-tier SSOT', () => {
     expect(PROFILE_DEFAULT_TIER.operator).toBe('small');
     expect(PROFILE_DEFAULT_TIER.standard).toBe('small');
   });
+
+  it('GATEWAY_CLASS_DEFAULT_TIER maps every GatewayClass', () => {
+    for (const gatewayClass of GATEWAY_CLASSES) {
+      expect(GATEWAY_CLASS_DEFAULT_TIER[gatewayClass]).toBeDefined();
+      expect(SIZING_TIERS).toContain(GATEWAY_CLASS_DEFAULT_TIER[gatewayClass]);
+    }
+  });
+
+  it('builder class defaults to micro; shared and operator default to small', () => {
+    expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('micro');
+    expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('small');
+    expect(GATEWAY_CLASS_DEFAULT_TIER.operator).toBe('small');
+  });
 });
 
 describe('resolveSizingTier', () => {
@@ -77,6 +92,16 @@ describe('resolveSizingTier', () => {
     const result = resolveSizingTier({ sizingTier: undefined, profile: undefined });
     expect(result.tier).toBe('small');
     expect(result.resolvedFrom).toBe('profile-default');
+  });
+
+  it('uses the class default before the legacy profile default', () => {
+    const result = resolveSizingTier({
+      sizingTier: undefined,
+      gatewayClass: 'builder',
+      profile: 'standard',
+    });
+    expect(result.tier).toBe('micro');
+    expect(result.resolvedFrom).toBe('class-default');
   });
 
   it('narrows to SizingTier (compile-time guard)', () => {

@@ -6,7 +6,13 @@ import {
   BuilderGatewaysMeResponse,
 } from "../../../../shared/types/builder-shell.js";
 import {
-  isOperatorGatewayShellAccessEnabled,
+  isGatewayClassShellAccessEnabled,
+  isGatewayClass,
+  isGatewayProfile,
+  resolveGatewayClass,
+  resolveGatewayImageProfile,
+  type GatewayClass,
+  type GatewayImageProfile,
   type OperatorGatewayAccessSpec,
 } from "../../../../shared/types/glm.js";
 
@@ -16,6 +22,8 @@ router.use(requireAuth);
 interface GlmGatewayDoc {
   gatewayId: string;
   profile?: string;
+  gatewayClass?: string;
+  imageProfile?: string;
   ownerUid?: string;
   coOwnerUids?: string[];
   desiredStatus?: string;
@@ -27,15 +35,29 @@ function builderViewOf(
   doc: GlmGatewayDoc,
   via: "owner" | "co-owner",
 ): BuilderGatewayListEntry {
+  const explicitProfile = isGatewayProfile(doc.profile) ? doc.profile : undefined;
+  const profile = explicitProfile ?? "standard";
+  const explicitImageProfile = isGatewayProfile(doc.imageProfile)
+    ? doc.imageProfile
+    : undefined;
+  const gatewayClass: GatewayClass = resolveGatewayClass({
+    gatewayClass: isGatewayClass(doc.gatewayClass) ? doc.gatewayClass : undefined,
+    profile: explicitProfile,
+    imageProfile: explicitImageProfile,
+  });
+  const imageProfile: GatewayImageProfile = resolveGatewayImageProfile({
+    gatewayClass,
+    imageProfile: explicitImageProfile,
+    profile: explicitProfile,
+  });
   return {
     gatewayId: doc.gatewayId,
-    profile: doc.profile ?? "standard",
+    profile,
+    gatewayClass,
+    imageProfile,
     desiredStatus: doc.desiredStatus ?? "running",
     imageTag: doc.imageTag,
-    shellsEnabled: isOperatorGatewayShellAccessEnabled(
-      doc.profile === "operator" ? "operator" : "standard",
-      doc.operatorAccess,
-    ),
+    shellsEnabled: isGatewayClassShellAccessEnabled(gatewayClass, doc.operatorAccess),
     via,
   };
 }

@@ -9,6 +9,15 @@ set -e
 # OPENCLAW_GATEWAY_TOKEN (L57) and GATEWAY_ID (L92).
 export OPENCLAW_DIR=/home/node/.openclaw
 TEMPLATES_DIR="${OCTOGEE_TEMPLATES_DIR:-/octogee/templates}"
+TSX=/octogee/scripts/node_modules/.bin/tsx
+GATEWAY_CLASS_EFFECTIVE="${GATEWAY_CLASS:-}"
+if [ -z "$GATEWAY_CLASS_EFFECTIVE" ]; then
+  if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
+    GATEWAY_CLASS_EFFECTIVE="operator"
+  else
+    GATEWAY_CLASS_EFFECTIVE="shared"
+  fi
+fi
 
 # Consistent ISO timestamp logging (matches OpenClaw gateway format)
 log() {
@@ -30,6 +39,26 @@ mkdir -p "$OPENCLAW_DIR/customers"
 mkdir -p "$OPENCLAW_DIR/identity"
 mkdir -p "$OPENCLAW_DIR/secrets"
 mkdir -p "$OPENCLAW_DIR/agents"
+
+# ── SSH config (host alias for Gitea — used by per-customer GIT_SSH_COMMAND) ──
+# No global SSH identity file — per-customer keys are gateway-local and passed
+# via GIT_SSH_COMMAND="-i {customer_key}". This prevents agents from falling
+# back to a global admin key.
+# Boot-sync uses brokered HTTP restore paths; no global SSH/admin identity lives
+# in the gateway filesystem.
+GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
+mkdir -p "$HOME/.ssh"
+cat > "$HOME/.ssh/config" <<SSHEOF
+Host gitea
+  HostName ${GIT_SSH_HOST}
+  Port 2222
+  User git
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  LogLevel ERROR
+SSHEOF
+chmod 600 "$HOME/.ssh/config"
+log "SSH config written for Gitea (host: ${GIT_SSH_HOST}, no global identity file)"
 
 # ── Bootstrap openclaw.json from env vars ───────────────────────────────────
 # Always regenerate on boot — no stale config from prior deploys.
@@ -67,15 +96,13 @@ fi
 export OPENCLAW_GATEWAY_TOKEN
 # ── End require ────────────────────────────────────────────────────────────
 
-# ── Source operator-customization env (PVC-resident, additive) ─────────────
+# ── Source operator-customization env (local, additive) ────────────────────
 # Per docs/architecture/GATEWAY-PLATFORM-SPEC.md §Operator-class customization
-# surface: operator-class gateways (PVC home) get a single shell-sourceable
-# env file at ~/.openclaw/secrets/operator.env for additional credentials /
-# integrations the platform doesn't manage (personal Discord bots, custom
-# MCP credentials, personal API keys). Helm-invisible, survives every
-# reschedule via PVC. First proven on gw-bender 2026-05-24 when the Discord
-# bot token rehome needed a place to live that didn't require a platform-
-# wide K8s Secret edit.
+# surface: operator-class gateways may source a shell-readable env file at
+# ~/.openclaw/secrets/operator.env for local-only credentials / integrations
+# the platform doesn't manage. This file is convenience state on emptyDir,
+# not a durability contract; durable operator-owned credentials belong in the
+# builder/operator credential store or an explicit per-gateway Secret.
 #
 # Sourced AFTER the platform require block but BEFORE envsubst on
 # openclaw.template.json, so operator-defined values can populate the
@@ -142,6 +169,41 @@ os.replace(tmp, p)
 fi
 # Secret rotation / reconciliation (env-sync) happens later via pre-boot-config.ts
 # — nothing else fixed up here. The template is canonical; don't re-derive.
+
+# ── Dedicated gateway system_config restore ─────────────────────────────────
+# Builder/operator gateways are emptyDir cattle too. If Cowboy supplied the
+# one-builder slug, restore the durable runtime config from that builder's
+# Gitea system_config repo before OpenClaw starts. The restore seeds only the
+# placeholder template on a missing repo, preserves already-brokered platform
+# fields (for example mac-${GATEWAY_ID}'s bot PAT), and fails open to the
+# template config so a bad repo cannot brick the gateway.
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ -n "${GATEWAY_BUILDER_SLUG:-}" ]; then
+  log "Pre-boot: restoring system_config for builder slug ${GATEWAY_BUILDER_SLUG}..."
+  "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts || log "system_config restore: non-fatal failure, continuing..."
+  python3 -c 'import json, os
+p = os.environ["OPENCLAW_DIR"] + "/openclaw.json"
+with open(p) as f:
+    c = json.load(f)
+c.setdefault("gateway", {}).setdefault("auth", {})["token"] = os.environ["OPENCLAW_GATEWAY_TOKEN"]
+tmp = p + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(c, f, indent=2)
+os.replace(tmp, p)
+'
+  chmod 600 "$OPENCLAW_DIR/openclaw.json"
+  log "openclaw.json gateway.auth.token re-synced after system_config restore"
+elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "system_config restore skipped: GATEWAY_BUILDER_SLUG is unset for class ${GATEWAY_CLASS_EFFECTIVE}"
+fi
+
+# Enforce the class-level OpenClaw policy before startup. The base template is
+# shared-safe (exec/process denied, Codex disabled). Builder-class keeps the
+# standard image but removes the exec/process denies for its one tenant. Operator
+# class is handled later by the operator-image-only codex sandbox patch.
+CLASS_POLICY=/octogee/infra/gateway/apply-gateway-class-policy.mjs
+if [ -f "$CLASS_POLICY" ]; then
+  node "$CLASS_POLICY" || log "apply-gateway-class-policy: non-fatal failure"
+fi
 
 # Publish the fresh gateway auth token to Secret Manager only when explicitly
 # requested. The normal Kubernetes path keeps gateway auth pod-local:
@@ -214,26 +276,6 @@ fi
 # sessions dir as a repair. Create both before boot so doctor sees a clean
 # tree on first start.
 mkdir -p "$OPS_AGENT_DIR/agent" "$OPS_AGENT_DIR/sessions"
-
-# ── SSH config (host alias for Gitea — used by per-customer GIT_SSH_COMMAND) ──
-# No global SSH identity file — per-customer keys are gateway-local and passed
-# via GIT_SSH_COMMAND="-i {customer_key}". This prevents agents from falling
-# back to a global admin key.
-# Boot-sync uses brokered HTTP restore paths; no global SSH/admin identity lives
-# in the gateway filesystem.
-GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
-mkdir -p "$HOME/.ssh"
-cat > "$HOME/.ssh/config" <<SSHEOF
-Host gitea
-  HostName ${GIT_SSH_HOST}
-  Port 2222
-  User git
-  StrictHostKeyChecking no
-  UserKnownHostsFile /dev/null
-  LogLevel ERROR
-SSHEOF
-chmod 600 "$HOME/.ssh/config"
-log "SSH config written for Gitea (host: ${GIT_SSH_HOST}, no global identity file)"
 
 # ── Operator-profile: Claude Code first-run stamp ──────────────────────────
 # Bender's PVC needed this stamped by hand on first boot — Claude's TUI
@@ -374,7 +416,6 @@ fi
 # child's crash-loop. Replaces the bare per-runner respawn loops, which were
 # invisible to monitoring (PID 1 stays alive, so a crash-looping child never
 # showed as a container restart). See GATEWAY-RUNNER-OBSERVABILITY-SPEC.md.
-TSX=/octogee/scripts/node_modules/.bin/tsx
 SUPERVISE="$TSX /octogee/scripts/entrypoints/supervise-runner.ts"
 supervise_runner() {
   _name="$1"; shift
@@ -388,31 +429,31 @@ supervise_runner() {
   ) &
 }
 
-# The local fleet controller is db-less for every profile. Cowboy owns liveness
-# writes, and standard gateways mount customers from tenant-bound octogee-api
-# broker reads rather than local Firestore credentials.
+# The local fleet controller is db-less for every class. Cowboy owns liveness
+# writes, and standard-image gateways mount customers from tenant-bound
+# octogee-api broker reads rather than local Firestore credentials.
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
-if [ "${GATEWAY_PROFILE:-}" != "operator" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
   supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
 else
   log "Operator site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
 fi
 supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
-if [ "${GATEWAY_PROFILE:-}" != "operator" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
   supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
 fi
 
-# Builder-shell PTY server — operator profile plus explicit access unlock only.
+# Builder-shell PTY server — operator class plus explicit access unlock only.
 # Cattle and locked operator gateways own no shells; their Helm Service omits the
 # builder-shell port. BUILDER_SHELL_REQUIRE_KEY enforces the INTERNAL_SERVICE_KEY
 # header on :3005 (defense-in-depth over K8s-namespace isolation) so a compromised
 # same-namespace pod can't bypass chat-proxy's Origin allowlist + ticket discipline.
 # No tmux→Firestore reconciler runs here: operator pods are db-less (no platform
 # credentials), so dead-shell reconciliation must move to a Cowboy-side design.
-if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "operator" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
   export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
   supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
-elif [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
+elif [ "$GATEWAY_CLASS_EFFECTIVE" = "operator" ]; then
   log "Builder-shell disabled: operator trust boundary is not provisioned"
 fi
 

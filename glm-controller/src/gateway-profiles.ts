@@ -1,13 +1,18 @@
-import type { GatewayDesiredState, GatewayProfile } from "../../shared/types/glm.js";
+import {
+  resolveGatewayImageProfile,
+  type GatewayDesiredState,
+  type GatewayProfile,
+} from "../../shared/types/glm.js";
 
 export const PROFILE_IMAGE_NAME: Record<Exclude<GatewayProfile, "standard">, string> = {
   operator: "octogee-gateway-operator",
 };
 
 export function resolveGatewayImageRepository(
-  d: Pick<GatewayDesiredState, "profile" | "imageRepository">,
+  d: Pick<GatewayDesiredState, "gatewayClass" | "imageProfile" | "profile" | "imageRepository">,
 ): string {
-  if (!d.profile || d.profile === "standard") return d.imageRepository;
+  const imageProfile = resolveGatewayImageProfile(d);
+  if (imageProfile === "standard") return d.imageRepository;
   const base = d.imageRepository.replace(/\/[^/]+$/, "");
-  return `${base}/${PROFILE_IMAGE_NAME[d.profile]}`;
+  return `${base}/${PROFILE_IMAGE_NAME[imageProfile]}`;
 }

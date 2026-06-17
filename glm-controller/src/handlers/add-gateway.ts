@@ -1,4 +1,11 @@
-import type { Operation, OperationStep, StepStatus } from "../../../shared/types/glm.js";
+import {
+  isGatewayClass,
+  isGatewayProfile,
+  resolveGatewayClass,
+  type Operation,
+  type OperationStep,
+  type StepStatus,
+} from "../../../shared/types/glm.js";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
 import type { KubeOps } from "../lib/kube-ops.js";
@@ -37,6 +44,8 @@ interface AddGatewayInput {
   gatewayId?: unknown;
   imageTag?: unknown;
   profile?: unknown;
+  gatewayClass?: unknown;
+  imageProfile?: unknown;
 }
 
 interface PollResult {
@@ -55,7 +64,11 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
     const input = op.input as AddGatewayInput;
     const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
     const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
-    const profile = input.profile === "operator" ? "operator" : "standard";
+    const gatewayClass = resolveGatewayClass({
+      gatewayClass: isGatewayClass(input.gatewayClass) ? input.gatewayClass : undefined,
+      profile: isGatewayProfile(input.profile) ? input.profile : undefined,
+      imageProfile: isGatewayProfile(input.imageProfile) ? input.imageProfile : undefined,
+    });
 
     if (!gatewayId) return { steps: [], success: false, error: "missing gatewayId in op.input" };
 
@@ -93,7 +106,7 @@ export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler 
       return { steps: [], success: false, error: deploymentReadyResult.errorMsg };
     }
 
-    if (profile === "operator") {
+    if (gatewayClass === "operator") {
       const readyStartedAt = deps.now();
       await reportStep(ctx, {
         name: "platform-ready-record",

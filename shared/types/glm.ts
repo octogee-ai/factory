@@ -5,12 +5,25 @@ export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired"
 export const GATEWAY_PROFILES = ["standard", "operator"] as const;
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 
+export const GATEWAY_CLASSES = ["shared", "builder", "operator"] as const;
+export type GatewayClass = (typeof GATEWAY_CLASSES)[number];
+
+export const GATEWAY_IMAGE_PROFILES = ["standard", "operator"] as const;
+export type GatewayImageProfile = (typeof GATEWAY_IMAGE_PROFILES)[number];
+
 export interface GatewayDesiredState {
   gatewayId: string;
   imageRepository: string;
   imageTag: string;
 
+  /**
+   * Legacy overloaded image/capability selector. Keep for compatibility with
+   * already-authored desired-state docs and API clients. New callers should set
+   * gatewayClass + imageProfile explicitly.
+   */
   profile?: GatewayProfile;
+  gatewayClass?: GatewayClass;
+  imageProfile?: GatewayImageProfile;
   desiredStatus: GatewayDesiredStatus;
 
   createdBy: string;
@@ -176,15 +189,10 @@ export function operatorGatewayServiceAccountName(gatewayId: string): string {
 }
 
 export function resolveGatewayPersistence(
-  profile: GatewayProfile | undefined,
+  _profile: GatewayProfile | undefined,
   persistence: GatewayPersistenceSpec | undefined,
 ): GatewayPersistenceSpec | undefined {
-  if (persistence) return persistence;
-  if (profile !== "operator") return undefined;
-  return {
-    ...OPERATOR_GATEWAY_DEFAULT_PERSISTENCE,
-    accessModes: [...(OPERATOR_GATEWAY_DEFAULT_PERSISTENCE.accessModes ?? [])],
-  };
+  return persistence;
 }
 
 export function isOperatorGatewayShellAccessEnabled(
@@ -192,6 +200,13 @@ export function isOperatorGatewayShellAccessEnabled(
   operatorAccess: OperatorGatewayAccessSpec | undefined,
 ): boolean {
   return profile === "operator" && operatorAccess?.shellsEnabled === true;
+}
+
+export function isGatewayClassShellAccessEnabled(
+  gatewayClass: GatewayClass | undefined,
+  operatorAccess: OperatorGatewayAccessSpec | undefined,
+): boolean {
+  return gatewayClass === "operator" && operatorAccess?.shellsEnabled === true;
 }
 
 export type ByosubProvider = "openai" | "anthropic";
@@ -254,6 +269,9 @@ export interface HelmInstanceValue {
   operatorAccess?: OperatorGatewayAccessSpec;
 
   profile?: GatewayProfile;
+  gatewayClass?: GatewayClass;
+  imageProfile?: GatewayImageProfile;
+  builderSlug?: string;
 
   sizingTier?: SizingTier;
 
@@ -264,3 +282,38 @@ export type HelmInstancesMap = Record<string, HelmInstanceValue>;
 
 export const GLM_GATEWAYS_COLLECTION = "glmGateways";
 export const GLM_OPERATIONS_COLLECTION = "glmOperations";
+
+export function isGatewayClass(value: unknown): value is GatewayClass {
+  return (
+    typeof value === "string" &&
+    (GATEWAY_CLASSES as readonly string[]).includes(value)
+  );
+}
+
+export function isGatewayProfile(value: unknown): value is GatewayProfile {
+  return (
+    typeof value === "string" &&
+    (GATEWAY_PROFILES as readonly string[]).includes(value)
+  );
+}
+
+export function resolveGatewayClass(input: {
+  gatewayClass?: GatewayClass;
+  profile?: GatewayProfile;
+  imageProfile?: GatewayImageProfile;
+}): GatewayClass {
+  if (input.gatewayClass) return input.gatewayClass;
+  return input.profile === "operator" || input.imageProfile === "operator"
+    ? "operator"
+    : "shared";
+}
+
+export function resolveGatewayImageProfile(input: {
+  gatewayClass?: GatewayClass;
+  imageProfile?: GatewayImageProfile;
+  profile?: GatewayProfile;
+}): GatewayImageProfile {
+  if (input.imageProfile) return input.imageProfile;
+  if (!input.gatewayClass && input.profile) return input.profile;
+  return resolveGatewayClass(input) === "operator" ? "operator" : "standard";
+}
