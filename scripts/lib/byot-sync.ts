@@ -34,6 +34,10 @@ const BYOT_MARKER = ".byot-managed";
 
 export type ByotInput = ByotConfigInput;
 
+export function isShellRuntimeProvider(provider: Provider): boolean {
+  return provider === "openai-codex" || provider === "claude-cli";
+}
+
 // Pins agentRuntime so a per-agent BYOS model override routes through the right
 // harness (codex / claude-cli) rather than the platform provider key.
 type RuntimeModelsDef = Record<string, { agentRuntime: { id: string } }>;
@@ -178,4 +182,3 @@ agentsDir: string = AGENTS_DIR,
   }
   return changed;
 }
-

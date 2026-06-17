@@ -343,10 +343,10 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 });
 
 describe("applyCoachModelPatch — applies the durable patch, best-effort", () => {
-  it("codex input → applies the codex patch once, returns true", async () => {
+  it("openai api_key input → applies the native model patch once, returns true", async () => {
     const calls: object[] = [];
     const r = await applyCoachModelPatch(
-      { slug: "tester-70", provider: "openai-codex" },
+      { slug: "tester-70", provider: "openai" },
       {
         applyPatch: async (p) => {
           calls.push(p);
@@ -357,11 +357,31 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(calls).toEqual([
       {
         agents: {
-          list: [{ id: "octogee-tester-70-coach", model: "openai/gpt-5.5" }],
-          defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+          list: [{ id: "octogee-tester-70-coach", model: "openai/gpt-5" }],
         },
       },
     ]);
+  });
+
+  it("shell-runtime BYOS providers do not patch standard shared gateways", async () => {
+    const applyPatch = vi.fn(async () => {});
+    const logFn = vi.fn();
+    await expect(
+      applyCoachModelPatch(
+        { slug: "tester-70", provider: "openai-codex" },
+        { applyPatch, logFn },
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      applyCoachModelPatch(
+        { slug: "tester-70", provider: "claude-cli" },
+        { applyPatch, logFn },
+      ),
+    ).resolves.toBe(false);
+    expect(applyPatch).not.toHaveBeenCalled();
+    expect(logFn).toHaveBeenCalledWith(
+      expect.stringContaining("requires a private exec gateway"),
+    );
   });
 
   it("no-override / null → does NOT apply, returns false", async () => {
@@ -375,7 +395,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
 
   it("never throws — a failed apply returns false (sync continues → retried next sync)", async () => {
     const r = await applyCoachModelPatch(
-      { slug: "tester-70", provider: "openai-codex" },
+      { slug: "tester-70", provider: "openai" },
       {
         applyPatch: async () => {
           throw new Error("config.patch hash-mismatch exhausted");
@@ -399,7 +419,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
   it("waits for the booting runtime: deadline-bounded retries, not a 3-shot budget (byot fires at pod boot before openclaw listens on :18789)", async () => {
     const opts: Array<Record<string, unknown>> = [];
     const r = await applyCoachModelPatch(
-      { slug: "tester-70", provider: "openai-codex" },
+      { slug: "tester-70", provider: "openai" },
       {
         isOperatorGateway: () => false,
         applyConfigPatch: async (_args, o) => {
@@ -412,6 +432,36 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(opts).toHaveLength(1);
     expect(opts[0].maxRetries).toBe(Number.POSITIVE_INFINITY);
     expect(opts[0].totalDeadlineMs as number).toBeGreaterThanOrEqual(60_000);
+  });
+});
+
+describe("standard gateway — shell-runtime BYOS is not materialized", () => {
+  it("syncByotForCustomer clears local BYOT artifacts and skips oauth restore/model patch/reload unless cleanup changed", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "claude-cli" } },
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: applyByotStateFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
+    expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 });
 

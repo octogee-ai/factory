@@ -3,6 +3,7 @@ import {
   applyByotState,
   byosCoachConfigPatch,
   deriveDesiredByotState,
+  isShellRuntimeProvider,
   type ByotInput,
 } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
@@ -31,6 +32,12 @@ export async function applyCoachModelPatch(
   const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
   if (isOp()) return false;
   if (!input) return false;
+  if (isShellRuntimeProvider(input.provider)) {
+    logFn(
+      `[byot-sync] ${input.slug}: ${input.provider} requires a private exec gateway; skipping standard gateway runtime patch`,
+    );
+    return false;
+  }
   const patch = byosCoachConfigPatch(input);
   if (!patch) return false;
   const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
@@ -182,6 +189,15 @@ export async function syncByotForCustomer(
   const desired = deriveDesiredByotState(userData);
   const slug = userData.username;
   if (!slug) return;
+
+  if (desired.input && isShellRuntimeProvider(desired.input.provider)) {
+    const changed = applyByotStateFn(slug, null);
+    log(
+      `[byot-sync] ${slug}: ${desired.input.provider} requires a private exec gateway; leaving standard gateway on native providers`,
+    );
+    if (changed) await triggerSecretsReloadFn();
+    return;
+  }
 
   const changed = applyByotStateFn(slug, desired.input);
 

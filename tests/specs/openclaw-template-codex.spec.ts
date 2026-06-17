@@ -10,20 +10,21 @@ function readTemplate() {
   );
 }
 
-describe("infra/gateway/openclaw.template.json — shared Codex runtime", () => {
-  it("uses the guardian (auto-review + workspace-write) Codex posture for shared gateways", () => {
+describe("infra/gateway/openclaw.template.json — standard gateway exec-off posture", () => {
+  it("denies exec for standard agents and subagents", () => {
     const template = readTemplate();
-    const appServer = template.plugins.entries.codex.config.appServer;
 
-    expect(template.plugins.entries.codex.enabled).toBe(true);
-    expect(appServer.approvalPolicy).toBe("on-request");
-    expect(appServer.approvalsReviewer).toBe("auto_review");
-    expect(appServer.sandbox).toBe("workspace-write");
+    expect(template.tools.deny).toEqual(["exec", "process"]);
+    expect(template.tools.exec).toEqual({ mode: "deny" });
+    expect(template.tools.subagents.tools.deny).toEqual(["exec", "process"]);
   });
 
-  it("does not set tools.exec.mode globally, so operator gateways can still override Codex explicitly", () => {
+  it("disables the Codex plugin and removes the gpt-5.5 Codex runtime route", () => {
     const template = readTemplate();
 
-    expect(template.tools.exec).toBeUndefined();
+    expect(template.plugins.allow).not.toContain("codex");
+    expect(template.plugins.entries.codex).toEqual({ enabled: false });
+    expect(template.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
+    expect(template.auth.profiles["openai-codex:default"]).toBeUndefined();
   });
 });
