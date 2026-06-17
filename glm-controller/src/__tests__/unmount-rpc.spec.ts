@@ -3,6 +3,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { SIGNATURE_HEADER } from "../../../shared/types/fleet-controller.js";
 import { verifyFleetRequest } from "../../../scripts/lib/fleet-signature.js";
 import { buildOperatorHeartbeatPollerDeps, callUnmountRpc } from "../index.js";
+import { FLEET_KEY_PAIR } from "../../../scripts/__tests__/fixtures/fleet-keys.js";
 
 function fakeDb(): Firestore {
   return {
@@ -34,7 +35,7 @@ describe("callUnmountRpc", () => {
       });
 
     const pending = callUnmountRpc(fakeDb(), {
-      secret: "secret",
+      privateKey: FLEET_KEY_PAIR.privateKey,
       gatewayId: "bender",
       slug: "ghost",
       log: vi.fn(),
@@ -59,31 +60,29 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
     vi.restoreAllMocks();
   });
 
-  it("signs operator eviction with the per-gateway auth token", async () => {
+  it("signs operator eviction with the fleet controller private key", async () => {
     let capturedInit: RequestInit | undefined;
     vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
       capturedInit = init;
       return Promise.resolve(new Response("{}", { status: 200 }));
     });
-    const readGatewayAuthTokenForId = vi.fn(async () => "gateway-token");
     const deps = buildOperatorHeartbeatPollerDeps(
       fakeDb(),
       vi.fn(),
-      readGatewayAuthTokenForId,
+      FLEET_KEY_PAIR.privateKey,
     );
 
     await deps.evictSlug?.("bender", "ghost");
 
-    expect(readGatewayAuthTokenForId).toHaveBeenCalledWith("bender");
     const rawBody = capturedInit?.body as string;
     const body = JSON.parse(rawBody) as { migrationId: string };
     const headers = capturedInit?.headers as Record<string, string>;
     const signature = headers[SIGNATURE_HEADER];
     expect(
-      verifyFleetRequest("gateway-token", body.migrationId, rawBody, signature),
+      verifyFleetRequest(FLEET_KEY_PAIR.publicKey, body.migrationId, rawBody, signature),
     ).toBe(true);
     expect(
-      verifyFleetRequest("fleet-secret", body.migrationId, rawBody, signature),
+      verifyFleetRequest("gateway-token", body.migrationId, rawBody, signature),
     ).toBe(false);
   });
 });

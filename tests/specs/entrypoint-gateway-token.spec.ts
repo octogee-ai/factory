@@ -142,7 +142,7 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
 function runnerBlockSource(): string {
   const src = fs.readFileSync(ENTRYPOINT, "utf8");
   const start = src.indexOf("TSX=/octogee/scripts/node_modules/.bin/tsx");
-  const end = src.indexOf("# Builder-shell PTY server", start);
+  const end = src.indexOf("# ── Runner metrics exporter", start);
   if (start < 0 || end < 0) {
     throw new Error("could not locate runner startup block in entrypoint.sh");
   }
@@ -157,7 +157,7 @@ function runnerBlockSource(): string {
   );
 }
 
-function runRunnerBlock(profile: string): {
+function runRunnerBlock(profile: string, opts: { operatorShellsEnabled?: string } = {}): {
   status: number | null;
   stderr: string;
   runners: string[];
@@ -169,6 +169,7 @@ function runRunnerBlock(profile: string): {
       set -e
       log() { echo "$*" >&2; }
       export GATEWAY_PROFILE="${profile}"
+      export OPERATOR_SHELLS_ENABLED="${opts.operatorShellsEnabled ?? ""}"
       export RUNNER_MARKER="${marker}"
       ${runnerBlockSource()}
     `;
@@ -194,11 +195,13 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     expect(result.runners).not.toContain("provisioner");
     expect(result.runners).not.toContain("site-build");
     expect(result.runners).not.toContain("byosub-syncback");
+    expect(result.runners).not.toContain("builder-shell");
     expect(result.stderr).toMatch(/Operator site-build-api disabled/);
+    expect(result.stderr).toMatch(/Builder-shell disabled/);
   });
 
-  it("starts the db-less fleet controller and cattle side runners on standard gateways", () => {
-    const result = runRunnerBlock("standard");
+  it("starts the db-less fleet controller and cattle side runners on standard gateways, never builder-shell", () => {
+    const result = runRunnerBlock("standard", { operatorShellsEnabled: "true" });
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
       "fleet-controller",
@@ -206,6 +209,16 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
       "preview-proxy",
       "byosub-syncback",
     ]);
+  });
+
+  it("starts builder-shell only on explicitly unlocked operator gateways", () => {
+    const result = runRunnerBlock("operator", { operatorShellsEnabled: "true" });
+    expect(result.status).toBe(0);
+    expect(result.runners).toContain("fleet-controller");
+    expect(result.runners).toContain("preview-proxy");
+    expect(result.runners).toContain("builder-shell");
+    expect(result.runners).not.toContain("site-build");
+    expect(result.runners).not.toContain("byosub-syncback");
   });
 });
 

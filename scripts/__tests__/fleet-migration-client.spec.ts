@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { signFleetRequest } from "../lib/fleet-signature";
+import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys";
 import {
   SIGNATURE_HEADER,
   MIGRATION_QUIESCE_TIMEOUT_MS,
@@ -37,10 +38,10 @@ function captureFetch(handler: (call: CapturedCall) => Response | Promise<Respon
   return { calls, fakeFetch };
 }
 
-const SECRET = "test-secret";
+const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
 
 describe("MigrationClient.quiesce", () => {
-  it("POSTs JSON to /quiesce/{gatewayId} signed with HMAC over `${migrationId}\\n${rawBody}`", async () => {
+  it("POSTs JSON to /quiesce/{gatewayId} signed by the fleet controller private key", async () => {
     const { calls, fakeFetch } = captureFetch(() =>
       new Response(
         JSON.stringify({ migrationId: "m1", slug: "alice", drained: true, runningCount: 0 }),
@@ -48,7 +49,7 @@ describe("MigrationClient.quiesce", () => {
       ),
     );
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet-test.example.com`,
       fetch: fakeFetch,
     });
@@ -62,7 +63,7 @@ describe("MigrationClient.quiesce", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://fleet-test.example.com/quiesce/gw-source");
     expect(calls[0].method).toBe("POST");
-    const expectedSig = signFleetRequest(SECRET, "m1", calls[0].body!);
+    const expectedSig = signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!);
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({ migrationId: "m1", slug: "alice", timeoutMs: 30_000 });
@@ -73,7 +74,7 @@ describe("MigrationClient.quiesce", () => {
       new Response(JSON.stringify({ error: "invalid signature" }), { status: 401 }),
     );
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
     });
@@ -90,7 +91,7 @@ describe("MigrationClient.quiesce", () => {
       ),
     );
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
     });
@@ -109,7 +110,7 @@ describe("MigrationClient.unmount", () => {
       ),
     );
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
     });
@@ -118,7 +119,7 @@ describe("MigrationClient.unmount", () => {
     expect(calls[0].url).toBe("https://fleet.example.com/unmount/gw-source");
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({ migrationId: "m1", slug: "alice" });
-    const expectedSig = signFleetRequest(SECRET, "m1", calls[0].body!);
+    const expectedSig = signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!);
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
   });
 
@@ -130,7 +131,7 @@ describe("MigrationClient.unmount", () => {
       ),
     );
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
     });
@@ -149,7 +150,7 @@ describe("MigrationClient.transferState", () => {
     );
 
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: (id) =>
         id === "gw-from" ? "https://fleet-from.example.com" : "https://fleet-to.example.com",
       fetch: fakeFetch,
@@ -169,29 +170,24 @@ describe("MigrationClient.transferState", () => {
       slug: "alice",
       targetGatewayId: "gw-to",
       targetUrl: "https://fleet-to.example.com",
-      targetImportSignature: signFleetRequest(SECRET, "m1", "alice"),
+      targetImportSignature: signFleetRequest(PRIVATE_KEY, "m1", "alice"),
     });
-    const expectedSig = signFleetRequest(SECRET, "m1", calls[0].body!);
+    const expectedSig = signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!);
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
     expect(res.imported).toBe(true);
   });
 
-  it("uses per-gateway request secrets and can request an activation manifest", async () => {
+  it("uses the controller private key for source and target signatures and can request an activation manifest", async () => {
     const { calls, fakeFetch } = captureFetch(() =>
       new Response(
         JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
     );
-    const resolveRequestSecret = vi.fn(async (gatewayId: string) =>
-      gatewayId === "gw-from" ? "source-secret" : "target-secret",
-    );
-
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: (id) =>
         id === "gw-from" ? "https://fleet-from.example.com" : "https://fleet-to.example.com",
-      resolveRequestSecret,
       fetch: fakeFetch,
     });
     await client.transferState({
@@ -205,13 +201,11 @@ describe("MigrationClient.transferState", () => {
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({
       includeActivationManifest: true,
-      targetImportSignature: signFleetRequest("target-secret", "m1", "alice"),
+      targetImportSignature: signFleetRequest(PRIVATE_KEY, "m1", "alice"),
     });
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
-      signFleetRequest("source-secret", "m1", calls[0].body!),
+      signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!),
     );
-    expect(resolveRequestSecret).toHaveBeenCalledWith("gw-to");
-    expect(resolveRequestSecret).toHaveBeenCalledWith("gw-from");
   });
 
   it("throws if push-state returns non-2xx", async () => {
@@ -220,7 +214,7 @@ describe("MigrationClient.transferState", () => {
     );
 
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
     });
@@ -255,7 +249,7 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
   it("passes an AbortSignal on quiesce derived from MIGRATION_QUIESCE_TIMEOUT_MS", async () => {
     const { fakeFetch, seenSignal } = captureSignal();
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://fleet.example.com",
       fetch: fakeFetch,
     });
@@ -279,7 +273,7 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     }) as typeof fetch;
 
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://fleet.example.com",
       fetch: fakeFetch,
       timeouts: {
@@ -305,7 +299,7 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     }) as typeof fetch;
 
     const client = createMigrationClient({
-      secret: SECRET,
+      privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://fleet.example.com",
       fetch: fakeFetch,
     });

@@ -5,11 +5,7 @@ export interface UnmountFromGatewayDeps {
 
   readAvailableReplicas: (gatewayId: string) => Promise<number | null>;
 
-  fleetSecret: string;
-
-  readGatewayAuthToken: (gatewayId: string) => Promise<string>;
-
-  unmountRpc: (opts: { gatewayId: string; slug: string; secret: string }) => Promise<void>;
+  unmountRpc: (opts: { gatewayId: string; slug: string }) => Promise<void>;
 
   wait: (ms: number) => Promise<void>;
   now: () => number;
@@ -39,17 +35,6 @@ function describeFailure(err: TypeError): string {
   return cause ? `${err.message} (${cause})` : err.message;
 }
 
-async function resolveSecret(
-  deps: UnmountFromGatewayDeps,
-  profile: "standard" | "operator",
-  gatewayId: string,
-): Promise<string> {
-  // Operator pods never mount FLEET_CONTROLLER_SECRET; their fleet server
-  // verifies against the per-gateway OPENCLAW_GATEWAY_TOKEN instead.
-  if (profile === "operator") return deps.readGatewayAuthToken(gatewayId);
-  return deps.fleetSecret;
-}
-
 // A pod with zero available replicas has no local customer footprint (emptyDir),
 // and the gateway's level-triggered mount reconcile only mounts slugs still
 // assigned in Firestore — which deprovision deletes — so a future boot cannot
@@ -68,7 +53,6 @@ export function createUnmountFromGateway(
 
     const deadline = deps.now() + retryDeadlineMs;
     let attempts = 0;
-    let secret: string | null = null;
     for (;;) {
       const available = await deps.readAvailableReplicas(gatewayId);
       if (available == null || available < 1) {
@@ -78,13 +62,9 @@ export function createUnmountFromGateway(
         return "skipped-no-live-pod";
       }
 
-      // Resolved after the replica gate so a sleeping gateway whose auth
-      // secret is already gone still skips instead of failing.
-      secret ??= await resolveSecret(deps, profile, gatewayId);
-
       attempts += 1;
       try {
-        await deps.unmountRpc({ gatewayId, slug, secret });
+        await deps.unmountRpc({ gatewayId, slug });
         return "unmounted";
       } catch (err) {
         if (!isConnectionFailure(err)) throw err;

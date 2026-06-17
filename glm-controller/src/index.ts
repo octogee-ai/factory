@@ -35,7 +35,6 @@ import {
 import {
   createAuthSecretEnsurer,
   defaultRandomTokenHex,
-  readGatewayAuthToken,
 } from "./auth-secret-ensurer.js";
 import {
   spawnKubectl,
@@ -706,7 +705,7 @@ let claimed = false;
 export function buildOperatorHeartbeatPollerDeps(
   db: Firestore,
   log: (msg: string) => void,
-  readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>,
+  privateKey: string,
 ): OperatorHeartbeatPollerDeps {
   return {
     listGatewayIds: async () => {
@@ -741,8 +740,7 @@ export function buildOperatorHeartbeatPollerDeps(
         );
     },
     evictSlug: async (gatewayId: string, slug: string) => {
-      const secret = await readGatewayAuthTokenForId(gatewayId);
-      await callUnmountRpc(db, { secret, gatewayId, slug, log, tag: "evict" });
+      await callUnmountRpc(db, { privateKey, gatewayId, slug, log, tag: "evict" });
     },
     log,
   };
@@ -807,8 +805,10 @@ const handlerSyncFleetIngress = async () => {
     await syncAllFleetIngresses(gateways);
   };
 
-  const readGatewayAuthTokenForId = (gatewayId: string) =>
-    readGatewayAuthToken({ runKubectl }, { namespace: NAMESPACE, gatewayId });
+  const fleetControllerPrivateKey = requireEnv(
+    "FLEET_CONTROLLER_PRIVATE_KEY",
+    "migrate-customer, deprovision-customer, and operator eviction RPCs require the controller signing key",
+  );
 
   const handlers = await buildHandlers(
     db,
@@ -817,7 +817,7 @@ const handlerSyncFleetIngress = async () => {
     kubeOps,
     {
       syncFleetIngress: handlerSyncFleetIngress,
-      readGatewayAuthTokenForId,
+      privateKey: fleetControllerPrivateKey,
     },
   );
 
@@ -844,7 +844,7 @@ const handlerSyncFleetIngress = async () => {
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
   const stopPoller = startOperatorHeartbeatPoller(
-    buildOperatorHeartbeatPollerDeps(db, log, readGatewayAuthTokenForId),
+    buildOperatorHeartbeatPollerDeps(db, log, fleetControllerPrivateKey),
     OPERATOR_HEARTBEAT_POLL_MS,
   );
 
@@ -1011,21 +1011,14 @@ async function readGatewayProfileFromFirestore(
 }
 
 function createMigrationClientBuilder(
-  db: Firestore,
-  secret: string,
+  privateKey: string,
   logFn: (msg: string) => void,
-  readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>,
 ) {
   return (resolveSync: (gatewayId: string) => string) =>
     createMigrationClient({
-      secret,
+      privateKey,
       resolveGatewayUrl: resolveSync,
       log: logFn,
-      resolveRequestSecret: async (gatewayId) => {
-        const profile = await readGatewayProfileFromFirestore(db, gatewayId);
-        if (profile !== "operator") return secret;
-        return readGatewayAuthTokenForId(gatewayId);
-      },
     });
 }
 
@@ -1036,13 +1029,13 @@ async function buildHandlers(
   kubeOps: KubeOps,
   fleetOps: {
     syncFleetIngress: () => Promise<void>;
-    readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>;
+    privateKey: string;
   },
 ): Promise<OperationHandlers> {
-  const secret = process.env.FLEET_CONTROLLER_SECRET;
-  if (!secret) {
+  const { privateKey } = fleetOps;
+  if (!privateKey) {
     throw new Error(
-      "FLEET_CONTROLLER_SECRET is not set — required for migrate-customer. Refusing to start with stub handlers.",
+      "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",
     );
   }
 
@@ -1094,10 +1087,8 @@ async function buildHandlers(
     resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
     readGatewayProfile: (gatewayId) => readGatewayProfileFromFirestore(db, gatewayId),
     buildClient: createMigrationClientBuilder(
-      db,
-      secret,
+      privateKey,
       logFn,
-      fleetOps.readGatewayAuthTokenForId,
     ),
     genMigrationId: () => `mig-${Date.now()}-${randomUUID().slice(0, 8)}`,
     now: () => Date.now(),
@@ -1233,10 +1224,9 @@ async function buildHandlers(
 
   const deprovisionCustomer = buildDeprovisionCustomerHandler(
     db,
-    secret,
+    privateKey,
     logFn,
     kubeOps,
-    fleetOps.readGatewayAuthTokenForId,
   );
 
   const restartGateway = createRestartGatewayHandler({
@@ -1293,10 +1283,9 @@ function requireEnv(name: string, why: string): string {
 
 function buildDeprovisionCustomerHandler(
   db: Firestore,
-  secret: string,
+  privateKey: string,
   logFn: (msg: string) => void,
   kubeOps: Pick<KubeOps, "readAvailableReplicas">,
-  readGatewayAuthTokenForId: (gatewayId: string) => Promise<string>,
 ) {
   const cleanupEnv = (name: string) =>
     requireEnv(name, "deprovision-customer cloud cleanup requires it");
@@ -1325,10 +1314,8 @@ function buildDeprovisionCustomerHandler(
           namespace: NAMESPACE,
           name: deploymentNameForInstance(gatewayId),
         }),
-      fleetSecret: secret,
-      readGatewayAuthToken: readGatewayAuthTokenForId,
-      unmountRpc: ({ gatewayId, slug, secret: rpcSecret }) =>
-        callUnmountRpc(db, { secret: rpcSecret, gatewayId, slug, log: logFn }),
+      unmountRpc: ({ gatewayId, slug }) =>
+        callUnmountRpc(db, { privateKey, gatewayId, slug, log: logFn }),
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
       now: () => Date.now(),
       log: logFn,
@@ -1396,7 +1383,7 @@ scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
 export async function callUnmountRpc(
   db: Firestore,
   opts: {
-    secret: string;
+    privateKey: string;
     gatewayId: string;
     slug: string;
     log: (msg: string) => void;
@@ -1405,7 +1392,7 @@ export async function callUnmountRpc(
   },
 ): Promise<void> {
   const {
-    secret,
+    privateKey,
     gatewayId,
     slug,
     log,
@@ -1416,7 +1403,7 @@ export async function callUnmountRpc(
   const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
   const migrationId = `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const body = JSON.stringify({ migrationId, slug });
-  const signature = signFleetRequest(secret, migrationId, body);
+  const signature = signFleetRequest(privateKey, migrationId, body);
   const controller = new AbortController();
   let didTimeout = false;
   const timer = setTimeout(() => {

@@ -267,6 +267,11 @@ spec:
             {{- end }}
             - name: FLEET_CONTROLLER_PORT
               value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
+            - name: FLEET_CONTROLLER_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-fleet-controller
+                  key: public-key
             - name: SITE_BUILD_API_PORT
               value: {{ .Values.env.siteBuildApiPort | default "3004" | quote }}
             {{- if .Values.preview.host }}

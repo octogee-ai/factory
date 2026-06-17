@@ -20,7 +20,7 @@ import {
   MIGRATION_SLUG_HEADER,
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername } from "../../shared/types/identity.js";
-import { signFleetRequest, verifyFleetRequest } from "./fleet-signature.js";
+import { verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { removeCustomerFromGateway } from "./customer-lifecycle.js";
 import {
@@ -29,7 +29,7 @@ import {
 } from "./migration-activation-manifest.js";
 
 export interface MigrationHandlerDeps {
-  secret: string;
+  publicKey: string;
   gatewayId: string;
   adapter: CustomerLifecycleAdapter;
   
@@ -53,7 +53,7 @@ function rejectInvalidSlug(slug: string, res: Response): boolean {
 function parseAndVerifyJsonBody<T extends MigrationRequestBody>(
   req: Request,
   res: Response,
-  secret: string,
+  publicKey: string,
   log: (msg: string) => void,
 ): T | null {
   const rawBody: string = (req as unknown as { rawBody?: string }).rawBody ?? "";
@@ -72,7 +72,7 @@ function parseAndVerifyJsonBody<T extends MigrationRequestBody>(
 
   const sigHeader = req.header(SIGNATURE_HEADER);
 
-const sigValid = verifyFleetRequest(secret, body.migrationId, rawBody, sigHeader ?? undefined);
+const sigValid = verifyFleetRequest(publicKey, body.migrationId, rawBody, sigHeader ?? undefined);
   if (!sigValid) {
     log(`[migration-http] ⚠ bad signature migrationId=${body.migrationId} slug=${body.slug}`);
     res.status(401).json({ error: "invalid signature" });
@@ -85,10 +85,10 @@ function verifyHeaderSignature(
   migrationId: string,
   slug: string,
   sigHeader: string | undefined,
-  secret: string,
+  publicKey: string,
 ): boolean {
 
-return verifyFleetRequest(secret, migrationId, slug, sigHeader);
+return verifyFleetRequest(publicKey, migrationId, slug, sigHeader);
 }
 
 function tarArgsForSources(sources: Array<{ cwd: string; path: string }>): string[] {
@@ -135,7 +135,7 @@ function spawnTarStream(sources: Array<{ cwd: string; path: string }>): TarStrea
 export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<QuiesceRequestBody>(req, res, deps.secret, log);
+    const body = parseAndVerifyJsonBody<QuiesceRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
 
     try {
@@ -161,7 +161,7 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
 export function createExportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps.secret, log);
+    const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
 
     try {
@@ -242,7 +242,7 @@ function resolveTargetImportUrl(targetUrl: string, targetGatewayId: string): str
 function validatePushStateBody(
   body: PushStateRequestBody,
   res: Response,
-): { targetGatewayId: string; importUrl: string; targetImportSignature?: string } | null {
+): { targetGatewayId: string; importUrl: string; targetImportSignature: string } | null {
   if (typeof body.targetGatewayId !== "string" || body.targetGatewayId.length === 0) {
     res.status(400).json({ error: "missing targetGatewayId" });
     return null;
@@ -255,13 +255,15 @@ function validatePushStateBody(
     res.status(400).json({ error: "missing targetUrl" });
     return null;
   }
+  if (typeof body.targetImportSignature !== "string" || body.targetImportSignature.length === 0) {
+    res.status(400).json({ error: "missing targetImportSignature" });
+    return null;
+  }
   try {
     return {
       targetGatewayId: body.targetGatewayId,
       importUrl: resolveTargetImportUrl(body.targetUrl, body.targetGatewayId),
-      targetImportSignature: typeof body.targetImportSignature === "string" && body.targetImportSignature.length > 0
-        ? body.targetImportSignature
-        : undefined,
+      targetImportSignature: body.targetImportSignature,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -358,7 +360,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const timeoutMs = deps.pushStateTimeoutMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<PushStateRequestBody>(req, res, deps.secret, log);
+    const body = parseAndVerifyJsonBody<PushStateRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
     const target = validatePushStateBody(body, res);
     if (!target) return;
@@ -390,15 +392,13 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
 
       tar = spawnTarStream(sources);
 
-      const importSig =
-        target.targetImportSignature ?? signFleetRequest(deps.secret, body.migrationId, body.slug);
       const importRes = await fetchImpl(
         target.importUrl,
         {
           method: "POST",
           headers: {
             "content-type": "application/x-tar",
-            [SIGNATURE_HEADER]: importSig,
+            [SIGNATURE_HEADER]: target.targetImportSignature,
             [MIGRATION_ID_HEADER]: body.migrationId,
             [MIGRATION_SLUG_HEADER]: body.slug,
           },
@@ -515,7 +515,7 @@ function validateImportRequest(
   }
   if (rejectInvalidSlug(slug, res)) return null;
   const sigHeader = req.header(SIGNATURE_HEADER);
-  if (!verifyHeaderSignature(migrationId, slug, sigHeader, deps.secret)) {
+  if (!verifyHeaderSignature(migrationId, slug, sigHeader, deps.publicKey)) {
     log(`[migration-http] ⚠ bad signature on import migrationId=${migrationId} slug=${slug}`);
     res.status(401).json({ error: "invalid signature" });
     return null;
@@ -687,7 +687,7 @@ if (entry.split("/").includes("..")) {
 export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<UnmountRequestBody>(req, res, deps.secret, log);
+    const body = parseAndVerifyJsonBody<UnmountRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
 
     try {

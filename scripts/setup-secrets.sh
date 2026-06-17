@@ -350,76 +350,60 @@ if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
 fi
 ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
 
-# ── 9b. Fleet controller HMAC secret (glm-controller ↔ gateway) ──────────
-# glm-controller signs the in-cluster migration RPCs with this key; the
-# gateway verifies on receipt. Secret Manager is the durable store:
-#   - K8s Secret `octogee-fleet-controller/secret` feeds glm-controller +
-#     the gateway pod (this script syncs it from SM).
-# If SM and K8s diverge the gateway silently 401s every migration RPC, so
-# both must hold the same value. Rotating = new SM version + re-run this
-# script + rollout the gateway/controller pods. (Cloud Functions no longer
-# use this secret — the restore-customer Cloud Tasks path was retired.)
-info "octogee-fleet-controller (fleet controller HMAC)"
-# Detect + repair trailing-whitespace drift in SM.
-#
-# Manual stdin input (or `gcloud secrets versions add` from a heredoc) can
-# persist a trailing newline into the stored value. glm-controller reads it
-# via its K8s Secret env and signs with 65 bytes; the gateway verifies with
-# 64 (bash command substitution strips the newline on the gateway side),
-# HMAC mismatch, every migration RPC 401s. Observed on TEST and again on
-# PROD 2026-04-24.
-#
-# IMPORTANT: bash $(...) command substitution ALWAYS strips trailing
-# newlines. The old detection did `FLEET_RAW_BYTES=$(gcloud ...)` and
-# compared against the stripped value — both sides were pre-stripped, so
-# the comparison was always equal and no clean version was ever written.
-# To actually see the raw bytes we must write them to a file.
-FLEET_RAW_TMP=$(mktemp)
-gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET \
-  --project="$FIREBASE_PROJECT" > "$FLEET_RAW_TMP" 2>/dev/null || true
-FLEET_RAW_LEN=$(wc -c < "$FLEET_RAW_TMP" | tr -d ' ')
-FLEET_CONTROLLER_SECRET=$(tr -d '[:space:]' < "$FLEET_RAW_TMP")
-FLEET_CLEAN_LEN=${#FLEET_CONTROLLER_SECRET}
-rm -f "$FLEET_RAW_TMP"
+# ── 9b. Fleet controller signing keypair (glm-controller ↔ gateway) ──────
+# glm-controller signs the in-cluster migration RPCs with an Ed25519 private
+# key; gateway pods verify with only the public key. Secret Manager is the
+# durable store and the K8s Secret fans the split material into the right pods:
+#   - octogee-fleet-controller/private-key → glm-controller only
+#   - octogee-fleet-controller/public-key  → gateway pods only
+# Rotating = new SM private-key version + derived public-key version + re-run
+# this script + rollout the gateway/controller pods.
+info "octogee-fleet-controller (fleet controller Ed25519 keypair)"
 
-if [[ "$FLEET_CLEAN_LEN" -gt 0 && "$FLEET_RAW_LEN" != "$FLEET_CLEAN_LEN" ]]; then
-  info "  SM FLEET_CONTROLLER_SECRET had trailing whitespace (${FLEET_RAW_LEN}→${FLEET_CLEAN_LEN} bytes) — rewriting clean version"
-  echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add FLEET_CONTROLLER_SECRET \
-    --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>&1 | tail -1 | sed 's/^/    /'
-fi
-if [[ -z "$FLEET_CONTROLLER_SECRET" ]]; then
-  # Not in SM — try to recover from existing K8s cache
-  EXISTING_FCS=$(ksecret_key octogee-fleet-controller secret)
-  if [[ -n "$EXISTING_FCS" ]]; then
-    info "  Reusing existing FLEET_CONTROLLER_SECRET from K8s, back-filling Secret Manager"
-    FLEET_CONTROLLER_SECRET="$EXISTING_FCS"
-    echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets create "FLEET_CONTROLLER_SECRET" \
-      --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null || \
-    echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add "FLEET_CONTROLLER_SECRET" \
-      --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
+persist_sm_file() {
+  local name="$1" file="$2"
+  if gcloud secrets describe "$name" --project="$FIREBASE_PROJECT" >/dev/null 2>&1; then
+    gcloud secrets versions add "$name" --data-file="$file" --project="$FIREBASE_PROJECT" --quiet >/dev/null
+    ok "  Updated SM secret: $name"
   else
-    # First install — generate and persist to SM
-    FLEET_CONTROLLER_SECRET=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9+/' | head -c 64)
-    info "  First install — generating FLEET_CONTROLLER_SECRET, saving to Secret Manager ($FIREBASE_PROJECT)"
-    if echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets create "FLEET_CONTROLLER_SECRET" \
-         --data-file=- --project="$FIREBASE_PROJECT" \
-         --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
-      ok "  Created SM secret: FLEET_CONTROLLER_SECRET"
-    elif echo -n "$FLEET_CONTROLLER_SECRET" | gcloud secrets versions add "FLEET_CONTROLLER_SECRET" \
-         --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
-      ok "  Updated SM secret: FLEET_CONTROLLER_SECRET"
-    else
-      warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
-    fi
+    gcloud secrets create "$name" --data-file="$file" --project="$FIREBASE_PROJECT" \
+      --replication-policy=user-managed --locations=us-central1 --quiet >/dev/null
+    ok "  Created SM secret: $name"
   fi
+}
+
+FLEET_PRIVATE_TMP=$(mktemp)
+FLEET_PUBLIC_TMP=$(mktemp)
+FLEET_DERIVED_PUBLIC_TMP=$(mktemp)
+gcloud secrets versions access latest --secret=FLEET_CONTROLLER_PRIVATE_KEY \
+  --project="$FIREBASE_PROJECT" > "$FLEET_PRIVATE_TMP" 2>/dev/null || true
+gcloud secrets versions access latest --secret=FLEET_CONTROLLER_PUBLIC_KEY \
+  --project="$FIREBASE_PROJECT" > "$FLEET_PUBLIC_TMP" 2>/dev/null || true
+
+if [[ ! -s "$FLEET_PRIVATE_TMP" ]]; then
+  info "  First install — generating FLEET_CONTROLLER_PRIVATE_KEY, saving to Secret Manager ($FIREBASE_PROJECT)"
+  openssl genpkey -algorithm Ed25519 -out "$FLEET_PRIVATE_TMP"
+  persist_sm_file "FLEET_CONTROLLER_PRIVATE_KEY" "$FLEET_PRIVATE_TMP"
 fi
-# No runtime service account reads this from Secret Manager: glm-controller
-# and the gateway read the synced K8s Secret below, and Cloud Functions no
-# longer use it (the restore-customer Cloud Tasks path is gone). SM is only
-# the durable store this script reads/writes with operator creds — so no SM
-# IAM bindings are needed.
-ksecret octogee-fleet-controller --from-literal=secret="$FLEET_CONTROLLER_SECRET"
+
+if ! openssl pkey -in "$FLEET_PRIVATE_TMP" -noout >/dev/null 2>&1; then
+  rm -f "$FLEET_PRIVATE_TMP" "$FLEET_PUBLIC_TMP" "$FLEET_DERIVED_PUBLIC_TMP"
+  fail "FLEET_CONTROLLER_PRIVATE_KEY is not a valid private key"
+fi
+
+openssl pkey -in "$FLEET_PRIVATE_TMP" -pubout -out "$FLEET_DERIVED_PUBLIC_TMP" >/dev/null 2>&1
+if [[ ! -s "$FLEET_PUBLIC_TMP" ]] || ! cmp -s "$FLEET_PUBLIC_TMP" "$FLEET_DERIVED_PUBLIC_TMP"; then
+  info "  Deriving FLEET_CONTROLLER_PUBLIC_KEY from the private key"
+  cp "$FLEET_DERIVED_PUBLIC_TMP" "$FLEET_PUBLIC_TMP"
+  persist_sm_file "FLEET_CONTROLLER_PUBLIC_KEY" "$FLEET_PUBLIC_TMP"
+fi
+
+# No runtime service account reads these from Secret Manager. SM is only the
+# durable store this script reads/writes with operator creds.
+ksecret octogee-fleet-controller \
+  --from-file=private-key="$FLEET_PRIVATE_TMP" \
+  --from-file=public-key="$FLEET_PUBLIC_TMP"
+rm -f "$FLEET_PRIVATE_TMP" "$FLEET_PUBLIC_TMP" "$FLEET_DERIVED_PUBLIC_TMP"
 
 # ── 9c. Gateway auth token secret shell + IAM ────────────────────────────
 # Legacy compatibility shell for the old Secret Manager OpenClaw-token path.

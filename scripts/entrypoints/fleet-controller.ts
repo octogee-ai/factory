@@ -34,9 +34,9 @@ async function main(): Promise<void> {
     execFile: execFileSync,
     binaryPath: "/usr/local/bin/openclaw",
   });
-  const secret = process.env.FLEET_CONTROLLER_SECRET || process.env.OPENCLAW_GATEWAY_TOKEN || "";
-  if (!secret) {
-    throw new Error("fleet controller secret unavailable: expected FLEET_CONTROLLER_SECRET or OPENCLAW_GATEWAY_TOKEN");
+  const publicKey = process.env.FLEET_CONTROLLER_PUBLIC_KEY || "";
+  if (!publicKey) {
+    throw new Error("fleet controller public key unavailable: expected FLEET_CONTROLLER_PUBLIC_KEY");
   }
   const operator = isOperatorGateway();
   const brokerClient = operator ? null : createFleetBrokerClient(MY_GATEWAY_ID);
@@ -54,7 +54,7 @@ async function main(): Promise<void> {
     gatewayId: MY_GATEWAY_ID,
     log,
     port: parseInt(process.env.FLEET_CONTROLLER_PORT ?? "3003", 10),
-    secret,
+    publicKey,
     version: process.env.BUILD_SHA ?? "unknown",
     openclawVersion,
     openclawDir: OPENCLAW_DIR,

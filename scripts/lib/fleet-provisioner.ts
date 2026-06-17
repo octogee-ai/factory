@@ -63,7 +63,7 @@ export interface StartFleetOptions {
   gatewayId: string;
   log: (msg: string) => void;
   port: number;
-  secret: string;
+  publicKey: string;
   version: string;
   openclawVersion: string;
   adminMmUserId?: string;
@@ -507,7 +507,7 @@ const waitForGatewayReady = async (): Promise<void> => {
   };
 
   const migrationDeps = {
-    secret: opts.secret,
+    publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
     adapter: wrappedAdapter,
     log: opts.log,

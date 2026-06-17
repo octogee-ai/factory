@@ -477,64 +477,66 @@ else
   done
 fi
 
-# ── 5f. Fleet-control HMAC secret ────────────────────────────────────────────
+# ── 5f. Fleet-control signing keypair ───────────────────────────────────────
 # The fleet-control LB was retired (FLEET-CONTROL-NEG-SHED): migration now runs
 # inside glm-controller over internal ClusterIP DNS — no fleet host / static IP /
-# DNS to check. The HMAC secret stays: the controller signs the in-cluster
-# migration RPCs and the gateway verifies them.
+# DNS to check. glm-controller signs the in-cluster migration RPCs with an
+# Ed25519 private key; gateway pods verify with only the public key.
 # Per-env:
-#   - K8s Secret octogee-fleet-controller matches Secret Manager byte-for-byte
-#     (SM is the durable store; glm-controller reads the synced K8s Secret —
-#     no runtime SA reads SM, so no SM IAM binding to check)
+#   - K8s Secret octogee-fleet-controller/private-key matches SM
+#     FLEET_CONTROLLER_PRIVATE_KEY
+#   - K8s Secret octogee-fleet-controller/public-key matches SM
+#     FLEET_CONTROLLER_PUBLIC_KEY and derives from the private key
 set_section infra
-header "5f. Fleet-control HMAC secret"
+header "5f. Fleet-control signing keypair"
 
 if [[ "$NAMESPACE" != "octogee" && "$NAMESPACE" != "octogee-test" ]]; then
   warn "Unknown namespace '$NAMESPACE' — skipping fleet-control secret checks"
 else
 
-  # Fleet controller HMAC secret — exists in Secret Manager (Firebase
-  # project) AND K8s. Both sides must resolve to the SAME BYTES or the
-  # gateway silently 401s every migration RPC.
-  #
-  # IMPORTANT: read RAW bytes (write to file, use wc -c on the file) —
-  # not `$(gcloud ...)` command substitution, which strips trailing
-  # whitespace and hides byte-length drift. Observed on TEST: SM had 65
-  # bytes (trailing newline from `firebase functions:secrets:set` stdin),
-  # K8s had 64 bytes (command substitution stripped the newline on
-  # write); SHA-256 matched after trimming but the function runtime read
-  # the raw 65 and the gateway read the raw 64. Every HMAC mismatched.
-  tmp_k8s=$(mktemp) && tmp_sm=$(mktemp)
-  kubectl get secret octogee-fleet-controller -n "$NAMESPACE" -o jsonpath='{.data.secret}' 2>/dev/null | base64 -d > "$tmp_k8s" 2>/dev/null || true
-  gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" > "$tmp_sm" 2>/dev/null || true
-  K8S_LEN=$(wc -c < "$tmp_k8s" | tr -d ' ')
-  SM_LEN=$(wc -c < "$tmp_sm" | tr -d ' ')
-  K8S_HASH=$(shasum -a 256 < "$tmp_k8s" | awk '{print $1}' | head -c 12)
-  SM_HASH=$(shasum -a 256 < "$tmp_sm" | awk '{print $1}' | head -c 12)
-  rm -f "$tmp_k8s" "$tmp_sm"
-  if [[ "$K8S_LEN" == "0" ]]; then
-    fail "K8s Secret octogee-fleet-controller missing in $NAMESPACE — gateway cannot verify HMACs"
+  tmp_k8s_priv=$(mktemp) && tmp_k8s_pub=$(mktemp) && tmp_sm_priv=$(mktemp) && tmp_sm_pub=$(mktemp) && tmp_derived_pub=$(mktemp)
+  kubectl get secret octogee-fleet-controller -n "$NAMESPACE" -o go-template='{{index .data "private-key"}}' 2>/dev/null | base64 -d > "$tmp_k8s_priv" 2>/dev/null || true
+  kubectl get secret octogee-fleet-controller -n "$NAMESPACE" -o go-template='{{index .data "public-key"}}' 2>/dev/null | base64 -d > "$tmp_k8s_pub" 2>/dev/null || true
+  gcloud secrets versions access latest --secret=FLEET_CONTROLLER_PRIVATE_KEY --project="$FIREBASE_PROJECT" > "$tmp_sm_priv" 2>/dev/null || true
+  gcloud secrets versions access latest --secret=FLEET_CONTROLLER_PUBLIC_KEY --project="$FIREBASE_PROJECT" > "$tmp_sm_pub" 2>/dev/null || true
+  K8S_PRIV_LEN=$(wc -c < "$tmp_k8s_priv" | tr -d ' ')
+  K8S_PUB_LEN=$(wc -c < "$tmp_k8s_pub" | tr -d ' ')
+  SM_PRIV_LEN=$(wc -c < "$tmp_sm_priv" | tr -d ' ')
+  SM_PUB_LEN=$(wc -c < "$tmp_sm_pub" | tr -d ' ')
+  K8S_PRIV_HASH=$(shasum -a 256 < "$tmp_k8s_priv" | awk '{print $1}' | head -c 12)
+  K8S_PUB_HASH=$(shasum -a 256 < "$tmp_k8s_pub" | awk '{print $1}' | head -c 12)
+  SM_PRIV_HASH=$(shasum -a 256 < "$tmp_sm_priv" | awk '{print $1}' | head -c 12)
+  SM_PUB_HASH=$(shasum -a 256 < "$tmp_sm_pub" | awk '{print $1}' | head -c 12)
+
+  if [[ "$K8S_PRIV_LEN" == "0" || "$K8S_PUB_LEN" == "0" ]]; then
+    fail "K8s Secret octogee-fleet-controller missing private-key/public-key in $NAMESPACE — migration RPC auth will fail"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
     fi
-  elif [[ "$SM_LEN" == "0" ]]; then
-    fail "Secret Manager FLEET_CONTROLLER_SECRET missing in $FIREBASE_PROJECT — gateway K8s Secret cannot be synced from SM"
+  elif [[ "$SM_PRIV_LEN" == "0" || "$SM_PUB_LEN" == "0" ]]; then
+    fail "Secret Manager fleet controller keypair missing in $FIREBASE_PROJECT — K8s Secret cannot be synced from SM"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (back-fills SM from K8s)"
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
     fi
-  elif [[ "$K8S_LEN" != "$SM_LEN" ]]; then
-    fail "FLEET_CONTROLLER_SECRET BYTE-LENGTH drift: K8s=$K8S_LEN vs SM=$SM_LEN — usually trailing-whitespace in SM. Every migration RPC will 401"
+  elif ! openssl pkey -in "$tmp_sm_priv" -pubout -out "$tmp_derived_pub" >/dev/null 2>&1; then
+    fail "FLEET_CONTROLLER_PRIVATE_KEY is not a valid private key"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (detects + writes clean version)"
+      echo -e "  ${YELLOW}FIX:${NC} rotate FLEET_CONTROLLER_PRIVATE_KEY, then ./scripts/setup-secrets.sh --env=$ENV"
     fi
-  elif [[ "$K8S_HASH" != "$SM_HASH" ]]; then
-    fail "FLEET_CONTROLLER_SECRET value mismatch: K8s=$K8S_HASH... vs SM=$SM_HASH... — every migration RPC will 401"
+  elif ! cmp -s "$tmp_sm_pub" "$tmp_derived_pub"; then
+    fail "FLEET_CONTROLLER_PUBLIC_KEY does not derive from FLEET_CONTROLLER_PRIVATE_KEY"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (re-derives public key)"
+    fi
+  elif [[ "$K8S_PRIV_HASH" != "$SM_PRIV_HASH" || "$K8S_PUB_HASH" != "$SM_PUB_HASH" ]]; then
+    fail "octogee-fleet-controller keypair drift: K8s private=$K8S_PRIV_HASH public=$K8S_PUB_HASH vs SM private=$SM_PRIV_HASH public=$SM_PUB_HASH"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (SM is source of truth; rewrites K8s)"
     fi
   else
-    pass "FLEET_CONTROLLER_SECRET matches across K8s + Secret Manager ($K8S_LEN bytes, $K8S_HASH...)"
+    pass "Fleet controller keypair synced (private $K8S_PRIV_LEN bytes, public $K8S_PUB_LEN bytes, public=$K8S_PUB_HASH...)"
   fi
+  rm -f "$tmp_k8s_priv" "$tmp_k8s_pub" "$tmp_sm_priv" "$tmp_sm_pub" "$tmp_derived_pub"
 
 fi
 

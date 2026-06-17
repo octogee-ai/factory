@@ -78,7 +78,7 @@ migrationId: string;
 export interface PushStateRequestBody extends MigrationRequestBody {
   targetGatewayId: string;
   targetUrl: string;
-  targetImportSignature?: string;
+  targetImportSignature: string;
   includeActivationManifest?: boolean;
 }
 

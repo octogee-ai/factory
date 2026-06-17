@@ -24,13 +24,15 @@ import {
   type PushStateRequestBody,
 } from "../../shared/types/fleet-controller.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const spawnMock = vi.fn();
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-const SECRET = "test-secret";
+const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
+const PUBLIC_KEY = FLEET_KEY_PAIR.publicKey;
 const GATEWAY_ID = "gw-a";
 
 const SAMPLE_QUIESCE: QuiesceRequestBody = {
@@ -54,6 +56,7 @@ const SAMPLE_PUSH: PushStateRequestBody = {
   slug: "chris",
   targetGatewayId: "gw-b",
   targetUrl: "http://target-gateway:18789",
+  targetImportSignature: signFleetRequest(PRIVATE_KEY, "mig-1", "chris"),
 };
 
 function mkRequest<T>(body: T, opts: { signature?: string; rawBody?: string } = {}): Request {
@@ -181,7 +184,7 @@ hasCustomerDir: vi.fn(() => true),
 
 function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandlerDeps {
   return {
-    secret: SECRET,
+    publicKey: PUBLIC_KEY,
     gatewayId: GATEWAY_ID,
     adapter: mkAdapter(),
     log: vi.fn(),
@@ -252,7 +255,7 @@ describe("createQuiesceHandler", () => {
   it("rejects missing migrationId/slug with 400", async () => {
     const handler = createQuiesceHandler(mkDeps());
     const req = mkRequest({} as QuiesceRequestBody, {
-      signature: signFleetRequest(SECRET, "x", "{}"),
+      signature: signFleetRequest(PRIVATE_KEY, "x", "{}"),
     });
     const { res, getStatus } = mkResponse();
     await handler(req, res, vi.fn());
@@ -263,7 +266,7 @@ describe("createQuiesceHandler", () => {
     const handler = createQuiesceHandler(mkDeps());
     const body: QuiesceRequestBody = { migrationId: "m", slug: "../etc" };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(SECRET, body.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -275,7 +278,7 @@ describe("createQuiesceHandler", () => {
     const adapter = mkAdapter();
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_QUIESCE);
-    const sig = signFleetRequest(SECRET, SAMPLE_QUIESCE.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_QUIESCE.migrationId, rawBody);
     const req = mkRequest(SAMPLE_QUIESCE, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -295,7 +298,7 @@ describe("createQuiesceHandler", () => {
     });
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_QUIESCE);
-    const sig = signFleetRequest(SECRET, SAMPLE_QUIESCE.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_QUIESCE.migrationId, rawBody);
     const req = mkRequest(SAMPLE_QUIESCE, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -308,7 +311,7 @@ describe("createQuiesceHandler", () => {
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const body: QuiesceRequestBody = { migrationId: "m", slug: "chris" };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(SECRET, body.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res } = mkResponse();
     await handler(req, res, vi.fn());
@@ -323,7 +326,7 @@ describe("createQuiesceHandler", () => {
     });
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_QUIESCE);
-    const sig = signFleetRequest(SECRET, SAMPLE_QUIESCE.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_QUIESCE.migrationId, rawBody);
     const req = mkRequest(SAMPLE_QUIESCE, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -347,7 +350,7 @@ describe("createUnmountHandler", () => {
     });
     const handler = createUnmountHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
-    const sig = signFleetRequest(SECRET, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -364,7 +367,7 @@ describe("createUnmountHandler", () => {
 const adapter = mkAdapter();
     const handler = createUnmountHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
-    const sig = signFleetRequest(SECRET, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -390,7 +393,7 @@ describe("createExportHandler", () => {
     });
     const handler = createExportHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_EXPORT);
-    const sig = signFleetRequest(SECRET, SAMPLE_EXPORT.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_EXPORT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_EXPORT, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -416,7 +419,7 @@ const fakeChild = new EventEmitter() as EventEmitter & {
 
     const handler = createExportHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_EXPORT);
-    const sig = signFleetRequest(SECRET, SAMPLE_EXPORT.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_EXPORT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_EXPORT, { signature: sig });
     const { res, getStatus, getHeaders } = mkResponse();
     await handler(req, res, vi.fn());
@@ -450,7 +453,7 @@ describe("createPushStateHandler", () => {
       expect(String(input)).toBe("http://target-gateway:18789/import/gw-b");
       const headers = init?.headers as Record<string, string>;
       expect(headers["content-type"]).toBe("application/x-tar");
-      expect(headers[SIGNATURE_HEADER]).toBe(signFleetRequest(SECRET, "mig-1", "chris"));
+      expect(headers[SIGNATURE_HEADER]).toBe(signFleetRequest(PRIVATE_KEY, "mig-1", "chris"));
       expect(headers[MIGRATION_ID_HEADER]).toBe("mig-1");
       expect(headers[MIGRATION_SLUG_HEADER]).toBe("chris");
       expect(init?.body).toBe(fakeChild.stdout);
@@ -463,7 +466,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(SECRET, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -511,7 +514,7 @@ describe("createPushStateHandler", () => {
       targetImportSignature: "target-import-sig",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(SECRET, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
     const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus } = mkResponse();
@@ -528,7 +531,7 @@ describe("createPushStateHandler", () => {
   it("rejects a missing targetGatewayId before spawning tar", async () => {
     const body = { migrationId: "mig-1", slug: "chris", targetUrl: "http://target" };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(SECRET, "mig-1", rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", rawBody);
     const handler = createPushStateHandler(mkDeps());
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -536,6 +539,25 @@ describe("createPushStateHandler", () => {
 
     expect(getStatus()).toBe(400);
     expect(getBody()).toEqual({ error: "missing targetGatewayId" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing controller-signed target import signature before spawning tar", async () => {
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      targetGatewayId: "gw-b",
+      targetUrl: "http://target",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", rawBody);
+    const handler = createPushStateHandler(mkDeps());
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toEqual({ error: "missing targetImportSignature" });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -548,7 +570,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(SECRET, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -579,7 +601,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(SECRET, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -603,7 +625,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(SECRET, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -638,7 +660,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(SECRET, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
 
@@ -672,7 +694,7 @@ describe("createPushStateHandler", () => {
       mkDeps({ fetch: fetchMock, pushStateTimeoutMs: 5 }),
     );
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(SECRET, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -726,7 +748,7 @@ const adapter = mkAdapter();
     spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(SECRET, "mig-1", "chris");
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",
@@ -762,7 +784,7 @@ const adapter = mkAdapter();
     spawnMock.mockReturnValueOnce(fakeListChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(SECRET, "mig-1", "chris");
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
     const req = mkImportRequest({ migrationId: "mig-1", slug: "chris", signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -778,7 +800,7 @@ const adapter = mkAdapter();
     const handler = createImportHandler(
       mkDeps({ adapter, getMountedCustomers: () => ["chris"] }),
     );
-    const sig = signFleetRequest(SECRET, "mig-1", "chris");
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",
@@ -825,7 +847,7 @@ const adapter = mkAdapter();
     spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(SECRET, "mig-1", "chris");
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
     const req = mkImportRequest({ migrationId: "mig-1", slug: "chris", signature: sig });
     const { res, getStatus } = mkResponse();
 
@@ -846,7 +868,7 @@ await activateStarted;
     spawnMock.mockReturnValueOnce(fakeChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(SECRET, "mig-1", "chris");
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",

@@ -51,11 +51,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: FLEET_CONTROLLER_SECRET
+            - name: FLEET_CONTROLLER_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
                   name: octogee-fleet-controller
-                  key: secret
+                  key: private-key
             # Gitea + Mattermost admin credentials for cloud-side
             # customer cleanup (deprovision-customer op handler). Same
             # secrets the gateway pod uses; glm-controller now needs

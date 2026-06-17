@@ -1,34 +1,57 @@
-import { createHmac, timingSafeEqual } from "crypto";
+import {
+  createPrivateKey,
+  createPublicKey,
+  sign as cryptoSign,
+  verify as cryptoVerify,
+} from "node:crypto";
 
 export function canonicalPayload(jobId: string, rawBody: string): string {
   return `${jobId}\n${rawBody}`;
 }
 
 export function signFleetRequest(
-  secret: string,
+  privateKeyPem: string,
   jobId: string,
   rawBody: string,
 ): string {
-  return createHmac("sha256", secret)
-    .update(canonicalPayload(jobId, rawBody))
-    .digest("hex");
+  const payload = Buffer.from(canonicalPayload(jobId, rawBody), "utf8");
+  return cryptoSign(null, payload, createPrivateKey(normalizeKeyMaterial(privateKeyPem)))
+    .toString("base64url");
 }
 
 export function verifyFleetRequest(
-  secret: string,
+  publicKeyPem: string,
   jobId: string,
   rawBody: string,
   headerValue: string | undefined,
 ): boolean {
   if (!headerValue) return false;
-  const expected = signFleetRequest(secret, jobId, rawBody);
-  if (expected.length !== headerValue.length) return false;
   try {
-    return timingSafeEqual(
-      Buffer.from(expected, "utf8"),
-      Buffer.from(headerValue, "utf8"),
+    const signature = Buffer.from(headerValue, "base64url");
+    if (signature.length !== 64) return false;
+    return cryptoVerify(
+      null,
+      Buffer.from(canonicalPayload(jobId, rawBody), "utf8"),
+      createPublicKey(normalizeKeyMaterial(publicKeyPem)),
+      signature,
     );
   } catch {
     return false;
   }
+}
+
+function normalizeKeyMaterial(raw: string): string {
+  const value = raw.trim().replace(/\\n/g, "\n");
+  if (value.includes("-----BEGIN ")) return value;
+
+  for (const encoding of ["base64url", "base64"] as const) {
+    try {
+      const decoded = Buffer.from(value, encoding).toString("utf8").trim().replace(/\\n/g, "\n");
+      if (decoded.includes("-----BEGIN ")) return decoded;
+    } catch {
+      // Try the next encoding.
+    }
+  }
+
+  return value;
 }

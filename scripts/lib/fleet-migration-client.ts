@@ -18,8 +18,7 @@ export interface MigrationClientTimeouts {
 }
 
 export interface MigrationClientDeps {
-  
-  secret: string;
+  privateKey: string;
   
   resolveGatewayUrl: (gatewayId: string) => string;
   
@@ -29,7 +28,6 @@ export interface MigrationClientDeps {
   
   timeouts?: MigrationClientTimeouts;
 
-  resolveRequestSecret?: (gatewayId: string) => Promise<string>;
 }
 
 export interface MigrationClient {
@@ -94,10 +92,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     timeoutMs: number,
   ): Promise<Resp> => {
     const rawBody = JSON.stringify(body);
-    const requestSecret = deps.resolveRequestSecret
-      ? await deps.resolveRequestSecret(gatewayId)
-      : deps.secret;
-    const signature = signFleetRequest(requestSecret, migrationId, rawBody);
+    const signature = signFleetRequest(deps.privateKey, migrationId, rawBody);
     const url = `${deps.resolveGatewayUrl(gatewayId)}${path}`;
     const res = await fetchWithTimeout(
       path,
@@ -153,10 +148,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
 
     async transferState({ migrationId, fromGatewayId, toGatewayId, slug, includeActivationManifest }) {
       const targetUrl = deps.resolveGatewayUrl(toGatewayId);
-      const targetSecret = deps.resolveRequestSecret
-        ? await deps.resolveRequestSecret(toGatewayId)
-        : deps.secret;
-      const targetImportSignature = signFleetRequest(targetSecret, migrationId, slug);
+      const targetImportSignature = signFleetRequest(deps.privateKey, migrationId, slug);
       const parsed = await postSignedJson<ImportResponse>(
         fromGatewayId,
         `/push-state/${fromGatewayId}`,

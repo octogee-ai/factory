@@ -683,6 +683,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
 
     for (const name of [
       "FLEET_CONTROLLER_SECRET",
+      "FLEET_CONTROLLER_PRIVATE_KEY",
       "GIT_API_TOKEN",
       "BRAVE_API_KEY",
       "MM_BOT_TOKEN",
@@ -700,7 +701,12 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     ]) {
       expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
     }
+    expect(gw).toMatch(
+      /name:\s*FLEET_CONTROLLER_PUBLIC_KEY[\s\S]*?secretKeyRef:[\s\S]*?name:\s*octogee-fleet-controller[\s\S]*?key:\s*public-key/,
+    );
     for (const name of [
+      "FLEET_CONTROLLER_PUBLIC_KEY",
+      "FLEET_CONTROLLER_PRIVATE_KEY",
       "MM_ADMIN_PAT",
       "STRIPE_SECRET_KEY",
       "MM_ADMIN_TOKEN",
@@ -738,6 +744,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     const gw = containerBlock(dep ?? "", "gateway");
     for (const name of [
       "FLEET_CONTROLLER_SECRET",
+      "FLEET_CONTROLLER_PRIVATE_KEY",
       "GIT_API_TOKEN",
       "BRAVE_API_KEY",
       "MM_BOT_TOKEN",
@@ -752,8 +759,13 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     ]) {
       expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
     }
+    expect(gw).toMatch(
+      /name:\s*FLEET_CONTROLLER_PUBLIC_KEY[\s\S]*?secretKeyRef:[\s\S]*?name:\s*octogee-fleet-controller[\s\S]*?key:\s*public-key/,
+    );
     const edge = containerBlock(dep ?? "", "gateway-edge");
     for (const name of [
+      "FLEET_CONTROLLER_PUBLIC_KEY",
+      "FLEET_CONTROLLER_PRIVATE_KEY",
       "MM_ADMIN_PAT",
       "STRIPE_SECRET_KEY",
       "MM_ADMIN_TOKEN",

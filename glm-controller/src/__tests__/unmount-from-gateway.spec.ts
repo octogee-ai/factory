@@ -12,8 +12,6 @@ function mkDeps(overrides: Partial<UnmountFromGatewayDeps> = {}): UnmountFromGat
   return {
     readGatewayProfile: vi.fn(async () => "standard" as const),
     readAvailableReplicas: vi.fn(async () => 1),
-    fleetSecret: "fleet-secret",
-    readGatewayAuthToken: vi.fn(async () => "per-gateway-token"),
     unmountRpc: vi.fn(async () => undefined),
     wait: vi.fn(async () => undefined),
     now: vi.fn(() => 0),
@@ -49,28 +47,24 @@ describe("createUnmountFromGateway — no live pod", () => {
   });
 });
 
-describe("createUnmountFromGateway — secret selection", () => {
-  it("signs standard-gateway unmounts with the global fleet secret", async () => {
+describe("createUnmountFromGateway — live pod unmount", () => {
+  it("calls the platform-signed unmount RPC for standard gateways", async () => {
     const deps = mkDeps();
     const unmount = createUnmountFromGateway(deps);
     await expect(unmount("default", "alice")).resolves.toBe("unmounted");
     expect(deps.unmountRpc).toHaveBeenCalledWith({
       gatewayId: "default",
       slug: "alice",
-      secret: "fleet-secret",
     });
-    expect(deps.readGatewayAuthToken).not.toHaveBeenCalled();
   });
 
-  it("signs operator-gateway unmounts with the per-gateway auth token", async () => {
+  it("uses the same platform-signed unmount RPC for operator gateways", async () => {
     const deps = mkDeps({ readGatewayProfile: vi.fn(async () => "operator" as const) });
     const unmount = createUnmountFromGateway(deps);
     await expect(unmount("bender", "theo")).resolves.toBe("unmounted");
-    expect(deps.readGatewayAuthToken).toHaveBeenCalledWith("bender");
     expect(deps.unmountRpc).toHaveBeenCalledWith({
       gatewayId: "bender",
       slug: "theo",
-      secret: "per-gateway-token",
     });
   });
 });
@@ -160,13 +154,13 @@ describe("createUnmountFromGateway — connection-error retry", () => {
     expect(deps.wait).not.toHaveBeenCalled();
   });
 
-  it("does not read the operator auth token when the gateway has no live pod", async () => {
+  it("does not call the unmount RPC when an operator gateway has no live pod", async () => {
     const deps = mkDeps({
       readGatewayProfile: vi.fn(async () => "operator" as const),
       readAvailableReplicas: vi.fn(async () => 0),
     });
     const unmount = createUnmountFromGateway(deps);
     await expect(unmount("bender", "theo")).resolves.toBe("skipped-no-live-pod");
-    expect(deps.readGatewayAuthToken).not.toHaveBeenCalled();
+    expect(deps.unmountRpc).not.toHaveBeenCalled();
   });
 });
