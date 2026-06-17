@@ -828,9 +828,10 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
         // WS is confirmed live (ATTACHED received), so flipping
         // currentAttacherUid can't kick the prior user only to strand
         // them when the new dial later fails.
-        import("../lib/shell-presence.js")
-          .then(({ recordShellAttach }) =>
-            recordShellAttach({
+        import("../lib/builder-shell-broker.js")
+          .then(({ recordBuilderShellAttach }) =>
+            recordBuilderShellAttach({
+              gatewayId: e.gatewayId,
               containerSlug: e.containerSlug,
               shellId: e.shellId,
               attacherUid: e.uid,
@@ -856,17 +857,19 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
         // takeover (it only clears if currentAttacherUid still matches
         // the detacher). closeAuditRow is idempotent — won't overwrite
         // a 'taken-over' status that recordShellAttach set already.
-        import("../lib/shell-presence.js")
-          .then(async ({ recordShellDetach, closeAuditRow }) => {
+        import("../lib/builder-shell-broker.js")
+          .then(async ({ recordBuilderShellDetach, closeBuilderShellAuditRow }) => {
             const isError =
               e.reason === "upstream-unreachable" || e.reason === "upstream-error";
             await Promise.allSettled([
-              recordShellDetach({
+              recordBuilderShellDetach({
+                gatewayId: e.gatewayId,
                 containerSlug: e.containerSlug,
                 shellId: e.shellId,
                 detacherUid: e.uid,
               }),
-              closeAuditRow({
+              closeBuilderShellAuditRow({
+                gatewayId: e.gatewayId,
                 sessionId: e.sessionId,
                 status: isError ? "errored" : "closed",
                 error: isError ? e.reason : undefined,
