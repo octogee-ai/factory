@@ -40,6 +40,12 @@ operatorAccess:
   # for THIS pod only. Enable ONLY when the bound GSA is least-privilege +
   # read-only (so a token grab is read-only blast radius). Default off.
   platformMetadataEgress: false
+  # Operator gateway TokenReview path. BuilderShell and broker identity checks
+  # call the Kubernetes API server; the fleet-wide gateway-egress policy blocks
+  # RFC1918, so GKE Dataplane V2 needs the real API-server endpoint /32 CIDR(s)
+  # from the default/kubernetes EndpointSlice, not the Service ClusterIP.
+  # Default off; set per operator gateway only.
+  kubeApiServerEgressCidrs: []
 
 # Replica count — Cowboy passes `--set replicas=0` for desiredStatus=paused.
 # values.test.yaml defaults to 0 so TEST stays scaled-to-zero across release

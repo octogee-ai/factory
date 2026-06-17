@@ -1008,6 +1008,64 @@ describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolic
   });
 });
 
+describe("helm/octogee-gateway/ - operator Kubernetes API-server egress NetworkPolicy", () => {
+  const policyName = "octogee-gateway-apiserver-egress-bender";
+  const apiServerCidr = (lastOctet: number) =>
+    ["10", "128", "0", String(lastOctet)].join(".") + "/32";
+  const apiServerCidrPattern = (lastOctet: number) =>
+    new RegExp(`cidr:\\s*"${escapeRegex(apiServerCidr(lastOctet))}"`);
+
+  it("is NOT rendered by default for locked operator gateways", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "operator",
+    });
+    expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
+  });
+
+  it("is NOT rendered for standard-profile gateways even when API-server CIDRs are set", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      "operatorAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
+    });
+    expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
+  });
+
+  it("is NOT rendered when NetworkPolicy is explicitly disabled", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "operator",
+      "operatorAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
+      "networkPolicy.enabled": "false",
+    });
+    expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
+  });
+
+  it("renders only explicit API-server /32 egress paths on :443 when enabled", () => {
+    const np = findDoc(
+      helmTemplate("octogee-gw-bender", {
+        gatewayId: "bender",
+        profile: "operator",
+        "operatorAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
+        "operatorAccess.kubeApiServerEgressCidrs[1]": apiServerCidr(3),
+      }),
+      "NetworkPolicy",
+      policyName,
+    );
+    expect(np).not.toBeNull();
+    expect(np).toMatch(/policyTypes:\s*\n\s*-\s*Egress/);
+    expect(np).toMatch(/podSelector:[\s\S]*?app:\s*octogee-gateway/);
+    expect(np).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*bender/);
+    expect(np).toMatch(apiServerCidrPattern(2));
+    expect(np).toMatch(apiServerCidrPattern(3));
+    expect(np).toMatch(/protocol:\s*TCP/);
+    expect(np).toMatch(/port:\s*443/);
+    expect(np).not.toMatch(/0\.0\.0\.0\/0/);
+    expect(np).not.toMatch(/169\.254\.169\.254\/32/);
+    expect(np).not.toMatch(/port:\s*80/);
+  });
+});
+
 describe("helm/octogee-gateway/ — required value validation", () => {
   it("fails to render when gatewayId is missing", () => {
     const args = [
