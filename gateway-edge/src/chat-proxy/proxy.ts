@@ -804,10 +804,22 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
   const { buildConnectUpstream } = await import("./builder-shell/upstream.js");
   const { attachBuilderShellUpgrade } = await import("./builder-shell/upgrade.js");
   const router = (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter;
+  // Re-resolve the credential on every redeem instead of capturing
+  // internalAuth.value once here. The operator SA token is a short-lived
+  // projected token (≈1h TTL) the kubelet rotates on disk; a value baked in at
+  // attach goes stale and every redeem then fails with "invalid
+  // operator-service-account credential" until the next gateway-edge restart.
+  // resolveBuilderShellInternalAuthSecret() re-reads the token file each call.
   const redeemAuth =
     internalAuth.headerName === "x-k8s-sa-token"
-      ? { k8sServiceAccountToken: internalAuth.value }
-      : { internalServiceKey: internalAuth.value };
+      ? {
+          getK8sServiceAccountToken: () =>
+            resolveBuilderShellInternalAuthSecret(process.env)?.value,
+        }
+      : {
+          getInternalServiceKey: () =>
+            resolveBuilderShellInternalAuthSecret(process.env)?.value,
+        };
   const upstreamInternalServiceKey =
     internalAuth.headerName === "x-internal-service-key" ? internalAuth.value : undefined;
   attachBuilderShellUpgrade(server, {
