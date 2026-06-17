@@ -9,8 +9,8 @@
 # heartbeats and matched against customer `provisioning.openclaw.gatewayId`.
 # Also forms the per-instance K8s resource names
 # (`octogee-gateway-<gatewayId>`, `gateway-edge-<gatewayId>`) that the
-# umbrella's fleet-control Ingress routes to. Must be a lowercase DNS-safe id
-# that fits every rendered resource suffix.
+# umbrella's api (`/api/g/<id>/*`) and preview (`/g/<id>/*`) Ingress paths
+# route to. Must be a lowercase DNS-safe id that fits every rendered suffix.
 gatewayId: ""
 
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)

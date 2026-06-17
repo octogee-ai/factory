@@ -347,25 +347,24 @@ if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
 fi
 ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
 
-# ── 9b. Fleet controller HMAC secret (gateway ↔ Cloud Functions) ─────────
-# The controller Cloud Functions (onUserUpdatedForFleet etc.) sign Cloud
-# Tasks push payloads with this key; the gateway verifies on receipt.
-# Stored once in Secret Manager in the Firebase project:
-#   - Firebase Functions binds it via `defineSecret("FLEET_CONTROLLER_SECRET")`
-#     → becomes `process.env.FLEET_CONTROLLER_SECRET` at function runtime.
-#   - K8s Secret `octogee-fleet-controller/secret` feeds the gateway pod.
-# If the two diverge the gateway silently 401s every restore task, so
-# both sides must pull the same SM value. Rotating = new SM version +
-# re-run this script + redeploy functions + rollout gateway pod.
+# ── 9b. Fleet controller HMAC secret (glm-controller ↔ gateway) ──────────
+# glm-controller signs the in-cluster migration RPCs with this key; the
+# gateway verifies on receipt. Secret Manager is the durable store:
+#   - K8s Secret `octogee-fleet-controller/secret` feeds glm-controller +
+#     the gateway pod (this script syncs it from SM).
+# If SM and K8s diverge the gateway silently 401s every migration RPC, so
+# both must hold the same value. Rotating = new SM version + re-run this
+# script + rollout the gateway/controller pods. (Cloud Functions no longer
+# use this secret — the restore-customer Cloud Tasks path was retired.)
 info "octogee-fleet-controller (fleet controller HMAC)"
 # Detect + repair trailing-whitespace drift in SM.
 #
-# `firebase functions:secrets:set` and manual stdin input can persist a
-# trailing newline into the stored value, which `process.env.X` in Cloud
-# Functions surfaces as-is — the controller signs with 65 bytes, the gateway
-# verifies with 64 (bash command substitution strips the newline on the
-# gateway side), HMAC mismatch, every restore 401s. Observed on TEST and
-# again on PROD 2026-04-24.
+# Manual stdin input (or `gcloud secrets versions add` from a heredoc) can
+# persist a trailing newline into the stored value. glm-controller reads it
+# via its K8s Secret env and signs with 65 bytes; the gateway verifies with
+# 64 (bash command substitution strips the newline on the gateway side),
+# HMAC mismatch, every migration RPC 401s. Observed on TEST and again on
+# PROD 2026-04-24.
 #
 # IMPORTANT: bash $(...) command substitution ALWAYS strips trailing
 # newlines. The old detection did `FLEET_RAW_BYTES=$(gcloud ...)` and
@@ -412,41 +411,11 @@ if [[ -z "$FLEET_CONTROLLER_SECRET" ]]; then
     fi
   fi
 fi
-# Two service accounts need access on FLEET_CONTROLLER_SECRET, with
-# DIFFERENT roles because Firebase deploy + runtime need different perms:
-#
-#   1. RUNTIME  — functions compute SA (`{projectNumber}-compute@…`) reads
-#      the secret VALUE at invocation time via defineSecret. Needs
-#      `roles/secretmanager.secretAccessor` (covers `versions.access`).
-#      Without it: every function invocation 500s.
-#
-#   2. DEPLOY   — GitHub Actions CI SA (`github-actions@octogee.iam.…`)
-#      reads secret METADATA at `firebase deploy` time to configure the
-#      function's secret binding. Needs `secretmanager.secrets.get`,
-#      which is NOT in `secretAccessor` — only in `roles/secretmanager.viewer`
-#      and above. We grant `roles/secretmanager.admin` (scoped to this
-#      single secret) so the deploy SA can also manage versions if we
-#      ever wire up rotation. Without it: firebase deploy 403s on
-#      "secretmanager.secrets.get denied".
-FN_SA_NUM=$(gcloud projects describe "$FIREBASE_PROJECT" --format='value(projectNumber)' 2>/dev/null)
-FN_SA=""
-[[ -n "$FN_SA_NUM" ]] && FN_SA="${FN_SA_NUM}-compute@developer.gserviceaccount.com"
-CI_DEPLOY_SA="github-actions@octogee.iam.gserviceaccount.com"
-
-if [[ -n "$FN_SA" ]]; then
-  gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET \
-    --member="serviceAccount:$FN_SA" \
-    --role="roles/secretmanager.secretAccessor" \
-    --project="$FIREBASE_PROJECT" --quiet >/dev/null 2>&1 \
-    && ok "  IAM runtime: $FN_SA → secretAccessor" \
-    || warn "  Could not grant $FN_SA secretAccessor"
-fi
-gcloud secrets add-iam-policy-binding FLEET_CONTROLLER_SECRET \
-  --member="serviceAccount:$CI_DEPLOY_SA" \
-  --role="roles/secretmanager.admin" \
-  --project="$FIREBASE_PROJECT" --quiet >/dev/null 2>&1 \
-  && ok "  IAM deploy:  $CI_DEPLOY_SA → admin (scoped to this secret)" \
-  || warn "  Could not grant $CI_DEPLOY_SA admin"
+# No runtime service account reads this from Secret Manager: glm-controller
+# and the gateway read the synced K8s Secret below, and Cloud Functions no
+# longer use it (the restore-customer Cloud Tasks path is gone). SM is only
+# the durable store this script reads/writes with operator creds — so no SM
+# IAM bindings are needed.
 ksecret octogee-fleet-controller --from-literal=secret="$FLEET_CONTROLLER_SECRET"
 
 # ── 9c. Gateway auth token secret shell + IAM ────────────────────────────

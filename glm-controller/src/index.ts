@@ -40,7 +40,6 @@ import {
 import {
   spawnKubectl,
   syncApiFleetIngressPaths,
-  syncFleetIngressPaths,
   syncPreviewIngressPaths,
   type FleetGateway,
   type KubectlSubprocess,
@@ -123,10 +122,6 @@ const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
 const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
-
-const FLEET_INGRESS_NAME = process.env.FLEET_INGRESS_NAME ?? "octogee-gateway-fleet-control-ingress";
-const FLEET_INGRESS_HOST = process.env.FLEET_INGRESS_HOST;
-const FLEET_ALIAS_SERVICE = process.env.FLEET_ALIAS_SERVICE ?? "octogee-gateway";
 
 const GATEWAY_EDGE_INGRESS_NAME =
   process.env.GATEWAY_EDGE_INGRESS_NAME ?? "gateway-edge-ingress";
@@ -777,17 +772,6 @@ async function main(): Promise<void> {
     process.env.KUBE_OPS_MODE === "stub"
       ? createLoggingKubeOps(log)
       : createKubeSubprocessRunner({ runKubectl, log });
-  const syncFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
-    syncFleetIngressPaths({
-      runKubectl,
-      ingressName: FLEET_INGRESS_NAME,
-      ingressHost: FLEET_INGRESS_HOST,
-      namespace: NAMESPACE,
-      desiredGateways: gateways,
-      fleetControllerPort: parseInt(FLEET_CONTROLLER_PORT, 10),
-      aliasServiceName: FLEET_ALIAS_SERVICE,
-      log,
-    }).then(() => undefined);
   const syncApiFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
     syncApiFleetIngressPaths({
       runKubectl,
@@ -811,7 +795,6 @@ async function main(): Promise<void> {
     }).then(() => undefined);
 
 const syncAllFleetIngresses = async (gateways: ReadonlyArray<FleetGateway>) => {
-    await syncFleetIngressForGateways(gateways);
     await syncApiFleetIngressForGateways(gateways);
     await syncPreviewIngressForGateways(gateways);
   };
@@ -852,7 +835,7 @@ const handlerSyncFleetIngress = async () => {
   };
 
   log(
-    `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftAutoRoll=${AUTO_ROLL_ON_CHART_DRIFT} valuesFile=${GATEWAY_VALUES_FILE} fleetIngress=${FLEET_INGRESS_NAME}`,
+    `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftAutoRoll=${AUTO_ROLL_ON_CHART_DRIFT} valuesFile=${GATEWAY_VALUES_FILE}`,
   );
 
   await bootstrapGlmGateways(deps);

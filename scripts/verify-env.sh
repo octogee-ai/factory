@@ -477,75 +477,25 @@ else
   done
 fi
 
-# ── 5f. Fleet-control LB ─────────────────────────────────────────────────────
-# Checks the fleet-control LB stack that carries the operator / gateway-to-gateway
-# migration RPCs (/quiesce, /export, /push-state, /import, /unmount) + /health.
+# ── 5f. Fleet-control HMAC secret ────────────────────────────────────────────
+# The fleet-control LB was retired (FLEET-CONTROL-NEG-SHED): migration now runs
+# inside glm-controller over internal ClusterIP DNS — no fleet host / static IP /
+# DNS to check. The HMAC secret stays: the controller signs the in-cluster
+# migration RPCs and the gateway verifies them.
 # Per-env:
-#   - global static IP exists (fleet-control-ip{-test})
-#   - DNS A record for fleet[-test].octogee.com resolves to that IP
-#   - K8s Secret octogee-fleet-controller exists in the gateway namespace
-#     (FLEET_CONTROLLER_SECRET — HMAC for the migration RPCs)
-#   - BackendConfig octogee-gateway-fleet-control exists (attached via
-#     the gateway Service's cloud.google.com/backend-config annotation)
-#   - Fleet-control Ingress exists (cert state covered in 5c)
-# See docs/GATEWAY-PLATFORM-SPEC.md §The fleet-control LB.
+#   - K8s Secret octogee-fleet-controller matches Secret Manager byte-for-byte
+#     (SM is the durable store; glm-controller reads the synced K8s Secret —
+#     no runtime SA reads SM, so no SM IAM binding to check)
 set_section infra
-header "5f. Fleet-control LB"
+header "5f. Fleet-control HMAC secret"
 
-# Derive env-scoped names from the namespace (octogee vs octogee-test).
-case "$NAMESPACE" in
-  octogee-test)
-    FLEET_IP_NAME="fleet-control-ip-test"
-    FLEET_HOST="fleet-test.octogee.com"
-    ;;
-  octogee)
-    FLEET_IP_NAME="fleet-control-ip"
-    FLEET_HOST="fleet.octogee.com"
-    ;;
-  *)
-    FLEET_IP_NAME=""
-    FLEET_HOST=""
-    ;;
-esac
-
-if [[ -z "$FLEET_IP_NAME" ]]; then
-  warn "Unknown namespace '$NAMESPACE' — skipping fleet-control checks"
+if [[ "$NAMESPACE" != "octogee" && "$NAMESPACE" != "octogee-test" ]]; then
+  warn "Unknown namespace '$NAMESPACE' — skipping fleet-control secret checks"
 else
-
-  # Static IP — lives in the CLUSTER project (not the namespace/Firebase
-  # project), because GKE Ingress resolves `global-static-ip-name` against
-  # the cluster's project. See PR #656 for the root-cause history.
-  FLEET_IP_VALUE=$(gcloud compute addresses describe "$FLEET_IP_NAME" --global --project="$CLUSTER_PROJECT" --format='value(address)' 2>/dev/null || echo "")
-  if [[ -n "$FLEET_IP_VALUE" ]]; then
-    pass "Static IP $FLEET_IP_NAME = $FLEET_IP_VALUE (in cluster project $CLUSTER_PROJECT)"
-  else
-    fail "Static IP $FLEET_IP_NAME missing in cluster project $CLUSTER_PROJECT"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} cd terraform/environments/$ENV && terraform apply -target=module.networking.google_compute_global_address.fleet_control"
-    fi
-  fi
-
-  # DNS — must resolve to the static IP. DNS is in Cloudflare (external), not
-  # Cloud DNS, so we resolve from the local machine's resolver + match against
-  # the static IP.
-  FLEET_DNS=$(dig +short +time=5 "$FLEET_HOST" | head -1)
-  if [[ -z "$FLEET_DNS" ]]; then
-    fail "DNS $FLEET_HOST has no A record"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} add A record in Cloudflare: $FLEET_HOST → $FLEET_IP_VALUE"
-    fi
-  elif [[ -n "$FLEET_IP_VALUE" && "$FLEET_DNS" == "$FLEET_IP_VALUE" ]]; then
-    pass "DNS $FLEET_HOST → $FLEET_DNS (matches static IP)"
-  else
-    fail "DNS $FLEET_HOST → $FLEET_DNS (static IP is $FLEET_IP_VALUE)"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} update Cloudflare A record: $FLEET_HOST → $FLEET_IP_VALUE"
-    fi
-  fi
 
   # Fleet controller HMAC secret — exists in Secret Manager (Firebase
   # project) AND K8s. Both sides must resolve to the SAME BYTES or the
-  # gateway silently 401s every restore task.
+  # gateway silently 401s every migration RPC.
   #
   # IMPORTANT: read RAW bytes (write to file, use wc -c on the file) —
   # not `$(gcloud ...)` command substitution, which strips trailing
@@ -568,17 +518,17 @@ else
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
     fi
   elif [[ "$SM_LEN" == "0" ]]; then
-    fail "Secret Manager FLEET_CONTROLLER_SECRET missing in $FIREBASE_PROJECT — Cloud Functions cannot sign HMACs"
+    fail "Secret Manager FLEET_CONTROLLER_SECRET missing in $FIREBASE_PROJECT — gateway K8s Secret cannot be synced from SM"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (back-fills SM from K8s)"
     fi
   elif [[ "$K8S_LEN" != "$SM_LEN" ]]; then
-    fail "FLEET_CONTROLLER_SECRET BYTE-LENGTH drift: K8s=$K8S_LEN vs SM=$SM_LEN — usually trailing-whitespace in SM. Every restore will 401"
+    fail "FLEET_CONTROLLER_SECRET BYTE-LENGTH drift: K8s=$K8S_LEN vs SM=$SM_LEN — usually trailing-whitespace in SM. Every migration RPC will 401"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (detects + writes clean version)"
     fi
   elif [[ "$K8S_HASH" != "$SM_HASH" ]]; then
-    fail "FLEET_CONTROLLER_SECRET value mismatch: K8s=$K8S_HASH... vs SM=$SM_HASH... — every restore will 401"
+    fail "FLEET_CONTROLLER_SECRET value mismatch: K8s=$K8S_HASH... vs SM=$SM_HASH... — every migration RPC will 401"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (SM is source of truth; rewrites K8s)"
     fi
@@ -586,58 +536,6 @@ else
     pass "FLEET_CONTROLLER_SECRET matches across K8s + Secret Manager ($K8S_LEN bytes, $K8S_HASH...)"
   fi
 
-  # Two SAs need access to FLEET_CONTROLLER_SECRET, with different roles:
-  #   - Runtime: functions compute SA needs `secretAccessor` (versions.access)
-  #   - Deploy:  GitHub Actions SA needs `admin` on this secret because
-  #     `firebase deploy` calls `secrets.get` to configure the binding —
-  #     and that permission is NOT in `secretAccessor`, only in `viewer`
-  #     and `admin`. We use `admin` (scoped to one secret) so the deploy
-  #     SA can also manage versions if we wire up rotation later.
-  FN_SA_NUM=$(gcloud projects describe "$FIREBASE_PROJECT" --format='value(projectNumber)' 2>/dev/null)
-  # get-iam-policy with --flatten makes each binding a row of role+member.
-  RUNTIME_BINDINGS=$(gcloud secrets get-iam-policy FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" --flatten='bindings[].members' --filter='bindings.role=roles/secretmanager.secretAccessor' --format='value(bindings.members)' 2>/dev/null || echo "")
-  DEPLOY_BINDINGS=$(gcloud secrets get-iam-policy FLEET_CONTROLLER_SECRET --project="$FIREBASE_PROJECT" --flatten='bindings[].members' --filter='bindings.role=roles/secretmanager.admin' --format='value(bindings.members)' 2>/dev/null || echo "")
-  if [[ -n "$FN_SA_NUM" ]]; then
-    FN_SA="${FN_SA_NUM}-compute@developer.gserviceaccount.com"
-    if echo "$RUNTIME_BINDINGS" | grep -q "$FN_SA"; then
-      pass "Functions runtime SA ($FN_SA) has secretAccessor"
-    else
-      fail "Functions runtime SA lacks secretAccessor on FLEET_CONTROLLER_SECRET — fn invocations will 500"
-      if $FIX; then
-        echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
-      fi
-    fi
-  fi
-  CI_DEPLOY_SA="github-actions@octogee.iam.gserviceaccount.com"
-  if echo "$DEPLOY_BINDINGS" | grep -q "$CI_DEPLOY_SA"; then
-    pass "Deploy SA ($CI_DEPLOY_SA) has admin (scoped)"
-  else
-    fail "Deploy SA lacks admin on FLEET_CONTROLLER_SECRET — firebase deploy will 403 (secretAccessor alone is not enough; needs secrets.get)"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
-    fi
-  fi
-
-  # BackendConfig (created by helm template, wires health check + WAF to the
-  # Ingress backend port)
-  if kubectl get backendconfig octogee-gateway-fleet-control -n "$NAMESPACE" -o name >/dev/null 2>&1; then
-    pass "BackendConfig octogee-gateway-fleet-control exists"
-  else
-    fail "BackendConfig octogee-gateway-fleet-control missing — Ingress backend will fall back to defaults"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
-    fi
-  fi
-
-  # Fleet-control Ingress
-  if kubectl get ingress octogee-gateway-fleet-control-ingress -n "$NAMESPACE" -o name >/dev/null 2>&1; then
-    pass "Ingress octogee-gateway-fleet-control-ingress exists"
-  else
-    fail "Ingress octogee-gateway-fleet-control-ingress missing — Cloud Tasks cannot reach the gateway"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ensure fleetControlIngress.enabled=true in values.$ENV.yaml, then helm upgrade"
-    fi
-  fi
 fi
 
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
@@ -648,7 +546,7 @@ fi
 # is the IAP-gated admin path — a 302 to the Google login page is expected.
 set_section bootstrap
 header "5d. Endpoint Health"
-for INGRESS_NAME in gateway-edge-ingress mattermost-ingress octogee-gateway-fleet-control-ingress; do
+for INGRESS_NAME in gateway-edge-ingress mattermost-ingress; do
   if ! kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
     continue
   fi

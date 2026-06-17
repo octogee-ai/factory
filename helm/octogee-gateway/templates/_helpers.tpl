@@ -1,9 +1,9 @@
 {{/*
 Common labels for the gateway pod's resources.
 
-`gateway-instance` is the per-release identity that the umbrella's
-fleet-control Ingress uses to route /restore-customer/{gatewayId}
-to the right Service.
+`gateway-instance` is the per-release identity that selects this
+gateway's per-instance Services — the api (`/api/g/<id>/*`) and preview
+(`/g/<id>/*`) Ingress paths Cowboy patches route to them by name.
 */}}
 {{- define "octogee-gateway.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}

@@ -1,9 +1,8 @@
 #!/usr/bin/env tsx
 
 import { initializeApp, cert } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,9 +22,10 @@ import {
   describeStep,
 } from "../lib/fleet-migration.js";
 import {
-  cutoverUserGatewayAndMarkMounted,
-  type FleetStateFirestore,
-} from "../lib/fleet-state.js";
+  enqueueOperation,
+  awaitOperation,
+  type OperationsDb,
+} from "../lib/glm-operations.js";
 
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
@@ -134,7 +134,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Move a customer between gateways via the four-step migration state machine.",
     args: "<slug> --to=<gw-id> [--apply]",
     description:
-      "Plans (or executes with --apply) the four-step migration: quiesce source → transfer state → cutover Firestore → unmount source. The state machine in scripts/lib/fleet-migration.ts owns the safety boundaries; rollback is automatic on per-step failure (un-quiesce pre-cutover; reverse cutover + unmount target post-cutover).\n\nDry-run by default — pass --apply to execute. Requires FLEET_CONTROLLER_SECRET in env (see error message for the gcloud one-liner).",
+      "Plans (or executes with --apply) the four-step migration: quiesce source → transfer state → cutover Firestore → unmount source. The state machine in scripts/lib/fleet-migration.ts owns the safety boundaries; rollback is automatic on per-step failure (un-quiesce pre-cutover; reverse cutover + unmount target post-cutover).\n\nDry-run by default — pass --apply to execute. Migration runs server-side in glm-controller; the CLI just enqueues the operation and streams its reported steps.",
     examples: [
       "fleet --env=test migrate-customer ceckert --to=canary",
       "fleet --env=test migrate-customer ceckert --to=canary --apply",
@@ -759,70 +759,62 @@ async function migrateCustomerPlan(
   await executeMigration(slug, user.uid, fromGatewayId, toGatewayId);
 }
 
+const MIGRATION_OP_TIMEOUT_MS = 30 * 60_000;
+
 async function executeMigration(
   slug: string,
   uid: string,
   fromGatewayId: string,
   toGatewayId: string,
 ): Promise<void> {
-  const secret = process.env.FLEET_CONTROLLER_SECRET;
-  if (!secret) {
-    const secretProject = args.env === "prod" ? "octogee" : "octogee-test";
-    console.error("\n" + red(`${CROSS} FLEET_CONTROLLER_SECRET is not set in your environment.`));
-    console.error(dim(`  Load it with:`));
-    console.error(
-      dim(
-        `    export FLEET_CONTROLLER_SECRET=$(gcloud secrets versions access latest --secret=FLEET_CONTROLLER_SECRET --project=${secretProject})`,
-      ),
-    );
-    process.exit(1);
-  }
-
-  const fleetHost = args.env === "prod" ? "https://fleet.octogee.com" : "https://fleet-test.octogee.com";
-  const migrationId = `mig-${Date.now()}-${randomUUID().slice(0, 8)}`;
-
-  const { createMigrationClient } = await import("../lib/fleet-migration-client.js");
-  const { runMigration } = await import("../lib/fleet-migration-runner.js");
-
-  const client = createMigrationClient({
-    secret,
-    resolveGatewayUrl: () => fleetHost,
-    log: (msg) => console.log(dim(`  ${msg}`)),
+  const opsDb = db as unknown as OperationsDb;
+  const opId = await enqueueOperation(opsDb, {
+    kind: "migrate-customer",
+    input: { uid, toGatewayId },
+    createdBy: `fleet-cli:${process.env.USER ?? "operator"}`,
   });
 
-  console.log("\n" + bold(`EXECUTING`) + dim(`  migrationId=${migrationId}`));
-
-  const result = await runMigration(
-    { migrationId, uid, slug, fromGatewayId, toGatewayId },
-    {
-      client,
-      cutoverFirestore: async (cutoverUid, target, cutoverSlug) => {
-        await cutoverUserGatewayAndMarkMounted(
-          {
-            db: db as unknown as FleetStateFirestore,
-            serverTimestamp: () => FieldValue.serverTimestamp(),
-            log: (msg) => console.log(dim(`  ${msg}`)),
-          },
-          { uid: cutoverUid, slug: cutoverSlug, toGatewayId: target },
-        );
-      },
-      log: (msg) => console.log(dim(`  ${msg}`)),
-    },
+  console.log(
+    "\n" +
+      bold(`EXECUTING`) +
+      dim(`  operationId=${opId}  (glm-controller runs the migration in-cluster)`),
   );
 
-  if (result.success) {
-    console.log("\n" + green(`${CHECK} migration complete: ${slug} ${fromGatewayId} ${ARROW} ${toGatewayId}`));
+  const rendered = new Set<string>();
+  const finalOp = await awaitOperation(opsDb, opId, {
+    pollMs: 2_000,
+    timeoutMs: MIGRATION_OP_TIMEOUT_MS,
+    onUpdate: (op) => {
+      for (const step of op.steps ?? []) {
+        const key = `${step.name}:${step.status}`;
+        if (rendered.has(key)) continue;
+        rendered.add(key);
+        const icon =
+          step.status === "done"
+            ? green(CHECK)
+            : step.status === "failed"
+              ? red(CROSS)
+              : dim("·");
+        console.log(
+          `  ${icon} ${step.name}${step.error ? dim(` — ${step.error}`) : ""}`,
+        );
+      }
+    },
+  });
+
+  if (finalOp.status === "succeeded") {
+    console.log(
+      "\n" +
+        green(`${CHECK} migration complete: ${slug} ${fromGatewayId} ${ARROW} ${toGatewayId}`),
+    );
     return;
   }
   console.error(
-    "\n" +
-      red(
-        `${CROSS} migration failed at phase=${result.errorAt?.phase}: ${result.errorAt?.error}`,
-      ),
+    "\n" + red(`${CROSS} migration ${finalOp.status}: ${finalOp.error ?? "unknown error"}`),
   );
   console.error(
     dim(
-      result.rolledBack
+      finalOp.rolledBack
         ? `  Rollback was attempted. Source should still own the customer; verify with \`fleet --env=${args.env} inspect customer ${slug}\`.`
         : `  No rollback attempted (or post-unmount). Operator must intervene.`,
     ),

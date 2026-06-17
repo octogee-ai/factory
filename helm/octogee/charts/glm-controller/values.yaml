@@ -36,8 +36,6 @@ ingress:
   sharedName: ""
   apiName: gateway-edge-ingress
   apiHost: ""
-  fleetName: octogee-gateway-fleet-control-ingress
-  fleetHost: ""
   previewName: preview-ingress
   previewHost: ""
 

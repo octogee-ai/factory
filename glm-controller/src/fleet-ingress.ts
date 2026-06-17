@@ -11,38 +11,8 @@ export interface IngressPathRule {
   servicePort: number;
 }
 
-const RPC_VERBS = ["quiesce", "export", "push-state", "import", "unmount"] as const;
-const FLEET_CONTROL_PREFIXES = RPC_VERBS.map((verb) => `/${verb}/`);
 const API_FLEET_PREFIX = "/api/g/";
 const PREVIEW_FLEET_PREFIX = "/g/";
-
-export function computeDesiredFleetPaths(opts: {
-  gateways: ReadonlyArray<FleetGateway>;
-  fleetControllerPort: number;
-  aliasServiceName: string;
-}): IngressPathRule[] {
-  const sorted = [...opts.gateways].sort((a, b) =>
-    a.gatewayId.localeCompare(b.gatewayId),
-  );
-  const out: IngressPathRule[] = [];
-  for (const gw of sorted) {
-    for (const verb of RPC_VERBS) {
-      out.push({
-        path: `/${verb}/${gw.gatewayId}`,
-        pathType: "ImplementationSpecific",
-        serviceName: `octogee-gateway-${gw.gatewayId}`,
-        servicePort: opts.fleetControllerPort,
-      });
-    }
-  }
-  out.push({
-    path: "/health",
-    pathType: "ImplementationSpecific",
-    serviceName: opts.aliasServiceName,
-    servicePort: opts.fleetControllerPort,
-  });
-  return out;
-}
 
 export function computeDesiredApiFleetPaths(opts: {
   gateways: ReadonlyArray<FleetGateway>;
@@ -236,17 +206,6 @@ export type KubectlSubprocess = (
   opts?: { stdin?: string },
 ) => Promise<KubectlSubprocessResult>;
 
-export interface SyncFleetIngressPathsOpts {
-  runKubectl: KubectlSubprocess;
-  ingressName: string;
-  ingressHost?: string;
-  namespace: string;
-  desiredGateways: ReadonlyArray<FleetGateway>;
-  fleetControllerPort: number;
-  aliasServiceName: string;
-  log: (msg: string) => void;
-}
-
 export interface SyncFleetIngressPathsResult {
   changed: boolean;
 }
@@ -258,27 +217,6 @@ const NOT_FOUND_PATTERNS = [
 
 function isIngressNotFound(stderr: string): boolean {
   return NOT_FOUND_PATTERNS.some((p) => p.test(stderr));
-}
-
-export async function syncFleetIngressPaths(
-  opts: SyncFleetIngressPathsOpts,
-): Promise<SyncFleetIngressPathsResult> {
-  const desired = computeDesiredFleetPaths({
-    gateways: opts.desiredGateways,
-    fleetControllerPort: opts.fleetControllerPort,
-    aliasServiceName: opts.aliasServiceName,
-  }).filter((p) => p.path !== "/health");
-
-  return syncManagedIngressPaths({
-    runKubectl: opts.runKubectl,
-    ingressName: opts.ingressName,
-    ingressHost: opts.ingressHost,
-    namespace: opts.namespace,
-    desired,
-    managedPathPrefixes: FLEET_CONTROL_PREFIXES,
-    logLabel: "fleet-control",
-    log: opts.log,
-  });
 }
 
 export interface SyncApiFleetIngressPathsOpts {

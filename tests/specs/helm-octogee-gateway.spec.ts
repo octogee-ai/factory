@@ -787,12 +787,23 @@ const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default
 });
 
 describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
-  it("annotates the gateway Service with the per-port BackendConfig map", () => {
+  it("backend-config (the NEG seam) covers ONLY the ingress-facing preview port", () => {
     const out = helmTemplate();
     const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
     expect(svc).toMatch(/cloud\.google\.com\/backend-config/);
     expect(svc).toMatch(/9080":"preview-backend"/);
-    expect(svc).toMatch(/3003":"octogee-gateway-fleet-control"/);
+    // Fleet-control (3003) is reached over internal ClusterIP DNS only (Cowboy +
+    // migrate-customer op). It must NOT be ingress-backed or GKE mints a wasted
+    // per-gateway NEG for it. This is the durable moat against internal ports
+    // silently re-acquiring NEGs (FLEET-CONTROL-NEG-SHED-SPEC).
+    expect(svc).not.toMatch(/octogee-gateway-fleet-control/);
+    expect(svc).not.toMatch(/"3003":/);
+  });
+
+  it("still exposes the fleet-control port on the Service for in-cluster callers", () => {
+    const out = helmTemplate();
+    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    expect(svc).toMatch(/port:\s*3003/);
   });
 });
 
