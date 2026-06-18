@@ -1,0 +1,405 @@
+import * as crypto from "node:crypto";
+import type { Firestore } from "firebase-admin/firestore";
+
+import { WINDOW_LENGTH_HOURS } from "../../../shared/types/billing.js";
+
+export type ModelBrokerUsageProvider = "anthropic";
+export type AnthropicCacheWriteTtl = "5m" | "1h";
+
+export interface AnthropicTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+}
+
+export interface ModelBrokerUsageCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  pricingModel: string;
+  cacheWriteTtl: AnthropicCacheWriteTtl;
+}
+
+export interface ModelBrokerUsageRecordInput {
+  eventId?: string;
+  requestId: string;
+  provider: ModelBrokerUsageProvider;
+  gatewayId: string;
+  ownerUid: string | null;
+  model: string;
+  usage: AnthropicTokenUsage;
+  cacheWriteTtl?: AnthropicCacheWriteTtl;
+  method: string;
+  path: string;
+  upstreamStatus: number;
+  now?: number;
+}
+
+export interface ModelBrokerUsageStore {
+  recordUsage(input: ModelBrokerUsageRecordInput): Promise<void>;
+}
+
+export const MODEL_BROKER_USAGE_EVENTS_COLLECTION = "modelBrokerUsageEvents";
+export const MODEL_BROKER_USAGE_ROLLUPS_COLLECTION = "modelBrokerUsageRollups";
+export const MODEL_BROKER_USAGE_WINDOWS_COLLECTION = "modelBrokerUsageWindows";
+
+const TOKENS_PER_MILLION = 1_000_000;
+const WINDOW_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
+
+interface AnthropicPricing {
+  inputPerMTok: number;
+  outputPerMTok: number;
+  cacheReadPerMTok: number;
+  cacheWrite5mPerMTok: number;
+  cacheWrite1hPerMTok: number;
+  pricingModel: string;
+}
+
+// Snapshot from Claude API pricing, verified 2026-06-18:
+// https://platform.claude.com/docs/en/about-claude/pricing
+const ANTHROPIC_PRICING: Record<string, AnthropicPricing> = {
+  fable: pricing(10, 50, "fable"),
+  mythos: pricing(10, 50, "mythos"),
+  "opus-latest": pricing(5, 25, "opus-latest"),
+  "opus-legacy": pricing(15, 75, "opus-legacy"),
+  sonnet: pricing(3, 15, "sonnet"),
+  "haiku-4.5": pricing(1, 5, "haiku-4.5"),
+  "haiku-3.5": pricing(0.8, 4, "haiku-3.5"),
+};
+
+function pricing(inputPerMTok: number, outputPerMTok: number, pricingModel: string): AnthropicPricing {
+  return {
+    inputPerMTok,
+    outputPerMTok,
+    cacheWrite5mPerMTok: inputPerMTok * 1.25,
+    cacheWrite1hPerMTok: inputPerMTok * 2,
+    cacheReadPerMTok: inputPerMTok * 0.1,
+    pricingModel,
+  };
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function normalizeAnthropicUsage(value: unknown): AnthropicTokenUsage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const usage = {
+    inputTokens: numberOrZero(data.input_tokens),
+    outputTokens: numberOrZero(data.output_tokens),
+    cacheCreationInputTokens: numberOrZero(data.cache_creation_input_tokens),
+    cacheReadInputTokens: numberOrZero(data.cache_read_input_tokens),
+  };
+  return totalTokens(usage) > 0 ? usage : null;
+}
+
+export function totalTokens(usage: AnthropicTokenUsage): number {
+  return (
+    usage.inputTokens +
+    usage.outputTokens +
+    usage.cacheCreationInputTokens +
+    usage.cacheReadInputTokens
+  );
+}
+
+export function mergeAnthropicUsage(
+  current: AnthropicTokenUsage | null,
+  next: AnthropicTokenUsage | null,
+): AnthropicTokenUsage | null {
+  if (!next) return current;
+  if (!current) return next;
+  return {
+    inputTokens: Math.max(current.inputTokens, next.inputTokens),
+    outputTokens: Math.max(current.outputTokens, next.outputTokens),
+    cacheCreationInputTokens: Math.max(
+      current.cacheCreationInputTokens,
+      next.cacheCreationInputTokens,
+    ),
+    cacheReadInputTokens: Math.max(current.cacheReadInputTokens, next.cacheReadInputTokens),
+  };
+}
+
+function modelPricing(model: string): AnthropicPricing | null {
+  const normalized = model.toLowerCase();
+  if (normalized.includes("fable")) return ANTHROPIC_PRICING.fable;
+  if (normalized.includes("mythos")) return ANTHROPIC_PRICING.mythos;
+  if (normalized.includes("sonnet")) return ANTHROPIC_PRICING.sonnet;
+  if (normalized.includes("haiku-3-5") || normalized.includes("haiku-3.5")) {
+    return ANTHROPIC_PRICING["haiku-3.5"];
+  }
+  if (normalized.includes("haiku")) return ANTHROPIC_PRICING["haiku-4.5"];
+  if (normalized.includes("opus-4-1") || normalized.includes("opus-4-0")) {
+    return ANTHROPIC_PRICING["opus-legacy"];
+  }
+  if (normalized.includes("opus")) return ANTHROPIC_PRICING["opus-latest"];
+  return null;
+}
+
+function usd(tokens: number, perMTok: number): number {
+  return (tokens / TOKENS_PER_MILLION) * perMTok;
+}
+
+export function estimateAnthropicCost(
+  model: string,
+  usage: AnthropicTokenUsage,
+  cacheWriteTtl: AnthropicCacheWriteTtl = "5m",
+): ModelBrokerUsageCost {
+  const prices = modelPricing(model);
+  if (!prices) {
+    return {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+      pricingModel: "unknown",
+      cacheWriteTtl,
+    };
+  }
+  const input = usd(usage.inputTokens, prices.inputPerMTok);
+  const output = usd(usage.outputTokens, prices.outputPerMTok);
+  const cacheRead = usd(usage.cacheReadInputTokens, prices.cacheReadPerMTok);
+  const cacheWrite = usd(
+    usage.cacheCreationInputTokens,
+    cacheWriteTtl === "1h" ? prices.cacheWrite1hPerMTok : prices.cacheWrite5mPerMTok,
+  );
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    total: input + output + cacheRead + cacheWrite,
+    pricingModel: prices.pricingModel,
+    cacheWriteTtl,
+  };
+}
+
+export function modelRollupKey(model: string): string {
+  return model.replace(/[/.]/g, "_").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100) || "unknown";
+}
+
+export function usageWindowStartMs(now: number): number {
+  return Math.floor(now / WINDOW_MS) * WINDOW_MS;
+}
+
+function windowDocId(gatewayId: string, windowStartMs: number): string {
+  return `${gatewayId}_${windowStartMs}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function numberField(data: Record<string, unknown>, key: string): number {
+  const value = data[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function addUsageFields(
+  existing: Record<string, unknown>,
+  usage: AnthropicTokenUsage,
+  cost: ModelBrokerUsageCost,
+): Record<string, number> {
+  const existingCost = asRecord(existing.costBreakdown);
+  return {
+    requestCount: numberField(existing, "requestCount") + 1,
+    totalTokens: numberField(existing, "totalTokens") + totalTokens(usage),
+    inputTokens: numberField(existing, "inputTokens") + usage.inputTokens,
+    outputTokens: numberField(existing, "outputTokens") + usage.outputTokens,
+    cacheCreationInputTokens:
+      numberField(existing, "cacheCreationInputTokens") + usage.cacheCreationInputTokens,
+    cacheReadInputTokens:
+      numberField(existing, "cacheReadInputTokens") + usage.cacheReadInputTokens,
+    costUsd: numberField(existing, "costUsd") + cost.total,
+    costInput: numberField(existingCost, "input") + cost.input,
+    costOutput: numberField(existingCost, "output") + cost.output,
+    costCacheRead: numberField(existingCost, "cacheRead") + cost.cacheRead,
+    costCacheWrite: numberField(existingCost, "cacheWrite") + cost.cacheWrite,
+  };
+}
+
+function usageDocumentTotals(
+  existing: Record<string, unknown>,
+  usage: AnthropicTokenUsage,
+  cost: ModelBrokerUsageCost,
+): Record<string, unknown> {
+  const totals = addUsageFields(existing, usage, cost);
+  return {
+    requestCount: totals.requestCount,
+    totalTokens: totals.totalTokens,
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    cacheCreationInputTokens: totals.cacheCreationInputTokens,
+    cacheReadInputTokens: totals.cacheReadInputTokens,
+    costUsd: totals.costUsd,
+    costBreakdown: {
+      input: totals.costInput,
+      output: totals.costOutput,
+      cacheRead: totals.costCacheRead,
+      cacheWrite: totals.costCacheWrite,
+    },
+  };
+}
+
+function modelTotals(
+  existing: Record<string, unknown>,
+  modelKey: string,
+  model: string,
+  usage: AnthropicTokenUsage,
+  cost: ModelBrokerUsageCost,
+): Record<string, unknown> {
+  const models = asRecord(existing.models);
+  const current = asRecord(models[modelKey]);
+  return {
+    ...models,
+    [modelKey]: {
+      model,
+      totalTokens: numberField(current, "totalTokens") + totalTokens(usage),
+      costUsd: numberField(current, "costUsd") + cost.total,
+      requestCount: numberField(current, "requestCount") + 1,
+    },
+  };
+}
+
+function eventDocument(
+  input: Required<Omit<ModelBrokerUsageRecordInput, "cacheWriteTtl">> & {
+    cacheWriteTtl: AnthropicCacheWriteTtl;
+    cost: ModelBrokerUsageCost;
+    windowStartMs: number;
+  },
+): Record<string, unknown> {
+  return {
+    eventId: input.eventId,
+    requestId: input.requestId,
+    provider: input.provider,
+    gatewayId: input.gatewayId,
+    ownerUid: input.ownerUid,
+    model: input.model,
+    modelKey: modelRollupKey(input.model),
+    method: input.method,
+    path: input.path,
+    upstreamStatus: input.upstreamStatus,
+    createdAt: input.now,
+    windowStartMs: input.windowStartMs,
+    usage: input.usage,
+    totalTokens: totalTokens(input.usage),
+    costUsd: input.cost.total,
+    costBreakdown: {
+      input: input.cost.input,
+      output: input.cost.output,
+      cacheRead: input.cost.cacheRead,
+      cacheWrite: input.cost.cacheWrite,
+    },
+    pricing: {
+      model: input.cost.pricingModel,
+      cacheWriteTtl: input.cacheWriteTtl,
+    },
+  };
+}
+
+export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
+  readonly events: Array<Record<string, unknown>> = [];
+  readonly rollups = new Map<string, { totalTokens: number; costUsd: number; requestCount: number }>();
+
+  async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
+    const now = input.now ?? Date.now();
+    const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
+    const cost = estimateAnthropicCost(input.model, input.usage, cacheWriteTtl);
+    const eventId = input.eventId ?? crypto.randomUUID();
+    const windowStartMs = usageWindowStartMs(now);
+    this.events.push(
+      eventDocument({
+        ...input,
+        eventId,
+        now,
+        cacheWriteTtl,
+        cost,
+        windowStartMs,
+      }),
+    );
+    const existing = this.rollups.get(input.gatewayId) ?? {
+      totalTokens: 0,
+      costUsd: 0,
+      requestCount: 0,
+    };
+    this.rollups.set(input.gatewayId, {
+      totalTokens: existing.totalTokens + totalTokens(input.usage),
+      costUsd: existing.costUsd + cost.total,
+      requestCount: existing.requestCount + 1,
+    });
+  }
+}
+
+export function createFirestoreModelBrokerUsageStore(
+  db: Pick<Firestore, "collection" | "runTransaction">,
+): ModelBrokerUsageStore {
+  return {
+    async recordUsage(input) {
+      const now = input.now ?? Date.now();
+      const eventId = input.eventId ?? crypto.randomUUID();
+      const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
+      const cost = estimateAnthropicCost(input.model, input.usage, cacheWriteTtl);
+      const windowStartMs = usageWindowStartMs(now);
+      const eventRef = db.collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION).doc(eventId);
+      const rollupRef = db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(input.gatewayId);
+      const windowRef = db
+        .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
+        .doc(windowDocId(input.gatewayId, windowStartMs));
+      const modelKey = modelRollupKey(input.model);
+
+      await db.runTransaction(async (t) => {
+        const existingEvent = await t.get(eventRef);
+        if (existingEvent.exists) return;
+        const [rollupSnap, windowSnap] = await Promise.all([
+          t.get(rollupRef),
+          t.get(windowRef),
+        ]);
+        const rollupData = rollupSnap.data() ?? {};
+        const windowData = windowSnap.data() ?? {};
+
+        t.set(
+          eventRef,
+          eventDocument({
+            ...input,
+            eventId,
+            now,
+            cacheWriteTtl,
+            cost,
+            windowStartMs,
+          }),
+        );
+        t.set(
+          rollupRef,
+          {
+            gatewayId: input.gatewayId,
+            ownerUid: input.ownerUid,
+            provider: input.provider,
+            updatedAt: now,
+            ...usageDocumentTotals(rollupData, input.usage, cost),
+            models: modelTotals(rollupData, modelKey, input.model, input.usage, cost),
+          },
+          { merge: true },
+        );
+        t.set(
+          windowRef,
+          {
+            gatewayId: input.gatewayId,
+            ownerUid: input.ownerUid,
+            provider: input.provider,
+            windowStartMs,
+            windowLengthHours: WINDOW_LENGTH_HOURS,
+            updatedAt: now,
+            ...usageDocumentTotals(windowData, input.usage, cost),
+          },
+          { merge: true },
+        );
+      });
+    },
+  };
+}
