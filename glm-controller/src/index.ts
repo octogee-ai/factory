@@ -41,6 +41,10 @@ import {
   defaultRandomTokenHex,
 } from "./auth-secret-ensurer.js";
 import {
+  createGatewayModelKeySecretEnsurer,
+  type GatewayModelKeySecretEnsurer,
+} from "./model-key-secret-ensurer.js";
+import {
   spawnKubectl,
   syncApiFleetIngressPaths,
   syncPreviewIngressPaths,
@@ -85,7 +89,11 @@ import {
   cutoverUserGatewayAndMarkMounted,
   type FleetStateFirestore,
 } from "../../scripts/lib/fleet-state.js";
-import { provisionGatewayAuthSecret, deleteSecret } from "../../scripts/lib/secret-manager.js";
+import {
+  provisionGatewayAuthSecret,
+  deleteSecret,
+  readSecretWithLabels,
+} from "../../scripts/lib/secret-manager.js";
 import { listGatewayBuilds } from "../../scripts/lib/artifact-registry.js";
 import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
 import { deleteAuthUserTolerantOfMissing } from "../../scripts/lib/firebase-auth-helpers.js";
@@ -146,10 +154,32 @@ function createGatewayPersistentVolumeClaimDeleter(
   };
 }
 
+function createGatewayDeploymentRestarter(
+  runKubectl: KubectlSubprocess,
+  logFn: (msg: string) => void,
+): (gatewayId: string) => Promise<void> {
+  return async (gatewayId) => {
+    const name = deploymentNameForInstance(gatewayId);
+    const result = await runKubectl([
+      "-n",
+      NAMESPACE,
+      "rollout",
+      "restart",
+      `deploy/${name}`,
+    ]);
+    if (result.code !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim());
+    }
+    logFn(`[glm-controller] rollout restart deploy/${name} after model-key secret change`);
+  };
+}
+
 interface ControllerDeps {
   db: Firestore;
   helm: HelmRunner;
   kubeOps?: KubeOps;
+  modelKeySecretEnsurer?: GatewayModelKeySecretEnsurer;
+  restartGatewayDeployment?: (gatewayId: string) => Promise<void>;
   handlers: OperationHandlers;
   log: (msg: string) => void;
 
@@ -341,6 +371,55 @@ async function readReconcileInputs(deps: ControllerDeps): Promise<ReconcileInput
   return { desired, actualMap, mountedByGatewayId };
 }
 
+async function readOwnerByotActive(
+  db: Firestore,
+  ownerUid: string | undefined,
+): Promise<boolean> {
+  if (!ownerUid) return false;
+  const snap = await db.collection("users").doc(ownerUid).get();
+  if (!snap.exists) return false;
+  return (snap.data() as { byotActive?: unknown } | undefined)?.byotActive === true;
+}
+
+async function syncGatewayModelKeySecrets(
+  deps: ControllerDeps,
+  desired: GatewayDesiredState[],
+): Promise<Set<string>> {
+  const ensurer = deps.modelKeySecretEnsurer;
+  const changedBuilderGateways = new Set<string>();
+  if (!ensurer) return changedBuilderGateways;
+
+  for (const gateway of desired) {
+    if (!gateway.gatewayId) continue;
+    const gatewayClass =
+      gateway.desiredStatus === "retired" ? "shared" : resolveGatewayClass(gateway);
+    const ownerByotActive =
+      gatewayClass === "builder"
+        ? await readOwnerByotActive(deps.db, gateway.ownerUid)
+        : false;
+    try {
+      const result = await ensurer.syncGatewayModelKeySecret({
+        namespace: NAMESPACE,
+        gatewayId: gateway.gatewayId,
+        gatewayClass,
+        ownerByotActive,
+      });
+      if (
+        result.changed &&
+        gatewayClass === "builder" &&
+        gateway.desiredStatus === "running"
+      ) {
+        changedBuilderGateways.add(gateway.gatewayId);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`(source=model-key-secret) ${gateway.gatewayId}: ${message}`);
+    }
+  }
+
+  return changedBuilderGateways;
+}
+
 function preservedDriftChanges(
   changes: ReconcileChange[],
   targetMap: HelmInstancesMap,
@@ -388,6 +467,28 @@ async function applyTargetChanges(
     .join(", ");
   deps.log(`[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`);
   await applyChanges(targetVsActual, deps);
+}
+
+async function restartGatewayDeploymentsForModelKeyChanges(
+  deps: ControllerDeps,
+  changedGatewayIds: Set<string>,
+  targetVsActual: ReconcileChange[],
+): Promise<void> {
+  if (!deps.restartGatewayDeployment || changedGatewayIds.size === 0) return;
+  const helmTouchedGatewayIds = new Set(
+    targetVsActual
+      .filter((change) => change.kind !== "drift")
+      .map((change) => change.gatewayId),
+  );
+  for (const gatewayId of changedGatewayIds) {
+    if (helmTouchedGatewayIds.has(gatewayId)) continue;
+    try {
+      await deps.restartGatewayDeployment(gatewayId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`(source=model-key-secret) ${gatewayId}: rollout restart failed: ${message}`);
+    }
+  }
 }
 
 async function syncFleetIngressIfConfigured(
@@ -540,6 +641,7 @@ async function completeRecoveredOperatorAddGatewayOps(
 
 async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
+  const modelKeyChangedGatewayIds = await syncGatewayModelKeySecrets(deps, desired);
   const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
   const changes = diffInstancesMap(actualMap, desiredMap, {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
@@ -555,6 +657,11 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
   });
   await applyTargetChanges(deps, targetVsActual, desired.length, Object.keys(actualMap).length);
+  await restartGatewayDeploymentsForModelKeyChanges(
+    deps,
+    modelKeyChangedGatewayIds,
+    targetVsActual,
+  );
   const readyGateways = await refreshGatewayReadiness(deps, desired);
   await syncFleetIngressIfConfigured(deps, desired);
   await completeRecoveredOperatorAddGatewayOps(deps, readyGateways);
@@ -769,6 +876,18 @@ async function main(): Promise<void> {
     randomTokenHex: defaultRandomTokenHex,
     log,
   });
+  const modelKeySecretEnsurer = createGatewayModelKeySecretEnsurer({
+    runKubectl,
+    readSourceSecret: async (secretName) => {
+      try {
+        return await readSecretWithLabels(secretName);
+      } catch (err) {
+        if ((err as { code?: number } | null)?.code === 5) return null;
+        throw err;
+      }
+    },
+    log,
+  });
   const helm =
     process.env.HELM_RUNNER_MODE === "stub"
       ? createLoggingHelmRunner(log)
@@ -838,6 +957,8 @@ const handlerSyncFleetIngress = async () => {
     db,
     helm,
     kubeOps,
+    modelKeySecretEnsurer,
+    restartGatewayDeployment: createGatewayDeploymentRestarter(runKubectl, log),
     handlers,
     log,
     syncFleetIngress: syncAllFleetIngresses,

@@ -107,6 +107,23 @@ export async function readSecret(
   return Buffer.from(data as Uint8Array).toString("utf8");
 }
 
+export async function readSecretWithLabels(
+  name: string,
+  version = "latest",
+): Promise<{ value: string; labels: Record<string, string> }> {
+  const secretName = fqSecretName(name);
+  const [secret] = await client().getSecret({ name: secretName });
+  const [v] = await client().accessSecretVersion({
+    name: `${secretName}/versions/${version}`,
+  });
+  const data = v.payload?.data;
+  if (!data) throw new Error(`Secret ${name} has no payload`);
+  return {
+    value: Buffer.from(data as Uint8Array).toString("utf8"),
+    labels: secret.labels ?? {},
+  };
+}
+
 export async function archiveSecret(name: string): Promise<{ disabledCount: number }> {
   const secretName = fqSecretName(name);
   try {
