@@ -7,6 +7,11 @@ port: 3001
 
 serviceAccountName: octogee-gateway
 
+# No-shell platform CronJobs run under their own least-privilege KSA. Its
+# projected octogee-api-audience token tenant-binds the call (kind=platform),
+# so the crons no longer depend on the shared internal-service-key.
+cronServiceAccountName: octogee-cron
+
 env:
   # K8s DNS — no hardcoded IPs
   GITEA_URL: ""  # leave empty to auto-compute from K8S_NAMESPACE
@@ -22,8 +27,9 @@ env:
 # The standalone gateway-edge Deployment is retired; gateway-edge now runs as
 # a sidecar in helm/octogee-gateway, where platform secrets are deliberately
 # omitted from gateway pods. Keep platform-secret env wiring out of this values
-# file. The CronJobs below wire INTERNAL_SERVICE_KEY directly because they are
-# no-shell platform callers into octogee-api.
+# file. The CronJobs below present a projected octogee-api-audience SA token for
+# tenant-binding; they still also wire INTERNAL_SERVICE_KEY as a fallback until
+# that key is retired.
 
 resources:
   requests:

@@ -103,14 +103,56 @@ export function requireInternalServiceKey(req: Request, res: Response, next: Nex
   if (!validateInternalServiceKey(req, res)) {
     return;
   }
+  logger.warn("internal request authenticated via legacy INTERNAL_SERVICE_KEY", {
+    route: req.path,
+    ip: req.ip,
+  });
   next();
 }
 
 export function requireInternalServiceAuth(req: Request, res: Response, next: NextFunction): void {
   const boundTenant = (req as Request & { boundTenant?: { kind?: unknown } }).boundTenant;
-  if (boundTenant?.kind === "gateway") {
+  if (boundTenant?.kind === "gateway" || boundTenant?.kind === "platform") {
     next();
     return;
+  }
+
+  requireInternalServiceKey(req, res, next);
+}
+
+function timingSafeStringEqual(a: string, b: string): boolean {
+  try {
+    return (
+      a.length === b.length &&
+      crypto.timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function bearerFromRequest(req: Request): string | null {
+  const header = req.headers.authorization;
+  if (typeof header !== "string" || !header.startsWith("Bearer ")) return null;
+  const token = header.slice("Bearer ".length).trim();
+  return token || null;
+}
+
+export function requireSocialNotificationAuth(req: Request, res: Response, next: NextFunction): void {
+  const configured = process.env.SOCIAL_NOTIFICATION_BEARER_TOKEN;
+  const provided = bearerFromRequest(req);
+  if (configured && provided && timingSafeStringEqual(provided, configured)) {
+    logger.info("social notification authenticated via dedicated bearer", {
+      route: req.path,
+    });
+    next();
+    return;
+  }
+
+  if (provided) {
+    logger.warn("social notification bearer rejected — falling back to legacy key", {
+      route: req.path,
+    });
   }
 
   requireInternalServiceKey(req, res, next);

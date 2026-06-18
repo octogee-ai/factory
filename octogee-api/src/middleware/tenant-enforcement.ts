@@ -158,6 +158,10 @@ export function createTenantEnforcementMiddleware(
     }
 
     const bound = req.boundTenant;
+    if (bound?.kind === "platform") {
+      next();
+      return;
+    }
     if (!bound || bound.kind !== "gateway") {
       res.status(403).json(FORBIDDEN);
       return;

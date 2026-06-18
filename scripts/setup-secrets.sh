@@ -383,6 +383,40 @@ if [[ -z "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" ]]; then
 fi
 ksecret gateway-model-key-issuer --from-literal=bearer_token="$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
 
+# ── 9a2. Social notification bearer (Cloud Functions → octogee-api /social) ─
+# Dedicated bearer for the out-of-cluster social inbox producer, replacing the
+# /social route's reliance on the shared internal-service-key. octogee-api reads
+# the K8s secret; Functions read the Secret Manager copy via defineSecret — both
+# must carry the SAME value. Precedence: Secret Manager > existing K8s > generated.
+info "social-notification-bearer"
+SOCIAL_NOTIFICATION_BEARER=$(sm_get "SOCIAL_NOTIFICATION_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+if [[ -z "$SOCIAL_NOTIFICATION_BEARER" ]]; then
+  EXISTING_SNB=$(ksecret_key social-notification-bearer bearer-token)
+  if [[ -n "$EXISTING_SNB" ]]; then
+    info "  Reusing existing social bearer from K8s, back-filling Secret Manager"
+    SOCIAL_NOTIFICATION_BEARER="$EXISTING_SNB"
+    echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets create "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
+      --data-file=- --project="$FIREBASE_PROJECT" \
+      --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null || \
+    echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets versions add "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
+      --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
+  else
+    SOCIAL_NOTIFICATION_BEARER=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
+    info "  First install — generating social bearer, saving to Secret Manager ($FIREBASE_PROJECT)"
+    if echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets create "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
+         --data-file=- --project="$FIREBASE_PROJECT" \
+         --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
+      ok "  Created SM secret: SOCIAL_NOTIFICATION_BEARER_TOKEN"
+    elif echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets versions add "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
+         --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
+      ok "  Updated SM secret: SOCIAL_NOTIFICATION_BEARER_TOKEN"
+    else
+      warn "  Could not persist to SM — bearer only in K8s this run; re-run to persist"
+    fi
+  fi
+fi
+ksecret social-notification-bearer --from-literal=bearer-token="$SOCIAL_NOTIFICATION_BEARER"
+
 # ── 9b. Fleet controller signing keypair (glm-controller ↔ gateway) ──────
 # glm-controller signs the in-cluster migration RPCs with an Ed25519 private
 # key; gateway pods verify with only the public key. Secret Manager is the
@@ -634,6 +668,7 @@ SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octo
 # Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy
 for sm_secret in \
   INTERNAL_SERVICE_KEY \
+  SOCIAL_NOTIFICATION_BEARER_TOKEN \
   MM_ADMIN_TOKEN \
   GITEA_TOKEN \
   STRIPE_SECRET_KEY \
@@ -673,6 +708,7 @@ status "mattermost-gateway / bot_user_id" "${MM_BOT_USER_ID:-}"
 status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
 status "internal-service-key" "${INTERNAL_SERVICE_KEY:-}"
 status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
+status "social-notification-bearer" "${SOCIAL_NOTIFICATION_BEARER:-}"
 status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
 status "resend-secrets / api_key" "${RESEND_API_KEY:-}"
 status "resend-secrets / from_email" "${RESEND_FROM_EMAIL:-}"

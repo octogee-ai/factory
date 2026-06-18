@@ -100,6 +100,49 @@ describe("tenant binding middleware", () => {
     await expect(registry.metrics()).resolves.toContain('result="ok"');
   });
 
+  it("binds the platform cron service-account token to a platform tenant", async () => {
+    const { app, registry } = buildApp({
+      reviewer: async () => ({
+        authenticated: true,
+        namespace: "octogee",
+        saName: "octogee-cron",
+        audiences: ["octogee-api"],
+      }),
+    });
+
+    const res = await request(app)
+      .post("/internal/probe")
+      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.boundTenant).toEqual({ kind: "platform", actor: "cron" });
+    await expect(registry.metrics()).resolves.toContain('result="ok_platform"');
+  });
+
+  it("never yields a platform binding for a wrong-audience token (the kind=platform gate)", async () => {
+    const warn = vi.fn();
+    const { app, registry } = buildApp({
+      warn,
+      reviewer: async () => ({
+        authenticated: true,
+        namespace: "octogee",
+        saName: "octogee-cron",
+        audiences: ["some-other-audience"],
+      }),
+    });
+
+    const res = await request(app)
+      .post("/internal/probe")
+      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.boundTenant).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    await expect(registry.metrics()).resolves.toContain('result="audience_mismatch"');
+  });
+
   it("binds a grandfathered operator gateway service-account token", async () => {
     const { app, registry } = buildApp({
       reviewer: async () => ({

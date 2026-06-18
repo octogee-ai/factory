@@ -164,6 +164,7 @@ case "$SECRET" in
     echo "    anthropic             — ANTHROPIC_API_KEY, standard/cattle BYOK/BYOS fallback (octogee-anthropic; standard gateways only, never operator)"
     echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: octogee-api, cron jobs, social functions"
     echo "    model-key-issuer      — GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN, consumers: octogee-api, glm-controller"
+    echo "    social-notification-bearer — SOCIAL_NOTIFICATION_BEARER_TOKEN, consumers: octogee-api /social, social functions"
     echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: octogee-api, glm-controller"
     echo "    gitea-pat             — Gitea API token, consumers: octogee-api, glm-controller"
     echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: octogee-gateway"
@@ -276,6 +277,34 @@ case "$SECRET" in
 
     info "Restarting octogee-api and glm-controller so both sides pick up the new token..."
     rollout_restart octogee-api glm-controller
+    ok "Rotation complete"
+    ;;
+
+  # ── Social notification bearer ──────────────────────────────────────────
+  social-notification-bearer)
+    confirm "Rotate the social notification bearer in $FIREBASE_PROJECT (octogee-api /social + social functions must use the new value)?" || { info "Cancelled"; exit 0; }
+
+    NEW_VALUE=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
+
+    info "Writing new version to Secret Manager ($FIREBASE_PROJECT)..."
+    echo -n "$NEW_VALUE" | gcloud secrets versions add SOCIAL_NOTIFICATION_BEARER_TOKEN \
+      --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
+    echo -n "$NEW_VALUE" | gcloud secrets create SOCIAL_NOTIFICATION_BEARER_TOKEN \
+      --data-file=- --project="$FIREBASE_PROJECT" \
+      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
+      fail "Could not write to Secret Manager"
+    ok "Secret Manager updated"
+
+    info "Updating K8s secret social-notification-bearer..."
+    kubectl create secret generic social-notification-bearer -n "$K8S_NAMESPACE" \
+      --from-literal=bearer-token="$NEW_VALUE" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    ok "K8s secret social-notification-bearer updated"
+
+    info "Restarting octogee-api so its env picks up the new social-notification-bearer Secret..."
+    rollout_restart octogee-api
+
+    info "Social Cloud Functions read the Secret Manager value; redeploy functions only if warm instances keep using an old version."
     ok "Rotation complete"
     ;;
 

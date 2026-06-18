@@ -91,6 +91,14 @@ describe("tenant enforcement middleware", () => {
     expect(res.status).toBe(200);
   });
 
+  it("allows a platform-bound caller for targetless global jobs without the legacy key", async () => {
+    const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
+      .post("/internal/probe")
+      .send({});
+
+    expect(res.status).toBe(200);
+  });
+
   it("rejects missing binding/key before route handlers run", async () => {
     const res = await request(app({ internalServiceKey: "platform-key" }))
       .post("/internal/probe")

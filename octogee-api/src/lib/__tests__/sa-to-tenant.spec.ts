@@ -166,4 +166,18 @@ describe("mapSaToTenant", () => {
       tenant: { kind: "platform", actor: "octogee-api" },
     });
   });
+
+  it("maps the platform cron KSA to a platform tenant for targetless jobs", async () => {
+    const cron = await mapSaToTenant(
+      fakeDb({}),
+      { namespace: "octogee", saName: "octogee-cron" },
+      "octogee",
+    );
+
+    expect(cron).toEqual({
+      attached: true,
+      result: "ok_platform",
+      tenant: { kind: "platform", actor: "cron" },
+    });
+  });
 });
