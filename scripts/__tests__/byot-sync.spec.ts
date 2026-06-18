@@ -436,6 +436,35 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
 });
 
 describe("standard gateway — shell-runtime BYOS is not materialized", () => {
+  it("broker-token gateway: anthropic BYOT is broker-resolved, not materialized locally", async () => {
+    const applyByotStateFn = vi.fn(() => true);
+    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "anthropic" } },
+      },
+      {
+        usesLlmBrokerToken: () => true,
+        isOperatorGateway: () => false,
+        applyByotState: applyByotStateFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
+    expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+  });
+
   it("syncByotForCustomer clears local BYOT artifacts and skips oauth restore/model patch/reload unless cleanup changed", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
@@ -465,7 +494,7 @@ describe("standard gateway — shell-runtime BYOS is not materialized", () => {
   });
 });
 
-describe("operator gateway — provisioner does not touch auth or openclaw.json", () => {
+describe("operator gateway — runtime sync stays narrow", () => {
   it("restoreOauthStoreForSlug: returns {restored:false, present:false} without fetching", async () => {
     const fetchGlmByosub = vi.fn(async () => ({}));
     const fetchSecret = vi.fn(async () => "x");
@@ -507,5 +536,34 @@ describe("operator gateway — provisioner does not touch auth or openclaw.json"
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
+  });
+
+  it("anthropic BYOT cleanup still runs on operator broker-token gateways", async () => {
+    const applyByotStateFn = vi.fn(() => true);
+    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "anthropic" } },
+      },
+      {
+        isOperatorGateway: () => true,
+        usesLlmBrokerToken: () => true,
+        applyByotState: applyByotStateFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
+    expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 });

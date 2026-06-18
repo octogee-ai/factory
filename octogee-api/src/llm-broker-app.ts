@@ -3,6 +3,10 @@ import * as crypto from "node:crypto";
 import express, { type Request, type Response as ExpressResponse, type NextFunction } from "express";
 
 import type {
+  ModelBrokerProviderKeyResolver,
+  ModelBrokerProviderKey,
+} from "./lib/model-broker-provider-keys.js";
+import type {
   ModelBrokerProvider,
   ModelBrokerTokenRecord,
   ModelBrokerTokenStore,
@@ -22,6 +26,7 @@ export interface LlmBrokerAppDeps {
   store: Pick<ModelBrokerTokenStore, "lookupToken">;
   usageStore?: ModelBrokerUsageStore;
   providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
+  providerKeyResolver?: ModelBrokerProviderKeyResolver;
   upstreamBaseUrl?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -85,7 +90,7 @@ function allowedEndpoint(req: Request, url: URL): boolean {
   );
 }
 
-function upstreamHeaders(req: Request, platformKey: string): Headers {
+function upstreamHeaders(req: Request, apiKey: string): Headers {
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase();
@@ -96,8 +101,41 @@ function upstreamHeaders(req: Request, platformKey: string): Headers {
       headers.set(name, value);
     }
   }
-  headers.set("x-api-key", platformKey);
+  headers.set("x-api-key", apiKey);
   return headers;
+}
+
+async function resolveProviderKey(input: {
+  record: ModelBrokerTokenRecord;
+  providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
+  providerKeyResolver?: ModelBrokerProviderKeyResolver;
+}): Promise<ModelBrokerProviderKey | null> {
+  if (input.providerKeyResolver) {
+    return input.providerKeyResolver({
+      provider: input.record.provider,
+      record: input.record,
+    });
+  }
+  const apiKey = input.providerKeys[input.record.provider]?.trim();
+  return apiKey ? { apiKey, source: "platform" } : null;
+}
+
+async function resolveProviderKeyForRequest(input: {
+  record: ModelBrokerTokenRecord;
+  providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
+  providerKeyResolver?: ModelBrokerProviderKeyResolver;
+  onError: (err: unknown) => void;
+}): Promise<ModelBrokerProviderKey | null> {
+  try {
+    return await resolveProviderKey({
+      record: input.record,
+      providerKeys: input.providerKeys,
+      providerKeyResolver: input.providerKeyResolver,
+    });
+  } catch (err) {
+    input.onError(err);
+    return null;
+  }
 }
 
 function isEventStream(upstream: globalThis.Response): boolean {
@@ -502,6 +540,18 @@ async function writeStreamingUpstreamResponse(
   }
 }
 
+async function writeUpstreamResponse(
+  upstream: globalThis.Response,
+  res: ExpressResponse,
+  metering?: MeteringContext,
+): Promise<void> {
+  if (isEventStream(upstream)) {
+    await writeStreamingUpstreamResponse(upstream, res, metering);
+  } else {
+    await writeBufferedUpstreamResponse(upstream, res, metering);
+  }
+}
+
 export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
   const app = express();
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -535,8 +585,13 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           res.status(401).json({ error: "invalid broker token" });
           return;
         }
-        const platformKey = deps.providerKeys.anthropic;
-        if (!platformKey) {
+        const providerKey = await resolveProviderKeyForRequest({
+          record,
+          providerKeys: deps.providerKeys,
+          providerKeyResolver: deps.providerKeyResolver,
+          onError: deps.onMeteringError ?? (() => undefined),
+        });
+        if (!providerKey) {
           res.status(503).json({ error: "anthropic upstream is not configured" });
           return;
         }
@@ -563,7 +618,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
         const requestId = crypto.randomUUID();
         const upstream = await fetchImpl(`${upstreamBaseUrl}${url.pathname}${url.search}`, {
           method: req.method,
-          headers: Object.fromEntries(upstreamHeaders(req, platformKey).entries()),
+          headers: Object.fromEntries(upstreamHeaders(req, providerKey.apiKey).entries()),
           body,
           redirect: "manual",
         });
@@ -580,11 +635,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
               onMeteringError: deps.onMeteringError ?? (() => undefined),
             }
           : undefined;
-        if (isEventStream(upstream)) {
-          await writeStreamingUpstreamResponse(upstream, res, metering);
-        } else {
-          await writeBufferedUpstreamResponse(upstream, res, metering);
-        }
+        await writeUpstreamResponse(upstream, res, metering);
       } catch (err) {
         next(err);
       }

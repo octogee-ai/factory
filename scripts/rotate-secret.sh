@@ -209,18 +209,17 @@ case "$SECRET" in
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     ok "K8s secret octogee-anthropic updated"
 
-    # Every standard/non-operator gateway mounts the fallback key (the helm
-    # gate is `ne .Values.profile "operator"`), so restart them all — not just
-    # the default pool. Operator gateways never mount it (BuilderShell users
-    # bring their own BYOT/BYOS key). See DECISIONS.md.
-    info "Restarting all standard (non-operator) gateways (classifier reload ~90s)..."
-    STANDARD_GWS=$(kubectl get deploy -n "$K8S_NAMESPACE" \
-      -l 'app=octogee-gateway,gateway-profile!=operator' \
+    # Shared gateways mount octogee-anthropic directly. Builder/operator
+    # gateways hold broker tokens; llm-broker is the provider-key holder.
+    info "Restarting llm-broker and shared gateways (classifier reload ~90s)..."
+    rollout_restart llm-broker
+    SHARED_GWS=$(kubectl get deploy -n "$K8S_NAMESPACE" \
+      -l 'app=octogee-gateway,gateway-class=shared' \
       -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null)
-    [[ -n "$STANDARD_GWS" ]] && rollout_restart $STANDARD_GWS || warn "No standard gateways found to restart"
+    [[ -n "$SHARED_GWS" ]] && rollout_restart $SHARED_GWS || warn "No shared gateways found to restart"
 
     info "Verifying gateway startup..."
-    kubectl logs -n "$K8S_NAMESPACE" -l 'app=octogee-gateway,gateway-profile!=operator' \
+    kubectl logs -n "$K8S_NAMESPACE" -l 'app=octogee-gateway,gateway-class=shared' \
       --tail=15 --max-log-requests=20 2>/dev/null | grep -iE 'anthropic|auth|error' || true
     ok "Rotation complete"
     ;;

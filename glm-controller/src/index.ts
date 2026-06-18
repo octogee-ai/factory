@@ -378,45 +378,30 @@ async function readReconcileInputs(deps: ControllerDeps): Promise<ReconcileInput
   return { desired, actualMap, mountedByGatewayId };
 }
 
-async function readOwnerByotActive(
-  db: Firestore,
-  ownerUid: string | undefined,
-): Promise<boolean> {
-  if (!ownerUid) return false;
-  const snap = await db.collection("users").doc(ownerUid).get();
-  if (!snap.exists) return false;
-  return (snap.data() as { byotActive?: unknown } | undefined)?.byotActive === true;
-}
-
 async function syncGatewayModelKeySecrets(
   deps: ControllerDeps,
   desired: GatewayDesiredState[],
 ): Promise<Set<string>> {
   const ensurer = deps.modelKeySecretEnsurer;
-  const changedBuilderGateways = new Set<string>();
-  if (!ensurer) return changedBuilderGateways;
+  const changedBrokerGateways = new Set<string>();
+  if (!ensurer) return changedBrokerGateways;
 
   for (const gateway of desired) {
     if (!gateway.gatewayId) continue;
     const gatewayClass =
       gateway.desiredStatus === "retired" ? "shared" : resolveGatewayClass(gateway);
-    const ownerByotActive =
-      gatewayClass === "builder"
-        ? await readOwnerByotActive(deps.db, gateway.ownerUid)
-        : false;
     try {
       const result = await ensurer.syncGatewayModelKeySecret({
         namespace: NAMESPACE,
         gatewayId: gateway.gatewayId,
         gatewayClass,
-        ownerByotActive,
       });
       if (
         result.changed &&
-        gatewayClass === "builder" &&
+        (gatewayClass === "builder" || gatewayClass === "operator") &&
         gateway.desiredStatus === "running"
       ) {
-        changedBuilderGateways.add(gateway.gatewayId);
+        changedBrokerGateways.add(gateway.gatewayId);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -424,7 +409,7 @@ async function syncGatewayModelKeySecrets(
     }
   }
 
-  return changedBuilderGateways;
+  return changedBrokerGateways;
 }
 
 async function syncGatewayModelKeySources(
@@ -437,17 +422,12 @@ async function syncGatewayModelKeySources(
   for (const gateway of desired) {
     if (!gateway.gatewayId) continue;
     const gatewayClass = resolveGatewayClass(gateway);
-    const ownerByotActive =
-      gatewayClass === "builder"
-        ? await readOwnerByotActive(deps.db, gateway.ownerUid)
-        : false;
     try {
       await issuer.syncGatewayModelKeySource({
         gatewayId: gateway.gatewayId,
         gatewayClass,
         desiredStatus: gateway.desiredStatus,
         ownerUid: gateway.ownerUid,
-        ownerByotActive,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

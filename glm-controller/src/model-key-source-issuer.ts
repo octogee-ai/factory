@@ -34,7 +34,6 @@ export interface GatewayModelKeySourceIssuer {
     gatewayClass: GatewayClass;
     desiredStatus: GatewayDesiredStatus;
     ownerUid?: string;
-    ownerByotActive?: boolean;
   }): Promise<GatewayModelKeySourceResult>;
 }
 
@@ -50,7 +49,6 @@ export interface GatewayModelKeySourceResult {
   reason?:
     | "non_builder"
     | "retired"
-    | "owner_byot_active"
     | "missing_source"
     | "missing_issuer"
     | "invalid_source_labels"
@@ -186,6 +184,10 @@ function parsePositiveNumber(raw: string | undefined): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function gatewayClassUsesBrokerToken(gatewayClass: GatewayClass): boolean {
+  return gatewayClass === "builder" || gatewayClass === "operator";
+}
+
 export function createConfiguredGatewayModelKeyIssuerBackend(
   env: NodeJS.ProcessEnv,
 ): GatewayModelKeyIssuerBackend | undefined {
@@ -208,7 +210,6 @@ export function createGatewayModelKeySourceIssuer(
       gatewayClass,
       desiredStatus,
       ownerUid,
-      ownerByotActive,
     }) {
       const secretName = gatewayModelKeySecretName(gatewayId);
       const deleteAndReport = async (
@@ -242,14 +243,11 @@ export function createGatewayModelKeySourceIssuer(
         };
       };
 
-      if (gatewayClass !== "builder") {
+      if (!gatewayClassUsesBrokerToken(gatewayClass)) {
         return deleteAndReport("non_builder");
       }
       if (desiredStatus === "retired") {
         return deleteAndReport("retired");
-      }
-      if (ownerByotActive) {
-        return deleteAndReport("owner_byot_active");
       }
 
       const existing = await deps.readSourceSecret(secretName);

@@ -14,7 +14,6 @@ export interface GatewayModelKeySecretEnsurer {
     namespace: string;
     gatewayId: string;
     gatewayClass: GatewayClass;
-    ownerByotActive?: boolean;
   }): Promise<GatewayModelKeySecretResult>;
 }
 
@@ -29,7 +28,6 @@ export interface GatewayModelKeySecretResult {
     | "skipped";
   reason?:
     | "non_builder"
-    | "owner_byot_active"
     | "missing_source"
     | "invalid_source_labels"
     | "empty_source_value";
@@ -51,6 +49,10 @@ function isNotFound(stderr: string): boolean {
 
 export function gatewayModelKeySecretName(gatewayId: string): string {
   return `${GATEWAY_MODEL_KEY_SECRET_PREFIX}${gatewayId}`;
+}
+
+function gatewayClassUsesBrokerToken(gatewayClass: GatewayClass): boolean {
+  return gatewayClass === "builder" || gatewayClass === "operator";
 }
 
 export function gatewayModelKeySourceLabels(gatewayId: string): Record<string, string> {
@@ -232,7 +234,6 @@ export function createGatewayModelKeySecretEnsurer(
       namespace,
       gatewayId,
       gatewayClass,
-      ownerByotActive,
     }) {
       const secretName = gatewayModelKeySecretName(gatewayId);
       const deleteAndReport = async (
@@ -253,11 +254,8 @@ export function createGatewayModelKeySecretEnsurer(
         };
       };
 
-      if (gatewayClass !== "builder") {
+      if (!gatewayClassUsesBrokerToken(gatewayClass)) {
         return deleteAndReport("non_builder");
-      }
-      if (ownerByotActive) {
-        return deleteAndReport("owner_byot_active");
       }
 
       const source = await deps.readSourceSecret(secretName);

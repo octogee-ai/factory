@@ -134,36 +134,32 @@ describe("createGatewayModelKeySourceIssuer", () => {
     expect(deps.writeSourceSecret).not.toHaveBeenCalled();
   });
 
-  it("deletes and revokes a source when the owner enables BYOT", async () => {
-    const revokeGatewayModelKey = vi.fn(async () => undefined);
+  it("issues a broker token source for operator gateways too", async () => {
     const deps = makeDeps({
-      readSourceSecret: vi.fn(async () => validSource()),
-      deleteSourceSecret: vi.fn(async () => ({ deleted: true })),
       backend: {
-        issueGatewayModelKey: vi.fn(async () => null),
-        revokeGatewayModelKey,
+        issueGatewayModelKey: vi.fn(async () => ({
+          value: "ogk_bender_token",
+          provider: "anthropic",
+          capped: true,
+        })),
       },
     });
     const issuer = createGatewayModelKeySourceIssuer(deps);
 
     const result = await issuer.syncGatewayModelKeySource({
-      gatewayId: "jack",
-      gatewayClass: "builder",
+      gatewayId: "bender",
+      gatewayClass: "operator",
       desiredStatus: "running",
-      ownerUid: "uid-jack",
-      ownerByotActive: true,
+      ownerUid: "uid-bender",
     });
 
-    expect(result).toMatchObject({
-      action: "deleted",
-      reason: "owner_byot_active",
-      changed: true,
+    expect(result).toMatchObject({ action: "issued", changed: true });
+    expect(deps.writeSourceSecret).toHaveBeenCalledWith({
+      name: "gateway-model-key-bender",
+      value: "ogk_bender_token",
+      labels: gatewayModelKeySourceLabels("bender"),
     });
-    expect(revokeGatewayModelKey).toHaveBeenCalledWith({
-      gatewayId: "jack",
-      ownerUid: "uid-jack",
-      secretName: "gateway-model-key-jack",
-    });
+    expect(deps.deleteSourceSecret).not.toHaveBeenCalled();
   });
 
   it("does not call revoke when policy teardown finds no source secret", async () => {

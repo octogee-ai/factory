@@ -10,7 +10,7 @@ import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { isOauthProvider } from "./byot-multi-provider-config.js";
 import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
-import { OPENCLAW_DIR, isOperatorGateway, log } from "./config.js";
+import { OPENCLAW_DIR, isOperatorGateway, log, usesLlmBrokerToken } from "./config.js";
 
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -163,6 +163,7 @@ return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0 };
 
 export interface SyncByotForCustomerDeps {
   isOperatorGateway?: () => boolean;
+  usesLlmBrokerToken?: () => boolean;
   applyByotState?: typeof applyByotState;
   restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch?: typeof applyCoachModelPatch;
@@ -179,7 +180,7 @@ export async function syncByotForCustomer(
   deps?: SyncByotForCustomerDeps,
 ): Promise<void> {
   const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
-  if (isOp()) return;
+  const usesBrokerToken = deps?.usesLlmBrokerToken ?? usesLlmBrokerToken;
 
   const applyByotStateFn = deps?.applyByotState ?? applyByotState;
   const restoreOauthFn = deps?.restoreOauthStoreForSlug ?? restoreOauthStoreForSlug;
@@ -189,6 +190,22 @@ export async function syncByotForCustomer(
   const desired = deriveDesiredByotState(userData);
   const slug = userData.username;
   if (!slug) return;
+
+  if (
+    usesBrokerToken() &&
+    (!desired.input || desired.input.provider === "anthropic")
+  ) {
+    const changed = applyByotStateFn(slug, null);
+    if (desired.input?.provider === "anthropic") {
+      log(
+        `[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`,
+      );
+    }
+    if (changed) await triggerSecretsReloadFn();
+    return;
+  }
+
+  if (isOp()) return;
 
   if (desired.input && isShellRuntimeProvider(desired.input.provider)) {
     const changed = applyByotStateFn(slug, null);

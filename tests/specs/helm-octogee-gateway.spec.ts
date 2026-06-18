@@ -683,7 +683,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(gw).not.toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
   });
 
-  it("OMITS ANTHROPIC_API_KEY when profile is operator (operator uses `claude auth login` instead)", () => {
+  it("renders operator model access as a broker token plus ANTHROPIC_BASE_URL", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", {
         profile: "operator",
@@ -693,8 +693,11 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
       "octogee-gateway-default",
     );
     expect(dep).not.toBeNull();
-    expect(dep).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
-    expect(dep).not.toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
+    const gw = containerBlock(dep ?? "", "gateway");
+    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-default\s*\n\s*key:\s*anthropic_api_key/);
+    expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010"/);
+    expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
   });
 
   it("omits shared platform credentials from the standard gateway and gateway-edge containers", () => {
@@ -777,10 +780,13 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
       "MM_ADMIN_USER_ID",
       "DISCORD_OPS_WEBHOOK_URL",
       "INTERNAL_SERVICE_KEY",
-      "ANTHROPIC_API_KEY",
     ]) {
       expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
     }
+    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-default\s*\n\s*key:\s*anthropic_api_key/);
+    expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
+    expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
     expect(gw).toMatch(
       /name:\s*FLEET_CONTROLLER_PUBLIC_KEY[\s\S]*?secretKeyRef:[\s\S]*?name:\s*octogee-fleet-controller[\s\S]*?key:\s*public-key/,
     );

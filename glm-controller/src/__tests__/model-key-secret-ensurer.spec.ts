@@ -97,31 +97,47 @@ describe("createGatewayModelKeySecretEnsurer", () => {
     ]);
   });
 
-  it("deletes the builder fallback key when the owner has BYOT/BYOS active", async () => {
-    const { runKubectl } = mockKubectl([
-      { stdout: "secret/gateway-model-key-jack\n" },
-      { stdout: "secret \"gateway-model-key-jack\" deleted\n" },
+  it("applies a broker token secret for operator gateways too", async () => {
+    const { runKubectl, calls } = mockKubectl([
+      {
+        stderr:
+          'Error from server (NotFound): secrets "gateway-model-key-bender" not found',
+        code: 1,
+      },
+      { stdout: "secret/gateway-model-key-bender configured\n" },
     ]);
-    const readSourceSecret = vi.fn();
     const ensurer = createGatewayModelKeySecretEnsurer({
       runKubectl,
-      readSourceSecret,
+      readSourceSecret: vi.fn(async () =>
+        source("ogk_bender_token", {
+          octogee_kind: "gateway_model_key",
+          gateway_id: "bender",
+          provider: "anthropic",
+          capped: "true",
+        }),
+      ),
       log: vi.fn(),
     });
 
     const result = await ensurer.syncGatewayModelKeySecret({
       namespace: "octogee-test",
-      gatewayId: "jack",
-      gatewayClass: "builder",
-      ownerByotActive: true,
+      gatewayId: "bender",
+      gatewayClass: "operator",
     });
 
-    expect(result).toMatchObject({
-      action: "deleted",
-      changed: true,
-      reason: "owner_byot_active",
+    expect(result).toMatchObject({ action: "upserted", changed: true });
+    expect(calls[1].args).toEqual(["apply", "-f", "-"]);
+    const manifest = JSON.parse(calls[1].stdin ?? "{}");
+    expect(manifest).toMatchObject({
+      metadata: {
+        name: "gateway-model-key-bender",
+        labels: {
+          "octogee.ai/gateway-id": "bender",
+          "octogee.ai/provider": "anthropic",
+        },
+      },
+      stringData: { anthropic_api_key: "ogk_bender_token" },
     });
-    expect(readSourceSecret).not.toHaveBeenCalled();
   });
 
   it("does not create a builder key when the Secret Manager source is missing", async () => {
