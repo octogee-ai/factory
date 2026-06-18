@@ -508,7 +508,7 @@ if $FULL; then
 fi
 
 # ── 6. Secret Manager: preserve infra secrets, wipe per-customer byok-* ──
-# Infra secrets (ANTHROPIC_API_KEY, INTERNAL_SERVICE_KEY, STRIPE_*, RESEND_*,
+# Infra secrets (ANTHROPIC_API_KEY, STRIPE_*, RESEND_*,
 # Firebase web config, DB passwords) are preserved across teardown — they're
 # the source of truth, rotating them is a deliberate operation, use
 # scripts/rotate-secret.sh, not teardown.

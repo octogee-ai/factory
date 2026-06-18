@@ -39,7 +39,6 @@ function fakeDb(opts: {
 
 function app(opts: {
   boundTenant?: Express.Request["boundTenant"];
-  internalServiceKey?: string;
   users?: Record<string, UserDoc>;
   flows?: Record<string, FlowDoc>;
 }) {
@@ -66,12 +65,12 @@ function app(opts: {
         },
       flows: opts.flows,
     }),
-    internalServiceKey: opts.internalServiceKey,
   });
   const handler = (_req: express.Request, res: express.Response) => res.json({ ok: true });
   a.post("/internal/probe", enforcement, handler);
   a.post("/internal/probe/:uid", enforcement, handler);
   a.post("/internal/connectors/access-token", enforcement, handler);
+  a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   return a;
 }
 
@@ -82,25 +81,33 @@ const BENDER: Express.Request["boundTenant"] = {
 };
 
 describe("tenant enforcement middleware", () => {
-  it("allows the explicit platform-key carve-out for targetless global jobs", async () => {
-    const res = await request(app({ internalServiceKey: "platform-key" }))
-      .post("/internal/probe")
-      .set("X-Internal-Service-Key", "platform-key")
+  it("allows a platform-bound cron caller on an allowlisted cron route", async () => {
+    const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
+      .post("/internal/billing/check-trial-expiry")
       .send({});
 
     expect(res.status).toBe(200);
   });
 
-  it("allows a platform-bound caller for targetless global jobs without the legacy key", async () => {
+  it("forbids a platform-bound caller on any non-cron internal route (no skeleton key)", async () => {
     const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
       .post("/internal/probe")
       .send({});
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
   });
 
-  it("rejects missing binding/key before route handlers run", async () => {
-    const res = await request(app({ internalServiceKey: "platform-key" }))
+  it("does not honor a legacy X-Internal-Service-Key", async () => {
+    const res = await request(app({}))
+      .post("/internal/billing/check-trial-expiry")
+      .set("X-Internal-Service-Key", "platform-key")
+      .send({});
+
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects missing binding before route handlers run", async () => {
+    const res = await request(app({}))
       .post("/internal/probe")
       .send({});
 

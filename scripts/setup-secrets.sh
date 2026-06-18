@@ -313,47 +313,10 @@ fi
 # helm/octogee/charts/gateway-edge/values.yaml, and this script's
 # Firebase-function pre-create list.
 
-# ── 9. Internal service key (octogee-api ↔ gateway-edge/gateway ↔ jobs) ─
-# Used by requireInternalServiceAuth() on /internal/* and key-guarded producer routes.
-# One shared secret across octogee-api, gateway-edge, gateways, CronJobs, and Functions.
-# Precedence: Secret Manager > existing K8s secret > newly-generated.
-# Rotating this value breaks cron jobs until pods restart, so we only
-# generate a new one on first install (both SM and K8s empty).
-info "internal-service-key"
-INTERNAL_SERVICE_KEY=$(sm_get "INTERNAL_SERVICE_KEY" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
-  # Not in SM — try to recover from existing K8s cache
-  EXISTING_ISK=$(ksecret_key internal-service-key key)
-  if [[ -n "$EXISTING_ISK" ]]; then
-    info "  Reusing existing INTERNAL_SERVICE_KEY from K8s, back-filling Secret Manager"
-    INTERNAL_SERVICE_KEY="$EXISTING_ISK"
-    echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
-      --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null || \
-    echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
-      --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
-  else
-    # First install — generate and persist to SM
-    INTERNAL_SERVICE_KEY=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
-    info "  First install — generating INTERNAL_SERVICE_KEY, saving to Secret Manager ($FIREBASE_PROJECT)"
-    if echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets create "INTERNAL_SERVICE_KEY" \
-         --data-file=- --project="$FIREBASE_PROJECT" \
-         --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
-      ok "  Created SM secret: INTERNAL_SERVICE_KEY"
-    elif echo -n "$INTERNAL_SERVICE_KEY" | gcloud secrets versions add "INTERNAL_SERVICE_KEY" \
-         --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
-      ok "  Updated SM secret: INTERNAL_SERVICE_KEY"
-    else
-      warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
-    fi
-  fi
-fi
-ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
-
 # ── 9a. Gateway model-key issuer bearer (glm-controller → octogee-api) ─
-# Distinct from INTERNAL_SERVICE_KEY. This only authorizes Cowboy to mint and
-# revoke opaque LLM broker tokens; it is not accepted by legacy /internal/*
-# routes and is never mounted into gateway pods.
+# A dedicated bearer, separate from the gateway tenant-binding auth. It only
+# authorizes Cowboy to mint and revoke opaque LLM broker tokens via
+# /internal/model-keys, and is never mounted into gateway pods.
 info "gateway-model-key-issuer"
 GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN=$(sm_get "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 if [[ -z "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" ]]; then
@@ -384,8 +347,8 @@ fi
 ksecret gateway-model-key-issuer --from-literal=bearer_token="$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
 
 # ── 9a2. Social notification bearer (Cloud Functions → octogee-api /social) ─
-# Dedicated bearer for the out-of-cluster social inbox producer, replacing the
-# /social route's reliance on the shared internal-service-key. octogee-api reads
+# Dedicated bearer for the out-of-cluster social inbox producer — the only auth
+# on the public /api/notifications/social route. octogee-api reads
 # the K8s secret; Functions read the Secret Manager copy via defineSecret — both
 # must carry the SAME value. Precedence: Secret Manager > existing K8s > generated.
 info "social-notification-bearer"
@@ -667,7 +630,6 @@ SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octo
 
 # Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy
 for sm_secret in \
-  INTERNAL_SERVICE_KEY \
   SOCIAL_NOTIFICATION_BEARER_TOKEN \
   MM_ADMIN_TOKEN \
   GITEA_TOKEN \
@@ -706,7 +668,6 @@ status "mattermost-gateway / admin_user_id" "${MM_ADMIN_USER_ID:-}"
 status "mattermost-gateway / bot_token" "${MM_BOT_TOKEN:-}"
 status "mattermost-gateway / bot_user_id" "${MM_BOT_USER_ID:-}"
 status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
-status "internal-service-key" "${INTERNAL_SERVICE_KEY:-}"
 status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
 status "social-notification-bearer" "${SOCIAL_NOTIFICATION_BEARER:-}"
 status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"

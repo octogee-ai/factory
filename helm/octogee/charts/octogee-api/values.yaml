@@ -118,13 +118,8 @@ secrets:
     secretName: discord-secrets
     secretKey: guild_id
     optional: true
-  - envName: INTERNAL_SERVICE_KEY
-    secretName: internal-service-key
-    secretKey: key
-    optional: false
-  # Dedicated bearer for the out-of-cluster Cloud Functions social producer.
-  # Optional during rollout; once provisioned it replaces the social route's
-  # reliance on internal-service-key.
+  # Dedicated bearer for the out-of-cluster Cloud Functions social producer
+  # (the only auth on the public /api/notifications/social route).
   - envName: SOCIAL_NOTIFICATION_BEARER_TOKEN
     secretName: social-notification-bearer
     secretKey: bearer-token

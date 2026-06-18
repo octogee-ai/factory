@@ -26,7 +26,6 @@ set -euo pipefail
 #
 # Usage:
 #   ./scripts/rotate-secret.sh --env=test anthropic
-#   ./scripts/rotate-secret.sh --env=test internal-service-key
 #   ./scripts/rotate-secret.sh --env=test mm-admin-pat
 #   ./scripts/rotate-secret.sh --env=test gitea-pat
 #   ./scripts/rotate-secret.sh --env=test discord-ops-webhook
@@ -34,7 +33,6 @@ set -euo pipefail
 #
 # Rotatable secrets:
 #   anthropic             — ANTHROPIC_API_KEY (reads from stdin or ANTHROPIC_API_KEY env)
-#   internal-service-key  — generates a new random 40-char key, persists to SM
 #   model-key-issuer      — generates a new issuer bearer token, persists to SM
 #   mm-admin-pat          — revokes + remints via setup-mattermost.sh
 #   gitea-pat             — revokes + remints via setup-gitea.sh
@@ -162,7 +160,6 @@ case "$SECRET" in
   list)
     echo "  Rotatable via this script (test + prod only):"
     echo "    anthropic             — ANTHROPIC_API_KEY, standard/cattle BYOK/BYOS fallback (octogee-anthropic; standard gateways only, never operator)"
-    echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: octogee-api, cron jobs, social functions"
     echo "    model-key-issuer      — GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN, consumers: octogee-api, glm-controller"
     echo "    social-notification-bearer — SOCIAL_NOTIFICATION_BEARER_TOKEN, consumers: octogee-api /social, social functions"
     echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: octogee-api, glm-controller"
@@ -221,35 +218,6 @@ case "$SECRET" in
     info "Verifying gateway startup..."
     kubectl logs -n "$K8S_NAMESPACE" -l 'app=octogee-gateway,gateway-class=shared' \
       --tail=15 --max-log-requests=20 2>/dev/null | grep -iE 'anthropic|auth|error' || true
-    ok "Rotation complete"
-    ;;
-
-  # ── Internal service key ────────────────────────────────────────────────
-  internal-service-key)
-    confirm "Rotate INTERNAL_SERVICE_KEY in $FIREBASE_PROJECT (octogee-api + cron jobs must use the new value)?" || { info "Cancelled"; exit 0; }
-
-    NEW_VALUE=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
-
-    info "Writing new version to Secret Manager ($FIREBASE_PROJECT)..."
-    echo -n "$NEW_VALUE" | gcloud secrets versions add INTERNAL_SERVICE_KEY \
-      --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
-    echo -n "$NEW_VALUE" | gcloud secrets create INTERNAL_SERVICE_KEY \
-      --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
-      fail "Could not write to Secret Manager"
-    ok "Secret Manager updated"
-
-    info "Updating K8s secret internal-service-key..."
-    kubectl create secret generic internal-service-key -n "$K8S_NAMESPACE" \
-      --from-literal=key="$NEW_VALUE" \
-      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-    ok "K8s secret internal-service-key updated"
-
-    info "Restarting octogee-api so its env picks up the new internal-service-key Secret..."
-    rollout_restart octogee-api
-
-    info "Cron jobs read the secret on each invocation — no restart needed."
-    info "Social Cloud Functions read the Secret Manager value; redeploy functions only if warm instances keep using an old version."
     ok "Rotation complete"
     ;;
 

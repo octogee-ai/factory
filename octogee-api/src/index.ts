@@ -65,11 +65,7 @@ export function shouldAttemptTenantBinding(path: string): boolean {
 
 export function shouldEnforceTenantBinding(req: Request): boolean {
   if (!shouldAttemptTenantBinding(req.path)) return false;
-  return Boolean(
-    req.boundTenant ||
-      req.get("x-k8s-sa-token") ||
-      req.get("x-internal-service-key"),
-  );
+  return Boolean(req.boundTenant || req.get("x-k8s-sa-token"));
 }
 
 export function createApp(opts: CreateAppOptions = {}) {
@@ -164,7 +160,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     mattermostMintRoutes,
   });
   // octogee-api-only: trusted singleton billing maintenance. CronJobs call this
-  // directly with INTERNAL_SERVICE_KEY instead of routing through a gateway sidecar.
+  // with their projected octogee-cron KSA token (tenant-bound as kind=platform).
   app.use("/internal/billing", internalBillingRoutes);
   // octogee-api-only: Gitea admin broker. Gateway provisioners call this with
   // their projected gateway KSA token; octogee-api holds the Gitea admin token.
@@ -207,15 +203,6 @@ export function createApp(opts: CreateAppOptions = {}) {
 const app = createApp();
 
 if (process.env.NODE_ENV !== "test") {
-  const env = process.env.K8S_NAMESPACE || process.env.NODE_ENV || "development";
-  const isProd = env !== "development" && env !== "local" && env !== "test";
-  if (isProd && !process.env.INTERNAL_SERVICE_KEY) {
-    logger.error(
-      "FATAL: INTERNAL_SERVICE_KEY is required in non-development environments.",
-    );
-    process.exit(1);
-  }
-
   app.listen(PORT, () => {
     logger.info(`octogee-api boot — listening on port ${PORT}`, {
       port: PORT,

@@ -25,9 +25,7 @@ vi.mock("../lib/gitea-admin.js", () => ({
   archiveRepo: vi.fn(async () => {}),
 }));
 
-const KEY = "test-internal-key";
-
-function app(boundGatewayId?: string) {
+function app(boundGatewayId: string | null = "bender") {
   const a = express();
   a.use(express.json());
   if (boundGatewayId) {
@@ -45,19 +43,20 @@ function app(boundGatewayId?: string) {
 }
 
 function authed(req: request.Test) {
-  return req.set("X-Internal-Service-Key", KEY);
+  // Auth is the gateway tenant-binding injected by app(); the legacy
+  // internal-service-key is retired.
+  return req;
 }
 
 describe("internal gitea-admin route", () => {
   beforeEach(() => {
-    process.env.INTERNAL_SERVICE_KEY = KEY;
     process.env.GATEWAY_ID = "bender";
     vi.clearAllMocks();
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValue(["acme"]);
   });
 
-  it("rejects requests without the internal service key (401)", async () => {
-    const res = await request(app()).post("/internal/gitea/ensure-user").send({ slug: "acme", pubKey: "k" });
+  it("rejects requests without a bound gateway identity (401)", async () => {
+    const res = await request(app(null)).post("/internal/gitea/ensure-user").send({ slug: "acme", pubKey: "k" });
     expect(res.status).toBe(401);
     expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
   });
@@ -89,16 +88,6 @@ describe("internal gitea-admin route", () => {
       request(app()).post("/internal/gitea/ensure-user"),
     ).send({ slug: "victim", pubKey: "ssh-ed25519 AAA" });
     expect(res.status).toBe(403);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
-  });
-
-  it("ensure-user → 500 when GATEWAY_ID is missing, before touching Gitea", async () => {
-    delete process.env.GATEWAY_ID;
-    const res = await authed(
-      request(app()).post("/internal/gitea/ensure-user"),
-    ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
-    expect(res.status).toBe(500);
-    expect(readAssignedSlugsForGateway).not.toHaveBeenCalled();
     expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
   });
 

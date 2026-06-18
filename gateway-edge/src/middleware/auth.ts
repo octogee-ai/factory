@@ -58,66 +58,25 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
   });
 }
 
-function validateInternalServiceKey(req: Request, res: Response): boolean {
-  const configuredSecret = process.env.INTERNAL_SERVICE_KEY;
-
-  if (!configuredSecret) {
-    logger.error("INTERNAL_SERVICE_KEY is not set — refusing internal request");
-    res.status(503).json({ error: "Internal auth unavailable" });
-    return false;
-  }
-
-  const provided = req.headers["x-internal-service-key"];
-  if (!provided) {
-    res.status(401).json({ error: "X-Internal-Service-Key header required" });
-    return false;
-  }
-  if (typeof provided !== "string") {
-    logger.warn(`Internal service auth rejected from ${req.ip} — invalid key`);
-    res.status(401).json({ error: "Invalid internal service key" });
-    return false;
-  }
-
-  let valid = false;
-  try {
-    valid =
-      provided.length === configuredSecret.length &&
-      crypto.timingSafeEqual(
-        Buffer.from(provided, "utf8"),
-        Buffer.from(configuredSecret, "utf8")
-      );
-  } catch {
-    valid = false;
-  }
-
-  if (!valid) {
-    logger.warn(`Internal service auth rejected from ${req.ip} — invalid key`);
-    res.status(401).json({ error: "Invalid internal service key" });
-    return false;
-  }
-
-  return true;
-}
-
-export function requireInternalServiceKey(req: Request, res: Response, next: NextFunction): void {
-  if (!validateInternalServiceKey(req, res)) {
-    return;
-  }
-  logger.warn("internal request authenticated via legacy INTERNAL_SERVICE_KEY", {
-    route: req.path,
-    ip: req.ip,
-  });
-  next();
+function boundTenantKind(req: Request): unknown {
+  return (req as Request & { boundTenant?: { kind?: unknown } }).boundTenant?.kind;
 }
 
 export function requireInternalServiceAuth(req: Request, res: Response, next: NextFunction): void {
-  const boundTenant = (req as Request & { boundTenant?: { kind?: unknown } }).boundTenant;
-  if (boundTenant?.kind === "gateway" || boundTenant?.kind === "platform") {
+  if (boundTenantKind(req) === "gateway") {
     next();
     return;
   }
+  res.status(401).json({ error: "internal auth required" });
+}
 
-  requireInternalServiceKey(req, res, next);
+export function requireInternalPlatformAuth(req: Request, res: Response, next: NextFunction): void {
+  const kind = boundTenantKind(req);
+  if (kind === "gateway" || kind === "platform") {
+    next();
+    return;
+  }
+  res.status(401).json({ error: "internal auth required" });
 }
 
 function timingSafeStringEqual(a: string, b: string): boolean {
@@ -142,18 +101,8 @@ export function requireSocialNotificationAuth(req: Request, res: Response, next:
   const configured = process.env.SOCIAL_NOTIFICATION_BEARER_TOKEN;
   const provided = bearerFromRequest(req);
   if (configured && provided && timingSafeStringEqual(provided, configured)) {
-    logger.info("social notification authenticated via dedicated bearer", {
-      route: req.path,
-    });
     next();
     return;
   }
-
-  if (provided) {
-    logger.warn("social notification bearer rejected — falling back to legacy key", {
-      route: req.path,
-    });
-  }
-
-  requireInternalServiceKey(req, res, next);
+  res.status(401).json({ error: "invalid social notification bearer" });
 }

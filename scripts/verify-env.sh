@@ -224,7 +224,6 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   MM_BOT_TOKEN=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.bot_token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_BOT_USER_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.bot_user_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_TEAM_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.team_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-  INTERNAL_SERVICE_KEY=$(kubectl get secret internal-service-key -n "$NAMESPACE" -o jsonpath='{.data.key}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   GITEA_TOKEN=$(kubectl get secret gitea-token -n "$NAMESPACE" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 
   status "mattermost-gateway admin_user present" "mattermost-gateway admin_user missing" "$MM_ADMIN_USER"
@@ -234,7 +233,6 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   status "mattermost-gateway bot_token present" "mattermost-gateway bot_token missing (MM WS bridge will fail)" "$MM_BOT_TOKEN"
   status "mattermost-gateway bot_user_id present" "mattermost-gateway bot_user_id missing" "$MM_BOT_USER_ID"
   status "mattermost-gateway team_id present" "mattermost-gateway team_id missing" "$MM_TEAM_ID"
-  status "internal-service-key present" "internal-service-key missing" "$INTERNAL_SERVICE_KEY"
   status "gitea-token present" "gitea-token missing" "$GITEA_TOKEN"
   set_section bootstrap
 else

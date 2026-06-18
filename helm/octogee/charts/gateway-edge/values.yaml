@@ -27,9 +27,8 @@ env:
 # The standalone gateway-edge Deployment is retired; gateway-edge now runs as
 # a sidecar in helm/octogee-gateway, where platform secrets are deliberately
 # omitted from gateway pods. Keep platform-secret env wiring out of this values
-# file. The CronJobs below present a projected octogee-api-audience SA token for
-# tenant-binding; they still also wire INTERNAL_SERVICE_KEY as a fallback until
-# that key is retired.
+# file. The CronJobs below authenticate to octogee-api solely with a projected
+# octogee-api-audience SA token (tenant-bound kind=platform).
 
 resources:
   requests:

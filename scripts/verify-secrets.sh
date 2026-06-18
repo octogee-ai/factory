@@ -71,7 +71,6 @@ esac
 #   helm/octogee/charts/gateway-edge/templates/cronjob-trial-expiry.yaml
 REQUIRED_SECRETS=(
   "octogee-anthropic"       # setup/legacy only; gateway pods do not mount it
-  "internal-service-key"    # octogee-api + CronJobs; gateway pods do not mount it
   "gateway-model-key-issuer" # glm-controller ↔ octogee-api model broker token issuer
   "social-notification-bearer"  # octogee-api /social + Cloud Functions social producer
   "mattermost-gateway"      # octogee-api + glm-controller; gateway pods do not mount admin_token
@@ -95,7 +94,6 @@ REQUIRED_KEYS=(
   "mattermost-gateway:admin_user:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   "mattermost-gateway:admin_pass:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   "mattermost-gateway:admin_user_id:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
-  "internal-service-key:key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "gateway-model-key-issuer:bearer_token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "social-notification-bearer:bearer-token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-anthropic:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"

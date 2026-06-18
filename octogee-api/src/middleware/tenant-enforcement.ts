@@ -1,4 +1,3 @@
-import * as crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
@@ -8,10 +7,16 @@ type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" 
 
 export interface TenantEnforcementOptions {
   db?: Pick<Firestore, "collection">;
-  internalServiceKey?: string;
 }
 
 const FORBIDDEN = { error: "forbidden" } as const;
+
+// The only internal routes a platform tenant (the octogee-cron KSA) may reach.
+// Must stay in lockstep with the routes guarded by requireInternalPlatformAuth.
+const PLATFORM_INTERNAL_ROUTES = new Set([
+  "/internal/billing/check-trial-expiry",
+  "/internal/notifications/digest",
+]);
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -23,20 +28,6 @@ function stringArray(value: unknown): string[] {
 
 function body(req: Request): Record<string, unknown> {
   return req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
-}
-
-function validPlatformKey(req: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const provided = req.headers["x-internal-service-key"];
-  if (typeof provided !== "string") return false;
-  try {
-    return (
-      provided.length === expected.length &&
-      crypto.timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(expected, "utf8"))
-    );
-  } catch {
-    return false;
-  }
 }
 
 function requestedGatewayIds(req: Request): string[] {
@@ -151,15 +142,13 @@ export function createTenantEnforcementMiddleware(
 ): (req: Request, res: Response, next: NextFunction) => void {
   const db = opts.db ?? defaultDb;
   return (req, res, next) => {
-    const platformKey = opts.internalServiceKey ?? process.env.INTERNAL_SERVICE_KEY;
-    if (validPlatformKey(req, platformKey)) {
-      next();
-      return;
-    }
-
     const bound = req.boundTenant;
     if (bound?.kind === "platform") {
-      next();
+      if (PLATFORM_INTERNAL_ROUTES.has(req.path)) {
+        next();
+      } else {
+        res.status(403).json(FORBIDDEN);
+      }
       return;
     }
     if (!bound || bound.kind !== "gateway") {
