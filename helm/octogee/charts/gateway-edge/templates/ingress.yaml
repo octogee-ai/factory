@@ -155,7 +155,7 @@ spec:
           # Customers tab + per-customer drawer also lifted to glm-controller
           # so it survives no-gateway-pod scenarios. The /api/admin/customer/*
           # prefix matches /customer/:uid + all sub-paths (usage, throttle,
-          # audit, ops, csi-refresh, delete). /api/admin/customers/* matches
+          # audit, ops, delete). /api/admin/customers/* matches
           # the list + stats endpoints.
           - path: /api/admin/customer/*
             pathType: ImplementationSpecific
@@ -172,13 +172,6 @@ spec:
                 port:
                   name: http
           - path: /api/admin/customers
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glm }}
-                port:
-                  name: http
-          - path: /api/admin/funnel
             pathType: ImplementationSpecific
             backend:
               service:

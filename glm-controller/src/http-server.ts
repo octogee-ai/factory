@@ -10,7 +10,6 @@ import {
 } from "../../scripts/lib/admin-fleet-router.js";
 import {
   addAdminCustomerRoutes,
-  type CsiRefreshResult,
   type WorkspaceMmContextLite,
 } from "../../scripts/lib/admin-customer-router.js";
 import {
@@ -118,12 +117,6 @@ addAdminCustomerRoutes(adminRouter, {
     logger: adaptLogger(deps.log),
     workspaceSlugsForUser: deps.workspaceSlugsForUser,
     getWorkspaceMmContext: (uid, hint) => readMmContextFromFirestore(deps.db, uid, hint),
-    refreshCsiForUser: async (): Promise<CsiRefreshResult> => ({
-      ok: false,
-      updatedAt: null,
-      unavailable: true,
-      reason: "CSI refresh requires gateway-edge; the gateway pod runs the compute pipeline. Try again once a gateway pod is healthy.",
-    }),
   });
   addAdminFleetRoutes(adminRouter, {
     db: deps.db,

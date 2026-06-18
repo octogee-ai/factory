@@ -103,13 +103,6 @@ spec:
                 name: {{ $glmSvc }}
                 port:
                   name: http
-          - path: /api/admin/funnel
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
           # Cluster API default. Gateway-local locality routes must use the
           # per-instance /api/g/<gatewayId>/* seam; bare /api/* goes to the
           # singleton octogee-api so newly mounted cluster routes cannot fall

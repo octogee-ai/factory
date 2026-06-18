@@ -5,16 +5,12 @@ import { db, FieldValue } from "../lib/db.js";
 import { liftSuppression } from "../lib/email-suppression.js";
 import { runEmailPreflight } from "../lib/email-preflight.js";
 import { getResend } from "../lib/resend.js";
-import { updateCSIForUser } from "../csi/updater.js";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
 import { workspaceSlugsForUser } from "../../../scripts/lib/workspace-slugs.js";
 import { provisionGatewayAuthSecret } from "../../../scripts/lib/secret-manager.js";
 import { listGatewayBuilds } from "../../../scripts/lib/artifact-registry.js";
 import { addAdminFleetRoutes } from "../../../scripts/lib/admin-fleet-router.js";
-import {
-  addAdminCustomerRoutes,
-  type CsiRefreshResult,
-} from "../../../scripts/lib/admin-customer-router.js";
+import { addAdminCustomerRoutes } from "../../../scripts/lib/admin-customer-router.js";
 import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "../../../scripts/lib/firebase-auth-helpers.js";
 
 const router = Router();
@@ -28,10 +24,6 @@ addAdminCustomerRoutes(router, {
   getWorkspaceMmContext: async (uid, hint) => {
     const ctx = await getWorkspaceMmContext(uid, undefined, hint);
     return ctx ? { coachDmChannelId: ctx.coachDmChannelId } : null;
-  },
-  refreshCsiForUser: async (uid): Promise<CsiRefreshResult> => {
-    const updated = await updateCSIForUser(uid);
-    return { ok: !!updated, updatedAt: updated ? updated.updatedAt : null };
   },
 });
 

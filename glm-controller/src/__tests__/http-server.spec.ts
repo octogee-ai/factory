@@ -336,15 +336,4 @@ it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory 
     expect(res.body).toEqual({ error: "User not found" });
   });
 
-  it("/api/admin/customer/:uid/csi-refresh returns 503 with friendly unavailable reason", async () => {
-    const app = createHttpServer(buildDeps(store));
-    const res = await request(app)
-      .post("/api/admin/customer/admin-uid/csi-refresh")
-      .set("Authorization", "Bearer admin-token");
-    expect(res.status).toBe(503);
-    expect(res.body.unavailable).toBe(true);
-    expect(res.body.success).toBe(false);
-    expect(res.body.reason).toMatch(/csi.*gateway-edge|gateway pod/i);
-  });
-
 });

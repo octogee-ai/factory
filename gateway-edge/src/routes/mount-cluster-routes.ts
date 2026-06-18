@@ -40,8 +40,6 @@ import projectsMembersRoutes from "./projects/members.js";
 import projectsDeleteRoutes from "./projects/delete.js";
 
 import internalNotificationRoutes from "./internal/notifications.js";
-import internalEngagementRoutes from "./internal/engagement.js";
-import internalCSIRoutes from "./internal/csi.js";
 
 import { requireAuth } from "../middleware/auth.js";
 
@@ -108,6 +106,4 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   app.use("/internal/agents", agentRoutes);
   app.use("/internal/notifications", notificationRoutes);
   app.use("/internal/notifications", internalNotificationRoutes);
-  app.use("/internal/engagement", internalEngagementRoutes);
-  app.use("/internal/csi", internalCSIRoutes);
 }
