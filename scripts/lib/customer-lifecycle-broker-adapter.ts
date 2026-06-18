@@ -3,14 +3,17 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
-import { CONFIG_PATCH_DEADLINE_MS, MIGRATING_IN_PIN_TTL_MS } from "../../shared/types/fleet-controller.js";
+import {
+  CONFIG_PATCH_DEADLINE_MS,
+  MIGRATING_IN_PIN_TTL_MS,
+  VERIFY_ACCOUNT_TIMEOUT_MS,
+} from "../../shared/types/fleet-controller.js";
 import {
   applyConfigPatch,
   customerConfigReplacePaths,
   type ConfigCache,
 } from "./apply-config-patch.js";
 import {
-  addCustomerToGateway,
   type CustomerContext,
   type CustomerLifecycleAdapter,
   type MmUpdate,
@@ -63,8 +66,11 @@ import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot
 import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
+  applyOpenClawActivationManifest,
   extractOpenClawActivationManifest,
   MIGRATION_ACTIVATION_DIR,
+  readActivationManifest,
+  removeActivationManifest,
 } from "./migration-activation-manifest.js";
 
 const DEFAULT_COACH = {
@@ -380,16 +386,30 @@ async function prepareImportDir(slug: string): Promise<string> {
 
 async function activateImportedCustomer(
   ctx: BrokerCtx,
-  adapter: CustomerLifecycleAdapter,
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<void> {
-  const uid = await ctx.client.uidForSlug(slug);
-  if (!uid) {
-    throw new Error(`[import:${slug}] fleet broker could not resolve uid for imported slug`);
+  const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
+  const patch = await applyOpenClawActivationManifest(manifest, {
+    rpc: ctx.rpc,
+    cache: ctx.configCache,
+    signal: opts?.signal,
+    log: ctx.log,
+  });
+  ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
+  await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
+
+  ctx.log(
+    `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,
+  );
+  const healthy = await waitForAccountHealthy(ctx, {
+    slug,
+    timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS,
+  });
+  if (!healthy) {
+    throw new Error(`[import:${slug}] channel did not reach running+connected after activation`);
   }
-  const result = await addCustomerToGateway(adapter, uid, { signal: opts?.signal });
-  ctx.log(`[import:${slug}] brokered activation complete steps=${result.steps.join(",")}`);
+  ctx.log(`[import:${slug}] activation complete`);
 }
 
 async function removeImportedCustomerBySlug(
@@ -497,7 +517,7 @@ export function buildBrokeredLifecycleAdapter(
     quiesceCustomer: (slug, timeoutMs) => quiesceCustomer(opts.log, slug, timeoutMs),
     listExportPaths,
     prepareImportDir,
-    activateImportedCustomer: (slug, callOpts) => activateImportedCustomer(ctx, adapter, slug, callOpts),
+    activateImportedCustomer: (slug, callOpts) => activateImportedCustomer(ctx, slug, callOpts),
     exportOpenClawActivationManifest: (slug) => extractOpenClawActivationManifest(OPENCLAW_CONFIG, slug),
     removeImportedCustomerBySlug: (slug) => removeImportedCustomerBySlug(ctx, slug),
   };
