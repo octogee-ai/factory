@@ -220,6 +220,48 @@ await vi.advanceTimersByTimeAsync(20_000);
     stop();
   });
 
+  it("passes builderSlug from desired state through to helm upsert", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      upsertInstance: async () => undefined,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "eggman",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "running",
+          createdBy: "ci",
+          gatewayClass: "operator",
+          imageProfile: "operator",
+          profile: "operator",
+          builderSlug: "eggman",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).toHaveBeenCalledWith(
+      expect.objectContaining({ builderSlug: "eggman" }),
+    );
+    stop();
+  });
+
   it("runs a follow-up tick when desired state changes during an in-flight reconcile", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();

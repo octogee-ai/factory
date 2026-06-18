@@ -262,6 +262,7 @@ async function applyChanges(
     await deps.helm.upsertInstance({
       namespace: NAMESPACE,
       gatewayId: change.to.gatewayId,
+      builderSlug: change.to.builderSlug,
       imageRepository: change.to.image.repository,
       imageTag: change.to.image.tag,
       serviceAccountName: change.to.serviceAccountName,
