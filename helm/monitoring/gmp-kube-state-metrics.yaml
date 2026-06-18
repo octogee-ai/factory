@@ -19,7 +19,10 @@ metadata:
     app: gmp-kube-state-metrics
 rules:
   - apiGroups: [""]
-    resources: [configmaps, secrets, nodes, pods, services, serviceaccounts, resourcequotas, replicationcontrollers, limitranges, persistentvolumeclaims, persistentvolumes, namespaces, endpoints]
+    # `secrets` intentionally excluded from the upstream KSM role: list/watch on
+    # secrets returns their data cluster-wide, and we do not use kube_secret_*
+    # metrics. Re-adding it trips Trivy KSV-0041 (CRITICAL). Least-privilege.
+    resources: [configmaps, nodes, pods, services, serviceaccounts, resourcequotas, replicationcontrollers, limitranges, persistentvolumeclaims, persistentvolumes, namespaces, endpoints]
     verbs: [list, watch]
   - apiGroups: [apps]
     resources: [statefulsets, daemonsets, deployments, replicasets]
