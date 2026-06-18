@@ -45,6 +45,11 @@ import {
   type GatewayModelKeySecretEnsurer,
 } from "./model-key-secret-ensurer.js";
 import {
+  createConfiguredGatewayModelKeyIssuerBackend,
+  createGatewayModelKeySourceIssuer,
+  type GatewayModelKeySourceIssuer,
+} from "./model-key-source-issuer.js";
+import {
   spawnKubectl,
   syncApiFleetIngressPaths,
   syncPreviewIngressPaths,
@@ -93,6 +98,7 @@ import {
   provisionGatewayAuthSecret,
   deleteSecret,
   readSecretWithLabels,
+  writeSecret,
 } from "../../scripts/lib/secret-manager.js";
 import { listGatewayBuilds } from "../../scripts/lib/artifact-registry.js";
 import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
@@ -178,6 +184,7 @@ interface ControllerDeps {
   db: Firestore;
   helm: HelmRunner;
   kubeOps?: KubeOps;
+  modelKeySourceIssuer?: GatewayModelKeySourceIssuer;
   modelKeySecretEnsurer?: GatewayModelKeySecretEnsurer;
   restartGatewayDeployment?: (gatewayId: string) => Promise<void>;
   handlers: OperationHandlers;
@@ -420,6 +427,35 @@ async function syncGatewayModelKeySecrets(
   return changedBuilderGateways;
 }
 
+async function syncGatewayModelKeySources(
+  deps: ControllerDeps,
+  desired: GatewayDesiredState[],
+): Promise<void> {
+  const issuer = deps.modelKeySourceIssuer;
+  if (!issuer) return;
+
+  for (const gateway of desired) {
+    if (!gateway.gatewayId) continue;
+    const gatewayClass = resolveGatewayClass(gateway);
+    const ownerByotActive =
+      gatewayClass === "builder"
+        ? await readOwnerByotActive(deps.db, gateway.ownerUid)
+        : false;
+    try {
+      await issuer.syncGatewayModelKeySource({
+        gatewayId: gateway.gatewayId,
+        gatewayClass,
+        desiredStatus: gateway.desiredStatus,
+        ownerUid: gateway.ownerUid,
+        ownerByotActive,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`(source=model-key-source) ${gateway.gatewayId}: ${message}`);
+    }
+  }
+}
+
 function preservedDriftChanges(
   changes: ReconcileChange[],
   targetMap: HelmInstancesMap,
@@ -641,6 +677,7 @@ async function completeRecoveredOperatorAddGatewayOps(
 
 async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
+  await syncGatewayModelKeySources(deps, desired);
   const modelKeyChangedGatewayIds = await syncGatewayModelKeySecrets(deps, desired);
   const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
   const changes = diffInstancesMap(actualMap, desiredMap, {
@@ -888,6 +925,22 @@ async function main(): Promise<void> {
     },
     log,
   });
+  const modelKeySourceIssuer = createGatewayModelKeySourceIssuer({
+    readSourceSecret: async (secretName) => {
+      try {
+        return await readSecretWithLabels(secretName);
+      } catch (err) {
+        if ((err as { code?: number } | null)?.code === 5) return null;
+        throw err;
+      }
+    },
+    writeSourceSecret: async ({ name, value, labels }) => {
+      await writeSecret({ name, value, labels });
+    },
+    deleteSourceSecret: deleteSecret,
+    backend: createConfiguredGatewayModelKeyIssuerBackend(process.env),
+    log,
+  });
   const helm =
     process.env.HELM_RUNNER_MODE === "stub"
       ? createLoggingHelmRunner(log)
@@ -957,6 +1010,7 @@ const handlerSyncFleetIngress = async () => {
     db,
     helm,
     kubeOps,
+    modelKeySourceIssuer,
     modelKeySecretEnsurer,
     restartGatewayDeployment: createGatewayDeploymentRestarter(runKubectl, log),
     handlers,

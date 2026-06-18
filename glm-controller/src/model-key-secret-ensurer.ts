@@ -53,17 +53,20 @@ export function gatewayModelKeySecretName(gatewayId: string): string {
   return `${GATEWAY_MODEL_KEY_SECRET_PREFIX}${gatewayId}`;
 }
 
-function requiredSourceLabelErrors(
-  gatewayId: string,
-  labels: Record<string, string>,
-): string[] {
-  const expected: Record<string, string> = {
+export function gatewayModelKeySourceLabels(gatewayId: string): Record<string, string> {
+  return {
     octogee_kind: "gateway_model_key",
     gateway_id: gatewayId,
     provider: "anthropic",
     capped: "true",
   };
-  return Object.entries(expected)
+}
+
+export function gatewayModelKeySourceLabelErrors(
+  gatewayId: string,
+  labels: Record<string, string>,
+): string[] {
+  return Object.entries(gatewayModelKeySourceLabels(gatewayId))
     .filter(([key, value]) => labels[key] !== value)
     .map(([key, value]) => `${key}=${value}`);
 }
@@ -262,7 +265,7 @@ export function createGatewayModelKeySecretEnsurer(
         return deleteAndReport("missing_source");
       }
 
-      const labelErrors = requiredSourceLabelErrors(gatewayId, source.labels);
+      const labelErrors = gatewayModelKeySourceLabelErrors(gatewayId, source.labels);
       if (labelErrors.length > 0) {
         deps.log(
           `[model-key-secret] refusing ${secretName}: Secret Manager source is missing required label(s): ${labelErrors.join(", ")}`,

@@ -424,6 +424,71 @@ resolveUpgrade(undefined);
     stop();
   });
 
+  it("syncs the model-key source before mirroring the K8s model-key secret", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const order: string[] = [];
+    const helm = makeFakeHelm({
+      upsertInstance: async () => undefined,
+    });
+    const modelKeySourceIssuer = {
+      syncGatewayModelKeySource: vi.fn(async () => {
+        order.push("source");
+        return {
+          gatewayId: "jack",
+          secretName: "gateway-model-key-jack",
+          changed: true,
+          action: "issued" as const,
+        };
+      }),
+    };
+    const modelKeySecretEnsurer = {
+      syncGatewayModelKeySecret: vi.fn(async () => {
+        order.push("secret");
+        return {
+          gatewayId: "jack",
+          secretName: "gateway-model-key-jack",
+          changed: true,
+          action: "upserted" as const,
+        };
+      }),
+    };
+    const restartGatewayDeployment = vi.fn(async () => {});
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "jack",
+          gatewayClass: "builder",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      modelKeySourceIssuer,
+      modelKeySecretEnsurer,
+      restartGatewayDeployment,
+      log,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(order).toEqual(["source", "secret"]);
+    expect(restartGatewayDeployment).not.toHaveBeenCalled();
+    stop();
+  });
+
   it("calls syncFleetIngress even when there are no helm changes — keeps the Ingress in sync after Helm clobbers", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
