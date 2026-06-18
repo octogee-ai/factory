@@ -8,6 +8,8 @@ import type {
   ModelBrokerTokenStore,
 } from "./lib/model-broker-tokens.js";
 import {
+  estimateAnthropicCost,
+  isUnknownAnthropicPricingModel,
   mergeAnthropicUsage,
   normalizeAnthropicUsage,
   totalTokens,
@@ -29,6 +31,7 @@ export interface LlmBrokerAppDeps {
 
 const DEFAULT_UPSTREAM_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_BODY_LIMIT = "32mb";
+const MAX_SSE_METERING_BUFFER_CHARS = 1_000_000;
 
 const ALLOWED_ANTHROPIC_ENDPOINTS = new Set([
   "GET /v1/models",
@@ -152,6 +155,10 @@ function containsOneHourCacheControl(value: unknown): boolean {
   return false;
 }
 
+// Anthropic reports one aggregate cache-creation counter even when a request
+// mixes 5m and 1h breakpoints. Pricing all cache creation at 1h when any 1h
+// breakpoint appears deliberately over-counts until we have per-block usage.
+
 function copyResponseHeaders(upstream: globalThis.Response, res: ExpressResponse): void {
   upstream.headers.forEach((value, key) => {
     if (!FORBIDDEN_RESPONSE_HEADERS.has(key.toLowerCase())) {
@@ -166,21 +173,54 @@ async function writeChunk(res: ExpressResponse, chunk: Uint8Array): Promise<void
   }
 }
 
-function extractAnthropicPayloadUsage(
-  payload: unknown,
-): { usage: AnthropicTokenUsage | null; model: string | null } {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return { usage: null, model: null };
+const ANTHROPIC_USAGE_FIELDS = [
+  "input_tokens",
+  "output_tokens",
+  "cache_creation_input_tokens",
+  "cache_read_input_tokens",
+] as const;
+
+function invalidAnthropicUsageFields(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const data = value as Record<string, unknown>;
+  return ANTHROPIC_USAGE_FIELDS.filter((field) => {
+    if (!(field in data)) return false;
+    const raw = data[field];
+    return typeof raw !== "number" || !Number.isFinite(raw) || raw < 0;
+  });
+}
+
+interface AnthropicPayloadExtraction {
+  usage: AnthropicTokenUsage | null;
+  model: string | null;
+  messageId: string | null;
+  invalidUsageFields: string[];
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+function extractAnthropicPayloadUsage(payload: unknown): AnthropicPayloadExtraction {
+  const data = objectRecord(payload);
+  if (!data) {
+    return { usage: null, model: null, messageId: null, invalidUsageFields: [] };
   }
-  const data = payload as Record<string, unknown>;
-  const message =
-    data.message && typeof data.message === "object" && !Array.isArray(data.message)
-      ? (data.message as Record<string, unknown>)
-      : null;
+  const message = objectRecord(data.message);
   const model = data.model ?? message?.model;
+  const messageId = data.id ?? message?.id;
+  const rawUsage = data.usage ?? message?.usage;
   return {
-    usage: normalizeAnthropicUsage(data.usage ?? message?.usage),
-    model: typeof model === "string" && model ? model : null,
+    usage: normalizeAnthropicUsage(rawUsage),
+    model: nonEmptyString(model),
+    messageId: nonEmptyString(messageId),
+    invalidUsageFields: invalidAnthropicUsageFields(rawUsage),
   };
 }
 
@@ -189,9 +229,14 @@ class AnthropicSseUsageCollector {
   private buffered = "";
   usage: AnthropicTokenUsage | null = null;
   model: string | null = null;
+  messageId: string | null = null;
+  invalidUsageFields: string[] = [];
 
   push(chunk: Uint8Array): void {
     this.buffered += this.decoder.decode(chunk, { stream: true });
+    if (this.buffered.length > MAX_SSE_METERING_BUFFER_CHARS) {
+      throw new Error("Anthropic SSE metering buffer exceeded cap");
+    }
     this.processCompleteEvents();
   }
 
@@ -220,11 +265,55 @@ class AnthropicSseUsageCollector {
       const extracted = extractAnthropicPayloadUsage(JSON.parse(data) as unknown);
       this.usage = mergeAnthropicUsage(this.usage, extracted.usage);
       if (extracted.model) this.model = extracted.model;
+      if (extracted.messageId) this.messageId = extracted.messageId;
+      this.invalidUsageFields.push(...extracted.invalidUsageFields);
     } catch {
       // Ignore malformed upstream event fragments; the response is still proxied verbatim.
     }
   }
 }
+
+function collectSseUsageChunk(
+  collector: AnthropicSseUsageCollector | null,
+  chunk: Uint8Array,
+  onError: (err: unknown) => void,
+): AnthropicSseUsageCollector | null {
+  if (!collector) return null;
+  try {
+    collector.push(chunk);
+    return collector;
+  } catch (err) {
+    onError(err);
+    return null;
+  }
+}
+
+function finishSseUsageCollection(
+  collector: AnthropicSseUsageCollector | null,
+  onError: (err: unknown) => void,
+): AnthropicSseUsageCollector | null {
+  if (!collector) return null;
+  try {
+    collector.finish();
+    return collector;
+  } catch (err) {
+    onError(err);
+    return null;
+  }
+}
+
+interface GateDecisionAllowed {
+  allowed: true;
+}
+
+interface GateDecisionDenied {
+  allowed: false;
+  status: 402 | 429 | 503;
+  error: string;
+  retryAfterSeconds?: number;
+}
+
+type GateDecision = GateDecisionAllowed | GateDecisionDenied;
 
 interface MeteringContext {
   req: Request;
@@ -243,15 +332,25 @@ async function recordUsage(
   upstream: globalThis.Response,
   usage: AnthropicTokenUsage | null,
   responseModel: string | null,
+  upstreamId: string | null,
 ): Promise<void> {
   if (!ctx.usageStore || !usage || totalTokens(usage) <= 0) return;
+  const model = responseModel ?? ctx.requestModel ?? "unknown";
+  const cost = estimateAnthropicCost(model, usage, ctx.cacheWriteTtl);
+  if (isUnknownAnthropicPricingModel(cost.pricingModel)) {
+    ctx.onMeteringError(
+      new Error(`llm-broker used fallback pricing for unknown Anthropic model: ${model}`),
+    );
+  }
   try {
     await ctx.usageStore.recordUsage({
+      eventId: usageEventId(ctx.record, upstreamId, ctx.requestId),
       requestId: ctx.requestId,
+      upstreamId,
       provider: "anthropic",
       gatewayId: ctx.record.gatewayId,
       ownerUid: ctx.record.ownerUid,
-      model: responseModel ?? ctx.requestModel ?? "unknown",
+      model,
       usage,
       cacheWriteTtl: ctx.cacheWriteTtl,
       method: ctx.req.method.toUpperCase(),
@@ -261,6 +360,77 @@ async function recordUsage(
     });
   } catch (err) {
     ctx.onMeteringError(err);
+  }
+}
+
+function usageEventId(
+  record: ModelBrokerTokenRecord,
+  upstreamId: string | null,
+  requestId: string,
+): string {
+  if (!upstreamId) return requestId;
+  return `${record.provider}_${record.gatewayId}_${crypto
+    .createHash("sha256")
+    .update(upstreamId, "utf8")
+    .digest("hex")}`;
+}
+
+async function preflightGate(input: {
+  req: Request;
+  url: URL;
+  record: ModelBrokerTokenRecord;
+  usageStore?: ModelBrokerUsageStore;
+  now: () => number;
+  onMeteringError: (err: unknown) => void;
+}): Promise<GateDecision> {
+  const { record } = input;
+  if (input.req.method.toUpperCase() === "GET" && input.url.pathname === "/v1/models") {
+    return { allowed: true };
+  }
+  const spendWindowUsd = record.limits.spendWindowUsd;
+  const requestsPerMinute = record.limits.requestsPerMinute;
+  if (spendWindowUsd === null && requestsPerMinute === null) return { allowed: true };
+  if (!input.usageStore) {
+    return { allowed: false, status: 503, error: "model broker limit store unavailable" };
+  }
+  try {
+    if (spendWindowUsd !== null) {
+      if (!input.usageStore.readWindowUsage) {
+        return { allowed: false, status: 503, error: "model broker spend gate unavailable" };
+      }
+      const usage = await input.usageStore.readWindowUsage({
+        gatewayId: record.gatewayId,
+        now: input.now(),
+      });
+      if (usage.costUsd >= spendWindowUsd) {
+        return {
+          allowed: false,
+          status: 402,
+          error: "model broker spend cap exceeded",
+        };
+      }
+    }
+    if (requestsPerMinute !== null) {
+      if (!input.usageStore.reserveRateWindow) {
+        return { allowed: false, status: 503, error: "model broker rate gate unavailable" };
+      }
+      const rate = await input.usageStore.reserveRateWindow({
+        gatewayId: record.gatewayId,
+        now: input.now(),
+      });
+      if (rate.requestCount > requestsPerMinute) {
+        return {
+          allowed: false,
+          status: 429,
+          error: "model broker rate limit exceeded",
+          retryAfterSeconds: 60,
+        };
+      }
+    }
+    return { allowed: true };
+  } catch (err) {
+    input.onMeteringError(err);
+    return { allowed: false, status: 503, error: "model broker limit check failed" };
   }
 }
 
@@ -276,7 +446,12 @@ async function writeBufferedUpstreamResponse(
   if (metering && isJson(upstream)) {
     try {
       const extracted = extractAnthropicPayloadUsage(JSON.parse(text) as unknown);
-      await recordUsage(metering, upstream, extracted.usage, extracted.model);
+      if (extracted.invalidUsageFields.length) {
+        metering.onMeteringError(
+          new Error(`Anthropic usage contained invalid fields: ${extracted.invalidUsageFields.join(",")}`),
+        );
+      }
+      await recordUsage(metering, upstream, extracted.usage, extracted.model, extracted.messageId);
     } catch {
       // Non-JSON success bodies are simply not meterable.
     }
@@ -294,21 +469,33 @@ async function writeStreamingUpstreamResponse(
     res.end();
     return;
   }
-  const collector = metering ? new AnthropicSseUsageCollector() : null;
+  let collector = metering ? new AnthropicSseUsageCollector() : null;
   const reader = upstream.body.getReader();
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       if (value) {
-        collector?.push(value);
+        collector = collectSseUsageChunk(
+          collector,
+          value,
+          metering?.onMeteringError ?? (() => undefined),
+        );
         await writeChunk(res, value);
       }
     }
-    collector?.finish();
+    collector = finishSseUsageCollection(
+      collector,
+      metering?.onMeteringError ?? (() => undefined),
+    );
     res.end();
     if (metering && collector) {
-      await recordUsage(metering, upstream, collector.usage, collector.model);
+      if (collector.invalidUsageFields.length) {
+        metering.onMeteringError(
+          new Error(`Anthropic usage contained invalid fields: ${collector.invalidUsageFields.join(",")}`),
+        );
+      }
+      await recordUsage(metering, upstream, collector.usage, collector.model, collector.messageId);
     }
   } finally {
     reader.releaseLock();
@@ -351,6 +538,21 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
         const platformKey = deps.providerKeys.anthropic;
         if (!platformKey) {
           res.status(503).json({ error: "anthropic upstream is not configured" });
+          return;
+        }
+        const gate = await preflightGate({
+          req,
+          url,
+          record,
+          usageStore: deps.usageStore,
+          now,
+          onMeteringError: deps.onMeteringError ?? (() => undefined),
+        });
+        if (!gate.allowed) {
+          if (gate.retryAfterSeconds) {
+            res.setHeader("retry-after", String(gate.retryAfterSeconds));
+          }
+          res.status(gate.status).json({ error: gate.error });
           return;
         }
         const body =

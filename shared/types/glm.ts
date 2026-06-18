@@ -56,6 +56,13 @@ export interface GatewayDesiredState {
   builderSlug?: string;
 
   sizingTier?: SizingTier;
+
+  modelBrokerLimits?: GatewayModelBrokerLimits;
+}
+
+export interface GatewayModelBrokerLimits {
+  spendWindowUsd?: number | null;
+  requestsPerMinute?: number | null;
 }
 
 export interface GatewayPersistenceSpec {

@@ -3,9 +3,12 @@ import { Router, type Request, type Response } from "express";
 
 import {
   createFirestoreModelBrokerTokenStore,
+  normalizeModelBrokerTokenLimits,
+  type ModelBrokerTokenLimits,
   type ModelBrokerTokenStore,
 } from "../lib/model-broker-tokens.js";
 import type { Firestore } from "firebase-admin/firestore";
+import { windowBudgetUsdForTier } from "../../../shared/types/billing.js";
 import {
   GATEWAY_ID_REQUIREMENT,
   isValidGatewayId,
@@ -16,6 +19,7 @@ export interface ModelKeyIssuerRouteDeps {
   store?: ModelBrokerTokenStore;
   bearerToken?: string;
   ttlSeconds?: number | null;
+  defaultLimits?: Partial<ModelBrokerTokenLimits> | null;
   now?: () => number;
   randomBytes?: (size: number) => Buffer;
 }
@@ -104,6 +108,97 @@ function parseOptionalTtlSeconds(raw: string | undefined): number | null {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
 }
 
+function parseOptionalNumber(raw: string | undefined): number | null {
+  if (raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function envDefaultLimits(): ModelBrokerTokenLimits {
+  return normalizeModelBrokerTokenLimits({
+    spendWindowUsd: parseOptionalNumber(process.env.MODEL_BROKER_SPEND_WINDOW_USD),
+    requestsPerMinute: parseOptionalNumber(process.env.MODEL_BROKER_REQUESTS_PER_MINUTE),
+  });
+}
+
+function timestampDate(value: unknown): Date | null {
+  if (value instanceof Date) return value;
+  if (value && typeof value === "object" && "toDate" in value) {
+    const date = (value as { toDate?: () => unknown }).toDate?.();
+    return date instanceof Date ? date : null;
+  }
+  return null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function ownerTier(data: Record<string, unknown>, subscription: Record<string, unknown>): string {
+  if (typeof data.selectedTier === "string") return data.selectedTier;
+  if (typeof subscription.tier === "string") return subscription.tier;
+  return "trial";
+}
+
+async function readOwnerTierLimit(
+  db: Pick<Firestore, "collection"> | undefined,
+  ownerUid: string | undefined,
+  now: number,
+): Promise<number | null> {
+  if (!db || !ownerUid) return null;
+  const snap = await db.collection("users").doc(ownerUid).get();
+  const data = snap.data() as Record<string, unknown> | undefined;
+  if (!data) return null;
+  const subscription =
+    data.subscription && typeof data.subscription === "object" && !Array.isArray(data.subscription)
+      ? (data.subscription as Record<string, unknown>)
+      : {};
+  return windowBudgetUsdForTier(
+    ownerTier(data, subscription),
+    timestampDate(subscription.trialStartedAt),
+    new Date(now),
+  );
+}
+
+async function readGatewayLimitOverrides(
+  db: Pick<Firestore, "collection"> | undefined,
+  gatewayId: string,
+): Promise<Partial<ModelBrokerTokenLimits>> {
+  if (!db) return {};
+  const snap = await db.collection("glmGateways").doc(gatewayId).get();
+  const data = snap.data() as Record<string, unknown> | undefined;
+  const raw =
+    data?.modelBrokerLimits && typeof data.modelBrokerLimits === "object" && !Array.isArray(data.modelBrokerLimits)
+      ? (data.modelBrokerLimits as Record<string, unknown>)
+      : {};
+  return {
+    ...(finiteNumber(raw.spendWindowUsd) !== null
+      ? { spendWindowUsd: finiteNumber(raw.spendWindowUsd) }
+      : {}),
+    ...(finiteNumber(raw.requestsPerMinute) !== null
+      ? { requestsPerMinute: finiteNumber(raw.requestsPerMinute) }
+      : {}),
+  };
+}
+
+async function resolveLimits(
+  deps: ModelKeyIssuerRouteDeps,
+  parsed: { gatewayId: string; ownerUid?: string },
+  now: number,
+): Promise<ModelBrokerTokenLimits> {
+  const defaults =
+    deps.defaultLimits === undefined
+      ? envDefaultLimits()
+      : normalizeModelBrokerTokenLimits(deps.defaultLimits);
+  const tierSpendWindowUsd = await readOwnerTierLimit(deps.db, parsed.ownerUid, now);
+  const gatewayOverrides = await readGatewayLimitOverrides(deps.db, parsed.gatewayId);
+  return normalizeModelBrokerTokenLimits({
+    ...defaults,
+    ...(tierSpendWindowUsd === null ? {} : { spendWindowUsd: tierSpendWindowUsd }),
+    ...gatewayOverrides,
+  });
+}
+
 export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): Router {
   const router = Router();
   let store = deps.store;
@@ -134,11 +229,13 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): 
         res.status(400).json({ error: parsed.error });
         return;
       }
+      const issuedAt = now();
       const issued = await activeStore.issueToken({
         ...parsed,
         provider: PROVIDER,
         ttlSeconds,
-        now: now(),
+        limits: await resolveLimits(deps, parsed, issuedAt),
+        now: issuedAt,
         randomBytes: deps.randomBytes,
       });
       res.json({

@@ -50,6 +50,9 @@ env:
   # metadata.namespace via downward API. PROD ns "octogee" = PROD project,
   # TEST ns "octogee-test" = TEST project. Matches the glm-controller pattern.
   # K8S_NAMESPACE is also downward API, not values-driven.
+  # Model broker issuer defaults. Spend caps come from the owner tier unless
+  # glmGateways/{gatewayId}.modelBrokerLimits.spendWindowUsd overrides them.
+  MODEL_BROKER_REQUESTS_PER_MINUTE: "60"
 
 # Mirrors gateway-edge's secret list — same routes, same secret needs.
 # When gateway-edge is later renamed gateway-edge and slimmed to ~3

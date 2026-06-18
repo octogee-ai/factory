@@ -26,6 +26,7 @@ export interface ModelBrokerUsageCost {
 export interface ModelBrokerUsageRecordInput {
   eventId?: string;
   requestId: string;
+  upstreamId?: string | null;
   provider: ModelBrokerUsageProvider;
   gatewayId: string;
   ownerUid: string | null;
@@ -40,14 +41,43 @@ export interface ModelBrokerUsageRecordInput {
 
 export interface ModelBrokerUsageStore {
   recordUsage(input: ModelBrokerUsageRecordInput): Promise<void>;
+  readWindowUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot>;
+  reserveRateWindow?(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot>;
+}
+
+export interface ModelBrokerUsageWindowReadInput {
+  gatewayId: string;
+  now?: number;
+}
+
+export interface ModelBrokerUsageWindowSnapshot {
+  gatewayId: string;
+  windowStartMs: number;
+  requestCount: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+export interface ModelBrokerRateWindowReserveInput {
+  gatewayId: string;
+  now?: number;
+}
+
+export interface ModelBrokerRateWindowSnapshot {
+  gatewayId: string;
+  windowStartMs: number;
+  requestCount: number;
 }
 
 export const MODEL_BROKER_USAGE_EVENTS_COLLECTION = "modelBrokerUsageEvents";
 export const MODEL_BROKER_USAGE_ROLLUPS_COLLECTION = "modelBrokerUsageRollups";
 export const MODEL_BROKER_USAGE_WINDOWS_COLLECTION = "modelBrokerUsageWindows";
+export const MODEL_BROKER_RATE_WINDOWS_COLLECTION = "modelBrokerRateWindows";
 
 const TOKENS_PER_MILLION = 1_000_000;
 const WINDOW_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
+const RATE_WINDOW_MS = 60 * 1000;
+const USAGE_RETENTION_DAYS = 180;
 
 interface AnthropicPricing {
   inputPerMTok: number;
@@ -69,6 +99,7 @@ const ANTHROPIC_PRICING: Record<string, AnthropicPricing> = {
   "haiku-4.5": pricing(1, 5, "haiku-4.5"),
   "haiku-3.5": pricing(0.8, 4, "haiku-3.5"),
 };
+const UNKNOWN_MODEL_FALLBACK_PRICING = pricing(10, 50, "unknown-fable-fallback");
 
 function pricing(inputPerMTok: number, outputPerMTok: number, pricingModel: string): AnthropicPricing {
   return {
@@ -123,12 +154,17 @@ export function mergeAnthropicUsage(
   };
 }
 
-function modelPricing(model: string): AnthropicPricing | null {
+function modelPricing(model: string): AnthropicPricing {
   const normalized = model.toLowerCase();
   if (normalized.includes("fable")) return ANTHROPIC_PRICING.fable;
   if (normalized.includes("mythos")) return ANTHROPIC_PRICING.mythos;
   if (normalized.includes("sonnet")) return ANTHROPIC_PRICING.sonnet;
-  if (normalized.includes("haiku-3-5") || normalized.includes("haiku-3.5")) {
+  if (
+    normalized.includes("haiku-3-5") ||
+    normalized.includes("haiku-3.5") ||
+    normalized.includes("3-5-haiku") ||
+    normalized.includes("3.5-haiku")
+  ) {
     return ANTHROPIC_PRICING["haiku-3.5"];
   }
   if (normalized.includes("haiku")) return ANTHROPIC_PRICING["haiku-4.5"];
@@ -136,7 +172,11 @@ function modelPricing(model: string): AnthropicPricing | null {
     return ANTHROPIC_PRICING["opus-legacy"];
   }
   if (normalized.includes("opus")) return ANTHROPIC_PRICING["opus-latest"];
-  return null;
+  return UNKNOWN_MODEL_FALLBACK_PRICING;
+}
+
+export function isUnknownAnthropicPricingModel(pricingModel: string): boolean {
+  return pricingModel === UNKNOWN_MODEL_FALLBACK_PRICING.pricingModel;
 }
 
 function usd(tokens: number, perMTok: number): number {
@@ -149,17 +189,6 @@ export function estimateAnthropicCost(
   cacheWriteTtl: AnthropicCacheWriteTtl = "5m",
 ): ModelBrokerUsageCost {
   const prices = modelPricing(model);
-  if (!prices) {
-    return {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-      pricingModel: "unknown",
-      cacheWriteTtl,
-    };
-  }
   const input = usd(usage.inputTokens, prices.inputPerMTok);
   const output = usd(usage.outputTokens, prices.outputPerMTok);
   const cacheRead = usd(usage.cacheReadInputTokens, prices.cacheReadPerMTok);
@@ -186,8 +215,16 @@ export function usageWindowStartMs(now: number): number {
   return Math.floor(now / WINDOW_MS) * WINDOW_MS;
 }
 
+export function rateWindowStartMs(now: number): number {
+  return Math.floor(now / RATE_WINDOW_MS) * RATE_WINDOW_MS;
+}
+
 function windowDocId(gatewayId: string, windowStartMs: number): string {
   return `${gatewayId}_${windowStartMs}`;
+}
+
+function expiresAt(now: number): Date {
+  return new Date(now + USAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -268,7 +305,9 @@ function modelTotals(
 }
 
 function eventDocument(
-  input: Required<Omit<ModelBrokerUsageRecordInput, "cacheWriteTtl">> & {
+  input: ModelBrokerUsageRecordInput & {
+    eventId: string;
+    now: number;
     cacheWriteTtl: AnthropicCacheWriteTtl;
     cost: ModelBrokerUsageCost;
     windowStartMs: number;
@@ -277,6 +316,7 @@ function eventDocument(
   return {
     eventId: input.eventId,
     requestId: input.requestId,
+    upstreamId: input.upstreamId ?? null,
     provider: input.provider,
     gatewayId: input.gatewayId,
     ownerUid: input.ownerUid,
@@ -286,6 +326,7 @@ function eventDocument(
     path: input.path,
     upstreamStatus: input.upstreamStatus,
     createdAt: input.now,
+    expiresAt: expiresAt(input.now),
     windowStartMs: input.windowStartMs,
     usage: input.usage,
     totalTokens: totalTokens(input.usage),
@@ -306,12 +347,17 @@ function eventDocument(
 export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly events: Array<Record<string, unknown>> = [];
   readonly rollups = new Map<string, { totalTokens: number; costUsd: number; requestCount: number }>();
+  readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot>();
+  readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
+  private readonly eventIds = new Set<string>();
 
   async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
     const now = input.now ?? Date.now();
     const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
     const cost = estimateAnthropicCost(input.model, input.usage, cacheWriteTtl);
     const eventId = input.eventId ?? crypto.randomUUID();
+    if (this.eventIds.has(eventId)) return;
+    this.eventIds.add(eventId);
     const windowStartMs = usageWindowStartMs(now);
     this.events.push(
       eventDocument({
@@ -333,6 +379,49 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
       costUsd: existing.costUsd + cost.total,
       requestCount: existing.requestCount + 1,
     });
+    const windowKey = windowDocId(input.gatewayId, windowStartMs);
+    const existingWindow = this.windows.get(windowKey) ?? {
+      gatewayId: input.gatewayId,
+      windowStartMs,
+      totalTokens: 0,
+      costUsd: 0,
+      requestCount: 0,
+    };
+    this.windows.set(windowKey, {
+      gatewayId: input.gatewayId,
+      windowStartMs,
+      totalTokens: existingWindow.totalTokens + totalTokens(input.usage),
+      costUsd: existingWindow.costUsd + cost.total,
+      requestCount: existingWindow.requestCount + 1,
+    });
+  }
+
+  async readWindowUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot> {
+    const now = input.now ?? Date.now();
+    const windowStartMs = usageWindowStartMs(now);
+    return (
+      this.windows.get(windowDocId(input.gatewayId, windowStartMs)) ?? {
+        gatewayId: input.gatewayId,
+        windowStartMs,
+        requestCount: 0,
+        totalTokens: 0,
+        costUsd: 0,
+      }
+    );
+  }
+
+  async reserveRateWindow(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot> {
+    const now = input.now ?? Date.now();
+    const windowStartMs = rateWindowStartMs(now);
+    const key = windowDocId(input.gatewayId, windowStartMs);
+    const current = this.rateWindows.get(key) ?? {
+      gatewayId: input.gatewayId,
+      windowStartMs,
+      requestCount: 0,
+    };
+    const next = { ...current, requestCount: current.requestCount + 1 };
+    this.rateWindows.set(key, next);
+    return next;
   }
 }
 
@@ -395,10 +484,54 @@ export function createFirestoreModelBrokerUsageStore(
             windowStartMs,
             windowLengthHours: WINDOW_LENGTH_HOURS,
             updatedAt: now,
+            expiresAt: expiresAt(now),
             ...usageDocumentTotals(windowData, input.usage, cost),
           },
           { merge: true },
         );
+      });
+    },
+
+    async readWindowUsage(input) {
+      const now = input.now ?? Date.now();
+      const windowStartMs = usageWindowStartMs(now);
+      const snap = await db
+        .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
+        .doc(windowDocId(input.gatewayId, windowStartMs))
+        .get();
+      const data = snap.data() ?? {};
+      return {
+        gatewayId: input.gatewayId,
+        windowStartMs,
+        requestCount: numberField(data, "requestCount"),
+        totalTokens: numberField(data, "totalTokens"),
+        costUsd: numberField(data, "costUsd"),
+      };
+    },
+
+    async reserveRateWindow(input) {
+      const now = input.now ?? Date.now();
+      const windowStartMs = rateWindowStartMs(now);
+      const rateRef = db
+        .collection(MODEL_BROKER_RATE_WINDOWS_COLLECTION)
+        .doc(windowDocId(input.gatewayId, windowStartMs));
+      return db.runTransaction(async (t) => {
+        const snap = await t.get(rateRef);
+        const data = snap.data() ?? {};
+        const requestCount = numberField(data, "requestCount") + 1;
+        t.set(
+          rateRef,
+          {
+            gatewayId: input.gatewayId,
+            windowStartMs,
+            windowLengthMs: RATE_WINDOW_MS,
+            requestCount,
+            updatedAt: now,
+            expiresAt: expiresAt(now),
+          },
+          { merge: true },
+        );
+        return { gatewayId: input.gatewayId, windowStartMs, requestCount };
       });
     },
   };

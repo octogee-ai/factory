@@ -3,6 +3,11 @@ import type { Firestore } from "firebase-admin/firestore";
 
 export type ModelBrokerProvider = "anthropic";
 
+export interface ModelBrokerTokenLimits {
+  spendWindowUsd: number | null;
+  requestsPerMinute: number | null;
+}
+
 export interface ModelBrokerTokenRecord {
   tokenHash: string;
   gatewayId: string;
@@ -12,6 +17,7 @@ export interface ModelBrokerTokenRecord {
   secretName: string;
   createdAt: number;
   expiresAt: number | null;
+  limits: ModelBrokerTokenLimits;
   revoked: boolean;
   revokedAt?: number;
 }
@@ -22,6 +28,7 @@ export interface IssueModelBrokerTokenInput {
   provider: ModelBrokerProvider;
   secretName: string;
   ttlSeconds?: number | null;
+  limits?: Partial<ModelBrokerTokenLimits> | null;
   now?: number;
   randomBytes?: (size: number) => Buffer;
 }
@@ -56,17 +63,28 @@ function normalizeTtlSeconds(ttlSeconds: number | null | undefined): number | nu
   return Math.floor(ttlSeconds);
 }
 
+function nonNegativeLimit(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+export function normalizeModelBrokerTokenLimits(
+  limits: Partial<ModelBrokerTokenLimits> | null | undefined,
+): ModelBrokerTokenLimits {
+  return {
+    spendWindowUsd: nonNegativeLimit(limits?.spendWindowUsd),
+    requestsPerMinute: nonNegativeLimit(limits?.requestsPerMinute),
+  };
+}
+
 function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerTokenRecord | null {
-  if (!data) return null;
-  if (data.provider !== "anthropic") return null;
-  if (data.capped !== true) return null;
-  if (typeof data.tokenHash !== "string") return null;
-  if (typeof data.gatewayId !== "string" || !data.gatewayId) return null;
-  if (typeof data.secretName !== "string" || !data.secretName) return null;
-  if (typeof data.createdAt !== "number") return null;
+  if (!recordHasRequiredShape(data)) return null;
   const ownerUid = typeof data.ownerUid === "string" ? data.ownerUid : null;
   const expiresAt = typeof data.expiresAt === "number" ? data.expiresAt : null;
   const revokedAt = typeof data.revokedAt === "number" ? data.revokedAt : undefined;
+  const limits =
+    data.limits && typeof data.limits === "object" && !Array.isArray(data.limits)
+      ? normalizeModelBrokerTokenLimits(data.limits as Partial<ModelBrokerTokenLimits>)
+      : normalizeModelBrokerTokenLimits(null);
   return {
     tokenHash: data.tokenHash,
     gatewayId: data.gatewayId,
@@ -76,9 +94,27 @@ function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerToke
     secretName: data.secretName,
     createdAt: data.createdAt,
     expiresAt,
+    limits,
     revoked: data.revoked === true,
     ...(revokedAt === undefined ? {} : { revokedAt }),
   };
+}
+
+function recordHasRequiredShape(data: Record<string, unknown> | undefined): data is Record<string, unknown> & {
+  tokenHash: string;
+  gatewayId: string;
+  secretName: string;
+  createdAt: number;
+} {
+  if (!data) return false;
+  return [
+    data.provider === "anthropic",
+    data.capped === true,
+    typeof data.tokenHash === "string",
+    typeof data.gatewayId === "string" && data.gatewayId.length > 0,
+    typeof data.secretName === "string" && data.secretName.length > 0,
+    typeof data.createdAt === "number",
+  ].every(Boolean);
 }
 
 export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
@@ -112,6 +148,7 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
       secretName: input.secretName,
       createdAt: now,
       expiresAt: ttl ? now + ttl * 1000 : null,
+      limits: normalizeModelBrokerTokenLimits(input.limits),
       revoked: false,
     };
     this.tokens.set(tokenHash, record);
@@ -182,6 +219,7 @@ export function createFirestoreModelBrokerTokenStore(
         secretName: input.secretName,
         createdAt: now,
         expiresAt: ttl ? now + ttl * 1000 : null,
+        limits: normalizeModelBrokerTokenLimits(input.limits),
         revoked: false,
       };
       await tokens.doc(tokenHash).set(record);
