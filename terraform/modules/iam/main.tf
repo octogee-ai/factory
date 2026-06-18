@@ -106,7 +106,12 @@ resource "google_project_iam_member" "llm_broker_anthropic_secret_accessor" {
   condition {
     title       = "AnthropicProviderKeysOnly"
     description = "LLM broker may access only the platform Anthropic key and per-builder Anthropic BYOT secrets."
-    expression  = "resource.name.matches('.*/secrets/(octogee-anthropic|byok-[a-z0-9-]+-anthropic)/versions/[^/]+$')"
+    expression  = <<-EOT
+    resource.name.startsWith("projects/${var.project_id}/secrets/octogee-anthropic/versions/") ||
+    resource.name.startsWith("projects/${data.google_project.this.number}/secrets/octogee-anthropic/versions/") ||
+    (resource.name.startsWith("projects/${var.project_id}/secrets/byok-") && resource.name.endsWith("-anthropic/versions/latest")) ||
+    (resource.name.startsWith("projects/${data.google_project.this.number}/secrets/byok-") && resource.name.endsWith("-anthropic/versions/latest"))
+    EOT
   }
 }
 
