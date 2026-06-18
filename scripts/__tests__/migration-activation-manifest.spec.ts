@@ -123,10 +123,12 @@ describe("migration activation manifest", () => {
       { agentId: "octogee-bob-coach", keep: true },
       { agentId: "octogee-alice-coach", match: { channel: "mattermost" } },
     ]);
-    // Dropping the stale binding shrinks `bindings` — the OC destructive-array guard
-    // requires the intent confirmed via replacePaths. (No alice-coach account in this
-    // base config, so the derived set is bindings-only.)
-    expect(configPatch.mock.calls[0][2]).toEqual({ replacePaths: ["bindings"] });
+    // Dropping stale customer entries can shrink customer-scoped arrays — the OC
+    // destructive-array guard requires the intent confirmed via replacePaths. (No
+    // alice-coach account in this base config, so the derived set is agents+bindings.)
+    expect(configPatch.mock.calls[0][2]).toEqual({
+      replacePaths: ["agents.list", "bindings"],
+    });
   });
 
   it("confirms the residual account's arrays when importing over residue (re-import case)", async () => {
@@ -159,7 +161,11 @@ describe("migration activation manifest", () => {
     await applyOpenClawActivationManifest(manifest(), { rpc: rpc as never, log: vi.fn() });
 
     expect(configPatch.mock.calls[0][2]).toEqual({
-      replacePaths: ["bindings", "channels.mattermost.accounts.alice-coach.groupAllowFrom"],
+      replacePaths: [
+        "agents.list",
+        "bindings",
+        "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+      ],
     });
   });
 });

@@ -697,8 +697,8 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
 });
 
 describe("customerConfigReplacePaths — the remove-patch's guard confirmation set", () => {
-  it("always confirms bindings (the filtered array shrink)", () => {
-    expect(customerConfigReplacePaths({}, "alice")).toEqual(["bindings"]);
+  it("always confirms agents.list and bindings (the filtered array shrink)", () => {
+    expect(customerConfigReplacePaths({}, "alice")).toEqual(["agents.list", "bindings"]);
   });
 
   it("confirms every array under the null-deleted account (mirrors OC collectBaseArrayPaths)", () => {
@@ -717,21 +717,22 @@ describe("customerConfigReplacePaths — the remove-patch's guard confirmation s
       },
     };
     expect(customerConfigReplacePaths(current, "alice")).toEqual([
+      "agents.list",
       "bindings",
       "channels.mattermost.accounts.alice-coach.groupAllowFrom",
       "channels.mattermost.accounts.alice-coach.nested.deep.list",
     ]);
   });
 
-  it("handles an absent or non-object account (just bindings — nothing else to confirm)", () => {
+  it("handles an absent or non-object account (just customer-scoped arrays to confirm)", () => {
     expect(
       customerConfigReplacePaths({ channels: { mattermost: { accounts: {} } } }, "alice"),
-    ).toEqual(["bindings"]);
+    ).toEqual(["agents.list", "bindings"]);
     expect(
       customerConfigReplacePaths(
         { channels: { mattermost: { accounts: { "alice-coach": "garbage" } } } },
         "alice",
       ),
-    ).toEqual(["bindings"]);
+    ).toEqual(["agents.list", "bindings"]);
   });
 });

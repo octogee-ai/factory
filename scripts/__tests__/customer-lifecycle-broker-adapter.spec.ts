@@ -2,11 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
+import {
+  applyConfigPatch,
+  customerConfigReplacePaths,
+} from "../lib/apply-config-patch.js";
 
 const mocks = vi.hoisted(() => ({
   readActivationManifest: vi.fn(),
   applyOpenClawActivationManifest: vi.fn(),
   removeActivationManifest: vi.fn(),
+}));
+const patchMocks = vi.hoisted(() => ({
+  applyConfigPatch: vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 })),
 }));
 
 vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
@@ -16,6 +23,13 @@ vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
     readActivationManifest: mocks.readActivationManifest,
     applyOpenClawActivationManifest: mocks.applyOpenClawActivationManifest,
     removeActivationManifest: mocks.removeActivationManifest,
+  };
+});
+vi.mock("../lib/apply-config-patch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/apply-config-patch.js")>();
+  return {
+    ...actual,
+    applyConfigPatch: patchMocks.applyConfigPatch,
   };
 });
 
@@ -69,6 +83,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     mocks.readActivationManifest.mockReset();
     mocks.applyOpenClawActivationManifest.mockReset();
     mocks.removeActivationManifest.mockReset();
+    patchMocks.applyConfigPatch.mockClear();
     mocks.readActivationManifest.mockResolvedValue({ slug: "tester10" });
     mocks.applyOpenClawActivationManifest.mockResolvedValue({ elapsedMs: 42 });
     mocks.removeActivationManifest.mockResolvedValue(undefined);
@@ -120,5 +135,54 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       /missing activation manifest/,
     );
     expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildBrokeredLifecycleAdapter remove config patch", () => {
+  beforeEach(() => {
+    patchMocks.applyConfigPatch.mockClear();
+  });
+
+  it("removes only the customer's agent/bindings/account and confirms shrink paths", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    await adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach");
+
+    const call = vi.mocked(applyConfigPatch).mock.calls.at(-1)!;
+    const args = call[0] as {
+      buildPatch: (current: unknown) => {
+        agents: { list: Array<{ id?: string }> };
+        bindings: Array<{ agentId?: string }>;
+        channels: { mattermost: { accounts: Record<string, null> } };
+      };
+      buildReplacePaths?: (current: unknown) => string[];
+    };
+    const current = {
+      agents: {
+        list: [
+          { id: "octogee-ops-eggman" },
+          { id: "octogee-alice-coach" },
+        ],
+      },
+      bindings: [
+        { agentId: "octogee-ops-eggman" },
+        { agentId: "octogee-alice-coach" },
+      ],
+      channels: {
+        mattermost: { accounts: { "alice-coach": { groupAllowFrom: ["mm-1"] } } },
+      },
+    };
+    expect(args.buildPatch(current)).toEqual({
+      agents: { list: [{ id: "octogee-ops-eggman" }] },
+      bindings: [{ agentId: "octogee-ops-eggman" }],
+      channels: { mattermost: { accounts: { "alice-coach": null } } },
+    });
+    expect(args.buildReplacePaths?.(current)).toEqual(
+      customerConfigReplacePaths(current, "alice"),
+    );
   });
 });

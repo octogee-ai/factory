@@ -100,10 +100,26 @@ function buildRemoveCustomerPatchLocal(
   current: unknown,
   slug: string,
   agentId: string,
-): { bindings: unknown[]; channels: { mattermost: { accounts: Record<string, null> } } } {
+): {
+  agents: { list: unknown[] };
+  bindings: unknown[];
+  channels: { mattermost: { accounts: Record<string, null> } };
+} {
+  const agents = (current as { agents?: { list?: unknown } })?.agents?.list;
+  const currentAgents = Array.isArray(agents) ? agents : [];
   const bindings = (current as { bindings?: unknown })?.bindings;
   const currentBindings = Array.isArray(bindings) ? bindings : [];
   return {
+    agents: {
+      list: currentAgents.filter(
+        (agent) =>
+          !(
+            agent &&
+            typeof agent === "object" &&
+            (agent as { id?: unknown }).id === agentId
+          ),
+      ),
+    },
     bindings: currentBindings.filter(
       (binding) =>
         !(

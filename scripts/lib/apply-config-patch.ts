@@ -300,13 +300,13 @@ function collectArrayPathsUnder(value: unknown, prefix: string): string[] {
 }
 
 /**
- * The replacePaths set a customer-scoped config patch must confirm: `bindings` (add, remove,
- * and activation all wholesale-replace it after filtering this agent's entries) plus every
- * array under the slug's MM account — the remove patch null-deletes the account object, and
- * the add/activation patches merge a rebuilt account fragment whose arrays (groupAllowFrom)
- * can legitimately shrink on re-ensure. Derived from `current` so it tracks the account's
- * actual shape; confirming a path that doesn't shrink is a no-op for the guard, and for
- * non-id-keyed arrays it does not alter merge semantics.
+ * The replacePaths set a customer-scoped config patch must confirm: `agents.list` and
+ * `bindings` (add, remove, and activation filter this agent's entries before rebuilding)
+ * plus every array under the slug's MM account — the remove patch null-deletes the account
+ * object, and the add/activation patches merge a rebuilt account fragment whose arrays
+ * (groupAllowFrom) can legitimately shrink on re-ensure. Derived from `current` so it
+ * tracks the account's actual shape; confirming a path that doesn't shrink is a no-op for
+ * the guard, and for non-id-keyed arrays it does not alter merge semantics.
  */
 export function customerConfigReplacePaths(current: unknown, slug: string): string[] {
   const accountId = `${slug}-coach`;
@@ -314,5 +314,9 @@ export function customerConfigReplacePaths(current: unknown, slug: string): stri
     current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } } | undefined
   )?.channels?.mattermost?.accounts;
   const account = isPlainObject(accounts) ? accounts[accountId] : undefined;
-  return ["bindings", ...collectArrayPathsUnder(account, `channels.mattermost.accounts.${accountId}`)];
+  return [
+    "agents.list",
+    "bindings",
+    ...collectArrayPathsUnder(account, `channels.mattermost.accounts.${accountId}`),
+  ];
 }
