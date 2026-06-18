@@ -234,6 +234,14 @@ const armOnClose = (event: string | symbol) => {
   return child;
 }
 
+async function readRequestBody(body: unknown): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of body as AsyncIterable<Buffer | string>) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 describe("createQuiesceHandler", () => {
   it("rejects bad signature with 401", async () => {
     const handler = createQuiesceHandler(mkDeps());
@@ -439,7 +447,7 @@ const fakeChild = new EventEmitter() as EventEmitter & {
 });
 
 describe("createPushStateHandler", () => {
-  it("streams a local tar directly into the target gateway import endpoint", async () => {
+  it("materializes a local tar file before uploading it to the target gateway import endpoint", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [
         { cwd: "/state", path: "agents/octogee-chris-coach" },
@@ -456,7 +464,8 @@ describe("createPushStateHandler", () => {
       expect(headers[SIGNATURE_HEADER]).toBe(signFleetRequest(PRIVATE_KEY, "mig-1", "chris"));
       expect(headers[MIGRATION_ID_HEADER]).toBe("mig-1");
       expect(headers[MIGRATION_SLUG_HEADER]).toBe("chris");
-      expect(init?.body).toBe(fakeChild.stdout);
+      expect(init?.body).not.toBe(fakeChild.stdout);
+      expect(await readRequestBody(init?.body)).toBe("tar-bytes");
       expect((init as RequestInit & { duplex?: string })?.duplex).toBe("half");
       return new Response(
         JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
@@ -562,7 +571,7 @@ describe("createPushStateHandler", () => {
   });
 
   it("returns 502 when the target import endpoint rejects the stream", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], stderr: ["broken pipe"], exitCode: 141 });
+    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
     spawnMock.mockReturnValueOnce(fakeChild);
     const fetchMock = vi.fn(async () =>
       new Response("signature rejected", { status: 401 }),
@@ -581,11 +590,11 @@ describe("createPushStateHandler", () => {
       status: 401,
       message: "signature rejected",
     });
-    expect(fakeChild.kill).toHaveBeenCalled();
+    expect(fakeChild.kill).not.toHaveBeenCalled();
   });
 
-  it("returns target alreadyMounted success even when the target closes the tar pipe early", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], stderr: ["write error"], exitCode: 141 });
+  it("returns target alreadyMounted success after uploading the materialized tar", async () => {
+    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
     spawnMock.mockReturnValueOnce(fakeChild);
     const fetchMock = vi.fn(async () =>
       new Response(
@@ -613,11 +622,11 @@ describe("createPushStateHandler", () => {
       imported: true,
       alreadyMounted: true,
     });
-    expect(fakeChild.kill).toHaveBeenCalled();
+    expect(fakeChild.kill).not.toHaveBeenCalled();
   });
 
-  it("handles a rejected target fetch and a non-zero tar exit without crashing", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], stderr: ["broken pipe"], exitCode: 141 });
+  it("handles a rejected target fetch after source tar materialization without crashing", async () => {
+    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
     spawnMock.mockReturnValueOnce(fakeChild);
     const fetchMock = vi.fn(async () => {
       throw new Error("target unreachable");
@@ -635,11 +644,32 @@ describe("createPushStateHandler", () => {
       error: "push-state failed",
       message: "target unreachable",
     });
+    expect(fakeChild.kill).not.toHaveBeenCalled();
+  });
+
+  it("fails before contacting the target when source tar materialization fails", async () => {
+    const fakeChild = mkFakeChild({ stderr: ["tar sad"], exitCode: 2 });
+    spawnMock.mockReturnValueOnce(fakeChild);
+    const fetchMock = vi.fn() as unknown as typeof fetch;
+
+    const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
+    const rawBody = JSON.stringify(SAMPLE_PUSH);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const req = mkRequest(SAMPLE_PUSH, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({
+      error: "push-state failed",
+      message: expect.stringMatching(/tar exit 2: tar sad/),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(fakeChild.kill).toHaveBeenCalled();
   });
 
-  it("aborts the target import and kills tar when the controller disconnects", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], stderr: ["aborted"], exitCode: 141 });
+  it("aborts the target import when the controller disconnects", async () => {
+    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
     spawnMock.mockReturnValueOnce(fakeChild);
     let signalSeen: AbortSignal | undefined;
     let resolveFetchStarted: () => void = () => {};
@@ -670,13 +700,13 @@ describe("createPushStateHandler", () => {
     await handlerPromise;
 
     expect(signalSeen?.aborted).toBe(true);
-    expect(fakeChild.kill).toHaveBeenCalled();
+    expect(fakeChild.kill).not.toHaveBeenCalled();
     expect(getStatus()).toBe(499);
     expect(getBody()).toMatchObject({ error: "controller disconnected" });
   });
 
-  it("aborts the target import and kills tar when the inner push-state timeout fires", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], stderr: ["timeout"], exitCode: 141 });
+  it("aborts the target import when the inner push-state timeout fires", async () => {
+    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
     spawnMock.mockReturnValueOnce(fakeChild);
     let signalSeen: AbortSignal | undefined;
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -700,7 +730,7 @@ describe("createPushStateHandler", () => {
     await handler(req, res, vi.fn());
 
     expect(signalSeen?.aborted).toBe(true);
-    expect(fakeChild.kill).toHaveBeenCalled();
+    expect(fakeChild.kill).not.toHaveBeenCalled();
     expect(getStatus()).toBe(504);
     expect(getBody()).toMatchObject({ error: "push-state timed out" });
   });

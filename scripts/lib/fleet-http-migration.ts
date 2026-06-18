@@ -2,10 +2,11 @@
 
 import type { Request, Response, RequestHandler } from "express";
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pipeline } from "node:stream/promises";
 import {
   type ImportResponse,
   type MigrationRequestBody,
@@ -130,6 +131,23 @@ function spawnTarStream(sources: Array<{ cwd: string; path: string }>): TarStrea
   });
   markPromiseHandled(done);
   return { child, stdout, done };
+}
+
+async function writeTarToFile(
+  sources: Array<{ cwd: string; path: string }>,
+  tarPath: string,
+): Promise<void> {
+  const tar = spawnTarStream(sources);
+  try {
+    await Promise.all([
+      pipeline(tar.stdout, createWriteStream(tarPath)),
+      tar.done,
+    ]);
+  } catch (err) {
+    tar.child.kill();
+    await tar.done.catch(() => undefined);
+    throw err;
+  }
 }
 
 export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -341,14 +359,11 @@ function pushStateFailureStatus(
 }
 
 async function finishPushStateAlreadyMounted(
-  tar: TarStream,
   res: Response,
   parsed: ImportResponse,
   targetGatewayId: string,
   log: (msg: string) => void,
 ): Promise<void> {
-  tar.child.kill();
-  await tar.done.catch(() => undefined);
   log(
     `[migration-http] ✅ push-state migrationId=${parsed.migrationId} slug=${parsed.slug} target=${targetGatewayId} already mounted`,
   );
@@ -371,7 +386,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
       log,
     );
 
-    let tar: TarStream | null = null;
+    let pushTmpDir: string | null = null;
     let cleanupActivationManifest: () => Promise<void> = async () => {};
     try {
       const sources = await deps.adapter.listExportPaths(body.slug);
@@ -387,10 +402,16 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
         sources.push(activationManifest.source);
       }
       log(
-        `[migration-http] push-state migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s) directly to ${target.targetGatewayId}`,
+        `[migration-http] push-state migrationId=${body.migrationId} slug=${body.slug} preparing ${sources.length} path(s) for ${target.targetGatewayId}`,
       );
 
-      tar = spawnTarStream(sources);
+      pushTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-push-${body.migrationId}-`));
+      const tarPath = path.join(pushTmpDir, "state.tar");
+      await writeTarToFile(sources, tarPath);
+      const stat = await fs.stat(tarPath);
+      log(
+        `[migration-http] push-state migrationId=${body.migrationId} slug=${body.slug} materialized ${stat.size} byte tar before upload`,
+      );
 
       const importRes = await fetchImpl(
         target.importUrl,
@@ -402,7 +423,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
             [MIGRATION_ID_HEADER]: body.migrationId,
             [MIGRATION_SLUG_HEADER]: body.slug,
           },
-          body: tar.stdout,
+          body: createReadStream(tarPath),
           duplex: "half",
           signal: abort.controller.signal,
         } as unknown as RequestInit & { duplex: "half" },
@@ -410,8 +431,6 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
 
       if (!importRes.ok) {
         const text = await importRes.text().catch(() => "<no body>");
-        tar.child.kill();
-        await tar.done.catch(() => undefined);
         log(
           `[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug} target import failed status=${importRes.status}: ${text}`,
         );
@@ -423,18 +442,15 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
 
       const parsed = (await importRes.json()) as ImportResponse;
       if (parsed.alreadyMounted) {
-        await finishPushStateAlreadyMounted(tar, res, parsed, target.targetGatewayId, log);
+        await finishPushStateAlreadyMounted(res, parsed, target.targetGatewayId, log);
         return;
       }
 
-      await tar.done;
       log(
         `[migration-http] ✅ push-state migrationId=${body.migrationId} slug=${body.slug} target=${target.targetGatewayId} done`,
       );
       res.status(200).json(parsed);
     } catch (err) {
-      tar?.child.kill();
-      await tar?.done.catch(() => undefined);
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
       if (!res.headersSent) {
@@ -449,6 +465,9 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
     } finally {
       abort.detach();
       await cleanupActivationManifest();
+      if (pushTmpDir) {
+        await fs.rm(pushTmpDir, { recursive: true, force: true }).catch(() => undefined);
+      }
     }
   };
 }
