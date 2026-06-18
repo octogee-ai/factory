@@ -1,5 +1,17 @@
 {{- if .Values.llmBroker.enabled }}
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.llmBroker.serviceAccountName }}
+  labels:
+    app: llm-broker
+    {{- include "octogee.labels" . | nindent 4 }}
+  {{- with .Values.llmBroker.gcpServiceAccount }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ . | quote }}
+  {{- end }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

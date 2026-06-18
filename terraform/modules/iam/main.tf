@@ -24,6 +24,13 @@ resource "google_service_account" "api" {
   project      = var.project_id
 }
 
+# ── Service Account: llm-broker ─────────────────────────────────────────────
+resource "google_service_account" "llm_broker" {
+  account_id   = var.llm_broker_sa_name
+  display_name = "Octogee LLM broker (${var.environment})"
+  project      = var.project_id
+}
+
 # ── Workload Identity bindings ──────────────────────────────────────────────
 # Allows K8s SA "octogee-gateway" in namespace to act as the cattle GCP SA.
 # The WI pool is always in the cluster project (octogee), even when the SA
@@ -38,6 +45,12 @@ resource "google_service_account_iam_member" "workload_identity_octogee_api" {
   service_account_id = google_service_account.api.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-api]"
+}
+
+resource "google_service_account_iam_member" "workload_identity_llm_broker" {
+  service_account_id = google_service_account.llm_broker.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/llm-broker]"
 }
 
 # ── Cloud SQL Client role ───────────────────────────────────────────────────
@@ -73,6 +86,28 @@ resource "google_storage_bucket_iam_member" "api_storage_object_admin" {
   bucket = "${var.project_id}.firebasestorage.app"
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.api.email}"
+}
+
+# ── LLM broker runtime grants ───────────────────────────────────────────────
+# The broker resolves Anthropic keys off-pod and records usage/cap counters.
+# It must not inherit octogee-api's Firebase admin, Secret Manager admin,
+# Cloud SQL, or Storage authority.
+resource "google_project_iam_member" "llm_broker_datastore_user" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.llm_broker.email}"
+}
+
+resource "google_project_iam_member" "llm_broker_anthropic_secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.llm_broker.email}"
+
+  condition {
+    title       = "AnthropicProviderKeysOnly"
+    description = "LLM broker may access only the platform Anthropic key and per-builder Anthropic BYOT secrets."
+    expression  = "resource.name.matches('.*/secrets/(octogee-anthropic|byok-[a-z0-9-]+-anthropic)/versions/[^/]+$')"
+  }
 }
 
 # ── Service Account: glm-controller (Cowboy) ────────────────────────────────

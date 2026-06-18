@@ -255,7 +255,8 @@ llmBroker:
     tag: latest
   replicas: 2
   port: 3010
-  serviceAccountName: octogee-api
+  serviceAccountName: llm-broker
+  gcpServiceAccount: octogee-llm-broker@octogee.iam.gserviceaccount.com
   upstream:
     anthropicBaseUrl: "https://api.anthropic.com"
   providerSecret:

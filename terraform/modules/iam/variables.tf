@@ -25,6 +25,12 @@ variable "api_sa_name" {
   default     = "octogee-api"
 }
 
+variable "llm_broker_sa_name" {
+  description = "Service account ID for the LLM broker"
+  type        = string
+  default     = "octogee-llm-broker"
+}
+
 variable "cloudsql_project_id" {
   description = "Project ID that owns the Cloud SQL instance (always 'octogee')"
   type        = string
