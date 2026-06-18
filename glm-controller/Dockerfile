@@ -1,12 +1,10 @@
 FROM node:26-slim
 
-# helm + kubectl unpinned — ride latest stable. helm-runner.ts uses
+# helm + kubectl resolve latest stable at image build time. helm-runner.ts uses
 # `--server-side=true --force-conflicts` (v4 string-flag syntax); any v4+
-# release supports that, and a flag-shape regression upstream fails loud
-# in CI tests rather than silently degrading. The CI deploy job
-# (.github/workflows/build-and-deploy.yml) also rides latest, so both
-# surfaces stay in lockstep automatically. Each image rebuild resolves
-# the freshest release at build time via api.github.com / dl.k8s.io.
+# release supports that, and the build verifies those flags before publishing
+# the controller image. The CI deploy job pins Helm v4 separately to avoid
+# azure/setup-helm's Helm 3 fallback when "latest" lookup fails.
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tini \
@@ -25,6 +23,8 @@ RUN apt-get update \
        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl" \
   && chmod +x /usr/local/bin/kubectl \
   && helm version --short \
+  && helm upgrade --help | grep -q -- '--server-side' \
+  && helm upgrade --help | grep -q -- '--force-conflicts' \
   && kubectl version --client=true
 
 # Mirror the repo layout under /app so the controller's tsconfig.json
