@@ -350,6 +350,39 @@ if [[ -z "$INTERNAL_SERVICE_KEY" ]]; then
 fi
 ksecret internal-service-key --from-literal=key="$INTERNAL_SERVICE_KEY"
 
+# ── 9a. Gateway model-key issuer bearer (glm-controller → octogee-api) ─
+# Distinct from INTERNAL_SERVICE_KEY. This only authorizes Cowboy to mint and
+# revoke opaque LLM broker tokens; it is not accepted by legacy /internal/*
+# routes and is never mounted into gateway pods.
+info "gateway-model-key-issuer"
+GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN=$(sm_get "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+if [[ -z "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" ]]; then
+  EXISTING_MODEL_ISSUER=$(ksecret_key gateway-model-key-issuer bearer_token)
+  if [[ -n "$EXISTING_MODEL_ISSUER" ]]; then
+    info "  Reusing existing GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN from K8s, back-filling Secret Manager"
+    GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN="$EXISTING_MODEL_ISSUER"
+    echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets create "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
+      --data-file=- --project="$FIREBASE_PROJECT" \
+      --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null || \
+    echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets versions add "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
+      --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
+  else
+    GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN=$(openssl rand -hex 32)
+    info "  First install — generating GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN, saving to Secret Manager ($FIREBASE_PROJECT)"
+    if echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets create "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
+         --data-file=- --project="$FIREBASE_PROJECT" \
+         --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
+      ok "  Created SM secret: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
+    elif echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets versions add "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
+         --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
+      ok "  Updated SM secret: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
+    else
+      warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
+    fi
+  fi
+fi
+ksecret gateway-model-key-issuer --from-literal=bearer_token="$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
+
 # ── 9b. Fleet controller signing keypair (glm-controller ↔ gateway) ──────
 # glm-controller signs the in-cluster migration RPCs with an Ed25519 private
 # key; gateway pods verify with only the public key. Secret Manager is the
@@ -639,6 +672,7 @@ status "mattermost-gateway / bot_token" "${MM_BOT_TOKEN:-}"
 status "mattermost-gateway / bot_user_id" "${MM_BOT_USER_ID:-}"
 status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
 status "internal-service-key" "${INTERNAL_SERVICE_KEY:-}"
+status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
 status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
 status "resend-secrets / api_key" "${RESEND_API_KEY:-}"
 status "resend-secrets / from_email" "${RESEND_FROM_EMAIL:-}"

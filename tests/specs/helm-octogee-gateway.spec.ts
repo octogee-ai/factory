@@ -659,6 +659,30 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
   });
 
+  it("renders builder fallback as a broker token plus ANTHROPIC_BASE_URL", () => {
+    const dep =
+      findDoc(
+        helmTemplate("octogee-gw-jack", {
+          gatewayId: "jack",
+          gatewayClass: "builder",
+          builderSlug: "jack",
+        }),
+        "Deployment",
+        "octogee-gateway-jack",
+      ) ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-jack\s*\n\s*key:\s*anthropic_api_key/);
+    expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010"/);
+    expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
+  });
+
+  it("does not route shared fallback traffic through the broker", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).not.toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
+  });
+
   it("OMITS ANTHROPIC_API_KEY when profile is operator (operator uses `claude auth login` instead)", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", {
@@ -670,6 +694,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     );
     expect(dep).not.toBeNull();
     expect(dep).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(dep).not.toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
   });
 
   it("omits shared platform credentials from the standard gateway and gateway-edge containers", () => {

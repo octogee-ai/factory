@@ -110,6 +110,13 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
+    - to:
+        - podSelector:
+            matchLabels:
+              app: llm-broker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.llmBroker.port | default 3010 }}
     # Gateway-to-gateway migration direct transfer. The controller asks
     # the source gateway to POST the workspace tarball directly to the
     # target gateway's /import route, so no workspace bytes transit the

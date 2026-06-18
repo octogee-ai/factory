@@ -243,6 +243,32 @@ gatewayFleet:
     name: ""
     spotName: ""
 
+# ── llm-broker ───────────────────────────────────────────────────────────────
+# Dedicated, shell-less cluster service that holds the real platform model key
+# and accepts only per-gateway broker tokens from exec-capable builder pods.
+# It runs from the octogee-api image for now so the platform release carries one
+# singleton image tag; split to a separate image only when traffic/load demands.
+llmBroker:
+  enabled: true
+  image:
+    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-api
+    tag: latest
+  replicas: 2
+  port: 3010
+  serviceAccountName: octogee-api
+  upstream:
+    anthropicBaseUrl: "https://api.anthropic.com"
+  providerSecret:
+    name: octogee-anthropic
+    key: api_key
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 # ── Service Account ──────────────────────────────────────────────────────────
 serviceAccount:
   gcpServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"

@@ -29,15 +29,13 @@ env:
   gitOrg: ""
   mmUrl: ""
 
-# Builder gateway model-key source issuer. Disabled by default; when enabled,
-# Cowboy calls octogee-api's trusted issuer before mirroring the resulting
-# Secret Manager source into a gateway pod.
 modelKeyIssuer:
-  enabled: false
+  enabled: true
   issueUrl: ""
   revokeUrl: ""
-  bearerTokenSecretName: gateway-model-key-issuer
-  bearerTokenSecretKey: bearer-token
+  bearerSecretName: gateway-model-key-issuer
+  bearerSecretKey: bearer_token
+  timeoutMs: "10000"
 
 # Ingress shells whose dynamic per-gateway paths are owned by Cowboy.
 # `sharedName` points all writers at the consolidated app Ingress; leave

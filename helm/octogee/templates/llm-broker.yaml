@@ -1,0 +1,128 @@
+{{- if .Values.llmBroker.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-broker
+  labels:
+    app: llm-broker
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.llmBroker.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: llm-broker
+  template:
+    metadata:
+      labels:
+        app: llm-broker
+    spec:
+      serviceAccountName: {{ .Values.llmBroker.serviceAccountName }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: llm-broker
+          image: "{{ .Values.llmBroker.image.repository }}:{{ .Values.llmBroker.image.tag }}"
+          imagePullPolicy: Always
+          command:
+            - node
+            - dist/octogee-api/src/llm-broker.js
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: {{ .Values.llmBroker.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.llmBroker.port | quote }}
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GCLOUD_PROJECT
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GCP_PROJECT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GOOGLE_CLOUD_PROJECT
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: FIREBASE_PROJECT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: ANTHROPIC_UPSTREAM_BASE_URL
+              value: {{ .Values.llmBroker.upstream.anthropicBaseUrl | quote }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llmBroker.providerSecret.name }}
+                  key: {{ .Values.llmBroker.providerSecret.key }}
+                  optional: false
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.llmBroker.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-broker
+  labels:
+    app: llm-broker
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: llm-broker
+  ports:
+    - name: http
+      port: {{ .Values.llmBroker.port }}
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-broker-ingress
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: llm-broker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.llmBroker.port }}
+{{- end }}

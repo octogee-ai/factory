@@ -35,6 +35,7 @@ set -euo pipefail
 # Rotatable secrets:
 #   anthropic             — ANTHROPIC_API_KEY (reads from stdin or ANTHROPIC_API_KEY env)
 #   internal-service-key  — generates a new random 40-char key, persists to SM
+#   model-key-issuer      — generates a new issuer bearer token, persists to SM
 #   mm-admin-pat          — revokes + remints via setup-mattermost.sh
 #   gitea-pat             — revokes + remints via setup-gitea.sh
 #   discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL (reads from stdin or env)
@@ -162,6 +163,7 @@ case "$SECRET" in
     echo "  Rotatable via this script (test + prod only):"
     echo "    anthropic             — ANTHROPIC_API_KEY, standard/cattle BYOK/BYOS fallback (octogee-anthropic; standard gateways only, never operator)"
     echo "    internal-service-key  — INTERNAL_SERVICE_KEY, consumers: octogee-api, cron jobs, social functions"
+    echo "    model-key-issuer      — GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN, consumers: octogee-api, glm-controller"
     echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: octogee-api, glm-controller"
     echo "    gitea-pat             — Gitea API token, consumers: octogee-api, glm-controller"
     echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: octogee-gateway"
@@ -248,6 +250,32 @@ case "$SECRET" in
 
     info "Cron jobs read the secret on each invocation — no restart needed."
     info "Social Cloud Functions read the Secret Manager value; redeploy functions only if warm instances keep using an old version."
+    ok "Rotation complete"
+    ;;
+
+  # ── Gateway model-key issuer bearer ─────────────────────────────────────
+  model-key-issuer)
+    confirm "Rotate GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN in $FIREBASE_PROJECT (octogee-api + glm-controller must restart)?" || { info "Cancelled"; exit 0; }
+
+    NEW_VALUE=$(openssl rand -hex 32)
+
+    info "Writing new version to Secret Manager ($FIREBASE_PROJECT)..."
+    echo -n "$NEW_VALUE" | gcloud secrets versions add GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN \
+      --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
+    echo -n "$NEW_VALUE" | gcloud secrets create GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN \
+      --data-file=- --project="$FIREBASE_PROJECT" \
+      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
+      fail "Could not write to Secret Manager"
+    ok "Secret Manager updated"
+
+    info "Updating K8s secret gateway-model-key-issuer..."
+    kubectl create secret generic gateway-model-key-issuer -n "$K8S_NAMESPACE" \
+      --from-literal=bearer_token="$NEW_VALUE" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    ok "K8s secret gateway-model-key-issuer updated"
+
+    info "Restarting octogee-api and glm-controller so both sides pick up the new token..."
+    rollout_restart octogee-api glm-controller
     ok "Rotation complete"
     ;;
 

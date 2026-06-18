@@ -66,6 +66,7 @@ const pluginCfg = config.plugins?.entries?.["octogee-router"]?.config;
 
 const envBotToken = env.MM_BOT_TOKEN;
   const envMmUrl = env.MM_URL;
+  const envAnthropicBaseUrl = env.ANTHROPIC_BASE_URL;
   if (config.channels?.mattermost) {
     const mm = config.channels.mattermost;
     if (envBotToken) {
@@ -99,6 +100,23 @@ if (mm.accounts && typeof mm.accounts === "object") {
           changed = true;
           logFn(`forced commands.native=false on accounts.${accountId}`);
         }
+      }
+    }
+  }
+
+  if (envAnthropicBaseUrl) {
+    config.auth ??= {};
+    config.auth.profiles ??= {};
+    config.auth.profiles["anthropic:default"] ??= {
+      provider: "anthropic",
+      mode: "api_key",
+    };
+    const anthropic = config.auth.profiles["anthropic:default"];
+    if (anthropic && typeof anthropic === "object") {
+      if (anthropic.baseUrl !== envAnthropicBaseUrl) {
+        anthropic.baseUrl = envAnthropicBaseUrl;
+        changed = true;
+        logFn(`Anthropic baseUrl synced from ANTHROPIC_BASE_URL env var`);
       }
     }
   }

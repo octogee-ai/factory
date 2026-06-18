@@ -221,15 +221,17 @@ spec:
                   optional: true
             {{- else if eq $gatewayClass "builder" }}
             # Builder-class gateways are exec-capable, so they must not receive
-            # the shared platform key. This optional per-gateway secret is the
-            # capped-key/BYOS seam; if absent, BYOS/BYOT auth paths handle model
-            # access and the pod still boots.
+            # the shared platform key. This optional per-gateway secret contains
+            # an opaque LLM broker token, not a provider key; if absent,
+            # BYOS/BYOT auth paths handle model access and the pod still boots.
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: gateway-model-key-{{ .Values.gatewayId }}
                   key: anthropic_api_key
                   optional: true
+            - name: ANTHROPIC_BASE_URL
+              value: {{ .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) | quote }}
             {{- end }}
             {{- if eq $gatewayClass "operator" }}
             # Operator gateway shells run inside the tenant shell container,

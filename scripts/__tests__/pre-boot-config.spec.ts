@@ -131,6 +131,49 @@ describe("applyPreBootPatches — MM env sync", () => {
   });
 });
 
+describe("applyPreBootPatches — Anthropic broker base URL", () => {
+  it("syncs ANTHROPIC_BASE_URL into the default Anthropic auth profile", () => {
+    const config: any = {
+      auth: {
+        profiles: {
+          "anthropic:default": {
+            provider: "anthropic",
+            mode: "api_key",
+          },
+        },
+      },
+    };
+
+    const changed = applyPreBootPatches(config, {
+      ANTHROPIC_BASE_URL: "http://llm-broker.octogee-test.svc.cluster.local:3010",
+    });
+
+    expect(changed).toBe(true);
+    expect(config.auth.profiles["anthropic:default"]).toMatchObject({
+      provider: "anthropic",
+      mode: "api_key",
+      baseUrl: "http://llm-broker.octogee-test.svc.cluster.local:3010",
+    });
+  });
+
+  it("does not add Anthropic baseUrl when the broker env is absent", () => {
+    const config: any = {
+      auth: {
+        profiles: {
+          "anthropic:default": {
+            provider: "anthropic",
+            mode: "api_key",
+          },
+        },
+      },
+    };
+
+    applyPreBootPatches(config, {});
+
+    expect(config.auth.profiles["anthropic:default"].baseUrl).toBeUndefined();
+  });
+});
+
 describe("applyPreBootPatches — octogee-router cleanup", () => {
   it("removes the router from plugins.allow + plugins.entries when OCTOGEE_ROUTER_ENABLED=false", () => {
     const config: any = {

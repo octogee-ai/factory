@@ -141,6 +141,7 @@ env:
   discordOpsWebhookUrl: ""
   gitApiUrl: ""
   gitSshHost: ""
+  llmBrokerUrl: ""  # auto-computed from release namespace for builder-class gateways
   octogeeRouterEnabled: "true"
   openclawLogLevel: "info"
   fleetControllerPort: "3003"

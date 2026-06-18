@@ -108,23 +108,25 @@ spec:
             # never be bound to the control-plane identity.
             - name: GATEWAY_SERVICE_ACCOUNT
               value: {{ .Values.gatewayServiceAccount | quote }}
+            {{- if (.Values.modelKeyIssuer).enabled }}
+            - name: GATEWAY_MODEL_KEY_ISSUER_URL
+              value: {{ (.Values.modelKeyIssuer).issueUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001/internal/model-keys/issue" .Release.Namespace) | quote }}
+            - name: GATEWAY_MODEL_KEY_REVOKE_URL
+              value: {{ (.Values.modelKeyIssuer).revokeUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001/internal/model-keys/revoke" .Release.Namespace) | quote }}
+            - name: GATEWAY_MODEL_KEY_ISSUER_TIMEOUT_MS
+              value: {{ (.Values.modelKeyIssuer).timeoutMs | default "10000" | quote }}
+            - name: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ (.Values.modelKeyIssuer).bearerSecretName | default "gateway-model-key-issuer" }}
+                  key: {{ (.Values.modelKeyIssuer).bearerSecretKey | default "bearer_token" }}
+            {{- end }}
             - name: BOOTSTRAP_DEFAULT_GATEWAY
               value: {{ (.Values.bootstrapDefaultGateway).enabled | default false | quote }}
             - name: BOOTSTRAP_IMAGE_REPOSITORY
               value: {{ (.Values.bootstrapDefaultGateway).imageRepository | default "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway" | quote }}
             - name: BOOTSTRAP_IMAGE_TAG
               value: {{ (.Values.bootstrapDefaultGateway).imageTag | default "latest" | quote }}
-            {{- if (.Values.modelKeyIssuer).enabled }}
-            - name: GATEWAY_MODEL_KEY_ISSUER_URL
-              value: {{ (.Values.modelKeyIssuer).issueUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001/internal/model-keys/issue" .Release.Namespace) | quote }}
-            - name: GATEWAY_MODEL_KEY_REVOKE_URL
-              value: {{ (.Values.modelKeyIssuer).revokeUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001/internal/model-keys/revoke" .Release.Namespace) | quote }}
-            - name: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ (.Values.modelKeyIssuer).bearerTokenSecretName | default "gateway-model-key-issuer" | quote }}
-                  key: {{ (.Values.modelKeyIssuer).bearerTokenSecretKey | default "bearer-token" | quote }}
-            {{- end }}
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http

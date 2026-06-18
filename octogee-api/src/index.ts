@@ -1,5 +1,4 @@
 
-
 import express, { Request, Response } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 
@@ -19,11 +18,7 @@ import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-bro
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
-import {
-  createConfiguredGatewayModelKeyIssuerBackend,
-  createGatewayModelKeyIssuerRoutes,
-  type GatewayModelKeyIssuerBackend,
-} from "./routes/model-key-issuer.js";
+import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { db } from "../../gateway-edge/src/lib/db.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
@@ -35,6 +30,7 @@ import {
   createTenantBindingMetrics,
 } from "./middleware/tenant-binding.js";
 import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
+import type { ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TENANT_BOUND_API_ROUTES = new Set([
@@ -53,8 +49,9 @@ export interface CreateAppOptions {
     inCluster?: boolean;
     tokenPath?: string;
   };
-  modelKeyIssuerBackend?: GatewayModelKeyIssuerBackend;
+  modelKeyTokenStore?: ModelBrokerTokenStore;
   modelKeyIssuerBearerToken?: string;
+  modelKeyIssuerTtlSeconds?: number | null;
 }
 
 export function shouldAttemptTenantBinding(path: string): boolean {
@@ -119,8 +116,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     if (req.path === "/metrics") return next();
     const end = httpRequestDuration.startTimer();
     res.on("finish", () => {
-
-const route = req.route?.path || "unmatched";
+      const route = req.route?.path || "unmatched";
       const labels = { method: req.method, route, status: String(res.statusCode) };
       end(labels);
       httpRequestTotal.inc(labels);
@@ -186,16 +182,17 @@ const route = req.route?.path || "unmatched";
   // octogee-api-only: broker BuilderShell ticket, presence, and audit
   // Firestore writes so operator gateway pods can stay datastore.viewer-only.
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());
-  // octogee-api-only: trusted model-key issuer for Builder gateways. GLM calls
-  // this with a dedicated bearer token and still owns the Secret Manager write.
+  // octogee-api-only: mint/revoke opaque model broker tokens. GLM mirrors
+  // these into per-gateway K8s secrets, but the values are no longer provider
+  // keys and cannot fetch provider keys from the gateway pod.
   app.use(
     "/internal/model-keys",
-    createGatewayModelKeyIssuerRoutes({
+    createModelKeyIssuerRoutes({
+      db,
+      store: opts.modelKeyTokenStore,
       bearerToken:
         opts.modelKeyIssuerBearerToken ?? process.env.GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN,
-      backend:
-        opts.modelKeyIssuerBackend ??
-        createConfiguredGatewayModelKeyIssuerBackend(process.env),
+      ttlSeconds: opts.modelKeyIssuerTtlSeconds,
     }),
   );
   // octogee-api-only: the Hosting-deploy broker. Mounted after the tenant-binding
