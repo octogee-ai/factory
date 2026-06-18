@@ -10,6 +10,7 @@ import {
   type ConfigCache,
 } from "./apply-config-patch.js";
 import {
+  addCustomerToGateway,
   type CustomerContext,
   type CustomerLifecycleAdapter,
   type MmUpdate,
@@ -62,11 +63,8 @@ import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot
 import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
-  applyOpenClawActivationManifest,
   extractOpenClawActivationManifest,
   MIGRATION_ACTIVATION_DIR,
-  readActivationManifest,
-  removeActivationManifest,
 } from "./migration-activation-manifest.js";
 
 const DEFAULT_COACH = {
@@ -382,22 +380,16 @@ async function prepareImportDir(slug: string): Promise<string> {
 
 async function activateImportedCustomer(
   ctx: BrokerCtx,
+  adapter: CustomerLifecycleAdapter,
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<void> {
-  const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
-  const patch = await applyOpenClawActivationManifest(manifest, {
-    rpc: ctx.rpc,
-    cache: ctx.configCache,
-    signal: opts?.signal,
-    log: ctx.log,
-  });
-  ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
-  await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
-  const healthy = await waitForAccountHealthy(ctx, { slug, timeoutMs: 120_000 });
-  if (!healthy) {
-    throw new Error(`[import:${slug}] channel did not reach running+connected after local activation`);
+  const uid = await ctx.client.uidForSlug(slug);
+  if (!uid) {
+    throw new Error(`[import:${slug}] fleet broker could not resolve uid for imported slug`);
   }
+  const result = await addCustomerToGateway(adapter, uid, { signal: opts?.signal });
+  ctx.log(`[import:${slug}] brokered activation complete steps=${result.steps.join(",")}`);
 }
 
 async function removeImportedCustomerBySlug(
@@ -431,7 +423,7 @@ export function buildBrokeredLifecycleAdapter(
     snapshotsByUid: new Map(),
     snapshotsBySlug: new Map(),
   };
-  return {
+  const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
     isOperatorGateway: () => false,
     customerCoachWiredInOpenclawConfig: (slug) =>
@@ -505,8 +497,9 @@ export function buildBrokeredLifecycleAdapter(
     quiesceCustomer: (slug, timeoutMs) => quiesceCustomer(opts.log, slug, timeoutMs),
     listExportPaths,
     prepareImportDir,
-    activateImportedCustomer: (slug, callOpts) => activateImportedCustomer(ctx, slug, callOpts),
+    activateImportedCustomer: (slug, callOpts) => activateImportedCustomer(ctx, adapter, slug, callOpts),
     exportOpenClawActivationManifest: (slug) => extractOpenClawActivationManifest(OPENCLAW_CONFIG, slug),
     removeImportedCustomerBySlug: (slug) => removeImportedCustomerBySlug(ctx, slug),
   };
+  return adapter;
 }
