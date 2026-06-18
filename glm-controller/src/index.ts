@@ -1133,15 +1133,6 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
   }
 }
 
-async function readGatewayProfileFromFirestore(
-  db: Firestore,
-  gatewayId: string,
-): Promise<"standard" | "operator"> {
-  const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const data = doc.data() as GatewayDesiredState | undefined;
-  return resolveGatewayImageProfile(data ?? {}) === "operator" ? "operator" : "standard";
-}
-
 function createMigrationClientBuilder(
   privateKey: string,
   logFn: (msg: string) => void,
@@ -1218,7 +1209,6 @@ async function buildHandlers(
       );
     },
     resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
-    readGatewayProfile: (gatewayId) => readGatewayProfileFromFirestore(db, gatewayId),
     buildClient: createMigrationClientBuilder(
       privateKey,
       logFn,

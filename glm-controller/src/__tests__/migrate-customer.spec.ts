@@ -139,15 +139,11 @@ describe("createMigrateCustomerHandler — happy path", () => {
     expect(deps.buildClient).toHaveBeenCalledTimes(1);
   });
 
-  it("requests an activation manifest when the target gateway is operator-profile", async () => {
-    const readGatewayProfile = vi.fn(async (gatewayId: string) =>
-      gatewayId === "gw-green" ? ("operator" as const) : ("standard" as const),
-    );
-    const { deps, client } = makeDeps({ readGatewayProfile });
+  it("requests an activation manifest for every migration target", async () => {
+    const { deps, client } = makeDeps();
     const handler = createMigrateCustomerHandler(deps);
     await handler(mkOp({}), makeCtx());
 
-    expect(readGatewayProfile).toHaveBeenCalledWith("gw-green");
     expect(client.transferState).toHaveBeenCalledWith(
       expect.objectContaining({ includeActivationManifest: true }),
     );
