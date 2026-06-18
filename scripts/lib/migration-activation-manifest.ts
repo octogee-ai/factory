@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { CONFIG_PATCH_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import {
   applyConfigPatch,
-  customerConfigReplacePaths,
+  customerConfigFullAgentListReplacePaths,
   type ConfigCache,
 } from "./apply-config-patch.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
@@ -190,7 +190,7 @@ export async function applyOpenClawActivationManifest(
       // Rebuilding the agent's bindings can shrink the array (stale entries dropped), and
       // importing over residue merges an account fragment whose arrays can shrink too — the
       // gateway's destructive-array guard requires both confirmed.
-      buildReplacePaths: (current) => customerConfigReplacePaths(current, manifest.slug),
+      buildReplacePaths: (current) => customerConfigFullAgentListReplacePaths(current, manifest.slug),
       logPrefix: `[import:${manifest.slug}]`,
     },
     {

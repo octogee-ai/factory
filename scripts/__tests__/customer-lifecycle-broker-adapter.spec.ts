@@ -4,7 +4,7 @@ import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
   applyConfigPatch,
-  customerConfigReplacePaths,
+  customerConfigFullAgentListReplacePaths,
 } from "../lib/apply-config-patch.js";
 
 const mocks = vi.hoisted(() => ({
@@ -182,7 +182,7 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
       channels: { mattermost: { accounts: { "alice-coach": null } } },
     });
     expect(args.buildReplacePaths?.(current)).toEqual(
-      customerConfigReplacePaths(current, "alice"),
+      customerConfigFullAgentListReplacePaths(current, "alice"),
     );
   });
 });

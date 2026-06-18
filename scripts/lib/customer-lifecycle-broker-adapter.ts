@@ -10,6 +10,7 @@ import {
 } from "../../shared/types/fleet-controller.js";
 import {
   applyConfigPatch,
+  customerConfigFullAgentListReplacePaths,
   customerConfigReplacePaths,
   type ConfigCache,
 } from "./apply-config-patch.js";
@@ -291,7 +292,7 @@ async function applyRemoveCustomerConfigPatch(
   await applyConfigPatch(
     {
       buildPatch: (current) => buildRemoveCustomerPatchLocal(current, slug, agentId),
-      buildReplacePaths: (current) => customerConfigReplacePaths(current, slug),
+      buildReplacePaths: (current) => customerConfigFullAgentListReplacePaths(current, slug),
       logPrefix: `[remove:${slug}]`,
     },
     { rpc: ctx.rpc, cache: ctx.configCache, totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS },

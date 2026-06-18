@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { applyConfigPatch, customerConfigReplacePaths } from "../lib/apply-config-patch.js";
+import {
+  applyConfigPatch,
+  customerConfigFullAgentListReplacePaths,
+  customerConfigReplacePaths,
+} from "../lib/apply-config-patch.js";
 import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
 
 function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
@@ -696,9 +700,16 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
   });
 });
 
-describe("customerConfigReplacePaths — the remove-patch's guard confirmation set", () => {
-  it("always confirms agents.list and bindings (the filtered array shrink)", () => {
-    expect(customerConfigReplacePaths({}, "alice")).toEqual(["agents.list", "bindings"]);
+describe("customerConfigReplacePaths — the customer-scoped guard confirmation set", () => {
+  it("confirms bindings without flipping agents.list upserts into replacement", () => {
+    expect(customerConfigReplacePaths({}, "alice")).toEqual(["bindings"]);
+  });
+
+  it("adds agents.list only for callers that intentionally send the full replacement list", () => {
+    expect(customerConfigFullAgentListReplacePaths({}, "alice")).toEqual([
+      "agents.list",
+      "bindings",
+    ]);
   });
 
   it("confirms every array under the null-deleted account (mirrors OC collectBaseArrayPaths)", () => {
@@ -717,6 +728,11 @@ describe("customerConfigReplacePaths — the remove-patch's guard confirmation s
       },
     };
     expect(customerConfigReplacePaths(current, "alice")).toEqual([
+      "bindings",
+      "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+      "channels.mattermost.accounts.alice-coach.nested.deep.list",
+    ]);
+    expect(customerConfigFullAgentListReplacePaths(current, "alice")).toEqual([
       "agents.list",
       "bindings",
       "channels.mattermost.accounts.alice-coach.groupAllowFrom",
@@ -727,12 +743,12 @@ describe("customerConfigReplacePaths — the remove-patch's guard confirmation s
   it("handles an absent or non-object account (just customer-scoped arrays to confirm)", () => {
     expect(
       customerConfigReplacePaths({ channels: { mattermost: { accounts: {} } } }, "alice"),
-    ).toEqual(["agents.list", "bindings"]);
+    ).toEqual(["bindings"]);
     expect(
       customerConfigReplacePaths(
         { channels: { mattermost: { accounts: { "alice-coach": "garbage" } } } },
         "alice",
       ),
-    ).toEqual(["agents.list", "bindings"]);
+    ).toEqual(["bindings"]);
   });
 });
