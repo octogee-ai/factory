@@ -19,6 +19,11 @@ import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-bro
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
+import {
+  createConfiguredGatewayModelKeyIssuerBackend,
+  createGatewayModelKeyIssuerRoutes,
+  type GatewayModelKeyIssuerBackend,
+} from "./routes/model-key-issuer.js";
 import { db } from "../../gateway-edge/src/lib/db.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
@@ -48,6 +53,8 @@ export interface CreateAppOptions {
     inCluster?: boolean;
     tokenPath?: string;
   };
+  modelKeyIssuerBackend?: GatewayModelKeyIssuerBackend;
+  modelKeyIssuerBearerToken?: string;
 }
 
 export function shouldAttemptTenantBinding(path: string): boolean {
@@ -179,6 +186,18 @@ const route = req.route?.path || "unmatched";
   // octogee-api-only: broker BuilderShell ticket, presence, and audit
   // Firestore writes so operator gateway pods can stay datastore.viewer-only.
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());
+  // octogee-api-only: trusted model-key issuer for Builder gateways. GLM calls
+  // this with a dedicated bearer token and still owns the Secret Manager write.
+  app.use(
+    "/internal/model-keys",
+    createGatewayModelKeyIssuerRoutes({
+      bearerToken:
+        opts.modelKeyIssuerBearerToken ?? process.env.GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN,
+      backend:
+        opts.modelKeyIssuerBackend ??
+        createConfiguredGatewayModelKeyIssuerBackend(process.env),
+    }),
+  );
   // octogee-api-only: the Hosting-deploy broker. Mounted after the tenant-binding
   // middleware so req.boundTenant is attached; never mounted on the in-pod gateway-edge.
   app.use("/api/site/hosting-deploy", createSiteDeployRoutes({ db }));

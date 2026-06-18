@@ -45,6 +45,12 @@ env:
   # reads connector tokens directly. Cattle gateways carry no creds and set
   # CONNECTOR_TOKEN_BROKER_URL instead; they never get this flag.
   CONNECTOR_TOKEN_AUTHORITY: "1"
+  # Optional model-key issuer upstream. Leave empty unless octogee-api should
+  # delegate Builder gateway key issuance/revocation to a provider-specific
+  # trusted service. GLM calls octogee-api, not the upstream directly.
+  GATEWAY_MODEL_KEY_UPSTREAM_ISSUER_URL: ""
+  GATEWAY_MODEL_KEY_UPSTREAM_REVOKE_URL: ""
+  GATEWAY_MODEL_KEY_UPSTREAM_TIMEOUT_MS: ""
   # GCLOUD_PROJECT / GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT / FIREBASE_PROJECT_ID
   # are NOT set here — the deployment template wires them all from
   # metadata.namespace via downward API. PROD ns "octogee" = PROD project,
@@ -142,6 +148,18 @@ secrets:
   - envName: EMAIL_UNSUBSCRIBE_SECRET
     secretName: resend-secrets
     secretKey: unsubscribe_secret
+    optional: true
+  - envName: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN
+    secretName: gateway-model-key-issuer
+    secretKey: bearer-token
+    optional: true
+  - envName: GATEWAY_MODEL_KEY_POOL_JSON
+    secretName: gateway-model-key-issuer
+    secretKey: key-pool-json
+    optional: true
+  - envName: GATEWAY_MODEL_KEY_UPSTREAM_BEARER_TOKEN
+    secretName: gateway-model-key-issuer
+    secretKey: upstream-bearer-token
     optional: true
 
 resources:
