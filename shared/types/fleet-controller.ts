@@ -1,5 +1,7 @@
 
 
+import type { FleetBrokerUserSnapshot } from "./fleet-broker.js";
+
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 
 export interface GatewayLastError {
@@ -57,6 +59,7 @@ export const ADD_CUSTOMER_DEADLINE_MS = 300_000;
 export const MIGRATION_QUIESCE_TIMEOUT_MS = 60_000;
 export const MIGRATION_TRANSFER_TIMEOUT_MS = ADD_CUSTOMER_DEADLINE_MS + 30_000;
 export const MIGRATION_UNMOUNT_TIMEOUT_MS = CONFIG_PATCH_DEADLINE_MS + 30_000;
+export const MIGRATION_VERIFY_TIMEOUT_MS = VERIFY_ACCOUNT_TIMEOUT_MS + 30_000;
 
 // Window the import-handler's migrating-in pin guards a freshly-imported customer from the
 // reconcile evict direction. Must outlast import→cutover so a slow import never false-evicts;
@@ -80,6 +83,7 @@ export interface PushStateRequestBody extends MigrationRequestBody {
   targetUrl: string;
   targetImportSignature: string;
   includeActivationManifest?: boolean;
+  mode?: "pre" | "final";
 }
 
 export interface QuiesceRequestBody extends MigrationRequestBody {
@@ -112,6 +116,34 @@ export interface UnmountResponse {
   slug: string;
 
 unmounted: boolean;
+}
+
+export interface RestoreMigrationRequestBody extends MigrationRequestBody {
+  uid: string;
+  snapshot: FleetBrokerUserSnapshot;
+}
+
+export interface RestoreMigrationResponse {
+  migrationId: string;
+  slug: string;
+  restored: boolean;
+  steps: string[];
+}
+
+export interface VerifyMigrationRequestBody extends MigrationRequestBody {
+  timeoutMs?: number;
+}
+
+export interface VerifyMigrationResponse {
+  migrationId: string;
+  slug: string;
+  ready: boolean;
+  checks: {
+    customerDir: boolean;
+    coachWired: boolean;
+    mountMarked: boolean;
+    accountHealthy: boolean;
+  };
 }
 
 export const MIGRATION_ID_HEADER = "X-Migration-Id";

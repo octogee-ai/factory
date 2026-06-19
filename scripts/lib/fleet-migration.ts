@@ -2,8 +2,11 @@
 
 export type MigrationPhase =
   | "initial"
+  | "target-restored"
+  | "pre-synced"
   | "source-quiesced"
-  | "state-transferred"
+  | "final-synced"
+  | "target-verified"
   | "cutover-done"
   | "source-unmounted"
   | "done";
@@ -17,15 +20,32 @@ export interface MigrationState {
 }
 
 export type MigrationStep =
+  | { action: "restore-target"; gateway: string; uid: string; slug: string }
   | { action: "quiesce-source"; gateway: string; slug: string }
-  | { action: "transfer-state"; from: string; to: string; slug: string }
+  | { action: "sync-state"; mode: "pre" | "final"; from: string; to: string; slug: string }
+  | { action: "verify-target"; gateway: string; slug: string }
   | { action: "cutover-firestore"; uid: string; from: string; to: string }
-  | { action: "unmount-source"; gateway: string; slug: string }
+  | { action: "unmount-gateway"; role: "source" | "target"; gateway: string; slug: string }
   | { action: "complete" };
 
 export function nextMigrationStep(state: MigrationState): MigrationStep {
   switch (state.phase) {
     case "initial":
+      return {
+        action: "restore-target",
+        gateway: state.toGatewayId,
+        uid: state.uid,
+        slug: state.slug,
+      };
+    case "target-restored":
+      return {
+        action: "sync-state",
+        mode: "pre",
+        from: state.fromGatewayId,
+        to: state.toGatewayId,
+        slug: state.slug,
+      };
+    case "pre-synced":
       return {
         action: "quiesce-source",
         gateway: state.fromGatewayId,
@@ -33,12 +53,19 @@ export function nextMigrationStep(state: MigrationState): MigrationStep {
       };
     case "source-quiesced":
       return {
-        action: "transfer-state",
+        action: "sync-state",
+        mode: "final",
         from: state.fromGatewayId,
         to: state.toGatewayId,
         slug: state.slug,
       };
-    case "state-transferred":
+    case "final-synced":
+      return {
+        action: "verify-target",
+        gateway: state.toGatewayId,
+        slug: state.slug,
+      };
+    case "target-verified":
       return {
         action: "cutover-firestore",
         uid: state.uid,
@@ -47,7 +74,8 @@ export function nextMigrationStep(state: MigrationState): MigrationStep {
       };
     case "cutover-done":
       return {
-        action: "unmount-source",
+        action: "unmount-gateway",
+        role: "source",
         gateway: state.fromGatewayId,
         slug: state.slug,
       };
@@ -59,8 +87,11 @@ export function nextMigrationStep(state: MigrationState): MigrationStep {
 
 const PHASE_ORDER: readonly MigrationPhase[] = [
   "initial",
+  "target-restored",
+  "pre-synced",
   "source-quiesced",
-  "state-transferred",
+  "final-synced",
+  "target-verified",
   "cutover-done",
   "source-unmounted",
   "done",
@@ -89,24 +120,34 @@ export function fullPlan(state: MigrationState): MigrationStep[] {
 export function rollbackPlan(state: MigrationState): MigrationStep[] {
   switch (state.phase) {
     case "initial":
-      
       return [];
+    case "target-restored":
+    case "pre-synced":
     case "source-quiesced":
-    case "state-transferred":
-
-return [
-        { action: "quiesce-source", gateway: state.fromGatewayId, slug: state.slug },
+    case "final-synced":
+    case "target-verified":
+      return [
+        {
+          action: "unmount-gateway",
+          role: "target",
+          gateway: state.toGatewayId,
+          slug: state.slug,
+        },
       ];
     case "cutover-done":
-
-return [
+      return [
         {
           action: "cutover-firestore",
           uid: state.uid,
           from: state.toGatewayId, // current owner
           to: state.fromGatewayId, // restore source
         },
-        { action: "unmount-source", gateway: state.toGatewayId, slug: state.slug },
+        {
+          action: "unmount-gateway",
+          role: "target",
+          gateway: state.toGatewayId,
+          slug: state.slug,
+        },
       ];
     case "source-unmounted":
     case "done":
@@ -120,12 +161,16 @@ export function describeStep(step: MigrationStep): string {
   switch (step.action) {
     case "quiesce-source":
       return `quiesce ${step.slug} on ${step.gateway} (stop accepting new prompts; let in-flight runs settle)`;
-    case "transfer-state":
-      return `push ~/.openclaw/agents/${step.slug} directly from ${step.from} → ${step.to}`;
+    case "restore-target":
+      return `restore durable state for ${step.slug} onto ${step.gateway} before live sync`;
+    case "sync-state":
+      return `${step.mode === "pre" ? "pre-sync" : "final-sync"} local state for ${step.slug} directly from ${step.from} → ${step.to}`;
+    case "verify-target":
+      return `verify ${step.slug} is mounted and channel-ready on ${step.gateway} before cutover`;
     case "cutover-firestore":
       return `Firestore: users/{uid=${step.uid}}.provisioning.openclaw.gatewayId = ${step.to} (was ${step.from}) + gatewayProfile mirror`;
-    case "unmount-source":
-      return `unmount ${step.slug} on ${step.gateway} (release agent + data dir)`;
+    case "unmount-gateway":
+      return `unmount ${step.role} copy of ${step.slug} on ${step.gateway} (release agent + data dir)`;
     case "complete":
       return "(done)";
   }

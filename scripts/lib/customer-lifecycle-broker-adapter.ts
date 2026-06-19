@@ -173,6 +173,7 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     greetingPosted: snapshot.greetingPosted,
     channels: snapshot.channels,
     ownerName: snapshot.ownerName,
+    projects: snapshot.projects,
   };
 }
 
@@ -370,6 +371,9 @@ async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path:
   const agentId = customerCoachAgentId(slug);
   const candidates = [
     { cwd: stateDir, path: path.join("agents", agentId) },
+    { cwd: stateDir, path: path.join("memory", `${agentId}.sqlite`) },
+    { cwd: stateDir, path: path.join("memory", `${agentId}.sqlite-wal`) },
+    { cwd: stateDir, path: path.join("memory", `${agentId}.sqlite-shm`) },
     { cwd: OPENCLAW_DIR, path: path.join("customers", slug) },
     { cwd: OPENCLAW_DIR, path: path.join("customer-keys", slug) },
   ];
@@ -390,6 +394,9 @@ async function prepareImportDir(slug: string): Promise<string> {
   const agentId = customerCoachAgentId(slug);
   for (const p of [
     path.join(stateDir, "agents", agentId),
+    path.join(stateDir, "memory", `${agentId}.sqlite`),
+    path.join(stateDir, "memory", `${agentId}.sqlite-wal`),
+    path.join(stateDir, "memory", `${agentId}.sqlite-shm`),
     path.join(OPENCLAW_DIR, "customers", slug),
     path.join(OPENCLAW_DIR, "customer-keys", slug),
     path.join(OPENCLAW_DIR, MIGRATION_ACTIVATION_DIR, slug),
@@ -446,6 +453,13 @@ async function removeImportedCustomerBySlug(
     recursive: true,
     force: true,
   });
+  const stateDir = resolveOpenClawStateDir();
+  for (const suffix of [".sqlite", ".sqlite-wal", ".sqlite-shm"]) {
+    await fsp.rm(path.join(stateDir, "memory", `${agentId}${suffix}`), {
+      recursive: true,
+      force: true,
+    });
+  }
   return { wasMounted: true, steps: ["config-patch-remove", "delete-dir"] };
 }
 
@@ -480,6 +494,9 @@ export function buildBrokeredLifecycleAdapter(
     loadUserSnapshot: async (uid) => {
       const snapshot = await snapshotForUid(ctx, uid);
       return snapshot ? toUserSnapshot(snapshot) : null;
+    },
+    seedUserSnapshotForMigration: (snapshot) => {
+      cacheSnapshot(ctx, snapshot);
     },
     setProvisioningStatus: async (uid, status) => {
       await opts.client.setProvisioningStatus(uid, status);

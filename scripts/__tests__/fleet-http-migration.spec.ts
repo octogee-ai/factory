@@ -9,7 +9,9 @@ import {
   createImportHandler,
   createPushStateHandler,
   createQuiesceHandler,
+  createRestoreHandler,
   createUnmountHandler,
+  createVerifyHandler,
   findPathTraversalViolation,
   type MigrationHandlerDeps,
 } from "../lib/fleet-http-migration.js";
@@ -58,6 +60,29 @@ const SAMPLE_PUSH: PushStateRequestBody = {
   targetUrl: "http://target-gateway:18789",
   targetImportSignature: signFleetRequest(PRIVATE_KEY, "mig-1", "chris"),
 };
+
+const RESTORE_SNAPSHOT = {
+  uid: "uid-chris",
+  slug: "chris",
+  tier: "trial",
+  gatewayId: GATEWAY_ID,
+  status: "complete",
+  agentIds: ["octogee-chris-coach"],
+  repoUrl: "git@gitea:octogee/chris.git",
+  mattermostUserId: "mmuser-chris",
+  customerMmUserId: "mmuser-chris",
+  greetingPosted: true,
+  channels: [],
+  projects: [],
+  ownerName: "Chris",
+  email: "chris@example.com",
+  displayName: "Chris",
+  lastName: "",
+  photoURL: "",
+  onboardingVibe: null,
+  coachToken: "coach-token",
+  coachMmUserId: "mm-coach",
+} as const;
 
 function mkRequest<T>(body: T, opts: { signature?: string; rawBody?: string } = {}): Request {
   const rawBody = opts.rawBody ?? JSON.stringify(body);
@@ -160,8 +185,11 @@ const everythingElseThrows = new Proxy(
     ]),
     prepareImportDir: vi.fn(async () => "/tmp/import"),
     activateImportedCustomer: vi.fn(async () => {}),
+    waitForAccountHealthy: vi.fn(async () => true),
 
 hasCustomerDir: vi.fn(() => true),
+    customerCoachWiredInOpenclawConfig: vi.fn(() => true),
+    customerMountMarked: vi.fn(() => true),
     applyRemoveCustomerConfigPatch: vi.fn(async () => {}),
     deleteCustomerDir: vi.fn(async () => {}),
     loadUserSnapshot: vi.fn(async () => ({
@@ -343,6 +371,168 @@ describe("createQuiesceHandler", () => {
   });
 });
 
+describe("createVerifyHandler", () => {
+  it("rejects bad signature with 401", async () => {
+    const handler = createVerifyHandler(mkDeps());
+    const body = { migrationId: "mig-1", slug: "chris" };
+    const req = mkRequest(body, { signature: "deadbeef" });
+    const { res, getStatus } = mkResponse();
+    await handler(req, res, vi.fn());
+    expect(getStatus()).toBe(401);
+  });
+
+  it("returns 200 ready=true when local migration readiness checks pass", async () => {
+    const adapter = mkAdapter();
+    const handler = createVerifyHandler(mkDeps({ adapter }));
+    const body = { migrationId: "mig-1", slug: "chris", timeoutMs: 5_000 };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({
+      migrationId: "mig-1",
+      slug: "chris",
+      ready: true,
+      checks: {
+        customerDir: true,
+        coachWired: true,
+        mountMarked: true,
+        accountHealthy: true,
+      },
+    });
+    expect(adapter.waitForAccountHealthy).toHaveBeenCalledWith({
+      slug: "chris",
+      timeoutMs: 5_000,
+    });
+  });
+
+  it("returns 409 ready=false when any readiness check fails", async () => {
+    const adapter = mkAdapter({
+      customerMountMarked: vi.fn(() => false),
+    });
+    const handler = createVerifyHandler(mkDeps({ adapter }));
+    const body = { migrationId: "mig-1", slug: "chris" };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(409);
+    expect(getBody()).toMatchObject({
+      ready: false,
+      checks: { mountMarked: false },
+    });
+  });
+});
+
+describe("createRestoreHandler", () => {
+  it("rejects bad signature with 401", async () => {
+    const handler = createRestoreHandler(mkDeps());
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      uid: "uid-chris",
+      snapshot: RESTORE_SNAPSHOT,
+    };
+    const req = mkRequest(body, { signature: "deadbeef" });
+    const { res, getStatus } = mkResponse();
+    await handler(req, res, vi.fn());
+    expect(getStatus()).toBe(401);
+  });
+
+  it("restores runtime state from the controller-provided durable snapshot", async () => {
+    const adapter = mkAdapter({
+      loadUserSnapshot: vi.fn(async () => {
+        throw new Error("restore should use the signed snapshot, not broker lookup");
+      }),
+      hasCustomerSshKey: vi.fn(() => true),
+      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 local"),
+      readGiteaCustomerPubKey: vi.fn(async () => "ssh-ed25519 local"),
+      ensureGiteaOrg: vi.fn(async () => undefined),
+      hasWorkspaceGitDir: vi.fn(() => false),
+      cloneWorkspaceRepo: vi.fn(async () => true),
+      ensureCustomerDirectories: vi.fn(),
+      writeCustomerTemplateFiles: vi.fn(async () => undefined),
+      blobSyncForSlug: vi.fn(async () => undefined),
+      restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
+      applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+      writeMountMarker: vi.fn(),
+      markCustomerMigratingIn: vi.fn(),
+    });
+    const handler = createRestoreHandler(mkDeps({ adapter }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      uid: "uid-chris",
+      snapshot: RESTORE_SNAPSHOT,
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toMatchObject({
+      migrationId: "mig-1",
+      slug: "chris",
+      restored: true,
+    });
+    expect(adapter.cloneWorkspaceRepo).toHaveBeenCalledWith(
+      "chris",
+      "git@gitea:octogee/chris.git",
+    );
+    expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledWith(
+      expect.objectContaining({ uid: "uid-chris", slug: "chris" }),
+      null,
+      expect.objectContaining({ byosActive: false }),
+    );
+    expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
+    expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(2);
+    expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+  });
+
+  it("rejects a snapshot whose uid/slug do not match the signed restore body", async () => {
+    const handler = createRestoreHandler(mkDeps());
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      uid: "uid-chris",
+      snapshot: { ...RESTORE_SNAPSHOT, slug: "mallory" },
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toEqual({ error: "snapshot mismatch" });
+  });
+
+  it("rejects a malformed snapshot body with 400 instead of throwing", async () => {
+    const handler = createRestoreHandler(mkDeps());
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      uid: "uid-chris",
+      snapshot: null,
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toEqual({ error: "snapshot mismatch" });
+  });
+});
+
 describe("createUnmountHandler", () => {
   it("rejects bad signature with 401", async () => {
     const handler = createUnmountHandler(mkDeps());
@@ -447,7 +637,7 @@ const fakeChild = new EventEmitter() as EventEmitter & {
 });
 
 describe("createPushStateHandler", () => {
-  it("materializes a local tar file before uploading it to the target gateway import endpoint", async () => {
+  it("streams a tar directly into the target gateway import endpoint", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [
         { cwd: "/state", path: "agents/octogee-chris-coach" },
@@ -464,7 +654,7 @@ describe("createPushStateHandler", () => {
       expect(headers[SIGNATURE_HEADER]).toBe(signFleetRequest(PRIVATE_KEY, "mig-1", "chris"));
       expect(headers[MIGRATION_ID_HEADER]).toBe("mig-1");
       expect(headers[MIGRATION_SLUG_HEADER]).toBe("chris");
-      expect(init?.body).not.toBe(fakeChild.stdout);
+      expect(init?.body).toBe(fakeChild.stdout);
       expect(await readRequestBody(init?.body)).toBe("tar-bytes");
       expect((init as RequestInit & { duplex?: string })?.duplex).toBe("half");
       return new Response(
@@ -689,7 +879,7 @@ describe("createPushStateHandler", () => {
     expect(fakeChild.kill).not.toHaveBeenCalled();
   });
 
-  it("returns target alreadyMounted success after uploading the materialized tar", async () => {
+  it("returns target alreadyMounted success after streaming the tar", async () => {
     const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
     spawnMock.mockReturnValueOnce(fakeChild);
     const fetchMock = vi.fn(async () =>
@@ -721,7 +911,7 @@ describe("createPushStateHandler", () => {
     expect(fakeChild.kill).not.toHaveBeenCalled();
   });
 
-  it("handles a rejected target fetch after source tar materialization without crashing", async () => {
+  it("handles a rejected target fetch after source tar streaming starts without crashing", async () => {
     const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
     spawnMock.mockReturnValueOnce(fakeChild);
     const fetchMock = vi.fn(async () => {
@@ -740,13 +930,15 @@ describe("createPushStateHandler", () => {
       error: "push-state failed",
       message: "target unreachable",
     });
-    expect(fakeChild.kill).not.toHaveBeenCalled();
+    expect(fakeChild.kill).toHaveBeenCalled();
   });
 
-  it("fails before contacting the target when source tar materialization fails", async () => {
+  it("returns source tar failure when tar exits non-zero during streaming", async () => {
     const fakeChild = mkFakeChild({ stderr: ["tar sad"], exitCode: 2 });
     spawnMock.mockReturnValueOnce(fakeChild);
-    const fetchMock = vi.fn() as unknown as typeof fetch;
+    const fetchMock = vi.fn(async () =>
+      new Response("target saw stream abort", { status: 500 }),
+    ) as unknown as typeof fetch;
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
@@ -757,10 +949,10 @@ describe("createPushStateHandler", () => {
 
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({
-      error: "push-state failed",
+      error: "source tar failed",
       message: expect.stringMatching(/tar exit 2: tar sad/),
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
     expect(fakeChild.kill).toHaveBeenCalled();
   });
 
@@ -796,7 +988,7 @@ describe("createPushStateHandler", () => {
     await handlerPromise;
 
     expect(signalSeen?.aborted).toBe(true);
-    expect(fakeChild.kill).not.toHaveBeenCalled();
+    expect(fakeChild.kill).toHaveBeenCalled();
     expect(getStatus()).toBe(499);
     expect(getBody()).toMatchObject({ error: "controller disconnected" });
   });
@@ -826,7 +1018,7 @@ describe("createPushStateHandler", () => {
     await handler(req, res, vi.fn());
 
     expect(signalSeen?.aborted).toBe(true);
-    expect(fakeChild.kill).not.toHaveBeenCalled();
+    expect(fakeChild.kill).toHaveBeenCalled();
     expect(getStatus()).toBe(504);
     expect(getBody()).toMatchObject({ error: "push-state timed out" });
   });
@@ -921,8 +1113,14 @@ const adapter = mkAdapter();
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
-  it("returns 200 alreadyMounted=true (noop) when the slug is in the gateway's mounted set", async () => {
+  it("refreshes the import even when the slug is already mounted so final sync is not skipped", async () => {
     const adapter = mkAdapter();
+    const fakeListChild = mkFakeChild({
+      stdout: ["agents/octogee-chris-coach/sessions/sessions.json\n"],
+      exitCode: 0,
+    });
+    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
     const handler = createImportHandler(
       mkDeps({ adapter, getMountedCustomers: () => ["chris"] }),
     );
@@ -939,11 +1137,13 @@ const adapter = mkAdapter();
       migrationId: "mig-1",
       slug: "chris",
       imported: true,
-      alreadyMounted: true,
     });
-    expect(adapter.prepareImportDir).not.toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(spawnMock.mock.calls.length).toBe(0);
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
+      "chris",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(spawnMock.mock.calls.length).toBe(2);
   });
 
   it("aborts activate + responds 499 when the client disconnects mid-import", async () => {
@@ -1015,6 +1215,8 @@ describe("findPathTraversalViolation — operator agent transfer", () => {
         [
           "agents/octogee-ops-eggman",
           "agents/octogee-ops-eggman/sessions/sessions.json",
+          "memory/octogee-ops-eggman.sqlite",
+          "memory/octogee-ops-eggman.sqlite-wal",
         ],
         "eggman",
       ),
@@ -1038,6 +1240,8 @@ describe("findPathTraversalViolation", () => {
     expect(findPathTraversalViolation([
       "agents/octogee-chris-coach/sessions/sessions.json",
       "agents/octogee-chris-coach/",
+      "memory/octogee-chris-coach.sqlite",
+      "memory/octogee-chris-coach.sqlite-shm",
       "customers/chris/.git/config",
       "customer-keys/chris/id_ed25519",
       ".octogee-migration-activation/chris/activation.json",

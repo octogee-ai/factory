@@ -23,8 +23,29 @@ function s(phase: MigrationPhase): MigrationState {
 }
 
 describe("nextMigrationStep — forward path", () => {
-  it("initial → quiesce-source on the source gateway", () => {
+  it("initial → restore durable state on target", () => {
     const step = nextMigrationStep(s("initial"));
+    expect(step).toEqual({
+      action: "restore-target",
+      gateway: "gw-prod-v2",
+      uid: "uid-ceckert",
+      slug: "ceckert",
+    });
+  });
+
+  it("target-restored → pre-sync state from source to target", () => {
+    const step = nextMigrationStep(s("target-restored"));
+    expect(step).toEqual({
+      action: "sync-state",
+      mode: "pre",
+      from: "gw-prod",
+      to: "gw-prod-v2",
+      slug: "ceckert",
+    });
+  });
+
+  it("pre-synced → quiesce-source on the source gateway", () => {
+    const step = nextMigrationStep(s("pre-synced"));
     expect(step).toEqual({
       action: "quiesce-source",
       gateway: "gw-prod",
@@ -32,18 +53,28 @@ describe("nextMigrationStep — forward path", () => {
     });
   });
 
-  it("source-quiesced → transfer-state from→to", () => {
+  it("source-quiesced → final-sync state from source to target", () => {
     const step = nextMigrationStep(s("source-quiesced"));
     expect(step).toEqual({
-      action: "transfer-state",
+      action: "sync-state",
+      mode: "final",
       from: "gw-prod",
       to: "gw-prod-v2",
       slug: "ceckert",
     });
   });
 
-  it("state-transferred → cutover-firestore", () => {
-    const step = nextMigrationStep(s("state-transferred"));
+  it("final-synced → verify-target", () => {
+    const step = nextMigrationStep(s("final-synced"));
+    expect(step).toEqual({
+      action: "verify-target",
+      gateway: "gw-prod-v2",
+      slug: "ceckert",
+    });
+  });
+
+  it("target-verified → cutover-firestore", () => {
+    const step = nextMigrationStep(s("target-verified"));
     expect(step).toEqual({
       action: "cutover-firestore",
       uid: "uid-ceckert",
@@ -52,10 +83,11 @@ describe("nextMigrationStep — forward path", () => {
     });
   });
 
-  it("cutover-done → unmount-source on the source gateway", () => {
+  it("cutover-done → unmount source gateway", () => {
     const step = nextMigrationStep(s("cutover-done"));
     expect(step).toEqual({
-      action: "unmount-source",
+      action: "unmount-gateway",
+      role: "source",
       gateway: "gw-prod",
       slug: "ceckert",
     });
@@ -72,9 +104,12 @@ describe("nextMigrationStep — forward path", () => {
 
 describe("advancePhase", () => {
   it("walks the canonical sequence", () => {
-    expect(advancePhase("initial")).toBe("source-quiesced");
-    expect(advancePhase("source-quiesced")).toBe("state-transferred");
-    expect(advancePhase("state-transferred")).toBe("cutover-done");
+    expect(advancePhase("initial")).toBe("target-restored");
+    expect(advancePhase("target-restored")).toBe("pre-synced");
+    expect(advancePhase("pre-synced")).toBe("source-quiesced");
+    expect(advancePhase("source-quiesced")).toBe("final-synced");
+    expect(advancePhase("final-synced")).toBe("target-verified");
+    expect(advancePhase("target-verified")).toBe("cutover-done");
     expect(advancePhase("cutover-done")).toBe("source-unmounted");
     expect(advancePhase("source-unmounted")).toBe("done");
   });
@@ -89,22 +124,25 @@ describe("advancePhase", () => {
 });
 
 describe("fullPlan", () => {
-  it("from initial → 4 steps in canonical order", () => {
+  it("from initial → 7 steps in canonical order", () => {
     const plan = fullPlan(s("initial"));
-    expect(plan).toHaveLength(4);
-    expect(plan.map((p) => p.action)).toEqual([
+    expect(plan).toHaveLength(7);
+    expect(plan.map((p) => p.action === "sync-state" ? `${p.mode}-sync-state` : p.action)).toEqual([
+      "restore-target",
+      "pre-sync-state",
       "quiesce-source",
-      "transfer-state",
+      "final-sync-state",
+      "verify-target",
       "cutover-firestore",
-      "unmount-source",
+      "unmount-gateway",
     ]);
   });
 
   it("from a mid-state, only emits remaining steps", () => {
-    const plan = fullPlan(s("state-transferred"));
+    const plan = fullPlan(s("target-verified"));
     expect(plan.map((p) => p.action)).toEqual([
       "cutover-firestore",
-      "unmount-source",
+      "unmount-gateway",
     ]);
   });
 
@@ -119,20 +157,31 @@ describe("rollbackPlan — pre-cutover", () => {
     expect(rollbackPlan(s("initial"))).toEqual([]);
   });
 
-  it("source-quiesced → un-quiesce the source", () => {
-    const plan = rollbackPlan(s("source-quiesced"));
+  it("target-restored/pre-synced → unmount target import; source still owns", () => {
+    const plan = rollbackPlan(s("target-restored"));
     expect(plan).toHaveLength(1);
     expect(plan[0]).toEqual({
-      action: "quiesce-source",
-      gateway: "gw-prod",
+      action: "unmount-gateway",
+      role: "target",
+      gateway: "gw-prod-v2",
       slug: "ceckert",
     });
+    expect(rollbackPlan(s("pre-synced"))).toEqual(plan);
   });
 
-  it("state-transferred → un-quiesce (target import is leaked, caller prunes lazily)", () => {
+  it("source-quiesced/final-synced/target-verified → unmount target import; source still owns", () => {
 
-const plan = rollbackPlan(s("state-transferred"));
-    expect(plan.map((p) => p.action)).toEqual(["quiesce-source"]);
+    for (const phase of ["source-quiesced", "final-synced", "target-verified"] as const) {
+      const plan = rollbackPlan(s(phase));
+      expect(plan).toEqual([
+        {
+          action: "unmount-gateway",
+          role: "target",
+          gateway: "gw-prod-v2",
+          slug: "ceckert",
+        },
+      ]);
+    }
   });
 });
 
@@ -147,7 +196,8 @@ describe("rollbackPlan — post-cutover", () => {
         to: "gw-prod", // restore source
       },
       {
-        action: "unmount-source",
+        action: "unmount-gateway",
+        role: "target",
         gateway: "gw-prod-v2", // unmount the TARGET, not source
         slug: "ceckert",
       },
@@ -169,9 +219,11 @@ describe("describeStep", () => {
   it("renders every action variant non-empty", () => {
     const variants: ReturnType<typeof nextMigrationStep>[] = [
       { action: "quiesce-source", gateway: "g", slug: "s" },
-      { action: "transfer-state", from: "a", to: "b", slug: "s" },
+      { action: "restore-target", gateway: "g", uid: "u", slug: "s" },
+      { action: "sync-state", mode: "pre", from: "a", to: "b", slug: "s" },
+      { action: "verify-target", gateway: "b", slug: "s" },
       { action: "cutover-firestore", uid: "u", from: "a", to: "b" },
-      { action: "unmount-source", gateway: "g", slug: "s" },
+      { action: "unmount-gateway", role: "source", gateway: "g", slug: "s" },
       { action: "complete" },
     ];
     for (const v of variants) {
@@ -185,13 +237,18 @@ describe("describeStep", () => {
     expect(q).toContain("ceckert");
     expect(q).toContain("gw-prod");
 
-    const u = describeStep({ action: "unmount-source", gateway: "gw-prod", slug: "ceckert" });
+    const u = describeStep({
+      action: "unmount-gateway",
+      role: "source",
+      gateway: "gw-prod",
+      slug: "ceckert",
+    });
     expect(u).toContain("ceckert");
     expect(u).toContain("gw-prod");
   });
 
-  it("includes both gateway ids in transfer-state description", () => {
-    const t = describeStep({ action: "transfer-state", from: "gw-a", to: "gw-b", slug: "x" });
+  it("includes both gateway ids in sync-state description", () => {
+    const t = describeStep({ action: "sync-state", mode: "pre", from: "gw-a", to: "gw-b", slug: "x" });
     expect(t).toContain("gw-a");
     expect(t).toContain("gw-b");
     expect(t).toContain("x");

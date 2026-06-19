@@ -6,15 +6,20 @@ import {
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
+  MIGRATION_VERIFY_TIMEOUT_MS,
   type ImportResponse,
   type QuiesceResponse,
+  type RestoreMigrationResponse,
   type UnmountResponse,
+  type VerifyMigrationResponse,
 } from "../../shared/types/fleet-controller.js";
+import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 
 export interface MigrationClientTimeouts {
   quiesceMs?: number;
   transferMs?: number;
   unmountMs?: number;
+  verifyMs?: number;
 }
 
 export interface MigrationClientDeps {
@@ -38,13 +43,29 @@ export interface MigrationClient {
     timeoutMs?: number;
   }): Promise<QuiesceResponse>;
 
+  restoreTarget(opts: {
+    migrationId: string;
+    gatewayId: string;
+    uid: string;
+    slug: string;
+    snapshot: FleetBrokerUserSnapshot;
+  }): Promise<RestoreMigrationResponse>;
+
   transferState(opts: {
     migrationId: string;
     fromGatewayId: string;
     toGatewayId: string;
     slug: string;
+    mode?: "pre" | "final";
     includeActivationManifest?: boolean;
   }): Promise<ImportResponse>;
+
+  verifyTarget(opts: {
+    migrationId: string;
+    gatewayId: string;
+    slug: string;
+    timeoutMs?: number;
+  }): Promise<VerifyMigrationResponse>;
 
   unmount(opts: {
     migrationId: string;
@@ -59,6 +80,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   const quiesceMs = deps.timeouts?.quiesceMs ?? MIGRATION_QUIESCE_TIMEOUT_MS;
   const transferMs = deps.timeouts?.transferMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
   const unmountMs = deps.timeouts?.unmountMs ?? MIGRATION_UNMOUNT_TIMEOUT_MS;
+  const verifyMs = deps.timeouts?.verifyMs ?? MIGRATION_VERIFY_TIMEOUT_MS;
 
   const fetchWithTimeout = async (
     label: string,
@@ -115,6 +137,20 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   };
 
   return {
+    async restoreTarget({ migrationId, gatewayId, uid, slug, snapshot }) {
+      const res = await postSignedJson<RestoreMigrationResponse>(
+        gatewayId,
+        `/restore/${gatewayId}`,
+        migrationId,
+        { migrationId, uid, slug, snapshot },
+        transferMs,
+      );
+      log(
+        `[migration-client] ✅ restoreTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId} steps=${res.steps.join(",")}`,
+      );
+      return res;
+    },
+
     async quiesce({ migrationId, gatewayId, slug, timeoutMs }) {
       const res = await postSignedJson<QuiesceResponse>(
         gatewayId,
@@ -146,7 +182,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async transferState({ migrationId, fromGatewayId, toGatewayId, slug, includeActivationManifest }) {
+    async transferState({ migrationId, fromGatewayId, toGatewayId, slug, mode, includeActivationManifest }) {
       const targetUrl = deps.resolveGatewayUrl(toGatewayId);
       const targetImportSignature = signFleetRequest(deps.privateKey, migrationId, slug);
       const parsed = await postSignedJson<ImportResponse>(
@@ -159,14 +195,36 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
           targetGatewayId: toGatewayId,
           targetUrl,
           targetImportSignature,
+          ...(mode ? { mode } : {}),
           ...(includeActivationManifest ? { includeActivationManifest: true } : {}),
         },
         transferMs,
       );
       log(
-        `[migration-client] ✅ transferState migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`,
+        `[migration-client] ✅ transferState mode=${mode ?? "default"} migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`,
       );
       return parsed;
+    },
+
+    async verifyTarget({ migrationId, gatewayId, slug, timeoutMs }) {
+      const requestTimeoutMs =
+        timeoutMs == null ? verifyMs : Math.max(verifyMs, timeoutMs + 30_000);
+      const res = await postSignedJson<VerifyMigrationResponse>(
+        gatewayId,
+        `/verify/${gatewayId}`,
+        migrationId,
+        timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+        requestTimeoutMs,
+      );
+      if (!res.ready) {
+        throw new Error(
+          `target verify failed on ${gatewayId} for slug=${slug}: ${JSON.stringify(res.checks)}`,
+        );
+      }
+      log(
+        `[migration-client] ✅ verifyTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId}`,
+      );
+      return res;
     },
   };
 }

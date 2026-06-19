@@ -9,6 +9,7 @@ import {
   type MigrationStep,
 } from "./fleet-migration.js";
 import type { MigrationClient } from "./fleet-migration-client.js";
+import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 
 export interface ReportedStep {
   name: string;
@@ -31,6 +32,7 @@ export interface MigrationRunnerInput {
   slug: string;
   fromGatewayId: string;
   toGatewayId: string;
+  restoreSnapshot: FleetBrokerUserSnapshot;
   includeActivationManifest?: boolean;
 }
 
@@ -41,14 +43,35 @@ export interface MigrationRunnerResult {
   rolledBack: boolean;
 }
 
-async function executeStep(
-  step: MigrationStep,
-  deps: MigrationRunnerDeps,
-  migrationId: string,
-  slug: string,
-  includeActivationManifest: boolean | undefined,
-): Promise<void> {
+async function executeStep(params: {
+  step: MigrationStep;
+  deps: MigrationRunnerDeps;
+  migrationId: string;
+  slug: string;
+  restoreSnapshot: FleetBrokerUserSnapshot | null;
+  includeActivationManifest: boolean | undefined;
+}): Promise<void> {
+  const {
+    step,
+    deps,
+    migrationId,
+    slug,
+    restoreSnapshot,
+    includeActivationManifest,
+  } = params;
   switch (step.action) {
+    case "restore-target":
+      if (!restoreSnapshot) {
+        throw new Error("restore-target requires a durable snapshot");
+      }
+      await deps.client.restoreTarget({
+        migrationId,
+        gatewayId: step.gateway,
+        uid: step.uid,
+        slug: step.slug,
+        snapshot: restoreSnapshot,
+      });
+      return;
     case "quiesce-source":
       await deps.client.quiesce({
         migrationId,
@@ -56,19 +79,27 @@ async function executeStep(
         slug: step.slug,
       });
       return;
-    case "transfer-state":
+    case "sync-state":
       await deps.client.transferState({
         migrationId,
         fromGatewayId: step.from,
         toGatewayId: step.to,
         slug: step.slug,
+        mode: step.mode,
         includeActivationManifest,
+      });
+      return;
+    case "verify-target":
+      await deps.client.verifyTarget({
+        migrationId,
+        gatewayId: step.gateway,
+        slug: step.slug,
       });
       return;
     case "cutover-firestore":
       await deps.cutoverFirestore(step.uid, step.to, slug);
       return;
-    case "unmount-source":
+    case "unmount-gateway":
       await deps.client.unmount({
         migrationId,
         gatewayId: step.gateway,
@@ -78,6 +109,12 @@ async function executeStep(
     case "complete":
       return;
   }
+}
+
+function reportName(step: MigrationStep): string {
+  if (step.action === "sync-state") return `${step.mode}-sync-state`;
+  if (step.action === "unmount-gateway") return `unmount-${step.role}`;
+  return step.action;
 }
 
 export async function runMigration(
@@ -97,25 +134,27 @@ export async function runMigration(
     if (step.action === "complete") break;
 
     const phaseAtStart = state.phase;
-    await report(deps, { name: step.action, status: "running" });
+    const name = reportName(step);
+    await report(deps, { name, status: "running" });
     try {
-      await executeStep(
+      await executeStep({
         step,
         deps,
-        input.migrationId,
-        input.slug,
-        input.includeActivationManifest,
-      );
-      await report(deps, { name: step.action, status: "done" });
+        migrationId: input.migrationId,
+        slug: input.slug,
+        restoreSnapshot: input.restoreSnapshot,
+        includeActivationManifest: input.includeActivationManifest,
+      });
+      await report(deps, { name, status: "done" });
       deps.log(
-        `[migration-runner] ${step.action} ok migrationId=${input.migrationId} slug=${input.slug} (phase ${phaseAtStart} → ${advancePhase(state.phase)})`,
+        `[migration-runner] ${name} ok migrationId=${input.migrationId} slug=${input.slug} (phase ${phaseAtStart} → ${advancePhase(state.phase)})`,
       );
       state = { ...state, phase: advancePhase(state.phase) };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      await report(deps, { name: step.action, status: "failed", error: errMsg });
+      await report(deps, { name, status: "failed", error: errMsg });
       deps.log(
-        `[migration-runner] ❌ ${step.action} failed at phase=${phaseAtStart}: ${errMsg}`,
+        `[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${errMsg}`,
       );
       const rolledBack = await tryRollback(state, deps, input.migrationId);
       return {
@@ -155,10 +194,17 @@ async function tryRollback(
     return false;
   }
   for (const step of plan) {
-    const rbName = `rollback:${step.action}`;
+    const rbName = `rollback:${reportName(step)}`;
     await report(deps, { name: rbName, status: "running" });
     try {
-      await executeStep(step, deps, migrationId, state.slug, undefined);
+      await executeStep({
+        step,
+        deps,
+        migrationId,
+        slug: state.slug,
+        restoreSnapshot: null,
+        includeActivationManifest: undefined,
+      });
       await report(deps, { name: rbName, status: "done" });
       deps.log(`[migration-runner] rollback ${step.action} ok`);
     } catch (rbErr) {

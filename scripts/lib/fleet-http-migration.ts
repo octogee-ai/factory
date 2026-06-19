@@ -2,20 +2,24 @@
 
 import type { Request, Response, RequestHandler } from "express";
 import { spawn } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createWriteStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pipeline } from "node:stream/promises";
 import {
   type ImportResponse,
   type MigrationRequestBody,
   type PushStateRequestBody,
   type QuiesceRequestBody,
   type QuiesceResponse,
+  type RestoreMigrationRequestBody,
+  type RestoreMigrationResponse,
   type UnmountRequestBody,
   type UnmountResponse,
+  type VerifyMigrationRequestBody,
+  type VerifyMigrationResponse,
   MIGRATION_TRANSFER_TIMEOUT_MS,
+  MIGRATION_VERIFY_TIMEOUT_MS,
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
   MIGRATION_SLUG_HEADER,
@@ -23,7 +27,11 @@ import {
 import { isValidUsername } from "../../shared/types/identity.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
-import { removeCustomerFromGateway } from "./customer-lifecycle.js";
+import {
+  removeCustomerFromGateway,
+  restoreCustomerRuntimeFromSnapshot,
+  type UserSnapshot,
+} from "./customer-lifecycle.js";
 import {
   MIGRATION_ACTIVATION_DIR,
   writeActivationManifest,
@@ -109,6 +117,10 @@ function markPromiseHandled(promise: Promise<unknown>): void {
   promise.catch(() => undefined);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function spawnTarStream(sources: Array<{ cwd: string; path: string }>): TarStream {
   const child = spawn("tar", tarArgsForSources(sources), { stdio: ["ignore", "pipe", "pipe"] }); // eslint-disable-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
   const stdout = child.stdout;
@@ -133,23 +145,6 @@ function spawnTarStream(sources: Array<{ cwd: string; path: string }>): TarStrea
   return { child, stdout, done };
 }
 
-async function writeTarToFile(
-  sources: Array<{ cwd: string; path: string }>,
-  tarPath: string,
-): Promise<void> {
-  const tar = spawnTarStream(sources);
-  try {
-    await Promise.all([
-      pipeline(tar.stdout, createWriteStream(tarPath)),
-      tar.done,
-    ]);
-  } catch (err) {
-    tar.child.kill();
-    await tar.done.catch(() => undefined);
-    throw err;
-  }
-}
-
 export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -172,6 +167,79 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ quiesce migrationId=${body.migrationId} slug=${body.slug} failed: ${message}`);
       res.status(500).json({ error: "quiesce failed", message });
+    }
+  };
+}
+
+function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapshot | null {
+  const snapshot: unknown = body.snapshot;
+  if (!isRecord(snapshot)) return null;
+  if (snapshot.uid !== body.uid || snapshot.slug !== body.slug) return null;
+  return {
+    uid: snapshot.uid as string,
+    slug: snapshot.slug as string,
+    tier: snapshot.tier as string,
+    gatewayId: snapshot.gatewayId as string,
+    status: snapshot.status as UserSnapshot["status"],
+    agentIds: Array.isArray(snapshot.agentIds)
+      ? snapshot.agentIds.filter((id): id is string => typeof id === "string")
+      : [],
+    repoUrl: typeof snapshot.repoUrl === "string" ? snapshot.repoUrl : "",
+    mattermostUserId:
+      typeof snapshot.mattermostUserId === "string" ? snapshot.mattermostUserId : null,
+    greetingPosted: snapshot.greetingPosted === true,
+    channels: Array.isArray(snapshot.channels) ? snapshot.channels as UserSnapshot["channels"] : [],
+    ownerName: typeof snapshot.ownerName === "string" ? snapshot.ownerName : body.slug,
+    projects: Array.isArray(snapshot.projects) ? snapshot.projects as UserSnapshot["projects"] : [],
+  };
+}
+
+export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<RestoreMigrationRequestBody>(
+      req,
+      res,
+      deps.publicKey,
+      log,
+    );
+    if (!body) return;
+    if (typeof body.uid !== "string" || body.uid.length === 0) {
+      res.status(400).json({ error: "missing uid" });
+      return;
+    }
+    const snapshot = snapshotFromRestoreBody(body);
+    if (!snapshot) {
+      res.status(400).json({ error: "snapshot mismatch" });
+      return;
+    }
+
+    try {
+      deps.adapter.markCustomerMigratingIn?.(body.slug);
+      deps.adapter.seedUserSnapshotForMigration?.(body.snapshot);
+      const adapter: CustomerLifecycleAdapter = {
+        ...deps.adapter,
+        loadUserSnapshot: async (uid) =>
+          uid === snapshot.uid ? snapshot : deps.adapter.loadUserSnapshot(uid),
+        uidForSlug: async (slug) =>
+          slug === snapshot.slug ? snapshot.uid : deps.adapter.uidForSlug(slug),
+      };
+      const result = await restoreCustomerRuntimeFromSnapshot(adapter, snapshot);
+      deps.adapter.markCustomerMigratingIn?.(body.slug);
+      const response: RestoreMigrationResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        restored: result.restored,
+        steps: result.steps,
+      };
+      log(
+        `[migration-http] ✅ restore migrationId=${body.migrationId} slug=${body.slug} steps=${result.steps.join(",")}`,
+      );
+      res.status(200).json(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`[migration-http] ❌ restore migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      res.status(500).json({ error: "restore failed", message });
     }
   };
 }
@@ -382,6 +450,48 @@ async function finishPushStateAlreadyMounted(
   res.status(200).json(parsed);
 }
 
+export function createVerifyHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<VerifyMigrationRequestBody>(
+      req,
+      res,
+      deps.publicKey,
+      log,
+    );
+    if (!body) return;
+
+    try {
+      const customerDir = deps.adapter.hasCustomerDir(body.slug);
+      const coachWired =
+        deps.adapter.customerCoachWiredInOpenclawConfig?.(body.slug)
+        ?? deps.getMountedCustomers?.().includes(body.slug)
+        ?? false;
+      const mountMarked = deps.adapter.customerMountMarked?.(body.slug) ?? coachWired;
+      const accountHealthy = await deps.adapter.waitForAccountHealthy({
+        slug: body.slug,
+        timeoutMs: body.timeoutMs ?? MIGRATION_VERIFY_TIMEOUT_MS,
+      });
+      const checks = { customerDir, coachWired, mountMarked, accountHealthy };
+      const ready = customerDir && coachWired && mountMarked && accountHealthy;
+      const response: VerifyMigrationResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        ready,
+        checks,
+      };
+      log(
+        `[migration-http] verify migrationId=${body.migrationId} slug=${body.slug} ready=${ready} checks=${JSON.stringify(checks)}`,
+      );
+      res.status(ready ? 200 : 409).json(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`[migration-http] ❌ verify migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      res.status(500).json({ error: "verify failed", message });
+    }
+  };
+}
+
 export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   const fetchImpl = deps.fetch ?? globalThis.fetch;
@@ -398,8 +508,8 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
       log,
     );
 
-    let pushTmpDir: string | null = null;
     let cleanupActivationManifest: () => Promise<void> = async () => {};
+    let sourceTarError: unknown;
     try {
       const sources = await deps.adapter.listExportPaths(body.slug);
       if (sources.length === 0) {
@@ -414,18 +524,18 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
         sources.push(activationManifest.source);
       }
       log(
-        `[migration-http] push-state migrationId=${body.migrationId} slug=${body.slug} preparing ${sources.length} path(s) for ${target.targetGatewayId}`,
+        `[migration-http] push-state mode=${body.mode ?? "default"} migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s) to ${target.targetGatewayId}`,
       );
 
-      pushTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-push-${body.migrationId}-`));
-      const tarPath = path.join(pushTmpDir, "state.tar");
-      await writeTarToFile(sources, tarPath);
-      const stat = await fs.stat(tarPath);
-      log(
-        `[migration-http] push-state migrationId=${body.migrationId} slug=${body.slug} materialized ${stat.size} byte tar before upload`,
-      );
-
-      const importRes = await fetchImpl(
+      const tar = spawnTarStream(sources);
+      const tarDone = tar.done.catch((err: unknown) => {
+        sourceTarError = err;
+        abort.controller.abort(err);
+        throw err;
+      });
+      let importRes: globalThis.Response;
+      try {
+        importRes = await fetchImpl(
         target.importUrl,
         {
           method: "POST",
@@ -435,11 +545,17 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
             [MIGRATION_ID_HEADER]: body.migrationId,
             [MIGRATION_SLUG_HEADER]: body.slug,
           },
-          body: createReadStream(tarPath),
+          body: tar.stdout,
           duplex: "half",
           signal: abort.controller.signal,
         } as unknown as RequestInit & { duplex: "half" },
-      );
+        );
+        await tarDone;
+      } catch (err) {
+        tar.child.kill();
+        await tar.done.catch(() => undefined);
+        throw sourceTarError ?? err;
+      }
 
       if (!importRes.ok) {
         const text = await importRes.text().catch(() => "<no body>");
@@ -466,10 +582,12 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
       if (!res.headersSent) {
-        const { status, error } = pushStateFailureStatus(
-          abort.didTimeout(),
-          abort.controller.signal,
-        );
+        const { status, error } = sourceTarError
+          ? { status: 500, error: "source tar failed" }
+          : pushStateFailureStatus(
+              abort.didTimeout(),
+              abort.controller.signal,
+            );
         res.status(status).json({ error, message });
       } else {
         res.destroy(err instanceof Error ? err : new Error(message));
@@ -477,9 +595,6 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
     } finally {
       abort.detach();
       await cleanupActivationManifest();
-      if (pushTmpDir) {
-        await fs.rm(pushTmpDir, { recursive: true, force: true }).catch(() => undefined);
-      }
     }
   };
 }
@@ -508,27 +623,6 @@ const controller = new AbortController();
   };
 }
 
-function maybeRespondAlreadyMounted(
-  deps: MigrationHandlerDeps,
-  res: Response,
-  migrationId: string,
-  slug: string,
-  log: (msg: string) => void,
-): boolean {
-  if (!deps.getMountedCustomers?.().includes(slug)) return false;
-  log(
-    `[migration-http] import migrationId=${migrationId} slug=${slug} already mounted — noop (skipping prepareImportDir, no tar read)`,
-  );
-  const response: ImportResponse = {
-    migrationId,
-    slug,
-    imported: true,
-    alreadyMounted: true,
-  };
-  res.status(200).json(response);
-  return true;
-}
-
 function validateImportRequest(
   deps: MigrationHandlerDeps,
   req: Request,
@@ -551,7 +645,6 @@ function validateImportRequest(
     res.status(401).json({ error: "invalid signature" });
     return null;
   }
-  if (maybeRespondAlreadyMounted(deps, res, migrationId, slug, log)) return null;
   return { migrationId, slug };
 }
 
@@ -694,6 +787,8 @@ export function findPathTraversalViolation(
   const allowedPrefixes = [
     `agents/octogee-${slug}-coach/`,
     `agents/octogee-ops-${slug}/`,
+    `memory/octogee-${slug}-coach.sqlite`,
+    `memory/octogee-ops-${slug}.sqlite`,
     `customers/${slug}/`,
     `customer-keys/${slug}/`,
     `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
@@ -710,7 +805,7 @@ if (entry.split("/").includes("..")) {
     }
     const allowed = allowedPrefixes.some((p) => entry === p.slice(0, -1) || entry.startsWith(p));
     if (!allowed) {
-      return `path '${raw}' is outside the per-slug allowlist (agents/octogee-${slug}-coach, agents/octogee-ops-${slug}, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug})`;
+      return `path '${raw}' is outside the per-slug allowlist (agents/octogee-${slug}-coach, agents/octogee-ops-${slug}, memory/octogee-${slug}-coach.sqlite*, memory/octogee-ops-${slug}.sqlite*, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug})`;
     }
   }
   return null;

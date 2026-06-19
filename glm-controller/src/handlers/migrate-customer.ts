@@ -4,6 +4,7 @@ import type {
   OperationStep,
   StepStatus,
 } from "../../../shared/types/glm";
+import type { FleetBrokerUserSnapshot } from "../../../shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { MigrationClient } from "../../../scripts/lib/fleet-migration-client.js";
 import {
@@ -40,6 +41,8 @@ export interface UserGatewayInfo {
 export interface MigrateCustomerDeps {
   
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
+
+  readUserSnapshot: (uid: string) => Promise<FleetBrokerUserSnapshot | null>;
 
   readGatewayImageProfile: (gatewayId: string) => Promise<GatewayImageProfile>;
   
@@ -113,13 +116,18 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       let fromUrl: string;
       let toUrl: string;
       let sourceImageProfile: GatewayImageProfile;
+      let restoreSnapshot: FleetBrokerUserSnapshot | null;
       try {
         fromUrl = await deps.resolveGatewayUrl(user.currentGatewayId);
         toUrl = await deps.resolveGatewayUrl(toGatewayId);
         sourceImageProfile = await deps.readGatewayImageProfile(user.currentGatewayId);
+        restoreSnapshot = await deps.readUserSnapshot(uid);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { steps: [], success: false, error: message };
+      }
+      if (!restoreSnapshot) {
+        return { steps: [], success: false, error: `durable snapshot not found for ${uid}` };
       }
       const includeActivationManifest = sourceImageProfile !== "operator";
       if (!includeActivationManifest) {
@@ -148,6 +156,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           slug: user.slug,
           fromGatewayId: user.currentGatewayId,
           toGatewayId,
+          restoreSnapshot,
           includeActivationManifest,
         },
         {

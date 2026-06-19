@@ -8,7 +8,9 @@ import {
   createImportHandler,
   createPushStateHandler,
   createQuiesceHandler,
+  createRestoreHandler,
   createUnmountHandler,
+  createVerifyHandler,
 } from "./fleet-http-migration.js";
 import {
   writeGatewayHeartbeat,
@@ -522,7 +524,9 @@ const waitForGatewayReady = async (): Promise<void> => {
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
   };
+  app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
+  app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
   app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));

@@ -7,10 +7,34 @@ import {
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
 import type { MigrationClient } from "../../../scripts/lib/fleet-migration-client";
+import type { FleetBrokerUserSnapshot } from "../../../shared/types/fleet-broker";
 
 afterEach(() => {
   _resetMigrationConcurrencyForTests();
 });
+
+const SNAPSHOT: FleetBrokerUserSnapshot = {
+  uid: "uid-alice",
+  slug: "alice",
+  tier: "trial",
+  gatewayId: "gw-blue",
+  status: "complete",
+  agentIds: ["octogee-alice-coach"],
+  repoUrl: "git@gitea:octogee/alice.git",
+  mattermostUserId: "mm-alice",
+  customerMmUserId: "mm-alice",
+  greetingPosted: true,
+  channels: [],
+  projects: [],
+  ownerName: "Alice",
+  email: "alice@example.com",
+  displayName: "Alice",
+  lastName: "",
+  photoURL: "",
+  onboardingVibe: null,
+  coachToken: "coach-token",
+  coachMmUserId: "mm-coach",
+};
 
 function mkOp(overrides: Partial<Operation>): Operation {
   return {
@@ -29,6 +53,12 @@ function mkOp(overrides: Partial<Operation>): Operation {
 
 function happyClient(): MigrationClient {
   return {
+    restoreTarget: vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      restored: true,
+      steps: ["clone-workspace-repo"],
+    })) as MigrationClient["restoreTarget"],
     quiesce: vi.fn(async ({ migrationId, slug }) => ({
       migrationId,
       slug,
@@ -40,6 +70,17 @@ function happyClient(): MigrationClient {
       slug,
       imported: true,
     })) as MigrationClient["transferState"],
+    verifyTarget: vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      ready: true,
+      checks: {
+        customerDir: true,
+        coachWired: true,
+        mountMarked: true,
+        accountHealthy: true,
+      },
+    })) as MigrationClient["verifyTarget"],
     unmount: vi.fn(async ({ migrationId, slug }) => ({
       migrationId,
       slug,
@@ -57,6 +98,7 @@ function makeDeps(
       slug: "alice",
       currentGatewayId: "gw-blue",
     })),
+    readUserSnapshot: vi.fn(async () => SNAPSHOT),
     readGatewayImageProfile: vi.fn(async () => "standard" as const),
     cutoverFirestore: vi.fn(async (_uid: string, _to: string, _slug: string) => undefined),
     resolveGatewayUrl: vi.fn(async (gw: string) => `http://test/${gw}`),
@@ -80,7 +122,7 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 }
 
 describe("createMigrateCustomerHandler — happy path", () => {
-  it("returns success=true and writes all four step pairs through ctx.reportStep", async () => {
+  it("returns success=true and writes all seven step pairs through ctx.reportStep", async () => {
     const { deps } = makeDeps();
     const handler = createMigrateCustomerHandler(deps);
     const ctx = makeCtx();
@@ -94,10 +136,16 @@ describe("createMigrateCustomerHandler — happy path", () => {
     const reported = ctx.reported;
     const names = reported.map((s) => `${s.name}:${s.status}`);
     expect(names).toEqual([
+      "restore-target:running",
+      "restore-target:done",
+      "pre-sync-state:running",
+      "pre-sync-state:done",
       "quiesce-source:running",
       "quiesce-source:done",
-      "transfer-state:running",
-      "transfer-state:done",
+      "final-sync-state:running",
+      "final-sync-state:done",
+      "verify-target:running",
+      "verify-target:done",
       "cutover-firestore:running",
       "cutover-firestore:done",
       "unmount-source:running",
@@ -148,6 +196,7 @@ describe("createMigrateCustomerHandler — happy path", () => {
     expect(client.transferState).toHaveBeenCalledWith(
       expect.objectContaining({ includeActivationManifest: true }),
     );
+    expect(client.transferState).toHaveBeenCalledTimes(2);
   });
 
   it("skips the activation manifest for operator source gateways", async () => {
@@ -160,6 +209,7 @@ describe("createMigrateCustomerHandler — happy path", () => {
     expect(client.transferState).toHaveBeenCalledWith(
       expect.objectContaining({ includeActivationManifest: false }),
     );
+    expect(client.transferState).toHaveBeenCalledTimes(2);
   });
 
   it("buildClient's resolver throws on an unexpected gatewayId — no silent default", async () => {
@@ -260,6 +310,12 @@ describe("createMigrateCustomerHandler — per-target concurrency cap", () => {
       releaseFn = r;
     });
     const client: MigrationClient = {
+      restoreTarget: vi.fn(async ({ migrationId, slug }) => ({
+        migrationId,
+        slug,
+        restored: true,
+        steps: [],
+      })) as MigrationClient["restoreTarget"],
       quiesce: vi.fn(async ({ migrationId, slug }) => ({
         migrationId,
         slug,
@@ -270,6 +326,17 @@ describe("createMigrateCustomerHandler — per-target concurrency cap", () => {
         await gate;
         return { migrationId, slug, imported: true };
       }) as MigrationClient["transferState"],
+      verifyTarget: vi.fn(async ({ migrationId, slug }) => ({
+        migrationId,
+        slug,
+        ready: true,
+        checks: {
+          customerDir: true,
+          coachWired: true,
+          mountMarked: true,
+          accountHealthy: true,
+        },
+      })) as MigrationClient["verifyTarget"],
       unmount: vi.fn(async ({ migrationId, slug }) => ({
         migrationId,
         slug,
@@ -374,8 +441,11 @@ describe("createMigrateCustomerHandler — per-target concurrency cap", () => {
 describe("createMigrateCustomerHandler — failures + rollback", () => {
   it("propagates migration failure and rollback flag from runMigration", async () => {
     const client = happyClient();
-    client.transferState = vi.fn(async () => {
-      throw new Error("export: 503 upstream draining");
+    let transferCount = 0;
+    client.transferState = vi.fn(async ({ migrationId, slug }) => {
+      transferCount++;
+      if (transferCount === 2) throw new Error("export: 503 upstream draining");
+      return { migrationId, slug, imported: true };
     }) as MigrationClient["transferState"];
 
     const { deps } = makeDeps({}, client);
@@ -388,7 +458,7 @@ describe("createMigrateCustomerHandler — failures + rollback", () => {
     expect(result.rolledBack).toBe(true);
 
     const failedStep = ctx.reported.find((s) => s.status === "failed");
-    expect(failedStep?.name).toBe("transfer-state");
+    expect(failedStep?.name).toBe("final-sync-state");
     expect(failedStep?.error).toMatch(/503/);
 
     const rollbackSteps = ctx.reported.filter((s) => s.name.startsWith("rollback:"));

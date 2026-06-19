@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
-import { getFirestore, FieldValue, type Firestore } from "firebase-admin/firestore";
+import {
+  getFirestore,
+  FieldValue,
+  type Firestore,
+  type QueryDocumentSnapshot,
+} from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -82,7 +87,14 @@ import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { signFleetRequest } from "../../scripts/lib/fleet-signature.js";
-import { readAssignedSlugsForGateway } from "../../scripts/lib/assigned-roster.js";
+import {
+  readAssignedSlugsForGateway,
+  slugFromAssignedUser,
+} from "../../scripts/lib/assigned-roster.js";
+import {
+  mapProjectChannelDoc,
+  mapWorkspaceChannelDoc,
+} from "../../scripts/lib/customer-snapshot-mapping.js";
 import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   SIGNATURE_HEADER,
@@ -111,6 +123,11 @@ import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
+import type {
+  FleetBrokerChannelBinding,
+  FleetBrokerProjectRestore,
+  FleetBrokerUserSnapshot,
+} from "../../shared/types/fleet-broker.js";
 
 const logger = createLogger({
   color: process.env.NO_COLOR == null,
@@ -1180,6 +1197,119 @@ function createMigrationClientBuilder(
     });
 }
 
+function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
+  let cur: unknown = obj;
+  for (const part of dotted.split(".")) {
+    if (!cur || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+function stringAt(obj: Record<string, unknown> | undefined, dotted: string): string {
+  const value = readPath(obj, dotted);
+  return typeof value === "string" ? value : "";
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+async function collectMigrationChannelBindings(
+  workspaceChannels: QueryDocumentSnapshot[],
+  projectDocs: QueryDocumentSnapshot[],
+): Promise<FleetBrokerChannelBinding[]> {
+  const bindings: FleetBrokerChannelBinding[] = [];
+  for (const ch of workspaceChannels) {
+    const b = mapWorkspaceChannelDoc(ch.data());
+    if (b) bindings.push(b);
+  }
+  const projectChannelSnaps = await Promise.all(
+    projectDocs.map((p) => p.ref.collection("channels").get()),
+  );
+  for (let i = 0; i < projectDocs.length; i++) {
+    const p = projectDocs[i];
+    const projChannels = projectChannelSnaps[i];
+    for (const ch of projChannels.docs) {
+      const b = mapProjectChannelDoc(p.id, ch.data());
+      if (b) bindings.push(b);
+    }
+  }
+  return bindings;
+}
+
+function collectMigrationProjects(
+  projectDocs: QueryDocumentSnapshot[],
+): FleetBrokerProjectRestore[] {
+  return projectDocs.map((doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    const out: FleetBrokerProjectRestore = {
+      projectSlug: doc.id,
+      giteaRepoName: typeof data.giteaRepoName === "string" ? data.giteaRepoName : null,
+    };
+    if (typeof data.provisioningState === "string") {
+      out.provisioningState = data.provisioningState;
+    }
+    return out;
+  });
+}
+
+// eslint-disable-next-line complexity -- Mirrors the octogee-api fleet broker snapshot shape.
+async function readMigrationUserSnapshot(
+  db: Firestore,
+  uid: string,
+): Promise<FleetBrokerUserSnapshot | null> {
+  const userSnap = await db.collection("users").doc(uid).get();
+  const data = userSnap.data() as Record<string, unknown> | undefined;
+  if (!userSnap.exists || !data || data.approved !== true) return null;
+  const slug = slugFromAssignedUser(data);
+  if (!slug) return null;
+  const workspaceRef = db.collection("workspaces").doc(slug);
+  const [workspaceChannels, projectSnap, coachSecret, agentSnap] = await Promise.all([
+    workspaceRef.collection("channels").get(),
+    workspaceRef.collection("projects").get(),
+    db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+    db.collection("agents").doc(uid).get(),
+  ]);
+  const projectDocs = projectSnap.docs;
+  const channels = await collectMigrationChannelBindings(workspaceChannels.docs, projectDocs);
+  const projects = collectMigrationProjects(projectDocs);
+  const coachData = coachSecret.data() as Record<string, unknown> | undefined;
+  const agentData = agentSnap.data() as Record<string, unknown> | undefined;
+  const name = typeof agentData?.name === "string" ? agentData.name : "";
+  const emoji = typeof agentData?.avatarEmoji === "string" ? agentData.avatarEmoji : "";
+  const status = stringAt(data, "provisioning.openclaw.status");
+  return {
+    uid,
+    slug,
+    tier: stringAt(data, "tier") || stringAt(data, "subscription.tier") || "trial",
+    gatewayId: stringAt(data, "provisioning.openclaw.gatewayId"),
+    status: status === "provisioning" || status === "complete" ? status : "",
+    agentIds: stringArray(readPath(data, "provisioning.openclaw.agentIds")),
+    repoUrl: stringAt(data, "provisioning.git.repoUrl"),
+    mattermostUserId: stringAt(data, "mattermost.userId") || null,
+    customerMmUserId: stringAt(data, "mattermost.userId") || null,
+    greetingPosted: Boolean(
+      (readPath(data, "provisioning.openclaw.greeting") as { ok?: unknown } | undefined)?.ok,
+    ),
+    channels,
+    projects,
+    ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
+    email: stringAt(data, "email"),
+    displayName: stringAt(data, "displayName"),
+    lastName: stringAt(data, "lastName"),
+    photoURL: stringAt(data, "photoURL"),
+    onboardingVibe:
+      typeof readPath(data, "onboarding.vibe") === "string"
+        ? (readPath(data, "onboarding.vibe") as string)
+        : null,
+    coachToken: typeof coachData?.personalToken === "string" ? coachData.personalToken : null,
+    coachMmUserId:
+      typeof coachData?.coachMmUserId === "string" ? coachData.coachMmUserId : null,
+    ...(name || emoji ? { coachIdentity: { name, emoji } } : {}),
+  };
+}
+
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
 async function buildHandlers(
   db: Firestore,
@@ -1233,6 +1363,7 @@ async function buildHandlers(
       if (!slug || !currentGatewayId) return null;
       return { slug, currentGatewayId };
     },
+    readUserSnapshot: (uid) => readMigrationUserSnapshot(db, uid),
     readGatewayImageProfile: async (gatewayId) => {
       const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
       if (!doc.exists) {

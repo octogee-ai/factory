@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { signFleetRequest } from "../lib/fleet-signature";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys";
 import {
@@ -6,8 +6,10 @@ import {
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
+  MIGRATION_VERIFY_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller";
 import { createMigrationClient } from "../lib/fleet-migration-client";
+import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker";
 
 interface CapturedCall {
   url: string;
@@ -39,6 +41,28 @@ function captureFetch(handler: (call: CapturedCall) => Response | Promise<Respon
 }
 
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
+const SNAPSHOT: FleetBrokerUserSnapshot = {
+  uid: "uid-alice",
+  slug: "alice",
+  tier: "trial",
+  gatewayId: "gw-blue",
+  status: "complete",
+  agentIds: ["octogee-alice-coach"],
+  repoUrl: "git@gitea:octogee/alice.git",
+  mattermostUserId: "mm-alice",
+  customerMmUserId: "mm-alice",
+  greetingPosted: true,
+  channels: [],
+  projects: [],
+  ownerName: "Alice",
+  email: "alice@example.com",
+  displayName: "Alice",
+  lastName: "",
+  photoURL: "",
+  onboardingVibe: null,
+  coachToken: "coach-token",
+  coachMmUserId: "mm-coach",
+};
 
 describe("MigrationClient.quiesce", () => {
   it("POSTs JSON to /quiesce/{gatewayId} signed by the fleet controller private key", async () => {
@@ -140,6 +164,46 @@ describe("MigrationClient.unmount", () => {
   });
 });
 
+describe("MigrationClient.restoreTarget", () => {
+  it("POSTs the durable snapshot to /restore/{gatewayId} signed by the fleet controller key", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({
+          migrationId: "m1",
+          slug: "alice",
+          restored: true,
+          steps: ["clone-workspace-repo"],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => `https://fleet.example.com`,
+      fetch: fakeFetch,
+    });
+    const res = await client.restoreTarget({
+      migrationId: "m1",
+      gatewayId: "gw-green",
+      uid: "uid-alice",
+      slug: "alice",
+      snapshot: SNAPSHOT,
+    });
+    expect(res.restored).toBe(true);
+    expect(calls[0].url).toBe("https://fleet.example.com/restore/gw-green");
+    const parsed = JSON.parse(calls[0].body!);
+    expect(parsed).toMatchObject({
+      migrationId: "m1",
+      uid: "uid-alice",
+      slug: "alice",
+      snapshot: { uid: "uid-alice", slug: "alice", coachToken: "coach-token" },
+    });
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
+      signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!),
+    );
+  });
+});
+
 describe("MigrationClient.transferState", () => {
   it("tells the source gateway to push directly to the target gateway", async () => {
     const { calls, fakeFetch } = captureFetch(() =>
@@ -195,11 +259,13 @@ describe("MigrationClient.transferState", () => {
       fromGatewayId: "gw-from",
       toGatewayId: "gw-to",
       slug: "alice",
+      mode: "final",
       includeActivationManifest: true,
     });
 
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({
+      mode: "final",
       includeActivationManifest: true,
       targetImportSignature: signFleetRequest(PRIVATE_KEY, "m1", "alice"),
     });
@@ -227,6 +293,112 @@ describe("MigrationClient.transferState", () => {
       }),
     ).rejects.toThrow(/push-state.*503.*source gateway is draining/i);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("MigrationClient.verifyTarget", () => {
+  it("POSTs signed JSON to /verify/{gatewayId} and returns the ready result", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({
+          migrationId: "m1",
+          slug: "alice",
+          ready: true,
+          checks: {
+            customerDir: true,
+            coachWired: true,
+            mountMarked: true,
+            accountHealthy: true,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => `https://fleet.example.com`,
+      fetch: fakeFetch,
+    });
+    const res = await client.verifyTarget({
+      migrationId: "m1",
+      gatewayId: "gw-green",
+      slug: "alice",
+      timeoutMs: 7_000,
+    });
+    expect(res.ready).toBe(true);
+    expect(calls[0].url).toBe("https://fleet.example.com/verify/gw-green");
+    const parsed = JSON.parse(calls[0].body!);
+    expect(parsed).toMatchObject({ migrationId: "m1", slug: "alice", timeoutMs: 7_000 });
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
+      signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!),
+    );
+  });
+
+  it("derives the HTTP timeout from a larger per-call verify timeout", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const { fakeFetch } = captureFetch(() =>
+        new Response(
+          JSON.stringify({
+            migrationId: "m1",
+            slug: "alice",
+            ready: true,
+            checks: {
+              customerDir: true,
+              coachWired: true,
+              mountMarked: true,
+              accountHealthy: true,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+      const client = createMigrationClient({
+        privateKey: PRIVATE_KEY,
+        resolveGatewayUrl: () => `https://fleet.example.com`,
+        fetch: fakeFetch,
+        timeouts: {
+          verifyMs: 25,
+        },
+      });
+      await client.verifyTarget({
+        migrationId: "m1",
+        gatewayId: "gw-green",
+        slug: "alice",
+        timeoutMs: 7_000,
+      });
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 37_000);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("throws when the target reports ready=false", async () => {
+    const { fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({
+          migrationId: "m1",
+          slug: "alice",
+          ready: false,
+          checks: {
+            customerDir: true,
+            coachWired: true,
+            mountMarked: false,
+            accountHealthy: true,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => `https://fleet.example.com`,
+      fetch: fakeFetch,
+    });
+    await expect(
+      client.verifyTarget({ migrationId: "m1", gatewayId: "gw-green", slug: "alice" }),
+    ).rejects.toThrow(/target verify failed.*mountMarked/i);
   });
 });
 
@@ -280,6 +452,7 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
         quiesceMs: 25,
         transferMs: 25,
         unmountMs: 25,
+        verifyMs: 25,
       },
     });
 
@@ -313,5 +486,41 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     expect(signals).toHaveLength(1);
     expect(signals[0]).toBeInstanceOf(AbortSignal);
     expect(MIGRATION_TRANSFER_TIMEOUT_MS).toBeGreaterThan(MIGRATION_UNMOUNT_TIMEOUT_MS);
+  });
+
+  it("passes the AbortSignal on /verify inside verifyTarget", async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    const fakeFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal ?? undefined);
+      return new Response(JSON.stringify({
+        migrationId: "m1",
+        slug: "alice",
+        ready: true,
+        checks: {
+          customerDir: true,
+          coachWired: true,
+          mountMarked: true,
+          accountHealthy: true,
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://fleet.example.com",
+      fetch: fakeFetch,
+    });
+    await client.verifyTarget({
+      migrationId: "m1",
+      gatewayId: "gw-green",
+      slug: "alice",
+    });
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(MIGRATION_VERIFY_TIMEOUT_MS).toBeGreaterThan(0);
   });
 });
