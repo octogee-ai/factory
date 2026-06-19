@@ -537,7 +537,59 @@ describe("createPushStateHandler", () => {
     expect(args).toContain(".octogee-migration-activation/chris/activation.json");
   });
 
-  it("skips customer activation manifests for operator gateway state transfer", async () => {
+  it("embeds activation manifests for operator gateway transfers when coach wiring exists", async () => {
+    const exportOpenClawActivationManifest = vi.fn(async () => ({
+      version: 1 as const,
+      slug: "eggman",
+      agentId: "octogee-eggman-coach",
+      accountId: "eggman-coach",
+      agent: { id: "octogee-eggman-coach" },
+      mattermostAccount: { botToken: "coach-pat" },
+      bindings: [{ agentId: "octogee-eggman-coach" }],
+    }));
+    const adapter = mkAdapter({
+      isOperatorGateway: vi.fn(() => true),
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/state", path: "agents/octogee-eggman-coach" },
+        { cwd: "/state", path: "agents/octogee-ops-eggman" },
+      ]),
+      exportOpenClawActivationManifest,
+    });
+    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
+    spawnMock.mockReturnValueOnce(fakeChild);
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(await readRequestBody(init?.body)).toBe("tar-bytes");
+      return new Response(
+        JSON.stringify({ migrationId: "mig-operator", slug: "eggman", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const body: PushStateRequestBody = {
+      migrationId: "mig-operator",
+      slug: "eggman",
+      targetGatewayId: "eggman-green",
+      targetUrl: "http://target-gateway:18789",
+      targetImportSignature: "target-import-sig",
+      includeActivationManifest: true,
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({ migrationId: "mig-operator", slug: "eggman", imported: true });
+    expect(exportOpenClawActivationManifest).toHaveBeenCalledWith("eggman");
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).toContain("agents/octogee-eggman-coach");
+    expect(args).toContain("agents/octogee-ops-eggman");
+    expect(args).toContain(".octogee-migration-activation/eggman/activation.json");
+  });
+
+  it("falls back to operator state-only transfer when no customer activation manifest exists", async () => {
     const exportOpenClawActivationManifest = vi.fn(async () => {
       throw new Error("[migration-activation:eggman] activation manifest agent missing or mismatched");
     });
@@ -575,7 +627,7 @@ describe("createPushStateHandler", () => {
 
     expect(getStatus()).toBe(200);
     expect(getBody()).toEqual({ migrationId: "mig-operator", slug: "eggman", imported: true });
-    expect(exportOpenClawActivationManifest).not.toHaveBeenCalled();
+    expect(exportOpenClawActivationManifest).toHaveBeenCalledWith("eggman");
     const args = spawnMock.mock.calls[0][1] as string[];
     expect(args).toContain("agents/octogee-ops-eggman");
     expect(args).not.toContain(".octogee-migration-activation/eggman/activation.json");

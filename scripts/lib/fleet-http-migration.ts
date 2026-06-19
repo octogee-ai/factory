@@ -297,12 +297,6 @@ async function maybeMaterializeActivationManifest(
   if (body.includeActivationManifest !== true) {
     return { source: null, cleanup: async () => undefined };
   }
-  if (deps.adapter.isOperatorGateway?.() === true) {
-    deps.log?.(
-      `[migration-http] skipping customer activation manifest for operator slug=${body.slug}; transferring local operator state only`,
-    );
-    return { source: null, cleanup: async () => undefined };
-  }
   if (!deps.adapter.exportOpenClawActivationManifest) {
     throw new Error("source gateway cannot export an OpenClaw activation manifest");
   }
