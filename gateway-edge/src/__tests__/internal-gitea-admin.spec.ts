@@ -6,12 +6,79 @@ import * as giteaAdmin from "../lib/gitea-admin.js";
 import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
 import giteaAdminRoutes from "../routes/internal/gitea-admin.js";
 
+const mocks = vi.hoisted(() => {
+  const state = {
+    operationDocs: [] as Record<string, unknown>[],
+    users: new Map<string, Record<string, unknown>>(),
+  };
+  const valueAtPath = (data: Record<string, unknown>, path: string): unknown => {
+    let cursor: unknown = data;
+    for (const part of path.split(".")) {
+      if (!cursor || typeof cursor !== "object") return undefined;
+      cursor = (cursor as Record<string, unknown>)[part];
+    }
+    return cursor;
+  };
+  const queryFor = (name: string) => {
+    const filters: Array<{ field: string; value: unknown }> = [];
+    const query = {
+      where: vi.fn((field: string, _op: string, value: unknown) => {
+        filters.push({ field, value });
+        return query;
+      }),
+      limit: vi.fn(() => query),
+      get: vi.fn(async () => {
+        const entries =
+          name === "glmOperations"
+            ? state.operationDocs.map((data, index) => [`op-${index}`, data] as const)
+            : [...state.users.entries()];
+        const docs = entries
+          .filter(([, data]) =>
+            filters.every((filter) => valueAtPath(data, filter.field) === filter.value),
+          )
+          .map(([id, data]) => ({
+            id,
+            exists: true,
+            data: () => data,
+          }));
+        return { docs };
+      }),
+    };
+    return query;
+  };
+  const db = {
+    collection: vi.fn((name: string) => {
+      if (name === "glmOperations") return queryFor(name);
+      if (name === "users") {
+        return Object.assign(queryFor(name), {
+          doc: vi.fn((uid: string) => ({
+            get: vi.fn(async () => {
+              const data = state.users.get(uid);
+              return {
+                exists: data !== undefined,
+                data: () => data,
+              };
+            }),
+          })),
+        });
+      }
+      throw new Error(`unexpected collection: ${name}`);
+    }),
+  };
+  return { state, db };
+});
+
 vi.mock("../lib/db.js", () => ({
-  db: {},
+  db: mocks.db,
 }));
 
 vi.mock("../../../scripts/lib/assigned-roster.js", () => ({
   readAssignedSlugsForGateway: vi.fn(async () => ["acme"]),
+  slugFromAssignedUser: vi.fn((data: Record<string, unknown> | undefined) => {
+    const provisioning = data?.provisioning as Record<string, unknown> | undefined;
+    const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
+    return openclaw?.slug ?? data?.username ?? null;
+  }),
 }));
 
 vi.mock("../lib/gitea-admin.js", () => ({
@@ -52,6 +119,8 @@ describe("internal gitea-admin route", () => {
   beforeEach(() => {
     process.env.GATEWAY_ID = "bender";
     vi.clearAllMocks();
+    mocks.state.operationDocs.length = 0;
+    mocks.state.users.clear();
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValue(["acme"]);
   });
 
@@ -89,6 +158,82 @@ describe("internal gitea-admin route", () => {
     ).send({ slug: "victim", pubKey: "ssh-ed25519 AAA" });
     expect(res.status).toBe(403);
     expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+  });
+
+  it("allows the target gateway during a running inbound customer migration", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.operationDocs.push({
+      kind: "migrate-customer",
+      status: "running",
+      inputUid: "uid-acme",
+      input: {
+        uid: "uid-acme",
+        toGatewayId: "bender",
+      },
+    });
+    mocks.state.users.set("uid-acme", {
+      username: "acme",
+      provisioning: { openclaw: { slug: "acme" } },
+    });
+
+    const res = await authed(
+      request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(giteaAdmin.readGiteaUserPubKey).toHaveBeenCalledWith("acme");
+  });
+
+  it("keeps inbound migration allowance scoped to the target gateway and UID slug", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.operationDocs.push({
+      kind: "migrate-customer",
+      status: "running",
+      inputUid: "uid-acme",
+      input: {
+        uid: "uid-acme",
+        toGatewayId: "other-gateway",
+      },
+    });
+    mocks.state.users.set("uid-acme", {
+      username: "acme",
+      provisioning: { openclaw: { slug: "acme" } },
+    });
+
+    const res = await authed(
+      request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(giteaAdmin.readGiteaUserPubKey).not.toHaveBeenCalled();
+  });
+
+  it("denies an inbound migration op for a different UID than the requested slug", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.operationDocs.push({
+      kind: "migrate-customer",
+      status: "running",
+      inputUid: "uid-victim",
+      input: {
+        uid: "uid-victim",
+        toGatewayId: "bender",
+      },
+    });
+    mocks.state.users.set("uid-acme", {
+      username: "acme",
+      provisioning: { openclaw: { slug: "acme" } },
+    });
+    mocks.state.users.set("uid-victim", {
+      username: "victim",
+      provisioning: { openclaw: { slug: "victim" } },
+    });
+
+    const res = await authed(
+      request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(giteaAdmin.readGiteaUserPubKey).not.toHaveBeenCalled();
   });
 
   it("ensure-user → 502 when assignment lookup fails, before touching Gitea", async () => {

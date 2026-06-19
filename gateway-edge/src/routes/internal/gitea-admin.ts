@@ -1,7 +1,15 @@
 import { Router, type Request, type Response } from "express";
+import type { Firestore } from "firebase-admin/firestore";
 
 import { isValidProjectId, isValidUsername } from "@shared/types/identity.js";
-import { readAssignedSlugsForGateway } from "../../../../scripts/lib/assigned-roster.js";
+import {
+  readAssignedSlugsForGateway,
+  slugFromAssignedUser,
+} from "../../../../scripts/lib/assigned-roster.js";
+import {
+  GLM_OPERATIONS_COLLECTION,
+  type Operation,
+} from "../../../../shared/types/glm.js";
 import { db } from "../../lib/db.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";
@@ -85,7 +93,10 @@ async function requireAssignedHere(req: Request, res: Response, slug: string): P
 
   try {
     const assigned = await readAssignedSlugsForGateway(db, gatewayId);
-    if (!assigned.includes(slug)) {
+    if (
+      !assigned.includes(slug) &&
+      !(await hasRunningInboundMigrationForSlug(db, gatewayId, slug))
+    ) {
       res.status(403).json({ error: "slug is not assigned to this gateway" });
       return false;
     }
@@ -95,6 +106,44 @@ async function requireAssignedHere(req: Request, res: Response, slug: string): P
     res.status(502).json({ error: "gateway assignment lookup failed" });
     return false;
   }
+}
+
+async function hasRunningInboundMigrationForSlug(
+  dbClient: Firestore,
+  gatewayId: string,
+  slug: string,
+): Promise<boolean> {
+  const uid = await resolveUidForSlug(dbClient, slug);
+  if (!uid) return false;
+
+  const snap = await dbClient
+    .collection(GLM_OPERATIONS_COLLECTION)
+    .where("kind", "==", "migrate-customer")
+    .where("inputUid", "==", uid)
+    .where("status", "==", "running")
+    .get();
+
+  for (const doc of snap.docs) {
+    const op = doc.data() as Operation & { inputUid?: unknown };
+    const input = (op.input ?? {}) as Record<string, unknown>;
+    if (input.uid === uid && input.toGatewayId === gatewayId) return true;
+  }
+
+  return false;
+}
+
+async function resolveUidForSlug(
+  dbClient: Firestore,
+  slug: string,
+): Promise<string | null> {
+  for (const field of ["provisioning.openclaw.slug", "username"]) {
+    const snap = await dbClient.collection("users").where(field, "==", slug).limit(2).get();
+    for (const doc of snap.docs) {
+      const data = doc.data() as Record<string, unknown> | undefined;
+      if (slugFromAssignedUser(data) === slug) return doc.id;
+    }
+  }
+  return null;
 }
 
 async function broker(res: Response, op: string, fn: () => Promise<void>): Promise<void> {
