@@ -528,6 +528,30 @@ gcloud builds list --project=octogee --ongoing
 > building FROM the stale base. Closed the gap #990's existence-only
 > gate left for no-version-bump cycles (the 2026.5.18 `6ed39d7e` case).
 
+> **Flake recovery — `prebake-model.mjs` HF connect-timeout.** The base
+> build downloads the octogee-router embedding model (`Xenova/all-MiniLM-L6-v2`)
+> from the HF CDN at build time. Cloud Build egress to that CDN
+> occasionally connect-times-out, failing one base in the set with
+> `prebake-model.mjs … TypeError: fetch failed … ConnectTimeoutError`.
+> It's transient and tends to hit a *different* base each run. Recovery:
+> re-run the failed job — `gh run rerun <gateway-base-rebuild-run-id> --failed`
+> — and re-watch; already-SUCCESS bases are cache-skipped, so reruns
+> converge. As of the 6.9-beta.1 cycle `prebake-model.mjs` retries the
+> download 5× with backoff, so this should now be rare; the re-run recipe
+> stands if it slips through.
+>
+> **Do NOT trust a manual `gcloud builds submit --config cloudbuild-base.yaml`
+> as the base for a Release.** It stamps the sentinel `_BASE_INPUT_HASH`
+> as `manual` → `…-base-manual`, but `gateway-build.yml` waits for the
+> *computed* hash `sha256sum(Dockerfile.base, <base-config>, oc-build-matrix.yaml)`.
+> A manual build's `-base-manual` tag is invisible to that wait, so the
+> Release still times out (the GA-Day-cycle outage: a flaked
+> `gateway-base-rebuild` left no hash-stamped current base, and the manual
+> pre-builds didn't count toward the wait). `rebuild-matrix-bases.sh`
+> computes the real hash; the push-triggered `gateway-base-rebuild.yml` is
+> the canonical producer. The manual command is for throwaway local probes
+> only — never as the pre-merge gate.
+
 ### Step 14 — Stage the cloudbuild bumps on a clean main worktree
 
 Most other steps don't care which checkout you're in, but this one does:
