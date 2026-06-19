@@ -409,6 +409,15 @@ async function prepareImportDir(slug: string): Promise<string> {
   return OPENCLAW_DIR;
 }
 
+async function prepareKeyImportDir(slug: string): Promise<string> {
+  await fsp.rm(path.join(OPENCLAW_DIR, "customer-keys", slug), {
+    recursive: true,
+    force: true,
+  }).catch(() => undefined);
+  await fsp.mkdir(CUSTOMER_KEYS_DIR, { recursive: true });
+  return OPENCLAW_DIR;
+}
+
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
@@ -552,6 +561,7 @@ export function buildBrokeredLifecycleAdapter(
     quiesceCustomer: (slug, timeoutMs) => quiesceCustomer(opts.log, slug, timeoutMs),
     listExportPaths,
     prepareImportDir,
+    prepareKeyImportDir,
     activateImportedCustomer: (slug, callOpts) => activateImportedCustomer(ctx, slug, callOpts),
     exportOpenClawActivationManifest: (slug) => extractOpenClawActivationManifest(OPENCLAW_CONFIG, slug),
     removeImportedCustomerBySlug: (slug) => removeImportedCustomerBySlug(ctx, slug),

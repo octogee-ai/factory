@@ -14,6 +14,7 @@ import {
   type VerifyMigrationResponse,
 } from "../../shared/types/fleet-controller.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import type { MigrationSyncMode } from "./fleet-migration.js";
 
 export interface MigrationClientTimeouts {
   quiesceMs?: number;
@@ -56,7 +57,7 @@ export interface MigrationClient {
     fromGatewayId: string;
     toGatewayId: string;
     slug: string;
-    mode?: "pre" | "final";
+    mode?: MigrationSyncMode;
     includeActivationManifest?: boolean;
   }): Promise<ImportResponse>;
 

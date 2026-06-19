@@ -191,6 +191,12 @@ state.giteaRegisteredPubKey = pubKey;
 
     onMounted: () => record("onMounted"),
     onUnmounted: () => record("onUnmounted"),
+    uidForSlug: async () => state.user?.uid ?? null,
+    quiesceCustomer: async () => ({ drained: true, runningCount: 0 }),
+    listExportPaths: async () => [],
+    prepareImportDir: async () => "/tmp/import",
+    prepareKeyImportDir: async () => "/tmp/import",
+    activateImportedCustomer: async () => {},
   };
 }
 
@@ -425,6 +431,20 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
     state.cloneShouldFail = true;
     await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
       /workspace clone from .* failed/,
+    );
+  });
+
+  it("removes a partial non-git customer dir before cloning from Gitea", async () => {
+    state.disk.customerDir = true;
+    state.disk.workspaceGitDir = false;
+    state.disk.gitRemote = false;
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).toContain("clone-workspace-repo");
+    expect(state.calls).toContain("deleteCustomerDir");
+    expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
+      state.calls.indexOf("cloneWorkspaceRepo"),
     );
   });
 
@@ -1172,6 +1192,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     quiesceCustomer: false,
     listExportPaths: false,
     prepareImportDir: false,
+    prepareKeyImportDir: false,
     activateImportedCustomer: false,
   };
 

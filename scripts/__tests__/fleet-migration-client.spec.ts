@@ -274,6 +274,29 @@ describe("MigrationClient.transferState", () => {
     );
   });
 
+  it("can request key-only transfer before durable restore", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://fleet.example.com",
+      fetch: fakeFetch,
+    });
+    await client.transferState({
+      migrationId: "m1",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      mode: "keys",
+    });
+
+    expect(JSON.parse(calls[0].body!)).toMatchObject({ mode: "keys" });
+  });
+
   it("throws if push-state returns non-2xx", async () => {
     const { calls, fakeFetch } = captureFetch(() =>
       new Response("source gateway is draining", { status: 503 }),

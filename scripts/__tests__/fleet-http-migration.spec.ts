@@ -19,6 +19,7 @@ import { signFleetRequest } from "../lib/fleet-signature.js";
 import {
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
+  MIGRATION_MODE_HEADER,
   MIGRATION_SLUG_HEADER,
   type QuiesceRequestBody,
   type UnmountRequestBody,
@@ -97,12 +98,14 @@ function mkRequest<T>(body: T, opts: { signature?: string; rawBody?: string } = 
 function mkImportRequest(opts: {
   migrationId?: string;
   slug?: string;
+  mode?: string;
   signature?: string;
   body?: Readable;
 }): Request {
   const headers: Record<string, string> = {};
   if (opts.migrationId !== undefined) headers[MIGRATION_ID_HEADER.toLowerCase()] = opts.migrationId;
   if (opts.slug !== undefined) headers[MIGRATION_SLUG_HEADER.toLowerCase()] = opts.slug;
+  if (opts.mode !== undefined) headers[MIGRATION_MODE_HEADER.toLowerCase()] = opts.mode;
   if (opts.signature !== undefined) headers[SIGNATURE_HEADER.toLowerCase()] = opts.signature;
 
 const body = opts.body ?? Readable.from(["dummy-tar-bytes"]);
@@ -184,6 +187,7 @@ const everythingElseThrows = new Proxy(
       { cwd: "/tmp/state", path: "agents/octogee-chris-coach" },
     ]),
     prepareImportDir: vi.fn(async () => "/tmp/import"),
+    prepareKeyImportDir: vi.fn(async () => "/tmp/import"),
     activateImportedCustomer: vi.fn(async () => {}),
     waitForAccountHealthy: vi.fn(async () => true),
 
@@ -682,6 +686,46 @@ describe("createPushStateHandler", () => {
     ]);
   });
 
+  it("streams only the customer key dir in keys mode and forwards the import mode", async () => {
+    const adapter = mkAdapter({
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/state", path: "agents/octogee-chris-coach" },
+        { cwd: "/openclaw", path: "customers/chris" },
+        { cwd: "/openclaw", path: "customer-keys/chris" },
+      ]),
+      exportOpenClawActivationManifest: vi.fn(async () => {
+        throw new Error("keys mode must not export activation manifests");
+      }),
+    });
+    const fakeChild = mkFakeChild({ stdout: ["key-tar"], exitCode: 0 });
+    spawnMock.mockReturnValueOnce(fakeChild);
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>;
+      expect(headers[MIGRATION_MODE_HEADER]).toBe("keys");
+      expect(await readRequestBody(init?.body)).toBe("key-tar");
+      return new Response(
+        JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const body: PushStateRequestBody = { ...SAMPLE_PUSH, mode: "keys" };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(spawnMock.mock.calls[0][1]).toEqual([
+      "-cf", "-",
+      "-C", "/openclaw", "customer-keys/chris",
+    ]);
+    expect(adapter.exportOpenClawActivationManifest).not.toHaveBeenCalled();
+  });
+
   it("embeds an activation manifest and forwards the target-specific import signature", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [
@@ -1090,6 +1134,37 @@ expect(spawnMock.mock.calls.length).toBe(2);
     expect(spawnMock.mock.calls[0][0]).toBe("tar");
     expect(spawnMock.mock.calls[0][1][0]).toBe("-tf"); 
     expect(spawnMock.mock.calls[1][1][0]).toBe("-xf"); 
+  });
+
+  it("imports keys mode without activating the customer", async () => {
+    const adapter = mkAdapter();
+    const fakeListChild = mkFakeChild({
+      stdout: ["customer-keys/chris/id_ed25519\ncustomer-keys/chris/id_ed25519.pub\n"],
+      exitCode: 0,
+    });
+    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+
+    const handler = createImportHandler(mkDeps({ adapter }));
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const req = mkImportRequest({
+      migrationId: "mig-1",
+      slug: "chris",
+      mode: "keys",
+      signature: sig,
+    });
+    const { res, getStatus, getBody } = mkResponse();
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({
+      migrationId: "mig-1",
+      slug: "chris",
+      imported: true,
+    });
+    expect(adapter.prepareKeyImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).not.toHaveBeenCalled();
+    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
   it("returns 400 when the tarball contains a path-traversal entry (no extract attempted)", async () => {

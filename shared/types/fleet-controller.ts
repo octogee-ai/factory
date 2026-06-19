@@ -83,7 +83,7 @@ export interface PushStateRequestBody extends MigrationRequestBody {
   targetUrl: string;
   targetImportSignature: string;
   includeActivationManifest?: boolean;
-  mode?: "pre" | "final";
+  mode?: "keys" | "pre" | "final";
 }
 
 export interface QuiesceRequestBody extends MigrationRequestBody {
@@ -148,3 +148,4 @@ export interface VerifyMigrationResponse {
 
 export const MIGRATION_ID_HEADER = "X-Migration-Id";
 export const MIGRATION_SLUG_HEADER = "X-Migration-Slug";
+export const MIGRATION_MODE_HEADER = "X-Migration-Mode";

@@ -2,6 +2,7 @@
 
 export type MigrationPhase =
   | "initial"
+  | "keys-synced"
   | "target-restored"
   | "pre-synced"
   | "source-quiesced"
@@ -19,10 +20,12 @@ export interface MigrationState {
   toGatewayId: string;
 }
 
+export type MigrationSyncMode = "keys" | "pre" | "final";
+
 export type MigrationStep =
   | { action: "restore-target"; gateway: string; uid: string; slug: string }
   | { action: "quiesce-source"; gateway: string; slug: string }
-  | { action: "sync-state"; mode: "pre" | "final"; from: string; to: string; slug: string }
+  | { action: "sync-state"; mode: MigrationSyncMode; from: string; to: string; slug: string }
   | { action: "verify-target"; gateway: string; slug: string }
   | { action: "cutover-firestore"; uid: string; from: string; to: string }
   | { action: "unmount-gateway"; role: "source" | "target"; gateway: string; slug: string }
@@ -31,6 +34,14 @@ export type MigrationStep =
 export function nextMigrationStep(state: MigrationState): MigrationStep {
   switch (state.phase) {
     case "initial":
+      return {
+        action: "sync-state",
+        mode: "keys",
+        from: state.fromGatewayId,
+        to: state.toGatewayId,
+        slug: state.slug,
+      };
+    case "keys-synced":
       return {
         action: "restore-target",
         gateway: state.toGatewayId,
@@ -87,6 +98,7 @@ export function nextMigrationStep(state: MigrationState): MigrationStep {
 
 const PHASE_ORDER: readonly MigrationPhase[] = [
   "initial",
+  "keys-synced",
   "target-restored",
   "pre-synced",
   "source-quiesced",
@@ -121,6 +133,7 @@ export function rollbackPlan(state: MigrationState): MigrationStep[] {
   switch (state.phase) {
     case "initial":
       return [];
+    case "keys-synced":
     case "target-restored":
     case "pre-synced":
     case "source-quiesced":
@@ -164,6 +177,9 @@ export function describeStep(step: MigrationStep): string {
     case "restore-target":
       return `restore durable state for ${step.slug} onto ${step.gateway} before live sync`;
     case "sync-state":
+      if (step.mode === "keys") {
+        return `seed per-customer SSH key for ${step.slug} directly from ${step.from} → ${step.to}`;
+      }
       return `${step.mode === "pre" ? "pre-sync" : "final-sync"} local state for ${step.slug} directly from ${step.from} → ${step.to}`;
     case "verify-target":
       return `verify ${step.slug} is mounted and channel-ready on ${step.gateway} before cutover`;

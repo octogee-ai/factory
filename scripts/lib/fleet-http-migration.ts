@@ -22,6 +22,7 @@ import {
   MIGRATION_VERIFY_TIMEOUT_MS,
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
+  MIGRATION_MODE_HEADER,
   MIGRATION_SLUG_HEADER,
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername } from "../../shared/types/identity.js";
@@ -438,6 +439,23 @@ function pushStateFailureStatus(
   return { status: 500, error: "push-state failed" };
 }
 
+type MigrationImportMode = "keys" | "pre" | "final" | "default";
+
+function parseMigrationImportMode(value: string | undefined): MigrationImportMode {
+  if (value === "keys" || value === "pre" || value === "final") return value;
+  return "default";
+}
+
+function sourcesForPushMode(
+  sources: Array<{ cwd: string; path: string }>,
+  slug: string,
+  mode: PushStateRequestBody["mode"],
+): Array<{ cwd: string; path: string }> {
+  if (mode !== "keys") return sources;
+  const keyPath = path.join("customer-keys", slug);
+  return sources.filter((source) => source.path === keyPath);
+}
+
 async function finishPushStateAlreadyMounted(
   res: Response,
   parsed: ImportResponse,
@@ -511,14 +529,17 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
     let cleanupActivationManifest: () => Promise<void> = async () => {};
     let sourceTarError: unknown;
     try {
-      const sources = await deps.adapter.listExportPaths(body.slug);
+      const allSources = await deps.adapter.listExportPaths(body.slug);
+      const sources = sourcesForPushMode(allSources, body.slug, body.mode);
       if (sources.length === 0) {
         res
           .status(404)
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
-      const activationManifest = await maybeMaterializeActivationManifest(deps, body);
+      const activationManifest = body.mode === "keys"
+        ? { source: null, cleanup: async () => {} }
+        : await maybeMaterializeActivationManifest(deps, body);
       cleanupActivationManifest = activationManifest.cleanup;
       if (activationManifest.source) {
         sources.push(activationManifest.source);
@@ -544,6 +565,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
             [SIGNATURE_HEADER]: target.targetImportSignature,
             [MIGRATION_ID_HEADER]: body.migrationId,
             [MIGRATION_SLUG_HEADER]: body.slug,
+            [MIGRATION_MODE_HEADER]: body.mode ?? "default",
           },
           body: tar.stdout,
           duplex: "half",
@@ -628,7 +650,7 @@ function validateImportRequest(
   req: Request,
   res: Response,
   log: (msg: string) => void,
-): { migrationId: string; slug: string } | null {
+): { migrationId: string; slug: string; mode: MigrationImportMode } | null {
   const migrationId = req.header(MIGRATION_ID_HEADER);
   const slug = req.header(MIGRATION_SLUG_HEADER);
   if (!migrationId || !slug) {
@@ -645,7 +667,8 @@ function validateImportRequest(
     res.status(401).json({ error: "invalid signature" });
     return null;
   }
-  return { migrationId, slug };
+  const mode = parseMigrationImportMode(req.header(MIGRATION_MODE_HEADER));
+  return { migrationId, slug, mode };
 }
 
 function respondImportFailure(
@@ -672,7 +695,7 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
   return async (req, res) => {
     const validated = validateImportRequest(deps, req, res, log);
     if (!validated) return;
-    const { migrationId, slug } = validated;
+    const { migrationId, slug, mode } = validated;
 
     const { controller, detach } = attachImportDisconnectHandlers(
       res,
@@ -684,9 +707,11 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
     let tmpDir: string | null = null;
     try {
       if (controller.signal.aborted) throw controller.signal.reason ?? new Error("aborted");
-      const importDir = await deps.adapter.prepareImportDir(slug);
+      const importDir = mode === "keys"
+        ? await deps.adapter.prepareKeyImportDir(slug)
+        : await deps.adapter.prepareImportDir(slug);
       log(
-        `[migration-http] import migrationId=${migrationId} slug=${slug} unpacking → ${importDir}`,
+        `[migration-http] import mode=${mode} migrationId=${migrationId} slug=${slug} unpacking → ${importDir}`,
       );
 
 tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-${migrationId}-`));
@@ -695,7 +720,7 @@ tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-${migrationId}-`));
 await streamRequestToFile(req, tarPath);
 
 const entries = await listTarEntries(tarPath);
-      const violation = findPathTraversalViolation(entries, slug);
+      const violation = findPathTraversalViolation(entries, slug, mode);
       if (violation !== null) {
         log(
           `[migration-http] ⚠ import migrationId=${migrationId} slug=${slug} rejected: ${violation}`,
@@ -708,6 +733,13 @@ const entries = await listTarEntries(tarPath);
       }
 
 await extractTarToDir(tarPath, importDir);
+
+      if (mode === "keys") {
+        const response: ImportResponse = { migrationId, slug, imported: true };
+        log(`[migration-http] ✅ import mode=keys migrationId=${migrationId} slug=${slug} done`);
+        res.status(200).json(response);
+        return;
+      }
 
       // Pin BEFORE activation: activation coach-wires the customer here, but cutover hasn't
       // yet made it desired-on-this-gateway. The pin keeps the reconcile evict direction
@@ -783,16 +815,19 @@ async function extractTarToDir(tarPath: string, dest: string): Promise<void> {
 export function findPathTraversalViolation(
   entries: readonly string[],
   slug: string,
+  mode: MigrationImportMode = "default",
 ): string | null {
-  const allowedPrefixes = [
-    `agents/octogee-${slug}-coach/`,
-    `agents/octogee-ops-${slug}/`,
-    `memory/octogee-${slug}-coach.sqlite`,
-    `memory/octogee-ops-${slug}.sqlite`,
-    `customers/${slug}/`,
-    `customer-keys/${slug}/`,
-    `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
-  ];
+  const allowedPrefixes = mode === "keys"
+    ? [`customer-keys/${slug}/`]
+    : [
+        `agents/octogee-${slug}-coach/`,
+        `agents/octogee-ops-${slug}/`,
+        `memory/octogee-${slug}-coach.sqlite`,
+        `memory/octogee-ops-${slug}.sqlite`,
+        `customers/${slug}/`,
+        `customer-keys/${slug}/`,
+        `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
+      ];
   for (const raw of entries) {
 
 const entry = raw.endsWith("/") ? raw.slice(0, -1) : raw;
@@ -805,7 +840,10 @@ if (entry.split("/").includes("..")) {
     }
     const allowed = allowedPrefixes.some((p) => entry === p.slice(0, -1) || entry.startsWith(p));
     if (!allowed) {
-      return `path '${raw}' is outside the per-slug allowlist (agents/octogee-${slug}-coach, agents/octogee-ops-${slug}, memory/octogee-${slug}-coach.sqlite*, memory/octogee-ops-${slug}.sqlite*, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug})`;
+      const allowlist = mode === "keys"
+        ? `customer-keys/${slug}`
+        : `agents/octogee-${slug}-coach, agents/octogee-ops-${slug}, memory/octogee-${slug}-coach.sqlite*, memory/octogee-ops-${slug}.sqlite*, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug}`;
+      return `path '${raw}' is outside the per-slug allowlist (${allowlist})`;
     }
   }
   return null;

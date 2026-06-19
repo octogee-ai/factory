@@ -37,8 +37,8 @@ function happyClient(): MigrationClient & { calls: string[] } {
       calls.push(`quiesce:${slug}`);
       return { migrationId: "m1", slug, drained: true, runningCount: 0 };
     }) as MigrationClient["quiesce"],
-    transferState: vi.fn(async ({ slug }) => {
-      calls.push(`transfer:${slug}`);
+    transferState: vi.fn(async ({ slug, mode }) => {
+      calls.push(`transfer:${slug}:${mode ?? "default"}`);
       return { migrationId: "m1", slug, imported: true };
     }) as MigrationClient["transferState"],
     verifyTarget: vi.fn(async ({ slug }) => {
@@ -99,7 +99,7 @@ const INPUT = {
 };
 
 describe("runMigration — happy path", () => {
-  it("executes the blue/green flow in order: pre-sync → quiesce → final-sync → verify → cutover → unmount", async () => {
+  it("executes the blue/green flow in order: keys → restore → pre-sync → quiesce → final-sync → verify → cutover → unmount", async () => {
     const client = happyClient();
     const deps = makeDeps(client);
     const res = await runMigration(INPUT, deps);
@@ -107,10 +107,11 @@ describe("runMigration — happy path", () => {
     expect(res.finalPhase).toBe("done");
     expect(res.rolledBack).toBe(false);
     expect(client.calls).toEqual([
+      "transfer:alice:keys",
       "restore:alice",
-      "transfer:alice",
+      "transfer:alice:pre",
       "quiesce:alice",
-      "transfer:alice",
+      "transfer:alice:final",
       "verify:alice",
       "cutover:uid-alice->gw-green",
       "unmount:alice",
@@ -121,6 +122,7 @@ describe("runMigration — happy path", () => {
     const client = happyClient();
     const deps = makeDeps(client);
     await runMigration(INPUT, deps);
+    expect(deps.logCalls.some((l) => l.includes("keys-sync-state") && l.includes("ok"))).toBe(true);
     expect(deps.logCalls.some((l) => l.includes("quiesce") && l.includes("ok"))).toBe(true);
     expect(deps.logCalls.some((l) => l.includes("pre-sync-state") && l.includes("ok"))).toBe(true);
     expect(deps.logCalls.some((l) => l.includes("final-sync-state") && l.includes("ok"))).toBe(true);
@@ -133,6 +135,8 @@ describe("runMigration — happy path", () => {
     const deps = makeDeps(client);
     await runMigration(INPUT, deps);
     expect(deps.reportedSteps).toEqual([
+      { name: "keys-sync-state", status: "running" },
+      { name: "keys-sync-state", status: "done" },
       { name: "restore-target", status: "running" },
       { name: "restore-target", status: "done" },
       { name: "pre-sync-state", status: "running" },
@@ -175,7 +179,7 @@ describe("runMigration — failures", () => {
     let transferCount = 0;
     client.transferState = vi.fn(async ({ migrationId, slug }) => {
       transferCount++;
-      if (transferCount === 2) throw new Error("export: 503 upstream draining");
+      if (transferCount === 3) throw new Error("export: 503 upstream draining");
       return { migrationId, slug, imported: true };
     }) as MigrationClient["transferState"];
 
@@ -233,7 +237,7 @@ const client = happyClient();
     let transferCount = 0;
     client.transferState = vi.fn(async ({ migrationId, slug }) => {
       transferCount++;
-      if (transferCount === 2) throw new Error("export: 503");
+      if (transferCount === 3) throw new Error("export: 503");
       return { migrationId, slug, imported: true };
     }) as MigrationClient["transferState"];
     client.unmount = vi.fn(async () => {
