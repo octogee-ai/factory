@@ -340,6 +340,17 @@ const out = helmTemplate();
     expect(svc).toMatch(/name:\s*runner-metrics\s*\n\s*port:\s*9092\s*\n\s*targetPort:\s*9092/);
   });
 
+  it("exposes the migration rsync port only on the gateway container", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/containerPort:\s*30873\s*\n\s*name:\s*migration-rsync/);
+    expect(gw).toMatch(/name:\s*MIGRATION_RSYNC_PORT\s*\n\s*value:\s*"30873"/);
+
+    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    expect(svc).not.toMatch(/migration-rsync/);
+  });
+
   it("does not expose builder-shell on locked operator gateways", () => {
     const out = helmTemplate("octogee-gw-default", { profile: "operator" });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
@@ -996,6 +1007,21 @@ expect(open).toMatch(/port:\s*18789/);
     expect(restricted).toMatch(/namespaceSelector:[\s\S]*?kubernetes\.io\/metadata\.name:\s*gke-gmp-system/);
     expect(restricted).toMatch(/port:\s*9092/);
     expect(open).not.toMatch(/port:\s*9092/);
+  });
+
+  it("allows migration rsync ingress only from peer gateway pods — never the open any-source rule", () => {
+    const np = findDoc(
+      helmTemplate("octogee-gw-default", {
+        profile: "operator",
+        "operatorAccess.shellsEnabled": "true",
+      }),
+      "NetworkPolicy",
+      "octogee-gateway-builder-shell-default",
+    );
+    expect(np).not.toBeNull();
+    const { restricted, open } = splitNetworkPolicyRules(np!);
+    expect(restricted).toMatch(/app:\s*octogee-gateway[\s\S]*?port:\s*30873/);
+    expect(open).not.toMatch(/port:\s*30873/);
   });
 
   it("is NOT rendered for standard-profile gateways (cattle don't expose :3005 so no backstop needed)", () => {

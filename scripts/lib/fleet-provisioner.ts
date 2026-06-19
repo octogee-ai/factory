@@ -6,10 +6,14 @@ import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "../../shared/types/fleet-controll
 import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
+  createAbortRsyncImportHandler,
   createExportHandler,
   createExportPathsHandler,
+  createFinishRsyncImportHandler,
   createImportHandler,
   createPrepareImportHandler,
+  createPrepareRsyncImportHandler,
+  createPushRsyncStateHandler,
   createPushStateHandler,
   createQuiesceHandler,
   createRestoreHandler,
@@ -540,6 +544,10 @@ const waitForGatewayReady = async (): Promise<void> => {
   );
   app.post("/prepare-import/:gatewayId", gatewayIdGuard, createPrepareImportHandler(migrationDeps));
   app.post("/activate-import/:gatewayId", gatewayIdGuard, createActivateImportHandler(migrationDeps));
+  app.post("/prepare-rsync-import/:gatewayId", gatewayIdGuard, createPrepareRsyncImportHandler(migrationDeps));
+  app.post("/push-rsync-state/:gatewayId", gatewayIdGuard, createPushRsyncStateHandler(migrationDeps));
+  app.post("/finish-rsync-import/:gatewayId", gatewayIdGuard, createFinishRsyncImportHandler(migrationDeps));
+  app.post("/abort-rsync-import/:gatewayId", gatewayIdGuard, createAbortRsyncImportHandler(migrationDeps));
   app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));

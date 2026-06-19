@@ -117,9 +117,8 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.llmBroker.port | default 3010 }}
-    # Gateway-to-gateway migration direct transfer. The controller asks
-    # the source gateway to POST the workspace tarball directly to the
-    # target gateway's /import route, so no workspace bytes transit the
+    # Gateway-to-gateway migration control. The controller signs the
+    # direct-transfer instructions; workspace bytes never transit the
     # controller process.
     - to:
         - podSelector:
@@ -128,6 +127,16 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.global.fleetControllerPort | default "3003" }}
+    # Gateway-to-gateway migration data plane. The target opens a
+    # short-lived rsync daemon with one-time credentials and the source
+    # streams directly to the target pod IP.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.global.migrationRsyncPort | default "30873" }}
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

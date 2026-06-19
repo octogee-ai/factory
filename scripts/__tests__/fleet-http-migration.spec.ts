@@ -7,10 +7,14 @@ import { Readable, Writable } from "node:stream";
 import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
+  createAbortRsyncImportHandler,
   createExportHandler,
   createExportPathsHandler,
+  createFinishRsyncImportHandler,
   createImportHandler,
   createPrepareImportHandler,
+  createPrepareRsyncImportHandler,
+  createPushRsyncStateHandler,
   createPushStateHandler,
   createQuiesceHandler,
   createRestoreHandler,
@@ -33,6 +37,10 @@ import {
   type PrepareImportRequestBody,
   type ActivateImportRequestBody,
   type ActivationManifestExportRequestBody,
+  type AbortRsyncImportRequestBody,
+  type FinishRsyncImportRequestBody,
+  type PrepareRsyncImportRequestBody,
+  type PushRsyncStateRequestBody,
 } from "../../shared/types/fleet-controller.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
@@ -45,6 +53,8 @@ vi.mock("node:child_process", () => ({
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
 const PUBLIC_KEY = FLEET_KEY_PAIR.publicKey;
 const GATEWAY_ID = "gw-a";
+const SOURCE_POD_IP = ["10", "1", "0", "10"].join(".");
+const TARGET_POD_IP = ["10", "1", "0", "20"].join(".");
 
 const SAMPLE_QUIESCE: QuiesceRequestBody = {
   migrationId: "mig-1",
@@ -783,6 +793,160 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
     expect(onMounted).toHaveBeenCalledWith("chris");
     expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
+  });
+
+  it("createPrepareRsyncImportHandler opens a one-time target rsync import session", async () => {
+    const adapter = mkAdapter({
+      prepareImportDir: vi.fn(async () => "/openclaw"),
+      markCustomerMigratingIn: vi.fn(),
+    });
+    const waitForRsyncReady = vi.fn(async () => undefined);
+    const daemon = mkFakeChild();
+    spawnMock.mockReturnValueOnce(daemon);
+    const body: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-rsync",
+      slug: "chris",
+      mode: "pre",
+      transferUser: "migration",
+      transferKey: "a".repeat(64),
+      sourcePodIp: SOURCE_POD_IP,
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createPrepareRsyncImportHandler(
+      mkDeps({ adapter, migrationRsyncPort: 30873, waitForRsyncReady }),
+    );
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toMatchObject({
+      migrationId: "mig-rsync",
+      slug: "chris",
+      imported: true,
+      port: 30873,
+      module: "state",
+    });
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(waitForRsyncReady).toHaveBeenCalledWith(30873);
+    expect(String(spawnMock.mock.calls[0][0])).toMatch(/\/rsync$/);
+    expect(spawnMock.mock.calls[0][1]).toEqual(
+      expect.arrayContaining(["--daemon", "--no-detach", "--port=30873"]),
+    );
+
+    const abortBody: AbortRsyncImportRequestBody = {
+      migrationId: "mig-rsync",
+      slug: "chris",
+      mode: "pre",
+    };
+    const abortRaw = JSON.stringify(abortBody);
+    const abortSig = signFleetRequest(PRIVATE_KEY, abortBody.migrationId, abortRaw);
+    const abortHandler = createAbortRsyncImportHandler(mkDeps({ adapter }));
+    const abortReq = mkRequest(abortBody, { signature: abortSig });
+    const abortRes = mkResponse();
+    await abortHandler(abortReq, abortRes.res, vi.fn());
+    expect(daemon.kill).toHaveBeenCalled();
+  });
+
+  it("createPushRsyncStateHandler runs rsync directly to the target pod with the one-time key", async () => {
+    const adapter = mkAdapter({
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/state", path: "agents/octogee-chris-coach" },
+        { cwd: "/openclaw", path: "customers/chris" },
+      ]),
+      exportOpenClawActivationManifest: vi.fn(async () => ({
+        version: 1,
+        slug: "chris",
+        agentId: "octogee-chris-coach",
+        accountId: "chris-coach",
+        agent: { id: "octogee-chris-coach" },
+        mattermostAccount: { botToken: "coach-pat" },
+        bindings: [{ agentId: "octogee-chris-coach" }],
+      })),
+    });
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const body: PushRsyncStateRequestBody = {
+      migrationId: "mig-rsync",
+      slug: "chris",
+      mode: "pre",
+      targetHost: TARGET_POD_IP,
+      targetPort: 30873,
+      transferUser: "migration",
+      transferKey: "b".repeat(64),
+      includeActivationManifest: true,
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createPushRsyncStateHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toMatchObject({ migrationId: "mig-rsync", slug: "chris", imported: true });
+    const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(command).toMatch(/\/rsync$/);
+    expect(args).toContain("--relative");
+    expect(args).toContain("/state/./agents/octogee-chris-coach");
+    expect(args).toContain("/openclaw/./customers/chris");
+    expect(args.some((arg) => arg.endsWith("/./.octogee-migration-activation/chris/activation.json"))).toBe(true);
+    expect(args).toContain(`rsync://migration@${TARGET_POD_IP}:30873/state/`);
+  });
+
+  it("createFinishRsyncImportHandler copies staged bytes and activates the customer", async () => {
+    const adapter = mkAdapter({
+      prepareImportDir: vi.fn(async () => "/openclaw"),
+      activateImportedCustomer: vi.fn(async () => undefined),
+      markCustomerMigratingIn: vi.fn(),
+      onMounted: vi.fn(),
+    });
+    const daemon = mkFakeChild();
+    const copy = mkFakeChild({ exitCode: 0 });
+    spawnMock.mockReturnValueOnce(daemon).mockReturnValueOnce(copy);
+    const prepareBody: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-finish",
+      slug: "chris",
+      mode: "pre",
+      transferUser: "migration",
+      transferKey: "c".repeat(64),
+    };
+    const prepareRaw = JSON.stringify(prepareBody);
+    const prepareSig = signFleetRequest(PRIVATE_KEY, prepareBody.migrationId, prepareRaw);
+    const deps = mkDeps({
+      adapter,
+      migrationRsyncPort: 30873,
+      waitForRsyncReady: vi.fn(async () => undefined),
+    });
+    const prepareHandler = createPrepareRsyncImportHandler(deps);
+    const prepareReq = mkRequest(prepareBody, { signature: prepareSig });
+    const prepareRes = mkResponse();
+    await prepareHandler(prepareReq, prepareRes.res, vi.fn());
+
+    const finishBody: FinishRsyncImportRequestBody = {
+      migrationId: "mig-finish",
+      slug: "chris",
+      mode: "pre",
+    };
+    const finishRaw = JSON.stringify(finishBody);
+    const finishSig = signFleetRequest(PRIVATE_KEY, finishBody.migrationId, finishRaw);
+    const finishHandler = createFinishRsyncImportHandler(deps);
+    const finishReq = mkRequest(finishBody, { signature: finishSig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await finishHandler(finishReq, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toMatchObject({ migrationId: "mig-finish", slug: "chris", imported: true });
+    expect(daemon.kill).toHaveBeenCalled();
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.any(Object));
+    expect(adapter.onMounted).toHaveBeenCalledWith("chris");
+    const [copyCommand, copyArgs] = spawnMock.mock.calls[1] as [string, string[]];
+    expect(copyCommand).toMatch(/\/rsync$/);
+    expect(copyArgs.at(-1)).toBe("/openclaw/");
   });
 });
 

@@ -158,6 +158,8 @@ spec:
               name: preview
             - containerPort: {{ .Values.env.fleetControllerPort | default "3003" }}
               name: fleet-http
+            - containerPort: {{ .Values.env.migrationRsyncPort | default "30873" }}
+              name: migration-rsync
             {{- if $operatorShellsEnabled }}
             - containerPort: {{ .Values.env.builderShellPort | default "3005" }}
               name: builder-shell
@@ -286,6 +288,8 @@ spec:
             {{- end }}
             - name: FLEET_CONTROLLER_PORT
               value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
+            - name: MIGRATION_RSYNC_PORT
+              value: {{ .Values.env.migrationRsyncPort | default "30873" | quote }}
             - name: FLEET_CONTROLLER_PUBLIC_KEY
               valueFrom:
                 secretKeyRef:

@@ -10,6 +10,9 @@ import {
 
 type Store = Record<string, Record<string, unknown>>;
 
+const SOURCE_POD_IP = ["10", "1", "0", "10"].join(".");
+const TARGET_POD_IP = ["10", "1", "0", "20"].join(".");
+
 function makeDb(store: Store): Firestore {
   const docFor = (collection: string, id: string) => ({
     id,
@@ -67,6 +70,7 @@ function readyPod(name: string): Response {
         metadata: { name },
         status: {
           phase: "Running",
+          podIP: name === "gw-from-pod" ? SOURCE_POD_IP : TARGET_POD_IP,
           conditions: [{ type: "Ready", status: "True" }],
         },
       },
@@ -79,35 +83,32 @@ function makeFetch(calls: string[]): typeof fetch {
     const url = String(input);
     calls.push(url);
     const body = JSON.parse(String(init?.body ?? "{}")) as { migrationId: string; slug: string };
-    if (url.includes("/prepare-import/")) {
+    if (url.includes("/prepare-rsync-import/")) {
+      expect(body).toMatchObject({
+        transferUser: "migration",
+        sourcePodIp: SOURCE_POD_IP,
+      });
+      return jsonResponse({
+        migrationId: body.migrationId,
+        slug: body.slug,
+        imported: true,
+        host: "0.0.0.0",
+        port: 30873,
+        module: "state",
+      });
+    }
+    if (url.includes("/push-rsync-state/")) {
+      expect(body).toMatchObject({
+        targetHost: TARGET_POD_IP,
+        targetPort: 30873,
+        transferUser: "migration",
+      });
       return jsonResponse({ migrationId: body.migrationId, slug: body.slug, imported: true });
     }
-    if (url.includes("/export-paths/")) {
-      return jsonResponse({
-        migrationId: body.migrationId,
-        slug: body.slug,
-        sources: [
-          { cwd: "/home/node/.openclaw", path: "customers/alice" },
-          { cwd: "/home/node/.openclaw", path: "customer-keys/alice" },
-        ],
-      });
+    if (url.includes("/finish-rsync-import/")) {
+      return jsonResponse({ migrationId: body.migrationId, slug: body.slug, imported: true });
     }
-    if (url.includes("/export-activation-manifest/")) {
-      return jsonResponse({
-        migrationId: body.migrationId,
-        slug: body.slug,
-        manifest: {
-          version: 1,
-          slug: body.slug,
-          agentId: "octogee-alice-coach",
-          accountId: "alice-coach",
-          agent: { id: "octogee-alice-coach" },
-          mattermostAccount: { botToken: "token" },
-          bindings: [{ agentId: "octogee-alice-coach" }],
-        },
-      });
-    }
-    if (url.includes("/activate-import/")) {
+    if (url.includes("/abort-rsync-import/")) {
       return jsonResponse({ migrationId: body.migrationId, slug: body.slug, imported: true });
     }
     return new Response("unexpected", { status: 404 });
@@ -139,7 +140,7 @@ describe("migrationTransferTaskId", () => {
 });
 
 describe("createRsyncMigrationTransfer", () => {
-  it("runs prepare → source path list → rsync pull/push → activate and makes succeeded retry a no-op", async () => {
+  it("runs prepare → source direct rsync push → finish and makes succeeded retry a no-op", async () => {
     const store: Store = {};
     const fetchCalls: string[] = [];
     const commandCalls: Array<{ command: string; args: string[] }> = [];
@@ -171,19 +172,12 @@ describe("createRsyncMigrationTransfer", () => {
       targetGatewayId: "gw-to",
     });
     expect(fetchCalls).toEqual([
-      "http://gw-to/prepare-import/gw-to",
-      "http://gw-from/export-paths/gw-from",
-      "http://gw-from/export-activation-manifest/gw-from",
-      "http://gw-to/activate-import/gw-to",
+      "http://gw-to/prepare-rsync-import/gw-to",
+      "http://gw-from/push-rsync-state/gw-from",
+      "http://gw-to/finish-rsync-import/gw-to",
     ]);
-    const rsyncCalls = commandCalls.filter((c) => c.command === "rsync");
-    expect(rsyncCalls).toHaveLength(2);
-    expect(rsyncCalls[0].args).toContain(
-      "gw-from-pod:/home/node/.openclaw/./customers/alice",
-    );
-    expect(rsyncCalls[1].args).toContain("--delete");
-    expect(rsyncCalls[1].args.some((arg) => arg.includes("./customers/alice"))).toBe(true);
-    expect(rsyncCalls[1].args.some((arg) => arg.includes("./.octogee-migration-activation/alice/activation.json"))).toBe(true);
+    expect(commandCalls.filter((c) => c.command === "kubectl")).toHaveLength(2);
+    expect(commandCalls.filter((c) => c.command === "rsync")).toHaveLength(0);
 
     await transfer({
       migrationId: "mig-1",
@@ -194,30 +188,30 @@ describe("createRsyncMigrationTransfer", () => {
       includeActivationManifest: true,
     });
 
-    expect(fetchCalls).toHaveLength(4);
-    expect(commandCalls.filter((c) => c.command === "rsync")).toHaveLength(2);
+    expect(fetchCalls).toHaveLength(3);
+    expect(commandCalls.filter((c) => c.command === "kubectl")).toHaveLength(2);
   });
 
-  it("marks a failed rsync task failed and retries it with the next attempt", async () => {
+  it("marks a failed direct push task failed, aborts target import, and retries it with the next attempt", async () => {
     const store: Store = {};
     const fetchCalls: string[] = [];
     const commandCalls: Array<{ command: string; args: string[] }> = [];
     let failPush = true;
-    const baseRunner = makeCommandRunner(commandCalls);
-    const runCommand: CommandRunner = async (command, args, opts) => {
-      if (command === "rsync" && args.includes("--delete") && failPush) {
-        commandCalls.push({ command, args });
-        return { stdout: "", stderr: "network reset", code: 12 };
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      fetchCalls.push(url);
+      if (url.includes("/push-rsync-state/") && failPush) {
+        return new Response("network reset", { status: 500 });
       }
-      return baseRunner(command, args, opts);
-    };
+      return makeFetch([])(input, init);
+    }) as typeof globalThis.fetch;
     const transfer = createRsyncMigrationTransfer({
       db: makeDb(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       resolveGatewayUrl: (id) => `http://${id}`,
-      fetch: makeFetch(fetchCalls),
-      runCommand,
+      fetch,
+      runCommand: makeCommandRunner(commandCalls),
       now: () => Date.now(),
       workerId: "worker-1",
     });
@@ -233,6 +227,7 @@ describe("createRsyncMigrationTransfer", () => {
 
     await expect(transfer(input)).rejects.toThrow(/network reset/);
     expect(store["mig-2__final"]).toMatchObject({ status: "failed", attempt: 1 });
+    expect(fetchCalls).toContain("http://gw-to/abort-rsync-import/gw-to");
 
     failPush = false;
     await transfer(input);

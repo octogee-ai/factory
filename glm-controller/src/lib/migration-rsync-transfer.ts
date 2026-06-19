@@ -1,7 +1,5 @@
 import { spawn } from "node:child_process";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { randomBytes } from "node:crypto";
 import {
   FieldValue,
   type DocumentReference,
@@ -9,24 +7,21 @@ import {
 } from "firebase-admin/firestore";
 import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "../../../shared/types/glm.js";
 import {
-  type ActivationManifestExportResponse,
-  type ExportPathsResponse,
+  type FinishRsyncImportRequestBody,
   type ImportResponse,
   MIGRATION_TRANSFER_TIMEOUT_MS,
+  type PrepareRsyncImportRequestBody,
+  type PrepareRsyncImportResponse,
+  type PushRsyncStateRequestBody,
   SIGNATURE_HEADER,
 } from "../../../shared/types/fleet-controller.js";
 import type { MigrationSyncMode } from "../../../scripts/lib/fleet-migration.js";
 import type { MigrationClient } from "../../../scripts/lib/fleet-migration-client.js";
 import { signFleetRequest } from "../../../scripts/lib/fleet-signature.js";
-import {
-  MIGRATION_ACTIVATION_DIR,
-  MIGRATION_ACTIVATION_FILE,
-} from "../../../scripts/lib/migration-activation-manifest.js";
 
-const GATEWAY_CONTAINER = "gateway";
-const TARGET_OPENCLAW_DIR = "/home/node/.openclaw";
 const DEFAULT_LEASE_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
 const DEFAULT_WORKER_ID = `glm-${process.pid}`;
+const MIGRATION_TRANSFER_USER = "migration";
 
 export type MigrationTransferTaskStatus =
   | "running"
@@ -108,7 +103,7 @@ export function createSubprocessCommandRunner(): CommandRunner {
       proc.on("close", (code, signal) => {
         settled = true;
         if (timeout) clearTimeout(timeout);
-        if (signal !== null) {
+        if (signal != null) {
           resolve({ stdout, stderr: `${stderr}\n${command} terminated by ${signal}`, code: 128 });
           return;
         }
@@ -254,6 +249,7 @@ interface PodList {
     metadata?: { name?: string; deletionTimestamp?: string };
     status?: {
       phase?: string;
+      podIP?: string;
       conditions?: Array<{ type?: string; status?: string }>;
     };
   }>;
@@ -263,7 +259,7 @@ async function resolveRunningGatewayPod(params: {
   namespace: string;
   gatewayId: string;
   runCommand: CommandRunner;
-}): Promise<string> {
+}): Promise<{ name: string; podIP: string }> {
   const selector = `app=octogee-gateway,gateway-instance=${params.gatewayId}`;
   const result = await params.runCommand("kubectl", [
     "-n",
@@ -282,7 +278,7 @@ async function resolveRunningGatewayPod(params: {
   }
   const parsed = JSON.parse(result.stdout) as PodList;
   const running = (parsed.items ?? []).filter((item) => {
-    if (!item.metadata?.name || item.metadata.deletionTimestamp) return false;
+    if (!item.metadata?.name || !item.status?.podIP || item.metadata.deletionTimestamp) return false;
     if (item.status?.phase !== "Running") return false;
     return (item.status.conditions ?? []).some(
       (c) => c.type === "Ready" && c.status === "True",
@@ -293,131 +289,8 @@ async function resolveRunningGatewayPod(params: {
       `expected exactly one running pod for gateway=${params.gatewayId}; found ${running.length}`,
     );
   }
-  return running[0].metadata!.name!;
-}
-
-function trimTrailingSlash(value: string): string {
-  let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
-  return value.slice(0, end);
-}
-
-function posixRel(value: string): string {
-  let start = 0;
-  while (start < value.length && value.charCodeAt(start) === 47) start += 1;
-  return value.slice(start).split("\\").join("/");
-}
-
-function remoteSourceArg(pod: string, source: { cwd: string; path: string }): string {
-  return `${pod}:${trimTrailingSlash(source.cwd)}/./${posixRel(source.path)}`;
-}
-
-function localSourceArg(stageDir: string, relPath: string): string {
-  return `${trimTrailingSlash(stageDir)}/./${posixRel(relPath)}`;
-}
-
-async function writeKrsyncScript(dir: string): Promise<string> {
-  const scriptPath = path.join(dir, "krsync.sh");
-  await fs.writeFile(
-    scriptPath,
-    [
-      "#!/bin/sh",
-      "set -eu",
-      "pod=\"$1\"",
-      "shift",
-      "kubectl_bin=\"${KUBECTL_BIN:-kubectl}\"",
-      "exec \"$kubectl_bin\" -n \"${KRSYNC_NAMESPACE:?}\" exec -i \"$pod\" -c \"${KRSYNC_CONTAINER:-gateway}\" -- \"$@\"",
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-  await fs.chmod(scriptPath, 0o700);
-  return scriptPath;
-}
-
-async function runChecked(
-  runCommand: CommandRunner,
-  command: string,
-  args: string[],
-  opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number; label: string },
-): Promise<void> {
-  const result = await runCommand(command, args, opts);
-  if (result.code !== 0) {
-    throw new Error(
-      `${opts.label} failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
-    );
-  }
-}
-
-async function rsyncGatewayState(params: {
-  namespace: string;
-  runCommand: CommandRunner;
-  timeoutMs: number;
-  sourcePod: string;
-  targetPod: string;
-  sources: Array<{ cwd: string; path: string }>;
-  activationManifest?: Record<string, unknown> | null;
-}): Promise<void> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-rsync-transfer-"));
-  try {
-    const stageDir = path.join(tmpDir, "stage");
-    await fs.mkdir(stageDir, { recursive: true });
-    const krsync = await writeKrsyncScript(tmpDir);
-    const env = {
-      ...process.env,
-      KRSYNC_NAMESPACE: params.namespace,
-      KRSYNC_CONTAINER: GATEWAY_CONTAINER,
-    };
-
-    await runChecked(
-      params.runCommand,
-      "rsync",
-      [
-        "-a",
-        "--relative",
-        "--ignore-missing-args",
-        "-e",
-        krsync,
-        ...params.sources.map((source) => remoteSourceArg(params.sourcePod, source)),
-        `${stageDir}/`,
-      ],
-      { env, timeoutMs: params.timeoutMs, label: "rsync pull" },
-    );
-
-    const localRelPaths = params.sources.map((source) => posixRel(source.path));
-    if (params.activationManifest) {
-      const rel = path.posix.join(
-        MIGRATION_ACTIVATION_DIR,
-        String(params.activationManifest.slug ?? ""),
-        MIGRATION_ACTIVATION_FILE,
-      );
-      if (!params.activationManifest.slug) {
-        throw new Error("activation manifest missing slug");
-      }
-      const full = path.join(stageDir, rel);
-      await fs.mkdir(path.dirname(full), { recursive: true });
-      await fs.writeFile(full, `${JSON.stringify(params.activationManifest)}\n`, "utf-8");
-      localRelPaths.push(rel);
-    }
-
-    await runChecked(
-      params.runCommand,
-      "rsync",
-      [
-        "-a",
-        "--delete",
-        "--relative",
-        "--ignore-missing-args",
-        "-e",
-        krsync,
-        ...localRelPaths.map((rel) => localSourceArg(stageDir, rel)),
-        `${params.targetPod}:${TARGET_OPENCLAW_DIR}/`,
-      ],
-      { env, timeoutMs: params.timeoutMs, label: "rsync push" },
-    );
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+  const item = running[0];
+  return { name: item.metadata!.name!, podIP: item.status!.podIP! };
 }
 
 export function createRsyncMigrationTransfer(
@@ -452,6 +325,7 @@ export function createRsyncMigrationTransfer(
 
   return async (input) => {
     const mode = input.mode ?? "pre";
+    const transferKey = randomBytes(32).toString("hex");
     const claimed = await claimTask(
       {
         db: deps.db,
@@ -468,28 +342,8 @@ export function createRsyncMigrationTransfer(
       return { migrationId: input.migrationId, slug: input.slug, imported: true };
     }
 
+    let targetPrepareAttempted = false;
     try {
-      await control<ImportResponse>(
-        input.toGatewayId,
-        "/prepare-import",
-        input.migrationId,
-        { migrationId: input.migrationId, slug: input.slug, mode },
-      );
-      const sourcePaths = await control<ExportPathsResponse>(
-        input.fromGatewayId,
-        "/export-paths",
-        input.migrationId,
-        { migrationId: input.migrationId, slug: input.slug, mode },
-      );
-      const activation = input.includeActivationManifest && mode !== "keys"
-        ? await control<ActivationManifestExportResponse>(
-            input.fromGatewayId,
-            "/export-activation-manifest",
-            input.migrationId,
-            { migrationId: input.migrationId, slug: input.slug },
-          )
-        : null;
-
       const [sourcePod, targetPod] = await Promise.all([
         resolveRunningGatewayPod({
           namespace: deps.namespace,
@@ -502,33 +356,69 @@ export function createRsyncMigrationTransfer(
           runCommand,
         }),
       ]);
-      log(
-        `[migration-rsync] task=${claimed.taskId} attempt=${claimed.attempt} mode=${mode} ${input.fromGatewayId}/${sourcePod} → ${input.toGatewayId}/${targetPod} paths=${sourcePaths.sources.length}`,
+      const prepareBody: PrepareRsyncImportRequestBody = {
+        migrationId: input.migrationId,
+        slug: input.slug,
+        mode,
+        transferUser: MIGRATION_TRANSFER_USER,
+        transferKey,
+        sourcePodIp: sourcePod.podIP,
+      };
+      targetPrepareAttempted = true;
+      const prepared = await control<PrepareRsyncImportResponse>(
+        input.toGatewayId,
+        "/prepare-rsync-import",
+        input.migrationId,
+        prepareBody as unknown as Record<string, unknown>,
       );
-      await rsyncGatewayState({
-        namespace: deps.namespace,
-        runCommand,
-        timeoutMs: leaseMs,
-        sourcePod,
-        targetPod,
-        sources: sourcePaths.sources,
-        activationManifest: activation?.manifest ?? null,
-      });
-
-      if (mode !== "keys") {
-        await control<ImportResponse>(
-          input.toGatewayId,
-          "/activate-import",
-          input.migrationId,
-          { migrationId: input.migrationId, slug: input.slug },
-        );
-      }
+      log(
+        `[migration-rsync] task=${claimed.taskId} attempt=${claimed.attempt} mode=${mode} ${input.fromGatewayId}/${sourcePod.name} → ${input.toGatewayId}/${targetPod.name} target=${targetPod.podIP}:${prepared.port}`,
+      );
+      const pushBody: PushRsyncStateRequestBody = {
+        migrationId: input.migrationId,
+        slug: input.slug,
+        mode,
+        targetHost: targetPod.podIP,
+        targetPort: prepared.port,
+        transferUser: MIGRATION_TRANSFER_USER,
+        transferKey,
+        includeActivationManifest: input.includeActivationManifest,
+      };
+      await control<ImportResponse>(
+        input.fromGatewayId,
+        "/push-rsync-state",
+        input.migrationId,
+        pushBody as unknown as Record<string, unknown>,
+      );
+      const finishBody: FinishRsyncImportRequestBody = {
+        migrationId: input.migrationId,
+        slug: input.slug,
+        mode,
+      };
+      await control<ImportResponse>(
+        input.toGatewayId,
+        "/finish-rsync-import",
+        input.migrationId,
+        finishBody as unknown as Record<string, unknown>,
+      );
       await markTaskSucceeded(claimed.ref, now);
       log(
         `[migration-rsync] ✅ task=${claimed.taskId} mode=${mode} migrationId=${input.migrationId} slug=${input.slug}`,
       );
       return { migrationId: input.migrationId, slug: input.slug, imported: true };
     } catch (err) {
+      if (targetPrepareAttempted) {
+        await control<ImportResponse>(
+          input.toGatewayId,
+          "/abort-rsync-import",
+          input.migrationId,
+          { migrationId: input.migrationId, slug: input.slug, mode },
+        ).catch((abortErr) => {
+          log(
+            `[migration-rsync] ⚠ abort failed mode=${mode} migrationId=${input.migrationId} slug=${input.slug}: ${abortErr instanceof Error ? abortErr.message : String(abortErr)}`,
+          );
+        });
+      }
       await markTaskFailed(claimed.ref, now, err).catch((markErr) => {
         log(
           `[migration-rsync] ⚠ failed to mark task=${claimed.taskId} failed: ${markErr instanceof Error ? markErr.message : String(markErr)}`,

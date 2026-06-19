@@ -7,7 +7,7 @@ FROM node:26-slim
 # azure/setup-helm's Helm 3 fallback when "latest" lookup fails.
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl rsync tini \
+  && apt-get install -y --no-install-recommends ca-certificates curl tini \
   && rm -rf /var/lib/apt/lists/* \
   && HELM_VERSION="$(curl -fsSL https://api.github.com/repos/helm/helm/releases/latest \
        | grep -oE '\"tag_name\": *\"v[^\"]+\"' \

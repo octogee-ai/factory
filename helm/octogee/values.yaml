@@ -22,6 +22,10 @@ global:
   #     env, used to render Ingress paths at runtime)
   # If you change this value, both consumers update together — no drift.
   fleetControllerPort: "3003"
+  # Short-lived gateway-to-gateway rsync import port. GLM signs one-time
+  # credentials, target opens a temporary rsync daemon on this port, source
+  # streams directly to the target pod IP. Workspace bytes never transit GLM.
+  migrationRsyncPort: "30873"
 
 # Single shared GKE Ingress for the public app hosts. When disabled, the
 # legacy per-host Ingresses render exactly as before. When enabled, this

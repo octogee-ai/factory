@@ -88,6 +88,8 @@ export interface PushStateRequestBody extends MigrationRequestBody {
 
 export type MigrationTransferMode = "keys" | "pre" | "final";
 
+export const MIGRATION_RSYNC_PORT_DEFAULT = 30873;
+
 export interface PrepareImportRequestBody extends MigrationRequestBody {
   mode: MigrationTransferMode;
 }
@@ -111,6 +113,39 @@ export interface ActivationManifestExportResponse {
 }
 
 export interface ActivateImportRequestBody extends MigrationRequestBody {}
+
+export interface PrepareRsyncImportRequestBody extends MigrationRequestBody {
+  mode: MigrationTransferMode;
+  transferUser: string;
+  transferKey: string;
+  sourcePodIp?: string;
+}
+
+export interface PrepareRsyncImportResponse {
+  migrationId: string;
+  slug: string;
+  imported: boolean;
+  host: string;
+  port: number;
+  module: string;
+}
+
+export interface PushRsyncStateRequestBody extends MigrationRequestBody {
+  mode: MigrationTransferMode;
+  targetHost: string;
+  targetPort: number;
+  transferUser: string;
+  transferKey: string;
+  includeActivationManifest?: boolean;
+}
+
+export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
+  mode: MigrationTransferMode;
+}
+
+export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
+  mode: MigrationTransferMode;
+}
 
 export interface QuiesceRequestBody extends MigrationRequestBody {
 

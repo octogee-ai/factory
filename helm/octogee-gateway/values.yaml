@@ -150,6 +150,7 @@ env:
   octogeeRouterEnabled: "true"
   openclawLogLevel: "info"
   fleetControllerPort: "3003"
+  migrationRsyncPort: "30873"
 
 # Preview host the gateway's preview-proxy advertises in URLs it returns
 # to the app. Must match the umbrella's gatewayFleet.previewIngress.host
