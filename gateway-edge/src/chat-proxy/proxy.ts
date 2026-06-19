@@ -1029,6 +1029,8 @@ export async function startChatProxyBackground(): Promise<void> {
     const { startMmCoachEventListeners } = await import('./openclaw/mm-event-listener.js');
     const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
     const { handleReplyAsSteer } = await import('./openclaw/reply-handler.js');
+    const { makeCoachDmHandler } = await import('../notifications/chat-notifier.js');
+    const { fanOutNotification } = await import('../notifications/pipeline.js');
     const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
       const wiredAny = wired as unknown as {
         __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
@@ -1099,6 +1101,11 @@ export async function startChatProxyBackground(): Promise<void> {
           },
         });
       },
+      onCoachDm: makeCoachDmHandler({
+        resolveOwnerUid: ownerOf,
+        fanOut: fanOutNotification,
+        log: bridgeLog,
+      }),
     });
     // One MM WebSocket per tracked coach, each auth'd with that coach's own
     // token (no admin PAT): 1 WS on an operator gateway (single coach), N on a
