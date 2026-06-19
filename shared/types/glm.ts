@@ -291,6 +291,8 @@ export type HelmInstancesMap = Record<string, HelmInstanceValue>;
 
 export const GLM_GATEWAYS_COLLECTION = "glmGateways";
 export const GLM_OPERATIONS_COLLECTION = "glmOperations";
+export const GLM_MIGRATION_TRANSFER_TASKS_COLLECTION =
+  "glmMigrationTransferTasks";
 
 export function isGatewayClass(value: unknown): value is GatewayClass {
   return (

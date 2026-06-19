@@ -122,7 +122,7 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 }
 
 describe("createMigrateCustomerHandler — happy path", () => {
-  it("returns success=true and writes all seven step pairs through ctx.reportStep", async () => {
+  it("returns success=true and writes all migration step pairs through ctx.reportStep", async () => {
     const { deps } = makeDeps();
     const handler = createMigrateCustomerHandler(deps);
     const ctx = makeCtx();
@@ -136,6 +136,8 @@ describe("createMigrateCustomerHandler — happy path", () => {
     const reported = ctx.reported;
     const names = reported.map((s) => `${s.name}:${s.status}`);
     expect(names).toEqual([
+      "keys-sync-state:running",
+      "keys-sync-state:done",
       "restore-target:running",
       "restore-target:done",
       "pre-sync-state:running",
@@ -196,7 +198,7 @@ describe("createMigrateCustomerHandler — happy path", () => {
     expect(client.transferState).toHaveBeenCalledWith(
       expect.objectContaining({ includeActivationManifest: true }),
     );
-    expect(client.transferState).toHaveBeenCalledTimes(2);
+    expect(client.transferState).toHaveBeenCalledTimes(3);
   });
 
   it("skips the activation manifest for operator source gateways", async () => {
@@ -209,7 +211,7 @@ describe("createMigrateCustomerHandler — happy path", () => {
     expect(client.transferState).toHaveBeenCalledWith(
       expect.objectContaining({ includeActivationManifest: false }),
     );
-    expect(client.transferState).toHaveBeenCalledTimes(2);
+    expect(client.transferState).toHaveBeenCalledTimes(3);
   });
 
   it("buildClient's resolver throws on an unexpected gatewayId — no silent default", async () => {
@@ -444,7 +446,7 @@ describe("createMigrateCustomerHandler — failures + rollback", () => {
     let transferCount = 0;
     client.transferState = vi.fn(async ({ migrationId, slug }) => {
       transferCount++;
-      if (transferCount === 2) throw new Error("export: 503 upstream draining");
+      if (transferCount === 3) throw new Error("export: 503 upstream draining");
       return { migrationId, slug, imported: true };
     }) as MigrationClient["transferState"];
 

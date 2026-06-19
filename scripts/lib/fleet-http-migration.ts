@@ -8,7 +8,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   type ImportResponse,
+  type ActivateImportRequestBody,
+  type ActivationManifestExportRequestBody,
+  type ActivationManifestExportResponse,
+  type ExportPathsRequestBody,
+  type ExportPathsResponse,
   type MigrationRequestBody,
+  type PrepareImportRequestBody,
   type PushStateRequestBody,
   type QuiesceRequestBody,
   type QuiesceResponse,
@@ -295,6 +301,165 @@ res.status(404).json({ error: "no export paths", message: `nothing to export for
       } else {
         res.destroy(err instanceof Error ? err : new Error(message));
       }
+    }
+  };
+}
+
+export function createExportPathsHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ExportPathsRequestBody>(
+      req,
+      res,
+      deps.publicKey,
+      log,
+    );
+    if (!body) return;
+
+    try {
+      const allSources = await deps.adapter.listExportPaths(body.slug);
+      const sources = sourcesForPushMode(allSources, body.slug, body.mode);
+      if (sources.length === 0) {
+        res.status(404).json({
+          error: "no export paths",
+          message: `nothing to export for slug=${body.slug} mode=${body.mode}`,
+        });
+        return;
+      }
+      const response: ExportPathsResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        sources,
+      };
+      log(
+        `[migration-http] export-paths mode=${body.mode} migrationId=${body.migrationId} slug=${body.slug} paths=${sources.length}`,
+      );
+      res.status(200).json(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(
+        `[migration-http] ❌ export-paths migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+      );
+      res.status(500).json({ error: "export-paths failed", message });
+    }
+  };
+}
+
+export function createActivationManifestExportHandler(
+  deps: MigrationHandlerDeps,
+): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ActivationManifestExportRequestBody>(
+      req,
+      res,
+      deps.publicKey,
+      log,
+    );
+    if (!body) return;
+
+    try {
+      if (!deps.adapter.exportOpenClawActivationManifest) {
+        throw new Error("source gateway cannot export an OpenClaw activation manifest");
+      }
+      const manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
+      const response: ActivationManifestExportResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        manifest: manifest as unknown as Record<string, unknown>,
+      };
+      log(
+        `[migration-http] activation-manifest migrationId=${body.migrationId} slug=${body.slug} exported`,
+      );
+      res.status(200).json(response);
+    } catch (err) {
+      if (deps.adapter.isOperatorGateway?.() === true) {
+        const response: ActivationManifestExportResponse = {
+          migrationId: body.migrationId,
+          slug: body.slug,
+          manifest: null,
+        };
+        const message = err instanceof Error ? err.message : String(err);
+        log(
+          `[migration-http] activation-manifest migrationId=${body.migrationId} slug=${body.slug} unavailable on operator source: ${message}`,
+        );
+        res.status(200).json(response);
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      log(
+        `[migration-http] ❌ activation-manifest migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+      );
+      res.status(500).json({ error: "activation-manifest failed", message });
+    }
+  };
+}
+
+export function createPrepareImportHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<PrepareImportRequestBody>(
+      req,
+      res,
+      deps.publicKey,
+      log,
+    );
+    if (!body) return;
+
+    try {
+      const importDir = body.mode === "keys"
+        ? await deps.adapter.prepareKeyImportDir(body.slug)
+        : await deps.adapter.prepareImportDir(body.slug);
+      if (body.mode !== "keys") deps.adapter.markCustomerMigratingIn?.(body.slug);
+      log(
+        `[migration-http] prepare-import mode=${body.mode} migrationId=${body.migrationId} slug=${body.slug} dir=${importDir}`,
+      );
+      const response: ImportResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        imported: true,
+      };
+      res.status(200).json(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(
+        `[migration-http] ❌ prepare-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+      );
+      res.status(500).json({ error: "prepare-import failed", message });
+    }
+  };
+}
+
+export function createActivateImportHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ActivateImportRequestBody>(
+      req,
+      res,
+      deps.publicKey,
+      log,
+    );
+    if (!body) return;
+
+    try {
+      deps.adapter.markCustomerMigratingIn?.(body.slug);
+      await deps.adapter.activateImportedCustomer(body.slug);
+      deps.adapter.onMounted?.(body.slug);
+      const response: ImportResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        imported: true,
+      };
+      log(
+        `[migration-http] ✅ activate-import migrationId=${body.migrationId} slug=${body.slug}`,
+      );
+      res.status(200).json(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(
+        `[migration-http] ❌ activate-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+      );
+      res.status(500).json({ error: "activate-import failed", message });
     }
   };
 }

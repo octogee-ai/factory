@@ -4,8 +4,12 @@ import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-ro
 import type { Server } from "http";
 import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "../../shared/types/fleet-controller.js";
 import {
+  createActivateImportHandler,
+  createActivationManifestExportHandler,
   createExportHandler,
+  createExportPathsHandler,
   createImportHandler,
+  createPrepareImportHandler,
   createPushStateHandler,
   createQuiesceHandler,
   createRestoreHandler,
@@ -528,6 +532,14 @@ const waitForGatewayReady = async (): Promise<void> => {
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
   app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
+  app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));
+  app.post(
+    "/export-activation-manifest/:gatewayId",
+    gatewayIdGuard,
+    createActivationManifestExportHandler(migrationDeps),
+  );
+  app.post("/prepare-import/:gatewayId", gatewayIdGuard, createPrepareImportHandler(migrationDeps));
+  app.post("/activate-import/:gatewayId", gatewayIdGuard, createActivateImportHandler(migrationDeps));
   app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));

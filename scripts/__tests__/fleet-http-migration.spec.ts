@@ -5,8 +5,12 @@ import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import {
+  createActivateImportHandler,
+  createActivationManifestExportHandler,
   createExportHandler,
+  createExportPathsHandler,
   createImportHandler,
+  createPrepareImportHandler,
   createPushStateHandler,
   createQuiesceHandler,
   createRestoreHandler,
@@ -25,6 +29,10 @@ import {
   type UnmountRequestBody,
   type MigrationRequestBody,
   type PushStateRequestBody,
+  type ExportPathsRequestBody,
+  type PrepareImportRequestBody,
+  type ActivateImportRequestBody,
+  type ActivationManifestExportRequestBody,
 } from "../../shared/types/fleet-controller.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
@@ -637,6 +645,144 @@ const fakeChild = new EventEmitter() as EventEmitter & {
     ]);
     expect(getStatus()).toBe(200);
     expect(getHeaders()["content-type"]).toBe("application/x-tar");
+  });
+});
+
+describe("queued-rsync migration control handlers", () => {
+  it("createExportPathsHandler filters key-only mode down to the customer key dir", async () => {
+    const adapter = mkAdapter({
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/state", path: "agents/octogee-chris-coach" },
+        { cwd: "/openclaw", path: "customers/chris" },
+        { cwd: "/openclaw", path: "customer-keys/chris" },
+      ]),
+    });
+    const body: ExportPathsRequestBody = {
+      migrationId: "mig-1",
+      slug: "chris",
+      mode: "keys",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createExportPathsHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({
+      migrationId: "mig-1",
+      slug: "chris",
+      sources: [{ cwd: "/openclaw", path: "customer-keys/chris" }],
+    });
+  });
+
+  it("createPrepareImportHandler uses the key-only import prep without stamping migrating-in", async () => {
+    const markCustomerMigratingIn = vi.fn();
+    const adapter = mkAdapter({
+      prepareKeyImportDir: vi.fn(async () => "/openclaw"),
+      prepareImportDir: vi.fn(async () => "/openclaw"),
+      markCustomerMigratingIn,
+    });
+    const body: PrepareImportRequestBody = {
+      migrationId: "mig-1",
+      slug: "chris",
+      mode: "keys",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createPrepareImportHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(adapter.prepareKeyImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).not.toHaveBeenCalled();
+    expect(markCustomerMigratingIn).not.toHaveBeenCalled();
+    expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
+  });
+
+  it("createPrepareImportHandler wipes normal import paths and stamps the migrating-in pin", async () => {
+    const markCustomerMigratingIn = vi.fn();
+    const adapter = mkAdapter({
+      prepareImportDir: vi.fn(async () => "/openclaw"),
+      markCustomerMigratingIn,
+    });
+    const body: PrepareImportRequestBody = {
+      migrationId: "mig-1",
+      slug: "chris",
+      mode: "pre",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createPrepareImportHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+  });
+
+  it("createActivationManifestExportHandler returns the source manifest as signed JSON", async () => {
+    const manifest = {
+      version: 1,
+      slug: "chris",
+      agentId: "octogee-chris-coach",
+      accountId: "chris-coach",
+      agent: { id: "octogee-chris-coach" },
+      mattermostAccount: { botToken: "token" },
+      bindings: [{ agentId: "octogee-chris-coach" }],
+    };
+    const adapter = mkAdapter({
+      exportOpenClawActivationManifest: vi.fn(async () => manifest),
+    });
+    const body: ActivationManifestExportRequestBody = {
+      migrationId: "mig-1",
+      slug: "chris",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createActivationManifestExportHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({ migrationId: "mig-1", slug: "chris", manifest });
+  });
+
+  it("createActivateImportHandler activates and marks the imported customer mounted", async () => {
+    const markCustomerMigratingIn = vi.fn();
+    const onMounted = vi.fn();
+    const adapter = mkAdapter({
+      markCustomerMigratingIn,
+      activateImportedCustomer: vi.fn(async () => undefined),
+      onMounted,
+    });
+    const body: ActivateImportRequestBody = {
+      migrationId: "mig-1",
+      slug: "chris",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createActivateImportHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(onMounted).toHaveBeenCalledWith("chris");
+    expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
   });
 });
 

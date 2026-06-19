@@ -102,6 +102,7 @@ import {
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
 import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
+import { createRsyncMigrationTransfer } from "./lib/migration-rsync-transfer.js";
 import {
   cutoverUserGatewayAndMarkMounted,
   type FleetStateFirestore,
@@ -1186,15 +1187,27 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
 }
 
 function createMigrationClientBuilder(
+  db: Firestore,
   privateKey: string,
   logFn: (msg: string) => void,
 ) {
-  return (resolveSync: (gatewayId: string) => string) =>
-    createMigrationClient({
+  return (resolveSync: (gatewayId: string) => string) => {
+    const client = createMigrationClient({
       privateKey,
       resolveGatewayUrl: resolveSync,
       log: logFn,
     });
+    return {
+      ...client,
+      transferState: createRsyncMigrationTransfer({
+        db,
+        namespace: NAMESPACE,
+        privateKey,
+        resolveGatewayUrl: resolveSync,
+        log: logFn,
+      }),
+    };
+  };
 }
 
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
@@ -1383,6 +1396,7 @@ async function buildHandlers(
     },
     resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
     buildClient: createMigrationClientBuilder(
+      db,
       privateKey,
       logFn,
     ),

@@ -86,6 +86,32 @@ export interface PushStateRequestBody extends MigrationRequestBody {
   mode?: "keys" | "pre" | "final";
 }
 
+export type MigrationTransferMode = "keys" | "pre" | "final";
+
+export interface PrepareImportRequestBody extends MigrationRequestBody {
+  mode: MigrationTransferMode;
+}
+
+export interface ExportPathsRequestBody extends MigrationRequestBody {
+  mode: MigrationTransferMode;
+}
+
+export interface ExportPathsResponse {
+  migrationId: string;
+  slug: string;
+  sources: Array<{ cwd: string; path: string }>;
+}
+
+export interface ActivationManifestExportRequestBody extends MigrationRequestBody {}
+
+export interface ActivationManifestExportResponse {
+  migrationId: string;
+  slug: string;
+  manifest: Record<string, unknown> | null;
+}
+
+export interface ActivateImportRequestBody extends MigrationRequestBody {}
+
 export interface QuiesceRequestBody extends MigrationRequestBody {
 
 timeoutMs?: number;
