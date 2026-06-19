@@ -3,7 +3,10 @@ import request from "supertest";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import * as giteaAdmin from "../lib/gitea-admin.js";
-import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
+import {
+  hasRunningInboundMigrationForSlug,
+  readAssignedSlugsForGateway,
+} from "../../../scripts/lib/assigned-roster.js";
 import giteaAdminRoutes from "../routes/internal/gitea-admin.js";
 
 const mocks = vi.hoisted(() => {
@@ -73,6 +76,7 @@ vi.mock("../lib/db.js", () => ({
 }));
 
 vi.mock("../../../scripts/lib/assigned-roster.js", () => ({
+  hasRunningInboundMigrationForSlug: vi.fn(async () => false),
   readAssignedSlugsForGateway: vi.fn(async () => ["acme"]),
   slugFromAssignedUser: vi.fn((data: Record<string, unknown> | undefined) => {
     const provisioning = data?.provisioning as Record<string, unknown> | undefined;
@@ -121,6 +125,7 @@ describe("internal gitea-admin route", () => {
     vi.clearAllMocks();
     mocks.state.operationDocs.length = 0;
     mocks.state.users.clear();
+    vi.mocked(hasRunningInboundMigrationForSlug).mockResolvedValue(false);
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValue(["acme"]);
   });
 
@@ -162,77 +167,34 @@ describe("internal gitea-admin route", () => {
 
   it("allows the target gateway during a running inbound customer migration", async () => {
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
-    mocks.state.operationDocs.push({
-      kind: "migrate-customer",
-      status: "running",
-      inputUid: "uid-acme",
-      input: {
-        uid: "uid-acme",
-        toGatewayId: "bender",
-      },
-    });
-    mocks.state.users.set("uid-acme", {
-      username: "acme",
-      provisioning: { openclaw: { slug: "acme" } },
-    });
+    vi.mocked(hasRunningInboundMigrationForSlug).mockResolvedValueOnce(true);
 
     const res = await authed(
       request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }),
     );
 
     expect(res.status).toBe(200);
+    expect(hasRunningInboundMigrationForSlug).toHaveBeenCalledWith(
+      expect.anything(),
+      "bender",
+      "acme",
+    );
     expect(giteaAdmin.readGiteaUserPubKey).toHaveBeenCalledWith("acme");
   });
 
-  it("keeps inbound migration allowance scoped to the target gateway and UID slug", async () => {
+  it("denies unassigned slugs when the inbound migration helper does not allow them", async () => {
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
-    mocks.state.operationDocs.push({
-      kind: "migrate-customer",
-      status: "running",
-      inputUid: "uid-acme",
-      input: {
-        uid: "uid-acme",
-        toGatewayId: "other-gateway",
-      },
-    });
-    mocks.state.users.set("uid-acme", {
-      username: "acme",
-      provisioning: { openclaw: { slug: "acme" } },
-    });
 
     const res = await authed(
       request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }),
     );
 
     expect(res.status).toBe(403);
-    expect(giteaAdmin.readGiteaUserPubKey).not.toHaveBeenCalled();
-  });
-
-  it("denies an inbound migration op for a different UID than the requested slug", async () => {
-    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
-    mocks.state.operationDocs.push({
-      kind: "migrate-customer",
-      status: "running",
-      inputUid: "uid-victim",
-      input: {
-        uid: "uid-victim",
-        toGatewayId: "bender",
-      },
-    });
-    mocks.state.users.set("uid-acme", {
-      username: "acme",
-      provisioning: { openclaw: { slug: "acme" } },
-    });
-    mocks.state.users.set("uid-victim", {
-      username: "victim",
-      provisioning: { openclaw: { slug: "victim" } },
-    });
-
-    const res = await authed(
-      request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }),
+    expect(hasRunningInboundMigrationForSlug).toHaveBeenCalledWith(
+      expect.anything(),
+      "bender",
+      "acme",
     );
-
-    expect(res.status).toBe(403);
     expect(giteaAdmin.readGiteaUserPubKey).not.toHaveBeenCalled();
   });
 

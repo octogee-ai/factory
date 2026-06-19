@@ -1,6 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
-import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
+import {
+  hasRunningInboundMigrationForSlug,
+  readAssignedSlugsForGateway,
+} from "../../../scripts/lib/assigned-roster.js";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
@@ -95,8 +98,25 @@ async function slugBelongsToGateway(
   slug: string,
   gatewayId: string,
 ): Promise<boolean> {
-  const slugs = await readAssignedSlugsForGateway(db as Firestore, gatewayId);
+  const slugs = await readAssignedSlugsForGateway(db, gatewayId);
   return slugs.includes(slug);
+}
+
+function routeAllowsInboundMigrationSlug(req: Request): boolean {
+  return req.path === "/internal/gitea" || req.path.startsWith("/internal/gitea/");
+}
+
+async function slugAllowedForRequest(
+  db: Pick<Firestore, "collection">,
+  slug: string,
+  gatewayId: string,
+  req: Request,
+): Promise<boolean> {
+  if (await slugBelongsToGateway(db, slug, gatewayId)) return true;
+  return (
+    routeAllowsInboundMigrationSlug(req) &&
+    hasRunningInboundMigrationForSlug(db, gatewayId, slug)
+  );
 }
 
 async function gatewayBindingAuthorized(
@@ -129,7 +149,7 @@ async function gatewayBindingAuthorized(
   const slugs = requestedSlugs(req);
   if (slugs.length > 0) {
     for (const slug of slugs) {
-      if (!(await slugBelongsToGateway(db, slug, bound.gatewayId))) return false;
+      if (!(await slugAllowedForRequest(db, slug, bound.gatewayId, req))) return false;
     }
     return true;
   }

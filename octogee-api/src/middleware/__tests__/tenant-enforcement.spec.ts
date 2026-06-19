@@ -6,34 +6,50 @@ import { createTenantEnforcementMiddleware } from "../tenant-enforcement.js";
 
 type UserDoc = Record<string, unknown>;
 type FlowDoc = Record<string, unknown>;
+type OperationDoc = Record<string, unknown>;
+
+function valueAtPath(data: Record<string, unknown>, path: string): unknown {
+  let cursor: unknown = data;
+  for (const part of path.split(".")) {
+    if (!cursor || typeof cursor !== "object") return undefined;
+    cursor = (cursor as Record<string, unknown>)[part];
+  }
+  return cursor;
+}
 
 function fakeDb(opts: {
   users: Record<string, UserDoc>;
   flows?: Record<string, FlowDoc>;
+  operations?: Record<string, OperationDoc>;
 }): Pick<Firestore, "collection"> {
   return {
-    collection: (name: string) => ({
-      doc: (id: string) => ({
-        get: async () => ({
-          exists: Object.prototype.hasOwnProperty.call(
-            name === "byosubFlows" ? (opts.flows ?? {}) : opts.users,
-            id,
-          ),
-          data: () => (name === "byosubFlows" ? opts.flows?.[id] : opts.users[id]),
+    collection: (name: string) => {
+      const records =
+        name === "byosubFlows"
+          ? (opts.flows ?? {})
+          : name === "glmOperations"
+            ? (opts.operations ?? {})
+            : opts.users;
+      const query = (filters: Array<{ field: string; value: unknown }> = []) => ({
+        doc: (id: string) => ({
+          get: async () => ({
+            exists: Object.prototype.hasOwnProperty.call(records, id),
+            data: () => records[id],
+          }),
         }),
-      }),
-      where: (_field: string, _op: string, gatewayId: string) => ({
+        where: (field: string, _op: string, value: unknown) =>
+          query([...filters, { field, value }]),
+        limit: () => query(filters),
         get: async () => ({
-          docs: Object.values(opts.users)
-            .filter((data) => {
-              const provisioning = data.provisioning as Record<string, unknown> | undefined;
-              const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
-              return openclaw?.gatewayId === gatewayId;
-            })
-            .map((data) => ({ data: () => data })),
+          docs: Object.entries(records)
+            .filter(([, data]) =>
+              filters.every((filter) => valueAtPath(data, filter.field) === filter.value),
+            )
+            .map(([id, data]) => ({ id, data: () => data })),
         }),
-      }),
-    }),
+      });
+      return query();
+    },
   } as unknown as Pick<Firestore, "collection">;
 }
 
@@ -41,6 +57,7 @@ function app(opts: {
   boundTenant?: Express.Request["boundTenant"];
   users?: Record<string, UserDoc>;
   flows?: Record<string, FlowDoc>;
+  operations?: Record<string, OperationDoc>;
 }) {
   const a = express();
   a.use(express.json());
@@ -64,6 +81,7 @@ function app(opts: {
           },
         },
       flows: opts.flows,
+      operations: opts.operations,
     }),
   });
   const handler = (_req: express.Request, res: express.Response) => res.json({ ok: true });
@@ -71,6 +89,7 @@ function app(opts: {
   a.post("/internal/probe/:uid", enforcement, handler);
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
+  a.get("/internal/gitea/user-pubkey", enforcement, handler);
   return a;
 }
 
@@ -183,6 +202,63 @@ describe("tenant enforcement middleware", () => {
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
+  });
+
+  it("allows Gitea broker slug access during a running inbound customer migration", async () => {
+    const inbound = await request(
+      app({
+        boundTenant: BENDER,
+        operations: {
+          inbound: {
+            kind: "migrate-customer",
+            status: "running",
+            inputUid: "victim",
+            input: { uid: "victim", toGatewayId: "bender" },
+          },
+        },
+      }),
+    )
+      .get("/internal/gitea/user-pubkey")
+      .query({ slug: "victim" });
+
+    const ordinaryRoute = await request(
+      app({
+        boundTenant: BENDER,
+        operations: {
+          inbound: {
+            kind: "migrate-customer",
+            status: "running",
+            inputUid: "victim",
+            input: { uid: "victim", toGatewayId: "bender" },
+          },
+        },
+      }),
+    )
+      .post("/internal/probe")
+      .send({ slug: "victim" });
+
+    expect(inbound.status).toBe(200);
+    expect(ordinaryRoute.status).toBe(403);
+  });
+
+  it("keeps the Gitea inbound migration allowance scoped to the target gateway", async () => {
+    const res = await request(
+      app({
+        boundTenant: BENDER,
+        operations: {
+          inbound: {
+            kind: "migrate-customer",
+            status: "running",
+            inputUid: "victim",
+            input: { uid: "victim", toGatewayId: "other" },
+          },
+        },
+      }),
+    )
+      .get("/internal/gitea/user-pubkey")
+      .query({ slug: "victim" });
+
+    expect(res.status).toBe(403);
   });
 
   it("allows BYOS capture only for flows owned by the bound gateway", async () => {
