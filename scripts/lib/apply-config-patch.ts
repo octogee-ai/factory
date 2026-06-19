@@ -281,6 +281,21 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+export function upsertAgentInFullAgentList(
+  current: unknown,
+  agentId: string,
+  agentEntry: unknown,
+): unknown[] {
+  const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
+  const currentAgents = Array.isArray(list) ? list : [];
+  return [
+    ...currentAgents.filter(
+      (agent) => !(isPlainObject(agent) && agent.id === agentId),
+    ),
+    agentEntry,
+  ];
+}
+
 // Mirrors the gateway's collectBaseArrayPaths (openclaw src/gateway/server-methods/config.ts):
 // null-deleting an object via config.patch trips the destructive-array guard for EVERY array
 // anywhere under the deleted object, each named by exact dot-path. Arrays are terminal — the

@@ -11,7 +11,7 @@ import {
 import {
   applyConfigPatch,
   customerConfigFullAgentListReplacePaths,
-  customerConfigReplacePaths,
+  upsertAgentInFullAgentList,
   type ConfigCache,
 } from "./apply-config-patch.js";
 import {
@@ -268,12 +268,12 @@ async function applyAddCustomerConfigPatch(
           ? currentCfg.bindings.filter((b) => b.agentId !== agentId)
           : [];
         return {
-          agents: { list: [agentEntry] },
+          agents: { list: upsertAgentInFullAgentList(current, agentId, agentEntry) },
           bindings: [...existingBindings, ...bindings],
           channels: { mattermost: { accounts: { [accountId]: accountEntry } } },
         };
       },
-      buildReplacePaths: (current) => customerConfigReplacePaths(current, snapshot.slug),
+      buildReplacePaths: (current) => customerConfigFullAgentListReplacePaths(current, snapshot.slug),
       logPrefix: `[add:${snapshot.slug}]`,
     },
     {

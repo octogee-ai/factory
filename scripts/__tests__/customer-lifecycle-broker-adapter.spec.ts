@@ -6,6 +6,7 @@ import {
   applyConfigPatch,
   customerConfigFullAgentListReplacePaths,
 } from "../lib/apply-config-patch.js";
+import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 
 const mocks = vi.hoisted(() => ({
   readActivationManifest: vi.fn(),
@@ -181,6 +182,68 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
       bindings: [{ agentId: "octogee-ops-eggman" }],
       channels: { mattermost: { accounts: { "alice-coach": null } } },
     });
+    expect(args.buildReplacePaths?.(current)).toEqual(
+      customerConfigFullAgentListReplacePaths(current, "alice"),
+    );
+  });
+});
+
+describe("buildBrokeredLifecycleAdapter add config patch", () => {
+  beforeEach(() => {
+    patchMocks.applyConfigPatch.mockClear();
+  });
+
+  it("preserves unrelated agents while explicitly confirming the full agent list replacement", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const call = vi.mocked(applyConfigPatch).mock.calls.at(-1)!;
+    const args = call[0] as {
+      buildPatch: (current: unknown) => { agents: { list: Array<{ id?: string }> } };
+      buildReplacePaths?: (current: unknown) => string[];
+    };
+    const current = {
+      agents: {
+        list: [
+          { id: "octogee-mac-default" },
+          { id: "octogee-alice-coach", stale: true },
+          { id: "octogee-bob-coach" },
+        ],
+      },
+      bindings: [],
+      channels: {
+        mattermost: { accounts: { "alice-coach": { groupAllowFrom: ["mm-1"] } } },
+      },
+    };
+
+    const patch = args.buildPatch(current);
+    expect(patch.agents.list.map((agent) => agent.id)).toEqual([
+      "octogee-mac-default",
+      "octogee-bob-coach",
+      "octogee-alice-coach",
+    ]);
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );
