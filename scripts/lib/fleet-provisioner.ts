@@ -69,10 +69,14 @@ export interface StartFleetOptions {
   adminMmUserId?: string;
   platformState?: boolean;
   // Read-only observability (seed + report mounted customers, write this
-  // gateway's own liveness heartbeat) — independent of platformState (write-side
-  // provisioning). Defaults true; operator gateways set it true while
-  // platformState stays false. See OPERATOR-GATEWAY-DURABILITY-SPEC §4.
+  // gateway's own liveness heartbeat) — independent of local reconcile.
+  // Defaults true; db-less gateways leave it false and trusted Cowboy writes
+  // the heartbeat from /health.
   reportState?: boolean;
+  /** Run the local assigned-roster reconcile without Firestore state ownership.
+   *  Used by db-less gateway pods; desired roster and state mirrors are brokered
+   *  through octogee-api. */
+  localReconcile?: boolean;
   enableDeviceAuthRoutes?: boolean;
   /** Credential-less local mount reconcile: trusted octogee-api returns the
    * assigned roster for this gateway identity. */
@@ -98,8 +102,9 @@ export interface FleetCapabilities {
   /** Read the assigned roster + write this gateway's own liveness/mounted
    *  heartbeat (observability). Independent of provisioning. */
   reportMounted: boolean;
-  /** Run the write-side platform provisioner: the reconcile loop (ensure/evict)
-   *  + byosub device-auth. Off inside the locked operator boundary. */
+  /** Run the local reconcile loop (ensure/evict). Firestore-backed platform
+   *  provisioning requires platformState+db; db-less pods use localReconcile
+   *  with a brokered roster. */
   provision: boolean;
   /** At least one capability needs Firestore write deps (own heartbeat +
    *  glmGateways mirror). Brokered local reconcile can provision without it. */
@@ -107,16 +112,19 @@ export interface FleetCapabilities {
 }
 
 // The observability-vs-provisioning seam (OPERATOR-GATEWAY-DURABILITY-SPEC §4):
-// operator gateways report (reportState) WITHOUT provisioning (platformState).
-// Both require a Firestore handle, so each capability also gates on hasDb.
+// operator gateways can run brokered local reconcile without platformState.
+// Firestore-backed reporting still gates on hasDb; brokered local reconcile does not.
 export function resolveFleetCapabilities(opts: {
   platformState: boolean;
   reportState: boolean;
+  localReconcile?: boolean;
   hasDb: boolean;
   hasBrokeredRoster?: boolean;
 }): FleetCapabilities {
   const reportMounted = opts.reportState && opts.hasDb;
-  const provision = opts.platformState && (opts.hasDb || opts.hasBrokeredRoster === true);
+  const provision =
+    (opts.platformState && opts.hasDb) ||
+    (opts.localReconcile === true && opts.hasBrokeredRoster === true);
   return {
     reportMounted,
     provision,
@@ -383,6 +391,7 @@ export async function startFleetController(
   const caps = resolveFleetCapabilities({
     platformState,
     reportState,
+    localReconcile: opts.localReconcile === true,
     hasDb: !!opts.db,
     hasBrokeredRoster: !!opts.readDesiredSlugs,
   });

@@ -58,6 +58,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
           gatewayId: "canary",
           imageTag: "def5678",
           image: { repository: REPO },
+          computeClassOverride: "octogee-gateway-spot",
         }),
       },
     ]);
@@ -84,6 +85,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       enabled: true,
       image: { repository: REPO, tag: "def5678" },
       gatewayId: "canary",
+      computeClassOverride: "octogee-gateway-spot",
     });
   });
 
@@ -510,6 +512,25 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     });
 
     expect(calls[0]).toContain("sizingTier=medium");
+  });
+
+  it("passes explicit compute-class override via --set-string", async () => {
+    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
+
+    await runner.upsertInstance({
+      namespace: "octogee",
+      gatewayId: "bender-green",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      chartPath: "/charts/octogee-gateway",
+      computeClassOverride: "octogee-gateway-spot",
+    });
+
+    const idx = calls[0].findIndex(
+      (a, i) => a === "--set-string" && calls[0][i + 1] === "computeClassOverride=octogee-gateway-spot",
+    );
+    expect(idx).toBeGreaterThanOrEqual(0);
   });
 
   it("omits --set sizingTier when undefined (chart falls back to profile default)", async () => {

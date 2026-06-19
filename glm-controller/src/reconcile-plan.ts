@@ -119,6 +119,9 @@ function buildHelmInstanceValue(
     ...(gatewayClass !== "shared" ? { gatewayClass } : {}),
     ...(imageProfile !== "standard" ? { imageProfile, profile: imageProfile } : {}),
     ...(isSizingTier(d.sizingTier) ? { sizingTier: d.sizingTier } : {}),
+    ...(typeof d.computeClass === "string" && d.computeClass.length > 0
+      ? { computeClassOverride: d.computeClass }
+      : {}),
   };
 }
 
@@ -166,6 +169,7 @@ function instanceEqual(
     [a.builderSlug, b.builderSlug],
     [effectiveServiceAccountName(a), effectiveServiceAccountName(b)],
     [a.sizingTier, b.sizingTier],
+    [a.computeClassOverride, b.computeClassOverride],
     [a.replicas, b.replicas],
   ];
   for (const [x, y] of scalars) if (x !== y) return false;

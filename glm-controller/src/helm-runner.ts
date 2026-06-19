@@ -23,6 +23,7 @@ upsertInstance(opts: {
     gatewayContainerSecurityContext?: Record<string, unknown>;
     persistence?: HelmInstancesMap[string]["persistence"];
     operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
+    computeClassOverride?: string;
     chartPath: string;
     valuesFile?: string;
     takeOwnership?: boolean;
@@ -113,6 +114,7 @@ interface PerReleaseValues {
   gatewayContainerSecurityContext?: unknown;
   persistence?: unknown;
   operatorAccess?: unknown;
+  computeClassOverride?: unknown;
   profile?: unknown;
   gatewayClass?: unknown;
   imageProfile?: unknown;
@@ -210,6 +212,9 @@ function readPersonalKnobs(
   if (isPlainObject(v.operatorAccess)) {
     out.operatorAccess = v.operatorAccess as unknown as HelmInstancesMap[string]["operatorAccess"];
   }
+  if (typeof v.computeClassOverride === "string" && v.computeClassOverride.length > 0) {
+    out.computeClassOverride = v.computeClassOverride;
+  }
   if (typeof v.profile === "string" && (v.profile === "standard" || v.profile === "operator")) {
     out.profile = v.profile;
   }
@@ -266,6 +271,7 @@ interface BuildUpgradeArgsOpts {
   gatewayContainerSecurityContext?: Record<string, unknown>;
   persistence?: HelmInstancesMap[string]["persistence"];
   operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
+  computeClassOverride?: string;
   gcpProject?: string;
   valuesFile?: string;
   takeOwnership?: boolean;
@@ -318,6 +324,7 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   }
   if (opts.persistence) pushSetJson(args, "persistence", opts.persistence);
   if (opts.operatorAccess) pushSetJson(args, "operatorAccess", opts.operatorAccess);
+  if (opts.computeClassOverride) args.push(HELM_SET_STRING, `computeClassOverride=${opts.computeClassOverride}`);
   if (opts.gcpProject) args.push(HELM_SET_STRING, `gatewayEdge.env.GCP_PROJECT_ID=${opts.gcpProject}`);
   if (opts.valuesFile) args.push("-f", opts.valuesFile);
   if (opts.takeOwnership) args.push("--take-ownership");

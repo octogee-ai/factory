@@ -41,10 +41,27 @@ describe("sizingTier transition safety (stale Firestore values)", () => {
     expect(map.default.sizingTier).toBe("large");
   });
 
+  it("forwards an explicit computeClass as a per-release chart override", () => {
+    const map = buildInstancesMap([
+      mkDesired({ computeClass: "octogee-gateway-spot" }),
+    ]);
+    expect(map.default.computeClassOverride).toBe("octogee-gateway-spot");
+  });
+
   it("no perpetual update when desired holds a stale tier that actual already dropped", () => {
     const actual = buildInstancesMap([mkDesired({})]);
     const desired = buildHelmTargetMap([mkDesired({ sizingTier: STALE })], actual);
     expect(diffInstancesMap(actual, desired)).toEqual([]);
+  });
+
+  it("detects drift when the desired computeClass override is missing from the release", () => {
+    const actual = buildInstancesMap([mkDesired({})]);
+    const desired = buildHelmTargetMap([
+      mkDesired({ computeClass: "octogee-gateway-spot" }),
+    ], actual);
+    expect(diffInstancesMap(actual, desired)).toEqual([
+      expect.objectContaining({ kind: "update", gatewayId: "default" }),
+    ]);
   });
 });
 

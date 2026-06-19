@@ -307,6 +307,7 @@ async function applyChanges(
       gatewayContainerSecurityContext: change.to.gatewayContainerSecurityContext,
       persistence: change.to.persistence,
       operatorAccess: change.to.operatorAccess,
+      computeClassOverride: change.to.computeClassOverride,
       profile: change.to.profile,
       gatewayClass: change.to.gatewayClass,
       imageProfile: change.to.imageProfile,

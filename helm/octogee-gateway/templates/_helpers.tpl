@@ -91,7 +91,9 @@ the legacy single `.Values.computeClass`.
 */}}
 {{- define "octogee-gateway.computeClass" -}}
 {{- $class := include "octogee-gateway.gatewayClass" . -}}
-{{- if and .Values.computeClassByClass (index .Values.computeClassByClass $class) -}}
+{{- if .Values.computeClassOverride -}}
+{{- .Values.computeClassOverride -}}
+{{- else if and .Values.computeClassByClass (index .Values.computeClassByClass $class) -}}
 {{- index .Values.computeClassByClass $class -}}
 {{- else -}}
 {{- .Values.computeClass | default "Performance" -}}

@@ -85,6 +85,7 @@ interface BuildBrokeredLifecycleAdapterOptions {
   rpc: GatewayRpcClient;
   log: (msg: string) => void;
   adminMmUserId?: string;
+  isOperatorGateway?: () => boolean;
 }
 
 interface BrokerCtx {
@@ -462,7 +463,7 @@ export function buildBrokeredLifecycleAdapter(
   };
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
-    isOperatorGateway: () => false,
+    isOperatorGateway: opts.isOperatorGateway ?? (() => false),
     customerCoachWiredInOpenclawConfig: (slug) =>
       customerCoachWiredInOpenclawConfig(OPENCLAW_CONFIG, slug),
     listLocalCustomerSlugs: () =>

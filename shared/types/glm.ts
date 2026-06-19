@@ -56,6 +56,7 @@ export interface GatewayDesiredState {
   builderSlug?: string;
 
   sizingTier?: SizingTier;
+  computeClass?: string;
 
   modelBrokerLimits?: GatewayModelBrokerLimits;
 }
@@ -281,6 +282,7 @@ export interface HelmInstanceValue {
   builderSlug?: string;
 
   sizingTier?: SizingTier;
+  computeClassOverride?: string;
 
   replicas?: number;
 }

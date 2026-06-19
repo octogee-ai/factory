@@ -100,6 +100,11 @@ gatewayContainerSecurityContext:
 computeClass: "Performance"
 computeClassByClass: {}
 
+# Explicit per-gateway override set by Cowboy from glmGateways/{id}.computeClass.
+# This intentionally sits above computeClassByClass in the helper, while the
+# legacy computeClass remains the environment default.
+computeClassOverride: ""
+
 # Machine-family pin for the bare built-in Performance class. Leave EMPTY
 # when computeClass is a custom class (values.{prod,test}.yaml) — that class
 # already defines its families, and a pin here would fight it. Pinning a

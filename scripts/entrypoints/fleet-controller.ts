@@ -11,7 +11,6 @@ import {
 } from "../lib/config.js";
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
 import { syncAllWorkspaces } from "../lib/git.js";
-import { buildLocalMigrationAdapter } from "../lib/fleet-local-migration-adapter.js";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
 import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
@@ -39,15 +38,14 @@ async function main(): Promise<void> {
     throw new Error("fleet controller public key unavailable: expected FLEET_CONTROLLER_PUBLIC_KEY");
   }
   const operator = isOperatorGateway();
-  const brokerClient = operator ? null : createFleetBrokerClient(MY_GATEWAY_ID);
-  const adapter = operator
-    ? buildLocalMigrationAdapter({ rpc, log })
-    : buildBrokeredLifecycleAdapter({
-        client: brokerClient!,
-        rpc,
-        log,
-        adminMmUserId: process.env.MM_ADMIN_USER_ID,
-      });
+  const brokerClient = createFleetBrokerClient(MY_GATEWAY_ID);
+  const adapter = buildBrokeredLifecycleAdapter({
+    client: brokerClient,
+    rpc,
+    log,
+    adminMmUserId: process.env.MM_ADMIN_USER_ID,
+    isOperatorGateway,
+  });
   const fleetHandle = await startFleetController({
     rpc,
     adapter,
@@ -59,26 +57,20 @@ async function main(): Promise<void> {
     openclawVersion,
     openclawDir: OPENCLAW_DIR,
     platformState: !operator,
-    readDesiredSlugs: operator
-      ? undefined
-      : async () => {
-          const users = await brokerClient!.assignedUsers({ completeOnly: false });
-          return users.map((user) => user.slug);
-        },
-    stampMounted: operator
-      ? undefined
-      : (uid, mounted) => brokerClient!.setMounted(uid, mounted),
-    recordReconcileError: operator
-      ? undefined
-      : (slug, message) => brokerClient!.recordReconcileError(slug, message),
-    clearReconcileError: operator
-      ? undefined
-      : (slug) => brokerClient!.clearReconcileError(slug),
+    localReconcile: true,
+    readDesiredSlugs: async () => {
+      const users = await brokerClient.assignedUsers({ completeOnly: false });
+      return users.map((user) => user.slug);
+    },
+    stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
+    recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
+    clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),
     // Db-less: gateway pods hold NO Firestore credentials. Cowboy polls
-    // /health and writes gateways/{id} on the trusted side. Standard pods run
+    // /health and writes gateways/{id} on the trusted side. Gateway pods run
     // only the local mount reconcile from brokered assigned snapshots; all
     // trusted-side provisioning mutations go through octogee-api.
     reportState: false,
+    enableDeviceAuthRoutes: !operator,
     internalServiceKey: "",
   });
 
