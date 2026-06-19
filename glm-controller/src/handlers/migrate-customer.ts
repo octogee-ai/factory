@@ -1,4 +1,9 @@
-import type { Operation, OperationStep, StepStatus } from "../../../shared/types/glm";
+import type {
+  GatewayImageProfile,
+  Operation,
+  OperationStep,
+  StepStatus,
+} from "../../../shared/types/glm";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { MigrationClient } from "../../../scripts/lib/fleet-migration-client.js";
 import {
@@ -35,6 +40,8 @@ export interface UserGatewayInfo {
 export interface MigrateCustomerDeps {
   
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
+
+  readGatewayImageProfile: (gatewayId: string) => Promise<GatewayImageProfile>;
   
   cutoverFirestore: (uid: string, toGatewayId: string, slug: string) => Promise<void>;
 
@@ -105,12 +112,20 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       const migrationId = deps.genMigrationId();
       let fromUrl: string;
       let toUrl: string;
+      let sourceImageProfile: GatewayImageProfile;
       try {
         fromUrl = await deps.resolveGatewayUrl(user.currentGatewayId);
         toUrl = await deps.resolveGatewayUrl(toGatewayId);
+        sourceImageProfile = await deps.readGatewayImageProfile(user.currentGatewayId);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { steps: [], success: false, error: message };
+      }
+      const includeActivationManifest = sourceImageProfile !== "operator";
+      if (!includeActivationManifest) {
+        deps.log(
+          `[migrate-customer] skipping customer activation manifest for operator source gateway=${user.currentGatewayId} slug=${user.slug}`,
+        );
       }
       const urls = new Map<string, string>([
         [user.currentGatewayId, fromUrl],
@@ -133,7 +148,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           slug: user.slug,
           fromGatewayId: user.currentGatewayId,
           toGatewayId,
-          includeActivationManifest: true,
+          includeActivationManifest,
         },
         {
           client,

@@ -61,6 +61,35 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(restoreBlock).toMatch(/!= "shared"/);
     expect(restoreBlock).toMatch(/GATEWAY_BUILDER_SLUG/);
   });
+
+  it("exports a builder-stable operator agent id before openclaw.template envsubst", () => {
+    const agentSlugIdx = entrypoint.indexOf("OPERATOR_AGENT_SLUG=");
+    const agentIdIdx = entrypoint.indexOf("OPERATOR_AGENT_ID=");
+    const envsubstIdx = entrypoint.indexOf("envsubst < /octogee/infra/gateway/openclaw.template.json");
+    expect(agentSlugIdx).toBeGreaterThan(-1);
+    expect(agentIdIdx).toBeGreaterThan(-1);
+    expect(envsubstIdx).toBeGreaterThan(-1);
+    expect(agentSlugIdx).toBeLessThan(envsubstIdx);
+    expect(agentIdIdx).toBeLessThan(envsubstIdx);
+
+    const opsBlock = entrypoint.slice(
+      entrypoint.indexOf("Provision ops-agent workspace"),
+      entrypoint.indexOf("Operator-profile: Claude Code first-run stamp"),
+    );
+    expect(opsBlock).toMatch(/OPS_AGENT_ID="\$\{OPERATOR_AGENT_ID\}"/);
+  });
+
+  it("runs pre-boot env patches without requiring the removed Firebase SA key", () => {
+    const prebootIdx = entrypoint.indexOf("entrypoints/pre-boot-config.ts");
+    expect(prebootIdx).toBeGreaterThan(-1);
+    const prebootBlock = entrypoint.slice(
+      entrypoint.lastIndexOf("if [", prebootIdx),
+      prebootIdx + 220,
+    );
+    expect(prebootBlock).toMatch(/openclaw\.json/);
+    expect(prebootBlock).not.toMatch(/SA_KEY_PATH/);
+    expect(prebootBlock).not.toMatch(/octogee-test-sa-key\.json/);
+  });
 });
 
 describe("infra/gateway/entrypoint.sh — operator-profile boot hooks", () => {

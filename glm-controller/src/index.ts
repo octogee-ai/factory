@@ -1232,6 +1232,13 @@ async function buildHandlers(
       if (!slug || !currentGatewayId) return null;
       return { slug, currentGatewayId };
     },
+    readGatewayImageProfile: async (gatewayId) => {
+      const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+      if (!doc.exists) {
+        throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
+      }
+      return resolveGatewayImageProfile((doc.data() as GatewayDesiredState | undefined) ?? {});
+    },
     cutoverFirestore: async (uid, toGatewayId, slug) => {
       await cutoverUserGatewayAndMarkMounted(
         {

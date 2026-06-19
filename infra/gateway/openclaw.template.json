@@ -73,10 +73,10 @@
     },
     "list": [
       {
-        "id": "octogee-ops-${GATEWAY_ID}",
-        "name": "Mac (${GATEWAY_ID})",
+        "id": "${OPERATOR_AGENT_ID}",
+        "name": "Mac (${OPERATOR_AGENT_SLUG})",
         "workspace": "/home/node/.openclaw/workspace/ops",
-        "agentDir": "/home/node/.openclaw/agents/octogee-ops-${GATEWAY_ID}/agent",
+        "agentDir": "/home/node/.openclaw/agents/${OPERATOR_AGENT_ID}/agent",
         "model": "anthropic/claude-sonnet-4-6",
         "heartbeat": {
           "every": "30m"

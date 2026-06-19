@@ -5,6 +5,7 @@ import {
   buildGitconfigContent,
   hydrateGitIdentity,
   pickSoleTenantSlug,
+  preBootFirestoreEnabled,
   slugFromCoachAgentId,
   withTimeout,
 } from "../entrypoints/pre-boot-config.js";
@@ -132,7 +133,7 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — Anthropic broker base URL", () => {
-  it("syncs ANTHROPIC_BASE_URL into the default Anthropic auth profile", () => {
+  it("syncs ANTHROPIC_BASE_URL into the Anthropic model provider config", () => {
     const config: any = {
       auth: {
         profiles: {
@@ -152,8 +153,59 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
     expect(config.auth.profiles["anthropic:default"]).toMatchObject({
       provider: "anthropic",
       mode: "api_key",
-      baseUrl: "http://llm-broker.octogee-test.svc.cluster.local:3010",
     });
+    expect(config.auth.profiles["anthropic:default"].baseUrl).toBeUndefined();
+    expect(config.models.providers.anthropic.baseUrl).toBe(
+      "http://llm-broker.octogee-test.svc.cluster.local:3010",
+    );
+  });
+
+  it("syncs ANTHROPIC_BASE_URL even when no Firebase credential is present", () => {
+    const config: any = {
+      auth: {
+        profiles: {
+          "anthropic:default": {
+            provider: "anthropic",
+            mode: "api_key",
+          },
+        },
+      },
+    };
+
+    expect(preBootFirestoreEnabled({}, () => false)).toBe(false);
+
+    const changed = applyPreBootPatches(config, {
+      ANTHROPIC_BASE_URL: "http://llm-broker.octogee-test.svc.cluster.local:3010",
+    });
+
+    expect(changed).toBe(true);
+    expect(config.models.providers.anthropic.baseUrl).toBe(
+      "http://llm-broker.octogee-test.svc.cluster.local:3010",
+    );
+  });
+
+  it("removes stale auth-profile baseUrl because OpenClaw validates provider URLs under models.providers", () => {
+    const config: any = {
+      auth: {
+        profiles: {
+          "anthropic:default": {
+            provider: "anthropic",
+            mode: "api_key",
+            baseUrl: "https://api.anthropic.com",
+          },
+        },
+      },
+    };
+
+    const changed = applyPreBootPatches(config, {
+      ANTHROPIC_BASE_URL: "http://llm-broker.octogee-test.svc.cluster.local:3010",
+    });
+
+    expect(changed).toBe(true);
+    expect(config.auth.profiles["anthropic:default"].baseUrl).toBeUndefined();
+    expect(config.models.providers.anthropic.baseUrl).toBe(
+      "http://llm-broker.octogee-test.svc.cluster.local:3010",
+    );
   });
 
   it("does not add Anthropic baseUrl when the broker env is absent", () => {
@@ -171,6 +223,27 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
     applyPreBootPatches(config, {});
 
     expect(config.auth.profiles["anthropic:default"].baseUrl).toBeUndefined();
+    expect(config.models?.providers?.anthropic?.baseUrl).toBeUndefined();
+  });
+});
+
+describe("preBootFirestoreEnabled", () => {
+  it("stays off for db-less gateways without an explicit credential file", () => {
+    expect(preBootFirestoreEnabled({}, () => false)).toBe(false);
+  });
+
+  it("turns on when SA_KEY_PATH points at an existing credential file", () => {
+    expect(
+      preBootFirestoreEnabled(
+        { SA_KEY_PATH: "/var/secrets/firebase.json" },
+        (p) => p === "/var/secrets/firebase.json",
+      ),
+    ).toBe(true);
+  });
+
+  it("honors explicit operator overrides", () => {
+    expect(preBootFirestoreEnabled({ OCTOGEE_PREBOOT_FIRESTORE: "true" }, () => false)).toBe(true);
+    expect(preBootFirestoreEnabled({ OCTOGEE_PREBOOT_FIRESTORE: "false" }, () => true)).toBe(false);
   });
 });
 

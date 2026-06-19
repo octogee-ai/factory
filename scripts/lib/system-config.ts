@@ -108,6 +108,87 @@ function preserveDefaultMattermostBotToken(
   restoredMattermost.accounts = accounts;
 }
 
+function operatorAgentSlug(env: NodeJS.ProcessEnv): string {
+  return env.OPERATOR_AGENT_SLUG ?? env.GATEWAY_BUILDER_SLUG ?? env.GATEWAY_ID ?? "";
+}
+
+function operatorAgentId(env: NodeJS.ProcessEnv): string {
+  const explicit = env.OPERATOR_AGENT_ID;
+  if (explicit && explicit.length > 0) return explicit;
+  const slug = operatorAgentSlug(env);
+  return slug.length > 0 ? `octogee-ops-${slug}` : "";
+}
+
+function restoreEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const slug = operatorAgentSlug(env);
+  const agentId = operatorAgentId(env);
+  return {
+    ...env,
+    ...(slug ? { OPERATOR_AGENT_SLUG: slug } : {}),
+    ...(agentId ? { OPERATOR_AGENT_ID: agentId } : {}),
+  };
+}
+
+function recordString(record: UnknownRecord, key: string): string {
+  const value = record[key];
+  return typeof value === "string" ? value : "";
+}
+
+function isOperatorAgentIdentity(
+  agent: UnknownRecord,
+  params: { legacyId: string; expectedId: string },
+): boolean {
+  const id = recordString(agent, "id");
+  const agentDir = recordString(agent, "agentDir");
+  return (
+    id === params.legacyId ||
+    id === params.expectedId ||
+    agentDir.includes(`/agents/${params.legacyId}/`)
+  );
+}
+
+function rewriteOperatorAgentIdentity(
+  agent: UnknownRecord,
+  params: {
+    expectedId: string;
+    expectedSlug: string;
+    legacyGatewayId: string;
+    legacyId: string;
+  },
+): void {
+  agent.id = params.expectedId;
+  if (recordString(agent, "name") === `Mac (${params.legacyGatewayId})`) {
+    agent.name = `Mac (${params.expectedSlug})`;
+  }
+  const agentDir = recordString(agent, "agentDir");
+  if (agentDir.length > 0) {
+    agent.agentDir = agentDir.replace(
+      `/agents/${params.legacyId}/`,
+      `/agents/${params.expectedId}/`,
+    );
+  }
+}
+
+function normalizeOperatorAgentIdentity(restored: UnknownRecord, env: NodeJS.ProcessEnv): void {
+  const expectedSlug = operatorAgentSlug(env);
+  const expectedId = operatorAgentId(env);
+  const legacyGatewayId = env.GATEWAY_ID;
+  if (!expectedSlug || !expectedId || !legacyGatewayId) return;
+
+  const agents = asRecord(restored.agents);
+  const list = agents?.list;
+  if (!Array.isArray(list)) return;
+
+  const legacyId = `octogee-ops-${legacyGatewayId}`;
+  const params = { expectedId, expectedSlug, legacyGatewayId, legacyId };
+  for (const entry of list) {
+    const agent = asRecord(entry);
+    if (!agent) continue;
+    if (!isOperatorAgentIdentity(agent, params)) continue;
+    rewriteOperatorAgentIdentity(agent, params);
+  }
+}
+
 async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): Promise<void> {
   const pubKey = generateCustomerSshKey(slug);
   await createGiteaUser(slug, pubKey);
@@ -171,10 +252,12 @@ function restoreOpenClawConfig(
   runtimeConfigPath: string,
   env: NodeJS.ProcessEnv,
 ): void {
-  const expanded = expandEnvPlaceholders(fs.readFileSync(repoConfigPath, "utf-8"), env);
+  const envForRestore = restoreEnv(env);
+  const expanded = expandEnvPlaceholders(fs.readFileSync(repoConfigPath, "utf-8"), envForRestore);
   const restored = JSON.parse(expanded) as Record<string, unknown>;
   const currentRuntime = readJsonFile(runtimeConfigPath);
   preserveDefaultMattermostBotToken(restored, currentRuntime);
+  normalizeOperatorAgentIdentity(restored, envForRestore);
   atomicWrite(runtimeConfigPath, `${JSON.stringify(restored, null, 2)}\n`);
 }
 

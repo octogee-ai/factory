@@ -123,10 +123,17 @@ fi
 # ── End operator-env ───────────────────────────────────────────────────────
 
 # GATEWAY_ID is set by the deployment's env block; `export` makes it visible
-# to envsubst below. Fail fast if it's missing — the template references it
-# and a silently-empty substitution would yield `octogee-ops-` as the agent
-# id (broken on both the K8s side and OpenClaw's agent routing).
+# to envsubst below. Fail fast if it's missing.
 export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
+
+# Operator blue/green uses a different transient gatewayId for the green pod,
+# but the agent identity must stay stable for session transfer. Builder/operator
+# classes carry GATEWAY_BUILDER_SLUG; shared gateways fall back to GATEWAY_ID.
+OPERATOR_AGENT_SLUG="${GATEWAY_BUILDER_SLUG:-$GATEWAY_ID}"
+export OPERATOR_AGENT_SLUG
+OPERATOR_AGENT_ID="octogee-ops-${OPERATOR_AGENT_SLUG}"
+export OPERATOR_AGENT_ID
+
 if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
   envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
   chmod 600 "$OPENCLAW_DIR/openclaw.json"
@@ -260,10 +267,10 @@ fi
 # ── Provision ops-agent workspace + agent dirs ──────────────────────────────
 # Workspace (SOUL.md et al.) is shared across all gateways — it's the ops
 # agent's personality and runbook, not per-gateway state.
-# agentDir (agents/octogee-ops-{gatewayId}/{agent,sessions}) IS per-gateway
-# and must exist before OpenClaw boots, otherwise the doctor silently
+# agentDir (agents/${OPERATOR_AGENT_ID}/{agent,sessions}) is stable across
+# blue/green gatewayIds and must exist before OpenClaw boots, otherwise the doctor silently
 # creates `sessions/` later and logs it as a reconciliation event.
-OPS_AGENT_ID="octogee-ops-${GATEWAY_ID}"
+OPS_AGENT_ID="${OPERATOR_AGENT_ID}"
 OPS_WS="$OPENCLAW_DIR/workspace/ops"
 OPS_AGENT_DIR="$OPENCLAW_DIR/agents/$OPS_AGENT_ID"
 if [ ! -f "$OPS_WS/SOUL.md" ] && [ -d "$TEMPLATES_DIR/ops-workspace" ]; then
@@ -376,11 +383,13 @@ else
   log "⚠ Codex plugin: /opt/openclaw-codex-deps absent — codex harness unavailable"
 fi
 
-# ── Pre-boot: seed restart-triggering config from Firestore ─────────────
-# Queries advisory slugs + enforcement overrides BEFORE OpenClaw starts,
-# so the gateway boots with complete plugin config (no post-boot SIGUSR1).
-if [ -f "$OPENCLAW_DIR/openclaw.json" ] && [ -f "${SA_KEY_PATH:-$OPENCLAW_DIR/secrets/octogee-test-sa-key.json}" ]; then
-  log "Pre-boot: seeding plugin config from Firestore..."
+# ── Pre-boot: sync env/runtime config into openclaw.json ─────────────────
+# Must run on db-less builder/operator gateways too: system_config restore can
+# bring back an old auth profile, but ANTHROPIC_BASE_URL is env-owned and is
+# what keeps capped broker tokens from being sent directly to Anthropic.
+# pre-boot-config.ts gates its optional Firestore-backed overrides internally.
+if [ -f "$OPENCLAW_DIR/openclaw.json" ]; then
+  log "Pre-boot: applying env/runtime config patches..."
   /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 

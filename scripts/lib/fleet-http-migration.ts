@@ -297,10 +297,28 @@ async function maybeMaterializeActivationManifest(
   if (body.includeActivationManifest !== true) {
     return { source: null, cleanup: async () => undefined };
   }
+  if (deps.adapter.isOperatorGateway?.() === true) {
+    deps.log?.(
+      `[migration-http] skipping customer activation manifest for operator slug=${body.slug}; transferring local operator state only`,
+    );
+    return { source: null, cleanup: async () => undefined };
+  }
   if (!deps.adapter.exportOpenClawActivationManifest) {
     throw new Error("source gateway cannot export an OpenClaw activation manifest");
   }
-  const manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
+  let manifest: Awaited<ReturnType<NonNullable<CustomerLifecycleAdapter["exportOpenClawActivationManifest"]>>>;
+  try {
+    manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
+  } catch (err) {
+    if (deps.adapter.isOperatorGateway?.() === true) {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.log?.(
+        `[migration-http] no customer activation manifest for operator slug=${body.slug}; continuing with local state only: ${message}`,
+      );
+      return { source: null, cleanup: async () => undefined };
+    }
+    throw err;
+  }
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-activation-${body.migrationId}-`));
   try {
     const source = await writeActivationManifest(tmpDir, manifest);
@@ -681,6 +699,7 @@ export function findPathTraversalViolation(
 ): string | null {
   const allowedPrefixes = [
     `agents/octogee-${slug}-coach/`,
+    `agents/octogee-ops-${slug}/`,
     `customers/${slug}/`,
     `customer-keys/${slug}/`,
     `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
@@ -697,7 +716,7 @@ if (entry.split("/").includes("..")) {
     }
     const allowed = allowedPrefixes.some((p) => entry === p.slice(0, -1) || entry.startsWith(p));
     if (!allowed) {
-      return `path '${raw}' is outside the per-slug allowlist (agents/octogee-${slug}-coach, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug})`;
+      return `path '${raw}' is outside the per-slug allowlist (agents/octogee-${slug}-coach, agents/octogee-ops-${slug}, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug})`;
     }
   }
   return null;

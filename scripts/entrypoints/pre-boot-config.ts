@@ -104,7 +104,7 @@ if (mm.accounts && typeof mm.accounts === "object") {
     }
   }
 
-  if (envAnthropicBaseUrl) {
+if (envAnthropicBaseUrl) {
     config.auth ??= {};
     config.auth.profiles ??= {};
     config.auth.profiles["anthropic:default"] ??= {
@@ -113,10 +113,31 @@ if (mm.accounts && typeof mm.accounts === "object") {
     };
     const anthropic = config.auth.profiles["anthropic:default"];
     if (anthropic && typeof anthropic === "object") {
-      if (anthropic.baseUrl !== envAnthropicBaseUrl) {
-        anthropic.baseUrl = envAnthropicBaseUrl;
+      if (anthropic.baseUrl !== undefined) {
+        delete anthropic.baseUrl;
         changed = true;
-        logFn(`Anthropic baseUrl synced from ANTHROPIC_BASE_URL env var`);
+        logFn(`removed stale auth.profiles.anthropic:default.baseUrl (OpenClaw expects provider baseUrl)`);
+      }
+    }
+    config.models ??= {};
+    if (!config.models || typeof config.models !== "object" || Array.isArray(config.models)) {
+      config.models = {};
+    }
+    config.models.providers ??= {};
+    if (
+      !config.models.providers ||
+      typeof config.models.providers !== "object" ||
+      Array.isArray(config.models.providers)
+    ) {
+      config.models.providers = {};
+    }
+    config.models.providers.anthropic ??= {};
+    const anthropicProvider = config.models.providers.anthropic;
+    if (anthropicProvider && typeof anthropicProvider === "object") {
+      if (anthropicProvider.baseUrl !== envAnthropicBaseUrl) {
+        anthropicProvider.baseUrl = envAnthropicBaseUrl;
+        changed = true;
+        logFn(`Anthropic provider baseUrl synced from ANTHROPIC_BASE_URL env var`);
       }
     }
   }
@@ -329,6 +350,28 @@ let alreadyPresent = false;
   }
 }
 
+export function preBootFirestoreEnabled(
+  env: NodeJS.ProcessEnv,
+  fileExists: (p: string) => boolean = fs.existsSync,
+): boolean {
+  if (env.OCTOGEE_PREBOOT_FIRESTORE === "true") return true;
+  if (env.OCTOGEE_PREBOOT_FIRESTORE === "false") return false;
+
+  const candidates = [
+    env.GOOGLE_APPLICATION_CREDENTIALS,
+    env.SA_KEY_PATH,
+    path.join(OPENCLAW_DIR, "secrets/octogee-test-sa-key.json"),
+  ].filter((p): p is string => typeof p === "string" && p.trim().length > 0);
+
+  return candidates.some((p) => {
+    try {
+      return fileExists(p);
+    } catch {
+      return false;
+    }
+  });
+}
+
 async function applyGlmDesiredState(
   config: Record<string, unknown>,
   logFn: (msg: string) => void,
@@ -399,7 +442,13 @@ let configRaw: string;
   }
   const config = JSON.parse(configRaw);
 
-  const overridesChanged = await applyGlmDesiredState(config, log);
+  const firestoreEnabled = preBootFirestoreEnabled(process.env);
+  const overridesChanged = firestoreEnabled
+    ? await applyGlmDesiredState(config, log)
+    : false;
+  if (!firestoreEnabled) {
+    log("Firestore-backed pre-boot state skipped (db-less gateway); applying env/runtime patches only");
+  }
 
   const policyChanged = applyPreBootPatches(config, process.env, log);
 
@@ -413,11 +462,12 @@ let configRaw: string;
 try {
     const homeDir = process.env.HOME ?? "/home/node";
     const gitconfigPath = path.join(homeDir, ".gitconfig");
-    const { db } = await import("../lib/firebase.js");
+    const db = firestoreEnabled ? (await import("../lib/firebase.js")).db : null;
     await hydrateGitIdentity({
       gitconfigPath,
       agentIds: agentIdsFromConfig(config),
       fetchUserBySlug: async (slug) => {
+        if (!db) return null;
 
 const tryByField = async (
           field: string,

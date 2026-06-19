@@ -57,6 +57,7 @@ function makeDeps(
       slug: "alice",
       currentGatewayId: "gw-blue",
     })),
+    readGatewayImageProfile: vi.fn(async () => "standard" as const),
     cutoverFirestore: vi.fn(async (_uid: string, _to: string, _slug: string) => undefined),
     resolveGatewayUrl: vi.fn(async (gw: string) => `http://test/${gw}`),
     buildClient: vi.fn((_resolveSync: (gw: string) => string) => client),
@@ -139,13 +140,25 @@ describe("createMigrateCustomerHandler — happy path", () => {
     expect(deps.buildClient).toHaveBeenCalledTimes(1);
   });
 
-  it("requests an activation manifest for every migration target", async () => {
+  it("requests an activation manifest for standard source gateways", async () => {
     const { deps, client } = makeDeps();
     const handler = createMigrateCustomerHandler(deps);
     await handler(mkOp({}), makeCtx());
 
     expect(client.transferState).toHaveBeenCalledWith(
       expect.objectContaining({ includeActivationManifest: true }),
+    );
+  });
+
+  it("skips the activation manifest for operator source gateways", async () => {
+    const { deps, client } = makeDeps({
+      readGatewayImageProfile: vi.fn(async () => "operator" as const),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+    await handler(mkOp({}), makeCtx());
+
+    expect(client.transferState).toHaveBeenCalledWith(
+      expect.objectContaining({ includeActivationManifest: false }),
     );
   });
 

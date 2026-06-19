@@ -85,7 +85,7 @@ describe("system_config restore", () => {
     fs.writeFileSync(
       templatePath,
       JSON.stringify({
-        agents: { list: [{ id: "octogee-ops-${GATEWAY_ID}" }] },
+        agents: { list: [{ id: "${OPERATOR_AGENT_ID}" }] },
         channels: {
           mattermost: {
             baseUrl: "${MM_URL}",
@@ -100,7 +100,14 @@ describe("system_config restore", () => {
       openclawDir,
       runtimeConfigPath,
       templatePath,
-      env: { GATEWAY_ID: "bender", MM_URL: "http://mm", MM_BOT_TOKEN: "" },
+      env: {
+        GATEWAY_ID: "bender-green",
+        GATEWAY_BUILDER_SLUG: "bender",
+        OPERATOR_AGENT_SLUG: "bender",
+        OPERATOR_AGENT_ID: "octogee-ops-bender",
+        MM_URL: "http://mm",
+        MM_BOT_TOKEN: "",
+      },
       log: () => {},
     });
 
@@ -114,12 +121,47 @@ describe("system_config restore", () => {
       repoDir,
       "commit -m \"initial system_config openclaw template\"",
     );
-    expect(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8")).toContain("${GATEWAY_ID}");
+    expect(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8")).toContain("${OPERATOR_AGENT_ID}");
 
     const runtime = JSON.parse(fs.readFileSync(runtimeConfigPath, "utf-8"));
     expect(runtime.agents.list[0].id).toBe("octogee-ops-bender");
     expect(runtime.channels.mattermost.baseUrl).toBe("http://mm");
     expect(runtime.channels.mattermost.accounts.default.botToken).toBe("minted-mac-pat");
+  });
+
+  it("normalizes legacy GATEWAY_ID ops-agent placeholders to builder-stable identity", async () => {
+    writeJson(runtimeConfigPath, {});
+    writeJson(path.join(repoDir, "openclaw.json"), {
+      agents: {
+        list: [
+          {
+            id: "octogee-ops-${GATEWAY_ID}",
+            name: "Mac (${GATEWAY_ID})",
+            agentDir: "/home/node/.openclaw/agents/octogee-ops-${GATEWAY_ID}/agent",
+          },
+        ],
+      },
+    });
+
+    await restoreSystemConfigForSlug("eggman", {
+      openclawDir,
+      runtimeConfigPath,
+      templatePath,
+      env: {
+        GATEWAY_ID: "eggman-green",
+        GATEWAY_BUILDER_SLUG: "eggman",
+        OPERATOR_AGENT_SLUG: "eggman",
+        OPERATOR_AGENT_ID: "octogee-ops-eggman",
+      },
+      log: () => {},
+    });
+
+    const runtime = JSON.parse(fs.readFileSync(runtimeConfigPath, "utf-8"));
+    expect(runtime.agents.list[0]).toMatchObject({
+      id: "octogee-ops-eggman",
+      name: "Mac (eggman)",
+      agentDir: "/home/node/.openclaw/agents/octogee-ops-eggman/agent",
+    });
   });
 
   it("restores an existing repo config without reseeding", async () => {

@@ -537,6 +537,50 @@ describe("createPushStateHandler", () => {
     expect(args).toContain(".octogee-migration-activation/chris/activation.json");
   });
 
+  it("skips customer activation manifests for operator gateway state transfer", async () => {
+    const exportOpenClawActivationManifest = vi.fn(async () => {
+      throw new Error("[migration-activation:eggman] activation manifest agent missing or mismatched");
+    });
+    const adapter = mkAdapter({
+      isOperatorGateway: vi.fn(() => true),
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/state", path: "agents/octogee-ops-eggman" },
+      ]),
+      exportOpenClawActivationManifest,
+    });
+    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
+    spawnMock.mockReturnValueOnce(fakeChild);
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(await readRequestBody(init?.body)).toBe("tar-bytes");
+      return new Response(
+        JSON.stringify({ migrationId: "mig-operator", slug: "eggman", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const body: PushStateRequestBody = {
+      migrationId: "mig-operator",
+      slug: "eggman",
+      targetGatewayId: "eggman-green",
+      targetUrl: "http://target-gateway:18789",
+      targetImportSignature: "target-import-sig",
+      includeActivationManifest: true,
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({ migrationId: "mig-operator", slug: "eggman", imported: true });
+    expect(exportOpenClawActivationManifest).not.toHaveBeenCalled();
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).toContain("agents/octogee-ops-eggman");
+    expect(args).not.toContain(".octogee-migration-activation/eggman/activation.json");
+  });
+
   it("rejects a missing targetGatewayId before spawning tar", async () => {
     const body = { migrationId: "mig-1", slug: "chris", targetUrl: "http://target" };
     const rawBody = JSON.stringify(body);
@@ -909,6 +953,29 @@ await activateStarted;
     expect(getStatus()).toBe(500);
     expect((getBody() as { error?: string }).error).toBe("import failed");
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+  });
+});
+
+describe("findPathTraversalViolation — operator agent transfer", () => {
+  it("allows the slug-scoped operator ops-agent directory", () => {
+    expect(
+      findPathTraversalViolation(
+        [
+          "agents/octogee-ops-eggman",
+          "agents/octogee-ops-eggman/sessions/sessions.json",
+        ],
+        "eggman",
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects another operator agent directory", () => {
+    expect(
+      findPathTraversalViolation(
+        ["agents/octogee-ops-bender/sessions/sessions.json"],
+        "eggman",
+      ),
+    ).toContain("outside the per-slug allowlist");
   });
 });
 
