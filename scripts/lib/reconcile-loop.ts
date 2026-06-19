@@ -125,10 +125,22 @@ export interface StartReconcileLoopOptions extends ReconcileLoopDeps {
 }
 
 export function startReconcileLoop(opts: StartReconcileLoopOptions): () => void {
+  let running = false;
   const tick = () => {
-    reconcileFleet(opts).catch((err) => {
-      opts.log(`[reconcile] ${opts.gatewayId}: tick failed: ${errMessage(err)}`);
-    });
+    // Non-reentrant: reconcileFleet can outlive intervalMs (a mount may wait on
+    // the gateway's config.patch rate limit). Overlapping ticks create independent
+    // runBounded schedulers, so maxConcurrent stops being a process-wide cap; for
+    // callers that set maxConcurrent=1, that also breaks the serial-mount invariant.
+    // Skip; level-triggered, so the next interval after this tick drains catches up.
+    if (running) return;
+    running = true;
+    reconcileFleet(opts)
+      .catch((err) => {
+        opts.log(`[reconcile] ${opts.gatewayId}: tick failed: ${errMessage(err)}`);
+      })
+      .finally(() => {
+        running = false;
+      });
   };
   const timer = setInterval(tick, opts.intervalMs);
   return () => clearInterval(timer);

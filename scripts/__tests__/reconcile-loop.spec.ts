@@ -12,6 +12,12 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 interface Spy extends ReconcileLoopDeps {
   ensured: string[];
   evicted: string[];
@@ -271,6 +277,48 @@ describe("startReconcileLoop", () => {
       await vi.advanceTimersByTimeAsync(1000);
       // ensured "a" on the first tick; second tick it's still observed-empty so re-ensures.
       expect(d.ensured.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is non-reentrant: an interval firing while the prior tick's ensure is pending does not start a concurrent ensure", async () => {
+    vi.useFakeTimers();
+    try {
+      const ensured: string[] = [];
+      let inEnsure = 0;
+      let peak = 0;
+      const aGate = deferred();
+      const d = mkDeps({
+        ...observed([]),
+        readDesired: async () => ["a", "b"],
+        maxConcurrent: 1,
+        ensureSlug: async (slug) => {
+          inEnsure += 1;
+          peak = Math.max(peak, inEnsure);
+          if (slug === "a") await aGate.promise; // hold "a" across the next interval
+          inEnsure -= 1;
+          ensured.push(slug);
+          return "mounted";
+        },
+      });
+      const stop = startReconcileLoop({ ...d, intervalMs: 1000 });
+
+      await vi.advanceTimersByTimeAsync(1000); // tick 1 → ensure("a") starts and hangs
+      expect(peak).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1000); // tick 2 fires while "a" is still pending
+      // Without the re-entrancy guard, tick 2 runs reconcileFleet again and starts
+      // ensure("b") concurrently (a different slug → the per-slug inFlight guard
+      // doesn't stop it), defeating maxConcurrent: 1. With the guard, tick 2 is skipped.
+      expect(peak).toBe(1);
+
+      aGate.resolve(); // let "a" finish; tick 1's worker proceeds to "b" serially
+      await flushMicrotasks();
+      expect(peak).toBe(1);
+      expect(ensured).toContain("b");
+
+      stop();
     } finally {
       vi.useRealTimers();
     }
