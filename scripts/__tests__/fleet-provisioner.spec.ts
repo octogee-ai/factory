@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   getEvictObservedSlugs,
   getMountObservedSlugs,
@@ -7,6 +10,19 @@ import {
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import {
+  _resetMigratingInProcessPinsForTests,
+  isMigratingInPinned,
+  listLocalCustomerDirs,
+  writeMigratingInPin,
+} from "../lib/local-coach-wired.js";
+
+const tmpDirs: string[] = [];
+
+afterEach(() => _resetMigratingInProcessPinsForTests());
+afterAll(() => {
+  for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 function mkDb(rows: Array<Record<string, unknown>>): Firestore {
   const docs = rows.map((row) => ({ data: () => row }));
@@ -74,6 +90,21 @@ describe("observed split — evict keys off raw presence, mount off completion",
       customerMigratingIn: (s) => s === "incoming",
     });
     expect(getEvictObservedSlugs(a)).toEqual(["alice"]); // incoming guarded from eviction
+  });
+
+  it("evict-observed keeps a restored import guarded after the customer dir is replaced", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-mig-pin-"));
+    tmpDirs.push(root);
+    fs.mkdirSync(path.join(root, "incoming"));
+    writeMigratingInPin(root, "incoming");
+    fs.rmSync(path.join(root, "incoming"), { recursive: true, force: true });
+    fs.mkdirSync(path.join(root, "incoming"));
+    const a = mkObservedAdapter({
+      listLocalCustomerDirs: () => listLocalCustomerDirs(root),
+      customerMigratingIn: (s) => isMigratingInPinned(root, s, 5 * 60_000),
+    });
+
+    expect(getEvictObservedSlugs(a)).toEqual([]);
   });
 
   it("mount-observed excludes a coach-wired-but-unmarked slug (the post-config wedge)", () => {
