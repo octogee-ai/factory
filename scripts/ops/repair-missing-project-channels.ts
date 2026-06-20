@@ -24,7 +24,7 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
-async function mm(method: string, endpoint: string, body?: unknown): Promise<any> {
+async function mm(method: string, endpoint: string, body?: unknown): Promise<{ id: string; type: string }> {
   const resp = await fetch(`${MM_URL}/api/v4${endpoint}`, {
     method,
     headers: {
@@ -36,7 +36,7 @@ async function mm(method: string, endpoint: string, body?: unknown): Promise<any
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     const err = new Error(`MM ${resp.status} ${method} ${endpoint}: ${text.slice(0, 200)}`);
-    (err as any).status = resp.status;
+    (err as { status?: number }).status = resp.status;
     throw err;
   }
   return resp.json();
@@ -132,8 +132,8 @@ async function repairOne(p: ProjectToRepair): Promise<void> {
     channelId = existing.id;
     existingType = existing.type;
     console.log(`  FOUND existing MM channel ${channelName} (${channelId}, type=${existingType})`);
-  } catch (err: any) {
-    if (err.status !== 404) throw err;
+  } catch (err: unknown) {
+    if ((err as { status?: number }).status !== 404) throw err;
     if (!APPLY) {
       console.log(`  [DRY] would CREATE MM channel ${channelName} (type=P)`);
       return;
@@ -208,8 +208,8 @@ async function main() {
   for (const p of needs) {
     try {
       await repairOne(p);
-    } catch (err: any) {
-      console.error(`  FAILED ${p.workspaceId}/${p.projectSlug}: ${err.message}`);
+    } catch (err: unknown) {
+      console.error(`  FAILED ${p.workspaceId}/${p.projectSlug}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
