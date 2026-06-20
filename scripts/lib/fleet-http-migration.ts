@@ -710,11 +710,34 @@ function validateRsyncTargetHost(value: unknown, res: Response): string | null {
 }
 
 function validateRsyncPort(value: unknown, res: Response): number | null {
-  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 65_535) {
     res.status(400).json({ error: "invalid targetPort" });
     return null;
   }
   return value;
+}
+
+function normalizeLocalAddress(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const normalized = value.startsWith("::ffff:") ? value.slice("::ffff:".length) : value;
+  if (normalized === "0.0.0.0" || normalized === "::") return null;
+  return net.isIP(normalized) ? normalized : null;
+}
+
+function requestLocalAddress(req: Request): string {
+  const socket = (req as Request & {
+    socket?: {
+      localAddress?: string;
+      address?: () => string | net.AddressInfo;
+    };
+  }).socket;
+  const direct = normalizeLocalAddress(socket?.localAddress);
+  if (direct) return direct;
+  const address = socket?.address?.() as unknown;
+  const fromAddress = typeof address === "object" && address && "address" in address
+    ? normalizeLocalAddress(address.address)
+    : normalizeLocalAddress(address);
+  return fromAddress ?? "127.0.0.1";
 }
 
 function trimTrailingSlash(value: string): string {
@@ -942,7 +965,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       const child = spawn(
         RSYNC_BIN,
         ["--daemon", "--no-detach", `--config=${configPath}`, `--port=${port}`],
-        { stdio: ["ignore", "pipe", "pipe"] },
+        { stdio: ["ignore", "ignore", "ignore"] },
       );
       const session: RSyncImportSession = {
         key,
@@ -969,7 +992,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         migrationId: body.migrationId,
         slug: body.slug,
         imported: true,
-        host: "0.0.0.0",
+        host: requestLocalAddress(req),
         port,
         module: RSYNC_IMPORT_MODULE,
       };

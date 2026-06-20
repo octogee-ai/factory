@@ -103,13 +103,20 @@ const RESTORE_SNAPSHOT = {
   coachMmUserId: "mm-coach",
 } as const;
 
-function mkRequest<T>(body: T, opts: { signature?: string; rawBody?: string } = {}): Request {
+function mkRequest<T>(
+  body: T,
+  opts: { signature?: string; rawBody?: string; localAddress?: string } = {},
+): Request {
   const rawBody = opts.rawBody ?? JSON.stringify(body);
   const headers: Record<string, string> = {};
   if (opts.signature !== undefined) headers[SIGNATURE_HEADER.toLowerCase()] = opts.signature;
   return {
     header: (name: string) => headers[name.toLowerCase()],
     rawBody,
+    socket: {
+      localAddress: opts.localAddress,
+      address: () => ({ address: opts.localAddress ?? "127.0.0.1", family: "IPv4", port: 3003 }),
+    },
   } as unknown as Request;
 }
 
@@ -969,9 +976,24 @@ describe("queued-rsync migration control handlers", () => {
       waitForRsyncReady: vi.fn(async () => undefined),
     });
     const prepareHandler = createPrepareRsyncImportHandler(deps);
-    const prepareReq = mkRequest(prepareBody, { signature: prepareSig });
+    const prepareReq = mkRequest(prepareBody, {
+      signature: prepareSig,
+      localAddress: `::ffff:${TARGET_POD_IP}`,
+    });
     const prepareRes = mkResponse();
     await prepareHandler(prepareReq, prepareRes.res, vi.fn());
+    expect(prepareRes.getBody()).toMatchObject({
+      host: TARGET_POD_IP,
+      port: 30873,
+      module: "state",
+    });
+    const [, daemonArgs, daemonOpts] = spawnMock.mock.calls[0] as [
+      string,
+      string[],
+      { stdio: string[] },
+    ];
+    expect(daemonArgs).toContain("--daemon");
+    expect(daemonOpts.stdio).toEqual(["ignore", "ignore", "ignore"]);
 
     const finishBody: FinishRsyncImportRequestBody = {
       migrationId: "mig-finish",
