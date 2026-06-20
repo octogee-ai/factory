@@ -71,50 +71,61 @@ export interface RSyncMigrationTransferDeps {
   log?: (msg: string) => void;
 }
 
+// Extracted to module scope so the per-event `() => resolve(...)` arrows sit
+// at a shallow nesting depth (the inline Promise executor put them 5 levels
+// deep). Behaviour is identical — settle() still de-dupes the first outcome.
+function runSubprocess(
+  command: string,
+  args: string[],
+  opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number },
+  resolve: (result: CommandResult) => void,
+  reject: (err: Error) => void,
+): void {
+  const proc = spawn(command, args, {
+    env: opts.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  let settled = false;
+  let timeout: NodeJS.Timeout | null = null;
+  const settle = (action: () => void): void => {
+    if (settled) return;
+    settled = true;
+    if (timeout) clearTimeout(timeout);
+    action();
+  };
+  if (opts.timeoutMs) {
+    timeout = setTimeout(() => {
+      stderr += `\n${command} timed out after ${opts.timeoutMs}ms`;
+      proc.kill("SIGTERM");
+      settle(() => resolve({ stdout, stderr, code: 124 }));
+    }, opts.timeoutMs);
+  }
+
+  proc.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  proc.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+  proc.on("error", (err) => {
+    settle(() => reject(err));
+  });
+  proc.on("close", (code, signal) => {
+    if (signal != null) {
+      settle(() =>
+        resolve({ stdout, stderr: `${stderr}\n${command} terminated by ${signal}`, code: 128 }),
+      );
+      return;
+    }
+    settle(() => resolve({ stdout, stderr, code: code ?? 1 }));
+  });
+}
+
 export function createSubprocessCommandRunner(): CommandRunner {
   return (command, args, opts = {}) =>
-    new Promise<CommandResult>((resolve, reject) => {
-      const proc = spawn(command, args, {
-        env: opts.env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      let settled = false;
-      let timeout: NodeJS.Timeout | null = null;
-      const settle = (action: () => void): void => {
-        if (settled) return;
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        action();
-      };
-      if (opts.timeoutMs) {
-        timeout = setTimeout(() => {
-          stderr += `\n${command} timed out after ${opts.timeoutMs}ms`;
-          proc.kill("SIGTERM");
-          settle(() => resolve({ stdout, stderr, code: 124 }));
-        }, opts.timeoutMs);
-      }
-
-      proc.stdout?.on("data", (chunk) => {
-        stdout += chunk.toString();
-      });
-      proc.stderr?.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-      proc.on("error", (err) => {
-        settle(() => reject(err));
-      });
-      proc.on("close", (code, signal) => {
-        if (signal != null) {
-          settle(() =>
-            resolve({ stdout, stderr: `${stderr}\n${command} terminated by ${signal}`, code: 128 }),
-          );
-          return;
-        }
-        settle(() => resolve({ stdout, stderr, code: code ?? 1 }));
-      });
-    });
+    new Promise<CommandResult>((resolve, reject) => runSubprocess(command, args, opts, resolve, reject));
 }
 
 export function migrationTransferTaskId(input: {
@@ -161,6 +172,30 @@ function postSignedJson<Resp>(
   });
 }
 
+function buildClaimedTaskDoc(
+  input: Parameters<MigrationClient["transferState"]>[0],
+  existing: Partial<MigrationTransferTaskDoc> | undefined,
+  deps: { workerId: string; leaseMs: number },
+  now: number,
+  attempt: number,
+): MigrationTransferTaskDoc {
+  return {
+    kind: "gateway-rsync-transfer",
+    migrationId: input.migrationId,
+    slug: input.slug,
+    mode: input.mode ?? "pre",
+    sourceGatewayId: input.fromGatewayId,
+    targetGatewayId: input.toGatewayId,
+    status: "running",
+    attempt,
+    leaseOwner: deps.workerId,
+    leaseExpiresAt: now + deps.leaseMs,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    startedAt: existing?.startedAt ?? now,
+  };
+}
+
 async function claimTask(
   deps: Required<Pick<RSyncMigrationTransferDeps, "db" | "now" | "workerId" | "leaseMs">>,
   input: Parameters<MigrationClient["transferState"]>[0],
@@ -194,21 +229,7 @@ async function claimTask(
     }
 
     const attempt = (existing?.attempt ?? 0) + 1;
-    const doc: MigrationTransferTaskDoc = {
-      kind: "gateway-rsync-transfer",
-      migrationId: input.migrationId,
-      slug: input.slug,
-      mode: input.mode ?? "pre",
-      sourceGatewayId: input.fromGatewayId,
-      targetGatewayId: input.toGatewayId,
-      status: "running",
-      attempt,
-      leaseOwner: deps.workerId,
-      leaseExpiresAt: now + deps.leaseMs,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      startedAt: existing?.startedAt ?? now,
-    };
+    const doc = buildClaimedTaskDoc(input, existing, deps, now, attempt);
     txn.set(ref, doc, { merge: true });
     return { kind: "claimed", taskId, ref, attempt } as const;
   });
