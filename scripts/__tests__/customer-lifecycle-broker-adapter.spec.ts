@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
@@ -80,14 +83,27 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
 }
 
 describe("buildBrokeredLifecycleAdapter migration import activation", () => {
+  const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+  let tempStateDir: string | null = null;
+
   beforeEach(() => {
     mocks.readActivationManifest.mockReset();
     mocks.applyOpenClawActivationManifest.mockReset();
     mocks.removeActivationManifest.mockReset();
     patchMocks.applyConfigPatch.mockClear();
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    tempStateDir = null;
     mocks.readActivationManifest.mockResolvedValue({ slug: "tester10" });
     mocks.applyOpenClawActivationManifest.mockResolvedValue({ elapsedMs: 42 });
     mocks.removeActivationManifest.mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true });
+      tempStateDir = null;
+    }
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
   });
 
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
@@ -122,6 +138,31 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
+  });
+
+  it("accepts operator-source state-only imports when the activation manifest is absent", async () => {
+    const err = new Error("ENOENT: no such file or directory, open activation.json") as NodeJS.ErrnoException;
+    err.code = "ENOENT";
+    mocks.readActivationManifest.mockRejectedValue(err);
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-import-state-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    await fs.mkdir(path.join(tempStateDir, "agents", "octogee-tester10-coach"), {
+      recursive: true,
+    });
+    const log = vi.fn();
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log,
+    });
+
+    await adapter.activateImportedCustomer("tester10");
+
+    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "[import:tester10] no customer activation manifest; imported operator agent state only",
+    );
   });
 
   it("fails before mutating config when the activation manifest is absent", async () => {
