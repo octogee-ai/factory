@@ -688,6 +688,30 @@ describe("queued-rsync migration control handlers", () => {
     });
   });
 
+  it("createExportPathsHandler rejects a missing/invalid transfer mode", async () => {
+    const adapter = mkAdapter({
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/state", path: "agents/octogee-chris-coach" },
+      ]),
+    });
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      mode: "bogus",
+    } as unknown as ExportPathsRequestBody;
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createExportPathsHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toEqual({ error: "invalid migration mode" });
+    expect(adapter.listExportPaths).not.toHaveBeenCalled();
+  });
+
   it("createPrepareImportHandler uses the key-only import prep without stamping migrating-in", async () => {
     const markCustomerMigratingIn = vi.fn();
     const adapter = mkAdapter({
@@ -713,6 +737,29 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.prepareImportDir).not.toHaveBeenCalled();
     expect(markCustomerMigratingIn).not.toHaveBeenCalled();
     expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
+  });
+
+  it("createPrepareImportHandler rejects a missing/invalid transfer mode before wiping state", async () => {
+    const adapter = mkAdapter({
+      prepareKeyImportDir: vi.fn(async () => "/openclaw"),
+      prepareImportDir: vi.fn(async () => "/openclaw"),
+    });
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+    } as unknown as PrepareImportRequestBody;
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createPrepareImportHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toEqual({ error: "invalid migration mode" });
+    expect(adapter.prepareKeyImportDir).not.toHaveBeenCalled();
+    expect(adapter.prepareImportDir).not.toHaveBeenCalled();
   });
 
   it("createPrepareImportHandler wipes normal import paths and stamps the migrating-in pin", async () => {

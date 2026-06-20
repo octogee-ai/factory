@@ -327,14 +327,16 @@ export function createExportPathsHandler(deps: MigrationHandlerDeps): RequestHan
       log,
     );
     if (!body) return;
+    const mode = validateTransferMode(body.mode, res);
+    if (!mode) return;
 
     try {
       const allSources = await deps.adapter.listExportPaths(body.slug);
-      const sources = sourcesForPushMode(allSources, body.slug, body.mode);
+      const sources = sourcesForPushMode(allSources, body.slug, mode);
       if (sources.length === 0) {
         res.status(404).json({
           error: "no export paths",
-          message: `nothing to export for slug=${body.slug} mode=${body.mode}`,
+          message: `nothing to export for slug=${body.slug} mode=${mode}`,
         });
         return;
       }
@@ -344,7 +346,7 @@ export function createExportPathsHandler(deps: MigrationHandlerDeps): RequestHan
         sources,
       };
       log(
-        `[migration-http] export-paths mode=${body.mode} migrationId=${body.migrationId} slug=${body.slug} paths=${sources.length}`,
+        `[migration-http] export-paths mode=${mode} migrationId=${body.migrationId} slug=${body.slug} paths=${sources.length}`,
       );
       res.status(200).json(response);
     } catch (err) {
@@ -417,14 +419,16 @@ export function createPrepareImportHandler(deps: MigrationHandlerDeps): RequestH
       log,
     );
     if (!body) return;
+    const mode = validateTransferMode(body.mode, res);
+    if (!mode) return;
 
     try {
-      const importDir = body.mode === "keys"
+      const importDir = mode === "keys"
         ? await deps.adapter.prepareKeyImportDir(body.slug)
         : await deps.adapter.prepareImportDir(body.slug);
-      if (body.mode !== "keys") deps.adapter.markCustomerMigratingIn?.(body.slug);
+      if (mode !== "keys") deps.adapter.markCustomerMigratingIn?.(body.slug);
       log(
-        `[migration-http] prepare-import mode=${body.mode} migrationId=${body.migrationId} slug=${body.slug} dir=${importDir}`,
+        `[migration-http] prepare-import mode=${mode} migrationId=${body.migrationId} slug=${body.slug} dir=${importDir}`,
       );
       const response: ImportResponse = {
         migrationId: body.migrationId,
@@ -793,13 +797,22 @@ async function runSpawnChecked(
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const timeout = opts.timeoutMs
-      ? setTimeout(() => {
-          if (settled) return;
-          child.kill("SIGTERM");
-          stderr += `\n${opts.label} timed out after ${opts.timeoutMs}ms`;
-        }, opts.timeoutMs)
-      : null;
+    let timeout: NodeJS.Timeout | null = null;
+    const settle = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      action();
+    };
+    if (opts.timeoutMs) {
+      timeout = setTimeout(() => {
+        stderr += `\n${opts.label} timed out after ${opts.timeoutMs}ms`;
+        child.kill("SIGTERM");
+        settle(() =>
+          reject(new Error(`${opts.label} timed out after ${opts.timeoutMs}ms`)),
+        );
+      }, opts.timeoutMs);
+    }
     child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
     });
@@ -807,22 +820,20 @@ async function runSpawnChecked(
       stderr += chunk.toString();
     });
     child.on("error", (err) => {
-      settled = true;
-      if (timeout) clearTimeout(timeout);
-      reject(err);
+      settle(() => reject(err));
     });
     child.on("close", (code, signal) => {
-      settled = true;
-      if (timeout) clearTimeout(timeout);
       if (signal != null) {
-        reject(new Error(`${opts.label} terminated by ${signal}: ${stderr.trim()}`));
+        settle(() => reject(new Error(`${opts.label} terminated by ${signal}: ${stderr.trim()}`)));
         return;
       }
       if (code === 0) {
-        resolve();
+        settle(() => resolve());
         return;
       }
-      reject(new Error(`${opts.label} failed (code=${code ?? 1}): ${stderr.trim() || stdout.trim()}`));
+      settle(() =>
+        reject(new Error(`${opts.label} failed (code=${code ?? 1}): ${stderr.trim() || stdout.trim()}`)),
+      );
     });
   });
 }

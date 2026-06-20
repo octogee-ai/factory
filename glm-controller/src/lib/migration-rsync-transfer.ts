@@ -81,13 +81,20 @@ export function createSubprocessCommandRunner(): CommandRunner {
       let stdout = "";
       let stderr = "";
       let settled = false;
-      const timeout = opts.timeoutMs
-        ? setTimeout(() => {
-            if (settled) return;
-            proc.kill("SIGTERM");
-            stderr += `\n${command} timed out after ${opts.timeoutMs}ms`;
-          }, opts.timeoutMs)
-        : null;
+      let timeout: NodeJS.Timeout | null = null;
+      const settle = (action: () => void): void => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        action();
+      };
+      if (opts.timeoutMs) {
+        timeout = setTimeout(() => {
+          stderr += `\n${command} timed out after ${opts.timeoutMs}ms`;
+          proc.kill("SIGTERM");
+          settle(() => resolve({ stdout, stderr, code: 124 }));
+        }, opts.timeoutMs);
+      }
 
       proc.stdout?.on("data", (chunk) => {
         stdout += chunk.toString();
@@ -96,18 +103,16 @@ export function createSubprocessCommandRunner(): CommandRunner {
         stderr += chunk.toString();
       });
       proc.on("error", (err) => {
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        reject(err);
+        settle(() => reject(err));
       });
       proc.on("close", (code, signal) => {
-        settled = true;
-        if (timeout) clearTimeout(timeout);
         if (signal != null) {
-          resolve({ stdout, stderr: `${stderr}\n${command} terminated by ${signal}`, code: 128 });
+          settle(() =>
+            resolve({ stdout, stderr: `${stderr}\n${command} terminated by ${signal}`, code: 128 }),
+          );
           return;
         }
-        resolve({ stdout, stderr, code: code ?? 1 });
+        settle(() => resolve({ stdout, stderr, code: code ?? 1 }));
       });
     });
 }
