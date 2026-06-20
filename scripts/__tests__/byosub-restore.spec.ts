@@ -60,11 +60,6 @@ const codexBlob = () =>
 
 const apReadFor = (oc: string, agentId: string): unknown =>
   readAuthProfileStore(codexAgentDir(oc, agentId));
-const apWriteFor = (oc: string, agentId: string, payload: unknown) => {
-  const dir = codexAgentDir(oc, agentId);
-  fs.mkdirSync(dir, { recursive: true });
-  writeAuthProfileStore(dir, payload);
-};
 
 describe("isSafeAgentId (shared path-safety boundary)", () => {
   it("accepts real coach agent ids", () => {
