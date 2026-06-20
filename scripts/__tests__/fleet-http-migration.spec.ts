@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
 import { Readable, Writable } from "node:stream";
 import {
   createActivateImportHandler,
@@ -887,9 +888,17 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
     expect(waitForRsyncReady).toHaveBeenCalledWith(30873);
     expect(String(spawnMock.mock.calls[0][0])).toMatch(/\/rsync$/);
-    expect(spawnMock.mock.calls[0][1]).toEqual(
+    const spawnArgs = spawnMock.mock.calls[0][1] as string[];
+    expect(spawnArgs).toEqual(
       expect.arrayContaining(["--daemon", "--no-detach", "--port=30873"]),
     );
+    const configArg = spawnArgs.find((arg) => arg.startsWith("--config="));
+    expect(configArg).toBeDefined();
+    const configPath = configArg?.slice("--config=".length) ?? "";
+    const config = await fs.readFile(configPath, "utf-8");
+    expect(config).toContain(`pid file = ${configPath.replace(/rsyncd\.conf$/, "rsyncd.pid")}`);
+    expect(config).toContain(`lock file = ${configPath.replace(/rsyncd\.conf$/, "rsyncd.lock")}`);
+    expect(config).toContain(`  hosts allow = ${SOURCE_POD_IP}`);
 
     const abortBody: AbortRsyncImportRequestBody = {
       migrationId: "mig-rsync",
