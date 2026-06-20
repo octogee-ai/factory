@@ -1720,6 +1720,27 @@ describe("findPathTraversalViolation", () => {
     ], slug)).toBeNull();
   });
 
+  it("accepts rsync --relative parent directory entries", () => {
+    expect(findPathTraversalViolation([
+      "customers/",
+      "customers/chris/",
+      "customer-keys/",
+      "customer-keys/chris/",
+      "memory/",
+      "memory/octogee-chris-coach.sqlite",
+      ".octogee-migration-activation/",
+      ".octogee-migration-activation/chris/",
+    ], slug)).toBeNull();
+  });
+
+  it("accepts the customer-keys parent directory during keys-only transfer", () => {
+    expect(findPathTraversalViolation([
+      "customer-keys/",
+      "customer-keys/chris/",
+      "customer-keys/chris/id_ed25519",
+    ], slug, "keys")).toBeNull();
+  });
+
   it("rejects an absolute-path entry", () => {
     expect(findPathTraversalViolation(["/etc/passwd"], slug)).toContain("absolute path");
   });
@@ -1733,8 +1754,7 @@ describe("findPathTraversalViolation", () => {
   });
 
   it("does NOT false-positive on legitimate names containing `..`", () => {
-
-expect(findPathTraversalViolation([
+    expect(findPathTraversalViolation([
       "customers/chris/notes/foo..bar.txt",
     ], slug)).toBeNull();
   });
@@ -1742,6 +1762,19 @@ expect(findPathTraversalViolation([
   it("rejects a path for a different slug (cross-customer escape)", () => {
     expect(findPathTraversalViolation([
       "customers/other/secrets",
+    ], slug)).toContain("outside the per-slug allowlist");
+  });
+
+  it("rejects another slug below an allowed parent directory", () => {
+    expect(findPathTraversalViolation([
+      "customer-keys/",
+      "customer-keys/other/id_ed25519",
+    ], slug, "keys")).toContain("outside the per-slug allowlist");
+  });
+
+  it("rejects a truncated file-prefix match", () => {
+    expect(findPathTraversalViolation([
+      "memory/octogee-chris-coach.sqlit",
     ], slug)).toContain("outside the per-slug allowlist");
   });
 

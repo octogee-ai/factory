@@ -1531,16 +1531,15 @@ export function findPathTraversalViolation(
         `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
       ];
   for (const raw of entries) {
-
-const entry = raw.endsWith("/") ? raw.slice(0, -1) : raw;
+    const entry = raw.endsWith("/") ? raw.slice(0, -1) : raw;
     if (entry.startsWith("/")) {
       return `absolute path in tarball: ${raw}`;
     }
 
-if (entry.split("/").includes("..")) {
+    if (entry.split("/").includes("..")) {
       return `path traversal '..' in tarball: ${raw}`;
     }
-    const allowed = allowedPrefixes.some((p) => entry === p.slice(0, -1) || entry.startsWith(p));
+    const allowed = allowedPrefixes.some((p) => matchesAllowedMigrationPath(raw, entry, p));
     if (!allowed) {
       const allowlist = mode === "keys"
         ? `customer-keys/${slug}`
@@ -1549,6 +1548,16 @@ if (entry.split("/").includes("..")) {
     }
   }
   return null;
+}
+
+function matchesAllowedMigrationPath(raw: string, entry: string, allowedPrefix: string): boolean {
+  const isDirectoryPrefix = allowedPrefix.endsWith("/");
+  const exactPrefix = isDirectoryPrefix ? allowedPrefix.slice(0, -1) : allowedPrefix;
+  return (
+    entry === exactPrefix ||
+    entry.startsWith(allowedPrefix) ||
+    (raw.endsWith("/") && exactPrefix.startsWith(`${entry}/`))
+  );
 }
 
 export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler {
