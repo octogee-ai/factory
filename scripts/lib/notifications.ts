@@ -17,8 +17,8 @@ async function sendDiscordWebhook(content: string, username = "Octogee Ops"): Pr
     if (!resp.ok) {
       log(`[notify] Discord webhook failed: ${resp.status} ${resp.statusText}`);
     }
-  } catch (err: any) {
-    log(`[notify] Discord webhook error: ${err.message}`);
+  } catch (err: unknown) {
+    log(`[notify] Discord webhook error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

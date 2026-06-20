@@ -46,7 +46,7 @@ export interface CoachIdentityDeps {
   db: {
     collection: (name: string) => {
       doc: (id: string) => {
-        get: () => Promise<{ exists: boolean; data: () => any }>;
+        get: () => Promise<{ exists: boolean; data: () => Record<string, unknown> }>;
       };
     };
   };
@@ -118,7 +118,7 @@ export interface CoachTokenDeps {
       doc: (id: string) => {
         collection: (name: string) => {
           doc: (id: string) => {
-            get: () => Promise<{ exists: boolean; data: () => any }>;
+            get: () => Promise<{ exists: boolean; data: () => Record<string, unknown> }>;
           };
         };
       };

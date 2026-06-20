@@ -47,8 +47,8 @@ const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID ||
       payload: { data: Buffer.from(token) },
     });
     log(`[admin-creds] MM_ADMIN_TOKEN written to Secret Manager`);
-  } catch (err: any) {
-    if (err?.code === 5) {
+  } catch (err: unknown) {
+    if ((err as { code?: number })?.code === 5) {
       
       await secretClient.createSecret({
         parent: `projects/${project}`,
@@ -61,7 +61,7 @@ const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID ||
       });
       log(`[admin-creds] MM_ADMIN_TOKEN created in Secret Manager`);
     } else {
-      log(`[admin-creds] ⚠ failed to write MM_ADMIN_TOKEN to Secret Manager: ${err?.message}`);
+      log(`[admin-creds] ⚠ failed to write MM_ADMIN_TOKEN to Secret Manager: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
