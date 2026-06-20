@@ -877,13 +877,16 @@ async function writeRsyncDaemonConfig(params: {
     ? [`  hosts allow = ${params.sourcePodIp}`]
     : [];
   const configPath = path.join(params.dir, "rsyncd.conf");
+  const pidPath = path.join(params.dir, "rsyncd.pid");
+  const lockPath = path.join(params.dir, "rsyncd.lock");
   await fs.writeFile(
     configPath,
     [
       "use chroot = no",
       "max connections = 1",
       "log file = /dev/stdout",
-      "pid file = /tmp/octogee-migration-rsyncd.pid",
+      `pid file = ${pidPath}`,
+      `lock file = ${lockPath}`,
       `[${RSYNC_IMPORT_MODULE}]`,
       `  path = ${params.stageDir}`,
       "  read only = false",
