@@ -1,9 +1,10 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 import {
+  _resetMigratingInProcessPinsForTests,
   coachWiredInParsedConfig,
   customerCoachWiredInOpenclawConfig,
   hasMountedMarker,
@@ -34,6 +35,7 @@ function wiredConfig(slugs: string[]) {
     })),
   };
 }
+afterEach(() => _resetMigratingInProcessPinsForTests());
 afterAll(() => tmp.forEach((d) => fs.rmSync(d, { recursive: true, force: true })));
 
 describe("customerCoachWiredInOpenclawConfig", () => {
@@ -153,6 +155,19 @@ describe("listMigratingInSlugs (the /health migrating-in signal for Cowboy's pol
     writeMigratingInPin(root, "stale");
     const old = new Date(Date.now() - 10 * 60_000);
     fs.utimesSync(path.join(root, "stale", ".system", ".migrating-in"), old, old);
+    _resetMigratingInProcessPinsForTests();
+    expect(listMigratingInSlugs(root, 5 * 60_000)).toEqual(["incoming"]);
+  });
+
+  it("reports a process pin even when restore replaces the customer dir", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "lmig-"));
+    tmp.push(root);
+    fs.mkdirSync(path.join(root, "incoming"));
+    writeMigratingInPin(root, "incoming");
+    fs.rmSync(path.join(root, "incoming"), { recursive: true, force: true });
+    fs.mkdirSync(path.join(root, "incoming"));
+
+    expect(isMigratingInPinned(root, "incoming", 5 * 60_000)).toBe(true);
     expect(listMigratingInSlugs(root, 5 * 60_000)).toEqual(["incoming"]);
   });
 });
@@ -207,6 +222,7 @@ describe("migrating-in pin (guards a freshly-imported customer from the evict di
     writeMigratingInPin(root, "bob");
     const stale = new Date(Date.now() - 10 * 60_000);
     fs.utimesSync(path.join(root, "bob", ".system", ".migrating-in"), stale, stale);
+    _resetMigratingInProcessPinsForTests();
     expect(isMigratingInPinned(root, "bob", 5 * 60_000)).toBe(false);
   });
 
