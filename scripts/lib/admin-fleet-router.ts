@@ -517,6 +517,22 @@ interface ActivatableOperatorReservation {
   gatewayId: string;
 }
 
+interface BuilderActivationTarget {
+  gatewayId: string;
+  gatewayClass: "builder" | "operator";
+  desiredStatus: "running" | "paused" | "draining" | "retired" | null;
+  builderSlug: string | null;
+}
+
+type BuilderActivationPlan =
+  | {
+      ok:
+        | { action: "already-active"; target: BuilderActivationTarget }
+        | { action: "wake"; target: BuilderActivationTarget; status: string }
+        | { action: "migrate"; target: BuilderActivationTarget };
+    }
+  | { error: RolloutBodyError };
+
 interface AdminOperatorGatewayReservationSummary {
   uid: string;
   builderSlug: string | null;
@@ -1210,6 +1226,7 @@ function findPendingActivationOperation(
   docs: ReadonlyArray<FirestoreDocLike>,
   uid: string,
   gatewayId: string,
+  source: string,
 ): { id: string; kind: unknown } | null {
   for (const doc of docs) {
     const data = doc.data();
@@ -1221,12 +1238,163 @@ function findPendingActivationOperation(
       data.kind === "migrate-customer" &&
       input.uid === uid &&
       input.toGatewayId === gatewayId &&
-      input.source === "operator-gateway-reservation"
+      input.source === source
     ) {
       return { id: doc.id, kind: data.kind };
     }
   }
   return null;
+}
+
+function gatewayActivationClass(
+  data: Record<string, unknown>,
+): "builder" | "operator" | "shared" {
+  return resolveGatewayClass({
+    gatewayClass: isGatewayClass(data.gatewayClass) ? data.gatewayClass : undefined,
+    profile: isGatewayProfile(data.profile) ? data.profile : undefined,
+    imageProfile: isGatewayProfile(data.imageProfile) ? data.imageProfile : undefined,
+  });
+}
+
+function isInactiveDedicatedStatus(
+  status: BuilderActivationTarget["desiredStatus"],
+): boolean {
+  return status === "draining" || status === "retired";
+}
+
+export function resolveBuilderActivationPlan(opts: {
+  uid: string;
+  builderSlug: string;
+  currentGatewayId: string | null;
+  requestedGatewayClass: "builder" | "operator";
+  glmGateways: ReadonlyArray<FirestoreDocLike>;
+  gatewayHeartbeats: ReadonlyMap<string, Record<string, unknown>>;
+  pendingOps: ReadonlyArray<FirestoreDocLike>;
+}): BuilderActivationPlan {
+  if (!opts.currentGatewayId) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "user has no current gateway assignment; assign before activation",
+          uid: opts.uid,
+        },
+      },
+    };
+  }
+
+  const ownedClassGateways = opts.glmGateways
+    .map((doc): BuilderActivationTarget | null => {
+      const data = doc.data();
+      if (data.ownerUid !== opts.uid) return null;
+      const gatewayClass = gatewayActivationClass(data);
+      if (gatewayClass !== opts.requestedGatewayClass) return null;
+      return {
+        gatewayId: doc.id,
+        gatewayClass,
+        desiredStatus: projectDesiredStatus(data),
+        builderSlug: asStringOrNull(data.builderSlug),
+      };
+    })
+    .filter((v): v is BuilderActivationTarget => v !== null);
+
+  const slugMismatches = ownedClassGateways.filter(
+    (gw) => gw.builderSlug !== null && gw.builderSlug !== opts.builderSlug,
+  );
+  if (slugMismatches.length > 0) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "owned activation gateway builderSlug does not match user slug",
+          uid: opts.uid,
+          builderSlug: opts.builderSlug,
+          gatewayIds: slugMismatches.map((gw) => gw.gatewayId),
+        },
+      },
+    };
+  }
+
+  const candidates = ownedClassGateways.filter(
+    (gw) => gw.builderSlug === null || gw.builderSlug === opts.builderSlug,
+  );
+  if (candidates.length === 0) {
+    return {
+      error: {
+        status: 404,
+        body: {
+          error: "no owned dedicated activation gateway found",
+          uid: opts.uid,
+          builderSlug: opts.builderSlug,
+          gatewayClass: opts.requestedGatewayClass,
+        },
+      },
+    };
+  }
+  if (candidates.length > 1) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "multiple owned activation gateways match; operator must choose one",
+          uid: opts.uid,
+          builderSlug: opts.builderSlug,
+          gatewayClass: opts.requestedGatewayClass,
+          gatewayIds: candidates.map((gw) => gw.gatewayId),
+        },
+      },
+    };
+  }
+
+  const target = candidates[0];
+  if (isInactiveDedicatedStatus(target.desiredStatus)) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "activation gateway is not runnable",
+          gatewayId: target.gatewayId,
+          desiredStatus: target.desiredStatus,
+        },
+      },
+    };
+  }
+
+  const targetHeartbeat = opts.gatewayHeartbeats.get(target.gatewayId);
+  const targetStatus =
+    typeof targetHeartbeat?.status === "string"
+      ? targetHeartbeat.status
+      : "missing";
+  if (opts.currentGatewayId === target.gatewayId) {
+    if (targetStatus === "ready") return { ok: { action: "already-active", target } };
+    return { ok: { action: "wake", target, status: targetStatus } };
+  }
+
+  const existing = findPendingActivationOperation(
+    opts.pendingOps,
+    opts.uid,
+    target.gatewayId,
+    "builder-activation-lease",
+  );
+  if (existing) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "builder activation is already running",
+          uid: opts.uid,
+          gatewayId: target.gatewayId,
+          operationId: existing.id,
+          kind: existing.kind,
+        },
+      },
+    };
+  }
+
+  if (targetStatus !== "ready") {
+    return { ok: { action: "wake", target, status: targetStatus } };
+  }
+  return { ok: { action: "migrate", target } };
 }
 
 function operatorReservationRank(
@@ -2105,6 +2273,7 @@ router.post(
           pendingOpsSnap.docs,
           uid,
           reservation.ok.gatewayId,
+          "operator-gateway-reservation",
         );
         if (existingActivation) {
           res.status(409).json({
@@ -2244,6 +2413,184 @@ router.post(
             "provisioning.openclaw.shellsEnabled": false,
           });
         res.status(202).json({ uid, gatewayId: body.gatewayId, gatewayProfile });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.post(
+    "/customers/:uid/activation-lease",
+    // eslint-disable-next-line complexity -- activation has explicit safety gates; keeping them linear makes each operator-facing response unambiguous.
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const uid = req.params.uid as string;
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const now = Date.now();
+        const body = req.body as Partial<{
+          gatewayClass: string;
+          reason: string;
+        }>;
+        let requestedGatewayClass: "builder" | "operator" | null = "builder";
+        if (body.gatewayClass === "operator") {
+          requestedGatewayClass = "operator";
+        } else if (
+          body.gatewayClass !== undefined &&
+          body.gatewayClass !== "builder"
+        ) {
+          requestedGatewayClass = null;
+        }
+        if (requestedGatewayClass === null) {
+          res.status(400).json({
+            error: "gatewayClass must be builder or operator",
+            got: body.gatewayClass,
+          });
+          return;
+        }
+
+        const userRef = db.collection("users").doc(uid);
+        const [userSnap, glmSnap, hbSnap, pendingOpsSnap] = await Promise.all([
+          userRef.get(),
+          db.collection(GLM_GATEWAYS_COLLECTION).get(),
+          db.collection("gateways").get(),
+          db
+            .collection(GLM_OPERATIONS_COLLECTION)
+            .where("status", "in", ["pending", "running"])
+            .get(),
+        ]);
+        if (!userSnap.exists) {
+          res.status(404).json({ error: "user not found", uid });
+          return;
+        }
+        const userData = userSnap.data() as Record<string, unknown>;
+        if (userData.approved !== true) {
+          res.status(409).json({ error: "user is not approved", uid });
+          return;
+        }
+        const builderSlug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
+        if (!builderSlug) {
+          res.status(409).json({
+            error: "user has no resolvable builder slug",
+            uid,
+          });
+          return;
+        }
+
+        const gatewayHeartbeats = new Map<string, Record<string, unknown>>();
+        for (const doc of hbSnap.docs) {
+          gatewayHeartbeats.set(doc.id, doc.data() as Record<string, unknown>);
+        }
+        const plan = resolveBuilderActivationPlan({
+          uid,
+          builderSlug,
+          currentGatewayId: readUserGatewayId(userData),
+          requestedGatewayClass,
+          glmGateways: glmSnap.docs,
+          gatewayHeartbeats,
+          pendingOps: pendingOpsSnap.docs,
+        });
+        if ("error" in plan) {
+          res.status(plan.error.status).json(plan.error.body);
+          return;
+        }
+
+        const target = plan.ok.target;
+        const leaseBase = {
+          gatewayId: target.gatewayId,
+          gatewayClass: target.gatewayClass,
+          builderSlug,
+          requestedAt: now,
+          requestedBy: createdBy,
+          reason: typeof body.reason === "string" && body.reason.length > 0
+            ? body.reason
+            : "builder-activity",
+        };
+
+        if (plan.ok.action === "already-active") {
+          await userRef.update({
+            "provisioning.openclaw.activationLease": {
+              ...leaseBase,
+              status: "active",
+              activeAt: now,
+            },
+          });
+          res.status(200).json({
+            uid,
+            builderSlug,
+            gatewayId: target.gatewayId,
+            gatewayClass: target.gatewayClass,
+            status: "active",
+            alreadyActive: true,
+          });
+          return;
+        }
+
+        const targetRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(target.gatewayId);
+        if (plan.ok.action === "wake") {
+          const batch = db.batch();
+          batch.update(targetRef, { desiredStatus: "running" });
+          batch.update(userRef, {
+            "provisioning.openclaw.activationLease": {
+              ...leaseBase,
+              status: "waking",
+              targetStatus: plan.ok.status,
+            },
+          });
+          await batch.commit();
+          res.status(202).json({
+            uid,
+            builderSlug,
+            gatewayId: target.gatewayId,
+            gatewayClass: target.gatewayClass,
+            status: "waking",
+            targetStatus: plan.ok.status,
+            retryAfterMs: 15_000,
+          });
+          return;
+        }
+
+        const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+        const operationId = opRef.id;
+        const operationInput = {
+          uid,
+          toGatewayId: target.gatewayId,
+          source: "builder-activation-lease",
+          builderSlug,
+          gatewayClass: target.gatewayClass,
+          reason: leaseBase.reason,
+        };
+        const batch = db.batch();
+        batch.update(targetRef, { desiredStatus: "running" });
+        batch.set(opRef, {
+          kind: "migrate-customer",
+          status: "pending",
+          createdBy,
+          createdAt: now,
+          startedAt: null,
+          completedAt: null,
+          input: operationInput,
+          steps: [],
+          gatewayId: target.gatewayId,
+          inputUid: uid,
+        });
+        batch.update(userRef, {
+          "provisioning.openclaw.activationLease": {
+            ...leaseBase,
+            status: "activating",
+            operationId,
+          },
+        });
+        await batch.commit();
+
+        res.status(202).json({
+          uid,
+          builderSlug,
+          gatewayId: target.gatewayId,
+          gatewayClass: target.gatewayClass,
+          operationId,
+          status: "activating",
+        });
       } catch (e) {
         next(e);
       }

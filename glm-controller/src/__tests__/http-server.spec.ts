@@ -20,6 +20,24 @@ function emptyStore(): FakeStore {
   };
 }
 
+function applyPatch(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(patch)) {
+    const parts = key.split(".");
+    let cursor = target;
+    for (const part of parts.slice(0, -1)) {
+      const next = cursor[part];
+      if (!next || typeof next !== "object" || Array.isArray(next)) {
+        cursor[part] = {};
+      }
+      cursor = cursor[part] as Record<string, unknown>;
+    }
+    cursor[parts[parts.length - 1]] = value;
+  }
+}
+
 function makeQuery(
   collectionName: string,
   store: FakeStore,
@@ -68,9 +86,29 @@ function makeQuery(
 }
 
 function buildDb(store: FakeStore) {
+  let docSeq = 0;
   return {
-
-runTransaction: async <T,>(
+    batch: () => {
+      const writes: Array<() => Promise<void>> = [];
+      return {
+        update: (
+          ref: { update: (patch: Record<string, unknown>) => Promise<void> },
+          patch: Record<string, unknown>,
+        ) => {
+          writes.push(() => ref.update(patch));
+        },
+        set: (
+          ref: { set: (data: Record<string, unknown>) => Promise<void> },
+          data: Record<string, unknown>,
+        ) => {
+          writes.push(() => ref.set(data));
+        },
+        commit: async () => {
+          for (const write of writes) await write();
+        },
+      };
+    },
+    runTransaction: async <T,>(
       fn: (txn: {
         get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
         update: (
@@ -86,8 +124,7 @@ runTransaction: async <T,>(
           ref: { update: (patch: Record<string, unknown>) => Promise<void> },
           patch: Record<string, unknown>,
         ) => {
-
-queued.push(() => ref.update(patch));
+          queued.push(() => ref.update(patch));
         },
       };
       const result = await fn(txn);
@@ -95,49 +132,81 @@ queued.push(() => ref.update(patch));
       return result;
     },
     collection: (name: string): unknown => ({
-      doc: (id: string) => ({
-        id,
-        get: async () => {
-          if (name === "users") {
-            const data = store.users[id];
-            return { exists: data !== undefined, data: () => data };
-          }
-          if (name === "gateways") {
-            const data = store.gateways[id];
-            return { exists: data !== undefined, data: () => data };
-          }
-          if (name === "glmGateways") {
-            const data = store.glmGateways[id];
-            return { exists: data !== undefined, data: () => data };
-          }
-          return { exists: false, data: () => undefined };
-        },
-        update: async (patch: Record<string, unknown>) => {
-          if (name === "gateways" && store.gateways[id]) {
-            store.gateways[id] = { ...store.gateways[id], ...patch };
-            return;
-          }
-          if (name === "glmGateways" && store.glmGateways[id]) {
-            store.glmGateways[id] = { ...store.glmGateways[id], ...patch };
-            return;
-          }
-        },
-        collection: (sub: string) => ({
-          doc: (subId: string) => ({
-            get: async () => {
-              if (
-                name === "users" &&
-                sub === "system" &&
-                subId === "config"
-              ) {
-                const data = store.configs[id];
-                return { exists: data !== undefined, data: () => data };
-              }
-              return { exists: false, data: () => undefined };
-            },
+      doc: (id?: string) => {
+        const docId = id ?? `auto-${++docSeq}`;
+        return {
+          id: docId,
+          get: async () => {
+            if (name === "users") {
+              const data = store.users[docId];
+              return { exists: data !== undefined, data: () => data };
+            }
+            if (name === "gateways") {
+              const data = store.gateways[docId];
+              return { exists: data !== undefined, data: () => data };
+            }
+            if (name === "glmGateways") {
+              const data = store.glmGateways[docId];
+              return { exists: data !== undefined, data: () => data };
+            }
+            if (name === "glmOperations") {
+              const op = store.glmOperations.find((o) => o.id === docId);
+              return {
+                exists: op !== undefined,
+                data: () => op?.data,
+              };
+            }
+            return { exists: false, data: () => undefined };
+          },
+          update: async (patch: Record<string, unknown>) => {
+            if (name === "users" && store.users[docId]) {
+              applyPatch(store.users[docId], patch);
+              return;
+            }
+            if (name === "gateways" && store.gateways[docId]) {
+              applyPatch(store.gateways[docId], patch);
+              return;
+            }
+            if (name === "glmGateways" && store.glmGateways[docId]) {
+              applyPatch(store.glmGateways[docId], patch);
+            }
+          },
+          set: async (data: Record<string, unknown>) => {
+            if (name === "users") {
+              store.users[docId] = data;
+              return;
+            }
+            if (name === "gateways") {
+              store.gateways[docId] = data;
+              return;
+            }
+            if (name === "glmGateways") {
+              store.glmGateways[docId] = data;
+              return;
+            }
+            if (name === "glmOperations") {
+              const index = store.glmOperations.findIndex((o) => o.id === docId);
+              if (index === -1) store.glmOperations.push({ id: docId, data });
+              else store.glmOperations[index] = { id: docId, data };
+            }
+          },
+          collection: (sub: string) => ({
+            doc: (subId: string) => ({
+              get: async () => {
+                if (
+                  name === "users" &&
+                  sub === "system" &&
+                  subId === "config"
+                ) {
+                  const data = store.configs[docId];
+                  return { exists: data !== undefined, data: () => data };
+                }
+                return { exists: false, data: () => undefined };
+              },
+            }),
           }),
-        }),
-      }),
+        };
+      },
       where: (field: string, _op: string, value: unknown) =>
         makeQuery(name, store, [{ field, value }]),
       orderBy: () => makeQuery(name, store),
@@ -152,6 +221,13 @@ queued.push(() => ref.update(patch));
         }
         if (name === "users") {
           const docs = Object.entries(store.users).map(([id, data]) => ({
+            id,
+            data: () => data,
+          }));
+          return { docs, size: docs.length };
+        }
+        if (name === "glmGateways") {
+          const docs = Object.entries(store.glmGateways).map(([id, data]) => ({
             id,
             data: () => data,
           }));
@@ -324,6 +400,112 @@ describe("createHttpServer — admin gateway routes", () => {
       id: "op-1",
       kind: "add-gateway",
       status: "succeeded",
+    });
+  });
+
+  it("queues a builder activation lease migration when the owned builder gateway is ready", async () => {
+    store.users["uid-alice"] = {
+      approved: true,
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+    };
+    store.glmGateways["gw-alice"] = {
+      ownerUid: "uid-alice",
+      builderSlug: "alice",
+      gatewayClass: "builder",
+      desiredStatus: "running",
+    };
+    store.gateways["gw-alice"] = {
+      gatewayId: "gw-alice",
+      status: "ready",
+      mountedCustomers: [],
+    };
+
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .post("/api/admin/customers/uid-alice/activation-lease")
+      .set("Authorization", "Bearer admin-token")
+      .send({ reason: "conversation-start" });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({
+      uid: "uid-alice",
+      builderSlug: "alice",
+      gatewayId: "gw-alice",
+      gatewayClass: "builder",
+      operationId: "auto-1",
+      status: "activating",
+    });
+    expect(store.glmOperations).toHaveLength(1);
+    expect(store.glmOperations[0]).toMatchObject({
+      id: "auto-1",
+      data: {
+        kind: "migrate-customer",
+        status: "pending",
+        gatewayId: "gw-alice",
+        inputUid: "uid-alice",
+        input: {
+          uid: "uid-alice",
+          toGatewayId: "gw-alice",
+          source: "builder-activation-lease",
+          builderSlug: "alice",
+          gatewayClass: "builder",
+          reason: "conversation-start",
+        },
+      },
+    });
+    expect(store.users["uid-alice"].provisioning).toMatchObject({
+      openclaw: {
+        activationLease: {
+          gatewayId: "gw-alice",
+          gatewayClass: "builder",
+          builderSlug: "alice",
+          status: "activating",
+          operationId: "auto-1",
+        },
+      },
+    });
+  });
+
+  it("wakes a paused builder gateway without queuing migration until it is ready", async () => {
+    store.users["uid-alice"] = {
+      approved: true,
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+    };
+    store.glmGateways["gw-alice"] = {
+      ownerUid: "uid-alice",
+      builderSlug: "alice",
+      gatewayClass: "builder",
+      desiredStatus: "paused",
+    };
+
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .post("/api/admin/customers/uid-alice/activation-lease")
+      .set("Authorization", "Bearer admin-token")
+      .send({});
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({
+      uid: "uid-alice",
+      gatewayId: "gw-alice",
+      status: "waking",
+      targetStatus: "missing",
+      retryAfterMs: 15_000,
+    });
+    expect(store.glmGateways["gw-alice"].desiredStatus).toBe("running");
+    expect(store.glmOperations).toHaveLength(0);
+    expect(store.users["uid-alice"].provisioning).toMatchObject({
+      openclaw: {
+        activationLease: {
+          gatewayId: "gw-alice",
+          gatewayClass: "builder",
+          builderSlug: "alice",
+          status: "waking",
+          targetStatus: "missing",
+        },
+      },
     });
   });
 
