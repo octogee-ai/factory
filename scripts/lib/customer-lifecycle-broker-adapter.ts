@@ -418,12 +418,33 @@ async function prepareKeyImportDir(slug: string): Promise<string> {
   return OPENCLAW_DIR;
 }
 
+async function hasOperatorAgentStateForMigration(slug: string): Promise<boolean> {
+  const stateDir = resolveOpenClawStateDir();
+  const agentDir = path.join(stateDir, "agents", customerCoachAgentId(slug));
+  try {
+    await fsp.access(agentDir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<void> {
-  const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
+  let manifest;
+  try {
+    manifest = await readActivationManifest(OPENCLAW_DIR, slug);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" && await hasOperatorAgentStateForMigration(slug)) {
+      ctx.log(`[import:${slug}] no customer activation manifest; imported operator agent state only`);
+      return;
+    }
+    throw err;
+  }
   const patch = await applyOpenClawActivationManifest(manifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
