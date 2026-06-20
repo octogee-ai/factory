@@ -3,12 +3,52 @@ import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
 import { isValidGatewayId } from "../../../shared/types/glm.js";
+import {
+  activationLeaseMissCanMintTicket,
+  requestBuilderActivationLease,
+} from "../../../scripts/lib/builder-activation-lease.js";
 
 const router = Router();
+
+function workspaceSlugsForUser(data: { username?: string | null }): string[] {
+  return typeof data.username === "string" && data.username.length > 0
+    ? [data.username]
+    : [];
+}
+
+async function maybeRequestActivationBeforeTicket(
+  uid: string,
+  userData: Record<string, unknown> | undefined,
+): Promise<{ statusCode: number; body: Record<string, unknown> } | null> {
+  if (userData?.approved !== true) return null;
+  const result = await requestBuilderActivationLease({
+    db,
+    uid,
+    createdBy: `openclaw-ticket:${uid}`,
+    reason: "openclaw-ticket",
+    workspaceSlugsForUser,
+  });
+  if (result.statusCode === 202) {
+    return {
+      statusCode: 202,
+      body: { ...result.body, openclawTicketDeferred: true },
+    };
+  }
+  if (result.statusCode === 200 || activationLeaseMissCanMintTicket(result)) {
+    return null;
+  }
+  return result;
+}
 
 router.post("/ticket", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
+
+    const activation = await maybeRequestActivationBeforeTicket(uid, req.user);
+    if (activation) {
+      res.status(activation.statusCode).json(activation.body);
+      return;
+    }
 
     const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;

@@ -94,4 +94,130 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     expect(res.status).toBe(200);
     expect(res.body.gatewayId).toBe("");
   });
+
+  it("defers the ticket and queues an activation migration when the owned builder gateway is ready", async () => {
+    await db.doc("users/caller-uid").set({
+      approved: true,
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+    });
+    await db.doc("glmGateways/gw-alice").set({
+      ownerUid: "caller-uid",
+      builderSlug: "alice",
+      gatewayClass: "builder",
+      desiredStatus: "running",
+    });
+    await db.doc("gateways/gw-alice").set({
+      gatewayId: "gw-alice",
+      status: "ready",
+      mountedCustomers: [],
+    });
+
+    const token = await getIdTokenForUid("caller-uid");
+    const res = await request(buildApp())
+      .post("/api/openclaw/ticket")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({
+      status: "activating",
+      gatewayId: "gw-alice",
+      gatewayClass: "builder",
+      openclawTicketDeferred: true,
+    });
+    expect(res.body.wsTicket).toBeUndefined();
+
+    const ops = await db.collection("glmOperations").get();
+    expect(ops.size).toBe(1);
+    expect(ops.docs[0].data()).toMatchObject({
+      kind: "migrate-customer",
+      status: "pending",
+      gatewayId: "gw-alice",
+      inputUid: "caller-uid",
+      input: {
+        uid: "caller-uid",
+        toGatewayId: "gw-alice",
+        source: "builder-activation-lease",
+        builderSlug: "alice",
+        gatewayClass: "builder",
+        reason: "openclaw-ticket",
+      },
+    });
+  });
+
+  it("wakes a sleeping dedicated gateway and waits to mint until the next retry", async () => {
+    await db.doc("users/caller-uid").set({
+      approved: true,
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+    });
+    await db.doc("glmGateways/gw-alice").set({
+      ownerUid: "caller-uid",
+      builderSlug: "alice",
+      gatewayClass: "builder",
+      desiredStatus: "paused",
+    });
+
+    const token = await getIdTokenForUid("caller-uid");
+    const res = await request(buildApp())
+      .post("/api/openclaw/ticket")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({
+      status: "waking",
+      targetStatus: "missing",
+      gatewayId: "gw-alice",
+      openclawTicketDeferred: true,
+    });
+    expect(res.body.wsTicket).toBeUndefined();
+
+    const target = await db.doc("glmGateways/gw-alice").get();
+    expect(target.data()?.desiredStatus).toBe("running");
+    const ops = await db.collection("glmOperations").get();
+    expect(ops.empty).toBe(true);
+  });
+
+  it("auto-activates an owned operator gateway when it is the only dedicated target", async () => {
+    await db.doc("users/caller-uid").set({
+      approved: true,
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+    });
+    await db.doc("glmGateways/bender").set({
+      ownerUid: "caller-uid",
+      builderSlug: "alice",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      desiredStatus: "running",
+    });
+    await db.doc("gateways/bender").set({
+      gatewayId: "bender",
+      status: "ready",
+      mountedCustomers: [],
+    });
+
+    const token = await getIdTokenForUid("caller-uid");
+    const res = await request(buildApp())
+      .post("/api/openclaw/ticket")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({
+      status: "activating",
+      gatewayId: "bender",
+      gatewayClass: "operator",
+      openclawTicketDeferred: true,
+    });
+
+    const ops = await db.collection("glmOperations").get();
+    expect(ops.size).toBe(1);
+    expect(ops.docs[0].data()).toMatchObject({
+      input: {
+        uid: "caller-uid",
+        toGatewayId: "bender",
+        gatewayClass: "operator",
+      },
+    });
+  });
 });
