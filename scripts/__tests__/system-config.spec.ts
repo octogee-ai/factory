@@ -16,6 +16,7 @@ import {
 } from "../lib/gitea-admin-broker-client.js";
 import {
   expandEnvPlaceholders,
+  pushDirtySystemConfigForSlug,
   restoreSystemConfigForSlug,
   systemConfigDir,
 } from "../lib/system-config.js";
@@ -181,5 +182,71 @@ describe("system_config restore", () => {
     expect(gitExec).not.toHaveBeenCalledWith(repoDir, "add openclaw.json");
     const runtime = JSON.parse(fs.readFileSync(runtimeConfigPath, "utf-8"));
     expect(runtime.channels.mattermost.baseUrl).toBe("http://mm2");
+  });
+
+  it("preStop sync commits and pushes only dirty system_config openclaw.json", () => {
+    writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
+    const calls: Array<{ cwd: string; args: string; sshKeyPath?: string }> = [];
+    const logs: string[] = [];
+    const result = pushDirtySystemConfigForSlug("acme", {
+      openclawDir,
+      now: () => new Date("2026-06-20T14:00:00.000Z"),
+      log: (msg) => logs.push(msg),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: vi.fn((cwd: string, args: string, sshKeyPath?: string) => {
+        calls.push({ cwd, args, sshKeyPath });
+        if (args === "status --porcelain -- openclaw.json") return " M openclaw.json";
+        return "ok";
+      }),
+    });
+
+    expect(result).toEqual({ committed: true, pushed: true });
+    expect(calls).toEqual([
+      { cwd: repoDir, args: "status --porcelain -- openclaw.json", sshKeyPath: "/tmp/key" },
+      { cwd: repoDir, args: "add openclaw.json", sshKeyPath: "/tmp/key" },
+      {
+        cwd: repoDir,
+        args: 'commit -m "prestop: sync openclaw config 2026-06-20T14:00:00.000Z"',
+        sshKeyPath: "/tmp/key",
+      },
+      { cwd: repoDir, args: "push origin main", sshKeyPath: "/tmp/key" },
+    ]);
+    expect(logs.join("\n")).toMatch(/prestop pushed/);
+  });
+
+  it("preStop sync skips a clean system_config checkout", () => {
+    writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
+    const git = vi.fn((cwd: string, args: string) => {
+      if (args === "status --porcelain -- openclaw.json") return "";
+      return "unexpected";
+    });
+
+    const result = pushDirtySystemConfigForSlug("acme", {
+      openclawDir,
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    });
+
+    expect(result).toEqual({ committed: false, pushed: false });
+    expect(git).toHaveBeenCalledTimes(1);
+  });
+
+  it("preStop sync treats git status failure as skipped, not clean", () => {
+    writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
+    const logs: string[] = [];
+
+    const result = pushDirtySystemConfigForSlug("acme", {
+      openclawDir,
+      log: (msg) => logs.push(msg),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: vi.fn(() => null),
+    });
+
+    expect(result).toEqual({ skipped: "status-failed", committed: false, pushed: false });
+    expect(logs.join("\n")).toMatch(/status check failed/);
   });
 });

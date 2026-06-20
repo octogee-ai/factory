@@ -33,12 +33,27 @@ export interface SystemConfigRestoreResult {
   restored: boolean;
 }
 
+export interface SystemConfigSyncResult {
+  skipped?: string;
+  committed: boolean;
+  pushed: boolean;
+}
+
 interface SystemConfigRestoreOptions {
   openclawDir?: string;
   runtimeConfigPath?: string;
   templatePath?: string;
   env?: NodeJS.ProcessEnv;
   log?: (msg: string) => void;
+}
+
+interface SystemConfigSyncOptions {
+  openclawDir?: string;
+  now?: () => Date;
+  log?: (msg: string) => void;
+  gitExec?: typeof gitExec;
+  setRepoSshCommand?: typeof setRepoSshCommand;
+  customerSshKeyPath?: typeof customerSshKeyPath;
 }
 
 export function systemConfigDir(openclawDir = OPENCLAW_DIR): string {
@@ -284,4 +299,56 @@ export async function restoreSystemConfigForSlug(
   restoreOpenClawConfig(path.join(repoDir, "openclaw.json"), runtimeConfigPath, opts.env ?? process.env);
   log(`[system_config] restored openclaw.json from ${slug}/${systemConfigRepoName()}`);
   return { seeded, restored: true };
+}
+
+export function pushDirtySystemConfigForSlug(
+  slug: string,
+  opts: SystemConfigSyncOptions = {},
+): SystemConfigSyncResult {
+  const log = opts.log ?? defaultLog;
+  if (!isValidUsername(slug)) {
+    return { skipped: "invalid-builder-slug", committed: false, pushed: false };
+  }
+
+  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const repoDir = systemConfigDir(openclawDir);
+  const repoConfigPath = path.join(repoDir, "openclaw.json");
+  if (!fs.existsSync(path.join(repoDir, ".git"))) {
+    return { skipped: "checkout-unavailable", committed: false, pushed: false };
+  }
+  if (!fs.existsSync(repoConfigPath)) {
+    return { skipped: "openclaw-json-missing", committed: false, pushed: false };
+  }
+
+  const execGit = opts.gitExec ?? gitExec;
+  const configureSsh = opts.setRepoSshCommand ?? setRepoSshCommand;
+  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
+  configureSsh(repoDir, slug);
+
+  const dirty = execGit(repoDir, "status --porcelain -- openclaw.json", keyPath);
+  if (dirty === null) {
+    log(`[system_config] ${slug}: prestop status check failed`);
+    return { skipped: "status-failed", committed: false, pushed: false };
+  }
+  if (dirty.length === 0) {
+    log(`[system_config] ${slug}: no openclaw.json changes to flush`);
+    return { committed: false, pushed: false };
+  }
+
+  execGit(repoDir, "add openclaw.json", keyPath);
+  const stamp = (opts.now ?? (() => new Date()))().toISOString();
+  const committed = execGit(repoDir, `commit -m "prestop: sync openclaw config ${stamp}"`, keyPath);
+  if (committed === null) {
+    log(`[system_config] ${slug}: prestop commit failed`);
+    return { committed: false, pushed: false };
+  }
+
+  const pushed = execGit(repoDir, "push origin main", keyPath);
+  if (pushed === null) {
+    log(`[system_config] ${slug}: prestop push failed`);
+    return { committed: true, pushed: false };
+  }
+
+  log(`[system_config] ${slug}: prestop pushed openclaw.json changes`);
+  return { committed: true, pushed: true };
 }
