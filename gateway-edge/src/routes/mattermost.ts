@@ -6,6 +6,82 @@ import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
 
 const router = Router();
 
+const GATEWAY_ID_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+function extractValidGatewayId(user: { provisioning?: unknown }): string {
+  const provisioning = user.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
+  const raw = provisioning?.openclaw?.gatewayId;
+  return typeof raw === "string" && GATEWAY_ID_RE.test(raw) ? raw : "";
+}
+
+function inviteStatusMessage(data: {
+  status?: string;
+  inviteeFirstName?: string;
+  inviteeEmail?: string;
+  error?: string;
+}): string {
+  if (data.status === "completed") return `${data.inviteeFirstName || data.inviteeEmail} has been added!`;
+  if (data.status === "failed") return data.error || "Invite failed";
+  return "Processing...";
+}
+
+type InviteeResolution =
+  | { ok: false; status: number; error: string }
+  | { ok: true; id: string; firstName: string; mmUserId: string; normalizedEmail: string };
+
+// Resolve an invitee by email. `firstName` mirrors the stored doc value
+// (`firstName || ""`); message sites apply the `|| normalizedEmail` fallback.
+async function resolveInviteeByEmail(email: string): Promise<InviteeResolution> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const snap = await db.collection("users").where("email", "==", normalizedEmail).limit(1).get();
+  if (snap.empty) return { ok: false, status: 404, error: "No Octogee user found with that email" };
+  const data = snap.docs[0].data();
+  if (!data.mattermost?.userId) return { ok: false, status: 400, error: "That user's workspace isn't set up yet" };
+  return {
+    ok: true,
+    id: snap.docs[0].id,
+    firstName: data.firstName || "",
+    mmUserId: data.mattermost.userId,
+    normalizedEmail,
+  };
+}
+
+function existingInviteResponse(
+  existing: { id: string; data: Record<string, unknown> },
+  inviteeName: string,
+): { message: string; inviteId?: string } {
+  if (existing.data.status === "completed") return { message: `${inviteeName} is already in this channel` };
+  return { message: "Invite is being processed...", inviteId: existing.id };
+}
+
+async function findExistingInvite(
+  channelId: string,
+  inviteeUid: string,
+): Promise<{ id: string; data: Record<string, unknown> } | null> {
+  const existing = await db.collection("invites")
+    .where("channelId", "==", channelId)
+    .where("inviteeUid", "==", inviteeUid)
+    .where("status", "in", ["pending", "completed"])
+    .limit(1).get();
+  if (existing.empty) return null;
+  return { id: existing.docs[0].id, data: existing.docs[0].data() };
+}
+
+// Link-state validation (expiry + usage cap). The caller-onboarding check
+// stays inline in the handler so TS narrows callerData.mattermost afterwards.
+function validateInviteLink(linkData: {
+  expiresAt?: { toDate?: () => Date };
+  maxUses?: number;
+  uses?: number;
+}): { status: number; error: string } | null {
+  const expiresAt = linkData.expiresAt?.toDate?.() ?? new Date(0);
+  if (Date.now() > expiresAt.getTime()) return { status: 410, error: "This invite link has expired" };
+  if ((linkData.maxUses ?? 0) > 0 && (linkData.uses ?? 0) >= (linkData.maxUses ?? 0)) {
+    return { status: 410, error: "This invite link has reached its usage limit" };
+  }
+  return null;
+}
+
 router.get("/token", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
@@ -37,13 +113,7 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
     const proxyUrl = process.env.API_PUBLIC_URL || "";
     const coachMmUserId = ctx.coachUserId || null;
     const coachName = userData.onboarding?.coachName || null;
-
-const provisioning = userData.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
-    const rawGatewayId = provisioning?.openclaw?.gatewayId;
-    const gatewayId =
-      typeof rawGatewayId === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(rawGatewayId)
-        ? rawGatewayId
-        : "";
+    const gatewayId = extractValidGatewayId(userData);
 
     res.json({ mmUserId, dmChannelId, proxyUrl, gatewayId, coachMmUserId, coachName });
   } catch (e) { next(e); }
@@ -72,34 +142,16 @@ router.post("/invite", requireAuth, async (req: Request, res: Response, next: Ne
       return;
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
-    const inviteeSnap = await db.collection("users").where("email", "==", normalizedEmail).limit(1).get();
-
-    if (inviteeSnap.empty) {
-      res.status(404).json({ error: "No Octogee user found with that email" });
+    const invitee = await resolveInviteeByEmail(email);
+    if (!invitee.ok) {
+      res.status(invitee.status).json({ error: invitee.error });
       return;
     }
+    const inviteeName = invitee.firstName || invitee.normalizedEmail;
 
-    const inviteeDoc = inviteeSnap.docs[0];
-    const inviteeData = inviteeDoc.data();
-    if (!inviteeData.mattermost?.userId) {
-      res.status(400).json({ error: "That user's workspace isn't set up yet" });
-      return;
-    }
-
-const existing = await db.collection("invites")
-      .where("channelId", "==", channelId)
-      .where("inviteeUid", "==", inviteeDoc.id)
-      .where("status", "in", ["pending", "completed"])
-      .limit(1).get();
-
-    if (!existing.empty) {
-      const existingData = existing.docs[0].data();
-      if (existingData.status === "completed") {
-        res.json({ message: `${inviteeData.firstName || normalizedEmail} is already in this channel` });
-      } else {
-        res.json({ message: "Invite is being processed...", inviteId: existing.docs[0].id });
-      }
+    const existing = await findExistingInvite(channelId, invitee.id);
+    if (existing) {
+      res.json(existingInviteResponse(existing, inviteeName));
       return;
     }
 
@@ -107,10 +159,10 @@ const existing = await db.collection("invites")
       callerUid,
       callerEmail: callerData.email || "",
       callerFirstName: callerData.firstName || "",
-      inviteeUid: inviteeDoc.id,
-      inviteeEmail: normalizedEmail,
-      inviteeFirstName: inviteeData.firstName || "",
-      inviteeMmUserId: inviteeData.mattermost.userId,
+      inviteeUid: invitee.id,
+      inviteeEmail: invitee.normalizedEmail,
+      inviteeFirstName: invitee.firstName,
+      inviteeMmUserId: invitee.mmUserId,
       channelId,
       status: "pending",
       error: null,
@@ -119,7 +171,7 @@ const existing = await db.collection("invites")
     });
 
     res.json({
-      message: `Inviting ${inviteeData.firstName || normalizedEmail}...`,
+      message: `Inviting ${inviteeName}...`,
       inviteId: inviteRef.id,
     });
   } catch (e) { next(e); }
@@ -134,14 +186,7 @@ router.get("/invite-status", requireAuth, async (req: Request, res: Response, ne
     if (!doc.exists) { res.status(404).json({ error: "Invite not found" }); return; }
 
     const data = doc.data()!;
-    res.json({
-      status: data.status,
-      message: data.status === "completed"
-        ? `${data.inviteeFirstName || data.inviteeEmail} has been added!`
-        : data.status === "failed"
-          ? data.error || "Invite failed"
-          : "Processing...",
-    });
+    res.json({ status: data.status, message: inviteStatusMessage(data) });
   } catch (e) { next(e); }
 });
 
@@ -199,15 +244,8 @@ router.post("/accept-invite-link", requireAuth, async (req: Request, res: Respon
     if (!linkDoc.exists) { res.status(404).json({ error: "Invite link not found" }); return; }
 
     const linkData = linkDoc.data()!;
-    const expiresAt = linkData.expiresAt?.toDate?.() ?? new Date(0);
-    if (Date.now() > expiresAt.getTime()) {
-      res.status(410).json({ error: "This invite link has expired" });
-      return;
-    }
-    if (linkData.maxUses > 0 && linkData.uses >= linkData.maxUses) {
-      res.status(410).json({ error: "This invite link has reached its usage limit" });
-      return;
-    }
+    const linkError = validateInviteLink(linkData);
+    if (linkError) { res.status(linkError.status).json({ error: linkError.error }); return; }
 
     if (!callerData.mattermost?.userId) {
       res.status(400).json({ error: "You need to complete onboarding before joining a channel" });
@@ -216,18 +254,12 @@ router.post("/accept-invite-link", requireAuth, async (req: Request, res: Respon
 
     const channelId = linkData.channelId;
 
-    const existing = await db.collection("invites")
-      .where("channelId", "==", channelId)
-      .where("inviteeUid", "==", callerUid)
-      .where("status", "in", ["pending", "completed"])
-      .limit(1).get();
-
-    if (!existing.empty) {
-      const existingData = existing.docs[0].data();
+    const existing = await findExistingInvite(channelId, callerUid);
+    if (existing) {
       res.json({
-        inviteId: existing.docs[0].id,
+        inviteId: existing.id,
         channelId,
-        message: existingData.status === "completed" ? "You're already in this channel" : "Joining channel...",
+        message: existing.data.status === "completed" ? "You're already in this channel" : "Joining channel...",
       });
       return;
     }
