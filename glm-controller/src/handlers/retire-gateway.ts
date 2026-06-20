@@ -3,6 +3,8 @@ import { isValidGatewayId } from "../../../shared/types/glm.js";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
 
+const UNKNOWN_ERROR = "unknown error";
+
 export interface GatewayLiveState {
   mountedCustomers: string[];
 }
@@ -165,18 +167,18 @@ async function teardownResources(
     const r = await runReportedStep(ctx, deps, "delete-pvc", () =>
       deps.deleteGatewayPersistentVolumeClaim(gatewayId),
     );
-    if (!r.ok) errors.push(`delete-pvc: ${r.error ?? "unknown error"}`);
+    if (!r.ok) errors.push(`delete-pvc: ${r.error ?? UNKNOWN_ERROR}`);
   }
 
   const kube = await runReportedStep(ctx, deps, "delete-kube-secret", () =>
     deps.deleteGatewayKubeSecret(gatewayId),
   );
-  if (!kube.ok) errors.push(`delete-kube-secret: ${kube.error ?? "unknown error"}`);
+  if (!kube.ok) errors.push(`delete-kube-secret: ${kube.error ?? UNKNOWN_ERROR}`);
 
   const sm = await runReportedStep(ctx, deps, "delete-sm-secret", () =>
     deps.deleteAuthTokenSecret(gatewayId),
   );
-  if (!sm.ok) errors.push(`delete-sm-secret: ${sm.error ?? "unknown error"}`);
+  if (!sm.ok) errors.push(`delete-sm-secret: ${sm.error ?? UNKNOWN_ERROR}`);
 
   // GSA teardown: a non-404 failure means a per-gateway GSA (a standing IAM
   // principal — the exact thing decommission must remove) is still live, so it
@@ -191,7 +193,7 @@ async function teardownResources(
     );
   } else if (teardownGsa) {
     const gsa = await runReportedStep(ctx, deps, "teardown-gsa", () => teardownGsa(gatewayId));
-    if (!gsa.ok) errors.push(`teardown-gsa: ${gsa.error ?? "unknown error"}`);
+    if (!gsa.ok) errors.push(`teardown-gsa: ${gsa.error ?? UNKNOWN_ERROR}`);
   }
 
   return errors;
@@ -222,7 +224,7 @@ async function cleanupGatewayRecords(
   });
   return result.ok
     ? null
-    : failure(`cleanup failed after teardown: ${result.error ?? "unknown error"}`);
+    : failure(`cleanup failed after teardown: ${result.error ?? UNKNOWN_ERROR}`);
 }
 
 async function quiesceGatewayHeartbeat(
@@ -241,7 +243,7 @@ async function quiesceGatewayHeartbeat(
   });
   if (!result.ok) {
     deps.log(
-      `[retire-gateway] heartbeat-quiesce failed for ${gatewayId} (reaper will heal within 60s): ${result.error ?? "unknown error"}`,
+      `[retire-gateway] heartbeat-quiesce failed for ${gatewayId} (reaper will heal within 60s): ${result.error ?? UNKNOWN_ERROR}`,
     );
   }
 }
@@ -253,7 +255,7 @@ async function syncFleetIngress(
   const result = await runReportedStep(ctx, deps, "fleet-ingress", () => deps.syncFleetIngress());
   if (result.ok) return null;
   deps.log(
-    `[retire-gateway] cleanup committed but fleet-ingress sync failed; reconciler will heal within 30s — ${result.error ?? "unknown error"}`,
+    `[retire-gateway] cleanup committed but fleet-ingress sync failed; reconciler will heal within 30s — ${result.error ?? UNKNOWN_ERROR}`,
   );
   return failure(result.error ?? "fleet-ingress sync failed");
 }
