@@ -193,8 +193,7 @@ const sink = new Writable({
 }
 
 function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerLifecycleAdapter {
-
-const everythingElseThrows = new Proxy(
+  const everythingElseThrows = new Proxy(
     {},
     {
       get: (_t, prop: string) =>
@@ -215,9 +214,9 @@ const everythingElseThrows = new Proxy(
     prepareImportDir: vi.fn(async () => "/tmp/import"),
     prepareKeyImportDir: vi.fn(async () => "/tmp/import"),
     activateImportedCustomer: vi.fn(async () => {}),
+    writeMountMarker: vi.fn(),
     waitForAccountHealthy: vi.fn(async () => true),
-
-hasCustomerDir: vi.fn(() => true),
+    hasCustomerDir: vi.fn(() => true),
     customerCoachWiredInOpenclawConfig: vi.fn(() => true),
     customerMountMarked: vi.fn(() => true),
     applyRemoveCustomerConfigPatch: vi.fn(async () => {}),
@@ -1021,6 +1020,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(getBody()).toMatchObject({ migrationId: "mig-finish", slug: "chris", imported: true });
     expect(daemon.kill).toHaveBeenCalled();
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.any(Object));
+    expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
     expect(adapter.onMounted).toHaveBeenCalledWith("chris");
     const [copyCommand, copyArgs] = spawnMock.mock.calls[1] as [string, string[]];
     expect(copyCommand).toMatch(/\/rsync$/);
@@ -1488,8 +1488,7 @@ describe("createImportHandler", () => {
   });
 
   it("returns 200 and calls activateImportedCustomer on full success", async () => {
-
-const adapter = mkAdapter();
+    const adapter = mkAdapter();
     const fakeListChild = mkFakeChild({
       stdout: ["agents/octogee-chris-coach/sessions/sessions.json\ncustomers/chris/.git/HEAD\n"],
       exitCode: 0,
@@ -1517,11 +1516,12 @@ const adapter = mkAdapter();
       "chris",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+    expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
 
-expect(spawnMock.mock.calls.length).toBe(2);
+    expect(spawnMock.mock.calls.length).toBe(2);
     expect(spawnMock.mock.calls[0][0]).toBe("tar");
-    expect(spawnMock.mock.calls[0][1][0]).toBe("-tf"); 
-    expect(spawnMock.mock.calls[1][1][0]).toBe("-xf"); 
+    expect(spawnMock.mock.calls[0][1][0]).toBe("-tf");
+    expect(spawnMock.mock.calls[1][1][0]).toBe("-xf");
   });
 
   it("imports keys mode without activating the customer", async () => {
@@ -1553,11 +1553,11 @@ expect(spawnMock.mock.calls.length).toBe(2);
     expect(adapter.prepareKeyImportDir).toHaveBeenCalledWith("chris");
     expect(adapter.prepareImportDir).not.toHaveBeenCalled();
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(adapter.writeMountMarker).not.toHaveBeenCalled();
   });
 
   it("returns 400 when the tarball contains a path-traversal entry (no extract attempted)", async () => {
-
-const adapter = mkAdapter();
+    const adapter = mkAdapter();
     const fakeListChild = mkFakeChild({
       stdout: ["customers/chris/ok.txt\n/etc/passwd\n"],
       exitCode: 0,

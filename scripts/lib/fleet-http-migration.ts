@@ -460,6 +460,7 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
     try {
       deps.adapter.markCustomerMigratingIn?.(body.slug);
       await deps.adapter.activateImportedCustomer(body.slug);
+      deps.adapter.writeMountMarker?.(body.slug);
       deps.adapter.onMounted?.(body.slug);
       const response: ImportResponse = {
         migrationId: body.migrationId,
@@ -1131,6 +1132,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       if (mode !== "keys") {
         deps.adapter.markCustomerMigratingIn?.(body.slug);
         await deps.adapter.activateImportedCustomer(body.slug, { signal: controller.signal });
+        deps.adapter.writeMountMarker?.(body.slug);
         deps.adapter.onMounted?.(body.slug);
       }
       const response: ImportResponse = {
@@ -1416,12 +1418,12 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
         `[migration-http] import mode=${mode} migrationId=${migrationId} slug=${slug} unpacking → ${importDir}`,
       );
 
-tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-${migrationId}-`));
+      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-${migrationId}-`));
       const tarPath = path.join(tmpDir, "import.tar");
 
-await streamRequestToFile(req, tarPath);
+      await streamRequestToFile(req, tarPath);
 
-const entries = await listTarEntries(tarPath);
+      const entries = await listTarEntries(tarPath);
       const violation = findPathTraversalViolation(entries, slug, mode);
       if (violation !== null) {
         log(
@@ -1434,7 +1436,7 @@ const entries = await listTarEntries(tarPath);
         return;
       }
 
-await extractTarToDir(tarPath, importDir);
+      await extractTarToDir(tarPath, importDir);
 
       if (mode === "keys") {
         const response: ImportResponse = { migrationId, slug, imported: true };
@@ -1447,8 +1449,8 @@ await extractTarToDir(tarPath, importDir);
       // yet made it desired-on-this-gateway. The pin keeps the reconcile evict direction
       // from draining the fresh import during that window. Self-expiring (see the pin's TTL).
       deps.adapter.markCustomerMigratingIn?.(slug);
-
-await deps.adapter.activateImportedCustomer(slug, { signal: controller.signal });
+      await deps.adapter.activateImportedCustomer(slug, { signal: controller.signal });
+      deps.adapter.writeMountMarker?.(slug);
       deps.adapter.onMounted?.(slug);
 
       const response: ImportResponse = { migrationId, slug, imported: true };
