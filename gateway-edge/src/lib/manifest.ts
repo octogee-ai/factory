@@ -137,7 +137,7 @@ export async function removeFromManifest(
       sha: raw.sha,
     });
     manifestCache.delete(cacheKey(org, repoName));
-  } catch (e: any) {
-    logger.warn(`Manifest removal failed for ${repoName}: ${e.message}`);
+  } catch (e: unknown) {
+    logger.warn(`Manifest removal failed for ${repoName}: ${e instanceof Error ? e.message : String(e)}`);
   }
 }

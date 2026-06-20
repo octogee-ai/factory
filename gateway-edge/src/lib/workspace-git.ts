@@ -8,6 +8,8 @@ const GIT_TIMEOUT_MS = 5_000;
 const GIT_PUSH_TIMEOUT_MS = 60_000;
 const GIT_COMMIT_TIMEOUT_MS = 30_000;
 
+const END_OF_OPTIONS = "--end-of-options";
+
 const RECORD_SEPARATOR = String.fromCharCode(0x1e);
 const UNIT_SEPARATOR = String.fromCharCode(0x1f);
 const NUL = String.fromCharCode(0x00);
@@ -87,7 +89,7 @@ export async function gitDiff(
   options: { path?: string; ref?: string } = {},
 ): Promise<{ ok: true; diff: string } | { ok: false; error: WorkspaceGitError }> {
 
-const args = ["diff", "--no-color", "--no-ext-diff", "--end-of-options", options.ref ?? "HEAD"];
+const args = ["diff", "--no-color", "--no-ext-diff", END_OF_OPTIONS, options.ref ?? "HEAD"];
   if (options.path) {
     args.push("--", options.path);
   }
@@ -108,7 +110,7 @@ export async function gitCommitDiff(
     "-p",
     "-r",
     "--root",
-    "--end-of-options",
+    END_OF_OPTIONS,
     sha,
   ];
   const r = await runGit(customerDir, args);
@@ -123,7 +125,7 @@ export async function gitLog(
   const limit = clampLimit(options.limit ?? 20);
   
   const FMT = `%H${UNIT_SEPARATOR}%aN${UNIT_SEPARATOR}%ct${UNIT_SEPARATOR}%s${RECORD_SEPARATOR}`;
-  const args = ["log", "--no-ext-diff", `-n${limit}`, `--pretty=format:${FMT}`, "--end-of-options"];
+  const args = ["log", "--no-ext-diff", `-n${limit}`, `--pretty=format:${FMT}`, END_OF_OPTIONS];
   if (options.branch) args.push(options.branch);
   const r = await runGit(customerDir, args);
   if (!r.ok) return r;
@@ -208,7 +210,7 @@ export async function gitCheckout(
 
 const args: string[] = options.create
     ? ["checkout", "-b", branch]
-    : ["checkout", "--end-of-options", branch];
+    : ["checkout", END_OF_OPTIONS, branch];
   const r = await runGit(customerDir, args);
   if (!r.ok) return r;
   return { ok: true };
@@ -219,8 +221,8 @@ export async function gitPush(
   options: { branch?: string } = {},
 ): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
   const args = options.branch
-    ? ["push", "--end-of-options", "origin", options.branch]
-    : ["push", "--end-of-options"];
+    ? ["push", END_OF_OPTIONS, "origin", options.branch]
+    : ["push", END_OF_OPTIONS];
   const r = await runGit(customerDir, args, { timeoutMs: GIT_PUSH_TIMEOUT_MS });
   if (!r.ok) return r;
   return { ok: true };
