@@ -100,11 +100,10 @@ describe("superviseRunner", () => {
   it("does not wait the restart delay once stop is requested", async () => {
     const h: Harness = { writes: [], logs: [], sleeps: [] };
     const c = deferredChild();
-    let spawned = 0;
     let stopping = false;
     const loop = superviseRunner({
       name: "x",
-      spawn: () => { spawned++; return c.child; },
+      spawn: () => c.child,
       restartDelayMs: 30000,
       now: () => 0,
       sleep: async (ms) => { h.sleeps.push(ms); },

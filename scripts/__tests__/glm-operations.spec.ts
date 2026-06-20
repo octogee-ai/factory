@@ -6,7 +6,7 @@ import {
   isTerminalStatus,
   type OperationsDb,
 } from "../lib/glm-operations.js";
-import { GLM_OPERATIONS_COLLECTION, type Operation } from "../../shared/types/glm.js";
+import { GLM_OPERATIONS_COLLECTION } from "../../shared/types/glm.js";
 
 function makeFakeDb(initial: Record<string, Record<string, unknown>> = {}) {
   const docs = new Map<string, Record<string, unknown>>(Object.entries(initial));
