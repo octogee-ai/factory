@@ -47,6 +47,7 @@ spec:
         # stay stable across rolls.
         gateway-image: {{ .Values.image.tag | default .Values.imageTag | quote }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
       nodeSelector:
         cloud.google.com/compute-class: {{ include "octogee-gateway.computeClass" . | quote }}
         {{- if .Values.machineFamily }}
@@ -166,6 +167,18 @@ spec:
             {{- end }}
           securityContext:
             {{- toYaml .Values.gatewayContainerSecurityContext | nindent 12 }}
+          {{- if .Values.preStopFlush.enabled }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - >
+                    timeout {{ .Values.preStopFlush.timeoutSeconds | default 25 }}s
+                    /octogee/scripts/node_modules/.bin/tsx
+                    /octogee/scripts/entrypoints/prestop-flush.ts || true
+          {{- end }}
           env:
             - name: HOME
               value: "/home/node"

@@ -59,6 +59,14 @@ operatorAccess:
 # needed — TEST is always paused unless an operator explicitly resumes).
 replicas: 1
 
+# Spot/preemption drain budget. Kubernetes runs this hook before SIGTERM and
+# counts it against terminationGracePeriodSeconds, so keep timeoutSeconds below
+# gracePeriodSeconds to leave the entrypoint time to forward TERM to children.
+preStopFlush:
+  enabled: true
+  terminationGracePeriodSeconds: 30
+  timeoutSeconds: 25
+
 # Product/security class. Empty keeps legacy behavior: profile=operator derives
 # operator; otherwise shared. Builder is one-builder, standard image, exec-on,
 # no BuilderShell. Operator is one-builder/platform-owner, operator image,
