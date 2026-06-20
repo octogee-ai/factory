@@ -21,7 +21,7 @@ const channelCache = new Map<string, TtlEntry<string>>();
 
 export interface MmFetcher {
   /** GET /api/v4/<path>; returns parsed JSON or throws on non-2xx. */
-  get: (path: string, pat: string) => Promise<any>;
+  get: (path: string, pat: string) => Promise<unknown>;
 }
 
 export class MmResolveError extends Error {
@@ -44,7 +44,7 @@ export async function resolveTeamId(
   const hit = teamCache.get(slug);
   if (hit && hit.expiresAtMs > now) return hit.value;
 
-  let team: any;
+  let team: unknown;
   try {
     team = await fetcher.get(`/api/v4/teams/name/${encodeURIComponent(slug)}`, pat);
   } catch (err) {
@@ -53,7 +53,7 @@ export async function resolveTeamId(
       `teams/name/${slug} fetch failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  const id = team?.id;
+  const id = (team as { id?: unknown })?.id;
   if (typeof id !== "string" || !id) {
     throw new MmResolveError("team-not-found", `no team named ${slug}`);
   }
@@ -78,7 +78,7 @@ export async function resolveChannelId(
   const hit = channelCache.get(key);
   if (hit && hit.expiresAtMs > now) return hit.value;
 
-  let ch: any;
+  let ch: unknown;
   try {
     ch = await fetcher.get(
       `/api/v4/teams/${teamId}/channels/name/${encodeURIComponent(channelName)}`,
@@ -90,7 +90,7 @@ export async function resolveChannelId(
       `channels/name/${channelName} fetch failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  const id = ch?.id;
+  const id = (ch as { id?: unknown })?.id;
   if (typeof id !== "string" || !id) {
     throw new MmResolveError(
       "channel-not-found",
