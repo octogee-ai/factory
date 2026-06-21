@@ -23,6 +23,8 @@ export {
   type OpenclawWireErrorCode,
 } from "../../shared/types/openclaw-wire-core.js";
 
+const INVALID_RESPONSE = "invalid-response" as const;
+
 export interface ConnectTrace {
   url: string;
   stage: "ws-open" | "challenge" | "connect" | "done";
@@ -213,10 +215,10 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       const payload = await call("config.get", {});
       const snap = payload as { hash?: unknown; config?: unknown } | undefined;
       if (!snap || typeof snap !== "object") {
-        throw new OpenclawWireError("invalid-response", "config.get returned non-object payload");
+        throw new OpenclawWireError(INVALID_RESPONSE, "config.get returned non-object payload");
       }
       if (typeof snap.hash !== "string" || snap.hash.length === 0) {
-        throw new OpenclawWireError("invalid-response", "config.get payload missing `hash`");
+        throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload missing `hash`");
       }
       return { config: snap.config, hash: snap.hash };
     },
@@ -231,11 +233,11 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
             : {}),
         });
         if (!payload || typeof payload !== "object") {
-          throw new OpenclawWireError("invalid-response", "config.patch returned non-object payload");
+          throw new OpenclawWireError(INVALID_RESPONSE, "config.patch returned non-object payload");
         }
         const p = payload as ConfigPatchResult;
         if (p.ok !== true) {
-          throw new OpenclawWireError("invalid-response", "config.patch payload missing `ok: true`");
+          throw new OpenclawWireError(INVALID_RESPONSE, "config.patch payload missing `ok: true`");
         }
         return p;
       } catch (err) {
@@ -259,11 +261,11 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     async cronAdd(spec) {
       const payload = await call("cron.add", spec);
       if (!payload || typeof payload !== "object") {
-        throw new OpenclawWireError("invalid-response", "cron.add returned non-object payload");
+        throw new OpenclawWireError(INVALID_RESPONSE, "cron.add returned non-object payload");
       }
       const p = payload as { id?: unknown };
       if (typeof p.id !== "string" || p.id.length === 0) {
-        throw new OpenclawWireError("invalid-response", "cron.add payload missing string `id`");
+        throw new OpenclawWireError(INVALID_RESPONSE, "cron.add payload missing string `id`");
       }
       return payload as CronAddResult;
     },
@@ -272,20 +274,20 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       const payload = await call("secrets.reload", {});
       if (!payload || typeof payload !== "object") {
         throw new OpenclawWireError(
-          "invalid-response",
+          INVALID_RESPONSE,
           "secrets.reload returned non-object payload",
         );
       }
       const p = payload as { ok?: unknown; warningCount?: unknown };
       if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
         throw new OpenclawWireError(
-          "invalid-response",
+          INVALID_RESPONSE,
           `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`,
         );
       }
       if (p.ok !== undefined && typeof p.ok !== "boolean") {
         throw new OpenclawWireError(
-          "invalid-response",
+          INVALID_RESPONSE,
           `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`,
         );
       }
@@ -414,11 +416,10 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
       token: params.deviceToken || params.token || null,
       platform: clientInfo.platform,
     });
-    const auth = params.deviceToken
-      ? { deviceToken: params.deviceToken }
-      : params.token
-        ? { token: params.token }
-        : undefined;
+    let auth: { deviceToken: string } | { token: string } | undefined;
+    if (params.deviceToken) auth = { deviceToken: params.deviceToken };
+    else if (params.token) auth = { token: params.token };
+    else auth = undefined;
     const connectStart = Date.now();
     await sendWsRequest(
       ws,

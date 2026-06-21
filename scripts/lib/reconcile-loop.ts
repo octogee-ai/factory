@@ -65,10 +65,10 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
 
   if (toMount.length === 0 && toEvict.length === 0) return;
 
+  const mountList = toMount.length ? ` (${toMount.join(",")})` : "";
+  const evictList = toEvict.length ? ` (${toEvict.join(",")})` : "";
   deps.log(
-    `[reconcile] ${deps.gatewayId}: +${toMount.length} mount${
-      toMount.length ? ` (${toMount.join(",")})` : ""
-    } / -${toEvict.length} evict${toEvict.length ? ` (${toEvict.join(",")})` : ""}`,
+    `[reconcile] ${deps.gatewayId}: +${toMount.length} mount${mountList} / -${toEvict.length} evict${evictList}`,
   );
 
   const actions: Array<() => Promise<void>> = [];
