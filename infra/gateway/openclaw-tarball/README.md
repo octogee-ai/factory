@@ -540,6 +540,27 @@ gcloud builds list --project=octogee --ongoing
 > download 5× with backoff, so this should now be rare; the re-run recipe
 > stands if it slips through.
 >
+> **Flake recovery — base build `TIMEOUT` on `RUN npm install -g …fork.tgz`
+> (Step 6/23).** Distinct from the HF prebake flake above: this one times
+> out at the 30m wall-clock on the *fork-tarball npm install*, not the
+> model download. Seen on the 6.9 GA promotion when `rebuild-matrix-bases.sh
+> --apply` fired all three bases at once — registry/network contention
+> stalled one `npm install -g` while the other two sailed through (same
+> Dockerfile, so it's the environment, not the build). Recovery: re-submit
+> **only** the timed-out slot so it builds alone, using the script's own
+> invocation with the **real** computed hash (NOT a bare manual build — see
+> next note). Get the hash from the dry-run (`scripts/rebuild-matrix-bases.sh`),
+> then:
+> ```bash
+> gcloud builds submit --async --project=octogee \
+>   --config="$PWD/cloudbuild-base.yaml" \
+>   --substitutions="_OPENCLAW_VERSION=<ver>,_OPENCLAW_FORK_SHA=<fork>,_BASE_INPUT_HASH=<computed-hash>"
+> ```
+> Solo it flies (~6-8m). The post-merge `gateway-base-rebuild` guardrail
+> re-fires all three on push regardless — if it re-flakes there it's
+> cosmetic, since the pre-built hash-stamped bases already satisfy the
+> Release's poll-gate.
+>
 > **Do NOT trust a manual `gcloud builds submit --config cloudbuild-base.yaml`
 > as the base for a Release.** It stamps the sentinel `_BASE_INPUT_HASH`
 > as `manual` → `…-base-manual`, but `gateway-build.yml` waits for the
@@ -957,25 +978,27 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.8 GA (current) the fork carries **six logical essential patches across eight commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the device-token self-pairing-lockdown security patch; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.9 GA (current) the fork carries **six logical essential patches across eight commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the device-token self-pairing-lockdown security patch; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
 
-Live short SHAs at v2026.6.8 GA (top of current's integration branch is `c13e804a`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
-- `c13e804a` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
-- `8e8d1d46` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
-- `bff62450` — mattermost connect log: ✅ marker for operator visibility on GW startup
-- `0cd80597` — activity harness-signal Hunk B: session-correlated execution-phase
-- `f48dcc95` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
-- `af588dd1` — env-gated isControlUiVisible override
-- `573584a4` — config.patch returns post-write hash
-- `04a2168b` — per-account surgical channel reload
+Live short SHAs at v2026.6.9 GA (top of current's integration branch is `6f734689`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `6f734689` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
+- `1e13a9b0` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
+- `29a7bdfe` — mattermost connect log: ✅ marker for operator visibility on GW startup
+- `142a1676` — activity harness-signal Hunk B: session-correlated execution-phase
+- `98c5d057` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+- `45a34441` — env-gated isControlUiVisible override
+- `c613bbd9` — config.patch returns post-write hash
+- `7b6aa559` — per-account surgical channel reload
+
+The Hunk B execution-phase wrap now lives at `src/agents/embedded-agent-runner/run.ts` — upstream renamed `pi-embedded-runner` to `embedded-agent-runner` before 6.9; the cherry-pick rides the rename. WATCH (6.9): upstream GA-landed a `security.event` diagnostic type (`DiagnosticSecurityEvent`, emitted from our own `message-handler.ts`) — adjacent to the device-token patch but **not** session-correlated and not UI-landed, so left un-adopted; a session-correlated variant would be a Hunk-B-style adopt candidate for a PWA security feed.
 
 Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.6.8 (GA) | `c13e804a` |
-| previous | 2026.6.6 (GA) | `ccd5b76e` |
-| preview | 2026.6.9-alpha.5 | `824aad68` |
+| current | 2026.6.9 (GA) | `6f734689` |
+| previous | 2026.6.8 (GA) | `c13e804a` |
+| preview | 2026.6.10-beta.1 | `13add4e3` |
 
 **Essential:**
 
