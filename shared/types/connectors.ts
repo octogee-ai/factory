@@ -2,6 +2,8 @@ export type ConnectorCaptureMethod = 'oauth-web' | 'device' | 'pat' | 'fields';
 
 export type ConnectorConsumption = 'platform-read' | 'agent-runtime';
 
+const AGENT_RUNTIME: ConnectorConsumption = 'agent-runtime';
+
 export type ConnectorClientSource = 'platform' | 'per-user';
 
 export type ConnectorFamily =
@@ -96,7 +98,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Vercel',
     family: 'deploy-hosting',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: true,
@@ -107,7 +109,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Netlify',
     family: 'deploy-hosting',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: true,
@@ -118,7 +120,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Cloudflare',
     family: 'deploy-hosting',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: true,
@@ -129,7 +131,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'npm',
     family: 'registry',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: true,
@@ -140,7 +142,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Docker / GHCR',
     family: 'registry',
     captureMethods: ['fields'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     captureFields: [
@@ -155,7 +157,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'OpenAI',
     family: 'ai',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: false,
@@ -166,7 +168,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Anthropic',
     family: 'ai',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: false,
@@ -177,7 +179,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'OpenRouter',
     family: 'ai',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: false,
@@ -188,7 +190,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Google Gemini',
     family: 'ai',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: true,
@@ -199,7 +201,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'AWS',
     family: 'cloud',
     captureMethods: ['fields'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     captureFields: [
@@ -214,7 +216,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Google Cloud',
     family: 'cloud',
     captureMethods: ['fields'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     captureFields: [
@@ -234,7 +236,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Google',
     family: 'productivity',
     captureMethods: ['oauth-web'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'per-user',
     scopes: GOOGLE_SCOPES,
     platformScopes: GOOGLE_PLATFORM_SCOPES,
@@ -246,7 +248,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Microsoft',
     family: 'productivity',
     captureMethods: ['oauth-web'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: MICROSOFT_SCOPES,
     implemented: true,
@@ -257,7 +259,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Azure',
     family: 'cloud',
     captureMethods: ['fields'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     captureFields: [
@@ -273,7 +275,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     displayName: 'Yahoo',
     family: 'productivity',
     captureMethods: ['pat'],
-    consumption: 'agent-runtime',
+    consumption: AGENT_RUNTIME,
     clientSource: 'platform',
     scopes: [],
     implemented: false,
