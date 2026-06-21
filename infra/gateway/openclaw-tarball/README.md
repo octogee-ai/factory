@@ -540,6 +540,27 @@ gcloud builds list --project=octogee --ongoing
 > download 5× with backoff, so this should now be rare; the re-run recipe
 > stands if it slips through.
 >
+> **Flake recovery — base build `TIMEOUT` on `RUN npm install -g …fork.tgz`
+> (Step 6/23).** Distinct from the HF prebake flake above: this one times
+> out at the 30m wall-clock on the *fork-tarball npm install*, not the
+> model download. Seen on the 6.9 GA promotion when `rebuild-matrix-bases.sh
+> --apply` fired all three bases at once — registry/network contention
+> stalled one `npm install -g` while the other two sailed through (same
+> Dockerfile, so it's the environment, not the build). Recovery: re-submit
+> **only** the timed-out slot so it builds alone, using the script's own
+> invocation with the **real** computed hash (NOT a bare manual build — see
+> next note). Get the hash from the dry-run (`scripts/rebuild-matrix-bases.sh`),
+> then:
+> ```bash
+> gcloud builds submit --async --project=octogee \
+>   --config="$PWD/cloudbuild-base.yaml" \
+>   --substitutions="_OPENCLAW_VERSION=<ver>,_OPENCLAW_FORK_SHA=<fork>,_BASE_INPUT_HASH=<computed-hash>"
+> ```
+> Solo it flies (~6-8m). The post-merge `gateway-base-rebuild` guardrail
+> re-fires all three on push regardless — if it re-flakes there it's
+> cosmetic, since the pre-built hash-stamped bases already satisfy the
+> Release's poll-gate.
+>
 > **Do NOT trust a manual `gcloud builds submit --config cloudbuild-base.yaml`
 > as the base for a Release.** It stamps the sentinel `_BASE_INPUT_HASH`
 > as `manual` → `…-base-manual`, but `gateway-build.yml` waits for the
