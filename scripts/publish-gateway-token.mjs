@@ -78,6 +78,8 @@ const SECRET_NAME = `${PARENT}/secrets/${SECRET_ID}`;
 
 const client = new SecretManagerServiceClient();
 
+const SETUP_INCOMPLETE = "setup-incomplete";
+
 /** Classify an SM error — did setup-secrets.sh fail to run (fatal for
  *  deploy), or is this a transient GCP blip (warn + continue)? */
 function classifyError(err) {
@@ -88,7 +90,7 @@ function classifyError(err) {
   //   9  FAILED_PRECONDITION / ALREADY_EXISTS — ambiguous, treat as transient.
   //  14  UNAVAILABLE       — SM down / rate-limited. Transient.
   //  16  UNAUTHENTICATED   — Workload Identity misconfigured. Setup incomplete.
-  if (code === 5 || code === 7 || code === 16) return "setup-incomplete";
+  if (code === 5 || code === 7 || code === 16) return SETUP_INCOMPLETE;
   return "transient";
 }
 
@@ -105,11 +107,11 @@ async function main() {
     log(
       `GATEWAY_AUTH_PUBLISH_FAILED: cannot fetch secret shell ${SECRET_ID} ` +
         `in project ${PROJECT_ID} (${kind}) — ${err.message}. ` +
-        (kind === "setup-incomplete"
+        (kind === SETUP_INCOMPLETE
           ? "Run setup-secrets.sh --env=... to provision."
           : "SM likely transiently unavailable — next boot will retry."),
     );
-    process.exit(kind === "setup-incomplete" ? EXIT_SETUP_INCOMPLETE : EXIT_TRANSIENT);
+    process.exit(kind === SETUP_INCOMPLETE ? EXIT_SETUP_INCOMPLETE : EXIT_TRANSIENT);
   }
 
   // Add the new version FIRST, then prune — so there's always at least
@@ -126,7 +128,7 @@ async function main() {
     log(
       `GATEWAY_AUTH_PUBLISH_FAILED: addSecretVersion on ${SECRET_ID} (${kind}) — ${err.message}`,
     );
-    process.exit(kind === "setup-incomplete" ? EXIT_SETUP_INCOMPLETE : EXIT_TRANSIENT);
+    process.exit(kind === SETUP_INCOMPLETE ? EXIT_SETUP_INCOMPLETE : EXIT_TRANSIENT);
   }
   const newVersion = added.name?.split("/").pop() ?? "?";
   log(`published version ${newVersion} of ${SECRET_ID}`);
@@ -168,5 +170,5 @@ async function main() {
 main().catch((err) => {
   const kind = classifyError(err);
   log(`GATEWAY_AUTH_PUBLISH_FAILED: unexpected (${kind}) — ${err.message}`);
-  process.exit(kind === "setup-incomplete" ? EXIT_SETUP_INCOMPLETE : EXIT_TRANSIENT);
+  process.exit(kind === SETUP_INCOMPLETE ? EXIT_SETUP_INCOMPLETE : EXIT_TRANSIENT);
 });
