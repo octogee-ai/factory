@@ -123,6 +123,10 @@ import { recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
+import {
+  ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
+  startBuilderActivationLeaseSweeper,
+} from "./builder-activation-sweeper.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
 import type {
   FleetBrokerChannelBinding,
@@ -157,6 +161,10 @@ const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
 const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
+const ACTIVATION_LEASE_SWEEP_MS = parseNonNegativeInt(
+  process.env.ACTIVATION_LEASE_SWEEP_MS,
+  ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
+);
 
 const GATEWAY_EDGE_INGRESS_NAME =
   process.env.GATEWAY_EDGE_INGRESS_NAME ?? "gateway-edge-ingress";
@@ -231,6 +239,12 @@ function versionFromImageTag(imageTag: string | undefined): string {
   if (!imageTag) return "unknown";
   const [buildSha] = imageTag.split("-oc");
   return buildSha || imageTag;
+}
+
+function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
+  if (raw == null || raw.trim() === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function isRunningGateway(gateway: GatewayDesiredState): boolean {
@@ -1048,6 +1062,15 @@ const stopStuckOpReaper = startStuckOpReaper({
     stalenessMs: 15 * 60 * 1000,
     now: () => Date.now(),
   });
+  const stopActivationSweeper = startBuilderActivationLeaseSweeper(
+    {
+      db,
+      workspaceSlugsForUser,
+      now: () => Date.now(),
+      log,
+    },
+    ACTIVATION_LEASE_SWEEP_MS,
+  );
   const stopHttp = startHttpServer({
     db,
     log,
@@ -1069,6 +1092,7 @@ const stopStuckOpReaper = startStuckOpReaper({
     stopPoller();
     stopReaper();
     stopStuckOpReaper();
+    stopActivationSweeper();
     stopHttp();
     process.exit(0);
   };

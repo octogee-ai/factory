@@ -78,6 +78,8 @@ spec:
                   key: admin_token
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
+            - name: ACTIVATION_LEASE_SWEEP_MS
+              value: {{ (.Values.activationLease).sweepMs | default "30000" | quote }}
             # Single source of truth: parent `.Values.global.fleetControllerPort`.
             # The umbrella's gateway-fleet.yaml renders Service +
             # BackendConfig + Ingress paths off the same value, so a
