@@ -90,7 +90,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       record("cloneWorkspaceRepo");
       if (state.cloneShouldFail) return false;
 
-if (state.disk.customerDir) return false;
+      if (state.disk.customerDir) return false;
       state.disk.customerDir = true;
       state.disk.workspaceGitDir = true;
       state.disk.gitRemote = true;
@@ -1290,7 +1290,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
   it.each(scenarios)("$name", async ({ state, expectRepoTouch }) => {
     const st = state();
 
-if (st.giteaRegisteredPubKey === null) st.giteaRegisteredPubKey = "ssh-pubkey";
+    if (st.giteaRegisteredPubKey === null) st.giteaRegisteredPubKey = "ssh-pubkey";
     await addCustomerToGateway(makeAdapter(st), "uid-test");
 
     const orgIdx = st.calls.indexOf("ensureGiteaOrg");
