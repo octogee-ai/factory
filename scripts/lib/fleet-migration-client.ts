@@ -7,6 +7,7 @@ import {
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
+  type FlushGatewayResponse,
   type ImportResponse,
   type QuiesceResponse,
   type RestoreMigrationResponse,
@@ -43,6 +44,13 @@ export interface MigrationClient {
     slug: string;
     timeoutMs?: number;
   }): Promise<QuiesceResponse>;
+
+  flushGateway(opts: {
+    migrationId: string;
+    gatewayId: string;
+    slug: string;
+    reason: string;
+  }): Promise<FlushGatewayResponse>;
 
   restoreTarget(opts: {
     migrationId: string;
@@ -166,6 +174,20 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         );
       }
       log(`[migration-client] ✅ quiesce ok migrationId=${migrationId} slug=${slug}`);
+      return res;
+    },
+
+    async flushGateway({ migrationId, gatewayId, slug, reason }) {
+      const res = await postSignedJson<FlushGatewayResponse>(
+        gatewayId,
+        `/flush/${gatewayId}`,
+        migrationId,
+        { migrationId, slug, reason },
+        transferMs,
+      );
+      log(
+        `[migration-client] ✅ flushGateway migrationId=${migrationId} slug=${slug} gateway=${gatewayId} ok=${res.ok}`,
+      );
       return res;
     },
 

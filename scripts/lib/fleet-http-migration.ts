@@ -16,6 +16,8 @@ import {
   type ExportPathsRequestBody,
   type ExportPathsResponse,
   type FinishRsyncImportRequestBody,
+  type FlushGatewayRequestBody,
+  type FlushGatewayResponse,
   type MigrationRequestBody,
   type MigrationTransferMode,
   type PrepareRsyncImportRequestBody,
@@ -68,6 +70,11 @@ pushStateTimeoutMs?: number;
 migrationRsyncPort?: number;
 
 waitForRsyncReady?: (port: number) => Promise<void>;
+
+flushLocalState?: (input: {
+  slug: string;
+  reason: string;
+}) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 }
 
 function rejectInvalidSlug(slug: string, res: Response): boolean {
@@ -186,6 +193,39 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ quiesce migrationId=${body.migrationId} slug=${body.slug} failed: ${message}`);
       res.status(500).json({ error: "quiesce failed", message });
+    }
+  };
+}
+
+export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<FlushGatewayRequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+
+    if (!deps.flushLocalState) {
+      res.status(501).json({ error: "flush not configured" });
+      return;
+    }
+
+    try {
+      const result = await deps.flushLocalState({
+        slug: body.slug,
+        reason: typeof body.reason === "string" && body.reason ? body.reason : "controller",
+      });
+      const response: FlushGatewayResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        ...result,
+      };
+      log(
+        `[migration-http] ✅ flush migrationId=${body.migrationId} slug=${body.slug} ok=${result.ok} durationMs=${result.durationMs}`,
+      );
+      res.status(result.ok ? 200 : 500).json(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`[migration-http] ❌ flush migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      res.status(500).json({ error: "flush failed", message });
     }
   };
 }

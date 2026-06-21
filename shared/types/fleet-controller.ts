@@ -161,6 +161,23 @@ drained: boolean;
 runningCount: number;
 }
 
+export interface FlushGatewayRequestBody extends MigrationRequestBody {
+  reason?: string;
+}
+
+export interface FlushGatewayResponse {
+  migrationId: string;
+  slug: string;
+  ok: boolean;
+  durationMs: number;
+  steps: Array<{
+    name: string;
+    status: "done" | "failed" | "skipped";
+    error?: string;
+    durationMs: number;
+  }>;
+}
+
 export interface ImportResponse {
   migrationId: string;
   slug: string;

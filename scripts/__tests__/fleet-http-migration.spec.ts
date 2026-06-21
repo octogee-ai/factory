@@ -11,6 +11,7 @@ import {
   createAbortRsyncImportHandler,
   createExportHandler,
   createExportPathsHandler,
+  createFlushHandler,
   createFinishRsyncImportHandler,
   createImportHandler,
   createPrepareImportHandler,
@@ -397,6 +398,48 @@ describe("createQuiesceHandler", () => {
     await handler(req, res, vi.fn());
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({ error: "quiesce failed", message: "boom" });
+  });
+});
+
+describe("createFlushHandler", () => {
+  it("runs the configured local flush under the signed fleet-control envelope", async () => {
+    const flushLocalState = vi.fn(async () => ({
+      ok: true,
+      durationMs: 12,
+      steps: [{ name: "workspace-git", status: "done" as const, durationMs: 10 }],
+    }));
+    const handler = createFlushHandler(mkDeps({ flushLocalState }));
+    const body = { migrationId: "mig-1", slug: "chris", reason: "idle" };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(flushLocalState).toHaveBeenCalledWith({ slug: "chris", reason: "idle" });
+    expect(getBody()).toEqual({
+      migrationId: "mig-1",
+      slug: "chris",
+      ok: true,
+      durationMs: 12,
+      steps: [{ name: "workspace-git", status: "done", durationMs: 10 }],
+    });
+  });
+
+  it("fails closed when the gateway did not configure a flush implementation", async () => {
+    const handler = createFlushHandler(mkDeps());
+    const body = { migrationId: "mig-1", slug: "chris" };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(501);
+    expect(getBody()).toEqual({ error: "flush not configured" });
   });
 });
 
