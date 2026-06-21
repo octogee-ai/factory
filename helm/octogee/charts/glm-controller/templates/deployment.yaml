@@ -78,6 +78,14 @@ spec:
                   key: admin_token
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
+            - name: ACTIVATION_LEASE_SWEEP_MS
+              value: {{ (.Values.activationLease).sweepMs | default "30000" | quote }}
+            - name: DEDICATED_GATEWAY_IDLE_MS
+              value: {{ (.Values.dedicatedGatewayIdle).idleMs | default "0" | quote }}
+            - name: DEDICATED_GATEWAY_IDLE_SWEEP_MS
+              value: {{ (.Values.dedicatedGatewayIdle).sweepMs | default "60000" | quote }}
+            - name: PREEMPTION_HANDOFF_SWEEP_MS
+              value: {{ (.Values.preemptionHandoff).sweepMs | default "15000" | quote }}
             # Single source of truth: parent `.Values.global.fleetControllerPort`.
             # The umbrella's gateway-fleet.yaml renders Service +
             # BackendConfig + Ingress paths off the same value, so a

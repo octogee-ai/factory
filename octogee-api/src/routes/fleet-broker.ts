@@ -9,12 +9,20 @@ import type {
   FleetBrokerGreetingResult,
   FleetBrokerMacOpsToken,
   FleetBrokerMattermostUpdate,
+  FleetBrokerPreStopFlushEvent,
+  FleetBrokerPreStopFlushStep,
   FleetBrokerProjectCreateInput,
   FleetBrokerProjectRestore,
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
 } from "../../../shared/types/fleet-broker.js";
+import {
+  GLM_GATEWAYS_COLLECTION,
+  isGatewayClass,
+  isGatewayProfile,
+  resolveGatewayClass,
+} from "../../../shared/types/glm.js";
 import {
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
@@ -345,6 +353,71 @@ function objectBody(req: Request): Record<string, unknown> {
 function recordBodyValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
+    : null;
+}
+
+function validPreStopFlushEvent(
+  value: Record<string, unknown>,
+): FleetBrokerPreStopFlushEvent | null {
+  const phase = value.phase;
+  if (phase !== "started" && phase !== "completed") return null;
+  if (value.reason !== "prestop") return null;
+  const gatewayClass = typeof value.gatewayClass === "string" ? value.gatewayClass : "";
+  if (!gatewayClass) return null;
+  const resultValue = recordBodyValue(value.result);
+  if (phase === "started") {
+    return { gatewayClass, phase, reason: "prestop" };
+  }
+  if (!resultValue) return null;
+  const ok = resultValue.ok;
+  const durationMs = resultValue.durationMs;
+  const steps = resultValue.steps;
+  if (typeof ok !== "boolean" || typeof durationMs !== "number" || !Array.isArray(steps)) {
+    return null;
+  }
+  const validSteps = steps
+    .filter((step): step is Record<string, unknown> => recordBodyValue(step) !== null)
+    .map((step): FleetBrokerPreStopFlushStep => {
+      const status: FleetBrokerPreStopFlushStep["status"] =
+        step.status === "done" || step.status === "failed" || step.status === "skipped"
+          ? step.status
+          : "failed";
+      return {
+        name: typeof step.name === "string" ? step.name : "unknown",
+        status,
+        ...(typeof step.error === "string" ? { error: step.error.slice(0, 1000) } : {}),
+        durationMs: typeof step.durationMs === "number" ? step.durationMs : 0,
+      };
+    });
+  return {
+    gatewayClass,
+    phase,
+    reason: "prestop",
+    result: {
+      ok,
+      durationMs,
+      steps: validSteps,
+    },
+  };
+}
+
+function gatewayClassFromGlmDoc(data: Record<string, unknown> | undefined): string {
+  if (!data) return "shared";
+  return resolveGatewayClass({
+    gatewayClass: isGatewayClass(data.gatewayClass) ? data.gatewayClass : undefined,
+    profile: isGatewayProfile(data.profile) ? data.profile : undefined,
+    imageProfile: isGatewayProfile(data.imageProfile) ? data.imageProfile : undefined,
+  });
+}
+
+function warmTargetGatewayId(data: Record<string, unknown> | undefined): string | null {
+  const preemption =
+    data?.preemption && typeof data.preemption === "object"
+      ? (data.preemption as Record<string, unknown>)
+      : {};
+  return typeof preemption.warmTargetGatewayId === "string" &&
+    preemption.warmTargetGatewayId.length > 0
+    ? preemption.warmTargetGatewayId
     : null;
 }
 
@@ -948,6 +1021,75 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
     await runBrokered(res, async () => {
       const token = await mintMacOpsToken({ gatewayId: bound.gatewayId });
       res.json(token);
+    });
+  });
+
+  router.post("/prestop-flush", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const event = validPreStopFlushEvent(objectBody(req));
+    if (!event) {
+      res.status(400).json({ error: "invalid_prestop_flush_event" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const gatewayRef = db.collection("gateways").doc(bound.gatewayId);
+      const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(bound.gatewayId);
+      await db.runTransaction(async (txn) => {
+        const glmSnap = await txn.get(glmRef);
+        const glmData = glmSnap.exists
+          ? (glmSnap.data() as Record<string, unknown> | undefined)
+          : undefined;
+        txn.set(
+          gatewayRef,
+          {
+            lastPreStopFlush: {
+              ...event,
+              at: FieldValue.serverTimestamp(),
+            },
+          },
+          { merge: true },
+        );
+
+        if (!glmSnap.exists) return;
+        const gatewayClass = gatewayClassFromGlmDoc(glmData);
+        const targetGatewayId = warmTargetGatewayId(glmData);
+        if (
+          event.phase === "started" &&
+          (gatewayClass === "builder" || gatewayClass === "operator") &&
+          targetGatewayId
+        ) {
+          txn.set(
+            glmRef,
+            {
+              preemptionHandoff: {
+                status: "requested",
+                requestedAt: FieldValue.serverTimestamp(),
+                sourceGatewayId: bound.gatewayId,
+                targetGatewayId,
+                reason: "spot-prestop",
+                gatewayClass,
+              },
+            },
+            { merge: true },
+          );
+        }
+        const hasExistingHandoff =
+          typeof readPath(glmData, "preemptionHandoff.status") === "string";
+        if (event.phase === "completed" && (targetGatewayId || hasExistingHandoff)) {
+          txn.set(
+            glmRef,
+            {
+              preemptionHandoff: {
+                flushCompletedAt: FieldValue.serverTimestamp(),
+                flushOk: event.result?.ok === true,
+              },
+            },
+            { merge: true },
+          );
+        }
+      });
+      res.status(204).end();
     });
   });
 
