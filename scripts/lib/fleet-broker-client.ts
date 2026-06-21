@@ -3,6 +3,7 @@ import type {
   FleetBrokerGreetingResult,
   FleetBrokerMacOpsToken,
   FleetBrokerMattermostUpdate,
+  FleetBrokerPreStopFlushEvent,
   FleetBrokerProjectCreateInput,
   FleetBrokerProjectCreateSuccess,
   FleetBrokerProvisioningStatus,
@@ -75,6 +76,7 @@ export interface FleetBrokerClient {
     agentId: string;
     usage: FleetBrokerUsageData;
   }): Promise<void>;
+  recordPreStopFlush(input: FleetBrokerPreStopFlushEvent): Promise<void>;
   blobDownloadUrl(input: {
     slug: string;
     path: string;
@@ -190,6 +192,9 @@ export function createFleetBrokerClient(gatewayId: string): FleetBrokerClient {
     },
     recordUsageEvent(input) {
       return postNoContent("/internal/fleet/usage-event", { gatewayId, ...input });
+    },
+    recordPreStopFlush(input) {
+      return postNoContent("/internal/fleet/prestop-flush", { gatewayId, ...input });
     },
     blobDownloadUrl(input) {
       return postJson<FleetBrokerBlobSignedUrl>(

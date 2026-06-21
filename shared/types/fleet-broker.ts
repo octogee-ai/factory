@@ -75,6 +75,26 @@ export interface FleetBrokerBlobSignedUrl {
   expiresAt: string;
 }
 
+export interface FleetBrokerPreStopFlushStep {
+  name: string;
+  status: "done" | "failed" | "skipped";
+  error?: string;
+  durationMs: number;
+}
+
+export interface FleetBrokerPreStopFlushResult {
+  ok: boolean;
+  durationMs: number;
+  steps: FleetBrokerPreStopFlushStep[];
+}
+
+export interface FleetBrokerPreStopFlushEvent {
+  gatewayClass: string;
+  phase: "started" | "completed";
+  reason: "prestop";
+  result?: FleetBrokerPreStopFlushResult;
+}
+
 export interface FleetBrokerUserSnapshot {
   uid: string;
   slug: string;
