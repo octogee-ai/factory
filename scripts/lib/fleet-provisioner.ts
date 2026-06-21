@@ -2,13 +2,17 @@ import express from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
 import type { Server } from "http";
-import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "../../shared/types/fleet-controller.js";
+import {
+  GATEWAY_HEARTBEAT_INTERVAL_MS,
+  type FlushGatewayResponse,
+} from "../../shared/types/fleet-controller.js";
 import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
   createExportHandler,
   createExportPathsHandler,
+  createFlushHandler,
   createFinishRsyncImportHandler,
   createImportHandler,
   createPrepareImportHandler,
@@ -100,6 +104,11 @@ export interface StartFleetOptions {
   openclawDir?: string;
 
 internalServiceKey?: string;
+
+flushLocalState?: (input: {
+  slug: string;
+  reason: string;
+}) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 }
 
 export interface StartedFleetController {
@@ -531,9 +540,11 @@ const waitForGatewayReady = async (): Promise<void> => {
     adapter: wrappedAdapter,
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
+    flushLocalState: opts.flushLocalState,
   };
   app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
+  app.post("/flush/:gatewayId", gatewayIdGuard, createFlushHandler(migrationDeps));
   app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
   app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));

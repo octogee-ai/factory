@@ -65,3 +65,7 @@ http:
 
 activationLease:
   sweepMs: "30000"
+
+dedicatedGatewayIdle:
+  idleMs: "0"
+  sweepMs: "60000"
