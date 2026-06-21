@@ -132,6 +132,10 @@ import {
   DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
   startDedicatedGatewayIdleSweeper,
 } from "./dedicated-gateway-idle-sweeper.js";
+import {
+  PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
+  startPreemptionHandoffSweeper,
+} from "./preemption-handoff-sweeper.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
 import type {
   FleetBrokerChannelBinding,
@@ -177,6 +181,10 @@ const DEDICATED_GATEWAY_IDLE_MS = parseNonNegativeInt(
 const DEDICATED_GATEWAY_IDLE_SWEEP_MS = parseNonNegativeInt(
   process.env.DEDICATED_GATEWAY_IDLE_SWEEP_MS,
   DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
+);
+const PREEMPTION_HANDOFF_SWEEP_MS = parseNonNegativeInt(
+  process.env.PREEMPTION_HANDOFF_SWEEP_MS,
+  PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
 );
 
 const GATEWAY_EDGE_INGRESS_NAME =
@@ -1103,6 +1111,14 @@ const stopStuckOpReaper = startStuckOpReaper({
     },
     DEDICATED_GATEWAY_IDLE_SWEEP_MS,
   );
+  const stopPreemptionHandoffSweeper = startPreemptionHandoffSweeper(
+    {
+      db,
+      now: () => Date.now(),
+      log,
+    },
+    PREEMPTION_HANDOFF_SWEEP_MS,
+  );
   const stopHttp = startHttpServer({
     db,
     log,
@@ -1126,6 +1142,7 @@ const stopStuckOpReaper = startStuckOpReaper({
     stopStuckOpReaper();
     stopActivationSweeper();
     stopIdleSweeper();
+    stopPreemptionHandoffSweeper();
     stopHttp();
     process.exit(0);
   };

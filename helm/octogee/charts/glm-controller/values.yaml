@@ -69,3 +69,6 @@ activationLease:
 dedicatedGatewayIdle:
   idleMs: "0"
   sweepMs: "60000"
+
+preemptionHandoff:
+  sweepMs: "15000"
