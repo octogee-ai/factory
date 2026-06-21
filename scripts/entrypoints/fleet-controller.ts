@@ -2,6 +2,7 @@ import {
   AGENT_PREFIX,
   AGENTS_DIR,
   bootBanner,
+  GATEWAY_CLASS,
   GATEWAY_ID,
   GATEWAY_PROFILE,
   GIT_SYNC_INTERVAL_MS,
@@ -20,9 +21,12 @@ import { startFleetController } from "../lib/fleet-provisioner.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
 import { startWorkspaceAutosaveLoop } from "../lib/workspace-autosave-runner.js";
+import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
+import { pushDirtySystemConfigForSlug } from "../lib/system-config.js";
 import { execFileSync } from "node:child_process";
 
 const MY_GATEWAY_ID = GATEWAY_ID === "local" ? "default" : GATEWAY_ID;
+const BUILDER_SLUG = process.env.GATEWAY_BUILDER_SLUG?.trim() ?? "";
 
 async function main(): Promise<void> {
   log(bootBanner("fleet-controller"));
@@ -65,6 +69,25 @@ async function main(): Promise<void> {
     stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
     recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
     clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),
+    flushLocalState: async ({ reason }) => {
+      log(`[fleet] controller-requested flush reason=${reason}`);
+      return runGatewayPreStopFlush({
+        gatewayId: MY_GATEWAY_ID,
+        gatewayClass: GATEWAY_CLASS,
+        syncWorkspaces: syncAllWorkspaces,
+        syncBlobs: operator
+          ? undefined
+          : () => blobSyncAllWithOptions({
+              storeForSlug: () => createBrokeredBlobStore(brokerClient),
+            }),
+        syncSystemConfig: BUILDER_SLUG
+          ? async () => {
+              pushDirtySystemConfigForSlug(BUILDER_SLUG, { log });
+            }
+          : undefined,
+        log,
+      });
+    },
     // Db-less: gateway pods hold NO Firestore credentials. Cowboy polls
     // /health and writes gateways/{id} on the trusted side. Gateway pods run
     // only the local mount reconcile from brokered assigned snapshots; all

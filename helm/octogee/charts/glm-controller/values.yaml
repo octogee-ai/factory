@@ -62,3 +62,13 @@ resources:
 # routes specific fleet paths to this Service.
 http:
   port: 8080
+
+activationLease:
+  sweepMs: "30000"
+
+dedicatedGatewayIdle:
+  idleMs: "0"
+  sweepMs: "60000"
+
+preemptionHandoff:
+  sweepMs: "15000"

@@ -15,6 +15,17 @@ const builderSlug = process.env.GATEWAY_BUILDER_SLUG?.trim() ?? "";
 
 async function main(): Promise<void> {
   const brokerClient = createFleetBrokerClient(gatewayId);
+  await brokerClient
+    .recordPreStopFlush({
+      gatewayClass: GATEWAY_CLASS,
+      phase: "started",
+      reason: "prestop",
+    })
+    .catch((err) => {
+      log(
+        `[prestop-flush] broker start report failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   const result = await runGatewayPreStopFlush({
     gatewayId,
     gatewayClass: GATEWAY_CLASS,
@@ -29,6 +40,18 @@ async function main(): Promise<void> {
       : undefined,
     log,
   });
+  await brokerClient
+    .recordPreStopFlush({
+      gatewayClass: GATEWAY_CLASS,
+      phase: "completed",
+      reason: "prestop",
+      result,
+    })
+    .catch((err) => {
+      log(
+        `[prestop-flush] broker completion report failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
 
   if (!result.ok) {
     process.exitCode = 1;
