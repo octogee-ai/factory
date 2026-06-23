@@ -19,8 +19,6 @@ import { resolveUserGateway } from "../lib/user-gateway.js";
 import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
 
 const router = Router();
-const CLI_RUNTIME_UNSUPPORTED_ERROR =
-  "Subscription runtimes require a private exec-capable gateway";
 
 interface FlowDoc {
   uid: string;
@@ -34,15 +32,6 @@ consumedAt?: number;
 }
 
 const FLOW_TTL_MS = 60 * 60 * 1000;
-
-function rejectCliRuntimeOnStandardGateway(res: Response): boolean {
-  if (process.env.GATEWAY_PROFILE === "operator") return false;
-  res.status(409).json({
-    error: CLI_RUNTIME_UNSUPPORTED_ERROR,
-    requiredGatewayProfile: "operator",
-  });
-  return true;
-}
 
 async function readFlow(flowId: string): Promise<FlowDoc | null> {
   const snap = await db.collection("byosubFlows").doc(flowId).get();
@@ -71,7 +60,6 @@ router.post(
           .json({ error: `Unsupported provider: ${provider}`, supported: ["openai"] });
         return;
       }
-      if (rejectCliRuntimeOnStandardGateway(res)) return;
       const resolved = await resolveUserGateway(uid);
       if (!resolved) {
         res
@@ -253,7 +241,6 @@ router.post(
         res.status(400).json({ error: "token required" });
         return;
       }
-      if (rejectCliRuntimeOnStandardGateway(res)) return;
       const v = validateClaudeCliToken(b.token);
       if (!v.ok) {
         res.status(400).json({ error: `invalid token: ${v.reason}` });
@@ -307,7 +294,6 @@ router.post(
           .json({ error: `Unsupported provider: ${flow.provider}` });
         return;
       }
-      if (rejectCliRuntimeOnStandardGateway(res)) return;
       const secretName = byosubSecretName(flow.uid, flow.provider);
 
 if (flow.consumedAt) {
