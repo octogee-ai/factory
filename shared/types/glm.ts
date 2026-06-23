@@ -185,6 +185,17 @@ export const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec = {
   reason: "operator-trust-boundary-not-provisioned",
 };
 
+// An operator-class gateway with a Builder owner IS a provisioned tenant boundary
+// (single owner, exec on, owner-only shell auth in gateway-edge), so it gets
+// BuilderShell. Un-owned operator gateways stay locked.
+export function defaultOperatorGatewayAccess(
+  ownerUid: string | null | undefined,
+): OperatorGatewayAccessSpec {
+  return ownerUid
+    ? { shellsEnabled: true, reason: "owned-operator-gateway" }
+    : OPERATOR_GATEWAY_LOCKED_ACCESS;
+}
+
 export const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
 export const GATEWAY_ID_MAX_LENGTH = 32;
@@ -235,6 +246,35 @@ export function isGatewayClassShellAccessEnabled(
   operatorAccess: OperatorGatewayAccessSpec | undefined,
 ): boolean {
   return gatewayClass === "operator" && operatorAccess?.shellsEnabled === true;
+}
+
+// The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
+// shellsEnabled). A Builder gets BuilderShell when placed on an operator-class
+// gateway they OWN; a guest migrated onto someone else's operator gateway does not.
+export function resolveUserGatewayShellState(
+  data:
+    | {
+        gatewayClass?: unknown;
+        profile?: unknown;
+        imageProfile?: unknown;
+        ownerUid?: unknown;
+        coOwnerUids?: unknown;
+        operatorAccess?: OperatorGatewayAccessSpec;
+      }
+    | undefined,
+  uid: string,
+): { gatewayProfile: GatewayProfile; shellsEnabled: boolean } {
+  const gatewayClass = resolveGatewayClass({
+    gatewayClass: isGatewayClass(data?.gatewayClass) ? data.gatewayClass : undefined,
+    profile: isGatewayProfile(data?.profile) ? data.profile : undefined,
+    imageProfile: isGatewayProfile(data?.imageProfile) ? data.imageProfile : undefined,
+  });
+  const coOwnerUids = Array.isArray(data?.coOwnerUids) ? (data.coOwnerUids as unknown[]) : [];
+  const userOwns = data?.ownerUid === uid || coOwnerUids.includes(uid);
+  return {
+    gatewayProfile: gatewayClass === "operator" ? "operator" : "standard",
+    shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.operatorAccess),
+  };
 }
 
 export type ByosubProvider = "openai" | "anthropic";

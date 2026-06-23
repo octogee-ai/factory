@@ -379,7 +379,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     });
   });
 
-  it("reserves an operator gateway for a real owner without enabling shells", async () => {
+  it("reserves an operator gateway for a real owner and enables BuilderShell", async () => {
     usersDocs["uid-jack"] = {
       username: "jack",
       provisioning: { openclaw: { slug: "jack" } },
@@ -403,8 +403,8 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       ownerUid: "uid-jack",
       builderSlug: "jack",
       operatorAccess: {
-        shellsEnabled: false,
-        reason: "operator-trust-boundary-not-provisioned",
+        shellsEnabled: true,
+        reason: "owned-operator-gateway",
       },
       operatorReservation: {
         status: "reserved",
@@ -834,8 +834,8 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       builderSlug: "alice",
       sizingTier: "large",
       operatorAccess: {
-        shellsEnabled: false,
-        reason: "operator-trust-boundary-not-provisioned",
+        shellsEnabled: true,
+        reason: "owned-operator-gateway",
       },
       serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },
@@ -962,8 +962,8 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       builderSlug: "alice",
       sizingTier: "medium",
       operatorAccess: {
-        shellsEnabled: false,
-        reason: "operator-trust-boundary-not-provisioned",
+        shellsEnabled: true,
+        reason: "owned-operator-gateway",
       },
       serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },

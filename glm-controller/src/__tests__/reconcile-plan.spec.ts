@@ -181,6 +181,13 @@ describe("buildInstancesMap", () => {
     });
   });
 
+  it("enables shell access for an operator-profile gateway with a Builder owner", () => {
+    const map = buildInstancesMap([
+      mkDesired({ gatewayId: "bender", profile: "operator", ownerUid: "uid-chris" }),
+    ]);
+    expect(map.bender.operatorAccess).toMatchObject({ shellsEnabled: true });
+  });
+
   it("does not let an operator-profile gateway inherit the platform default ServiceAccount", () => {
     const map = buildInstancesMap([
       mkDesired({

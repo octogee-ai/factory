@@ -15,7 +15,8 @@ import {
   GATEWAY_ID_REQUIREMENT,
   GATEWAY_PROFILES,
   OPERATOR_GATEWAY_RESERVATIONS_COLLECTION,
-  OPERATOR_GATEWAY_LOCKED_ACCESS,
+  defaultOperatorGatewayAccess,
+  resolveUserGatewayShellState,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   isValidGatewayId,
   isGatewayClass,
@@ -171,11 +172,6 @@ function isTruthyQueryFlag(value: unknown): boolean {
 export function resolveFleetNamespace(env: NodeJS.ProcessEnv = process.env): string {
   const ns = env.K8S_NAMESPACE;
   return typeof ns === "string" && ns.length > 0 ? ns : "octogee";
-}
-
-async function readGatewayProfile(db: Firestore, gatewayId: string): Promise<GatewayProfile> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
 }
 
 type GlmDoc = Record<string, unknown>;
@@ -1561,7 +1557,7 @@ function operatorGatewayDesiredStateFromReservation(opts: {
     gatewayClass,
     imageProfile,
     ...(persistence ? { persistence } : {}),
-    operatorAccess: OPERATOR_GATEWAY_LOCKED_ACCESS,
+    operatorAccess: defaultOperatorGatewayAccess(opts.reservation.uid),
     serviceAccountName: operatorGatewayServiceAccountName(opts.body.gatewayId),
     serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
     ownerUid: opts.reservation.uid,
@@ -2198,7 +2194,12 @@ router.post(
           return;
         }
         const currentGid = userData.provisioning?.openclaw?.gatewayId;
-        const gatewayProfile = await readGatewayProfile(db, body.gatewayId);
+        const glmSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId).get();
+        const shellState = resolveUserGatewayShellState(
+          glmSnap.exists ? glmSnap.data() : undefined,
+          uid,
+        );
+        const gatewayProfile = shellState.gatewayProfile;
         if (currentGid === body.gatewayId) {
           if (normalizeGatewayProfile(userData.provisioning?.openclaw?.gatewayProfile) !== gatewayProfile) {
             await db
@@ -2206,7 +2207,7 @@ router.post(
               .doc(uid)
               .update({
                 "provisioning.openclaw.gatewayProfile": gatewayProfile,
-                "provisioning.openclaw.shellsEnabled": false,
+                "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
               });
             res.status(200).json({ uid, gatewayId: body.gatewayId, gatewayProfile, repaired: true });
             return;
@@ -2225,7 +2226,7 @@ router.post(
           .update({
             "provisioning.openclaw.gatewayId": body.gatewayId,
             "provisioning.openclaw.gatewayProfile": gatewayProfile,
-            "provisioning.openclaw.shellsEnabled": false,
+            "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
           });
         res.status(202).json({ uid, gatewayId: body.gatewayId, gatewayProfile });
       } catch (e) {
@@ -2481,7 +2482,7 @@ router.post(
         const operatorDefaults =
           gatewayClass === "operator"
             ? {
-                operatorAccess: OPERATOR_GATEWAY_LOCKED_ACCESS,
+                operatorAccess: defaultOperatorGatewayAccess(owner.ok.ownerUid),
                 serviceAccountName: operatorGatewayServiceAccountName(body.gatewayId),
                 serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
               }

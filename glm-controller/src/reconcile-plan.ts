@@ -1,6 +1,6 @@
 import {
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
-  OPERATOR_GATEWAY_LOCKED_ACCESS,
+  defaultOperatorGatewayAccess,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
@@ -89,7 +89,7 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
   }
   const operatorAccess =
     gatewayClass === "operator"
-      ? d.operatorAccess ?? OPERATOR_GATEWAY_LOCKED_ACCESS
+      ? d.operatorAccess ?? defaultOperatorGatewayAccess(d.ownerUid)
       : d.operatorAccess;
   return { serviceAccountName, serviceAccount, operatorAccess };
 }

@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  defaultOperatorGatewayAccess,
   isValidGatewayId,
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
+  resolveUserGatewayShellState,
 } from "./glm";
 
 describe("operatorGatewayServiceAccountName", () => {
@@ -66,5 +68,62 @@ describe("gateway class/profile resolution", () => {
   it("lets explicit imageProfile override the class-derived image", () => {
     expect(resolveGatewayImageProfile({ gatewayClass: "builder", imageProfile: "operator" })).toBe("operator");
     expect(resolveGatewayImageProfile({ gatewayClass: "operator", imageProfile: "standard" })).toBe("standard");
+  });
+});
+
+describe("defaultOperatorGatewayAccess", () => {
+  it("grants shells to an owned operator gateway and locks an un-owned one", () => {
+    expect(defaultOperatorGatewayAccess("uid-chris")).toMatchObject({ shellsEnabled: true });
+    expect(defaultOperatorGatewayAccess(null)).toMatchObject({ shellsEnabled: false });
+    expect(defaultOperatorGatewayAccess(undefined)).toMatchObject({ shellsEnabled: false });
+  });
+});
+
+describe("resolveUserGatewayShellState", () => {
+  it("enables BuilderShell for the owner of an operator-class gateway with shells on", () => {
+    expect(
+      resolveUserGatewayShellState(
+        {
+          gatewayClass: "operator",
+          imageProfile: "operator",
+          ownerUid: "uid-chris",
+          operatorAccess: { shellsEnabled: true },
+        },
+        "uid-chris",
+      ),
+    ).toEqual({ gatewayProfile: "operator", shellsEnabled: true });
+  });
+
+  it("honors a co-owner", () => {
+    expect(
+      resolveUserGatewayShellState(
+        { gatewayClass: "operator", coOwnerUids: ["uid-jack"], operatorAccess: { shellsEnabled: true } },
+        "uid-jack",
+      ).shellsEnabled,
+    ).toBe(true);
+  });
+
+  it("denies a guest migrated onto someone else's operator gateway", () => {
+    expect(
+      resolveUserGatewayShellState(
+        { gatewayClass: "operator", ownerUid: "uid-bender", operatorAccess: { shellsEnabled: true } },
+        "uid-jack",
+      ),
+    ).toEqual({ gatewayProfile: "operator", shellsEnabled: false });
+  });
+
+  it("never enables shells on a shared gateway", () => {
+    expect(
+      resolveUserGatewayShellState({ gatewayClass: "shared", ownerUid: "uid-chris" }, "uid-chris"),
+    ).toEqual({ gatewayProfile: "standard", shellsEnabled: false });
+  });
+
+  it("respects an explicitly locked operatorAccess even for the owner", () => {
+    expect(
+      resolveUserGatewayShellState(
+        { gatewayClass: "operator", ownerUid: "uid-chris", operatorAccess: { shellsEnabled: false } },
+        "uid-chris",
+      ).shellsEnabled,
+    ).toBe(false);
   });
 });
