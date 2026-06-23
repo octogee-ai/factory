@@ -34,19 +34,30 @@ const BYOT_MARKER = ".byot-managed";
 
 export type ByotInput = ByotConfigInput;
 
-export function isShellRuntimeProvider(provider: Provider): boolean {
-  return provider === "openai-codex" || provider === "claude-cli";
-}
-
 // Pins agentRuntime so a per-agent BYOS model override routes through the right
 // harness (codex / claude-cli) rather than the platform provider key.
 type RuntimeModelsDef = Record<string, { agentRuntime: { id: string } }>;
+interface CodexAppServerPatch {
+  sandbox: string;
+  approvalPolicy: string;
+}
 export interface CoachModelPatch {
   agents: {
     list: Array<{ id: string; model: string }>;
     defaults?: { models: RuntimeModelsDef };
   };
+  plugins?: {
+    entries: { codex: { enabled: boolean; config: { appServer: CodexAppServerPatch } } };
+  };
 }
+
+// Standard (shared/builder) gateways run the codex app-server SANDBOXED —
+// workspace-write + never is autonomous-but-confined, NOT the operator-only
+// danger-full-access YOLO (infra/gateway/apply-operator-codex-sandbox.mjs).
+const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
+  sandbox: "workspace-write",
+  approvalPolicy: "never",
+};
 
 export function byosCoachConfigPatch(
   input: ByotInput | null,
@@ -61,6 +72,11 @@ export function byosCoachConfigPatch(
   };
   if (input.provider === "openai-codex") {
     patch.agents.defaults = { models: codexRuntimeConfig().modelsDef };
+    patch.plugins = {
+      entries: {
+        codex: { enabled: true, config: { appServer: STANDARD_CODEX_APP_SERVER } },
+      },
+    };
   } else if (input.provider === "claude-cli") {
     patch.agents.defaults = { models: claudeCliRuntimeConfig().modelsDef };
   }

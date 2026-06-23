@@ -304,11 +304,21 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "anthropic" })).toBeNull();
   });
 
-  it("openai-codex → coach model openai/gpt-5.5 + agentRuntime:codex registry pin", () => {
+  it("openai-codex → coach model + agentRuntime:codex + enables the codex plugin with a SAFE (non-YOLO) sandbox so it runs on a standard shared gateway", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       agents: {
         list: [{ id, model: "openai/gpt-5.5" }],
         defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+      },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            // workspace-write + never = autonomous but sandboxed. NOT the
+            // operator-only danger-full-access YOLO (apply-operator-codex-sandbox.mjs).
+            config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
+          },
+        },
       },
     });
   });
@@ -363,25 +373,47 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     ]);
   });
 
-  it("shell-runtime BYOS providers do not patch standard shared gateways", async () => {
-    const applyPatch = vi.fn(async () => {});
-    const logFn = vi.fn();
-    await expect(
-      applyCoachModelPatch(
-        { slug: "tester-70", provider: "openai-codex" },
-        { applyPatch, logFn },
-      ),
-    ).resolves.toBe(false);
-    await expect(
-      applyCoachModelPatch(
-        { slug: "tester-70", provider: "claude-cli" },
-        { applyPatch, logFn },
-      ),
-    ).resolves.toBe(false);
-    expect(applyPatch).not.toHaveBeenCalled();
-    expect(logFn).toHaveBeenCalledWith(
-      expect.stringContaining("requires a private exec gateway"),
+  it("shell-runtime BYOS providers (codex / claude-cli) DO patch a standard shared gateway", async () => {
+    const codexCalls: object[] = [];
+    const rc = await applyCoachModelPatch(
+      { slug: "tester-70", provider: "openai-codex" },
+      { applyPatch: async (p) => { codexCalls.push(p); } },
     );
+    expect(rc).toBe(true);
+    expect(codexCalls).toEqual([
+      {
+        agents: {
+          list: [{ id: "octogee-tester-70-coach", model: "openai/gpt-5.5" }],
+          defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+        },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
+            },
+          },
+        },
+      },
+    ]);
+
+    const claudeCalls: object[] = [];
+    const ra = await applyCoachModelPatch(
+      { slug: "tester-70", provider: "claude-cli" },
+      { applyPatch: async (p) => { claudeCalls.push(p); } },
+    );
+    expect(ra).toBe(true);
+    // claude-cli is an openclaw CORE runtime — no plugin to enable.
+    expect(claudeCalls).toEqual([
+      {
+        agents: {
+          list: [{ id: "octogee-tester-70-coach", model: "anthropic/claude-opus-4-8" }],
+          defaults: {
+            models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+      },
+    ]);
   });
 
   it("no-override / null → does NOT apply, returns false", async () => {
@@ -435,7 +467,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
   });
 });
 
-describe("standard gateway — shell-runtime BYOS is not materialized", () => {
+describe("standard gateway — BYOS materialization", () => {
   it("broker-token gateway: anthropic BYOT is broker-resolved, not materialized locally", async () => {
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
@@ -465,8 +497,8 @@ describe("standard gateway — shell-runtime BYOS is not materialized", () => {
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("syncByotForCustomer clears local BYOT artifacts and skips oauth restore/model patch/reload unless cleanup changed", async () => {
-    const applyByotStateFn = vi.fn(() => false);
+  it("materializes claude-cli BYOS on a standard gateway: applyByotState(input) + oauth-store restore + coach-model patch + reload", async () => {
+    const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
@@ -487,8 +519,43 @@ describe("standard gateway — shell-runtime BYOS is not materialized", () => {
       },
     );
 
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
-    expect(restoreOauthFn).not.toHaveBeenCalled();
+    const input = {
+      slug: "tester-70",
+      provider: "claude-cli",
+      baseUrl: undefined,
+      model: undefined,
+    };
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", input);
+    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
+    expect(applyCoachModelPatchFn).toHaveBeenCalledWith(input);
+    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("oauth credential absent (missing ref / transient SM failure) → does NOT pin the coach, preserving the platform-key fallback", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const restoreOauthFn = vi.fn(async () => ({ restored: false, present: false }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "openai-codex" } },
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: applyByotStateFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
+    // The coach is NOT pinned to codex without a credential — it stays on the
+    // platform-key fallback until a later sync restores the subscription.
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });

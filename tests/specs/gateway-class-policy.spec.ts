@@ -29,7 +29,7 @@ function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
 }
 
 describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
-  it("shared class denies exec/process for face and subagents and disables Codex", () => {
+  it("shared class denies exec/process but KEEPS codex allowlisted and CLAMPS it to a sandboxed app-server (workspace-write, never YOLO)", () => {
     const out = runPolicy("shared", {
       tools: {
         deny: ["read"],
@@ -37,15 +37,21 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
       plugins: {
         allow: ["codex", "octogee-router"],
-        entries: { codex: { enabled: true } },
+        entries: {
+          codex: { enabled: true, config: { appServer: { sandbox: "danger-full-access" } } },
+        },
       },
     });
 
     expect(out.tools.deny).toEqual(["read", "exec", "process"]);
     expect(out.tools.exec).toEqual({ mode: "deny" });
     expect(out.tools.subagents.tools.deny).toEqual(["write", "exec", "process"]);
-    expect(out.plugins.allow).toEqual(["octogee-router"]);
-    expect(out.plugins.entries.codex.enabled).toBe(false);
+    // BYOS codex may run on a shared pod, but only sandboxed: the policy clamps a
+    // danger-full-access request down to workspace-write and keeps codex
+    // allowlisted so byot-sync can enable it per-customer.
+    expect(out.plugins.allow).toEqual(["codex", "octogee-router"]);
+    expect(out.plugins.entries.codex.config.appServer.sandbox).toBe("workspace-write");
+    expect(out.plugins.entries.codex.config.appServer.approvalPolicy).toBe("never");
   });
 
   it("builder class enables OpenClaw exec/process but keeps Codex disabled", () => {

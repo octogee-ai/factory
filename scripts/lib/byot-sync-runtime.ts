@@ -3,7 +3,6 @@ import {
   applyByotState,
   byosCoachConfigPatch,
   deriveDesiredByotState,
-  isShellRuntimeProvider,
   type ByotInput,
 } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
@@ -32,12 +31,6 @@ export async function applyCoachModelPatch(
   const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
   if (isOp()) return false;
   if (!input) return false;
-  if (isShellRuntimeProvider(input.provider)) {
-    logFn(
-      `[byot-sync] ${input.slug}: ${input.provider} requires a private exec gateway; skipping standard gateway runtime patch`,
-    );
-    return false;
-  }
   const patch = byosCoachConfigPatch(input);
   if (!patch) return false;
   const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
@@ -207,24 +200,22 @@ export async function syncByotForCustomer(
 
   if (isOp()) return;
 
-  if (desired.input && isShellRuntimeProvider(desired.input.provider)) {
-    const changed = applyByotStateFn(slug, null);
-    log(
-      `[byot-sync] ${slug}: ${desired.input.provider} requires a private exec gateway; leaving standard gateway on native providers`,
-    );
-    if (changed) await triggerSecretsReloadFn();
-    return;
-  }
-
   const changed = applyByotStateFn(slug, desired.input);
 
   const provider = desired.input?.provider;
-  const restored =
-    provider && isOauthProvider(provider)
-      ? (await restoreOauthFn(slug)).restored
-      : false;
+  const isOauth = Boolean(provider && isOauthProvider(provider));
+  const restore = isOauth ? await restoreOauthFn(slug) : null;
 
-  const patched = await applyCoachModelPatchFn(desired.input);
+  // OAuth subscriptions (codex / claude-cli) would pin the coach to a
+  // credential-less harness if patched before the credential materializes — a
+  // missing byosub ref or a transient Secret Manager read leaves the coach
+  // broken with no platform-key fallback. Only patch when the credential is
+  // present (restored now or healthy on disk); otherwise leave the coach on the
+  // platform key and let a later sync complete the swap.
+  const credentialPresent = !isOauth || restore!.present;
+  const patched = credentialPresent
+    ? await applyCoachModelPatchFn(desired.input)
+    : false;
 
-  if (changed || restored || patched) await triggerSecretsReloadFn();
+  if (changed || restore?.restored || patched) await triggerSecretsReloadFn();
 }
