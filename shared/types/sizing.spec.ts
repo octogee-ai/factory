@@ -13,6 +13,7 @@ describe('sizing-tier SSOT', () => {
   it('declares tiers in ascending size order', () => {
     expect(SIZING_TIERS).toEqual([
       'micro',
+      'mini',
       'nano',
       'small',
       'medium',
@@ -72,6 +73,13 @@ describe('sizing-tier SSOT', () => {
     expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('micro');
     expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('small');
     expect(GATEWAY_CLASS_DEFAULT_TIER.operator).toBe('small');
+  });
+
+  it('mini is the warm-standby tier between micro and nano', () => {
+    expect(TIER_PRESETS.mini.resources.requests.cpu).toBe('1000m');
+    expect(TIER_PRESETS.mini.resources.requests.memory).toBe('4Gi');
+    expect(TIER_PRESETS.mini.nodejs.maxOldSpaceSizeMb).toBe('3072');
+    expect(TIER_PRESETS.mini.capacity.targetActiveBuilders).toBe(1);
   });
 });
 

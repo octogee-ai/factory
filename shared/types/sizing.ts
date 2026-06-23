@@ -2,6 +2,7 @@ import type { GatewayClass, GatewayProfile } from './glm.js';
 
 export const SIZING_TIERS = [
   'micro',
+  'mini',
   'nano',
   'small',
   'medium',
@@ -52,6 +53,15 @@ export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
     },
     nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '1536' },
     capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },
+  },
+  mini: {
+    description: 'Warm standby — one active builder with cold-start headroom',
+    resources: {
+      requests: { cpu: '1000m', memory: '4Gi', 'ephemeral-storage': '4Gi' },
+      limits: { cpu: '1000m', memory: '4Gi', 'ephemeral-storage': '6Gi' },
+    },
+    nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '3072' },
+    capacity: { targetActiveBuilders: 1, typicalBuilders: 2 },
   },
   nano: {
     description: 'F&F floor — light shared use',

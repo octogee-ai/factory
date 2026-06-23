@@ -409,8 +409,9 @@ def d_sizing():
             "- **CPU throttled %** sustained above 0 means the agent wants more cores than the tier grants → size up.\n"
             "- **Window = the dashboard time range.** Set it to **7d–30d** (Prometheus retains 30d) for a real "
             "signal; the default `now-6h` is too short to size on.\n\n"
-            "Tiers (cpu / mem): nano 2 / 8Gi · **small 4 / 16Gi (operator default)** · medium 8 / 32Gi · "
-            "large 16 / 64Gi · xlarge 32 / 128Gi · 2xlarge 56 / 224Gi."
+            "Tiers (cpu / mem): micro 0.5 / 2Gi · mini 1 / 4Gi · nano 2 / 8Gi · "
+            "**small 4 / 16Gi (operator default)** · medium 8 / 32Gi · large 16 / 64Gi · "
+            "xlarge 32 / 128Gi · 2xlarge 56 / 224Gi."
         ), h=6),
         row("Per-instance headroom — peak over the selected range"),
         table("Right-sizing summary (gateway container)", [

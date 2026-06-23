@@ -217,6 +217,19 @@ tiers:
     nodejs:
       uvThreadpoolSize: "4"
       maxOldSpaceSizeMb: "1536"
+  mini:
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "4Gi"
+        ephemeral-storage: "4Gi"
+      limits:
+        cpu: "1000m"
+        memory: "4Gi"
+        ephemeral-storage: "6Gi"
+    nodejs:
+      uvThreadpoolSize: "4"
+      maxOldSpaceSizeMb: "3072"
   nano:
     resources:
       requests:
