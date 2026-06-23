@@ -735,10 +735,15 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     const rollback = calls.find((c) => c[0] === "rollback");
     expect(rollback).toBeDefined();
 
-expect(rollback).toContain("octogee-gw-default");
+    expect(rollback).toContain("octogee-gw-default");
     expect(rollback).toContain("3");
     expect(rollback).toContain("-n");
     expect(rollback).toContain("octogee-test");
+    // The recovery rollback mirrors the upgrade's server-side-apply flags so it
+    // can reclaim fields a kubectl side-channel grabbed instead of dying on the
+    // conflict (matches buildUpgradeArgs).
+    expect(rollback).toContain("--server-side=true");
+    expect(rollback).toContain("--force-conflicts");
     expect(log).toHaveBeenCalledWith(expect.stringContaining("stuck"));
   });
 

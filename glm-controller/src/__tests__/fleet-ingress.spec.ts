@@ -1,563 +1,267 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
-  computeApiFleetPathOps,
-  computeDesiredApiFleetPaths,
-  computeDesiredPreviewPaths,
-  computeIngressHostPathOps,
-  extractIngressPaths,
-  pathsEqual,
-  syncApiFleetIngressPaths,
-  syncPreviewIngressPaths,
+  apiFleetPaths,
+  previewFleetPaths,
+  mergeFleetRules,
+  parseBaseRoutes,
+  rulesEqual,
+  syncEdgeIngress,
   type FleetGateway,
-  type IngressPathRule,
+  type IngressRule,
   type KubectlSubprocess,
+  type KubectlSubprocessResult,
 } from "../fleet-ingress";
 
-const FLEET_PORT = 3003;
-const ALIAS = "octogee-gateway";
+const API_HOST = "api-test.octogee.com";
+const PREVIEW_HOST = "preview-test.octogee.com";
+const GATEWAY_EDGE_PORT = 3001;
+const PREVIEW_PORT = 9080;
+const CONFIGMAP = "octogee-edge-routes";
+const INGRESS = "octogee-edge-ingress";
+const NS = "octogee-test";
+const FIELD_MANAGER = "cowboy-fleet-ingress";
 
-describe("computeDesiredApiFleetPaths", () => {
-  const WSAPI_PORT = 3001;
-  const WSAPI_ALIAS = "gateway-edge";
-
-  it("emits the static /health rule pointing at the alias Service when no gateways exist (K8s Ingress requires ≥1 path)", () => {
-    const paths = computeDesiredApiFleetPaths({
-      gateways: [],
-      gatewayEdgePort: WSAPI_PORT,
-      gatewayEdgeServiceName: WSAPI_ALIAS,
-    });
-    expect(paths).toEqual([
-      {
-        path: "/health",
-        pathType: "ImplementationSpecific",
-        serviceName: WSAPI_ALIAS,
-        servicePort: WSAPI_PORT,
-      },
-    ]);
-  });
-
-  it("emits one /api/g/<gatewayId>/* path per gateway routed to the per-gateway gateway-edge Service, /health last", () => {
-    const gateways: FleetGateway[] = [
-      { gatewayId: "bender" },
-    ];
-    const paths = computeDesiredApiFleetPaths({
-      gateways,
-      gatewayEdgePort: WSAPI_PORT,
-      gatewayEdgeServiceName: WSAPI_ALIAS,
-    });
-    expect(paths.map((p) => p.path)).toEqual([
-      "/api/g/bender/*",
-      "/health",
-    ]);
-    expect(paths[0]).toMatchObject({
-      pathType: "ImplementationSpecific",
-      serviceName: "gateway-edge-bender",
-      servicePort: WSAPI_PORT,
-    });
-    expect(paths.at(-1)).toMatchObject({ path: "/health", serviceName: WSAPI_ALIAS });
-  });
-
-  it("uses the gatewayId for the per-gateway Service name — same convention as fleet-control", () => {
-    const gateways: FleetGateway[] = [
-      { gatewayId: "bender" },
-      { gatewayId: "default" },
-    ];
-    const paths = computeDesiredApiFleetPaths({
-      gateways,
-      gatewayEdgePort: WSAPI_PORT,
-      gatewayEdgeServiceName: WSAPI_ALIAS,
-    });
-    const gatewayPaths = paths.filter((p) => p.path.startsWith("/api/g/"));
-    expect(gatewayPaths.map((p) => p.serviceName)).toEqual([
-      "gateway-edge-bender",
-      "gateway-edge-default",
-    ]);
-  });
-
-  it("orders gateways by gatewayId for deterministic output (matches fleet-control)", () => {
-    const gateways: FleetGateway[] = [
-      { gatewayId: "zebra" },
-      { gatewayId: "alpha" },
-      { gatewayId: "default" },
-    ];
-    const paths = computeDesiredApiFleetPaths({
-      gateways,
-      gatewayEdgePort: WSAPI_PORT,
-      gatewayEdgeServiceName: WSAPI_ALIAS,
-    });
-    const gatewayPaths = paths.filter((p) => p.path.startsWith("/api/g/"));
-    expect(gatewayPaths.map((p) => p.path)).toEqual([
-      "/api/g/alpha/*",
-      "/api/g/default/*",
-      "/api/g/zebra/*",
-    ]);
-  });
-});
-
-describe("computeDesiredPreviewPaths", () => {
-  it("emits one /g/<gatewayId>/* path per gateway routed to the per-gateway gateway Service", () => {
-    const paths = computeDesiredPreviewPaths({
-      gateways: [
-        { gatewayId: "zebra" },
-        { gatewayId: "alpha" },
+const BASE_RULES: IngressRule[] = [
+  {
+    host: API_HOST,
+    http: {
+      paths: [
+        { path: "/api/admin/gateways/*", pathType: "ImplementationSpecific", backend: { service: { name: "glm-controller", port: { name: "http" } } } },
+        { path: "/api/*", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-api", port: { name: "http" } } } },
+        { path: "/health", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-edge", port: { name: "http" } } } },
       ],
-      previewPort: 9080,
-    });
-    expect(paths).toEqual([
-      {
-        path: "/g/alpha/*",
-        pathType: "ImplementationSpecific",
-        serviceName: "octogee-gateway-alpha",
-        servicePort: 9080,
-      },
-      {
-        path: "/g/zebra/*",
-        pathType: "ImplementationSpecific",
-        serviceName: "octogee-gateway-zebra",
-        servicePort: 9080,
-      },
-    ]);
-  });
-});
+    },
+  },
+  {
+    host: "git-test.octogee.com",
+    http: {
+      paths: [
+        { path: "/*", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-gitea-http", port: { number: 3000 } } } },
+      ],
+    },
+  },
+  {
+    host: PREVIEW_HOST,
+    http: {
+      paths: [
+        { path: "/health", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-gateway", port: { number: 9080 } } } },
+      ],
+    },
+  },
+];
 
-describe("pathsEqual", () => {
-  const a: IngressPathRule = { path: "/health", pathType: "ImplementationSpecific", serviceName: ALIAS, servicePort: FLEET_PORT };
-  it("returns true for identical lists", () => {
-    expect(pathsEqual([a], [a])).toBe(true);
-  });
-  it("returns false when length differs", () => {
-    expect(pathsEqual([a], [a, a])).toBe(false);
-  });
-  it("returns false when any field differs", () => {
-    const b: IngressPathRule = { ...a, serviceName: "other" };
-    expect(pathsEqual([a], [b])).toBe(false);
-  });
-  it("treats different orderings as not equal (paths order matters for GCE URL maps)", () => {
-    const x: IngressPathRule = { path: "/a", pathType: "ImplementationSpecific", serviceName: ALIAS, servicePort: FLEET_PORT };
-    const y: IngressPathRule = { path: "/b", pathType: "ImplementationSpecific", serviceName: ALIAS, servicePort: FLEET_PORT };
-    expect(pathsEqual([x, y], [y, x])).toBe(false);
-  });
-});
+const GATEWAYS: FleetGateway[] = [{ gatewayId: "default" }, { gatewayId: "bender" }];
 
-describe("extractIngressPaths", () => {
-  it("pulls path/pathType/service-name/service-port out of a kubectl get ingress -o json payload", () => {
-    const json = {
-      spec: {
-        rules: [
-          {
-            host: "fleet.octogee.com",
-            http: {
-              paths: [
-                {
-                  path: "/quiesce/gw-x",
-                  pathType: "ImplementationSpecific",
-                  backend: { service: { name: "octogee-gateway-default", port: { number: 3003 } } },
-                },
-                {
-                  path: "/health",
-                  pathType: "ImplementationSpecific",
-                  backend: { service: { name: "octogee-gateway", port: { number: 3003 } } },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    };
-    expect(extractIngressPaths(json)).toEqual([
-      { path: "/quiesce/gw-x", pathType: "ImplementationSpecific", serviceName: "octogee-gateway-default", servicePort: 3003 },
-      { path: "/health", pathType: "ImplementationSpecific", serviceName: "octogee-gateway", servicePort: 3003 },
-    ]);
-  });
-
-  it("returns empty when the ingress has no rules", () => {
-    expect(extractIngressPaths({ spec: { rules: [] } })).toEqual([]);
-  });
-
-  it("returns empty when the rules block is missing entirely", () => {
-    expect(extractIngressPaths({ spec: {} })).toEqual([]);
-  });
-
-  it("ignores paths with named ports — fleet ingress always uses numbered ports", () => {
-    const json = {
-      spec: {
-        rules: [
-          {
-            http: {
-              paths: [
-                {
-                  path: "/health",
-                  pathType: "ImplementationSpecific",
-                  backend: { service: { name: "x", port: { name: "http" } } },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    };
-    expect(extractIngressPaths(json)).toEqual([]);
-  });
-});
-
-function mockKubectl(
-  responses: Array<{ stdout?: string; stderr?: string; code?: number }>,
-): { runKubectl: KubectlSubprocess; calls: Array<{ args: string[]; stdin?: string }> } {
-  const calls: Array<{ args: string[]; stdin?: string }> = [];
-  let i = 0;
-  const runKubectl: KubectlSubprocess = vi.fn(async (args: string[], opts?: { stdin?: string }) => {
-    calls.push({ args, stdin: opts?.stdin });
-    const r = responses[Math.min(i, responses.length - 1)];
-    i++;
-    return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? 0 };
-  });
-  return { runKubectl, calls };
+function ok(stdout: string): KubectlSubprocessResult {
+  return { stdout, stderr: "", code: 0 };
+}
+function notFound(): KubectlSubprocessResult {
+  return { stdout: "", stderr: "Error from server (NotFound): not found", code: 1 };
+}
+function configMapStdout(rules: IngressRule[] = BASE_RULES): string {
+  return JSON.stringify({ data: { "routes.json": JSON.stringify(rules) } });
+}
+function ingressStdout(rules: IngressRule[]): string {
+  return JSON.stringify({ spec: { rules } });
 }
 
-describe("computeApiFleetPathOps", () => {
-  const STATIC = {
-    path: "/api/*",
-    pathType: "ImplementationSpecific",
-
-    backend: { service: { name: "gateway-edge", port: { name: "http" } } },
+interface FakeKubectl {
+  run: KubectlSubprocess;
+  calls: { args: string[]; stdin?: string }[];
+}
+function fakeKubectl(handlers: {
+  configmap?: KubectlSubprocessResult;
+  ingress?: KubectlSubprocessResult;
+  apply?: KubectlSubprocessResult;
+}): FakeKubectl {
+  const calls: { args: string[]; stdin?: string }[] = [];
+  const run: KubectlSubprocess = async (args, opts) => {
+    calls.push({ args, stdin: opts?.stdin });
+    if (args[0] === "get" && args[1] === "configmap") return handlers.configmap ?? ok(configMapStdout());
+    if (args[0] === "get" && args[1] === "ingress") return handlers.ingress ?? ok(ingressStdout(BASE_RULES));
+    if (args[0] === "apply") return handlers.apply ?? ok("ingress.networking.k8s.io/octogee-edge-ingress serverside-applied");
+    throw new Error(`unexpected kubectl ${args.join(" ")}`);
   };
-  const fleet = (id: string) => ({
-    path: `/api/g/${id}/*`,
-    pathType: "ImplementationSpecific",
-    backend: { service: { name: `gateway-edge-${id}`, port: { number: 3001 } } },
-  });
-  const desired = (gws: FleetGateway[]) =>
-    computeDesiredApiFleetPaths({
-      gateways: gws,
-      gatewayEdgePort: 3001,
-      gatewayEdgeServiceName: "gateway-edge",
-    }).filter((p) => p.path !== "/health");
+  return { run, calls };
+}
 
-  it("returns [] when live /api/g/* entries already match desired", () => {
-    const raw = [STATIC, fleet("bender")];
-    expect(
-      computeApiFleetPathOps(raw, desired([{ gatewayId: "bender" }])),
-    ).toEqual([]);
-  });
+function applyCall(k: FakeKubectl): { args: string[]; stdin?: string } | undefined {
+  return k.calls.find((c) => c.args[0] === "apply");
+}
 
-  it("adds a missing /api/g/* entry without touching the named-port static path", () => {
-    const ops = computeApiFleetPathOps(
-      [STATIC],
-      desired([{ gatewayId: "bender" }]),
-    );
-    expect(ops).toEqual([
-      {
-        op: "add",
-        path: "/spec/rules/0/http/paths/-",
-        value: {
-          path: "/api/g/bender/*",
-          pathType: "ImplementationSpecific",
-          backend: { service: { name: "gateway-edge-bender", port: { number: 3001 } } },
-        },
-      },
-    ]);
-  });
-
-  it("removes a stale /api/g/* entry test-guarded at its index, static path index untouched", () => {
-
-    const ops = computeApiFleetPathOps([STATIC, fleet("old")], desired([]));
-    expect(ops).toEqual([
-      { op: "test", path: "/spec/rules/0/http/paths/1/path", value: "/api/g/old/*" },
-      { op: "remove", path: "/spec/rules/0/http/paths/1" },
-    ]);
-
-    expect(ops.some((o) => o.path.includes("paths/0"))).toBe(false);
-  });
-
-  it("removes descending then re-adds when the fleet set changes (race-safe ordering)", () => {
-    const raw = [STATIC, fleet("a"), fleet("b")];
-    const ops = computeApiFleetPathOps(raw, desired([{ gatewayId: "c" }]));
-
-    const removeIdx = ops
-      .filter((o) => o.op === "remove")
-      .map((o) => Number(o.path.split("/").pop()));
-    expect(removeIdx).toEqual([2, 1]);
-    expect(ops.some((o) => o.op === "add" && (o.value as { path: string }).path === "/api/g/c/*")).toBe(true);
-  });
-});
-
-describe("computeIngressHostPathOps", () => {
-  it("patches only the matching host rule in a multi-host Ingress", () => {
-    const live = {
-      spec: {
-        rules: [
-          {
-            host: "api.example.com",
-            http: {
-              paths: [
-                {
-                  path: "/api/*",
-                  pathType: "ImplementationSpecific",
-                  backend: { service: { name: "gateway-edge", port: { name: "http" } } },
-                },
-              ],
-            },
-          },
-          {
-            host: "preview.example.com",
-            http: {
-              paths: [
-                {
-                  path: "/health",
-                  pathType: "ImplementationSpecific",
-                  backend: { service: { name: "octogee-gateway", port: { number: 9080 } } },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    };
-    const ops = computeIngressHostPathOps(
-      [
-        {
-          path: "/g/default/*",
-          pathType: "ImplementationSpecific",
-          serviceName: "octogee-gateway-default",
-          servicePort: 9080,
-        },
-      ],
-      live,
-      { ingressHost: "preview.example.com", managedPathPrefixes: ["/g/"] },
-    );
-    expect(ops).toEqual([
-      { op: "test", path: "/spec/rules/1/host", value: "preview.example.com" },
-      {
-        op: "add",
-        path: "/spec/rules/1/http/paths/-",
-        value: {
-          path: "/g/default/*",
-          pathType: "ImplementationSpecific",
-          backend: { service: { name: "octogee-gateway-default", port: { number: 9080 } } },
-        },
-      },
-    ]);
-  });
-
-  it("throws when the requested host is absent instead of falling back to rule 0", () => {
-    expect(() =>
-      computeIngressHostPathOps([], { spec: { rules: [{ host: "api.example.com" }] } }, {
-        ingressHost: "preview.example.com",
-        managedPathPrefixes: ["/g/"],
-      }),
-    ).toThrow(/missing host preview\.example\.com/);
-  });
-});
-
-describe("syncApiFleetIngressPaths (surgical patch on the shared ingress)", () => {
-  const ingressName = "gateway-edge-ingress";
-  const namespace = "octogee-test";
-  const WSAPI_PORT = 3001;
-  const WSAPI_ALIAS = "gateway-edge";
-
-  const liveWith = (paths: unknown[]) => ({
-    kind: "Ingress",
-    apiVersion: "networking.k8s.io/v1",
-    metadata: { name: ingressName, namespace },
-    spec: { rules: [{ host: "api.example.com", http: { paths } }] },
-  });
-  const staticPath = {
-    path: "/api/*",
-    pathType: "ImplementationSpecific",
-    backend: { service: { name: WSAPI_ALIAS, port: { name: "http" } } },
+function baseSyncOpts(k: FakeKubectl, gateways: FleetGateway[] = GATEWAYS) {
+  return {
+    runKubectl: k.run,
+    ingressName: INGRESS,
+    namespace: NS,
+    baseRoutesConfigMap: CONFIGMAP,
+    apiHost: API_HOST,
+    previewHost: PREVIEW_HOST,
+    gatewayEdgePort: GATEWAY_EDGE_PORT,
+    previewPort: PREVIEW_PORT,
+    desiredGateways: gateways,
+    fieldManager: FIELD_MANAGER,
+    log: () => {},
   };
+}
 
-  it("no-ops when the shared ingress already carries the desired /api/g/* paths", async () => {
-    const live = liveWith([
-      staticPath,
-      {
-        path: "/api/g/bender/*",
-        pathType: "ImplementationSpecific",
-        backend: { service: { name: "gateway-edge-bender", port: { number: WSAPI_PORT } } },
-      },
-    ]);
-    const { runKubectl, calls } = mockKubectl([{ stdout: JSON.stringify(live) }]);
-    const result = await syncApiFleetIngressPaths({
-      runKubectl,
-      ingressName,
-      namespace,
-      desiredGateways: [{ gatewayId: "bender" }],
-      gatewayEdgePort: WSAPI_PORT,
-      gatewayEdgeServiceName: WSAPI_ALIAS,
-      log: vi.fn(),
-    });
-    expect(result.changed).toBe(false);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args[0]).toBe("get");
-  });
-
-  it("JSON-patches missing /api/g/* paths onto the shared ingress (static path preserved)", async () => {
-    const live = liveWith([staticPath]);
-    const { runKubectl, calls } = mockKubectl([
-      { stdout: JSON.stringify(live) },
-      { stdout: "ingress.networking.k8s.io/gateway-edge-ingress patched" },
-    ]);
-    const result = await syncApiFleetIngressPaths({
-      runKubectl,
-      ingressName,
-      namespace,
-      desiredGateways: [
-        { gatewayId: "default" },
-        { gatewayId: "bender" },
-      ],
-      gatewayEdgePort: WSAPI_PORT,
-      gatewayEdgeServiceName: WSAPI_ALIAS,
-      log: vi.fn(),
-    });
-    expect(result.changed).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[1].args).toContain("patch");
-    expect(calls[1].args).toContain("--type=json");
-
-    expect(calls[1].args).not.toContain("--server-side");
-    const ops = JSON.parse(calls[1].args[calls[1].args.length - 1]);
-    expect(ops).toEqual([
-      {
-        op: "add",
-        path: "/spec/rules/0/http/paths/-",
-        value: {
-          path: "/api/g/bender/*",
-          pathType: "ImplementationSpecific",
-          backend: { service: { name: "gateway-edge-bender", port: { number: WSAPI_PORT } } },
-        },
-      },
-      {
-        op: "add",
-        path: "/spec/rules/0/http/paths/-",
-        value: {
-          path: "/api/g/default/*",
-          pathType: "ImplementationSpecific",
-          backend: { service: { name: "gateway-edge-default", port: { number: WSAPI_PORT } } },
-        },
-      },
+describe("apiFleetPaths", () => {
+  it("emits one /api/g/<id>/* path per gateway routed to the per-gateway gateway-edge Service", () => {
+    expect(apiFleetPaths(GATEWAYS, GATEWAY_EDGE_PORT)).toEqual([
+      { path: "/api/g/bender/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-edge-bender", port: { number: 3001 } } } },
+      { path: "/api/g/default/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-edge-default", port: { number: 3001 } } } },
     ]);
   });
 
-  it("uses ingressHost to patch the API rule inside a consolidated Ingress", async () => {
-    const live = {
-      kind: "Ingress",
-      apiVersion: "networking.k8s.io/v1",
-      metadata: { name: "octogee-edge-ingress", namespace },
-      spec: {
-        rules: [
-          {
-            host: "preview.example.com",
-            http: { paths: [{ path: "/health", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-gateway", port: { number: 9080 } } } }] },
-          },
-          { host: "api.example.com", http: { paths: [staticPath] } },
-        ],
-      },
-    };
-    const { runKubectl, calls } = mockKubectl([
-      { stdout: JSON.stringify(live) },
-      { stdout: "ingress.networking.k8s.io/octogee-edge-ingress patched" },
-    ]);
-    await syncApiFleetIngressPaths({
-      runKubectl,
-      ingressName: "octogee-edge-ingress",
-      ingressHost: "api.example.com",
-      namespace,
-      desiredGateways: [{ gatewayId: "bender" }],
-      gatewayEdgePort: WSAPI_PORT,
-      gatewayEdgeServiceName: WSAPI_ALIAS,
-      log: vi.fn(),
-    });
-    const ops = JSON.parse(calls[1].args[calls[1].args.length - 1]);
-    expect(ops[0]).toEqual({ op: "test", path: "/spec/rules/1/host", value: "api.example.com" });
-    expect(ops[1].path).toBe("/spec/rules/1/http/paths/-");
+  it("is empty when there are no gateways", () => {
+    expect(apiFleetPaths([], GATEWAY_EDGE_PORT)).toEqual([]);
   });
 
-  it("defers cleanly when the ingress is not yet present (bootstrap)", async () => {
-    const { runKubectl, calls } = mockKubectl([
-      {
-        code: 1,
-        stderr: 'Error from server (NotFound): ingresses.networking.k8s.io "gateway-edge-ingress" not found',
-      },
-    ]);
-    const log = vi.fn();
-    const result = await syncApiFleetIngressPaths({
-      runKubectl,
-      ingressName,
-      namespace,
-      desiredGateways: [{ gatewayId: "bender" }],
-      gatewayEdgePort: WSAPI_PORT,
-      gatewayEdgeServiceName: WSAPI_ALIAS,
-      log,
-    });
-    expect(result.changed).toBe(false);
-    expect(calls).toHaveLength(1);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("deferring"));
+  it("orders by gatewayId for deterministic output", () => {
+    const paths = apiFleetPaths([{ gatewayId: "zeta" }, { gatewayId: "alpha" }], GATEWAY_EDGE_PORT);
+    expect(paths.map((p) => p.path)).toEqual(["/api/g/alpha/*", "/api/g/zeta/*"]);
   });
 });
 
-describe("syncPreviewIngressPaths", () => {
-  const namespace = "octogee-test";
+describe("previewFleetPaths", () => {
+  it("emits one /g/<id>/* path per gateway routed to the per-gateway gateway Service", () => {
+    expect(previewFleetPaths(GATEWAYS, PREVIEW_PORT)).toEqual([
+      { path: "/g/bender/*", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-gateway-bender", port: { number: 9080 } } } },
+      { path: "/g/default/*", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-gateway-default", port: { number: 9080 } } } },
+    ]);
+  });
+});
 
-  it("patches /g/<gatewayId>/* preview paths on the preview host only", async () => {
-    const live = {
-      kind: "Ingress",
-      apiVersion: "networking.k8s.io/v1",
-      metadata: { name: "octogee-edge-ingress", namespace },
-      spec: {
-        rules: [
-          {
-            host: "api.example.com",
-            http: {
-              paths: [
-                {
-                  path: "/api/*",
-                  pathType: "ImplementationSpecific",
-                  backend: { service: { name: "gateway-edge", port: { name: "http" } } },
-                },
-              ],
-            },
-          },
-          {
-            host: "preview.example.com",
-            http: {
-              paths: [
-                {
-                  path: "/health",
-                  pathType: "ImplementationSpecific",
-                  backend: { service: { name: "octogee-gateway", port: { number: 9080 } } },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    };
-    const { runKubectl, calls } = mockKubectl([
-      { stdout: JSON.stringify(live) },
-      { stdout: "ingress.networking.k8s.io/octogee-edge-ingress patched" },
-    ]);
-    const result = await syncPreviewIngressPaths({
-      runKubectl,
-      ingressName: "octogee-edge-ingress",
-      ingressHost: "preview.example.com",
-      namespace,
-      desiredGateways: [{ gatewayId: "default" }],
-      previewPort: 9080,
-      log: vi.fn(),
+describe("mergeFleetRules", () => {
+  it("appends /api/g/* to the api host after the base paths, in gatewayId order", () => {
+    const merged = mergeFleetRules(BASE_RULES, {
+      apiHost: API_HOST,
+      previewHost: PREVIEW_HOST,
+      gateways: GATEWAYS,
+      gatewayEdgePort: GATEWAY_EDGE_PORT,
+      previewPort: PREVIEW_PORT,
     });
-    expect(result.changed).toBe(true);
-    const ops = JSON.parse(calls[1].args[calls[1].args.length - 1]);
-    expect(ops).toEqual([
-      { op: "test", path: "/spec/rules/1/host", value: "preview.example.com" },
-      {
-        op: "add",
-        path: "/spec/rules/1/http/paths/-",
-        value: {
-          path: "/g/default/*",
-          pathType: "ImplementationSpecific",
-          backend: { service: { name: "octogee-gateway-default", port: { number: 9080 } } },
-        },
-      },
+    const apiRule = merged.find((r) => r.host === API_HOST)!;
+    expect(apiRule.http.paths.map((p) => p.path)).toEqual([
+      "/api/admin/gateways/*",
+      "/api/*",
+      "/health",
+      "/api/g/bender/*",
+      "/api/g/default/*",
     ]);
+  });
+
+  it("appends /g/* to the preview host and leaves other hosts untouched", () => {
+    const merged = mergeFleetRules(BASE_RULES, {
+      apiHost: API_HOST,
+      previewHost: PREVIEW_HOST,
+      gateways: GATEWAYS,
+      gatewayEdgePort: GATEWAY_EDGE_PORT,
+      previewPort: PREVIEW_PORT,
+    });
+    expect(merged.find((r) => r.host === PREVIEW_HOST)!.http.paths.map((p) => p.path)).toEqual([
+      "/health",
+      "/g/bender/*",
+      "/g/default/*",
+    ]);
+    expect(merged.find((r) => r.host === "git-test.octogee.com")!.http.paths.map((p) => p.path)).toEqual(["/*"]);
+  });
+
+  it("is a no-op on the rules when there are no gateways (base routes pass through)", () => {
+    const merged = mergeFleetRules(BASE_RULES, {
+      apiHost: API_HOST,
+      previewHost: PREVIEW_HOST,
+      gateways: [],
+      gatewayEdgePort: GATEWAY_EDGE_PORT,
+      previewPort: PREVIEW_PORT,
+    });
+    expect(rulesEqual(merged, BASE_RULES)).toBe(true);
+  });
+});
+
+describe("rulesEqual", () => {
+  it("is true for structurally identical rules", () => {
+    expect(rulesEqual(BASE_RULES, JSON.parse(JSON.stringify(BASE_RULES)))).toBe(true);
+  });
+  it("is false when a path order differs (GCE URL-map order matters)", () => {
+    const reordered = JSON.parse(JSON.stringify(BASE_RULES)) as IngressRule[];
+    reordered[0].http.paths.reverse();
+    expect(rulesEqual(BASE_RULES, reordered)).toBe(false);
+  });
+  it("is false when a backend differs", () => {
+    const changed = JSON.parse(JSON.stringify(BASE_RULES)) as IngressRule[];
+    changed[0].http.paths[1].backend.service.name = "gateway-edge";
+    expect(rulesEqual(BASE_RULES, changed)).toBe(false);
+  });
+});
+
+describe("parseBaseRoutes", () => {
+  it("parses a valid routes.json payload", () => {
+    expect(parseBaseRoutes(JSON.stringify(BASE_RULES))).toEqual(BASE_RULES);
+  });
+  it("throws on non-JSON", () => {
+    expect(() => parseBaseRoutes("not json")).toThrow(/not parseable/);
+  });
+  it("throws when the payload is not an array of rules", () => {
+    expect(() => parseBaseRoutes(JSON.stringify({ host: "x" }))).toThrow(/array of/);
+    expect(() => parseBaseRoutes(JSON.stringify([{ host: "x" }]))).toThrow(/array of/);
+  });
+});
+
+describe("syncEdgeIngress", () => {
+  it("server-side-applies the merged base+fleet rules under the cowboy field manager", async () => {
+    const k = fakeKubectl({});
+    const result = await syncEdgeIngress(baseSyncOpts(k));
+
+    const apply = applyCall(k)!;
+    expect(apply.args).toEqual([
+      "apply", "--server-side", "--field-manager", FIELD_MANAGER, "--force-conflicts", "-n", NS, "-f", "-",
+    ]);
+    const manifest = JSON.parse(apply.stdin!) as { spec: { rules: IngressRule[] } };
+    const apiRule = manifest.spec.rules.find((r) => r.host === API_HOST)!;
+    expect(apiRule.http.paths.map((p) => p.path)).toContain("/api/g/bender/*");
+    expect(apiRule.http.paths.map((p) => p.path)).toContain("/api/g/default/*");
+    const previewRule = manifest.spec.rules.find((r) => r.host === PREVIEW_HOST)!;
+    expect(previewRule.http.paths.map((p) => p.path)).toContain("/g/bender/*");
+    expect(result.changed).toBe(true);
+  });
+
+  it("reports changed=false (and still applies) when the live rules already match", async () => {
+    const desired = mergeFleetRules(BASE_RULES, {
+      apiHost: API_HOST,
+      previewHost: PREVIEW_HOST,
+      gateways: GATEWAYS,
+      gatewayEdgePort: GATEWAY_EDGE_PORT,
+      previewPort: PREVIEW_PORT,
+    });
+    const k = fakeKubectl({ ingress: ok(ingressStdout(desired)) });
+    const result = await syncEdgeIngress(baseSyncOpts(k));
+    expect(result.changed).toBe(false);
+    expect(applyCall(k)).toBeDefined();
+  });
+
+  it("defers (no apply) when the base-routes ConfigMap is absent", async () => {
+    const k = fakeKubectl({ configmap: notFound() });
+    const result = await syncEdgeIngress(baseSyncOpts(k));
+    expect(result.changed).toBe(false);
+    expect(applyCall(k)).toBeUndefined();
+    expect(k.calls.some((c) => c.args[1] === "ingress")).toBe(false);
+  });
+
+  it("defers (no apply) when the Ingress object is absent", async () => {
+    const k = fakeKubectl({ ingress: notFound() });
+    const result = await syncEdgeIngress(baseSyncOpts(k));
+    expect(result.changed).toBe(false);
+    expect(applyCall(k)).toBeUndefined();
+  });
+
+  it("throws when a get fails for a non-NotFound reason", async () => {
+    const k = fakeKubectl({ configmap: { stdout: "", stderr: "Forbidden", code: 1 } });
+    await expect(syncEdgeIngress(baseSyncOpts(k))).rejects.toThrow(/configmap .* failed/);
+  });
+
+  it("throws when the apply fails", async () => {
+    const k = fakeKubectl({ apply: { stdout: "", stderr: "conflict", code: 1 } });
+    await expect(syncEdgeIngress(baseSyncOpts(k))).rejects.toThrow(/apply ingress .* failed/);
   });
 });

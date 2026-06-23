@@ -469,8 +469,12 @@ const hist = await deps.runHelm([
     }
     return `uninstalled stuck first-install ${release} (no good revision to roll back to)`;
   }
+  // Same SSA + force-conflicts as the upgrade path (see buildUpgradeArgs): a
+  // recovery rollback must be able to reclaim fields a kubectl-set/-patch
+  // side-channel grabbed, or it dies on the conflict instead of unblocking.
   const rb = await deps.runHelm([
-    "rollback", release, String(target), "-n", namespace, "--wait", `--timeout=${upgradeTimeout}`,
+    "rollback", release, String(target), "-n", namespace,
+    "--server-side=true", "--force-conflicts", "--wait", `--timeout=${upgradeTimeout}`,
   ]);
   if (rb.code !== 0) {
     throw new Error(

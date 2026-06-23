@@ -1,6 +1,5 @@
 {{- $sharedIngressName := .Values.ingress.sharedName | default "" -}}
 {{- $apiIngressName := default (.Values.ingress.apiName | default "gateway-edge-ingress") $sharedIngressName -}}
-{{- $previewIngressName := default (.Values.ingress.previewName | default "preview-ingress") $sharedIngressName -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -100,10 +99,12 @@ spec:
               value: {{ $apiIngressName | quote }}
             - name: GATEWAY_EDGE_INGRESS_HOST
               value: {{ .Values.ingress.apiHost | default "" | quote }}
-            - name: PREVIEW_INGRESS_NAME
-              value: {{ $previewIngressName | quote }}
             - name: PREVIEW_INGRESS_HOST
               value: {{ .Values.ingress.previewHost | default "" | quote }}
+            # The static base routing table Cowboy merges with per-gateway paths;
+            # published by the umbrella's edge-routes-configmap.yaml.
+            - name: EDGE_ROUTES_CONFIGMAP
+              value: "octogee-edge-routes"
             # Per-gateway auth-token Secret Manager rotation: when an
             # admin clicks "Add Gateway", the handler calls
             # provisionGatewayAuthSecret({gatewayServiceAccount}) and

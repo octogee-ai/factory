@@ -1,17 +1,18 @@
 FROM node:26-slim
 
-# helm + kubectl resolve latest stable at image build time. helm-runner.ts uses
-# `--server-side=true --force-conflicts` (v4 string-flag syntax); any v4+
-# release supports that, and the build verifies those flags before publishing
-# the controller image. The CI deploy job pins Helm v4 separately to avoid
-# azure/setup-helm's Helm 3 fallback when "latest" lookup fails.
+# Helm is PINNED to one version across every path that runs `helm upgrade`
+# against the cluster — CI's azure/setup-helm (.github/workflows/build-and-deploy.yml)
+# and the operator toolkit (infra/gateway/Dockerfile.operator-toolkit) — so the
+# umbrella upgrade and Cowboy's per-gateway upgrades share identical
+# server-side-apply semantics. helm-runner.ts relies on v4's `--server-side=true
+# --force-conflicts` string-flag syntax; the build verifies those flags below
+# before publishing. Bump all three sites together. kubectl tracks stable (it is
+# not SSA-version-sensitive).
+ARG HELM_VERSION=v4.2.2
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tini \
   && rm -rf /var/lib/apt/lists/* \
-  && HELM_VERSION="$(curl -fsSL https://api.github.com/repos/helm/helm/releases/latest \
-       | grep -oE '\"tag_name\": *\"v[^\"]+\"' \
-       | grep -oE 'v[0-9.]+')" \
   && echo "Installing helm ${HELM_VERSION}" \
   && curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-$(dpkg --print-architecture).tar.gz" \
        | tar -xz -C /tmp \

@@ -56,8 +56,7 @@ import {
 } from "./model-key-source-issuer.js";
 import {
   spawnKubectl,
-  syncApiFleetIngressPaths,
-  syncPreviewIngressPaths,
+  syncEdgeIngress,
   type FleetGateway,
   type KubectlSubprocess,
 } from "./fleet-ingress.js";
@@ -188,11 +187,17 @@ const PREEMPTION_HANDOFF_SWEEP_MS = parseNonNegativeInt(
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
 );
 
+// One shared edge ingress carries both the api host (/api/g/<id>/* locality
+// routes) and the preview host (/g/<id>/*). Cowboy owns its .spec.rules; the
+// umbrella chart publishes the static base routes via the EDGE_ROUTES_CONFIGMAP
+// ConfigMap and owns only the Ingress object + metadata.
 const GATEWAY_EDGE_INGRESS_NAME =
-  process.env.GATEWAY_EDGE_INGRESS_NAME ?? "gateway-edge-ingress";
+  process.env.GATEWAY_EDGE_INGRESS_NAME ?? "octogee-edge-ingress";
 const GATEWAY_EDGE_INGRESS_HOST = process.env.GATEWAY_EDGE_INGRESS_HOST;
-const PREVIEW_INGRESS_NAME = process.env.PREVIEW_INGRESS_NAME ?? "preview-ingress";
 const PREVIEW_INGRESS_HOST = process.env.PREVIEW_INGRESS_HOST;
+const EDGE_ROUTES_CONFIGMAP =
+  process.env.EDGE_ROUTES_CONFIGMAP ?? "octogee-edge-routes";
+const EDGE_INGRESS_FIELD_MANAGER = "cowboy-fleet-ingress";
 
 const GATEWAY_EDGE_PORT = 3001;
 const PREVIEW_PORT = 9080;
@@ -992,39 +997,27 @@ async function main(): Promise<void> {
     process.env.KUBE_OPS_MODE === "stub"
       ? createLoggingKubeOps(log)
       : createKubeSubprocessRunner({ runKubectl, log });
-  const syncApiFleetIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
-    syncApiFleetIngressPaths({
+  const syncEdgeIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
+    syncEdgeIngress({
       runKubectl,
       ingressName: GATEWAY_EDGE_INGRESS_NAME,
-      ingressHost: GATEWAY_EDGE_INGRESS_HOST,
       namespace: NAMESPACE,
-      desiredGateways: gateways,
+      baseRoutesConfigMap: EDGE_ROUTES_CONFIGMAP,
+      apiHost: GATEWAY_EDGE_INGRESS_HOST,
+      previewHost: PREVIEW_INGRESS_HOST,
       gatewayEdgePort: GATEWAY_EDGE_PORT,
-      gatewayEdgeServiceName: "gateway-edge",
-      log,
-    }).then(() => undefined);
-  const syncPreviewIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
-    syncPreviewIngressPaths({
-      runKubectl,
-      ingressName: PREVIEW_INGRESS_NAME,
-      ingressHost: PREVIEW_INGRESS_HOST,
-      namespace: NAMESPACE,
-      desiredGateways: gateways,
       previewPort: PREVIEW_PORT,
+      desiredGateways: gateways,
+      fieldManager: EDGE_INGRESS_FIELD_MANAGER,
       log,
     }).then(() => undefined);
 
-const syncAllFleetIngresses = async (gateways: ReadonlyArray<FleetGateway>) => {
-    await syncApiFleetIngressForGateways(gateways);
-    await syncPreviewIngressForGateways(gateways);
-  };
-
-const handlerSyncFleetIngress = async () => {
+  const handlerSyncFleetIngress = async () => {
     const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
     const gateways: FleetGateway[] = snap.docs
       .map((d) => d.data() as { gatewayId?: unknown })
       .filter((g): g is FleetGateway => typeof g.gatewayId === "string");
-    await syncAllFleetIngresses(gateways);
+    await syncEdgeIngressForGateways(gateways);
   };
 
   const fleetControllerPrivateKey = requireEnv(
@@ -1054,7 +1047,7 @@ const handlerSyncFleetIngress = async () => {
     restartGatewayDeployment: createGatewayDeploymentRestarter(runKubectl, log),
     handlers,
     log,
-    syncFleetIngress: syncAllFleetIngresses,
+    syncFleetIngress: syncEdgeIngressForGateways,
     operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
     chartFingerprint,
     resolveApiServerEgressCidrs: createCachedApiServerEgressResolver(

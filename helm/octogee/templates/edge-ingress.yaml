@@ -1,10 +1,13 @@
 {{- if .Values.edgeIngress.enabled }}
 {{- $name := .Values.edgeIngress.name | default "octogee-edge-ingress" -}}
-{{- $hosts := .Values.edgeIngress.hosts -}}
-{{- $gatewayEdge := index .Values "gateway-edge" -}}
-{{- $apiSvc := $gatewayEdge.ingress.octogeeApiService | default "octogee-api" -}}
-{{- $edgeSvc := $gatewayEdge.ingress.targetService | default "gateway-edge" -}}
-{{- $glmSvc := $gatewayEdge.ingress.glmService | default "glm-controller" -}}
+# Metadata-only Ingress. Helm owns the object, its annotations (managed certs,
+# static IP, ingress class) and ingressClassName, but deliberately NOT
+# .spec.rules: that is an atomic server-side-apply field with a single owner,
+# and Cowboy (glm-controller) is that owner. It applies the full rule set —
+# the static base routes (octogee.edgeBaseRoutes, published via the
+# octogee-edge-routes ConfigMap) plus the per-gateway locality paths — so the
+# umbrella deploy never fights Cowboy over spec.rules. On a fresh install the
+# LB provisions once Cowboy writes the first rules.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -15,140 +18,4 @@ metadata:
     kubernetes.io/ingress.global-static-ip-name: {{ .Values.edgeIngress.staticIpName }}
 spec:
   ingressClassName: gce
-  rules:
-    - host: {{ $hosts.api }}
-      http:
-        paths:
-          - path: /api/admin/gateways/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/gateways
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/operations
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/restore-jobs/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/restore-jobs
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/builds
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/rollouts
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/customer-distribution
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/customers/by-slug/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/customer/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/customers/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          - path: /api/admin/customers
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glmSvc }}
-                port:
-                  name: http
-          # Cluster API default. Gateway-local locality routes must use the
-          # per-instance /api/g/<gatewayId>/* seam; bare /api/* goes to the
-          # singleton octogee-api so newly mounted cluster routes cannot fall
-          # through to the gateway-edge sidecar.
-          - path: /api/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $apiSvc }}
-                port:
-                  name: http
-          - path: /health
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $edgeSvc }}
-                port:
-                  name: http
-    - host: {{ $hosts.git }}
-      http:
-        paths:
-          - path: /*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: octogee-gitea-http
-                port:
-                  number: 3000
-    - host: {{ $hosts.mattermost }}
-      http:
-        paths:
-          - path: /*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: mattermost
-                port:
-                  number: 8065
-    - host: {{ $hosts.preview }}
-      http:
-        paths:
-          - path: /health
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: octogee-gateway
-                port:
-                  number: 9080
 {{- end }}
