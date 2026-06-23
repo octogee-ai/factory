@@ -978,9 +978,10 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.9 GA (current) the fork carries **six logical essential patches across eight commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the device-token self-pairing-lockdown security patch; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.9 GA (current, fork-refreshed to `72f6897f`) the fork carries **seven logical essential patches across nine commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the device-token self-pairing-lockdown security patch; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
 
-Live short SHAs at v2026.6.9 GA (top of current's integration branch is `6f734689`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+Live short SHAs at v2026.6.9 GA (top of current's integration branch is `72f6897f` after the 2026-06-23 fork-SHA-only refresh) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `72f6897f` — exempt trusted control-plane (`usesSharedGatewayAuth`) from the config.patch write rate-limit
 - `6f734689` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
 - `1e13a9b0` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
 - `29a7bdfe` — mattermost connect log: ✅ marker for operator visibility on GW startup
@@ -996,11 +997,32 @@ Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.6.9 (GA) | `6f734689` |
+| current | 2026.6.9 (GA) | `72f6897f` |
 | previous | 2026.6.8 (GA) | `c13e804a` |
 | preview | 2026.6.10-beta.1 | `13add4e3` |
 
 **Essential:**
+
+- **Trusted control-plane `config.patch` rate-limit exemption** (introduced
+  `72f6897f`, 2026-06-23) — `src/gateway/server-methods.ts` (the control-plane
+  write gate) + `usesSharedGatewayAuth?` surfaced on `GatewayClient`
+  (`server-methods/shared-types.ts`, sibling to the existing `isDeviceTokenAuth`).
+  `config.patch` from a connection that authenticated with the shared gateway
+  control-plane token (`client.usesSharedGatewayAuth === true` — server-set at
+  the connect handshake, the same signal `server-shared-auth-generation`
+  already gates on; **not** the spoofable self-reported actor/`client.id`)
+  skips the 3/60s control-plane write cap. The in-pod provisioner fires one
+  idempotent `config.patch` per customer when a blue/green roll mounts N at
+  once; the cap throttled that to ~1 write/48s, serializing the roll at
+  ~48s/customer for a non-problem — the config-write/reload storm it guards is
+  already neutralized for these writes by our per-account surgical channel
+  reload + `config.patch` post-write-hash (no-op skip) patches (live TEST: hot
+  ~0.5s reloads, zero WS drops). Narrow: only `config.patch` **and**
+  `usesSharedGatewayAuth`; every untrusted caller (device-token, anonymous)
+  and every other control-plane write keeps the cap, and `config.patch` is
+  already `operator.admin`-scoped. **Supersedes** the deleted "control-plane
+  write rate-limit configurable" patch — grant the bypass to the trusted local
+  system, don't re-make the cap configurable. **Not** diagnostic-only.
 
 - **Activity harness-signal for sidecar bridges (Hunks A+B)** — one
   logical essential feature, two commits, single env gate
@@ -1106,7 +1128,7 @@ to spelunk):
 - AJV plugin defaults leaking into `event.sourceConfig` (the SIGUSR1-on-mount cascade) → landed upstream as `057b8276cc` (#73267) in v2026.4.28.
 - Channel/sidecar startup-handshake hang (4.25/4.26 blocker) → landed upstream as `8d58ad4c15`.
 - MM per-message latency instrumentation + emit-timing-summary-on-settle — diagnostic-only, dropped now that the bugs they helped chase are fixed.
-- Control-plane write rate-limit configurable — never deployed; surgical reload kept actual `config.patch` traffic well below the 3/60s upstream cap.
+- Control-plane write rate-limit configurable — never deployed. **Superseded** (2026-06-23, `72f6897f`) by the active "trusted control-plane config.patch rate-limit exemption" essential above: instead of making the cap configurable, we exempt the trusted local control-plane (`usesSharedGatewayAuth`) from the config.patch cap and keep 3/60s for everyone else.
 
 ---
 
