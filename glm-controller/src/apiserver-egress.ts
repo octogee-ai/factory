@@ -1,0 +1,75 @@
+import type { KubectlSubprocessResult } from "./fleet-ingress.js";
+
+export type KubectlRunner = (args: string[]) => Promise<KubectlSubprocessResult>;
+
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+function toCidrs(raw: string, sink: Set<string>): void {
+  for (const ip of raw.split(/\s+/).map((s) => s.trim()).filter(Boolean)) {
+    if (IPV4.test(ip)) sink.add(`${ip}/32`);
+  }
+}
+
+// Resolve the live Kubernetes API-server egress CIDRs so operator gateways can
+// reach the apiserver for builder-shell TokenReview. On GKE Dataplane V2 (Cilium)
+// the NetworkPolicy is enforced on the POST-DNAT destination, so we need the real
+// endpoint(s) from `endpoints/kubernetes` — the EndpointSlice is empty on managed
+// control planes — plus the ClusterIP for any pre-DNAT match. Both as /32.
+// Returns [] on failure: callers must NOT inject an empty set (would strip a
+// working gateway's egress); the prior value stands until a resolve succeeds.
+export async function resolveApiServerEgressCidrs(
+  kubectl: KubectlRunner,
+  log: (msg: string) => void,
+): Promise<string[]> {
+  const cidrs = new Set<string>();
+  try {
+    const endpoints = await kubectl([
+      "get",
+      "endpoints",
+      "kubernetes",
+      "-n",
+      "default",
+      "-o",
+      "jsonpath={.subsets[*].addresses[*].ip}",
+    ]);
+    if (endpoints.code === 0) toCidrs(endpoints.stdout, cidrs);
+    else log(`[apiserver-egress] get endpoints failed (code=${endpoints.code}): ${endpoints.stderr.trim()}`);
+
+    const service = await kubectl([
+      "get",
+      "service",
+      "kubernetes",
+      "-n",
+      "default",
+      "-o",
+      "jsonpath={.spec.clusterIP}",
+    ]);
+    if (service.code === 0) toCidrs(service.stdout, cidrs);
+    else log(`[apiserver-egress] get service failed (code=${service.code}): ${service.stderr.trim()}`);
+  } catch (err) {
+    log(`[apiserver-egress] resolve threw: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (cidrs.size === 0) {
+    log("[apiserver-egress] ⚠ resolved no apiserver CIDRs — operator builder-shell egress unchanged until this succeeds");
+  }
+  return [...cidrs].sort();
+}
+
+// The control-plane endpoint is stable, so resolve once and cache: one read per
+// TTL window, not per reconcile tick. Empties aren't cached, so a transient read
+// failure self-heals on the next reconcile.
+export function createCachedApiServerEgressResolver(
+  kubectl: KubectlRunner,
+  log: (msg: string) => void,
+  ttlMs = 5 * 60 * 1000,
+  now: () => number = () => Date.now(),
+): () => Promise<string[]> {
+  let cache: { value: string[]; expires: number } | null = null;
+  return async () => {
+    const t = now();
+    if (cache && cache.expires > t) return cache.value;
+    const value = await resolveApiServerEgressCidrs(kubectl, log);
+    if (value.length > 0) cache = { value, expires: t + ttlMs };
+    return value;
+  };
+}

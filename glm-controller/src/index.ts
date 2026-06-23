@@ -137,6 +137,7 @@ import {
   startPreemptionHandoffSweeper,
 } from "./preemption-handoff-sweeper.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
+import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectRestore,
@@ -246,6 +247,8 @@ interface ControllerDeps {
   operatorReadyRefreshMs?: number;
 
   chartFingerprint?: string;
+
+  resolveApiServerEgressCidrs?: () => Promise<string[]>;
 }
 
 function deploymentNameForInstance(gatewayId: string): string {
@@ -713,7 +716,8 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
   await syncGatewayModelKeySources(deps, desired);
   const modelKeyChangedGatewayIds = await syncGatewayModelKeySecrets(deps, desired);
-  const desiredMap = buildInstancesMap(desired, deps.chartFingerprint);
+  const apiServerEgressCidrs = (await deps.resolveApiServerEgressCidrs?.()) ?? [];
+  const desiredMap = buildInstancesMap(desired, deps.chartFingerprint, apiServerEgressCidrs);
   const changes = diffInstancesMap(actualMap, desiredMap, {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
   });
@@ -722,6 +726,7 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     actualMap,
     mountedByGatewayId,
     deps.chartFingerprint,
+    apiServerEgressCidrs,
   );
   logPreservedDrift(deps, preservedDriftChanges(changes, targetMap), desired);
   const targetVsActual = diffInstancesMap(actualMap, targetMap, {
@@ -1052,6 +1057,10 @@ const handlerSyncFleetIngress = async () => {
     syncFleetIngress: syncAllFleetIngresses,
     operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
     chartFingerprint,
+    resolveApiServerEgressCidrs: createCachedApiServerEgressResolver(
+      (args) => spawnKubectl(args),
+      log,
+    ),
   };
 
   log(

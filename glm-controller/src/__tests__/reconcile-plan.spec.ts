@@ -1,3 +1,4 @@
+/* eslint-disable sonarjs/no-hardcoded-ip -- apiserver egress CIDR fixtures */
 import { describe, it, expect } from "vitest";
 import {
   buildHelmTargetMap,
@@ -186,6 +187,39 @@ describe("buildInstancesMap", () => {
       mkDesired({ gatewayId: "bender", profile: "operator", ownerUid: "uid-chris" }),
     ]);
     expect(map.bender.operatorAccess).toMatchObject({ shellsEnabled: true });
+  });
+
+  it("injects resolved apiserver egress CIDRs into an owned operator gateway with shells", () => {
+    const map = buildInstancesMap(
+      [mkDesired({ gatewayId: "bender", profile: "operator", ownerUid: "uid-chris" })],
+      undefined,
+      ["10.128.0.2/32", "34.118.224.1/32"],
+    );
+    expect(map.bender.operatorAccess).toMatchObject({
+      shellsEnabled: true,
+      kubeApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
+    });
+  });
+
+  it("does not inject egress CIDRs into a shared gateway", () => {
+    const map = buildInstancesMap([mkDesired({ gatewayId: "default" })], undefined, ["10.128.0.2/32"]);
+    expect(map.default.operatorAccess).toBeUndefined();
+  });
+
+  it("leaves a working operator gateway's egress intact when no CIDRs resolved (read failure)", () => {
+    const map = buildInstancesMap(
+      [
+        mkDesired({
+          gatewayId: "bender",
+          profile: "operator",
+          ownerUid: "uid-chris",
+          operatorAccess: { shellsEnabled: true, kubeApiServerEgressCidrs: ["10.128.0.2/32"] },
+        }),
+      ],
+      undefined,
+      [],
+    );
+    expect(map.bender.operatorAccess?.kubeApiServerEgressCidrs).toEqual(["10.128.0.2/32"]);
   });
 
   it("does not let an operator-profile gateway inherit the platform default ServiceAccount", () => {

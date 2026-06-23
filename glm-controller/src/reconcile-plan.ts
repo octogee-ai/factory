@@ -30,11 +30,12 @@ export function deriveFleetImageTag(
 export function buildInstancesMap(
   desired: GatewayDesiredState[],
   chartFingerprint?: string,
+  apiServerEgressCidrs: readonly string[] = [],
 ): HelmInstancesMap {
   const out: HelmInstancesMap = {};
   for (const d of desired) {
     if (d.desiredStatus === "retired") continue;
-    out[d.gatewayId] = buildHelmInstanceValue(d, chartFingerprint);
+    out[d.gatewayId] = buildHelmInstanceValue(d, chartFingerprint, apiServerEgressCidrs);
   }
   return out;
 }
@@ -44,6 +45,7 @@ export function buildHelmTargetMap(
   actual: HelmInstancesMap,
   mountedByGatewayId: Map<string, readonly string[]> = new Map(),
   chartFingerprint?: string,
+  apiServerEgressCidrs: readonly string[] = [],
 ): HelmInstancesMap {
   const out: HelmInstancesMap = { ...actual };
   for (const d of desired) {
@@ -55,7 +57,7 @@ if (mounted === undefined || mounted.length === 0) {
       }
       continue;
     }
-    out[d.gatewayId] = buildHelmInstanceValue(d, chartFingerprint);
+    out[d.gatewayId] = buildHelmInstanceValue(d, chartFingerprint, apiServerEgressCidrs);
   }
   return out;
 }
@@ -94,14 +96,30 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
   return { serviceAccountName, serviceAccount, operatorAccess };
 }
 
+// Cowboy injects the live apiserver egress CIDRs (resolved per reconcile) for
+// operator gateways with shells on, so the egress NetworkPolicy tracks the real
+// control-plane endpoint without an operator ever setting it. Skipped when none
+// resolved, so a transient read failure can't strip a working gateway's egress.
+function injectApiServerEgress(
+  operatorAccess: HelmInstanceValue["operatorAccess"],
+  apiServerEgressCidrs: readonly string[],
+): HelmInstanceValue["operatorAccess"] {
+  if (!operatorAccess?.shellsEnabled || apiServerEgressCidrs.length === 0) {
+    return operatorAccess;
+  }
+  return { ...operatorAccess, kubeApiServerEgressCidrs: [...apiServerEgressCidrs] };
+}
+
 function buildHelmInstanceValue(
   d: GatewayDesiredState,
   chartFingerprint?: string,
+  apiServerEgressCidrs: readonly string[] = [],
 ): HelmInstanceValue {
   const gatewayClass = resolveGatewayClass(d);
   const imageProfile = resolveGatewayImageProfile(d);
   const persistence = resolveGatewayPersistence(imageProfile, d.persistence);
-  const { serviceAccountName, serviceAccount, operatorAccess } = resolveGatewayHelmKnobs(d);
+  const { serviceAccountName, serviceAccount, operatorAccess: baseAccess } = resolveGatewayHelmKnobs(d);
+  const operatorAccess = injectApiServerEgress(baseAccess, apiServerEgressCidrs);
   return {
     enabled: true,
     image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
