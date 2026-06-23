@@ -51,16 +51,15 @@ function fakeManager(over: Partial<DeviceAuthManager> = {}): DeviceAuthManager {
 }
 
 describe("device-auth start handler — internal-key guarded", () => {
-  it("401 (generic, no env-var name leaked) + no spawn when INTERNAL_SERVICE_KEY is unset", async () => {
+  it("allows start when no internal key is configured", async () => {
     const mgr = fakeManager();
-    const { res, getStatus, getBody } = mkRes();
+    const { res, getBody } = mkRes();
     await createDeviceAuthStartHandler({
       manager: mgr,
       internalServiceKey: "",
-    })(mkReq({ key: KEY, body: { agentId: "octogee-a-coach" } }), res, vi.fn());
-    expect(getStatus()).toBe(401);
-    expect(JSON.stringify(getBody())).not.toMatch(/INTERNAL_SERVICE_KEY/);
-    expect(mgr.start).not.toHaveBeenCalled();
+    })(mkReq({ body: { agentId: "octogee-a-coach" } }), res, vi.fn());
+    expect(mgr.start).toHaveBeenCalledWith("octogee-a-coach");
+    expect(getBody()).toMatchObject({ flowId: "f1", state: "awaiting_user" });
   });
 
   it("401 when the key is missing or wrong", async () => {
@@ -135,6 +134,18 @@ describe("device-auth start handler — internal-key guarded", () => {
 });
 
 describe("device-auth status handler", () => {
+  it("allows status when no internal key is configured", () => {
+    const mgr = fakeManager();
+    const { res, getBody } = mkRes();
+    createDeviceAuthStatusHandler({ manager: mgr, internalServiceKey: "" })(
+      mkReq({ params: { flowId: "f1" } }),
+      res,
+      vi.fn(),
+    );
+    expect(mgr.status).toHaveBeenCalledWith("f1");
+    expect(getBody()).toEqual({ state: "awaiting_user", expiresInMinutes: 12 });
+  });
+
   it("401 on a bad internal key (no flow info leaked)", () => {
     const mgr = fakeManager();
     const { res, getStatus } = mkRes();

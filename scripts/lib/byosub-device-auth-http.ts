@@ -27,15 +27,10 @@ function denied(
   req: Request,
   res: Response,
   key: string,
-  log: (m: string) => void,
 ): boolean {
 
 if (!key) {
-    log(
-      "byosub device-auth: refusing request — internal service key not configured",
-    );
-    res.status(401).json({ error: "unauthorized" });
-    return true;
+    return false;
   }
   const presented = req.header("X-Internal-Service-Key") ?? "";
   if (!internalKeyEquals(presented, key)) {
@@ -50,7 +45,7 @@ export function createDeviceAuthStartHandler(
 ): RequestHandler {
   const log = deps.log ?? (() => {});
   return async (req, res) => {
-    if (denied(req, res, deps.internalServiceKey, log)) return;
+    if (denied(req, res, deps.internalServiceKey)) return;
     const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
     if (typeof agentId !== "string" || !agentId) {
       res.status(400).json({ error: "agentId required" });
@@ -73,9 +68,8 @@ export function createDeviceAuthStartHandler(
 export function createDeviceAuthStatusHandler(
   deps: DeviceAuthHttpDeps,
 ): RequestHandler {
-  const log = deps.log ?? (() => {});
   return (req, res) => {
-    if (denied(req, res, deps.internalServiceKey, log)) return;
+    if (denied(req, res, deps.internalServiceKey)) return;
     const out = deps.manager.status(req.params.flowId as string);
     if (!out) {
       res.status(404).json({ error: "flow not found" });
