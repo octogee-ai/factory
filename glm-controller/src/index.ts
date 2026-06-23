@@ -139,6 +139,11 @@ import {
   startDedicatedGatewayIdleSweeper,
 } from "./dedicated-gateway-idle-sweeper.js";
 import { startDeferredRolloutSweeper } from "./rollout-defer-sweeper.js";
+import {
+  buildBlueGreenMigrateOpDoc,
+  runBlueGreenMigrateOp,
+  type MigrateOpStatus,
+} from "./rollout-migrate-op.js";
 import { readShellLiveness } from "./shell-liveness.js";
 import type { RolloutDeferMarker } from "./handlers/rollout.js";
 import {
@@ -1738,22 +1743,36 @@ async function buildHandlers(
         .get();
       return snap.docs.map((d) => d.id);
     },
-    migrateCustomer: async ({ uid, toGatewayId }, ctx) => {
-      const result = await migrateCustomer(
-        syntheticSubOp("migrate-customer", {
-          uid,
-          toGatewayId,
-          source: "rollout-bluegreen",
-        }),
-        ctx,
-      );
-      // Idempotent: a customer already on the target (a re-driven roll) is done,
-      // not failed — so a retried rollout converges instead of dead-ending.
-      if (!result.success && (result.error ?? "").includes(`already on ${toGatewayId}`)) {
-        return { success: true };
-      }
-      return { success: result.success, error: result.error };
-    },
+    // A blue/green customer migration runs as a REAL migrate-customer op, not an
+    // inline synthetic one: the operation worker claims it and sets status=running,
+    // and that running glmOperations record is exactly what the gitea-broker's
+    // hasRunningInboundMigrationForSlug authorizes the fresh sibling's restore
+    // (pubkey/bootstrap) on before the Firestore assignment cuts over. We enqueue
+    // it and await its terminal status.
+    migrateCustomer: ({ uid, toGatewayId }) =>
+      runBlueGreenMigrateOp(
+        { uid, toGatewayId },
+        {
+          enqueueMigrateOp: async ({ uid: u, toGatewayId: to }) => {
+            const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+            await opRef.set(
+              buildBlueGreenMigrateOpDoc({ uid: u, toGatewayId: to, createdAt: Date.now() }),
+            );
+            return opRef.id;
+          },
+          readOpStatus: async (opId) => {
+            const snap = await db.collection(GLM_OPERATIONS_COLLECTION).doc(opId).get();
+            if (!snap.exists) return null;
+            const data = snap.data() as { status?: MigrateOpStatus; error?: string };
+            return data.status ? { status: data.status, error: data.error } : null;
+          },
+          now: () => Date.now(),
+          wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+          timeoutMs: 600_000,
+          pollIntervalMs: 2_000,
+          log: logFn,
+        },
+      ),
     isSharedDefaultPool: async (gatewayId) => {
       const configured = (await db.doc("config/orchestrator").get()).data()
         ?.defaultGatewayId;
