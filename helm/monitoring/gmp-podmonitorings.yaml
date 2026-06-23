@@ -3,6 +3,9 @@
 # GMP sets the `job` label to the resource name — kept identical to the old
 # ServiceMonitor jobs so dashboards/alerts (up{job="octogee-gateway"}, the
 # $gateway var, gateway-edge panels) keep working unchanged.
+# Scrape at 30s: GMP bills per sample ingested, and 30s is ample for these
+# cost/capacity/health metrics (shortest alert window is for:2m = 4 samples).
+# 15s doubled the sample bill for no added signal. Gitea stays 60s (DB-backed).
 apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
@@ -14,7 +17,7 @@ spec:
   endpoints:
     - port: 3001
       path: /metrics
-      interval: 15s
+      interval: 30s
 ---
 # openclaw (:9091) + in-pod runner heartbeats (:9092) on the gateway pod.
 apiVersion: monitoring.googleapis.com/v1
@@ -28,10 +31,10 @@ spec:
   endpoints:
     - port: 9091
       path: /metrics
-      interval: 15s
+      interval: 30s
     - port: 9092
       path: /metrics
-      interval: 15s
+      interval: 30s
 ---
 # gateway-edge sidecar (:3001) — lives in the gateway pod, so select that pod but
 # keep job="gateway-edge" (separate CR) to match the old ServiceMonitor.
@@ -46,7 +49,7 @@ spec:
   endpoints:
     - port: 3001
       path: /metrics
-      interval: 15s
+      interval: 30s
 ---
 # Gitea's gauges are DB-backed (computed per scrape over the Cloud SQL proxy) —
 # give it room, like the old ServiceMonitor (60s/45s).
@@ -75,7 +78,7 @@ spec:
   endpoints:
     - port: 8067
       path: /metrics
-      interval: 15s
+      interval: 30s
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
@@ -88,4 +91,4 @@ spec:
   endpoints:
     - port: 8080
       path: /metrics
-      interval: 15s
+      interval: 30s
