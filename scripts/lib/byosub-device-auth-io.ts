@@ -22,8 +22,23 @@ export interface DeviceAuthIoConfig {
   log?: (m: string) => void;
 }
 
+function stripTrailingSlash(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function defaultOctogeeApiBaseUrl(): string {
+  const configured = process.env.OCTOGEE_API_URL;
+  if (configured) return stripTrailingSlash(configured);
+  const ns = process.env.K8S_NAMESPACE ?? "octogee";
+  return `http://octogee-api.${ns}.svc.cluster.local:3001`;
+}
+
 export function realDeviceAuthDeps(cfg: DeviceAuthIoConfig): DeviceAuthDeps {
-  const base = cfg.gatewayEdgeBaseUrl ?? "http://127.0.0.1:3001";
+  const base = cfg.gatewayEdgeBaseUrl
+    ? stripTrailingSlash(cfg.gatewayEdgeBaseUrl)
+    : defaultOctogeeApiBaseUrl();
   const codexBin = cfg.codexBin ?? "codex";
   const log = cfg.log ?? (() => {});
   return {
