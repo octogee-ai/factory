@@ -79,6 +79,12 @@ function makeDeps(state: FakeState, overrides: Partial<RolloutDeps> = {}): Rollo
         });
     }),
     readGatewayHeartbeat: vi.fn(async (gatewayId) => state.heartbeats.get(gatewayId) ?? null),
+    // Default: no active BuilderShell → rolls proceed (no defer).
+    readShellActivity: vi.fn(async () => ({ hasActiveSession: false })),
+    deferRollout: vi.fn(async () => undefined),
+    // Default: no mounted customers → the in-place path these tests exercise.
+    readMountedCustomers: vi.fn(async () => []),
+    runBlueGreen: vi.fn(async () => ({ steps: [], success: true })),
     helmRenderTimeoutMs: 60_000,
     heartbeatTimeoutMs: 60_000,
     pollIntervalMs: 1_000,
@@ -434,5 +440,99 @@ expect(state.specs.get("bender")?.imageRepository).toBe(REPO);
       shellsEnabled: false,
       reason: "operator-trust-boundary-not-provisioned",
     });
+  });
+});
+
+describe("createRolloutHandler — mounted gateways route to blue/green", () => {
+  it("delegates to runBlueGreen and NEVER updates the source spec in place when customers are mounted", async () => {
+    const state: FakeState = {
+      specs: new Map([
+        ["builder1", { gatewayId: "builder1", imageRepository: REPO, imageTag: "oldSha" }],
+      ]),
+      helmInstances: new Map([["builder1", { repository: REPO, tag: "oldSha" }]]),
+      heartbeats: new Map([["builder1", { version: "oldSha", lastHeartbeatAt: 0 }]]),
+    };
+    const runBlueGreen = vi.fn(async () => ({ steps: [], success: true }));
+    const deps = makeDeps(state, {
+      readMountedCustomers: vi.fn(async () => ["uidA"]),
+      runBlueGreen,
+    });
+
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "builder1", imageTag: "newSha" } }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(runBlueGreen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceGatewayId: "builder1",
+        targetImageTag: "newSha",
+      }),
+      expect.anything(),
+    );
+    // The in-place path must not run: source imageTag stays old, no spec write.
+    expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
+    expect(state.specs.get("builder1")?.imageTag).toBe("oldSha");
+  });
+
+  it("defers (does NOT roll) when a BuilderShell is active — parks the request, no blue/green, no in-place", async () => {
+    const state: FakeState = {
+      specs: new Map([
+        ["bender", { gatewayId: "bender", imageRepository: OPERATOR_REPO, imageTag: "oldSha", profile: "operator" }],
+      ]),
+      helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "oldSha" }]]),
+      heartbeats: new Map([["bender", { version: "oldSha", lastHeartbeatAt: 0 }]]),
+    };
+    const deferRollout = vi.fn(async () => undefined);
+    const runBlueGreen = vi.fn(async () => ({ steps: [], success: true }));
+    const deps = makeDeps(state, {
+      readShellActivity: vi.fn(async () => ({ hasActiveSession: true })),
+      readMountedCustomers: vi.fn(async () => ["ownerUid"]),
+      deferRollout,
+      runBlueGreen,
+    });
+
+    const ctx = makeCtx();
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "bender", imageTag: "newSha", profile: "operator" } }),
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(deferRollout).toHaveBeenCalledWith(
+      "bender",
+      expect.objectContaining({ imageTag: "newSha", gatewayClass: "operator" }),
+    );
+    expect(runBlueGreen).not.toHaveBeenCalled();
+    expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
+    expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
+      "defer-active-shell:running",
+      "defer-active-shell:done",
+    ]);
+  });
+
+  it("a no-op (already on the requested image) is still refused before any blue/green", async () => {
+    const state: FakeState = {
+      specs: new Map([
+        ["builder1", { gatewayId: "builder1", imageRepository: REPO, imageTag: "sameSha" }],
+      ]),
+      helmInstances: new Map([["builder1", { repository: REPO, tag: "sameSha" }]]),
+      heartbeats: new Map([["builder1", { version: "sameSha", lastHeartbeatAt: 0 }]]),
+    };
+    const runBlueGreen = vi.fn(async () => ({ steps: [], success: true }));
+    const deps = makeDeps(state, {
+      readMountedCustomers: vi.fn(async () => ["uidA"]),
+      runBlueGreen,
+    });
+
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "builder1", imageTag: "sameSha" } }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/no-op|already on/i);
+    expect(runBlueGreen).not.toHaveBeenCalled();
   });
 });

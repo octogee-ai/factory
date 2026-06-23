@@ -27,6 +27,7 @@ import {
   buildHelmTargetMap,
   buildInstancesMap,
   diffInstancesMap,
+  isImageRoll,
   isReplicasOnlyUpdate,
   type ReconcileChange,
 } from "./reconcile-plan.js";
@@ -62,6 +63,7 @@ import {
 } from "./fleet-ingress.js";
 import {
   routeOperation,
+  type OperationContext,
   type OperationHandlers,
 } from "./operation-router.js";
 import { createOperationContext } from "./operation-context.js";
@@ -78,6 +80,11 @@ import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
+import {
+  buildSiblingDoc,
+  runBlueGreenRollout,
+  type BlueGreenRolloutDeps,
+} from "./handlers/rollout-bluegreen.js";
 import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
 import { deleteAvatarObjects } from "./lib/customer-ops/avatars.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
@@ -131,6 +138,9 @@ import {
   DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
   startDedicatedGatewayIdleSweeper,
 } from "./dedicated-gateway-idle-sweeper.js";
+import { startDeferredRolloutSweeper } from "./rollout-defer-sweeper.js";
+import { readShellLiveness } from "./shell-liveness.js";
+import type { RolloutDeferMarker } from "./handlers/rollout.js";
 import {
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
   startPreemptionHandoffSweeper,
@@ -337,6 +347,7 @@ async function readGatewayHeartbeatFromFirestore(
 async function applyChanges(
   changes: ReconcileChange[],
   deps: ControllerDeps,
+  mountedByGatewayId: Map<string, readonly string[]>,
 ): Promise<void> {
   const kubeOps = deps.kubeOps ?? createLoggingKubeOps(deps.log);
   for (const change of changes) {
@@ -354,6 +365,21 @@ async function applyChanges(
         name: deploymentNameForInstance(change.gatewayId),
         replicas,
       });
+      continue;
+    }
+
+    // Invariant: NEVER in-place-roll a gateway's image while customers are
+    // mounted — that drops every live session (the builder1 outage). Such a roll
+    // must go through the blue/green orchestrator (rollout op). A stray direct
+    // imageTag write lands here; refuse it loudly rather than cut a live pod.
+    const mountedCount = mountedByGatewayId.get(change.gatewayId)?.length ?? 0;
+    if (isImageRoll(change) && mountedCount > 0) {
+      deps.log(
+        `[glm-controller] ⛔ REFUSED in-place image roll of ${change.gatewayId} ` +
+          `(${change.from.image.repository}:${change.from.image.tag} → ` +
+          `${change.to.image.repository}:${change.to.image.tag}) — ${mountedCount} customer(s) mounted. ` +
+          `Roll it via the blue/green rollout operation, not a direct imageTag write.`,
+      );
       continue;
     }
 
@@ -535,6 +561,7 @@ async function applyTargetChanges(
   targetVsActual: ReconcileChange[],
   desiredCount: number,
   actualCount: number,
+  mountedByGatewayId: Map<string, readonly string[]>,
 ): Promise<void> {
   if (targetVsActual.length === 0) {
     deps.log(`[glm-controller] reconcile tick: no changes (${desiredCount} desired, ${actualCount} actual)`);
@@ -544,7 +571,7 @@ async function applyTargetChanges(
     .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.gatewayId}`)
     .join(", ");
   deps.log(`[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`);
-  await applyChanges(targetVsActual, deps);
+  await applyChanges(targetVsActual, deps, mountedByGatewayId);
 }
 
 async function restartGatewayDeploymentsForModelKeyChanges(
@@ -737,7 +764,13 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   const targetVsActual = diffInstancesMap(actualMap, targetMap, {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
   });
-  await applyTargetChanges(deps, targetVsActual, desired.length, Object.keys(actualMap).length);
+  await applyTargetChanges(
+    deps,
+    targetVsActual,
+    desired.length,
+    Object.keys(actualMap).length,
+    mountedByGatewayId,
+  );
   await restartGatewayDeploymentsForModelKeyChanges(
     deps,
     modelKeyChangedGatewayIds,
@@ -1121,6 +1154,79 @@ const stopStuckOpReaper = startStuckOpReaper({
     },
     PREEMPTION_HANDOFF_SWEEP_MS,
   );
+  const stopDeferredRolloutSweeper = startDeferredRolloutSweeper({
+    listDeferredRollouts: async () => {
+      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
+      const out: Array<{ gatewayId: string; marker: RolloutDeferMarker }> = [];
+      for (const doc of snap.docs) {
+        const r = (doc.data() as { rollout?: unknown }).rollout;
+        if (
+          r &&
+          typeof r === "object" &&
+          typeof (r as RolloutDeferMarker).imageTag === "string" &&
+          typeof (r as RolloutDeferMarker).imageRepository === "string"
+        ) {
+          const m = r as RolloutDeferMarker;
+          out.push({
+            gatewayId: doc.id,
+            marker: {
+              imageTag: m.imageTag,
+              imageRepository: m.imageRepository,
+              ...(m.profile ? { profile: m.profile } : {}),
+              ...(m.gatewayClass ? { gatewayClass: m.gatewayClass } : {}),
+              ...(m.imageProfile ? { imageProfile: m.imageProfile } : {}),
+            },
+          });
+        }
+      }
+      return out;
+    },
+    readShellActivity: async (gatewayId) => ({
+      hasActiveSession: (await readShellLiveness(db, gatewayId, Date.now())).reallyActive,
+    }),
+    hasInFlightRollout: async (gatewayId) => {
+      const snap = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("gatewayId", "==", gatewayId)
+        .get();
+      return snap.docs.some((d) => {
+        const data = d.data() as { kind?: unknown; status?: unknown };
+        return (
+          data.kind === "rollout" &&
+          (data.status === "pending" || data.status === "running")
+        );
+      });
+    },
+    enqueueRolloutAndClearMarker: async (gatewayId, marker) => {
+      const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+      const batch = db.batch();
+      batch.set(opRef, {
+        kind: "rollout",
+        status: "pending",
+        createdBy: "glm-controller-rollout-defer-sweeper",
+        createdAt: Date.now(),
+        startedAt: null,
+        completedAt: null,
+        input: {
+          gatewayId,
+          imageTag: marker.imageTag,
+          imageRepository: marker.imageRepository,
+          ...(marker.profile ? { profile: marker.profile } : {}),
+          ...(marker.gatewayClass ? { gatewayClass: marker.gatewayClass } : {}),
+          ...(marker.imageProfile ? { imageProfile: marker.imageProfile } : {}),
+        },
+        steps: [],
+        gatewayId,
+      });
+      batch.update(db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId), {
+        rollout: FieldValue.delete(),
+      });
+      await batch.commit();
+      return opRef.id;
+    },
+    now: () => Date.now(),
+    log,
+  });
   const stopHttp = startHttpServer({
     db,
     log,
@@ -1145,6 +1251,7 @@ const stopStuckOpReaper = startStuckOpReaper({
     stopActivationSweeper();
     stopIdleSweeper();
     stopPreemptionHandoffSweeper();
+    stopDeferredRolloutSweeper();
     stopHttp();
     process.exit(0);
   };
@@ -1537,6 +1644,134 @@ async function buildHandlers(
     log: logFn,
   });
 
+  // Blue/green rollout reuses the add/migrate/retire handlers (all in scope) as
+  // its primitives: stand up a fresh-SHA sibling, migrate each mounted customer
+  // onto it via the transfer plane, retire the drained source. A roll thus
+  // becomes a sequence of already-tested operations rather than an in-place
+  // helm upgrade that drops every live session.
+  const syntheticSubOp = (
+    kind: Operation["kind"],
+    input: Record<string, unknown>,
+  ): Operation => ({
+    id: `bluegreen-${kind}`,
+    kind,
+    status: "running",
+    createdBy: "glm-controller-rollout-bluegreen",
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+    completedAt: null,
+    input,
+    steps: [],
+  });
+  const detachedCtx: OperationContext = { reportStep: async () => undefined };
+  const retireInstanceLightly = async (
+    gatewayId: string,
+    ctx: OperationContext,
+  ): Promise<{ success: boolean; error?: string }> => {
+    // The customer mirrors flipped during migration, but gateways/{id}.mountedCustomers
+    // is recomputed asynchronously by the heartbeat poller — clear it now so the
+    // retire's mounted-gate sees the source the orchestrator has already drained,
+    // instead of 409-ing on poller lag. (Reached only after every mounted customer
+    // migrated, and after the shared pointer was moved to green, so the source is
+    // genuinely empty.)
+    await db
+      .collection("gateways")
+      .doc(gatewayId)
+      .set({ mountedCustomers: [] }, { merge: true });
+    // Drive desired state so the reconciler uninstalls the pod, then run the
+    // standard teardown — but RETAIN PVC + GSA: a blue/green colour id recurs on
+    // the next roll, so a routine roll must never destroy durable data.
+    await db
+      .collection(GLM_GATEWAYS_COLLECTION)
+      .doc(gatewayId)
+      .set({ desiredStatus: "retired" }, { merge: true });
+    const result = await retireGateway(
+      syntheticSubOp("retire-gateway", {
+        gatewayId,
+        retainData: true,
+        retainServiceAccount: true,
+      }),
+      ctx,
+    );
+    return { success: result.success, error: result.error };
+  };
+  const blueGreenDeps: BlueGreenRolloutDeps = {
+    createSiblingInstance: async ({
+      sourceGatewayId,
+      targetGatewayId,
+      imageTag,
+      imageRepository,
+      profile,
+      gatewayClass,
+      imageProfile,
+    }) => {
+      const srcSnap = await db
+        .collection(GLM_GATEWAYS_COLLECTION)
+        .doc(sourceGatewayId)
+        .get();
+      if (!srcSnap.exists) {
+        throw new Error(`source gateway ${sourceGatewayId} not found in glmGateways`);
+      }
+      const clone = buildSiblingDoc(srcSnap.data() as Record<string, unknown>, {
+        targetGatewayId,
+        imageTag,
+        imageRepository,
+        profile,
+        gatewayClass,
+        imageProfile,
+        createdBy: "glm-controller-rollout-bluegreen",
+        createdAt: Date.now(),
+      });
+      await db.collection(GLM_GATEWAYS_COLLECTION).doc(targetGatewayId).set(clone);
+    },
+    awaitInstanceReady: async ({ gatewayId, imageTag, gatewayClass }, ctx) => {
+      const result = await addGateway(
+        syntheticSubOp("add-gateway", { gatewayId, imageTag, gatewayClass }),
+        ctx,
+      );
+      return { ok: result.success, error: result.error };
+    },
+    readAssignedCustomers: async (gatewayId) => {
+      const snap = await db
+        .collection("users")
+        .where("provisioning.openclaw.gatewayId", "==", gatewayId)
+        .get();
+      return snap.docs.map((d) => d.id);
+    },
+    migrateCustomer: async ({ uid, toGatewayId }, ctx) => {
+      const result = await migrateCustomer(
+        syntheticSubOp("migrate-customer", {
+          uid,
+          toGatewayId,
+          source: "rollout-bluegreen",
+        }),
+        ctx,
+      );
+      // Idempotent: a customer already on the target (a re-driven roll) is done,
+      // not failed — so a retried rollout converges instead of dead-ending.
+      if (!result.success && (result.error ?? "").includes(`already on ${toGatewayId}`)) {
+        return { success: true };
+      }
+      return { success: result.success, error: result.error };
+    },
+    isSharedDefaultPool: async (gatewayId) => {
+      const configured = (await db.doc("config/orchestrator").get()).data()
+        ?.defaultGatewayId;
+      return typeof configured === "string" && configured === gatewayId;
+    },
+    repointSharedDefault: async (toGatewayId) => {
+      await db
+        .doc("config/orchestrator")
+        .set({ defaultGatewayId: toGatewayId }, { merge: true });
+    },
+    retireInstance: ({ gatewayId }, ctx) => retireInstanceLightly(gatewayId, ctx),
+    cleanupFailedSibling: async (gatewayId) => {
+      await retireInstanceLightly(gatewayId, detachedCtx);
+    },
+    now: () => Date.now(),
+    log: logFn,
+  };
+
   const rollout = createRolloutHandler({
     helm,
     readCurrentSpec: async (gatewayId) => {
@@ -1609,6 +1844,35 @@ async function buildHandlers(
       }
       return { version, lastHeartbeatAt };
     },
+    readShellActivity: async (gatewayId) => ({
+      hasActiveSession: (await readShellLiveness(db, gatewayId, Date.now())).reallyActive,
+    }),
+    deferRollout: async (gatewayId, marker) => {
+      await db
+        .collection(GLM_GATEWAYS_COLLECTION)
+        .doc(gatewayId)
+        .set(
+          {
+            rollout: {
+              ...marker,
+              deferredReason: "active-builder-shell",
+              requestedAt: Date.now(),
+            },
+          },
+          { merge: true },
+        );
+    },
+    readMountedCustomers: async (gatewayId) => {
+      const doc = await db.collection("gateways").doc(gatewayId).get();
+      if (!doc.exists) return [];
+      const data = doc.data() as { mountedCustomers?: unknown } | undefined;
+      return Array.isArray(data?.mountedCustomers)
+        ? (data!.mountedCustomers as unknown[]).filter(
+            (s): s is string => typeof s === "string",
+          )
+        : [];
+    },
+    runBlueGreen: (input, ctx) => runBlueGreenRollout(input, blueGreenDeps, ctx),
     helmRenderTimeoutMs: 600_000,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 5_000,

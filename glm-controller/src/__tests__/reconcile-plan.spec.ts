@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildHelmTargetMap,
   buildInstancesMap,
-  deriveFleetImageTag,
   diffInstancesMap,
+  isImageRoll,
   isReplicasOnlyUpdate,
   type ReconcileChange,
 } from "../reconcile-plan";
@@ -283,43 +283,6 @@ describe("buildInstancesMap", () => {
     expect(map.default).not.toHaveProperty("gatewayClass");
     expect(map.default).not.toHaveProperty("imageProfile");
     expect(map.default).not.toHaveProperty("profile");
-  });
-});
-
-describe("deriveFleetImageTag — what sidecars should run", () => {
-  it("uses the `default` instance's imageTag when present", () => {
-    const tag = deriveFleetImageTag([
-      mkDesired({ gatewayId: "default", imageTag: "abc1234" }),
-      mkDesired({ gatewayId: "canary", imageTag: "canary999" }),
-    ]);
-    expect(tag).toBe("abc1234");
-  });
-
-  it("falls back to the first non-retired instance's imageTag when there's no `default`", () => {
-    const tag = deriveFleetImageTag([
-      mkDesired({ gatewayId: "smoke", imageTag: "smoke111" }),
-      mkDesired({ gatewayId: "canary", imageTag: "canary222" }),
-    ]);
-    expect(tag).toBe("smoke111");
-  });
-
-  it("ignores retired instances when picking the fleet imageTag", () => {
-    const tag = deriveFleetImageTag([
-      mkDesired({ gatewayId: "default", desiredStatus: "retired", imageTag: "old" }),
-      mkDesired({ gatewayId: "canary", imageTag: "fresh" }),
-    ]);
-    expect(tag).toBe("fresh");
-  });
-
-  it("returns undefined when no non-retired instances exist (chart default applies)", () => {
-    const tag = deriveFleetImageTag([
-      mkDesired({ gatewayId: "default", desiredStatus: "retired", imageTag: "old" }),
-    ]);
-    expect(tag).toBeUndefined();
-  });
-
-  it("returns undefined for an empty desired list (fresh-cluster bootstrap)", () => {
-    expect(deriveFleetImageTag([])).toBeUndefined();
   });
 });
 
@@ -777,5 +740,64 @@ describe("isReplicasOnlyUpdate", () => {
       to: inst,
     };
     expect(isReplicasOnlyUpdate(change)).toBe(false);
+  });
+});
+
+describe("isImageRoll — the in-place-roll detector behind the mounted-gateway guard", () => {
+  const REPO3 = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+  const OP_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
+  const base = () => ({
+    enabled: true as const,
+    image: { repository: REPO3, tag: "abc" },
+    gatewayId: "gw-test",
+  });
+
+  it("returns true when the image TAG changes (the classic SHA roll)", () => {
+    expect(
+      isImageRoll({
+        kind: "update",
+        gatewayId: "default",
+        from: { ...base(), image: { repository: REPO3, tag: "abc" } },
+        to: { ...base(), image: { repository: REPO3, tag: "def" } },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when only the image REPOSITORY changes (profile/repo switch)", () => {
+    expect(
+      isImageRoll({
+        kind: "update",
+        gatewayId: "bender",
+        from: { ...base(), image: { repository: REPO3, tag: "abc" } },
+        to: { ...base(), image: { repository: OP_REPO, tag: "abc" } },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for a replicas-only (pause/resume) update — must still apply in place", () => {
+    expect(
+      isImageRoll({
+        kind: "update",
+        gatewayId: "default",
+        from: { ...base(), replicas: 1 },
+        to: { ...base(), replicas: 0 },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for a config-only update at the same image (egress/operatorAccess)", () => {
+    expect(
+      isImageRoll({
+        kind: "update",
+        gatewayId: "bender",
+        from: { ...base(), operatorAccess: { shellsEnabled: false } },
+        to: { ...base(), operatorAccess: { shellsEnabled: true } },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false on create and drift (only a live in-place upgrade can drop sessions)", () => {
+    expect(isImageRoll({ kind: "create", gatewayId: "x", to: base() })).toBe(false);
+    expect(isImageRoll({ kind: "drift", gatewayId: "x", current: base() })).toBe(false);
   });
 });

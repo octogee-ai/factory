@@ -18,15 +18,6 @@ export type ReconcileChange =
   | { kind: "update"; gatewayId: string; from: HelmInstanceValue; to: HelmInstanceValue }
   | { kind: "drift"; gatewayId: string; current: HelmInstanceValue };
 
-export function deriveFleetImageTag(
-  desired: GatewayDesiredState[],
-): string | undefined {
-  const live = desired.filter((d) => d.desiredStatus !== "retired");
-  if (live.length === 0) return undefined;
-  const primary = live.find((d) => d.gatewayId === "default") ?? live[0];
-  return primary.imageTag;
-}
-
 export function buildInstancesMap(
   desired: GatewayDesiredState[],
   chartFingerprint?: string,
@@ -204,6 +195,21 @@ function instanceEqual(
     if (!stableEqual(x, y)) return false;
   }
   return true;
+}
+
+// True when a change rolls the pod's image (tag or repository) — the only kind
+// of in-place reconcile that drops a live customer's session. The reconciler
+// refuses to apply one of these on a gateway with mounted customers; such a roll
+// must go through the blue/green orchestrator instead. Config-only and
+// replicas-only updates are NOT image rolls and still apply in place.
+export function isImageRoll(
+  c: ReconcileChange,
+): c is Extract<ReconcileChange, { kind: "update" }> {
+  if (c.kind !== "update") return false;
+  return (
+    c.from.image.tag !== c.to.image.tag ||
+    c.from.image.repository !== c.to.image.repository
+  );
 }
 
 export function isReplicasOnlyUpdate(c: ReconcileChange): boolean {

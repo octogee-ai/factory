@@ -1418,6 +1418,15 @@ function serializeCustomerLookup(doc: CustomerLookupDoc): {
   return { uid: doc.id, currentGatewayId };
 }
 
+async function readMountedCustomers(db: Firestore, gatewayId: string): Promise<string[]> {
+  const snap = await db.collection("gateways").doc(gatewayId).get();
+  if (!snap.exists) return [];
+  const data = snap.data() as { mountedCustomers?: unknown } | undefined;
+  return Array.isArray(data?.mountedCustomers)
+    ? (data!.mountedCustomers as unknown[]).filter((s): s is string => typeof s === "string")
+    : [];
+}
+
 async function createOperation(
   db: Firestore,
   opts: NewOperationInput,
@@ -2571,6 +2580,22 @@ router.post(
             .status(404)
             .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
           return;
+        }
+        // A direct imageTag write on a MOUNTED gateway is refused by the
+        // reconciler (it would drop live sessions), but it still poisons desired
+        // state so a later rollout no-ops. Route image changes through the
+        // blue/green rollout op instead. Empty gateways may still be set directly.
+        if (update.imageTag !== undefined) {
+          const mounted = await readMountedCustomers(db, id);
+          if (mounted.length > 0) {
+            res.status(409).json({
+              error:
+                "cannot set imageTag directly on a gateway with mounted customers — roll it via POST /api/admin/gateways/:id/rollout (blue/green)",
+              gatewayId: id,
+              mountedCustomers: mounted,
+            });
+            return;
+          }
         }
         await ref.update(update);
         res

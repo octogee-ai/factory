@@ -21,6 +21,7 @@ import {
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
 import { resolveGatewayImageRepository } from "../gateway-profiles.js";
+import type { BlueGreenRolloutInput } from "./rollout-bluegreen.js";
 
 export interface GatewayHeartbeatVersion {
   version: string | null;
@@ -55,6 +56,16 @@ export interface RolloutGatewaySpecUpdate {
   operatorAccess: OperatorGatewayAccessSpec | undefined;
 }
 
+// The pending roll parked on glmGateways/{id}.rollout while a BuilderShell is
+// attached. Carries enough to re-issue a faithful rollout op when idle.
+export interface RolloutDeferMarker {
+  imageTag: string;
+  imageRepository: string;
+  profile?: GatewayProfile;
+  gatewayClass?: GatewayClass;
+  imageProfile?: GatewayImageProfile;
+}
+
 export interface RolloutDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
   
@@ -63,9 +74,28 @@ export interface RolloutDeps {
   updateGlmGatewayImage: (update: RolloutGatewaySpecUpdate) => Promise<void>;
   
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeatVersion | null>;
-  
+
+  // True while a BuilderShell is attached (operator-class gateways only). A roll
+  // defers rather than dropping a live shell; the defer sweeper retries when idle.
+  readShellActivity: (gatewayId: string) => Promise<{ hasActiveSession: boolean }>;
+
+  // Park the requested roll on glmGateways/{id}.rollout so the defer sweeper can
+  // re-enqueue it once the shell detaches.
+  deferRollout: (gatewayId: string, marker: RolloutDeferMarker) => Promise<void>;
+
+  // Customers mounted on the gateway right now. > 0 ⇒ blue/green (never drop a
+  // live customer); 0 ⇒ in-place upgrade is safe and cheap (fresh/idle/canary).
+  readMountedCustomers: (gatewayId: string) => Promise<string[]>;
+
+  // The blue/green orchestrator, pre-wired in index.ts. Called only when the
+  // gateway has mounted customers; the in-place path below handles the empty case.
+  runBlueGreen: (
+    input: BlueGreenRolloutInput,
+    ctx: OperationContext,
+  ) => Promise<OperationResult>;
+
   helmRenderTimeoutMs: number;
-  
+
   heartbeatTimeoutMs: number;
   pollIntervalMs: number;
   now: () => number;
@@ -258,6 +288,67 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
       resolvedRepository,
     } =
       resolved.target;
+
+    // Defer the roll while a BuilderShell is attached — never drop a live shell
+    // mid-session. Park the request on glmGateways/{id}.rollout; the defer sweeper
+    // re-enqueues it once the shell detaches (Phase 2 will proactively ask the
+    // agent to save + close shells first). Checked after no-op resolution so a
+    // no-op roll is still skipped rather than parked.
+    const shell = await deps.readShellActivity(gatewayId);
+    if (shell.hasActiveSession) {
+      const deferStartedAt = deps.now();
+      await reportStep(ctx, { name: "defer-active-shell", status: "running", startedAt: deferStartedAt });
+      try {
+        await deps.deferRollout(gatewayId, {
+          imageTag,
+          imageRepository: newRepository,
+          profile: newProfile,
+          gatewayClass: newGatewayClass,
+          imageProfile: newImageProfile,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await reportStep(ctx, {
+          name: "defer-active-shell",
+          status: "failed",
+          startedAt: deferStartedAt,
+          completedAt: deps.now(),
+          error: msg,
+        });
+        return { steps: [], success: false, error: `failed to defer roll for ${gatewayId}: ${msg}` };
+      }
+      await reportStep(ctx, {
+        name: "defer-active-shell",
+        status: "done",
+        startedAt: deferStartedAt,
+        completedAt: deps.now(),
+      });
+      deps.log(
+        `[rollout] ⚠ cannot auto-roll ${gatewayId} → ${imageTag}: active BuilderShell — deferred; ` +
+          `defer sweeper retries hourly until the shell detaches or is found dead`,
+      );
+      return { steps: [], success: true };
+    }
+
+    // A gateway with mounted customers must never roll in place — that drops
+    // every live session. Hand off to the blue/green orchestrator, which stands
+    // up a fresh-SHA sibling, migrates each customer onto it, and retires the
+    // source. The empty (0-mounted) case falls through to the cheap in-place
+    // upgrade below: fresh canary, idle-paused, or never-mounted instances.
+    const mountedCustomers = await deps.readMountedCustomers(gatewayId);
+    if (mountedCustomers.length > 0) {
+      return deps.runBlueGreen(
+        {
+          sourceGatewayId: gatewayId,
+          targetImageTag: imageTag,
+          targetImageRepository: newRepository,
+          profile: newProfile,
+          gatewayClass: newGatewayClass,
+          imageProfile: newImageProfile,
+        },
+        ctx,
+      );
+    }
 
     const updateStartedAt = deps.now();
     await reportStep(ctx, { name: "update-spec", status: "running", startedAt: updateStartedAt });

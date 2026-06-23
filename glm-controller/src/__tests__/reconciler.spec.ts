@@ -1353,3 +1353,112 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     stop();
   });
 });
+
+describe("startReconciler — never in-place-roll a mounted gateway (the builder1 outage guard)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function flush() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("REFUSES an in-place image upgrade when the gateway has mounted customers, and logs it loudly", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      read: async () => ({
+        default: {
+          enabled: true,
+          image: { repository: "repo", tag: "old-sha" },
+          gatewayId: "default",
+          replicas: 1,
+        },
+      }),
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "default",
+          imageRepository: "repo",
+          imageTag: "new-sha",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      gatewayDocs: { default: { mountedCustomers: ["cust-1", "cust-2"] } },
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).not.toHaveBeenCalled();
+    const refused = log.mock.calls.find(
+      ([msg]: [string]) =>
+        typeof msg === "string" && msg.includes("REFUSED in-place image roll"),
+    );
+    expect(refused).toBeDefined();
+    expect(refused?.[0]).toContain("default");
+    expect(refused?.[0]).toContain("2 customer(s)");
+    stop();
+  });
+
+  it("STILL upgrades in place when the SAME image change targets a gateway with NO mounted customers (fast path)", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({
+      read: async () => ({
+        canary: {
+          enabled: true,
+          image: { repository: "repo", tag: "old-sha" },
+          gatewayId: "canary",
+          replicas: 1,
+        },
+      }),
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "canary",
+          imageRepository: "repo",
+          imageTag: "new-sha",
+          desiredStatus: "running",
+          createdBy: "ci",
+        },
+      ],
+      gatewayDocs: { canary: { mountedCustomers: [] } },
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+    stop();
+  });
+});

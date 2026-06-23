@@ -598,6 +598,58 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
 
 });
 
+describe("PATCH /api/admin/gateways/:id — direct imageTag write is gated on mounted gateways", () => {
+  it("rejects an imageTag write when the gateway has mounted customers (409 → use the rollout op)", async () => {
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
+      imageRepository: "repo",
+      imageTag: "old",
+      desiredStatus: "running",
+    };
+    gatewaysDocs["default"] = { gatewayId: "default", mountedCustomers: ["u1", "u2"] };
+    const app = buildApp();
+
+    const res = await request(app).patch("/api/admin/gateways/default").send({ imageTag: "new" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/rollout/i);
+    // No wedge: desired imageTag is left untouched.
+    expect(glmGatewaysDocs["default"].imageTag).toBe("old");
+  });
+
+  it("allows an imageTag write on an EMPTY gateway (the in-place fast path)", async () => {
+    glmGatewaysDocs["canary"] = {
+      gatewayId: "canary",
+      imageRepository: "repo",
+      imageTag: "old",
+      desiredStatus: "running",
+    };
+    gatewaysDocs["canary"] = { gatewayId: "canary", mountedCustomers: [] };
+    const app = buildApp();
+
+    const res = await request(app).patch("/api/admin/gateways/canary").send({ imageTag: "new" });
+
+    expect(res.status).toBe(202);
+    expect(glmGatewaysDocs["canary"].imageTag).toBe("new");
+  });
+
+  it("allows a non-image PATCH (desiredStatus) on a mounted gateway", async () => {
+    glmGatewaysDocs["default"] = {
+      gatewayId: "default",
+      imageRepository: "repo",
+      imageTag: "old",
+      desiredStatus: "running",
+    };
+    gatewaysDocs["default"] = { gatewayId: "default", mountedCustomers: ["u1"] };
+    const app = buildApp();
+
+    const res = await request(app).patch("/api/admin/gateways/default").send({ desiredStatus: "paused" });
+
+    expect(res.status).toBe(202);
+    expect(glmGatewaysDocs["default"].desiredStatus).toBe("paused");
+  });
+});
+
 describe("GET /api/admin/operator-gateway-reservations", () => {
   it("returns reservations sorted by fulfillment priority with ISO timestamps", async () => {
     operatorGatewayReservationsDocs["uid-pending"] = {
