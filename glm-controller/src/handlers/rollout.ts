@@ -16,6 +16,7 @@ import {
   type GatewayImageProfile,
   type GatewayPersistenceSpec,
   type GatewayServiceAccountSpec,
+  type HelmInstanceValue,
   type OperatorGatewayAccessSpec,
 } from "../../../shared/types/glm.js";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
@@ -117,6 +118,22 @@ interface PollResult {
   errorMsg?: string;
 }
 
+interface ResolvedRolloutInput {
+  gatewayId: string;
+  imageTag: string;
+  imageRepositoryOverride: string | undefined;
+  profileOverride: GatewayProfile | undefined;
+  gatewayClassOverride: GatewayClass | undefined;
+  imageProfileOverride: GatewayImageProfile | undefined;
+}
+
+interface OperatorSafetyDefaults {
+  serviceAccountName: string | undefined;
+  serviceAccount: GatewayServiceAccountSpec | undefined;
+  operatorAccess: OperatorGatewayAccessSpec | undefined;
+  defaultsMissing: boolean;
+}
+
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 const PINNED_OC_MARKER = "-oc";
 
@@ -154,24 +171,20 @@ function isLowerHex(value: string): boolean {
   return true;
 }
 
-// eslint-disable-next-line complexity -- linear validation/target selection for one rollout operation; splitting obscures the no-op boundary checks.
 async function resolveRolloutTarget(
   op: Operation,
   deps: Pick<RolloutDeps, "readCurrentSpec" | "helm" | "log">,
 ): Promise<{ error: string } | { target: RolloutTarget }> {
-  const input = op.input as RolloutInput;
-  const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
-  const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
-  const imageRepositoryOverride =
-    typeof input.imageRepository === "string" ? input.imageRepository : undefined;
-  const profileOverride = isGatewayProfile(input.profile) ? input.profile : undefined;
-  const gatewayClassOverride = isGatewayClass(input.gatewayClass) ? input.gatewayClass : undefined;
-  const imageProfileOverride = isGatewayProfile(input.imageProfile)
-    ? input.imageProfile
-    : undefined;
-
-  if (!gatewayId) return { error: "missing gatewayId in op.input" };
-  if (!imageTag) return { error: "missing imageTag in op.input" };
+  const parsedInput = parseRolloutInput(op.input as RolloutInput);
+  if ("error" in parsedInput) return parsedInput;
+  const {
+    gatewayId,
+    imageTag,
+    imageRepositoryOverride,
+    profileOverride,
+    gatewayClassOverride,
+    imageProfileOverride,
+  } = parsedInput.input;
 
   const current = await deps.readCurrentSpec(gatewayId);
   if (!current) {
@@ -181,66 +194,43 @@ async function resolveRolloutTarget(
   const currentProfile: GatewayProfile = current.profile ?? "standard";
   const currentGatewayClass = resolveGatewayClass(current);
   const currentImageProfile = resolveGatewayImageProfile(current);
-  const requestedGatewayClass =
-    gatewayClassOverride ??
-    (profileOverride || imageProfileOverride
-      ? resolveGatewayClass({
-          profile: profileOverride,
-          imageProfile: imageProfileOverride,
-        })
-      : undefined);
+  const requestedGatewayClass = resolveRequestedGatewayClass({
+    profileOverride,
+    gatewayClassOverride,
+    imageProfileOverride,
+  });
   const newGatewayClass: GatewayClass = requestedGatewayClass ?? currentGatewayClass;
   const newImageProfile: GatewayImageProfile =
     imageProfileOverride ?? profileOverride ?? currentImageProfile;
   const newProfile: GatewayProfile = newImageProfile;
   const newPersistence = resolveGatewayPersistence(newImageProfile, current.persistence);
-  const generatedOperatorServiceAccountName = operatorGatewayServiceAccountName(gatewayId);
-  const shouldUseLockedOperatorServiceAccount =
-    newGatewayClass === "operator" &&
-    (!current.serviceAccountName ||
-      current.serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME);
-  const newServiceAccountName = shouldUseLockedOperatorServiceAccount
-    ? generatedOperatorServiceAccountName
-    : current.serviceAccountName;
-  const shouldCreateLockedOperatorServiceAccount =
-    newGatewayClass === "operator" &&
-    newServiceAccountName === generatedOperatorServiceAccountName &&
-    !current.serviceAccount;
-  const newServiceAccount =
-    shouldUseLockedOperatorServiceAccount || shouldCreateLockedOperatorServiceAccount
-      ? OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT
-      : current.serviceAccount;
-  const newOperatorAccess =
-    newGatewayClass === "operator"
-      ? current.operatorAccess ?? OPERATOR_GATEWAY_LOCKED_ACCESS
-      : current.operatorAccess;
+  const operatorSafetyDefaults = resolveOperatorSafetyDefaults(
+    gatewayId,
+    newGatewayClass,
+    current,
+  );
   const resolvedRepository = resolveGatewayImageRepository({
     gatewayClass: newGatewayClass,
     imageProfile: newImageProfile,
     profile: newProfile,
     imageRepository: newRepository,
   });
-  const operatorSafetyDefaultsMissing =
-    newGatewayClass === "operator" &&
-    (shouldUseLockedOperatorServiceAccount ||
-      shouldCreateLockedOperatorServiceAccount ||
-      !current.operatorAccess);
-
-  const desiredMatchesRequest =
-    newRepository === current.imageRepository &&
-    imageTag === current.imageTag &&
-    newProfile === currentProfile &&
-    newGatewayClass === currentGatewayClass &&
-    newImageProfile === currentImageProfile &&
-    !operatorSafetyDefaultsMissing;
+  const desiredMatchesRequest = rolloutTargetMatchesCurrent({
+    current,
+    currentProfile,
+    currentGatewayClass,
+    currentImageProfile,
+    newRepository,
+    imageTag,
+    newProfile,
+    newGatewayClass,
+    newImageProfile,
+    operatorSafetyDefaultsMissing: operatorSafetyDefaults.defaultsMissing,
+  });
   if (desiredMatchesRequest) {
     const deployedMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
     const deployed = deployedMap[current.gatewayId];
-    const actualMatchesRequest =
-      !!deployed &&
-      deployed.image.repository === resolvedRepository &&
-      deployed.image.tag === imageTag;
-    if (actualMatchesRequest) {
+    if (deployedMatchesRolloutTarget(deployed, resolvedRepository, imageTag)) {
       return {
         error: `gateway ${gatewayId} already on ${newRepository}:${imageTag} (${newGatewayClass}/${newImageProfile}) — no-op rollout`,
       };
@@ -259,12 +249,113 @@ async function resolveRolloutTarget(
       newImageProfile,
       builderSlug: current.builderSlug,
       newPersistence,
-      newServiceAccountName,
-      newServiceAccount,
-      newOperatorAccess,
+      newServiceAccountName: operatorSafetyDefaults.serviceAccountName,
+      newServiceAccount: operatorSafetyDefaults.serviceAccount,
+      newOperatorAccess: operatorSafetyDefaults.operatorAccess,
       resolvedRepository,
     },
   };
+}
+
+function parseRolloutInput(
+  input: RolloutInput,
+): { error: string } | { input: ResolvedRolloutInput } {
+  const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
+  const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
+  if (!gatewayId) return { error: "missing gatewayId in op.input" };
+  if (!imageTag) return { error: "missing imageTag in op.input" };
+  return {
+    input: {
+      gatewayId,
+      imageTag,
+      imageRepositoryOverride:
+        typeof input.imageRepository === "string" ? input.imageRepository : undefined,
+      profileOverride: isGatewayProfile(input.profile) ? input.profile : undefined,
+      gatewayClassOverride: isGatewayClass(input.gatewayClass) ? input.gatewayClass : undefined,
+      imageProfileOverride: isGatewayProfile(input.imageProfile) ? input.imageProfile : undefined,
+    },
+  };
+}
+
+function resolveRequestedGatewayClass(input: {
+  profileOverride: GatewayProfile | undefined;
+  gatewayClassOverride: GatewayClass | undefined;
+  imageProfileOverride: GatewayImageProfile | undefined;
+}): GatewayClass | undefined {
+  if (input.gatewayClassOverride) return input.gatewayClassOverride;
+  if (!input.profileOverride && !input.imageProfileOverride) return undefined;
+  return resolveGatewayClass({
+    profile: input.profileOverride,
+    imageProfile: input.imageProfileOverride,
+  });
+}
+
+function resolveOperatorSafetyDefaults(
+  gatewayId: string,
+  gatewayClass: GatewayClass,
+  current: CurrentGatewaySpec,
+): OperatorSafetyDefaults {
+  if (gatewayClass !== "operator") {
+    return {
+      serviceAccountName: current.serviceAccountName,
+      serviceAccount: current.serviceAccount,
+      operatorAccess: current.operatorAccess,
+      defaultsMissing: false,
+    };
+  }
+  const generatedServiceAccountName = operatorGatewayServiceAccountName(gatewayId);
+  const shouldUseLockedServiceAccount =
+    !current.serviceAccountName ||
+    current.serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME;
+  const serviceAccountName = shouldUseLockedServiceAccount
+    ? generatedServiceAccountName
+    : current.serviceAccountName;
+  const shouldCreateLockedServiceAccount =
+    serviceAccountName === generatedServiceAccountName && !current.serviceAccount;
+  return {
+    serviceAccountName,
+    serviceAccount:
+      shouldUseLockedServiceAccount || shouldCreateLockedServiceAccount
+        ? OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT
+        : current.serviceAccount,
+    operatorAccess: current.operatorAccess ?? OPERATOR_GATEWAY_LOCKED_ACCESS,
+    defaultsMissing:
+      shouldUseLockedServiceAccount || shouldCreateLockedServiceAccount || !current.operatorAccess,
+  };
+}
+
+function rolloutTargetMatchesCurrent(input: {
+  current: CurrentGatewaySpec;
+  currentProfile: GatewayProfile;
+  currentGatewayClass: GatewayClass;
+  currentImageProfile: GatewayImageProfile;
+  newRepository: string;
+  imageTag: string;
+  newProfile: GatewayProfile;
+  newGatewayClass: GatewayClass;
+  newImageProfile: GatewayImageProfile;
+  operatorSafetyDefaultsMissing: boolean;
+}): boolean {
+  return (
+    input.newRepository === input.current.imageRepository &&
+    input.imageTag === input.current.imageTag &&
+    input.newProfile === input.currentProfile &&
+    input.newGatewayClass === input.currentGatewayClass &&
+    input.newImageProfile === input.currentImageProfile &&
+    !input.operatorSafetyDefaultsMissing
+  );
+}
+
+function deployedMatchesRolloutTarget(
+  deployed: HelmInstanceValue | undefined,
+  resolvedRepository: string,
+  imageTag: string,
+): boolean {
+  return (
+    !!deployed &&
+    deployed.image.repository === resolvedRepository &&
+    deployed.image.tag === imageTag
+  );
 }
 
 export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
