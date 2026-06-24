@@ -512,77 +512,107 @@ type UpstreamOutcome =
   | { ok: true; upstream: WebSocket }
   | { ok: false; httpStatus: string };
 
-async function establishUpstreamWithRotation(
+type GatewayAuthOutcome =
+  | { ok: true; auth: GatewayOpenClawAuth }
+  | { ok: false; httpStatus: string };
+
+type OpenAttempt =
+  | { ok: true; upstream: WebSocket }
+  | { ok: false; code: string };
+
+export async function establishUpstreamWithRotation(
   gatewayId: string,
   gatewayUrl: string,
 ): Promise<UpstreamOutcome> {
-  let auth: GatewayOpenClawAuth;
-  try {
-    auth = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
-  } catch (e) {
-    if (e instanceof GatewayTokenError) {
-      console.error(`[proxy] OC WS: gateway auth fetch failed — ${e.code}: ${e.message}`);
-      return { ok: false, httpStatus: "503 Service Unavailable" };
-    }
-    throw e;
-  }
+  const auth = await fetchInitialGatewayAuth(gatewayId);
+  if (!auth.ok) return auth;
 
-  const tryOpen = (openAuth: GatewayOpenClawAuth) =>
-    openUpstream({
+  const first = await tryOpenGatewayUpstream(gatewayUrl, auth.auth);
+  if (first.ok) return acceptUpstreamHandshake(first.upstream);
+  if (first.code !== "auth-failed") return rejectUpstreamHandshake(first.code);
+
+  await clearStaleGatewayAuth(gatewayId, auth.auth);
+  const fresh = await fetchGatewayAuthAfterRotation(gatewayId);
+  if (!fresh.ok) return fresh;
+
+  const retry = await tryOpenGatewayUpstream(gatewayUrl, fresh.auth);
+  if (retry.ok) return acceptRotationRecovery(retry.upstream);
+  return rejectRotationHandshake(retry.code);
+}
+
+async function fetchInitialGatewayAuth(gatewayId: string): Promise<GatewayAuthOutcome> {
+  try {
+    const auth = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
+    return { ok: true, auth };
+  } catch (e) {
+    if (!(e instanceof GatewayTokenError)) throw e;
+    console.error(`[proxy] OC WS: gateway auth fetch failed — ${e.code}: ${e.message}`);
+    return { ok: false, httpStatus: "503 Service Unavailable" };
+  }
+}
+
+async function fetchGatewayAuthAfterRotation(gatewayId: string): Promise<GatewayAuthOutcome> {
+  try {
+    const auth = await fetchGatewayAuth({ gatewayId, skipCache: true, allowLegacyFallback: true });
+    return { ok: true, auth };
+  } catch (fetchErr) {
+    const fetchCode = fetchErr instanceof GatewayTokenError ? fetchErr.code : "unknown";
+    console.error(`[proxy] OC WS: gateway auth re-fetch during rotation failed — ${fetchCode}`);
+    ocWsHandshakeTotal.inc({ outcome: `fail:refetch:${fetchCode}` });
+    return { ok: false, httpStatus: "503 Service Unavailable" };
+  }
+}
+
+async function tryOpenGatewayUpstream(
+  gatewayUrl: string,
+  auth: GatewayOpenClawAuth,
+): Promise<OpenAttempt> {
+  try {
+    const upstream = await openUpstream({
       url: gatewayUrl,
-      token: openAuth.token,
-      deviceToken: openAuth.deviceToken,
+      token: auth.token,
+      deviceToken: auth.deviceToken,
       identity: getOpenClawIdentity(),
       onDeviceToken: async (issued) => {
         await persistGatewayDeviceToken({ token: issued.deviceToken });
       },
     });
-
-  try {
-    const upstream = await tryOpen(auth);
-    ocWsHandshakeTotal.inc({ outcome: "ok" });
     return { ok: true, upstream };
   } catch (e) {
     const code = e instanceof OpenclawWireError ? e.code : "unknown";
-    if (code !== "auth-failed") {
-      console.log(`[proxy] OC WS: upstream handshake failed — ${code}`);
-      ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
-      return { ok: false, httpStatus: "502 Bad Gateway" };
-    }
-
-    if (auth.source === "legacy-token") {
-      invalidateGatewayToken(gatewayId);
-    } else {
-      await clearGatewayDeviceToken();
-    }
-    let fresh: GatewayOpenClawAuth;
-    try {
-      fresh = await fetchGatewayAuth({ gatewayId, skipCache: true, allowLegacyFallback: true });
-    } catch (fetchErr) {
-      const fetchCode =
-        fetchErr instanceof GatewayTokenError ? fetchErr.code : "unknown";
-      console.error(
-        `[proxy] OC WS: gateway auth re-fetch during rotation failed — ${fetchCode}`,
-      );
-      ocWsHandshakeTotal.inc({ outcome: `fail:refetch:${fetchCode}` });
-      return { ok: false, httpStatus: "503 Service Unavailable" };
-    }
-
-    try {
-      const upstream = await tryOpen(fresh);
-      ocWsHandshakeTotal.inc({ outcome: "ok" });
-      ocWsRotationRecoveredTotal.inc();
-      return { ok: true, upstream };
-    } catch (retryErr) {
-      const retryCode =
-        retryErr instanceof OpenclawWireError ? retryErr.code : "unknown";
-      console.log(
-        `[proxy] OC WS: upstream handshake failed after rotation retry — ${retryCode}`,
-      );
-      ocWsHandshakeTotal.inc({ outcome: `fail:${retryCode}` });
-      return { ok: false, httpStatus: "502 Bad Gateway" };
-    }
+    return { ok: false, code };
   }
+}
+
+async function clearStaleGatewayAuth(gatewayId: string, auth: GatewayOpenClawAuth): Promise<void> {
+  if (auth.source === "legacy-token") {
+    invalidateGatewayToken(gatewayId);
+    return;
+  }
+  await clearGatewayDeviceToken();
+}
+
+function acceptUpstreamHandshake(upstream: WebSocket): UpstreamOutcome {
+  ocWsHandshakeTotal.inc({ outcome: "ok" });
+  return { ok: true, upstream };
+}
+
+function acceptRotationRecovery(upstream: WebSocket): UpstreamOutcome {
+  ocWsHandshakeTotal.inc({ outcome: "ok" });
+  ocWsRotationRecoveredTotal.inc();
+  return { ok: true, upstream };
+}
+
+function rejectUpstreamHandshake(code: string): UpstreamOutcome {
+  console.log(`[proxy] OC WS: upstream handshake failed — ${code}`);
+  ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
+  return { ok: false, httpStatus: "502 Bad Gateway" };
+}
+
+function rejectRotationHandshake(code: string): UpstreamOutcome {
+  console.log(`[proxy] OC WS: upstream handshake failed after rotation retry — ${code}`);
+  ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
+  return { ok: false, httpStatus: "502 Bad Gateway" };
 }
 
 function handleOpenClawWsUpgrade(
