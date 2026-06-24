@@ -167,45 +167,36 @@ export type FreshTokenResult =
   | { ok: true; accessToken: string }
   | { ok: false; reason: "not_connected" | "reauth_required" };
 
+interface StoredConnectorTokens {
+  encryptedAccessToken?: unknown;
+  encryptedRefreshToken?: unknown;
+  expiresAt?: unknown;
+  tokenType?: unknown;
+  clientSource?: unknown;
+}
+
 export async function getFreshAccessToken(
   uid: string,
   def: ConnectorDef,
 ): Promise<FreshTokenResult> {
   const ref = db.doc(`users/${uid}/secrets/${def.meta.id}`);
   const snap = await ref.get();
-  const tokens = (
-    snap.data() as
-      | {
-          tokens?: {
-            encryptedAccessToken?: unknown;
-            encryptedRefreshToken?: unknown;
-            expiresAt?: unknown;
-            tokenType?: unknown;
-            clientSource?: unknown;
-          };
-        }
-      | undefined
-  )?.tokens;
+  const tokens = readStoredConnectorTokens(snap.data());
 
-  const enc = tokens?.encryptedAccessToken;
-  if (typeof enc !== "string" || enc.length === 0) {
+  const enc = readEncryptedToken(tokens?.encryptedAccessToken);
+  if (!enc) {
     return { ok: false, reason: "not_connected" };
   }
 
-  const expiresAt = typeof tokens?.expiresAt === "number" ? tokens.expiresAt : null;
-  if (expiresAt === null || expiresAt > Date.now() + FRESHNESS_MARGIN_MS) {
+  if (isStoredAccessTokenFresh(tokens)) {
     return { ok: true, accessToken: await decryptSecret(enc) };
   }
 
-  const encRefresh = tokens?.encryptedRefreshToken;
-  if (typeof encRefresh !== "string" || encRefresh.length === 0 || !def.oauth) {
+  const encRefresh = readEncryptedToken(tokens?.encryptedRefreshToken);
+  if (!encRefresh || !def.oauth) {
     return { ok: false, reason: "reauth_required" };
   }
-  const storedSource =
-    tokens?.clientSource === "platform" || tokens?.clientSource === "per-user"
-      ? tokens.clientSource
-      : undefined;
-  const creds = await readConnectorClientCreds(uid, def, storedSource);
+  const creds = await readConnectorClientCreds(uid, def, readStoredClientSource(tokens));
   if (!creds) {
     return { ok: false, reason: "reauth_required" };
   }
@@ -216,8 +207,31 @@ export async function getFreshAccessToken(
     creds,
     encRefresh,
     previousAccessEnc: enc,
-    fallbackTokenType: typeof tokens?.tokenType === "string" ? tokens.tokenType : "bearer",
+    fallbackTokenType: readStoredTokenType(tokens),
   });
+}
+
+function readStoredConnectorTokens(data: unknown): StoredConnectorTokens | undefined {
+  return (data as { tokens?: StoredConnectorTokens } | undefined)?.tokens;
+}
+
+function readEncryptedToken(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function isStoredAccessTokenFresh(tokens: StoredConnectorTokens | undefined): boolean {
+  const expiresAt = typeof tokens?.expiresAt === "number" ? tokens.expiresAt : null;
+  return expiresAt === null || expiresAt > Date.now() + FRESHNESS_MARGIN_MS;
+}
+
+function readStoredClientSource(tokens: StoredConnectorTokens | undefined): "platform" | "per-user" | undefined {
+  return tokens?.clientSource === "platform" || tokens?.clientSource === "per-user"
+    ? tokens.clientSource
+    : undefined;
+}
+
+function readStoredTokenType(tokens: StoredConnectorTokens | undefined): string {
+  return typeof tokens?.tokenType === "string" ? tokens.tokenType : "bearer";
 }
 
 async function refreshAccessToken(args: {

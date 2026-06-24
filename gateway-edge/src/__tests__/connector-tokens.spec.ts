@@ -423,6 +423,14 @@ describe('getFreshAccessToken — refresh-aware access', () => {
     });
   });
 
+  it('reports reauth_required when an expired token has a blank refresh token', async () => {
+    seedGoogleTokens({ expiresAt: Date.now() - 1000, encryptedRefreshToken: '   ' });
+    await expect(getFreshAccessToken('u-dan', getConnector('google')!)).resolves.toEqual({
+      ok: false,
+      reason: 'reauth_required',
+    });
+  });
+
   it('reports not_connected when there are no stored tokens', async () => {
     await expect(getFreshAccessToken('u-dan', getConnector('google')!)).resolves.toEqual({
       ok: false,
