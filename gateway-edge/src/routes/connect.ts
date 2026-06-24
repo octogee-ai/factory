@@ -32,6 +32,31 @@ interface TokenResponse {
   token_type?: string;
 }
 
+interface RouteError {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+type FieldsConnectorDef = ConnectorDef & {
+  validateFields: NonNullable<ConnectorDef["validateFields"]>;
+};
+
+type DeviceConnectorDef = ConnectorDef & {
+  device: NonNullable<ConnectorDef["device"]>;
+};
+
+function routeError(status: number, body: Record<string, unknown>): RouteError {
+  return { status, body };
+}
+
+function isRouteError<T>(value: T | RouteError): value is RouteError {
+  return typeof (value as RouteError).status === "number" && "body" in (value as RouteError);
+}
+
+function sendRouteError(res: Response, error: RouteError): void {
+  res.status(error.status).json(error.body);
+}
+
 function flowsCol() {
   return db.collection("connectFlows");
 }
@@ -509,57 +534,103 @@ router.post(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const def = getConnector(req.params.connector as string);
-      if (!def?.validateFields || !def.meta.captureMethods.includes("fields")) {
+      const def = fieldsConnectorDef(req.params.connector as string);
+      if (!def) {
         res.status(404).json({ error: "Unknown connector or fields capture not supported" });
         return;
       }
-      const expected = def.meta.captureFields ?? [];
-      const body = ((req.body ?? {}).fields ?? {}) as Record<string, unknown>;
-      const fields: Record<string, string> = {};
-      for (const f of expected) {
-        const v = body[f.key];
-        if (typeof v !== "string" || v.trim().length === 0) {
-          res.status(400).json({ error: `${f.label} is required` });
-          return;
-        }
-        fields[f.key] = v.trim();
-      }
 
-      let accountLabel: string;
-      try {
-        ({ accountLabel } = await def.validateFields(fields));
-      } catch (err) {
-        logger.warn(`[connect] ${def.meta.id} fields rejected for uid=${req.uid}: ${(err as Error).message}`);
-        res.status(400).json({ error: "The provider rejected these credentials" });
+      const fields = connectorFieldsFromBody(def, req.body);
+      if (isRouteError(fields)) {
+        sendRouteError(res, fields);
         return;
       }
 
-      const encryptedFields: Record<string, string> = {};
-      for (const [k, v] of Object.entries(fields)) {
-        encryptedFields[k] = await encryptSecret(v);
+      const identity = await validateConnectorFields(req.uid!, def, fields);
+      if (isRouteError(identity)) {
+        sendRouteError(res, identity);
+        return;
       }
-      await userCol(req.uid!, "secrets").doc(def.meta.id).set({
-        provider: def.meta.id,
-        fields: encryptedFields,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      await userCol(req.uid!, "integrations").doc(def.meta.id).set({
-        provider: def.meta.id,
-        status: "connected",
-        accountLabel,
-        scopes: [],
-        captureMethod: "fields",
-        connectedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      logger.info(`[connect] ${def.meta.id} connected for uid=${req.uid} via fields (${accountLabel})`);
-      res.json({ ok: true, accountLabel });
+
+      await storeFieldsConnector(req.uid!, def, fields, identity.accountLabel);
+      logger.info(`[connect] ${def.meta.id} connected for uid=${req.uid} via fields (${identity.accountLabel})`);
+      res.json({ ok: true, accountLabel: identity.accountLabel });
     } catch (e) {
       next(e);
     }
   },
 );
+
+function fieldsConnectorDef(connector: string): FieldsConnectorDef | null {
+  const def = getConnector(connector);
+  if (!def?.validateFields || !def.meta.captureMethods.includes("fields")) {
+    return null;
+  }
+  return def as FieldsConnectorDef;
+}
+
+function fieldsBody(body: unknown): Record<string, unknown> {
+  return (((body ?? {}) as { fields?: unknown }).fields ?? {}) as Record<string, unknown>;
+}
+
+function connectorFieldsFromBody(
+  def: FieldsConnectorDef,
+  body: unknown,
+): Record<string, string> | RouteError {
+  const fields: Record<string, string> = {};
+  const input = fieldsBody(body);
+  for (const field of def.meta.captureFields ?? []) {
+    const value = input[field.key];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      return routeError(400, { error: `${field.label} is required` });
+    }
+    fields[field.key] = value.trim();
+  }
+  return fields;
+}
+
+async function validateConnectorFields(
+  uid: string,
+  def: FieldsConnectorDef,
+  fields: Record<string, string>,
+): Promise<{ accountLabel: string } | RouteError> {
+  try {
+    return await def.validateFields(fields);
+  } catch (err) {
+    logger.warn(`[connect] ${def.meta.id} fields rejected for uid=${uid}: ${(err as Error).message}`);
+    return routeError(400, { error: "The provider rejected these credentials" });
+  }
+}
+
+async function encryptConnectorFields(fields: Record<string, string>): Promise<Record<string, string>> {
+  const encryptedFields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    encryptedFields[key] = await encryptSecret(value);
+  }
+  return encryptedFields;
+}
+
+async function storeFieldsConnector(
+  uid: string,
+  def: FieldsConnectorDef,
+  fields: Record<string, string>,
+  accountLabel: string,
+): Promise<void> {
+  await userCol(uid, "secrets").doc(def.meta.id).set({
+    provider: def.meta.id,
+    fields: await encryptConnectorFields(fields),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  await userCol(uid, "integrations").doc(def.meta.id).set({
+    provider: def.meta.id,
+    status: "connected",
+    accountLabel,
+    scopes: [],
+    captureMethod: "fields",
+    connectedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+}
 
 router.post(
   "/:connector/device/start",
@@ -625,89 +696,161 @@ router.post(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const def = getConnector(req.params.connector as string);
-      if (!def?.device) {
+      const def = deviceConnectorDef(req.params.connector as string);
+      if (!def) {
         res.status(404).json({ error: "Unknown connector or device flow not supported" });
         return;
       }
-      const flowId = (req.body ?? {}).flowId;
-      if (typeof flowId !== "string" || !flowId) {
-        res.status(400).json({ error: "flowId required" });
+      const flowId = deviceFlowId(req.body);
+      if (isRouteError(flowId)) {
+        sendRouteError(res, flowId);
         return;
       }
 
-      const ref = flowsCol().doc(flowId);
-      const snap = await ref.get();
-      const flow = snap.data() as
-        | {
-            uid?: string;
-            connector?: string;
-            kind?: string;
-            encryptedDeviceCode?: string;
-            consumedAt?: unknown;
-          }
-        | undefined;
-      if (
-        !snap.exists ||
-        !flow ||
-        flow.uid !== req.uid ||
-        flow.connector !== def.meta.id ||
-        flow.kind !== "device" ||
-        flow.consumedAt ||
-        typeof flow.encryptedDeviceCode !== "string"
-      ) {
-        res.status(404).json({ error: "flow not found" });
-        return;
-      }
-      const deviceCode = await decryptSecret(flow.encryptedDeviceCode);
-
-      const clientId = process.env[def.device.clientIdEnv];
-      if (!clientId) {
-        res.status(503).json({ error: `${def.meta.displayName} connection is not configured` });
-        return;
-      }
-      const resp = await fetch(def.device.tokenUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body: new URLSearchParams({
-          client_id: clientId,
-          device_code: deviceCode,
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        }),
-      });
-      if (!resp.ok) {
-        throw new Error(`device token poll failed: ${resp.status}`);
-      }
-      const out = (await resp.json()) as TokenResponse & { error?: string };
-
-      if (out.error === "authorization_pending" || out.error === "slow_down") {
-        res.json({ status: "pending" });
-        return;
-      }
-      if (out.error || !out.access_token) {
-        await ref.set({ consumedAt: FieldValue.serverTimestamp() }, { merge: true });
-        logger.warn(`[connect] ${def.meta.id} device flow failed for uid=${req.uid}: ${out.error ?? "no_access_token"}`);
-        res.json({ status: "failed", reason: out.error ?? "no_access_token" });
+      const flow = await readDeviceFlow(req.uid!, def, flowId);
+      if (isRouteError(flow)) {
+        sendRouteError(res, flow);
         return;
       }
 
-      const identity = await def.fetchIdentity(out.access_token);
-      await storeConnectorTokens({
-        uid: req.uid!,
-        def,
-        tokens: out,
-        accountLabel: identity.accountLabel,
-        captureMethod: "device",
-      });
-      await ref.set({ consumedAt: FieldValue.serverTimestamp() }, { merge: true });
-      res.json({ status: "connected", accountLabel: identity.accountLabel });
+      const clientId = deviceClientId(def);
+      if (isRouteError(clientId)) {
+        sendRouteError(res, clientId);
+        return;
+      }
+
+      const out = await pollDeviceToken(def, clientId, await decryptSecret(flow.encryptedDeviceCode));
+      res.json(await devicePollResponse(req.uid!, def, flow.ref, out));
     } catch (e) {
       next(e);
     }
   },
 );
+
+function deviceConnectorDef(connector: string): DeviceConnectorDef | null {
+  const def = getConnector(connector);
+  return def?.device ? (def as DeviceConnectorDef) : null;
+}
+
+function deviceFlowId(body: unknown): string | RouteError {
+  const flowId = ((body ?? {}) as { flowId?: unknown }).flowId;
+  return typeof flowId === "string" && flowId
+    ? flowId
+    : routeError(400, { error: "flowId required" });
+}
+
+interface DeviceFlowDoc {
+  uid?: string;
+  connector?: string;
+  kind?: string;
+  encryptedDeviceCode?: string;
+  consumedAt?: unknown;
+}
+
+interface LoadedDeviceFlow {
+  ref: FirebaseFirestore.DocumentReference;
+  encryptedDeviceCode: string;
+}
+
+function isUsableDeviceFlow(
+  snap: FirebaseFirestore.DocumentSnapshot,
+  flow: DeviceFlowDoc | undefined,
+  uid: string,
+  def: DeviceConnectorDef,
+): flow is DeviceFlowDoc & { encryptedDeviceCode: string } {
+  return Boolean(
+    snap.exists &&
+    flow &&
+    flow.uid === uid &&
+    flow.connector === def.meta.id &&
+    flow.kind === "device" &&
+    !flow.consumedAt &&
+    typeof flow.encryptedDeviceCode === "string",
+  );
+}
+
+async function readDeviceFlow(
+  uid: string,
+  def: DeviceConnectorDef,
+  flowId: string,
+): Promise<LoadedDeviceFlow | RouteError> {
+  const ref = flowsCol().doc(flowId);
+  const snap = await ref.get();
+  const flow = snap.data() as DeviceFlowDoc | undefined;
+  if (!isUsableDeviceFlow(snap, flow, uid, def)) {
+    return routeError(404, { error: "flow not found" });
+  }
+  return { ref, encryptedDeviceCode: flow.encryptedDeviceCode };
+}
+
+function deviceClientId(def: DeviceConnectorDef): string | RouteError {
+  const clientId = process.env[def.device.clientIdEnv];
+  return clientId
+    ? clientId
+    : routeError(503, { error: `${def.meta.displayName} connection is not configured` });
+}
+
+async function pollDeviceToken(
+  def: DeviceConnectorDef,
+  clientId: string,
+  deviceCode: string,
+): Promise<TokenResponse & { error?: string }> {
+  const resp = await fetch(def.device.tokenUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: new URLSearchParams({
+      client_id: clientId,
+      device_code: deviceCode,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    }),
+  });
+  if (!resp.ok) {
+    throw new Error(`device token poll failed: ${resp.status}`);
+  }
+  return (await resp.json()) as TokenResponse & { error?: string };
+}
+
+async function consumeFailedDeviceFlow(
+  uid: string,
+  def: DeviceConnectorDef,
+  ref: FirebaseFirestore.DocumentReference,
+  reason: string,
+): Promise<{ status: "failed"; reason: string }> {
+  await ref.set({ consumedAt: FieldValue.serverTimestamp() }, { merge: true });
+  logger.warn(`[connect] ${def.meta.id} device flow failed for uid=${uid}: ${reason}`);
+  return { status: "failed", reason };
+}
+
+async function devicePollResponse(
+  uid: string,
+  def: DeviceConnectorDef,
+  ref: FirebaseFirestore.DocumentReference,
+  out: TokenResponse & { error?: string },
+): Promise<
+  | { status: "pending" }
+  | { status: "failed"; reason: string }
+  | { status: "connected"; accountLabel: string }
+> {
+  if (out.error === "authorization_pending" || out.error === "slow_down") {
+    return { status: "pending" };
+  }
+  if (out.error || !out.access_token) {
+    return consumeFailedDeviceFlow(uid, def, ref, out.error ?? "no_access_token");
+  }
+
+  const identity = await def.fetchIdentity(out.access_token);
+  await storeConnectorTokens({
+    uid,
+    def,
+    tokens: out,
+    accountLabel: identity.accountLabel,
+    captureMethod: "device",
+  });
+  await ref.set({ consumedAt: FieldValue.serverTimestamp() }, { merge: true });
+  return { status: "connected", accountLabel: identity.accountLabel };
+}
 
 export default router;
