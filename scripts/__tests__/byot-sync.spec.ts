@@ -338,6 +338,13 @@ describe("brokerFetchByosubCred — gateway-side broker client (no silent failur
   });
 });
 
+// Every BYOK coach model is a primary+fallback chain to the cheap platform
+// (haiku) baseline (B6).
+const withFallback = (primary: string) => ({
+  primary,
+  fallbacks: ["anthropic/claude-haiku-4-5"],
+});
+
 describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () => {
   const id = "octogee-tester-70-coach";
   it("null input / no-override providers → null (keep gateway default, no per-agent model)", () => {
@@ -348,7 +355,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
   it("openai-codex → coach model + agentRuntime:codex + enables the codex plugin with a SAFE (non-YOLO) sandbox so it runs on a standard shared gateway", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       agents: {
-        list: [{ id, model: "openai/gpt-5.5" }],
+        list: [{ id, model: withFallback("openai/gpt-5.5") }],
         defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
       },
       plugins: {
@@ -367,7 +374,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
   it("claude-cli (Claude subscription) → native claude-cli/claude-opus-4-8 + empty allowlist entry (prefix selects the runtime; no agentRuntime remap)", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "claude-cli" })).toEqual({
       agents: {
-        list: [{ id, model: "claude-cli/claude-opus-4-8" }],
+        list: [{ id, model: withFallback("claude-cli/claude-opus-4-8") }],
         defaults: {
           models: { "claude-cli/claude-opus-4-8": {} },
         },
@@ -377,7 +384,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 
   it("openai (api_key) → coach model only, NO agentRuntime pin", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai" })).toEqual({
-      agents: { list: [{ id, model: "openai/gpt-5" }] },
+      agents: { list: [{ id, model: withFallback("openai/gpt-5") }] },
     });
   });
 
@@ -389,7 +396,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
         baseUrl: "https://llm.example.com",
         model: "llama-3.1-70b",
       }),
-    ).toEqual({ agents: { list: [{ id, model: "custom-tester-70/llama-3.1-70b" }] } });
+    ).toEqual({ agents: { list: [{ id, model: withFallback("custom-tester-70/llama-3.1-70b") }] } });
   });
 });
 
@@ -404,16 +411,16 @@ describe("coachFullAgentList — full-list upsert (coach model updated, every si
         ],
       },
     };
-    expect(coachFullAgentList(current, "octogee-tester-70-coach", "openai/gpt-5")).toEqual([
+    expect(coachFullAgentList(current, "octogee-tester-70-coach", withFallback("openai/gpt-5"))).toEqual([
       { name: "legacy", model: "x/y" },
-      { id: "octogee-tester-70-coach", name: "coach", model: "openai/gpt-5", mmAccount: "a" },
+      { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5"), mmAccount: "a" },
       { id: "octogee-zed-coach", model: "z/y" },
     ]);
   });
 
   it("no agents.list (empty/missing) → [] (a no-op patch, never a destructive replace)", () => {
-    expect(coachFullAgentList(undefined, "octogee-tester-70-coach", "m")).toEqual([]);
-    expect(coachFullAgentList({ agents: {} }, "octogee-tester-70-coach", "m")).toEqual([]);
+    expect(coachFullAgentList(undefined, "octogee-tester-70-coach", withFallback("m"))).toEqual([]);
+    expect(coachFullAgentList({ agents: {} }, "octogee-tester-70-coach", withFallback("m"))).toEqual([]);
   });
 });
 
@@ -452,7 +459,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
         agents: {
           list: [
             { id: "octogee-router", name: "router" },
-            { id: "octogee-tester-70-coach", name: "coach", model: "openai/gpt-5", mmAccount: "a" },
+            { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
         },
@@ -477,7 +484,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
         agents: {
           list: [
             { id: "octogee-router", name: "router" },
-            { id: "octogee-tester-70-coach", name: "coach", model: "openai/gpt-5.5", mmAccount: "a" },
+            { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5.5"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
           defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
@@ -510,7 +517,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
         agents: {
           list: [
             { id: "octogee-router", name: "router" },
-            { id: "octogee-tester-70-coach", name: "coach", model: "claude-cli/claude-opus-4-8", mmAccount: "a" },
+            { id: "octogee-tester-70-coach", name: "coach", model: withFallback("claude-cli/claude-opus-4-8"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
           defaults: { models: { "claude-cli/claude-opus-4-8": {} } },

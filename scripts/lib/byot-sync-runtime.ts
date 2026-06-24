@@ -57,7 +57,9 @@ export async function applyCoachModelPatch(
       },
       { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
     );
-    logFn(`[byot-sync] ${input.slug}: coach model → ${model}`);
+    logFn(
+      `[byot-sync] ${input.slug}: coach model → ${model.primary} (fallback ${model.fallbacks.join(", ")})`,
+    );
     return true;
   } catch (e) {
     logFn(

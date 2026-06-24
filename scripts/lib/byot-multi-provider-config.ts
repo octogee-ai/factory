@@ -126,7 +126,8 @@ export const PROVIDERS: Record<Provider, ProviderSpec> = {
     shape: "customProvider",
     authProvider: "minimax",
     defaultModel: null,
-    // TODO(byok): confirm MiniMax's OpenAI-compatible base before the live demo.
+    // OpenAI-compatible base, confirmed against platform.minimax.io's OpenAI-SDK
+    // docs — chat/completions served at {baseUrl}/chat/completions.
     baseUrl: "https://api.minimax.io/v1",
   },
 };

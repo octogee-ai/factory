@@ -45,7 +45,10 @@ interface CodexAppServerPatch {
 }
 export interface CoachModelPatch {
   agents: {
-    list: Array<{ id: string; model: string }>;
+    // Primary+fallback chain: the Builder's BYOK model, with the platform model
+    // as the fallback so an unavailable/exhausted BYOK provider degrades to the
+    // platform key instead of leaving a credential-less coach (B6).
+    list: Array<{ id: string; model: { primary: string; fallbacks: string[] } }>;
     defaults?: { models: RuntimeModelsDef };
   };
   plugins?: {
@@ -61,6 +64,12 @@ const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
   approvalPolicy: "never",
 };
 
+// The always-available platform fallback. The gateway's platform key serves
+// anthropic models on every class; haiku is the cheap free-tier + fallback
+// baseline (Builders BYOK for pricier models). A failed/exhausted BYOK provider
+// degrades here rather than leaving the coach credential-less.
+const PLATFORM_FALLBACK_MODEL = "anthropic/claude-haiku-4-5";
+
 export function byosCoachConfigPatch(
   input: ByotInput | null,
 ): CoachModelPatch | null {
@@ -69,7 +78,12 @@ export function byosCoachConfigPatch(
   if (cfg.agentModelOverride == null) return null;
   const patch: CoachModelPatch = {
     agents: {
-      list: [{ id: agentIdForSlug(input.slug), model: cfg.agentModelOverride }],
+      list: [
+        {
+          id: agentIdForSlug(input.slug),
+          model: { primary: cfg.agentModelOverride, fallbacks: [PLATFORM_FALLBACK_MODEL] },
+        },
+      ],
     },
   };
   if (input.provider === "openai-codex") {
@@ -100,7 +114,7 @@ function isAgentRecord(a: unknown): a is { id?: unknown } {
 export function coachFullAgentList(
   current: unknown,
   agentId: string,
-  model: string,
+  model: CoachModelPatch["agents"]["list"][number]["model"],
 ): unknown[] {
   const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
   const agents = Array.isArray(list) ? list : [];
