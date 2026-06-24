@@ -978,28 +978,28 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.9 GA (current, fork-refreshed to `72f6897f`) the fork carries **seven logical essential patches across nine commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the device-token self-pairing-lockdown security patch; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.6.10 GA (current, fork `681045f9`) the fork carries **seven logical essential patches across nine commits, zero diagnostics** (Hunks A+B of the activity harness-signal feature count as one logical patch, delivered as two commits + a 5.22-introduced allowlist extension that adopts upstream's message-lifecycle / turn-start diagnostic event types under the same env gate; carried forward through every cycle since). Top is the device-token self-pairing-lockdown security patch; the mattermost connect-log ✅ marker (operator-visibility patch) is mirrored across all slots so the marker shows up regardless of which OC version a gateway runs — explicitly kept per operator preference ("it brings me joy"; single-line log delight in dense boot/reschedule logs).
 
-Live short SHAs at v2026.6.9 GA (top of current's integration branch is `72f6897f` after the 2026-06-23 fork-SHA-only refresh) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
-- `72f6897f` — exempt trusted control-plane (`usesSharedGatewayAuth`) from the config.patch write rate-limit
-- `6f734689` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
-- `1e13a9b0` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
-- `29a7bdfe` — mattermost connect log: ✅ marker for operator visibility on GW startup
-- `142a1676` — activity harness-signal Hunk B: session-correlated execution-phase
-- `98c5d057` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
-- `45a34441` — env-gated isControlUiVisible override
-- `c613bbd9` — config.patch returns post-write hash
-- `7b6aa559` — per-account surgical channel reload
+Live short SHAs at v2026.6.10 GA (top of current's integration branch is `681045f9`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `681045f9` — exempt trusted control-plane (`usesSharedGatewayAuth`) from the config.patch write rate-limit
+- `1704112a` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
+- `107b84d8` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
+- `bdbbce1c` — mattermost connect log: ✅ marker for operator visibility on GW startup
+- `7b637b79` — activity harness-signal Hunk B: session-correlated execution-phase
+- `8f7f9b2d` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+- `8d896771` — env-gated isControlUiVisible override
+- `764e3bdc` — config.patch returns post-write hash
+- `f5009bb8` — per-account surgical channel reload
 
-The Hunk B execution-phase wrap now lives at `src/agents/embedded-agent-runner/run.ts` — upstream renamed `pi-embedded-runner` to `embedded-agent-runner` before 6.9; the cherry-pick rides the rename. WATCH (6.9): upstream GA-landed a `security.event` diagnostic type (`DiagnosticSecurityEvent`, emitted from our own `message-handler.ts`) — adjacent to the device-token patch but **not** session-correlated and not UI-landed, so left un-adopted; a session-correlated variant would be a Hunk-B-style adopt candidate for a PWA security feed.
+The Hunk B execution-phase wrap now lives at `src/agents/embedded-agent-runner/run.ts` — upstream renamed `pi-embedded-runner` to `embedded-agent-runner` before 6.9; the cherry-pick rides the rename. WATCH (6.9, no movement through 6.10): upstream GA-landed a `security.event` diagnostic type (`DiagnosticSecurityEvent`, emitted from our own `message-handler.ts`) — adjacent to the device-token + rate-limit patches but **not** session-correlated and not UI-landed, so left un-adopted; a session-correlated variant would be a Hunk-B-style adopt candidate for a PWA security feed.
 
 Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.6.9 (GA) | `72f6897f` |
-| previous | 2026.6.8 (GA) | `c13e804a` |
-| preview | 2026.6.10-beta.1 | `13add4e3` |
+| current | 2026.6.10 (GA) | `681045f9` |
+| previous | 2026.6.9 (GA) | `72f6897f` |
+| preview | _(empty)_ | — |
 
 **Essential:**
 
