@@ -42,7 +42,7 @@ Most of the wait is two Cloud Builds + one Release CI run.
 
 ## Architectural rule for this flow
 
-> **`gateway-build.yml` produces artifacts. Cowboy deploys ALL gateway
+> **`gateway-build-operator-base.yml` produces artifacts. Cowboy deploys ALL gateway
 > builds.** CI does not write Firestore, does not call helm, does not roll
 > pods. Every gateway rollout — TEST and PROD — happens because an operator
 > (or Cowboy reconciling an existing desired-state) requested it. This
@@ -394,7 +394,7 @@ truth for `scripts/rebuild-matrix-bases.sh` and the
 `gateway-base-rebuild.yml` workflow. The `current` `bases:` entry MUST
 equal `cloudbuild.yaml`'s `_OPENCLAW_VERSION`/`_OPENCLAW_FORK_SHA` or the
 base that the gateway image FROMs won't get rebuilt. (`bases:` is a
-separate top-level key from `versions:`; `gateway-build.yml` only reads
+separate top-level key from `versions:`; `gateway-build-operator-base.yml` only reads
 `versions:`.)
 
 ✓ Diff shows both substitution changes, the comment refresh, and the
@@ -432,7 +432,7 @@ pinned in `cloudbuild.yaml`.
 | `previous` | the just-replaced current (rollback safety net + A/B baseline) | set at promotion time; the old `previous` is dropped at the next promotion |
 
 `bases:` always carries entries for every slot that exists. `versions:`
-carries `preview` + `previous` (gateway-build.yml excludes the
+carries `preview` + `previous` (gateway-build-operator-base.yml excludes the
 `current` version since the main `build` job already produces it as the
 bare `:<sha>` image — listing it here would double-build).
 
@@ -456,7 +456,7 @@ we're adopting):
   needed), CHANGE the old `previous` entry to track what was `current`
   (its row already exists if `current` was rotated in correctly last
   cycle — otherwise add it now), and DROP the entry for the new
-  `current` (which is what `preview` was — gateway-build.yml will
+  `current` (which is what `preview` was — gateway-build-operator-base.yml will
   exclude it via the cloudbuild.yaml pin).
 - `bases:` — drop the old `previous` row; relabel the old `current` row
   to `previous`; relabel the old `preview` row to `current` and switch
@@ -479,7 +479,7 @@ Step 15 (one commit).
 ### Step 13 — Build the base image (via the matrix-bases script)
 
 The canonical base must exist in AR **before** Step 15's Release CI runs
-— `gateway-build.yml` does `docker pull octogee-gateway-base:${_OPENCLAW_VERSION}`
+— `gateway-build-operator-base.yml` does `docker pull octogee-gateway-base:${_OPENCLAW_VERSION}`
 for the bare `:<sha>` image, and for a fresh version that tag won't
 exist yet. So you pre-build it.
 
@@ -521,7 +521,7 @@ gcloud builds list --project=octogee --ongoing
 > **Fork-only bumps are safe too (freshness gate).** The base build
 > pushes a fork-qualified sentinel
 > `octogee-gateway-base:${NEW_TAG#v}-fork-<forkSha>` alongside the bare
-> `:${NEW_TAG#v}`. `gateway-build.yml`'s `current`-slot poll-gate waits for
+> `:${NEW_TAG#v}`. `gateway-build-operator-base.yml`'s `current`-slot poll-gate waits for
 > *that sentinel*, not the bare version tag — so a fork-SHA-only bump
 > (version unchanged → bare tag already exists, stale) still blocks the
 > gateway build until the new-fork base actually lands, instead of
@@ -563,7 +563,7 @@ gcloud builds list --project=octogee --ongoing
 >
 > **Do NOT trust a manual `gcloud builds submit --config cloudbuild-base.yaml`
 > as the base for a Release.** It stamps the sentinel `_BASE_INPUT_HASH`
-> as `manual` → `…-base-manual`, but `gateway-build.yml` waits for the
+> as `manual` → `…-base-manual`, but `gateway-build-operator-base.yml` waits for the
 > *computed* hash `sha256sum(Dockerfile.base, <base-config>, oc-build-matrix.yaml)`.
 > A manual build's `-base-manual` tag is invisible to that wait, so the
 > Release still times out (the GA-Day-cycle outage: a flaked
@@ -630,7 +630,7 @@ git push origin main
 
 ### Step 16 — Watch Release CI
 
-`release.yml` orchestrates `gateway-build.yml`, which builds the 3 sidecar
+`releasev2.yml` orchestrates `gateway-build-operator-base.yml`, which builds the 3 sidecar
 images (gateway, gateway-edge, chat-proxy) on the same SHA via matrix.
 There's no deploy step — that's intentional, [see the architectural rule](#architectural-rule-for-this-flow).
 

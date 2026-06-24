@@ -294,7 +294,7 @@ mkdir -p "$OPS_AGENT_DIR/agent" "$OPS_AGENT_DIR/sessions"
 #   - PRESERVES every other key in ~/.claude.json
 #   - is idempotent across reboots
 # Operator-only by GATEWAY_PROFILE gate AND by COPY-set (only
-# Dockerfile.operator ships the script). See
+# Dockerfile.operator-base ships the script). See
 # tests/specs/stamp-claude-first-run.spec.ts.
 STAMPER=/octogee/infra/gateway/stamp-claude-first-run.mjs
 if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$STAMPER" ]; then
@@ -309,7 +309,7 @@ fi
 # so codex's app-server runs danger-full-access + approvalPolicy=never (the
 # agent acts without per-action approval prompts). Cattle gateways currently get
 # the same Codex app-server posture from the template as a temporary unblock;
-# this script ships ONLY in Dockerfile.operator and is gated on GATEWAY_PROFILE.
+# this script ships ONLY in Dockerfile.operator-base and is gated on GATEWAY_PROFILE.
 # Idempotent + non-fatal.
 # See tests/specs/apply-operator-codex-sandbox.spec.ts.
 CODEX_YOLO=/octogee/infra/gateway/apply-operator-codex-sandbox.mjs
