@@ -186,33 +186,45 @@ export async function redeemTicket(args: {
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return null;
-    const data = snap.data() ?? {};
-    const expiresAt = data.expiresAt;
-    const docPurpose = data.purpose;
-    const uid = data.uid;
-    const gatewayId = data.gatewayId;
-    const payload =
-      data.payload && typeof data.payload === "object"
-        ? (data.payload as Record<string, unknown>)
-        : {};
-
-    // Validate without mutating — a failed validation is a no-op commit, never
-    // a consume. Purpose mismatch (D2) is checked before delete: a ticket
-    // minted for one purpose can never be spent on another.
-    if (typeof expiresAt !== "number" || expiresAt < now) return null;
-    if (docPurpose !== purpose) return null;
-    if (typeof uid !== "string" || !uid) return null;
-    if (typeof gatewayId !== "string") return null;
-    // Per-gateway binding: reject a ticket redeemed against the wrong gateway
-    // (e.g. minted for gw-A but presented on gw-B's /api/g path). null opts out.
-    if (typeof expectedGatewayId === "string" && gatewayId !== expectedGatewayId) return null;
-
-    const ticket: GatewayTicket = { ticket: ticketId, uid, gatewayId, purpose, expiresAt, payload };
+    const ticket = redeemableTicketFromData({
+      data: snap.data() ?? {},
+      expectedGatewayId,
+      now,
+      purpose,
+      ticketId,
+    });
+    if (!ticket) return null;
     if (validate && !validate(ticket)) return null;
     if (onValidated) await onValidated(tx, ticket);
     tx.delete(ref);
     return ticket;
   });
+}
+
+function redeemableTicketFromData(args: {
+  data: Record<string, unknown>;
+  expectedGatewayId: string | null | undefined;
+  now: number;
+  purpose: GatewayTicketPurpose;
+  ticketId: string;
+}): GatewayTicket | null {
+  const { data, expectedGatewayId, now, purpose, ticketId } = args;
+  const expiresAt = data.expiresAt;
+  const docPurpose = data.purpose;
+  const uid = data.uid;
+  const gatewayId = data.gatewayId;
+
+  if (typeof expiresAt !== "number" || expiresAt < now) return null;
+  if (docPurpose !== purpose) return null;
+  if (typeof uid !== "string" || !uid) return null;
+  if (typeof gatewayId !== "string") return null;
+  if (typeof expectedGatewayId === "string" && gatewayId !== expectedGatewayId) return null;
+
+  const payload =
+    data.payload && typeof data.payload === "object"
+      ? (data.payload as Record<string, unknown>)
+      : {};
+  return { ticket: ticketId, uid, gatewayId, purpose, expiresAt, payload };
 }
 
 export const _testInternal = {

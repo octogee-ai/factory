@@ -81,13 +81,7 @@ async function probeFetch(
     const resp = await fetch(url, { ...init, signal: ac.signal });
     if (resp.ok) return { ok: true, httpStatus: resp.status };
 
-    let detail = "";
-    try {
-      const body = (await resp.json()) as { error?: { type?: string; message?: string }; message?: string };
-      detail = body?.error?.type || body?.error?.message || body?.message || "";
-    } catch {
-      detail = (await resp.text().catch(() => "")).slice(0, 80);
-    }
+    const detail = await readProbeErrorDetail(resp);
     return {
       ok: false,
       httpStatus: resp.status,
@@ -95,15 +89,28 @@ async function probeFetch(
       classification: classifyHttp(resp.status),
     };
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      return { ok: false, error: `Probe timed out after ${TIMEOUT_MS}ms`, classification: "transient" };
-    }
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`[byot-probe] network error: ${msg}`);
-    return { ok: false, error: `Probe failed: ${msg}`, classification: "transient" };
+    return probeErrorResult(err);
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function readProbeErrorDetail(resp: Response): Promise<string> {
+  try {
+    const body = (await resp.json()) as { error?: { type?: string; message?: string }; message?: string };
+    return body?.error?.type || body?.error?.message || body?.message || "";
+  } catch {
+    return (await resp.text().catch(() => "")).slice(0, 80);
+  }
+}
+
+function probeErrorResult(err: unknown): ProbeResult {
+  if (err instanceof Error && err.name === "AbortError") {
+    return { ok: false, error: `Probe timed out after ${TIMEOUT_MS}ms`, classification: "transient" };
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  logger.warn(`[byot-probe] network error: ${msg}`);
+  return { ok: false, error: `Probe failed: ${msg}`, classification: "transient" };
 }
 
 export async function probeProviderKey(req: ProbeRequest): Promise<ProbeResult> {
