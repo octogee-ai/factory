@@ -79,6 +79,15 @@ interface ExistingK8sSecret {
   annotations: Record<string, string>;
 }
 
+interface ApplyK8sSecretOptions {
+  deps: Pick<GatewayModelKeySecretEnsurerDeps, "runKubectl">;
+  namespace: string;
+  secretName: string;
+  gatewayId: string;
+  sourceSecretName: string;
+  value: string;
+}
+
 async function readExistingK8sSecret(
   deps: Pick<GatewayModelKeySecretEnsurerDeps, "runKubectl">,
   namespace: string,
@@ -194,14 +203,8 @@ function existingMatchesDesired(
   return true;
 }
 
-async function applyK8sSecret(
-  deps: Pick<GatewayModelKeySecretEnsurerDeps, "runKubectl">,
-  namespace: string,
-  secretName: string,
-  gatewayId: string,
-  sourceSecretName: string,
-  value: string,
-): Promise<void> {
+async function applyK8sSecret(opts: ApplyK8sSecretOptions): Promise<void> {
+  const { deps, namespace, secretName, gatewayId, sourceSecretName, value } = opts;
   const manifest = {
     apiVersion: "v1",
     kind: "Secret",
@@ -286,14 +289,14 @@ export function createGatewayModelKeySecretEnsurer(
         return { gatewayId, secretName, changed: false, action: "unchanged" };
       }
 
-      await applyK8sSecret(
+      await applyK8sSecret({
         deps,
         namespace,
         secretName,
         gatewayId,
-        secretName,
+        sourceSecretName: secretName,
         value,
-      );
+      });
       deps.log(
         `[model-key-secret] upserted ${secretName} in ns=${namespace} from capped Secret Manager source`,
       );
