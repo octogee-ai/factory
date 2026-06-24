@@ -34,6 +34,32 @@ export interface MigrationRunnerInput {
   toGatewayId: string;
   restoreSnapshot: FleetBrokerUserSnapshot;
   includeActivationManifest?: boolean;
+  /**
+   * The source instance is being RETIRED (a blue/green roll), so it must never be
+   * able to veto the migration. With this set, a SOURCE-side step that fails
+   * (quiesce-source, sync-state, unmount-source) degrades — log + continue toward
+   * cutover — instead of rolling back. The customer's durable baseline already
+   * lives on the target via restore-target (substrate), and the source is
+   * disposable cattle; live-state transfer from it is a best-effort optimization.
+   * TARGET/commit steps (restore-target, verify-target, cutover-firestore) stay
+   * strict — we never cut over to a target we couldn't set up. Cross-pool
+   * migrations (source survives) leave this unset and keep the strict contract.
+   */
+  sourceDisposable?: boolean;
+}
+
+// A step that operates on / pulls from the SOURCE. On a disposable source these
+// degrade instead of rolling back the roll. Target/commit steps are excluded.
+function isBestEffortSourceStep(step: MigrationStep): boolean {
+  switch (step.action) {
+    case "quiesce-source":
+    case "sync-state":
+      return true;
+    case "unmount-gateway":
+      return step.role === "source";
+    default:
+      return false;
+  }
 }
 
 export interface MigrationRunnerResult {
@@ -156,6 +182,15 @@ export async function runMigration(
       deps.log(
         `[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${errMsg}`,
       );
+      if (input.sourceDisposable && isBestEffortSourceStep(step)) {
+        deps.log(
+          `[migration-runner] ⚠ ${name} is best-effort on a disposable source (blue/green roll) — ` +
+            `degrading to the target's substrate baseline + continuing, NOT rolling back ` +
+            `(migrationId=${input.migrationId} slug=${input.slug})`,
+        );
+        state = { ...state, phase: advancePhase(state.phase) };
+        continue;
+      }
       const rolledBack = await tryRollback(state, deps, input.migrationId);
       return {
         success: false,

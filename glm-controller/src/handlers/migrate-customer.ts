@@ -61,7 +61,12 @@ buildClient: (resolveSync: (gatewayId: string) => string) => MigrationClient;
 interface MigrateCustomerInput {
   uid?: unknown;
   toGatewayId?: unknown;
+  // Set by the blue/green orchestrator. A "rollout-bluegreen" migrate retires the
+  // SOURCE, so its source-side steps are best-effort (the source can't veto the roll).
+  source?: unknown;
 }
+
+const ROLLOUT_BLUEGREEN_SOURCE = "rollout-bluegreen";
 
 function reportedStatusToStepStatus(reported: ReportedStep["status"]): StepStatus {
   if (reported === "running") return "running";
@@ -83,6 +88,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     const input = op.input as MigrateCustomerInput;
     const uid = typeof input.uid === "string" ? input.uid : undefined;
     const toGatewayId = typeof input.toGatewayId === "string" ? input.toGatewayId : undefined;
+    const sourceDisposable = input.source === ROLLOUT_BLUEGREEN_SOURCE;
 
     if (!uid) {
       return { steps: [], success: false, error: "missing uid in op.input" };
@@ -158,6 +164,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           toGatewayId,
           restoreSnapshot,
           includeActivationManifest,
+          sourceDisposable,
         },
         {
           client,

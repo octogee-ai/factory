@@ -255,3 +255,66 @@ const client = happyClient();
     ).toBe(true);
   });
 });
+
+describe("runMigration — disposable source (blue/green roll): source-side steps degrade, never veto", () => {
+  it("unmount-source failure does NOT roll back — the customer is already cut over to the target", async () => {
+    const client = happyClient();
+    client.unmount = vi.fn(async () => {
+      throw new Error("rate limit exceeded for config.patch; retry after 16s");
+    }) as MigrationClient["unmount"];
+    const deps = makeDeps(client);
+
+    const res = await runMigration({ ...INPUT, sourceDisposable: true }, deps);
+
+    expect(res.success).toBe(true);
+    expect(res.rolledBack).toBe(false);
+    // cutover committed and NOT undone
+    expect(client.calls).toContain("cutover:uid-alice->gw-green");
+    expect(deps.reportedSteps).toContainEqual(
+      expect.objectContaining({ name: "unmount-source", status: "failed" }),
+    );
+    expect(
+      deps.logCalls.some((l) => l.includes("best-effort") && l.includes("disposable source")),
+    ).toBe(true);
+  });
+
+  it("a source step failure pre-cutover (quiesce-source) degrades to the substrate baseline and still cuts over", async () => {
+    const client = happyClient();
+    client.quiesce = vi.fn(async () => {
+      throw new Error("quiesce: source pod already gone");
+    }) as MigrationClient["quiesce"];
+    const deps = makeDeps(client);
+
+    const res = await runMigration({ ...INPUT, sourceDisposable: true }, deps);
+
+    expect(res.success).toBe(true);
+    expect(res.rolledBack).toBe(false);
+    expect(client.calls).toContain("verify:alice"); // strict target steps still ran
+    expect(client.calls).toContain("cutover:uid-alice->gw-green");
+  });
+
+  it("a TARGET step (restore-target) still fails strictly — never cut over to a target we couldn't set up", async () => {
+    const client = happyClient();
+    client.restoreTarget = vi.fn(async () => {
+      throw new Error("restore failed: gitea-broker 403");
+    }) as MigrationClient["restoreTarget"];
+    const deps = makeDeps(client);
+
+    const res = await runMigration({ ...INPUT, sourceDisposable: true }, deps);
+
+    expect(res.success).toBe(false);
+    expect(client.calls).not.toContain("cutover:uid-alice->gw-green");
+  });
+
+  it("WITHOUT sourceDisposable (cross-pool migrate, source survives), an unmount-source failure still rolls back — strict contract preserved", async () => {
+    const client = happyClient();
+    client.unmount = vi.fn(async () => {
+      throw new Error("unmount failed");
+    }) as MigrationClient["unmount"];
+    const deps = makeDeps(client);
+
+    const res = await runMigration(INPUT, deps); // no sourceDisposable
+
+    expect(res.success).toBe(false);
+  });
+});

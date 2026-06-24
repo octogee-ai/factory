@@ -467,3 +467,38 @@ describe("createMigrateCustomerHandler — failures + rollback", () => {
     expect(rollbackSteps.length).toBeGreaterThan(0);
   });
 });
+
+describe("createMigrateCustomerHandler — blue/green source is disposable (threads sourceDisposable)", () => {
+  it("source=rollout-bluegreen: a failed unmount-source DEGRADES (migrate succeeds), not rolls back", async () => {
+    const client = happyClient();
+    client.unmount = vi.fn(async () => {
+      throw new Error("rate limit exceeded for config.patch; retry after 16s");
+    }) as MigrationClient["unmount"];
+    const { deps } = makeDeps({}, client);
+    const handler = createMigrateCustomerHandler(deps);
+
+    const res = await handler(
+      mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green", source: "rollout-bluegreen" } }),
+      makeCtx(),
+    );
+
+    expect(res.success).toBe(true);
+    expect(res.rolledBack).toBe(false);
+  });
+
+  it("without that source flag (cross-pool migrate), a failed unmount-source still fails strictly", async () => {
+    const client = happyClient();
+    client.unmount = vi.fn(async () => {
+      throw new Error("unmount failed");
+    }) as MigrationClient["unmount"];
+    const { deps } = makeDeps({}, client);
+    const handler = createMigrateCustomerHandler(deps);
+
+    const res = await handler(
+      mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green" } }),
+      makeCtx(),
+    );
+
+    expect(res.success).toBe(false);
+  });
+});
