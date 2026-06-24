@@ -40,7 +40,13 @@ describe("isResponseFrame", () => {
 describe("sendWsRequest", () => {
   it("sends a req frame and resolves the matching response payload", async () => {
     const ws = new FakeSocket();
-    const p = sendWsRequest(ws, "id1", "config.get", { a: 1 }, 1000);
+    const p = sendWsRequest({
+      ws,
+      id: "id1",
+      method: "config.get",
+      params: { a: 1 },
+      timeoutMs: 1000,
+    });
     expect(JSON.parse(ws.sent[0])).toEqual({
       type: "req",
       id: "id1",
@@ -53,7 +59,7 @@ describe("sendWsRequest", () => {
 
   it("decodes ArrayBuffer and fragmented Buffer[] frames (ws RawData)", async () => {
     const ab = new FakeSocket();
-    const pa = sendWsRequest(ab, "i", "m", {}, 1000);
+    const pa = sendWsRequest({ ws: ab, id: "i", method: "m", params: {}, timeoutMs: 1000 });
     ab.emit(
       "message",
       new TextEncoder().encode(
@@ -63,7 +69,7 @@ describe("sendWsRequest", () => {
     expect(await pa).toBe("AB");
 
     const frag = new FakeSocket();
-    const pf = sendWsRequest(frag, "i", "m", {}, 1000);
+    const pf = sendWsRequest({ ws: frag, id: "i", method: "m", params: {}, timeoutMs: 1000 });
     const whole = JSON.stringify({ type: "res", id: "i", ok: true, payload: "F" });
     frag.emit("message", [
       Buffer.from(whole.slice(0, 5)),
@@ -74,7 +80,7 @@ describe("sendWsRequest", () => {
 
   it("ignores responses with a different id", async () => {
     const ws = new FakeSocket();
-    const p = sendWsRequest(ws, "id1", "m", {}, 50);
+    const p = sendWsRequest({ ws, id: "id1", method: "m", params: {}, timeoutMs: 50 });
     ws.emit("message", JSON.stringify({ type: "res", id: "other", ok: true }));
     const e = await asErr(p);
     expect(e.code).toBe("timeout");
@@ -82,7 +88,13 @@ describe("sendWsRequest", () => {
 
   it("!ok → rpc-error with serverCode+details (normal path)", async () => {
     const ws = new FakeSocket();
-    const p = sendWsRequest(ws, "i", "config.patch", {}, 1000);
+    const p = sendWsRequest({
+      ws,
+      id: "i",
+      method: "config.patch",
+      params: {},
+      timeoutMs: 1000,
+    });
     ws.emit(
       "message",
       JSON.stringify({ type: "res", id: "i", ok: false, error: { code: "EBAD", message: "boom", details: { x: 1 } } }),
@@ -96,7 +108,14 @@ describe("sendWsRequest", () => {
 
   it("!ok → auth-failed when mapConnectErrors (the connect frame)", async () => {
     const ws = new FakeSocket();
-    const p = sendWsRequest(ws, "i", "connect", {}, 1000, true);
+    const p = sendWsRequest({
+      ws,
+      id: "i",
+      method: "connect",
+      params: {},
+      timeoutMs: 1000,
+      mapConnectErrors: true,
+    });
     ws.emit("message", JSON.stringify({ type: "res", id: "i", ok: false, error: { code: "EAUTH", message: "nope" } }));
     const e = await asErr(p);
     expect(e.code).toBe("auth-failed");
@@ -105,21 +124,33 @@ describe("sendWsRequest", () => {
 
   it("default error message is 'gateway error'", async () => {
     const ws = new FakeSocket();
-    const p = sendWsRequest(ws, "i", "m", {}, 1000);
+    const p = sendWsRequest({ ws, id: "i", method: "m", params: {}, timeoutMs: 1000 });
     ws.emit("message", JSON.stringify({ type: "res", id: "i", ok: false }));
     expect((await asErr(p)).message).toBe("gateway error");
   });
 
   it("socket close / error → connect-failed with method in the message", async () => {
     const c = new FakeSocket();
-    const pc = sendWsRequest(c, "i", "channels.status", {}, 1000);
+    const pc = sendWsRequest({
+      ws: c,
+      id: "i",
+      method: "channels.status",
+      params: {},
+      timeoutMs: 1000,
+    });
     c.emit("close");
     const ec = await asErr(pc);
     expect(ec.code).toBe("connect-failed");
     expect(ec.message).toBe("socket closed before channels.status response");
 
     const er = new FakeSocket();
-    const pe = sendWsRequest(er, "i", "cron.add", {}, 1000);
+    const pe = sendWsRequest({
+      ws: er,
+      id: "i",
+      method: "cron.add",
+      params: {},
+      timeoutMs: 1000,
+    });
     er.emit("error", new Error("ECONNRESET"));
     const ee = await asErr(pe);
     expect(ee.code).toBe("connect-failed");

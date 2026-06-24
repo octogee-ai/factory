@@ -202,7 +202,13 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       onConnectTrace,
     });
     try {
-      return await sendWsRequest(ws, randomUUID(), method, params, callTimeoutMs);
+      return await sendWsRequest({
+        ws,
+        id: randomUUID(),
+        method,
+        params,
+        timeoutMs: callTimeoutMs,
+      });
     } finally {
       try {
         ws.close();
@@ -421,11 +427,11 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
     else if (params.token) auth = { token: params.token };
     else auth = undefined;
     const connectStart = Date.now();
-    await sendWsRequest(
+    await sendWsRequest({
       ws,
-      randomUUID(),
-      "connect",
-      {
+      id: randomUUID(),
+      method: "connect",
+      params: {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: clientInfo,
@@ -434,9 +440,9 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
         device,
         ...(auth ? { auth } : {}),
       },
-      params.connectTimeoutMs,
-      true,
-    );
+      timeoutMs: params.connectTimeoutMs,
+      mapConnectErrors: true,
+    });
     connectMs = Date.now() - connectStart;
 
     emitTrace(true);

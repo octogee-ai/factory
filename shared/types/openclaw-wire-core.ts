@@ -9,6 +9,8 @@ export type OpenclawWireErrorCode =
   | "invalid-response"
   | "rpc-error";
 
+const CONNECT_FAILED: OpenclawWireErrorCode = "connect-failed";
+
 export class OpenclawWireError extends Error {
   override readonly name = "OpenclawWireError";
   constructor(
@@ -91,7 +93,7 @@ export function waitForWsOpen(
       }
       reject(
         new OpenclawWireError(
-          "connect-failed",
+          CONNECT_FAILED,
           `WS open timed out after ${timeoutMs}ms`,
         ),
       );
@@ -109,7 +111,7 @@ export function waitForWsOpen(
       }
       reject(
         new OpenclawWireError(
-          "connect-failed",
+          CONNECT_FAILED,
           `WS open failed: ${(args[0] as Error).message}`,
         ),
       );
@@ -167,7 +169,7 @@ export function startConnectChallengeTracker(ws: WireSocket): {
           cleanup();
           reject(
             new OpenclawWireError(
-              "connect-failed",
+              CONNECT_FAILED,
               `connect.challenge not received within ${timeoutMs}ms`,
             ),
           );
@@ -176,7 +178,7 @@ export function startConnectChallengeTracker(ws: WireSocket): {
           cleanup();
           reject(
             new OpenclawWireError(
-              "connect-failed",
+              CONNECT_FAILED,
               "socket closed before connect.challenge arrived",
             ),
           );
@@ -201,14 +203,23 @@ export function startConnectChallengeTracker(ws: WireSocket): {
   };
 }
 
-export function sendWsRequest(
-  ws: WireSocket,
-  id: string,
-  method: string,
-  params: unknown,
-  timeoutMs: number,
+export interface SendWsRequestParams {
+  ws: WireSocket;
+  id: string;
+  method: string;
+  params: unknown;
+  timeoutMs: number;
+  mapConnectErrors?: boolean;
+}
+
+export function sendWsRequest({
+  ws,
+  id,
+  method,
+  params,
+  timeoutMs,
   mapConnectErrors = false,
-): Promise<unknown> {
+}: SendWsRequestParams): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
@@ -242,7 +253,7 @@ export function sendWsRequest(
       cleanup();
       reject(
         new OpenclawWireError(
-          "connect-failed",
+          CONNECT_FAILED,
           `socket closed before ${method} response`,
         ),
       );
@@ -251,7 +262,7 @@ export function sendWsRequest(
       cleanup();
       reject(
         new OpenclawWireError(
-          "connect-failed",
+          CONNECT_FAILED,
           `socket error during ${method}: ${(args[0] as Error).message}`,
         ),
       );

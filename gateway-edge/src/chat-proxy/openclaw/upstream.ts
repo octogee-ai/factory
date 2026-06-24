@@ -37,6 +37,41 @@ export interface OpenUpstreamParams {
   onDeviceToken?: (auth: { deviceToken: string; role?: string; scopes?: string[] }) => void | Promise<void>;
 }
 
+type UpstreamAuth = { deviceToken: string } | { token: string } | undefined;
+
+function authForParams(params: OpenUpstreamParams): UpstreamAuth {
+  if (params.deviceToken) return { deviceToken: params.deviceToken };
+  if (params.token) return { token: params.token };
+  return undefined;
+}
+
+function tokenForDeviceSignature(params: OpenUpstreamParams): string | null {
+  return params.deviceToken || params.token || null;
+}
+
+function helloAuthInfo(helloOk: unknown):
+  | { deviceToken?: unknown; role?: unknown; scopes?: unknown }
+  | undefined {
+  return helloOk && typeof helloOk === "object"
+    ? (helloOk as { auth?: { deviceToken?: unknown; role?: unknown; scopes?: unknown } }).auth
+    : undefined;
+}
+
+async function emitDeviceToken(
+  params: OpenUpstreamParams,
+  helloOk: unknown,
+): Promise<void> {
+  const authInfo = helloAuthInfo(helloOk);
+  if (typeof authInfo?.deviceToken !== "string" || !authInfo.deviceToken.trim()) return;
+  await params.onDeviceToken?.({
+    deviceToken: authInfo.deviceToken,
+    role: typeof authInfo.role === "string" ? authInfo.role : undefined,
+    scopes: Array.isArray(authInfo.scopes)
+      ? authInfo.scopes.filter((scope): scope is string => typeof scope === "string")
+      : undefined,
+  });
+}
+
 export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocket> {
   const scopes = params.scopes ?? [...DEFAULT_OPERATOR_SCOPES];
   const timeoutMs = params.timeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
@@ -65,20 +100,16 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
       role: "operator",
       scopes,
       nonce,
-      token: params.deviceToken || params.token || null,
+      token: tokenForDeviceSignature(params),
       platform: clientInfo.platform,
     });
-    const auth = params.deviceToken
-      ? { deviceToken: params.deviceToken }
-      : params.token
-        ? { token: params.token }
-        : undefined;
+    const auth = authForParams(params);
 
-    const helloOk = await sendWsRequest(
+    const helloOk = await sendWsRequest({
       ws,
-      randomUUID(),
-      "connect",
-      {
+      id: randomUUID(),
+      method: "connect",
+      params: {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: clientInfo,
@@ -88,20 +119,9 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
         ...(auth ? { auth } : {}),
       },
       timeoutMs,
-      true,
-    );
-    const authInfo = helloOk && typeof helloOk === "object"
-      ? (helloOk as { auth?: { deviceToken?: unknown; role?: unknown; scopes?: unknown } }).auth
-      : undefined;
-    if (typeof authInfo?.deviceToken === "string" && authInfo.deviceToken.trim()) {
-      await params.onDeviceToken?.({
-        deviceToken: authInfo.deviceToken,
-        role: typeof authInfo.role === "string" ? authInfo.role : undefined,
-        scopes: Array.isArray(authInfo.scopes)
-          ? authInfo.scopes.filter((scope): scope is string => typeof scope === "string")
-          : undefined,
-      });
-    }
+      mapConnectErrors: true,
+    });
+    await emitDeviceToken(params, helloOk);
 
     return ws;
   } catch (err) {
