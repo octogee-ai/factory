@@ -16,6 +16,7 @@ import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-pr
 import { createSiteDeployRoutes } from "./routes/site-deploy.js";
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
+import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
@@ -175,6 +176,9 @@ export function createApp(opts: CreateAppOptions = {}) {
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
   app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db }));
+  // octogee-api-only: materialize byosub OAuth creds for cattle gateways that
+  // can't reach Secret Manager. Scoped to the caller's own glmGateways.byosub.
+  app.use("/internal/byok", createByokBrokerRoutes({ db }));
   // octogee-api-only: broker BuilderShell ticket, presence, and audit
   // Firestore writes so operator gateway pods can stay datastore.viewer-only.
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());

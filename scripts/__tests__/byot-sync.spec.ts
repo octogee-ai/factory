@@ -45,14 +45,18 @@ vi.mock("child_process", async () => {
   };
 });
 
+vi.mock("../lib/internal-fetch", () => ({ internalFetch: vi.fn() }));
+
 import { deriveDesiredByotState, byosCoachConfigPatch } from "../lib/byot-sync.js";
 import {
   triggerSecretsReload,
   restoreOauthStoreForSlug,
+  brokerFetchByosubCred,
   applyCoachModelPatch,
   syncByotForCustomer,
   markerProviderForSlot,
 } from "../lib/byot-sync-runtime";
+import { internalFetch } from "../lib/internal-fetch.js";
 import { codexAuthJsonPath, codexAgentDir } from "../lib/byosub-restore.js";
 import { readAuthProfileStore } from "../lib/auth-profile-sqlite.js";
 import * as fs from "fs";
@@ -206,10 +210,11 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
   it("materializes the per-agent codex-home for a mounted oauth customer (restored + present)", async () => {
     const oc = mk();
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchGlmByosub: async () => ({
-        "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" },
+      fetchByosubCred: async () => ({
+        provider: "openai",
+        secretName: "byosub-uid-openai",
+        credential: codexBlob(),
       }),
-      fetchSecret: async () => codexBlob(),
       openclawDir: oc,
     });
     expect(r.restored).toBe(true);
@@ -238,16 +243,13 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
   it("Copilot #2: a FAILED restore does NOT activate (not restored, not present)", async () => {
     const oc = mk();
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchGlmByosub: async () => ({
-        "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" },
-      }),
-      fetchSecret: async () => {
-        throw new Error("transient Secret Manager failure");
+      fetchByosubCred: async () => {
+        throw new Error("transient broker failure");
       },
       openclawDir: oc,
       logFn: () => {},
     });
-    expect(r.restored).toBe(false); 
+    expect(r.restored).toBe(false);
 
 expect(r.present).toBe(false);
     const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
@@ -256,8 +258,7 @@ expect(r.present).toBe(false);
 
   it("not restored / not present when this customer has no byosub ref (nothing to restore)", async () => {
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchGlmByosub: async () => ({}),
-      fetchSecret: async () => "x",
+      fetchByosubCred: async () => null,
       openclawDir: mk(),
     });
     expect(r.restored).toBe(false);
@@ -266,7 +267,7 @@ expect(r.present).toBe(false);
 
   it("never throws — a fetch failure is neither restored nor present (mount continues)", async () => {
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchGlmByosub: async () => {
+      fetchByosubCred: async () => {
         throw new Error("glmGateways read failed");
       },
       openclawDir: mk(),
@@ -279,10 +280,11 @@ expect(r.present).toBe(false);
 it("re-mount over a healthy on-disk cred → conservative skip → NOT restored but present", async () => {
     const oc = mk();
     const opts = {
-      fetchGlmByosub: async () => ({
-        "octogee-tester-70-coach": { provider: "openai", secretName: "byosub-uid-openai" } as const,
+      fetchByosubCred: async () => ({
+        provider: "openai",
+        secretName: "byosub-uid-openai",
+        credential: codexBlob(),
       }),
-      fetchSecret: async () => codexBlob(),
       openclawDir: oc,
       logFn: () => {},
     };
@@ -294,6 +296,45 @@ it("re-mount over a healthy on-disk cred → conservative skip → NOT restored 
 const second = await restoreOauthStoreForSlug("tester-70", opts);
     expect(second.restored).toBe(false);
     expect(second.present).toBe(true);
+  });
+});
+
+describe("brokerFetchByosubCred — gateway-side broker client (no silent failures)", () => {
+  beforeEach(() => vi.mocked(internalFetch).mockReset());
+
+  it("returns the materialized cred on 200", async () => {
+    vi.mocked(internalFetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          provider: "anthropic",
+          secretName: "byosub-uid-anthropic",
+          credential: "tok",
+        }),
+        { status: 200 },
+      ),
+    );
+    expect(await brokerFetchByosubCred("octogee-tester5-coach")).toEqual({
+      provider: "anthropic",
+      secretName: "byosub-uid-anthropic",
+      credential: "tok",
+    });
+  });
+
+  it("returns null on 404 (no byosub ref for this agent — nothing to restore)", async () => {
+    vi.mocked(internalFetch).mockResolvedValue(new Response("{}", { status: 404 }));
+    expect(await brokerFetchByosubCred("octogee-tester5-coach")).toBeNull();
+  });
+
+  it("throws on a non-ok, non-404 status (fail loud, never a silent skip)", async () => {
+    vi.mocked(internalFetch).mockResolvedValue(new Response("boom", { status: 500 }));
+    await expect(brokerFetchByosubCred("octogee-tester5-coach")).rejects.toThrow(/500/);
+  });
+
+  it("throws on a malformed broker response (never a half-materialized cred)", async () => {
+    vi.mocked(internalFetch).mockResolvedValue(
+      new Response(JSON.stringify({ provider: "anthropic" }), { status: 200 }),
+    );
+    await expect(brokerFetchByosubCred("octogee-tester5-coach")).rejects.toThrow(/malformed/);
   });
 });
 
@@ -563,18 +604,15 @@ describe("standard gateway — BYOS materialization", () => {
 
 describe("operator gateway — runtime sync stays narrow", () => {
   it("restoreOauthStoreForSlug: returns {restored:false, present:false} without fetching", async () => {
-    const fetchGlmByosub = vi.fn(async () => ({}));
-    const fetchSecret = vi.fn(async () => "x");
+    const fetchByosubCred = vi.fn(async () => null);
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchGlmByosub,
-      fetchSecret,
+      fetchByosubCred,
       openclawDir: fs.mkdtempSync(path.join(os.tmpdir(), "operator-skip-")),
       isOperatorGateway: () => true,
       logFn: () => {},
     });
     expect(r).toEqual({ restored: false, present: false });
-    expect(fetchGlmByosub).not.toHaveBeenCalled();
-    expect(fetchSecret).not.toHaveBeenCalled();
+    expect(fetchByosubCred).not.toHaveBeenCalled();
   });
 
   it("syncByotForCustomer: no internal call fires — applyByotState, restore, patch, reload all skipped", async () => {
