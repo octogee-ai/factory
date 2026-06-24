@@ -1,8 +1,32 @@
 import { validateAnthropicKey, type KeyValidationResult } from "./anthropic-key-format.js";
 
-export type Provider = "anthropic" | "openai" | "openai-compatible";
+export type Provider =
+  | "anthropic"
+  | "openai"
+  | "openai-compatible"
+  | "grok"
+  | "openrouter"
+  | "minimax";
 
-const SUPPORTED: Provider[] = ["anthropic", "openai", "openai-compatible"];
+// Must stay in sync with the api_key providers in scripts/lib
+// byot-multi-provider-config PROVIDERS and the secret-resolver id grammar —
+// asserted by tests/specs/byok-provider-registry-parity.spec.ts.
+export const SUPPORTED: Provider[] = [
+  "anthropic",
+  "openai",
+  "openai-compatible",
+  "grok",
+  "openrouter",
+  "minimax",
+];
+
+// Grok / OpenRouter / MiniMax are OpenAI-compatible with a CANONICAL upstream,
+// so the Builder supplies only a key (+ model); the probe uses this baseUrl.
+export const CANONICAL_BASE_URL: Partial<Record<Provider, string>> = {
+  grok: "https://api.x.ai/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+  minimax: "https://api.minimax.io/v1",
+};
 
 export function isSupportedProvider(input: unknown): input is Provider {
   return typeof input === "string" && (SUPPORTED as string[]).includes(input);
@@ -45,7 +69,12 @@ export function validateProviderKey(provider: Provider, input: unknown): KeyVali
   switch (provider) {
     case "anthropic":         return validateAnthropicKey(input);
     case "openai":            return validateOpenAi(input);
-    case "openai-compatible": return validateOpenAiCompatible(input);
+    // openai-compatible family (incl. canonical Grok / OpenRouter / MiniMax):
+    // lenient key-shape check — the upstream probe is the real validation.
+    case "openai-compatible":
+    case "grok":
+    case "openrouter":
+    case "minimax":           return validateOpenAiCompatible(input);
     default:                  return { valid: false, reason: `Unsupported provider: ${provider}` };
   }
 }

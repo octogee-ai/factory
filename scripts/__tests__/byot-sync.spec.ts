@@ -323,12 +323,12 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     });
   });
 
-  it("claude-cli (Claude subscription) → coach model Opus 4.8 + agentRuntime:claude-cli registry pin", () => {
+  it("claude-cli (Claude subscription) → native claude-cli/claude-opus-4-8 + empty allowlist entry (prefix selects the runtime; no agentRuntime remap)", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "claude-cli" })).toEqual({
       agents: {
-        list: [{ id, model: "anthropic/claude-opus-4-8" }],
+        list: [{ id, model: "claude-cli/claude-opus-4-8" }],
         defaults: {
-          models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } } },
+          models: { "claude-cli/claude-opus-4-8": {} },
         },
       },
     });
@@ -407,9 +407,9 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(claudeCalls).toEqual([
       {
         agents: {
-          list: [{ id: "octogee-tester-70-coach", model: "anthropic/claude-opus-4-8" }],
+          list: [{ id: "octogee-tester-70-coach", model: "claude-cli/claude-opus-4-8" }],
           defaults: {
-            models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } } },
+            models: { "claude-cli/claude-opus-4-8": {} },
           },
         },
       },

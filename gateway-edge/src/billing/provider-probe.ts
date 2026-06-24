@@ -2,7 +2,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { classifyHttp } from "./anthropic-probe.js";
 import { logger } from "../middleware/logging.js";
-import type { Provider } from "./provider-key-format.js";
+import { CANONICAL_BASE_URL, type Provider } from "./provider-key-format.js";
 
 export interface ProbeRequest {
   provider: Provider;
@@ -130,19 +130,28 @@ export async function probeProviderKey(req: ProbeRequest): Promise<ProbeResult> 
     });
   }
 
-  if (req.provider === "openai-compatible") {
-    if (!req.baseUrl) {
+  if (
+    req.provider === "openai-compatible" ||
+    req.provider === "grok" ||
+    req.provider === "openrouter" ||
+    req.provider === "minimax"
+  ) {
+    // openai-compatible takes the user's baseUrl; the canonical providers
+    // (grok/openrouter/minimax) use their fixed upstream. Both probe /models.
+    const baseUrl =
+      req.provider === "openai-compatible" ? req.baseUrl : CANONICAL_BASE_URL[req.provider];
+    if (!baseUrl) {
       return {
         ok: false,
         error: "baseUrl is required for openai-compatible providers",
         classification: "user",
       };
     }
-    const validationError = await validateCompatibleBaseUrl(req.baseUrl);
+    const validationError = await validateCompatibleBaseUrl(baseUrl);
     if (validationError) {
       return { ok: false, error: validationError, classification: "user" };
     }
-    return probeFetch(`${trimSlash(req.baseUrl)}/models`, {
+    return probeFetch(`${trimSlash(baseUrl)}/models`, {
       method: "GET",
       headers: { Authorization: `Bearer ${req.apiKey}` },
     });

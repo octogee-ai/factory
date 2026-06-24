@@ -5,7 +5,10 @@ export type Provider =
   | "openai"
   | "openai-compatible"
   | "openai-codex"
-  | "claude-cli";
+  | "claude-cli"
+  | "grok"
+  | "openrouter"
+  | "minimax";
 
 export type CredentialMode = "api_key" | "oauth";
 
@@ -91,7 +94,10 @@ export const PROVIDERS: Record<Provider, ProviderSpec> = {
     shape: "profile",
     profileKey: "anthropic:claude-cli",
     authProvider: "claude-cli",
-    defaultModel: "anthropic/claude-opus-4-8",
+    // openclaw exposes the Claude-sub model as claude-cli/<model> (the provider
+    // prefix selects the native claude-cli runtime); allowlisted with an empty
+    // entry. NOT anthropic/<model>+agentRuntime — that id is rejected (proven live).
+    defaultModel: "claude-cli/claude-opus-4-8",
   },
   "openai-compatible": {
     mode: "api_key",
@@ -99,12 +105,30 @@ export const PROVIDERS: Record<Provider, ProviderSpec> = {
     authProvider: "openai-compatible",
     defaultModel: null,
   },
-  // Ready slots (add a row + its capture flow — no new code here):
-  //   openrouter: { mode:"api_key", shape:"customProvider",
-  //     authProvider:"openrouter", defaultModel:null,
-  //     baseUrl:"https://openrouter.ai/api/v1" }
-  //   google / github: { mode:"oauth", shape:"profile",
-  //     profileKey:"<p>", authProvider:"<p>", defaultModel:null }
+  // Native-HTTP OpenAI-compatible providers — work on every gateway class
+  // (no exec). Canonical baseUrl so the Builder supplies only a model + key.
+  grok: {
+    mode: "api_key",
+    shape: "customProvider",
+    authProvider: "grok",
+    defaultModel: null,
+    baseUrl: "https://api.x.ai/v1",
+  },
+  openrouter: {
+    mode: "api_key",
+    shape: "customProvider",
+    authProvider: "openrouter",
+    defaultModel: null,
+    baseUrl: "https://openrouter.ai/api/v1",
+  },
+  minimax: {
+    mode: "api_key",
+    shape: "customProvider",
+    authProvider: "minimax",
+    defaultModel: null,
+    // TODO(byok): confirm MiniMax's OpenAI-compatible base before the live demo.
+    baseUrl: "https://api.minimax.io/v1",
+  },
 };
 
 const SECRET_RESOLVER_PROVIDER = "gcp-secret-manager";
@@ -225,10 +249,12 @@ export function codexRuntimeConfig(): {
 
 export function claudeCliRuntimeConfig(): {
   model: string;
-  modelsDef: Record<string, { agentRuntime: { id: "claude-cli" } }>;
+  modelsDef: Record<string, Record<string, never>>;
 } {
   const model = PROVIDERS["claude-cli"].defaultModel!;
-  return { model, modelsDef: { [model]: { agentRuntime: { id: "claude-cli" } } } };
+  // Empty entry = allowlist the native claude-cli/<model> id; the prefix selects
+  // the runtime, so no agentRuntime remap (unlike codex, a plugin).
+  return { model, modelsDef: { [model]: {} } };
 }
 
 export interface OAuthCredential {

@@ -103,6 +103,44 @@ describe("buildByotConfigForProvider — openai-compatible (custom provider) cha
   });
 });
 
+describe("buildByotConfigForProvider — canonical OpenAI-compatible providers (Grok / OpenRouter / MiniMax)", () => {
+  it.each([
+    ["grok", "https://api.x.ai/v1"],
+    ["openrouter", "https://openrouter.ai/api/v1"],
+    ["minimax", "https://api.minimax.io/v1"],
+  ] as const)(
+    "%s uses its canonical baseUrl + the builder's chosen model + a byok key ref (no baseUrl needed from the user)",
+    (provider, baseUrl) => {
+      const out = buildByotConfigForProvider({ slug: "tester-70", provider, model: "some-model" });
+      expect(out.authProfiles).toBeNull();
+      expect(out.models).toEqual({
+        providers: {
+          "custom-tester-70": {
+            api: "openai-completions",
+            baseUrl,
+            apiKey: {
+              source: "exec",
+              provider: "gcp-secret-manager",
+              id: `byok-tester-70-${provider}/latest`,
+            },
+            models: [{ id: "some-model", name: "some-model" }],
+          },
+        },
+      });
+      expect(out.agentModelOverride).toBe("custom-tester-70/some-model");
+    },
+  );
+
+  it.each(["grok", "openrouter", "minimax"] as const)(
+    "%s requires a model (baseUrl is canonical, so only the model is user-supplied)",
+    (provider) => {
+      expect(() => buildByotConfigForProvider({ slug: "tester-70", provider })).toThrow(
+        /model is required/,
+      );
+    },
+  );
+});
+
 describe("codexRuntimeConfig — BYOS coach model + agentRuntime:codex routing", () => {
   it("pins agentRuntime:{id:codex} so a per-agent gpt-5.5 override routes through the codex harness, not direct OpenAI API", () => {
     expect(codexRuntimeConfig()).toEqual({
@@ -271,12 +309,12 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
   });
 });
 
-describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION coach model + agentRuntime:claude-cli", () => {
-  it("pins agentRuntime:{id:claude-cli} on Opus 4.8 so a per-agent override routes through the Claude CLI sub, not the platform anthropic API key", () => {
+describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION coach model (native claude-cli/ id)", () => {
+  it("uses the openclaw-native claude-cli/<model> id, allowlisted with an empty entry — the provider prefix selects the runtime, so NO agentRuntime remap (proven live: openclaw exposes claude-cli/claude-opus-4-8, not anthropic/...)", () => {
     expect(claudeCliRuntimeConfig()).toEqual({
-      model: "anthropic/claude-opus-4-8",
+      model: "claude-cli/claude-opus-4-8",
       modelsDef: {
-        "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+        "claude-cli/claude-opus-4-8": {},
       },
     });
   });
@@ -330,9 +368,9 @@ describe("buildByotConfigForProvider — claude-cli (Claude subscription) at par
     expect(out.models).toBeNull();
   });
 
-  it("overrides the agent model to Opus 4.8 (the sub-routed model)", () => {
+  it("overrides the agent model to the native Opus 4.8 sub id (claude-cli/claude-opus-4-8)", () => {
     expect(buildByotConfigForProvider(base).agentModelOverride).toBe(
-      "anthropic/claude-opus-4-8",
+      "claude-cli/claude-opus-4-8",
     );
   });
 });

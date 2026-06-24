@@ -69,8 +69,11 @@ const AGENTS_DIR =
  *  chars. Provider is a closed enum. Version is "latest" or a 1-32 char
  *  alnum/hyphen string (Secret Manager versions are integers but `latest`
  *  + future labels are also valid). */
+// Provider enum must stay in sync with the api_key providers in
+// scripts/lib byot-multi-provider-config PROVIDERS and gateway-edge
+// provider-key-format SUPPORTED — asserted by the registry-parity spec.
 const BYOK_ID_RE =
-  /^byok-(?<slug>[a-z0-9][a-z0-9-]{0,62})-(?<provider>anthropic|openai|openai-compatible)(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
+  /^byok-(?<slug>[a-z0-9][a-z0-9-]{0,62})-(?<provider>anthropic|openai|openai-compatible|grok|openrouter|minimax)(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
 
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
@@ -120,7 +123,7 @@ function validateId(id) {
   }
   const m = id.match(BYOK_ID_RE);
   if (!m || !m.groups) {
-    return `id does not match byok-{slug}-{anthropic|openai|openai-compatible}[/version]`;
+    return `id does not match byok-{slug}-{anthropic|openai|openai-compatible|grok|openrouter|minimax}[/version]`;
   }
   const slug = m.groups.slug;
   if (!KNOWN_SLUGS.has(slug)) {

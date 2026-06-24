@@ -5,6 +5,7 @@ import { db, FieldValue } from "../../lib/db.js";
 import {
   validateProviderKey,
   isSupportedProvider,
+  SUPPORTED,
   type Provider,
 } from "../../billing/provider-key-format.js";
 import { probeProviderKey } from "../../billing/provider-probe.js";
@@ -41,7 +42,7 @@ let provider: Provider;
     } else {
       res.status(400).json({
         error: `Unsupported provider: ${String(body.provider)}`,
-        supportedProviders: ["anthropic", "openai", "openai-compatible"],
+        supportedProviders: SUPPORTED,
       });
       return;
     }

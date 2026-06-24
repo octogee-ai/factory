@@ -34,9 +34,11 @@ const BYOT_MARKER = ".byot-managed";
 
 export type ByotInput = ByotConfigInput;
 
-// Pins agentRuntime so a per-agent BYOS model override routes through the right
-// harness (codex / claude-cli) rather than the platform provider key.
-type RuntimeModelsDef = Record<string, { agentRuntime: { id: string } }>;
+// A per-agent BYOS model override. codex (a plugin) pins agentRuntime:{id:codex}
+// to route a gpt-5.5 override through the codex harness; claude-cli (a core
+// runtime) uses the native claude-cli/<model> id with an empty allowlist entry
+// (the prefix selects the runtime) — so agentRuntime is optional.
+type RuntimeModelsDef = Record<string, { agentRuntime?: { id: string } }>;
 interface CodexAppServerPatch {
   sandbox: string;
   approvalPolicy: string;

@@ -6,8 +6,11 @@ describe("isSupportedProvider", () => {
     ["anthropic", true],
     ["openai", true],
     ["openai-compatible", true],
+    ["grok", true],
+    ["openrouter", true],
+    ["minimax", true],
     ["codex", false],
-    ["openrouter", false],
+    ["bogus", false],
     ["", false],
   ])("%s → %s", (input, expected) => {
     expect(isSupportedProvider(input)).toBe(expected);
