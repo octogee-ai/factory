@@ -1,5 +1,5 @@
-import { Router } from "express";
-import { withFileTarget } from "../../lib/fileTarget.js";
+import { Router, type Request, type Response } from "express";
+import { withFileTarget, type FileTarget } from "../../lib/fileTarget.js";
 import { githubContentsApi, githubContentsPut } from "../../lib/github.js";
 import {
   isBrokeredWritablePath,
@@ -14,6 +14,19 @@ const router = Router();
 
 const MAX_SAVE_BYTES = 1024 * 1024;
 
+export type ValidatedSaveRequest =
+  | { ok: true; path: string; content: string }
+  | { ok: false; status: 400 | 413; error: string; code?: string };
+
+type SaveAuthor = ReturnType<typeof resolveCommitAuthor>;
+
+interface SavePayload {
+  author: SaveAuthor;
+  contentBase64: string;
+  message: string;
+  start: number;
+}
+
 function commitMessage(path: string, authorName: string): string {
   const kind = path.startsWith("notes/") ? "notes" : "canvas";
   return `${kind}: edit ${path} — ${authorName} via Octogee Canvas`;
@@ -25,79 +38,134 @@ function rethrowUnlessNotFound(e: unknown): undefined {
   throw e;
 }
 
-router.post("/save", withFileTarget(async (req, res, _next, target) => {
-  const path = typeof req.body?.path === "string" ? req.body.path : "";
-  const content = typeof req.body?.content === "string" ? req.body.content : null;
-  if (!path) { res.status(400).json({ error: "Missing path" }); return; }
-  if (content === null) { res.status(400).json({ error: "Missing content" }); return; }
+export function validatedSaveRequest(body: unknown): ValidatedSaveRequest {
+  const { path, content } = body && typeof body === "object"
+    ? body as { path?: unknown; content?: unknown }
+    : {};
+  const savePath = typeof path === "string" ? path : "";
+  const saveContent = typeof content === "string" ? content : null;
+  if (!savePath) return { ok: false, status: 400, error: "Missing path" };
+  if (saveContent === null) return { ok: false, status: 400, error: "Missing content" };
 
-  const pathError = validateWorkspacePath(path);
-  if (pathError) { res.status(400).json({ error: pathError }); return; }
-  if (!isTextFile(path)) {
-    res.status(400).json({ error: "Only text files can be saved", code: "NOT_TEXT" });
-    return;
+  const pathError = validateWorkspacePath(savePath);
+  if (pathError) return { ok: false, status: 400, error: pathError };
+  if (!isTextFile(savePath)) {
+    return { ok: false, status: 400, error: "Only text files can be saved", code: "NOT_TEXT" };
   }
-  if (Buffer.byteLength(content, "utf8") > MAX_SAVE_BYTES) {
-    res.status(413).json({ error: "Content too large", code: "TOO_LARGE" });
-    return;
+  if (Buffer.byteLength(saveContent, "utf8") > MAX_SAVE_BYTES) {
+    return { ok: false, status: 413, error: "Content too large", code: "TOO_LARGE" };
   }
 
+  return { ok: true, path: savePath, content: saveContent };
+}
+
+function sendValidationError(res: Response, validation: Extract<ValidatedSaveRequest, { ok: false }>): void {
+  res.status(validation.status).json({
+    error: validation.error,
+    ...(validation.code ? { code: validation.code } : {}),
+  });
+}
+
+function sendBrokeredPathError(res: Response): void {
+  res.status(403).json({
+    error: "Only notes and the canvas home file are writable with a brokered token",
+    code: "PATH_NOT_WRITABLE",
+  });
+}
+
+function savePayload(
+  req: Request,
+  target: FileTarget,
+  request: Extract<ValidatedSaveRequest, { ok: true }>,
+): SavePayload {
   const author = resolveCommitAuthor(req.user, target.slug);
-  const message = commitMessage(path, author.name);
-  const contentBase64 = Buffer.from(content, "utf8").toString("base64");
-  const start = Date.now();
-
-  // Brokered targets (workspace members impersonating the owner; all GitHub targets)
-  // may only write the knowledge store. Owners / project collaborators are unrestricted.
-  if (target.brokered && !isBrokeredWritablePath(path, target.canvasFile)) {
-    res.status(403).json({
-      error: "Only notes and the canvas home file are writable with a brokered token",
-      code: "PATH_NOT_WRITABLE",
-    });
-    return;
-  }
-
-  if (target.provider === "github") {
-    let sha: string | undefined;
-    try {
-      const existing = (await githubContentsApi(
-        target.org, target.repoName, path, target.githubToken,
-      )) as { sha?: string };
-      sha = existing.sha;
-    } catch (e) {
-      rethrowUnlessNotFound(e);
-    }
-    const out = (await githubContentsPut(target.org, target.repoName, path, target.githubToken, {
-      message,
-      contentBase64,
-      ...(sha ? { sha } : {}),
-      author,
-    })) as { content?: { sha?: string } };
-    logger.info(
-      `save github repo=${target.org}/${target.repoName} path=${path} dur=${Date.now() - start}ms`,
-    );
-    res.json({ ok: true, sha: out.content?.sha ?? null, provider: "github" });
-    return;
-  }
-
-  const apiPath = `${target.repoName}/contents/${path}`;
-  let sha: string | undefined;
-  try {
-    const existing = (await targetGiteaApi(target, apiPath)) as { sha?: string };
-    sha = existing.sha;
-  } catch (e) {
-    rethrowUnlessNotFound(e);
-  }
-  const out = (await targetGiteaApi(target, apiPath, "PUT", {
-    message,
-    content: contentBase64,
-    ...(sha ? { sha } : {}),
+  return {
     author,
+    contentBase64: Buffer.from(request.content, "utf8").toString("base64"),
+    message: commitMessage(request.path, author.name),
+    start: Date.now(),
+  };
+}
+
+async function githubSha(target: FileTarget, path: string): Promise<string | undefined> {
+  try {
+    const existing = (await githubContentsApi(
+      target.org, target.repoName, path, target.githubToken,
+    )) as { sha?: string };
+    return existing.sha;
+  } catch (e) {
+    return rethrowUnlessNotFound(e);
+  }
+}
+
+async function saveGithub(
+  target: FileTarget,
+  request: Extract<ValidatedSaveRequest, { ok: true }>,
+  payload: SavePayload,
+): Promise<{ ok: true; sha: string | null; provider: "github" }> {
+  const sha = await githubSha(target, request.path);
+  const out = (await githubContentsPut(target.org, target.repoName, request.path, target.githubToken, {
+    message: payload.message,
+    contentBase64: payload.contentBase64,
+    ...(sha ? { sha } : {}),
+    author: payload.author,
   })) as { content?: { sha?: string } };
   logger.info(
-    `save gitea repo=${target.org}/${target.repoName} path=${path} dur=${Date.now() - start}ms`,
+    `save github repo=${target.org}/${target.repoName} path=${request.path} dur=${Date.now() - payload.start}ms`,
   );
-  res.json({ ok: true, sha: out.content?.sha ?? null, provider: "gitea" });
+  return { ok: true, sha: out.content?.sha ?? null, provider: "github" };
+}
+
+async function giteaSha(target: FileTarget, apiPath: string): Promise<string | undefined> {
+  try {
+    const existing = (await targetGiteaApi(target, apiPath)) as { sha?: string };
+    return existing.sha;
+  } catch (e) {
+    return rethrowUnlessNotFound(e);
+  }
+}
+
+async function saveGitea(
+  target: FileTarget,
+  request: Extract<ValidatedSaveRequest, { ok: true }>,
+  payload: SavePayload,
+): Promise<{ ok: true; sha: string | null; provider: "gitea" }> {
+  const apiPath = `${target.repoName}/contents/${request.path}`;
+  const sha = await giteaSha(target, apiPath);
+  const out = (await targetGiteaApi(target, apiPath, "PUT", {
+    message: payload.message,
+    content: payload.contentBase64,
+    ...(sha ? { sha } : {}),
+    author: payload.author,
+  })) as { content?: { sha?: string } };
+  logger.info(
+    `save gitea repo=${target.org}/${target.repoName} path=${request.path} dur=${Date.now() - payload.start}ms`,
+  );
+  return { ok: true, sha: out.content?.sha ?? null, provider: "gitea" };
+}
+
+async function saveTarget(
+  target: FileTarget,
+  request: Extract<ValidatedSaveRequest, { ok: true }>,
+  payload: SavePayload,
+): Promise<{ ok: true; sha: string | null; provider: "github" | "gitea" }> {
+  if (target.provider === "github") return saveGithub(target, request, payload);
+  return saveGitea(target, request, payload);
+}
+
+router.post("/save", withFileTarget(async (req, res, _next, target) => {
+  const request = validatedSaveRequest(req.body);
+  if (!request.ok) {
+    sendValidationError(res, request);
+    return;
+  }
+
+  if (target.brokered && !isBrokeredWritablePath(request.path, target.canvasFile)) {
+    sendBrokeredPathError(res);
+    return;
+  }
+
+  res.json(await saveTarget(target, request, savePayload(req, target, request)));
 }, { allowWorkspaceMembers: true }));
 
 export default router;
