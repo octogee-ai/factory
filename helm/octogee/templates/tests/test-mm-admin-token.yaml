@@ -5,6 +5,7 @@ metadata:
   name: "{{ .Release.Name }}-test-mm-admin-token"
   labels:
     {{- include "octogee.labels" . | nindent 4 }}
+    app: octogee-mm-admin-token-test
   annotations:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded

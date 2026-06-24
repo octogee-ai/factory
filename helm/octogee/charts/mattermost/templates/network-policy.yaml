@@ -47,4 +47,11 @@ spec:
       ports:
         - protocol: TCP
           port: 8065
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-mm-admin-token-test
+      ports:
+        - protocol: TCP
+          port: 8065
 {{- end }}
