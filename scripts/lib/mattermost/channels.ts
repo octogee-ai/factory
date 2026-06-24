@@ -6,30 +6,42 @@ import { computeProjectChannelDisplayName } from "../../../shared/types/display-
 import { mmApiCall } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
 
+interface MattermostChannel {
+  id: string;
+  name?: string;
+  delete_at?: number;
+}
+
 export async function createOrRestoreChannel(
   teamId: string, name: string, displayName: string, type: string, purpose: string,
-): Promise<any | null> {
-  let channel = await mmApiCall("POST", "/channels", {
+): Promise<MattermostChannel | null> {
+  let channel = (await mmApiCall("POST", "/channels", {
     team_id: teamId, name, display_name: displayName, type, purpose,
-  });
+  })) as MattermostChannel | null;
   if (channel) return channel;
 
-channel = await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`);
+channel = (await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`)) as MattermostChannel | null;
   if (channel) return channel;
 
 const search = await mmApiCall("POST", `/teams/${teamId}/channels/search`, {
     term: name, include_deleted: true,
   });
   const archived = Array.isArray(search)
-    ? search.find((c: any) => c.name === name && c.delete_at > 0)
+    ? search.find((c): c is MattermostChannel => isArchivedChannel(c, name))
     : null;
   if (archived) {
-    channel = await mmApiCall("POST", `/channels/${archived.id}/restore`);
+    channel = (await mmApiCall("POST", `/channels/${archived.id}/restore`)) as MattermostChannel | null;
     if (channel) log(`[mattermost] restored archived channel: ${name}`);
     return channel;
   }
 
   return null;
+}
+
+function isArchivedChannel(candidate: unknown, name: string): candidate is MattermostChannel {
+  if (typeof candidate !== "object" || candidate === null) return false;
+  const channel = candidate as Partial<MattermostChannel>;
+  return channel.name === name && typeof channel.id === "string" && (channel.delete_at ?? 0) > 0;
 }
 
 export async function createProjectChannel(
