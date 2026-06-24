@@ -18,6 +18,12 @@ export interface ScopeResult {
   reasons: string[];
 }
 
+interface ScopeAccumulator {
+  jobs: Set<JobKey>;
+  reasons: string[];
+  everything: boolean;
+}
+
 function isGlobal(path: string): boolean {
   if (GLOBAL_EXACT.has(path)) return true;
   return GLOBAL_PREFIX.some((pre) => path.startsWith(pre));
@@ -33,56 +39,75 @@ function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
   return best;
 }
 
-interface PathScope {
-  everything: boolean;
-  jobs: JobKey[];
-  reasons: string[];
-}
-
-// The jobs a single changed path implies. Fail-open (everything) on repo-wide
-// paths and any path no package owns.
-function scopePath(path: string): PathScope {
-  if (isGlobal(path)) return { everything: true, jobs: [], reasons: [`global:${path}`] };
-  if (isInert(path)) return { everything: false, jobs: [], reasons: [`inert:${path}`] };
-
-  const jobs: JobKey[] = [];
-  const reasons: string[] = [];
-  const owner = ownerOf(path);
-  if (owner) {
-    jobs.push(...owner.jobs);
-  } else {
-    reasons.push(`unmapped:${path}`);
-  }
-  for (const edge of EDGES) {
-    if (path.startsWith(edge.when)) {
-      jobs.push(...edge.jobs);
-      reasons.push(`edge:${edge.when}`);
-    }
-  }
-  return { everything: !owner, jobs, reasons };
-}
-
 /**
  * The CI test jobs a diff must run. Pure. Fail-open: any repo-wide path or any
  * path no package owns escalates to the full set; an empty diff runs nothing.
  * The CLI passes `everything` itself when the diff base is unusable.
  */
 export function resolveScope(changedPaths: string[]): ScopeResult {
-  const jobs = new Set<JobKey>();
-  const reasons: string[] = [];
-  let everything = false;
+  const acc: ScopeAccumulator = {
+    jobs: new Set<JobKey>(),
+    reasons: [],
+    everything: false,
+  };
 
   for (const path of changedPaths) {
-    const scope = scopePath(path);
-    everything ||= scope.everything;
-    for (const j of scope.jobs) jobs.add(j);
-    reasons.push(...scope.reasons);
+    addPathScope(acc, path);
   }
 
-  if (everything) {
-    return { jobs: [...ALL_JOBS], everything: true, reasons };
+  if (acc.everything) {
+    return { jobs: [...ALL_JOBS], everything: true, reasons: acc.reasons };
   }
-  return { jobs: [...jobs].sort(), everything: false, reasons };
+  return { jobs: [...acc.jobs].sort(), everything: false, reasons: acc.reasons };
+}
+
+function addPathScope(acc: ScopeAccumulator, path: string): void {
+  if (markGlobalOrInert(acc, path)) {
+    return;
+  }
+
+  addOwnerScope(acc, path);
+  addEdgeScopes(acc, path);
+}
+
+function markGlobalOrInert(acc: ScopeAccumulator, path: string): boolean {
+  if (isGlobal(path)) {
+    acc.everything = true;
+    acc.reasons.push(`global:${path}`);
+    return true;
+  }
+  if (isInert(path)) {
+    acc.reasons.push(`inert:${path}`);
+    return true;
+  }
+
+  return false;
+}
+
+function addOwnerScope(acc: ScopeAccumulator, path: string): void {
+  const owner = ownerOf(path);
+  if (!owner) {
+    acc.everything = true;
+    acc.reasons.push(`unmapped:${path}`);
+    return;
+  }
+
+  addJobs(acc.jobs, owner.jobs);
+  acc.reasons.push(`owner:${owner.dir}`);
+}
+
+function addEdgeScopes(acc: ScopeAccumulator, path: string): void {
+  for (const edge of EDGES) {
+    if (!path.startsWith(edge.when)) continue;
+    addJobs(acc.jobs, edge.jobs);
+    acc.reasons.push(`edge:${edge.when}`);
+  }
+}
+
+function addJobs(target: Set<JobKey>, jobs: readonly JobKey[]): void {
+  for (const job of jobs) {
+    target.add(job);
+  }
 }
 
 export interface GhaOutputs {

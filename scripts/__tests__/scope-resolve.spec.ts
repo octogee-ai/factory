@@ -87,6 +87,12 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
+  it("records ownership and edge reasons for diagnostics", () => {
+    const result = resolveScope(["scripts/lib/admin-fleet-router.ts"]);
+
+    expect(result.reasons).toEqual(["owner:scripts/", "edge:scripts/lib/"]);
+  });
+
   it("a scripts change OUTSIDE lib/ does NOT pull octogee-api/gateway-edge (edge is path-specific)", () => {
     expectJobs(
       ["scripts/ops/audit-coverage.ts"],
