@@ -502,4 +502,34 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
       "DELETE",
     );
   });
+
+  it("removes the guest from the activity sibling channel", async () => {
+    await seedPublicAliceGame({ ownerUid: CALLER_UID });
+    await seedProjectActivityChannel();
+    await db
+      .collection("workspaces")
+      .doc("alice")
+      .collection("projects")
+      .doc("game")
+      .collection("members")
+      .doc("guest-uid")
+      .set({ id: "guest-uid", role: "member" });
+    await db.collection("users").doc("guest-uid").set({
+      username: "guesty",
+      mattermost: { userId: "mm-guest" },
+    });
+    mockMmApi.mockResolvedValue({ ok: true });
+    mockGiteaApi.mockResolvedValue({ ok: true });
+
+    const app = createApp();
+    const res = await request(app)
+      .delete("/api/projects/alice/game/members/guest-uid")
+      .set(await authHeader());
+
+    expect(res.status).toBe(200);
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels/ch-alice-game-activity/members/mm-guest",
+      "DELETE",
+    );
+  });
 });
