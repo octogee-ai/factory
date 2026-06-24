@@ -47,7 +47,7 @@ vi.mock("child_process", async () => {
 
 vi.mock("../lib/internal-fetch", () => ({ internalFetch: vi.fn() }));
 
-import { deriveDesiredByotState, byosCoachConfigPatch } from "../lib/byot-sync.js";
+import { deriveDesiredByotState, byosCoachConfigPatch, coachFullAgentList } from "../lib/byot-sync.js";
 import {
   triggerSecretsReload,
   restoreOauthStoreForSlug,
@@ -393,38 +393,93 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
   });
 });
 
+describe("coachFullAgentList — full-list upsert (coach model updated, every sibling preserved)", () => {
+  it("updates only the coach's model, preserving its other fields + every sibling (incl. an id-less one)", () => {
+    const current = {
+      agents: {
+        list: [
+          { name: "legacy", model: "x/y" }, // id-less: this is what flips the array to wholesale
+          { id: "octogee-tester-70-coach", name: "coach", model: "old", mmAccount: "a" },
+          { id: "octogee-zed-coach", model: "z/y" },
+        ],
+      },
+    };
+    expect(coachFullAgentList(current, "octogee-tester-70-coach", "openai/gpt-5")).toEqual([
+      { name: "legacy", model: "x/y" },
+      { id: "octogee-tester-70-coach", name: "coach", model: "openai/gpt-5", mmAccount: "a" },
+      { id: "octogee-zed-coach", model: "z/y" },
+    ]);
+  });
+
+  it("no agents.list (empty/missing) → [] (a no-op patch, never a destructive replace)", () => {
+    expect(coachFullAgentList(undefined, "octogee-tester-70-coach", "m")).toEqual([]);
+    expect(coachFullAgentList({ agents: {} }, "octogee-tester-70-coach", "m")).toEqual([]);
+  });
+});
+
 describe("applyCoachModelPatch — applies the durable patch, best-effort", () => {
-  it("openai api_key input → applies the native model patch once, returns true", async () => {
+  const CURRENT = {
+    agents: {
+      list: [
+        { id: "octogee-router", name: "router" },
+        { id: "octogee-tester-70-coach", name: "coach", model: "old", mmAccount: "a" },
+        { id: "octogee-zed-coach", model: "z/y" },
+      ],
+    },
+  };
+
+  it("openai api_key input → ships the FULL agents.list + replacePaths:[agents.list], only the coach's model updated", async () => {
     const calls: object[] = [];
+    let replacePaths: string[] | undefined;
     const r = await applyCoachModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
-        applyPatch: async (p) => {
-          calls.push(p);
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(CURRENT));
+          replacePaths = args.buildReplacePaths?.(CURRENT);
+          return { mode: "rpc", attempts: 1 };
         },
       },
     );
     expect(r).toBe(true);
+    // Load-bearing: an id-less base agent flips agents.list to wholesale, where
+    // the guard (arrayPreservesBaseEntries) flags the re-modeled coach entry as
+    // "removed" unless this exact path is confirmed. Without it applyConfigPatch
+    // rejects the patch permanently and the coach silently stays on the platform key.
+    expect(replacePaths).toEqual(["agents.list"]);
     expect(calls).toEqual([
       {
         agents: {
-          list: [{ id: "octogee-tester-70-coach", model: "openai/gpt-5" }],
+          list: [
+            { id: "octogee-router", name: "router" },
+            { id: "octogee-tester-70-coach", name: "coach", model: "openai/gpt-5", mmAccount: "a" },
+            { id: "octogee-zed-coach", model: "z/y" },
+          ],
         },
       },
     ]);
   });
 
-  it("shell-runtime BYOS providers (codex / claude-cli) DO patch a standard shared gateway", async () => {
+  it("shell-runtime BYOS providers (codex / claude-cli) patch the full list + defaults/plugins", async () => {
     const codexCalls: object[] = [];
     const rc = await applyCoachModelPatch(
       { slug: "tester-70", provider: "openai-codex" },
-      { applyPatch: async (p) => { codexCalls.push(p); } },
+      {
+        applyConfigPatch: async (args) => {
+          codexCalls.push(args.buildPatch(CURRENT));
+          return { mode: "rpc", attempts: 1 };
+        },
+      },
     );
     expect(rc).toBe(true);
     expect(codexCalls).toEqual([
       {
         agents: {
-          list: [{ id: "octogee-tester-70-coach", model: "openai/gpt-5.5" }],
+          list: [
+            { id: "octogee-router", name: "router" },
+            { id: "octogee-tester-70-coach", name: "coach", model: "openai/gpt-5.5", mmAccount: "a" },
+            { id: "octogee-zed-coach", model: "z/y" },
+          ],
           defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
         },
         plugins: {
@@ -441,36 +496,50 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     const claudeCalls: object[] = [];
     const ra = await applyCoachModelPatch(
       { slug: "tester-70", provider: "claude-cli" },
-      { applyPatch: async (p) => { claudeCalls.push(p); } },
+      {
+        applyConfigPatch: async (args) => {
+          claudeCalls.push(args.buildPatch(CURRENT));
+          return { mode: "rpc", attempts: 1 };
+        },
+      },
     );
     expect(ra).toBe(true);
     // claude-cli is an openclaw CORE runtime — no plugin to enable.
     expect(claudeCalls).toEqual([
       {
         agents: {
-          list: [{ id: "octogee-tester-70-coach", model: "claude-cli/claude-opus-4-8" }],
-          defaults: {
-            models: { "claude-cli/claude-opus-4-8": {} },
-          },
+          list: [
+            { id: "octogee-router", name: "router" },
+            { id: "octogee-tester-70-coach", name: "coach", model: "claude-cli/claude-opus-4-8", mmAccount: "a" },
+            { id: "octogee-zed-coach", model: "z/y" },
+          ],
+          defaults: { models: { "claude-cli/claude-opus-4-8": {} } },
         },
       },
     ]);
   });
 
   it("no-override / null → does NOT apply, returns false", async () => {
-    const applyPatch = vi.fn(async () => {});
-    expect(await applyCoachModelPatch(null, { applyPatch })).toBe(false);
+    let calls = 0;
     expect(
-      await applyCoachModelPatch({ slug: "tester-70", provider: "anthropic" }, { applyPatch }),
+      await applyCoachModelPatch(null, {
+        applyConfigPatch: async () => { calls += 1; return { mode: "rpc", attempts: 1 }; },
+      }),
     ).toBe(false);
-    expect(applyPatch).not.toHaveBeenCalled();
+    expect(
+      await applyCoachModelPatch(
+        { slug: "tester-70", provider: "anthropic" },
+        { applyConfigPatch: async () => { calls += 1; return { mode: "rpc", attempts: 1 }; } },
+      ),
+    ).toBe(false);
+    expect(calls).toBe(0);
   });
 
   it("never throws — a failed apply returns false (sync continues → retried next sync)", async () => {
     const r = await applyCoachModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
-        applyPatch: async () => {
+        applyConfigPatch: async () => {
           throw new Error("config.patch hash-mismatch exhausted");
         },
         logFn: () => {},
@@ -480,13 +549,16 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
   });
 
   it("operator gateway: never applies the patch (operator owns openclaw.json on PVC)", async () => {
-    const applyPatch = vi.fn(async () => {});
+    let calls = 0;
     const r = await applyCoachModelPatch(
       { slug: "tester-70", provider: "openai-codex" },
-      { applyPatch, isOperatorGateway: () => true },
+      {
+        applyConfigPatch: async () => { calls += 1; return { mode: "rpc", attempts: 1 }; },
+        isOperatorGateway: () => true,
+      },
     );
     expect(r).toBe(false);
-    expect(applyPatch).not.toHaveBeenCalled();
+    expect(calls).toBe(0);
   });
 
   it("waits for the booting runtime: deadline-bounded retries, not a 3-shot budget (byot fires at pod boot before openclaw listens on :18789)", async () => {

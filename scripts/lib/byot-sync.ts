@@ -85,6 +85,28 @@ export function byosCoachConfigPatch(
   return patch;
 }
 
+function isAgentRecord(a: unknown): a is { id?: unknown } {
+  return a !== null && typeof a === "object" && !Array.isArray(a);
+}
+
+// The coach-model config.patch must ship the FULL agents.list — the coach's
+// model updated, every sibling agent preserved verbatim — not a single-entry
+// list. openclaw's id-keyed array merge (config/merge-patch.ts) upserts by id
+// ONLY when every base entry carries a string id; a single id-less agent flips
+// the whole array to wholesale replacement, so a one-entry patch drops the rest
+// and trips the destructive-array guard (observed live 2026-06-23). A full list
+// is safe under both the id-keyed merge and the wholesale fallback — no entries
+// are removed either way.
+export function coachFullAgentList(
+  current: unknown,
+  agentId: string,
+  model: string,
+): unknown[] {
+  const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
+  const agents = Array.isArray(list) ? list : [];
+  return agents.map((a) => (isAgentRecord(a) && a.id === agentId ? { ...a, model } : a));
+}
+
 export function deriveDesiredByotState(userData: {
   byotActive?: boolean;
   username?: string;

@@ -2,6 +2,7 @@ import * as path from "path";
 import {
   applyByotState,
   byosCoachConfigPatch,
+  coachFullAgentList,
   deriveDesiredByotState,
   type ByotInput,
 } from "./byot-sync.js";
@@ -22,7 +23,6 @@ const BYOT_RUNTIME_BOOT_PATIENCE_MS = 120_000;
 export async function applyCoachModelPatch(
   input: ByotInput | null,
   deps?: {
-    applyPatch?: (patch: object) => Promise<void>;
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
     isOperatorGateway?: () => boolean;
@@ -34,20 +34,30 @@ export async function applyCoachModelPatch(
   if (!input) return false;
   const patch = byosCoachConfigPatch(input);
   if (!patch) return false;
+  const { id: agentId, model } = patch.agents.list[0];
   const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
-  const applyPatch =
-    deps?.applyPatch ??
-    (async (p: object) => {
-      await applyConfigPatchFn(
-        { buildPatch: () => p, logPrefix: `[byot-sync:${input.slug}]` },
-        { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
-      );
-    });
+  // Ship the FULL agents.list (coach model updated, siblings preserved verbatim)
+  // WITH replacePaths:["agents.list"]. On a multi-agent gateway an id-less base
+  // agent disables id-keyed merge for agents.list, so the destructive-array guard
+  // falls back to arrayPreservesBaseEntries — a deep-equal base↔merged check that
+  // flags the coach entry we just re-modeled as "removed" even though no entry is
+  // dropped. replacePaths confirms the wholesale replacement (the load-bearing
+  // half of the prod adapter's full-list pattern). Rebuilt per attempt against the
+  // freshly-fetched config (hash-mismatch safe; see coachFullAgentList).
+  const buildPatch = (current: unknown) => ({
+    ...patch,
+    agents: { ...patch.agents, list: coachFullAgentList(current, agentId, model) },
+  });
   try {
-    await applyPatch(patch);
-    logFn(
-      `[byot-sync] ${input.slug}: coach model → ${patch.agents.list[0].model}`,
+    await applyConfigPatchFn(
+      {
+        buildPatch,
+        buildReplacePaths: () => ["agents.list"],
+        logPrefix: `[byot-sync:${input.slug}]`,
+      },
+      { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
     );
+    logFn(`[byot-sync] ${input.slug}: coach model → ${model}`);
     return true;
   } catch (e) {
     logFn(
