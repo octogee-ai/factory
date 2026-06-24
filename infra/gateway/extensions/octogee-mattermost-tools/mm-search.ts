@@ -3,7 +3,7 @@
  * Spec §4.1.
  */
 
-import type { MmClient } from "./mm-client.js";
+import { asMmJsonObject, type MmClient, type MmJsonObject } from "./mm-client.js";
 import type { MmChannelMeta, MmPostsBundle, MmUserMeta } from "./shape.js";
 
 export type SearchScope = "current_channel" | "all_visible";
@@ -91,10 +91,11 @@ export async function mmSearch(
     },
   );
   const tookMs = Date.now() - t0;
+  const rawObject = asMmJsonObject(raw);
 
   const bundle: MmPostsBundle = {
-    posts: (raw && typeof raw === "object" ? raw.posts : null) ?? {},
-    order: Array.isArray(raw?.order) ? raw.order : [],
+    posts: postsFromRaw(rawObject),
+    order: orderFromRaw(rawObject),
   };
 
   // Spec §10 #4: MM 11.5 `/posts/search` can return posts without embedded
@@ -114,4 +115,15 @@ export async function mmSearch(
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function postsFromRaw(raw: MmJsonObject | null): MmPostsBundle["posts"] {
+  const posts = raw?.posts;
+  return posts && typeof posts === "object" && !Array.isArray(posts)
+    ? (posts as MmPostsBundle["posts"])
+    : {};
+}
+
+function orderFromRaw(raw: MmJsonObject | null): string[] {
+  return Array.isArray(raw?.order) ? (raw.order as string[]) : [];
 }

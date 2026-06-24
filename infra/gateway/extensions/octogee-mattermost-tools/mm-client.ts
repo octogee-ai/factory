@@ -20,8 +20,16 @@ export class MmFetchError extends Error {
 }
 
 export interface MmClient {
-  get: (path: string, pat: string) => Promise<any>;
-  post: (path: string, pat: string, body: unknown) => Promise<any>;
+  get: (path: string, pat: string) => Promise<unknown>;
+  post: (path: string, pat: string, body: unknown) => Promise<unknown>;
+}
+
+export type MmJsonObject = Record<string, unknown>;
+
+export function asMmJsonObject(value: unknown): MmJsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as MmJsonObject)
+    : null;
 }
 
 /**
@@ -40,7 +48,12 @@ export function createMmClient(baseUrl: string, opts: { timeoutMs?: number } = {
   // backtracking-prone even though the anchor makes it linear).
   const trimmed = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
 
-  async function call(method: "GET" | "POST", path: string, pat: string, body?: unknown): Promise<any> {
+  async function call(
+    method: "GET" | "POST",
+    path: string,
+    pat: string,
+    body?: unknown,
+  ): Promise<unknown> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
@@ -56,10 +69,11 @@ export function createMmClient(baseUrl: string, opts: { timeoutMs?: number } = {
       });
       const text = await res.text();
       if (!res.ok) {
+        const bodySuffix = text ? `: ${text.slice(0, 200)}` : "";
         throw new MmFetchError(
           res.status,
           path,
-          `${method} ${path} → ${res.status} ${res.statusText}${text ? `: ${text.slice(0, 200)}` : ""}`,
+          `${method} ${path} → ${res.status} ${res.statusText}${bodySuffix}`,
         );
       }
       if (!text) return null;

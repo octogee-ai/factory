@@ -3,7 +3,7 @@
  * Spec §4.2.
  */
 
-import type { MmClient } from "./mm-client.js";
+import { asMmJsonObject, type MmClient, type MmJsonObject } from "./mm-client.js";
 import type { MmChannelMeta, MmPost, MmPostsBundle } from "./shape.js";
 
 export type Direction = "latest" | "before" | "after" | "unread" | "around";
@@ -58,10 +58,11 @@ export async function mmHistory(
   const t0 = Date.now();
   const raw = await client.get(path, pat);
   const tookMs = Date.now() - t0;
+  const rawObject = asMmJsonObject(raw);
 
   let bundle: MmPostsBundle = {
-    posts: (raw && typeof raw === "object" ? raw.posts : null) ?? {},
-    order: Array.isArray(raw?.order) ? raw.order : [],
+    posts: postsFromRaw(rawObject),
+    order: orderFromRaw(rawObject),
   };
 
   // Apply from_user filter (spec §4.2 — client-side).
@@ -88,7 +89,7 @@ export async function mmHistory(
     channelMeta: undefined,
     nextCursor: oldest, // pass with direction=before to page further back
     prevCursor: newest,
-    hasMore: typeof raw?.has_next === "boolean" ? raw.has_next : orderOldestFirst.length >= limit,
+    hasMore: typeof rawObject?.has_next === "boolean" ? rawObject.has_next : orderOldestFirst.length >= limit,
     raw: { tookMs },
   };
 }
@@ -165,4 +166,15 @@ function filterByUser(bundle: MmPostsBundle, userId: string): MmPostsBundle {
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function postsFromRaw(raw: MmJsonObject | null): MmPostsBundle["posts"] {
+  const posts = raw?.posts;
+  return posts && typeof posts === "object" && !Array.isArray(posts)
+    ? (posts as MmPostsBundle["posts"])
+    : {};
+}
+
+function orderFromRaw(raw: MmJsonObject | null): string[] {
+  return Array.isArray(raw?.order) ? (raw.order as string[]) : [];
 }
