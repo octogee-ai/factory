@@ -3,86 +3,151 @@ import { storage } from "../../lib/db.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 import { withFileTarget } from "../../lib/fileTarget.js";
 import { getManifest } from "../../lib/manifest.js";
+import type { Manifest } from "../../lib/manifest.js";
 import { isOversizeFile } from "../../lib/github.js";
 import { giteaSudoUser, HIDDEN, isTargetPathWritable, pathHasReservedOrHiddenSegment, repoContentsApi } from "./helpers.js";
 
 const router = Router();
 
-router.get("/files", withFileTarget(async (req, res, _next, target) => {
-  const path = (req.query.path as string) ?? "";
-  const bustCache = req.query.nocache === "1";
+export interface RepoContentEntry {
+  name: string;
+  path: string;
+  type: string;
+  size?: number;
+}
 
-  if (path) {
-    const pathError = validateFilePath(path);
-    if (pathError) { res.status(400).json({ error: pathError }); return; }
-    if (pathHasReservedOrHiddenSegment(path)) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
+export interface WorkspaceFileEntry {
+  name: string;
+  path: string;
+  type: "dir" | "file";
+  size: number;
+  source: "git" | "blob";
+  thumbnailUrl?: string;
+}
+
+export interface WorkspaceFilesResponse {
+  files: WorkspaceFileEntry[];
+  readOnly?: boolean;
+}
+
+type ListPathValidation = { ok: true } | { ok: false; status: 400 | 403; error: string };
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function validateListPath(path: string): ListPathValidation {
+  if (!path) return { ok: true };
+
+  const pathError = validateFilePath(path);
+  if (pathError) return { ok: false, status: 400, error: pathError };
+
+  if (pathHasReservedOrHiddenSegment(path)) {
+    return { ok: false, status: 403, error: "Access denied" };
   }
 
-  interface RepoContentEntry {
-    name: string;
-    path: string;
-    type: string;
-    size?: number;
-  }
-  let contents: RepoContentEntry[];
+  return { ok: true };
+}
+
+async function repoContentEntries(
+  target: Parameters<typeof repoContentsApi>[0],
+  path: string,
+): Promise<RepoContentEntry[] | null> {
   try {
     const raw = await repoContentsApi(target, path);
-    contents = (Array.isArray(raw) ? raw : [raw]) as RepoContentEntry[];
+    return (Array.isArray(raw) ? raw : [raw]) as RepoContentEntry[];
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("404")) { res.json({ files: [] }); return; }
+    if (errorMessage(e).includes("404")) return null;
     throw e;
   }
+}
 
-  interface FileEntry {
-    name: string;
-    path: string;
-    type: "dir" | "file";
-    size: number;
-    source: "git" | "blob";
-    thumbnailUrl?: string;
-  }
-  const gitFiles: FileEntry[] = contents
-    .filter((f) => !HIDDEN.has(f.name) && !f.name.startsWith("."))
-    .map((f) => ({
-      name: f.name,
-      path: f.path,
-      type: f.type === "dir" ? ("dir" as const) : ("file" as const),
-      size: f.size ?? 0,
-      source: "git" as const,
+export function repoFileEntries(contents: RepoContentEntry[]): WorkspaceFileEntry[] {
+  return contents
+    .filter((file) => !HIDDEN.has(file.name) && !file.name.startsWith("."))
+    .map((file) => ({
+      name: file.name,
+      path: file.path,
+      type: file.type === "dir" ? "dir" : "file",
+      size: file.size ?? 0,
+      source: "git",
     }));
+}
 
-  if (target.provider !== "github") {
-    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName, bustCache);
-    const gitPaths = new Set(gitFiles.map((f) => f.path));
-    const prefix = path ? path + "/" : "";
+export function blobFileEntries(
+  manifest: Manifest,
+  path: string,
+  gitPaths: Set<string>,
+): WorkspaceFileEntry[] {
+  const prefix = path ? `${path}/` : "";
+  const entries: WorkspaceFileEntry[] = [];
 
-    for (const [manifestPath, entry] of Object.entries(manifest)) {
-      if (!manifestPath.startsWith(prefix)) continue;
-      const relative = manifestPath.slice(prefix.length);
-      if (relative.includes("/")) continue;
-      if (gitPaths.has(manifestPath)) continue;
+  for (const [manifestPath, entry] of Object.entries(manifest)) {
+    if (!manifestPath.startsWith(prefix) || gitPaths.has(manifestPath)) continue;
 
-      gitFiles.push({
-        name: relative,
-        path: manifestPath,
-        type: "file",
-        size: entry.size ?? 0,
-        source: "blob" as const,
-        ...(entry.thumbnailUrl ? { thumbnailUrl: entry.thumbnailUrl } : {}),
-      });
-    }
+    const relative = manifestPath.slice(prefix.length);
+    if (relative.includes("/")) continue;
+
+    entries.push({
+      name: relative,
+      path: manifestPath,
+      type: "file",
+      size: entry.size ?? 0,
+      source: "blob",
+      ...(entry.thumbnailUrl ? { thumbnailUrl: entry.thumbnailUrl } : {}),
+    });
   }
 
-  const files = gitFiles.sort((a, b) => {
+  return entries;
+}
+
+export function sortWorkspaceFiles(files: WorkspaceFileEntry[]): WorkspaceFileEntry[] {
+  return [...files].sort((a, b) => {
     if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
+}
 
-  res.json({ files, readOnly: target.provider !== "gitea" });
+async function workspaceFileEntries(
+  target: Parameters<typeof repoContentsApi>[0],
+  path: string,
+  bustCache: boolean,
+): Promise<WorkspaceFileEntry[] | null> {
+  const contents = await repoContentEntries(target, path);
+  if (!contents) return null;
+
+  const gitFiles = repoFileEntries(contents);
+  if (target.provider === "github") return sortWorkspaceFiles(gitFiles);
+
+  const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName, bustCache);
+  const gitPaths = new Set(gitFiles.map((file) => file.path));
+  return sortWorkspaceFiles([
+    ...gitFiles,
+    ...blobFileEntries(manifest, path, gitPaths),
+  ]);
+}
+
+export async function workspaceFilesResponse(
+  target: Parameters<typeof repoContentsApi>[0],
+  path: string,
+  bustCache: boolean,
+): Promise<WorkspaceFilesResponse> {
+  const files = await workspaceFileEntries(target, path, bustCache);
+  if (!files) return { files: [] };
+
+  return { files, readOnly: target.provider !== "gitea" };
+}
+
+router.get("/files", withFileTarget(async (req, res, _next, target) => {
+  const path = (req.query.path as string) ?? "";
+  const bustCache = req.query.nocache === "1";
+  const pathValidation = validateListPath(path);
+  if (!pathValidation.ok) {
+    res.status(pathValidation.status).json({ error: pathValidation.error });
+    return;
+  }
+
+  res.json(await workspaceFilesResponse(target, path, bustCache));
 }, { allowWorkspaceMembers: true }));
 
 router.get("/file", withFileTarget(async (req, res, _next, target) => {
