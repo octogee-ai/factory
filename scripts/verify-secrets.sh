@@ -77,6 +77,7 @@ REQUIRED_SECRETS=(
   "stripe-secrets"          # gateway-edge: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
   "gitea-token"             # octogee-api + glm-controller
   "approval-signing"        # chat-proxy: OCTOGEE_APPROVAL_SIGNING_SECRET (HMAC for approval buttons)
+  "byot-sync-internal"      # octogee-api → gateway-edge BYOT sync HMAC
 )
 
 # ── Critical keys within secrets ────────────────────────────────────────────
@@ -98,6 +99,7 @@ REQUIRED_KEYS=(
   "social-notification-bearer:bearer-token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-anthropic:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "byot-sync-internal:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
 )
 
 echo ""

@@ -10,16 +10,46 @@ import {
 } from "../../billing/provider-key-format.js";
 import { probeProviderKey } from "../../billing/provider-probe.js";
 import { writeSecret, archiveSecret } from "../../../../scripts/lib/secret-manager.js";
-import { triggerSecretsReload } from "../../../../scripts/lib/byot-sync-runtime.js";
 import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers.js";
+import { triggerGatewayByotSync } from "../../lib/byot-sync-trigger.js";
 
 const router = Router();
 
-function triggerByotSecretsReload(action: "save" | "remove"): void {
-  triggerSecretsReload().catch((err: unknown) => {
-    logger.warn(
-      `[billing] BYOT post-${action} secrets reload failed (will self-correct via provisioner): ${err}`,
-    );
+function gatewayIdFromRequest(req: Request): string | null {
+  const gatewayId = (req.user as { provisioning?: { openclaw?: { gatewayId?: unknown } } } | undefined)
+    ?.provisioning?.openclaw?.gatewayId;
+  return typeof gatewayId === "string" && gatewayId.length > 0 ? gatewayId : null;
+}
+
+function tierFieldsFromRequest(req: Request): Record<string, unknown> {
+  const user = req.user ?? {};
+  return {
+    ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
+    ...(typeof user.selectedTier === "string" ? { selectedTier: user.selectedTier } : {}),
+    ...(typeof user.trialExpired === "boolean" ? { trialExpired: user.trialExpired } : {}),
+  };
+}
+
+function triggerByotSync(args: {
+  req: Request;
+  slug: string;
+  byotActive: boolean;
+  byot?: { provider: Provider; baseUrl?: string; model?: string };
+}): void {
+  const gatewayId = gatewayIdFromRequest(args.req);
+  if (!gatewayId) {
+    logger.warn(`[billing] BYOT sync trigger skipped for ${args.slug}: missing gatewayId`);
+    return;
+  }
+  triggerGatewayByotSync({
+    gatewayId,
+    userData: {
+      byotActive: args.byotActive,
+      username: args.slug,
+      provisioning: { openclaw: { status: "complete" } },
+      ...tierFieldsFromRequest(args.req),
+      ...(args.byot ? { systemConfig: { byot: args.byot } } : {}),
+    },
   });
 }
 
@@ -146,9 +176,16 @@ await db.collection("users").doc(uid).update({
     });
 
     logger.info(`[billing] BYOT key saved for ${uid} provider=${provider} (${fingerprint}) version=${versionName}`);
-    // Fire-and-forget: signal the gateway to reload secrets immediately rather than
-    // waiting for the async Firestore-watcher → provisioner path to catch up.
-    triggerByotSecretsReload("save");
+    triggerByotSync({
+      req,
+      slug,
+      byotActive: true,
+      byot: {
+        provider,
+        ...(body.baseUrl ? { baseUrl: body.baseUrl } : {}),
+        ...(body.model ? { model: body.model } : {}),
+      },
+    });
     res.json({
       success: true,
       provider,
@@ -187,7 +224,7 @@ await db.collection("users").doc(uid).collection("system").doc("config").set(
     });
 
     logger.info(`[billing] BYOT key removed for ${uid} provider=${provider} (disabled ${disabledCount} SM version(s))`);
-    triggerByotSecretsReload("remove");
+    triggerByotSync({ req, slug, byotActive: false });
     res.json({
       success: true,
       message: "BYOT key removed. Reverting to platform billing.",

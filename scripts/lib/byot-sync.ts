@@ -33,6 +33,13 @@ type ByotFile = (typeof BYOT_FILES)[number];
 const BYOT_MARKER = ".byot-managed";
 
 export type ByotInput = ByotConfigInput;
+export interface FreeTierCoachModelInput {
+  slug: string;
+  model: typeof PLATFORM_FALLBACK_MODEL;
+  source: "free-tier";
+}
+
+export type CoachModelInput = ByotInput | FreeTierCoachModelInput;
 
 // A per-agent BYOS model override. codex (a plugin) pins agentRuntime:{id:codex}
 // to route a gpt-5.5 override through the codex harness; claude-cli (a core
@@ -71,9 +78,21 @@ const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
 const PLATFORM_FALLBACK_MODEL = "anthropic/claude-haiku-4-5";
 
 export function byosCoachConfigPatch(
-  input: ByotInput | null,
+  input: CoachModelInput | null,
 ): CoachModelPatch | null {
   if (!input) return null;
+  if ("source" in input) {
+    return {
+      agents: {
+        list: [
+          {
+            id: agentIdForSlug(input.slug),
+            model: { primary: input.model, fallbacks: [] },
+          },
+        ],
+      },
+    };
+  }
   const cfg = buildByotConfigForProvider(input);
   if (cfg.agentModelOverride == null) return null;
   const patch: CoachModelPatch = {
@@ -124,25 +143,47 @@ export function coachFullAgentList(
 export function deriveDesiredByotState(userData: {
   byotActive?: boolean;
   username?: string;
+  tier?: string;
+  selectedTier?: string;
+  trialExpired?: boolean;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
-}): { enabled: boolean; input: ByotInput | null } {
+}): { enabled: boolean; input: ByotInput | null; coachModelInput: CoachModelInput | null } {
   const status = userData.provisioning?.openclaw?.status;
   const slug = userData.username;
-  if (!userData.byotActive || !slug || status !== "complete") {
-    return { enabled: false, input: null };
+  if (!slug || status !== "complete") {
+    return { enabled: false, input: null, coachModelInput: null };
   }
-  const cfg = userData.systemConfig?.byot;
-
-const p = cfg?.provider;
-  const provider: Provider =
-    p && Object.prototype.hasOwnProperty.call(PROVIDERS, p)
-      ? (p as Provider)
-      : "anthropic";
+  if (!userData.byotActive) {
+    return { enabled: false, input: null, coachModelInput: freeTierCoachModelInput(slug, userData) };
+  }
+  const input = byotInputForSlug(slug, userData.systemConfig?.byot);
   return {
     enabled: true,
-    input: { slug, provider, baseUrl: cfg?.baseUrl, model: cfg?.model },
+    input,
+    coachModelInput: input,
   };
+}
+
+function freeTierCoachModelInput(
+  slug: string,
+  userData: { tier?: string; selectedTier?: string; trialExpired?: boolean },
+): FreeTierCoachModelInput | null {
+  const freeTier =
+    userData.trialExpired === true ||
+    userData.tier === "free" ||
+    userData.selectedTier === "free";
+  return freeTier ? { slug, model: PLATFORM_FALLBACK_MODEL, source: "free-tier" } : null;
+}
+
+function byotInputForSlug(
+  slug: string,
+  cfg: { provider?: string; baseUrl?: string; model?: string } | undefined,
+): ByotInput {
+  const provider = cfg?.provider && Object.prototype.hasOwnProperty.call(PROVIDERS, cfg.provider)
+    ? (cfg.provider as Provider)
+    : "anthropic";
+  return { slug, provider, baseUrl: cfg?.baseUrl, model: cfg?.model };
 }
 
 function writeAtomic(target: string, content: string): void {
@@ -157,45 +198,35 @@ function removeIfExists(target: string): boolean {
   return true;
 }
 
-export function applyByotState(
+function removeManagedByotState(
   slug: string,
-  input: ByotInput | null,
-
-agentsDir: string = AGENTS_DIR,
+  dir: string,
+  markerPath: string,
+  filePath: (f: string) => string,
 ): boolean {
-  const dir = agentDirForSlug(slug, agentsDir);
-  const filePath = (f: string) => path.join(dir, f);
-  const markerPath = filePath(BYOT_MARKER);
-
-  if (!input) {
-    if (!fs.existsSync(markerPath)) {
-      return false;
-    }
-    let changed = false;
-    for (const f of BYOT_FILES) changed = removeIfExists(filePath(f)) || changed;
-    // Clear the SQLite-backed auth-profiles row (no-op if the row or DB is
-    // absent). The marker presence is the canonical "BYOT was on" signal,
-    // so we don't need to know whether the row was actually there to log.
-    if (readAuthProfileStore(dir) !== null) {
-      deleteAuthProfileStore(dir);
-      changed = true;
-    }
-    changed = removeIfExists(markerPath) || changed;
-    if (changed) log(`[byot-sync] ${slug}: removed BYOT files (BYOT off)`);
-    return changed;
+  if (!fs.existsSync(markerPath)) return false;
+  let changed = false;
+  for (const f of BYOT_FILES) changed = removeIfExists(filePath(f)) || changed;
+  if (readAuthProfileStore(dir) !== null) {
+    deleteAuthProfileStore(dir);
+    changed = true;
   }
+  changed = removeIfExists(markerPath) || changed;
+  if (changed) log(`[byot-sync] ${slug}: removed BYOT files (BYOT off)`);
+  return changed;
+}
 
-  if (!fs.existsSync(dir)) {
-    log(`⚠ [byot-sync] ${slug}: agent dir missing (provisioning incomplete?) — skipping BYOT write`);
-    return false;
-  }
-
+function desiredByotFiles(input: ByotInput): Record<ByotFile, string | null> {
   const cfg = buildByotConfigForProvider(input);
-
-  const desired: Record<ByotFile, string | null> = {
-    "models.json":        cfg.models        ? JSON.stringify(cfg.models, null, 2)        : null,
+  return {
+    "models.json": cfg.models ? JSON.stringify(cfg.models, null, 2) : null,
   };
+}
 
+function writeDesiredByotFiles(
+  desired: Record<ByotFile, string | null>,
+  filePath: (f: string) => string,
+): boolean {
   let changed = false;
   for (const f of BYOT_FILES) {
     const target = filePath(f);
@@ -204,27 +235,50 @@ agentsDir: string = AGENTS_DIR,
 
     if (want == null) {
       changed = removeIfExists(target) || changed;
-      continue;
-    }
-    if (existing === want) continue;
-    writeAtomic(target, want);
-    changed = true;
-  }
-
-  // auth-profiles → SQLite. OAuth providers (codex) manage their own
-  // auth-profiles via openclaw; skip them here, same as the JSON era.
-  if (!isOauthProvider(input.provider)) {
-    if (cfg.authProfiles) {
-      const before = readAuthProfileStore(dir);
-      if (JSON.stringify(before) !== JSON.stringify(cfg.authProfiles)) {
-        writeAuthProfileStore(dir, cfg.authProfiles);
-        changed = true;
-      }
-    } else if (readAuthProfileStore(dir) !== null) {
-      deleteAuthProfileStore(dir);
+    } else if (existing !== want) {
+      writeAtomic(target, want);
       changed = true;
     }
   }
+  return changed;
+}
+
+function syncAuthProfileStore(dir: string, input: ByotInput): boolean {
+  if (isOauthProvider(input.provider)) return false;
+  const cfg = buildByotConfigForProvider(input);
+  if (cfg.authProfiles) {
+    const before = readAuthProfileStore(dir);
+    if (JSON.stringify(before) !== JSON.stringify(cfg.authProfiles)) {
+      writeAuthProfileStore(dir, cfg.authProfiles);
+      return true;
+    }
+    return false;
+  }
+  if (readAuthProfileStore(dir) === null) return false;
+  deleteAuthProfileStore(dir);
+  return true;
+}
+
+export function applyByotState(
+  slug: string,
+  input: ByotInput | null,
+  agentsDir: string = AGENTS_DIR,
+): boolean {
+  const dir = agentDirForSlug(slug, agentsDir);
+  const filePath = (f: string) => path.join(dir, f);
+  const markerPath = filePath(BYOT_MARKER);
+
+  if (!input) {
+    return removeManagedByotState(slug, dir, markerPath, filePath);
+  }
+
+  if (!fs.existsSync(dir)) {
+    log(`⚠ [byot-sync] ${slug}: agent dir missing (provisioning incomplete?) — skipping BYOT write`);
+    return false;
+  }
+
+  let changed = writeDesiredByotFiles(desiredByotFiles(input), filePath);
+  changed = syncAuthProfileStore(dir, input) || changed;
 
   if (!fs.existsSync(markerPath)) {
     writeAtomic(markerPath, JSON.stringify({ managedSince: new Date().toISOString() }) + "\n");

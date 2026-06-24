@@ -17,6 +17,8 @@ import {
 } from "../lib/byosub.js";
 import { resolveUserGateway } from "../lib/user-gateway.js";
 import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
+import { triggerGatewayByotSync } from "../lib/byot-sync-trigger.js";
+import { logger } from "../middleware/logging.js";
 
 const router = Router();
 
@@ -170,6 +172,59 @@ async function flipUnifiedByosSignal(
   await db.collection("users").doc(uid).set({ byotActive: true }, { merge: true });
 }
 
+function slugFromCoachAgentId(agentId: string): string | null {
+  const prefix = "octogee-";
+  const suffix = "-coach";
+  if (!agentId.startsWith(prefix) || !agentId.endsWith(suffix)) return null;
+  return agentId.slice(prefix.length, -suffix.length);
+}
+
+function triggerUnifiedByosSync(args: {
+  gatewayId: string;
+  slug: string;
+  provider: "openai-codex" | "claude-cli";
+}): void {
+  triggerGatewayByotSync({
+    gatewayId: args.gatewayId,
+    userData: {
+      byotActive: true,
+      username: args.slug,
+      provisioning: { openclaw: { status: "complete" } },
+      systemConfig: { byot: { provider: args.provider } },
+    },
+  });
+}
+
+function tierFieldsFromRequest(req: Request): Record<string, unknown> {
+  const user = req.user ?? {};
+  return {
+    ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
+    ...(typeof user.selectedTier === "string" ? { selectedTier: user.selectedTier } : {}),
+    ...(typeof user.trialExpired === "boolean" ? { trialExpired: user.trialExpired } : {}),
+  };
+}
+
+function triggerUnifiedByosOffSync(req: Request, resolved: { gatewayId: string; slug: string }): void {
+  triggerGatewayByotSync({
+    gatewayId: resolved.gatewayId,
+    userData: {
+      byotActive: false,
+      username: resolved.slug,
+      provisioning: { openclaw: { status: "complete" } },
+      ...tierFieldsFromRequest(req),
+    },
+  });
+}
+
+function triggerUnifiedByosSyncForFlow(flow: FlowDoc, provider: "openai-codex"): void {
+  const slug = slugFromCoachAgentId(flow.agentId);
+  if (!slug) {
+    logger.warn(`BYOS sync trigger skipped for malformed agentId=${flow.agentId}`);
+    return;
+  }
+  triggerUnifiedByosSync({ gatewayId: flow.gatewayId, slug, provider });
+}
+
 // #1141 — let the Builder clear a connected BYOS credential. The inverse
 // of /capture's unified-signal flip + glmGateways.byosub ref-write. The
 // Secret Manager secret is intentionally NOT destroyed (disconnect-only,
@@ -206,6 +261,7 @@ router.post(
         } catch (err) {
           if ((err as { code?: number } | null)?.code !== 5) throw err;
         }
+        triggerUnifiedByosOffSync(req, resolved);
       }
 
       res.json({ ok: true });
@@ -266,6 +322,11 @@ router.post(
           { merge: true },
         );
       await flipUnifiedByosSignal(uid, "claude-cli");
+      triggerUnifiedByosSync({
+        gatewayId: resolved.gatewayId,
+        slug: resolved.slug,
+        provider: "claude-cli",
+      });
       res.json({ ok: true, secretName });
     } catch (e) {
       next(e);
@@ -299,6 +360,7 @@ router.post(
 if (flow.consumedAt) {
 
 await flipUnifiedByosSignal(flow.uid, "openai-codex");
+        triggerUnifiedByosSyncForFlow(flow, "openai-codex");
         res.json({ ok: true, secretName, alreadyConsumed: true });
         return;
       }
@@ -330,6 +392,7 @@ await flipUnifiedByosSignal(flow.uid, "openai-codex");
         );
 
 await flipUnifiedByosSignal(flow.uid, "openai-codex");
+      triggerUnifiedByosSyncForFlow(flow, "openai-codex");
 
 await db
         .collection("byosubFlows")

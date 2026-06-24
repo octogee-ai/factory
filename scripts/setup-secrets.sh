@@ -231,6 +231,26 @@ if [[ -z "$APPROVAL_SIGNING_SECRET" ]]; then
 fi
 ksecret approval-signing --from-literal=secret="$APPROVAL_SIGNING_SECRET"
 
+# ── 2c. BYOT sync internal signing secret ─────────────────────────────────
+info "byot-sync-internal"
+BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-${ENV}"
+[[ "$ENV" == "custom" ]] && BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-custom-${CUSTOM_NS}"
+BYOT_SYNC_INTERNAL_SECRET=$(sm_get "$BYOT_SYNC_INTERNAL_SM_KEY" octogee 2>/dev/null || echo "")
+if [[ -z "$BYOT_SYNC_INTERNAL_SECRET" ]]; then
+  BYOT_SYNC_INTERNAL_SECRET=$(openssl rand -hex 32)
+  info "  Generated new BYOT sync signing secret — saving to Secret Manager..."
+  if echo -n "$BYOT_SYNC_INTERNAL_SECRET" | gcloud secrets create "$BYOT_SYNC_INTERNAL_SM_KEY" \
+       --data-file=- --project=octogee \
+       --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
+    :
+  else
+    echo -n "$BYOT_SYNC_INTERNAL_SECRET" | gcloud secrets versions add "$BYOT_SYNC_INTERNAL_SM_KEY" \
+      --data-file=- --project=octogee \
+      || fail "Could not persist BYOT sync signing secret to Secret Manager (key=${BYOT_SYNC_INTERNAL_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
+  fi
+fi
+ksecret byot-sync-internal --from-literal=secret="$BYOT_SYNC_INTERNAL_SECRET"
+
 # ── 3. Gitea admin ────────────────────────────────────────────────────────
 info "gitea-admin"
 GITEA_ADMIN_PASS=$(sm_get "gitea-admin-password-${ENV}" octogee 2>/dev/null || echo "")

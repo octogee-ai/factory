@@ -4,7 +4,7 @@ import {
   byosCoachConfigPatch,
   coachFullAgentList,
   deriveDesiredByotState,
-  type ByotInput,
+  type CoachModelInput,
 } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { internalFetch } from "./internal-fetch.js";
@@ -21,7 +21,7 @@ import { OPENCLAW_DIR, isOperatorGateway, log, usesLlmBrokerToken } from "./conf
 const BYOT_RUNTIME_BOOT_PATIENCE_MS = 120_000;
 
 export async function applyCoachModelPatch(
-  input: ByotInput | null,
+  input: CoachModelInput | null,
   deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
@@ -207,59 +207,84 @@ export interface SyncByotForCustomerDeps {
   triggerSecretsReload?: typeof triggerSecretsReload;
 }
 
+type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
+type SyncByotUserData = Parameters<typeof deriveDesiredByotState>[0];
+
+interface SyncByotActions {
+  applyByotState: typeof applyByotState;
+  restoreOauthStoreForSlug: typeof restoreOauthStoreForSlug;
+  applyCoachModelPatch: typeof applyCoachModelPatch;
+  triggerSecretsReload: typeof triggerSecretsReload;
+}
+
+function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
+  return {
+    applyByotState: deps?.applyByotState ?? applyByotState,
+    restoreOauthStoreForSlug: deps?.restoreOauthStoreForSlug ?? restoreOauthStoreForSlug,
+    applyCoachModelPatch: deps?.applyCoachModelPatch ?? applyCoachModelPatch,
+    triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
+  };
+}
+
+function isBrokerResolvedAnthropic(
+  desired: DesiredByotState,
+  usesBrokerToken: boolean,
+): boolean {
+  return usesBrokerToken && desired.input?.provider === "anthropic";
+}
+
+async function clearBrokerResolvedAnthropic(
+  slug: string,
+  actions: SyncByotActions,
+): Promise<void> {
+  const changed = actions.applyByotState(slug, null);
+  log(
+    `[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`,
+  );
+  if (changed) await actions.triggerSecretsReload();
+}
+
+async function restoreOauthIfNeeded(
+  slug: string,
+  desired: DesiredByotState,
+  actions: SyncByotActions,
+): Promise<OauthStoreRestoreResult> {
+  const provider = desired.input?.provider;
+  if (!provider || !isOauthProvider(provider)) return { restored: false, present: true };
+  return actions.restoreOauthStoreForSlug(slug);
+}
+
+async function syncStandardByotState(
+  slug: string,
+  desired: DesiredByotState,
+  actions: SyncByotActions,
+): Promise<void> {
+  const changed = actions.applyByotState(slug, desired.input);
+  const restore = await restoreOauthIfNeeded(slug, desired, actions);
+  const patched = restore.present && desired.coachModelInput
+    ? await actions.applyCoachModelPatch(desired.coachModelInput)
+    : false;
+
+  if (changed || restore.restored || patched) await actions.triggerSecretsReload();
+}
+
 export async function syncByotForCustomer(
-  userData: {
-    byotActive?: boolean;
-    username?: string;
-    provisioning?: { openclaw?: { status?: string } };
-    systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
-  },
+  userData: SyncByotUserData,
   deps?: SyncByotForCustomerDeps,
 ): Promise<void> {
   const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
   const usesBrokerToken = deps?.usesLlmBrokerToken ?? usesLlmBrokerToken;
-
-  const applyByotStateFn = deps?.applyByotState ?? applyByotState;
-  const restoreOauthFn = deps?.restoreOauthStoreForSlug ?? restoreOauthStoreForSlug;
-  const applyCoachModelPatchFn = deps?.applyCoachModelPatch ?? applyCoachModelPatch;
-  const triggerSecretsReloadFn = deps?.triggerSecretsReload ?? triggerSecretsReload;
+  const actions = syncActions(deps);
 
   const desired = deriveDesiredByotState(userData);
   const slug = userData.username;
   if (!slug) return;
 
-  if (
-    usesBrokerToken() &&
-    (!desired.input || desired.input.provider === "anthropic")
-  ) {
-    const changed = applyByotStateFn(slug, null);
-    if (desired.input?.provider === "anthropic") {
-      log(
-        `[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`,
-      );
-    }
-    if (changed) await triggerSecretsReloadFn();
+  if (isBrokerResolvedAnthropic(desired, usesBrokerToken())) {
+    await clearBrokerResolvedAnthropic(slug, actions);
     return;
   }
 
   if (isOp()) return;
-
-  const changed = applyByotStateFn(slug, desired.input);
-
-  const provider = desired.input?.provider;
-  const isOauth = Boolean(provider && isOauthProvider(provider));
-  const restore = isOauth ? await restoreOauthFn(slug) : null;
-
-  // OAuth subscriptions (codex / claude-cli) would pin the coach to a
-  // credential-less harness if patched before the credential materializes — a
-  // missing byosub ref or a transient Secret Manager read leaves the coach
-  // broken with no platform-key fallback. Only patch when the credential is
-  // present (restored now or healthy on disk); otherwise leave the coach on the
-  // platform key and let a later sync complete the swap.
-  const credentialPresent = !isOauth || restore!.present;
-  const patched = credentialPresent
-    ? await applyCoachModelPatchFn(desired.input)
-    : false;
-
-  if (changed || restore?.restored || patched) await triggerSecretsReloadFn();
+  await syncStandardByotState(slug, desired, actions);
 }

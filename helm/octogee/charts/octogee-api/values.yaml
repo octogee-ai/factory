@@ -124,6 +124,10 @@ secrets:
     secretName: social-notification-bearer
     secretKey: bearer-token
     optional: true
+  - envName: BYOT_SYNC_INTERNAL_SIGNING_SECRET
+    secretName: byot-sync-internal
+    secretKey: secret
+    optional: false
   - envName: INVITE_SECRET
     secretName: invite-secret
     secretKey: secret

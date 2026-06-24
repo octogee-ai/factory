@@ -92,6 +92,36 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     ).toBe(false);
   });
 
+  it("free post-trial non-BYOK derives a Haiku coach-model patch without local BYOT materialization", () => {
+    const desired = deriveDesiredByotState({
+      ...ON,
+      byotActive: false,
+      tier: "free",
+      selectedTier: "free",
+      trialExpired: true,
+    });
+    expect(desired.enabled).toBe(false);
+    expect(desired.input).toBeNull();
+    expect(desired.coachModelInput).toEqual({
+      slug: "tester-70",
+      model: "anthropic/claude-haiku-4-5",
+      source: "free-tier",
+    });
+  });
+
+  it("non-BYOK trial coach keeps the template Sonnet default (no patch)", () => {
+    const desired = deriveDesiredByotState({
+      ...ON,
+      byotActive: false,
+      tier: "trial",
+      selectedTier: "trial",
+      trialExpired: false,
+    });
+    expect(desired.enabled).toBe(false);
+    expect(desired.input).toBeNull();
+    expect(desired.coachModelInput).toBeNull();
+  });
+
   it("unknown/absent provider falls back to anthropic (api_key default)", () => {
     expect(deriveDesiredByotState({ ...ON }).input).toEqual({
       slug: "tester-70",
@@ -352,6 +382,18 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "anthropic" })).toBeNull();
   });
 
+  it("free-tier platform baseline → Haiku primary with no BYOK credential profile", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        model: "anthropic/claude-haiku-4-5",
+        source: "free-tier",
+      }),
+    ).toEqual({
+      agents: { list: [{ id, model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] } }] },
+    });
+  });
+
   it("openai-codex → coach model + agentRuntime:codex + enables the codex plugin with a SAFE (non-YOLO) sandbox so it runs on a standard shared gateway", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       agents: {
@@ -588,6 +630,68 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
 });
 
 describe("standard gateway — BYOS materialization", () => {
+  it("free post-trial non-BYOK customer removes local BYOT state, patches Haiku, and reloads", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        tier: "free",
+        selectedTier: "free",
+        trialExpired: true,
+      },
+      {
+        usesLlmBrokerToken: () => true,
+        isOperatorGateway: () => false,
+        applyByotState: applyByotStateFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
+    expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+      slug: "tester-70",
+      model: "anthropic/claude-haiku-4-5",
+      source: "free-tier",
+    });
+    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("trial non-BYOK customer leaves the template model untouched", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        tier: "trial",
+        selectedTier: "trial",
+        trialExpired: false,
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: applyByotStateFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
+  });
+
   it("broker-token gateway: anthropic BYOT is broker-resolved, not materialized locally", async () => {
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));

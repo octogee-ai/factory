@@ -501,6 +501,16 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
     // from per-customer client secrets, not from a shared K8s secret.
   });
 
+  it("gateway-edge sidecar mounts the dedicated BYOT sync signing secret", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const wsBlock = containerBlock(dep, "gateway-edge");
+
+    expect(wsBlock).toMatch(
+      /name:\s*BYOT_SYNC_INTERNAL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*byot-sync-internal\s*\n\s*key:\s*secret/,
+    );
+  });
+
   it("operator gateway-edge sidecar omits platform secret refs but keeps the per-gateway token", () => {
     const out = helmTemplate("octogee-gw-default", {
       profile: "operator",

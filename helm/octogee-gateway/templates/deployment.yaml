@@ -456,6 +456,11 @@ spec:
                 secretKeyRef:
                   name: approval-signing
                   key: secret
+            - name: BYOT_SYNC_INTERNAL_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: byot-sync-internal
+                  key: secret
             # Same per-gateway K8s secret as init + gateway container (see
             # init container env block for the rationale). chat-proxy is
             # folded into this container and needs the same token openclaw
