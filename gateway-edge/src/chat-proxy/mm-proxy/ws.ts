@@ -133,8 +133,8 @@ browserWs.on("message", (data: RawData, isBinary: boolean) => {
           }
           return resolvedId ?? null;
         })
-        .catch((err: Error) => {
-          deps.log(`[mm-proxy/ws] resolveMmUserId rejected: ${err.message}`);
+        .catch((err: unknown) => {
+          deps.log(`[mm-proxy/ws] resolveMmUserId rejected: ${errorToStr(err)}`);
           return null;
         })
         .finally(() => {
@@ -152,16 +152,7 @@ browserWs.on("message", (data: RawData, isBinary: boolean) => {
     inboundChain = inboundChain.then(async () => {
       let effectiveUserId = mmUserId;
       if (!effectiveUserId && pendingMmUserId) {
-        try {
-          effectiveUserId = await Promise.race<string | null>([
-            pendingMmUserId,
-            new Promise<null>((resolve) =>
-              setTimeout(() => resolve(null), ackResolutionTimeoutMs),
-            ),
-          ]);
-        } catch {
-          effectiveUserId = null;
-        }
+        effectiveUserId = await resolvePendingMmUserId(pendingMmUserId, ackResolutionTimeoutMs);
       }
       if (closed || browserWs.readyState !== 1) return;
       const ack = buildAckIfUserPost(data, effectiveUserId ?? mmUserId, now);
@@ -269,6 +260,31 @@ function reasonToStr(reason: unknown): string {
   if (reason == null) return "";
   const str = Buffer.isBuffer(reason) ? reason.toString("utf-8") : String(reason);
   return str.length > 120 ? `${str.slice(0, 120)}…` : str;
+}
+
+function errorToStr(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return reasonToStr(err);
+}
+
+async function resolvePendingMmUserId(
+  pendingMmUserId: Promise<string | null>,
+  timeoutMs: number,
+): Promise<string | null> {
+  try {
+    return await Promise.race<string | null>([
+      pendingMmUserId,
+      timeoutWithNull(timeoutMs),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+function timeoutWithNull(timeoutMs: number): Promise<null> {
+  return new Promise<null>((resolve) => {
+    setTimeout(() => resolve(null), timeoutMs);
+  });
 }
 
 function parsePostField(eventData: unknown): MmPostShape | null {

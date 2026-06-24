@@ -412,6 +412,32 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
     expect(authLines).toHaveLength(1);
   });
 
+  it("logs non-Error auth resolution rejections with the rejection reason", async () => {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(1);
+    upstream.readyState = 1;
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => {
+          throw "token lookup failed";
+        },
+        openUpstream: () => upstream as unknown as WebSocket,
+      },
+      browser as unknown as WebSocket,
+    );
+    upstream.emit("open");
+
+    browser.emit("message", authFrame);
+    await tickN(5);
+
+    expect(log).toHaveBeenCalledWith(
+      "[mm-proxy/ws] resolveMmUserId rejected: token lookup failed",
+    );
+  });
+
   it("logs upstream close with code + reason + mmUserId (the flap signal)", () => {
     const browser = makeFakeWs(1);
     const upstream = makeFakeWs(1);
