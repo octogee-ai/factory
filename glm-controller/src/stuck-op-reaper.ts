@@ -38,8 +38,15 @@ export async function runStuckOpReaperTick(
     const data = doc.data() as Operation | undefined;
     if (!data) continue;
 
-const anchorMs = readMillis(data.startedAt) ?? readMillis(data.createdAt);
-    if (anchorMs == null) continue;
+    // Liveness = the most recent of (last step progress, claim, creation). A long or
+    // resumed roll that is still stepping keeps lastProgressAt fresh and is NOT reaped;
+    // only an op with no progress and no recent (re)claim past the budget is stuck.
+    const anchorMs = Math.max(
+      readMillis(data.lastProgressAt) ?? 0,
+      readMillis(data.startedAt) ?? 0,
+      readMillis(data.createdAt) ?? 0,
+    );
+    if (anchorMs <= 0) continue;
     if (now - anchorMs < deps.stalenessMs) continue;
     stuck.push({ doc, data, ageMin: Math.round((now - anchorMs) / 60_000) });
   }

@@ -130,6 +130,7 @@ import { recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
+import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import {
   ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
   startBuilderActivationLeaseSweeper,
@@ -876,20 +877,26 @@ export function startOperationWorker(deps: ControllerDeps): () => void {
   return unsub;
 }
 
+// Op kinds safe to re-drive after a controller restart (idempotent orchestrators).
+// The blue/green rollout is the long, repoint-then-migrate op that strands a pool if
+// abandoned mid-flight; its migrate sub-ops are re-issued by the rollout re-drive, so
+// they are intentionally NOT resumed directly.
+const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set(["rollout"]);
+
 async function processOperation(
   op: Operation,
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
-
-let claimed = false;
+  let claimed = false;
   try {
     claimed = await deps.db.runTransaction(async (txn) => {
       const fresh = await txn.get(ref);
       if (!fresh.exists) return false;
       const data = fresh.data() as Operation | undefined;
       if (data?.status !== "pending") return false;
-      txn.update(ref, { status: "running", startedAt: Date.now() });
+      const now = Date.now();
+      txn.update(ref, { status: "running", startedAt: now, lastProgressAt: now });
       return true;
     });
   } catch (err) {
@@ -904,10 +911,56 @@ let claimed = false;
   }
 
   deps.log(`[glm-controller] claim op=${op.id} kind=${op.kind}`);
+  await runClaimedOperation(op, ref, deps);
+}
 
+// Re-adopt an op the previous controller instance left `running` (orphaned by a
+// deploy/restart mid-op) and re-drive it. Bumps the liveness heartbeat so the
+// stuck-op reaper gives the resumed run a fresh budget, and records resumeCount.
+async function reAdoptAndRunOperation(
+  op: Operation,
+  ref: FirebaseFirestore.DocumentReference,
+  deps: ControllerDeps,
+): Promise<void> {
+  let adopted = false;
+  try {
+    adopted = await deps.db.runTransaction(async (txn) => {
+      const fresh = await txn.get(ref);
+      if (!fresh.exists) return false;
+      const data = fresh.data() as Operation | undefined;
+      if (data?.status !== "running") return false;
+      const now = Date.now();
+      txn.update(ref, {
+        startedAt: now,
+        lastProgressAt: now,
+        resumeCount: (typeof data.resumeCount === "number" ? data.resumeCount : 0) + 1,
+      });
+      return true;
+    });
+  } catch (err) {
+    deps.log(
+      `[glm-controller] re-adopt transaction failed op=${op.id}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
+  if (!adopted) {
+    deps.log(`[glm-controller] op=${op.id} no longer running — skip resume`);
+    return;
+  }
+  await runClaimedOperation(op, ref, deps);
+}
+
+// Run an op whose status is already `running` (freshly claimed or re-adopted):
+// invoke its handler, persisting step progress (with a liveness heartbeat) and the
+// terminal result.
+async function runClaimedOperation(
+  op: Operation,
+  ref: FirebaseFirestore.DocumentReference,
+  deps: ControllerDeps,
+): Promise<void> {
   const { ctx, steps } = createOperationContext({
     persist: async (next) => {
-      await ref.update({ steps: next });
+      await ref.update({ steps: next, lastProgressAt: Date.now() });
     },
     log: deps.log,
     opId: op.id,
@@ -1100,6 +1153,22 @@ async function main(): Promise<void> {
 
   await bootstrapGlmGateways(deps);
   await bootstrapDefaultGateway(deps);
+
+  // Resume any op the previous instance left `running` when it exited mid-op (a
+  // deploy/restart redeploys this single-replica controller routinely). Re-driving
+  // the rollout idempotently is what keeps a redeploy from stranding a half-migrated
+  // pool; it runs before the stuck-op reaper's first tick so the re-adopt heartbeat
+  // protects the resumed run from being reaped.
+  resumeOrphanedRunningOps({
+    db,
+    log,
+    resumableKinds: RESUMABLE_OP_KINDS,
+    redrive: (op, ref) => reAdoptAndRunOperation(op, ref, deps),
+  }).catch((err) =>
+    log(
+      `[glm-controller] ⚠ resume-orphaned-ops sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+    ),
+  );
 
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);

@@ -322,6 +322,12 @@ export interface Operation {
   steps: OperationStep[];
   error?: string;
   rolledBack?: boolean;
+  // Heartbeat for the stuck-op reaper: bumped every time a step is reported and on
+  // resume-adoption. Lets a long or resumed roll keep proving liveness so it is reaped
+  // only when progress genuinely stalls, not on absolute age since first claim.
+  lastProgressAt?: number;
+  // Incremented each time a controller re-adopts this op after a restart (observability).
+  resumeCount?: number;
 }
 
 export interface HelmInstanceValue {

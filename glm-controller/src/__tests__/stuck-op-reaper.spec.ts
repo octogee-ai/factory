@@ -8,6 +8,7 @@ interface FakeOpDoc {
     kind?: string;
     startedAt?: number;
     createdAt?: number;
+    lastProgressAt?: number;
   };
   updated?: Record<string, unknown>;
 }
@@ -122,6 +123,50 @@ it("skips ops with no anchor timestamp (defensively — log noise only)", async 
     });
     expect(result).toEqual({ scanned: 1, reaped: 0 });
     expect(ops[0].updated).toBeUndefined();
+  });
+
+  it("does NOT reap a long-running op that is still making progress (fresh lastProgressAt beats an old startedAt)", async () => {
+    const ops: FakeOpDoc[] = [
+      {
+        id: "op-progressing",
+        data: {
+          status: "running",
+          kind: "rollout",
+          startedAt: NOW - 20 * 60_000, // claimed 20m ago (would reap on absolute age)
+          lastProgressAt: NOW - 60_000, // …but a step landed 1m ago
+        },
+      },
+    ];
+    const result = await runStuckOpReaperTick({
+      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      log: vi.fn(),
+      now: () => NOW,
+      stalenessMs: 15 * 60_000,
+    });
+    expect(result).toEqual({ scanned: 1, reaped: 0 });
+    expect(ops[0].updated).toBeUndefined();
+  });
+
+  it("reaps a running op whose progress AND claim are both stale past the budget", async () => {
+    const ops: FakeOpDoc[] = [
+      {
+        id: "op-hung",
+        data: {
+          status: "running",
+          kind: "rollout",
+          startedAt: NOW - 20 * 60_000,
+          lastProgressAt: NOW - 18 * 60_000, // no step in 18m → genuinely stuck
+        },
+      },
+    ];
+    const result = await runStuckOpReaperTick({
+      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      log: vi.fn(),
+      now: () => NOW,
+      stalenessMs: 15 * 60_000,
+    });
+    expect(result).toEqual({ scanned: 1, reaped: 1 });
+    expect(ops[0].updated).toMatchObject({ status: "failed" });
   });
 
   it("reaps multiple stuck ops in a single tick", async () => {
