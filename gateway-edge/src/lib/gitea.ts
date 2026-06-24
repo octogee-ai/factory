@@ -22,15 +22,25 @@ export function getToken(): string {
   return token;
 }
 
-async function giteaFetch(
-  token: string,
-  org: string,
-  path: string,
-  method: string,
-  body: unknown | undefined,
-  allow404: boolean,
-  sudo?: string,
-): Promise<unknown | null> {
+type GiteaFetchOptions = {
+  token: string;
+  org: string;
+  path: string;
+  method: string;
+  body: unknown | undefined;
+  allow404: boolean;
+  sudo?: string;
+};
+
+async function giteaFetch({
+  token,
+  org,
+  path,
+  method,
+  body,
+  allow404,
+  sudo,
+}: GiteaFetchOptions): Promise<unknown | null> {
   // Defense at the impersonation sink: the Sudo header carries a privileged identity,
   // so reject anything that isn't a clean Gitea username (no CRLF/space → no header
   // injection), regardless of how callers derived it.
@@ -64,19 +74,19 @@ async function giteaFetch(
 }
 
 export async function giteaApi(org: string, path: string, method = "GET", body?: unknown): Promise<unknown> {
-  return giteaFetch(getToken(), org, path, method, body, false) as Promise<unknown>;
+  return giteaFetch({ token: getToken(), org, path, method, body, allow404: false }) as Promise<unknown>;
 }
 
 export async function giteaApiAs(token: string, org: string, path: string, method = "GET", body?: unknown): Promise<unknown> {
-  return giteaFetch(token, org, path, method, body, false) as Promise<unknown>;
+  return giteaFetch({ token, org, path, method, body, allow404: false }) as Promise<unknown>;
 }
 
 async function giteaApiAllowNotFound(org: string, path: string, method = "GET", body?: unknown): Promise<unknown | null> {
-  return giteaFetch(getToken(), org, path, method, body, true);
+  return giteaFetch({ token: getToken(), org, path, method, body, allow404: true });
 }
 
 export async function giteaApiAsAllowNotFound(token: string, org: string, path: string, method = "GET", body?: unknown): Promise<unknown | null> {
-  return giteaFetch(token, org, path, method, body, true);
+  return giteaFetch({ token, org, path, method, body, allow404: true });
 }
 
 // First-party impersonation: act on Gitea AS the workspace user via the platform
@@ -91,7 +101,15 @@ export async function giteaApiAsUser(
   method = "GET",
   body?: unknown,
 ): Promise<unknown> {
-  return giteaFetch(getToken(), org, path, method, body, false, sudoUser) as Promise<unknown>;
+  return giteaFetch({
+    token: getToken(),
+    org,
+    path,
+    method,
+    body,
+    allow404: false,
+    sudo: sudoUser,
+  }) as Promise<unknown>;
 }
 
 export async function giteaApiAsUserAllowNotFound(
@@ -101,7 +119,15 @@ export async function giteaApiAsUserAllowNotFound(
   method = "GET",
   body?: unknown,
 ): Promise<unknown | null> {
-  return giteaFetch(getToken(), org, path, method, body, true, sudoUser);
+  return giteaFetch({
+    token: getToken(),
+    org,
+    path,
+    method,
+    body,
+    allow404: true,
+    sudo: sudoUser,
+  });
 }
 
 export async function giteaDeleteRepo(org: string, repo: string): Promise<void> {
