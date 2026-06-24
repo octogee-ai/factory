@@ -38,6 +38,9 @@ import { startReconcileLoop } from "./reconcile-loop.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
 import { mountByosubDeviceAuth } from "./byosub-device-auth-http.js";
+import { createClaudeSsoManager } from "./claude-sso-auth.js";
+import { realClaudeSsoDeps } from "./claude-sso-auth-io.js";
+import { mountClaudeSsoAuth } from "./claude-sso-auth-http.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 
@@ -56,7 +59,15 @@ function registerByosubDeviceAuth(
   const manager = createDeviceAuthManager(
     realDeviceAuthDeps({ openclawDir, internalServiceKey, log: opts.log }),
   );
+  const claudeSsoManager = createClaudeSsoManager(
+    realClaudeSsoDeps({ openclawDir, internalServiceKey, log: opts.log }),
+  );
   mountByosubDeviceAuth(app, { manager, internalServiceKey, log: opts.log });
+  mountClaudeSsoAuth(app, {
+    manager: claudeSsoManager,
+    internalServiceKey,
+    log: opts.log,
+  });
 }
 
 export interface BuildAdapterOptions {

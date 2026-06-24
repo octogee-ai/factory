@@ -94,7 +94,7 @@ async function main(): Promise<void> {
     // trusted-side provisioning mutations go through octogee-api.
     reportState: false,
     enableDeviceAuthRoutes: !operator,
-    internalServiceKey: "",
+    internalServiceKey: process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
   });
 
   const autosaveTimer = startWorkspaceAutosaveLoop(

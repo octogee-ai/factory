@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   byosubSecretName,
   validateCodexCredential,
+  validateClaudeCliCredential,
   validateClaudeCliToken,
+  gatewayClaudeSsoClient,
   gatewayDeviceAuthClient,
   byosubConnectionView,
   isSafeGatewayId,
@@ -87,15 +89,47 @@ describe("validateClaudeCliToken — Claude subscription setup-token (privileged
   });
 });
 
+describe("validateClaudeCliCredential — Claude subscription setup-token or SSO JSON", () => {
+  const ssoCredential = JSON.stringify({
+    claudeAiOauth: {
+      accessToken: "sk-ant-oat01-access",
+      refreshToken: "sk-ant-oat01-refresh",
+      expiresAt: 1_782_344_797_336,
+    },
+  });
+
+  it("accepts legacy setup-token and Claude SSO .credentials.json payloads", () => {
+    expect(validateClaudeCliCredential("sk-ant-oat01-abc")).toEqual({ ok: true });
+    expect(validateClaudeCliCredential(ssoCredential)).toEqual({ ok: true });
+  });
+
+  it("rejects malformed SSO JSON without falling back to setup-token handling", () => {
+    expect(validateClaudeCliCredential('{"claudeAiOauth":{}}').ok).toBe(false);
+    expect(
+      validateClaudeCliCredential(
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "sk-ant-oat01-access",
+            refreshToken: "sk-ant-oat01-refresh",
+            expiresAt: 0,
+          },
+        }),
+      ).ok,
+    ).toBe(false);
+  });
+});
+
 describe("gatewayDeviceAuthClient — addresses the gateway by gatewayId", () => {
   const realFetch = globalThis.fetch;
   beforeEach(() => {
     process.env.INTERNAL_SERVICE_KEY = "k";
     process.env.K8S_NAMESPACE = "octogee";
     delete process.env.GATEWAY_INTERNAL_URL_TEMPLATE;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
   afterEach(() => {
     globalThis.fetch = realFetch;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
 
   it("derives the K8s Service from the bare gatewayId (resource name keeps the octogee-gateway- prefix)", async () => {
@@ -132,6 +166,67 @@ describe("gatewayDeviceAuthClient — addresses the gateway by gatewayId", () =>
     await expect(
       gatewayDeviceAuthClient().start({ gatewayId: "bender", agentId: "a" }),
     ).rejects.toThrow(/502/);
+  });
+});
+
+describe("gatewayClaudeSsoClient — addresses the gateway by gatewayId", () => {
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    process.env.INTERNAL_SERVICE_KEY = "k";
+    process.env.K8S_NAMESPACE = "octogee";
+    delete process.env.GATEWAY_INTERNAL_URL_TEMPLATE;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  });
+
+  it("starts the pod-side Claude SSO manager through the gateway service", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = vi.fn(async (url: any) => {
+      seen.push(String(url));
+      return { ok: true, json: async () => ({ flowId: "f" }) } as any;
+    }) as any;
+    await gatewayClaudeSsoClient().start({
+      gatewayId: "bender",
+      agentId: "octogee-x-coach",
+    });
+    expect(seen[0]).toBe(
+      "http://octogee-gateway-bender.octogee.svc.cluster.local:3003/internal/byosub/claude-sso/start",
+    );
+  });
+
+  it("authenticates the pod-side Claude SSO hop with the per-gateway token", async () => {
+    delete process.env.INTERNAL_SERVICE_KEY;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "gateway-token";
+    const seen: string[] = [];
+    globalThis.fetch = vi.fn(async (_url: any, init: any) => {
+      seen.push(new Headers(init.headers).get("X-Internal-Service-Key") ?? "");
+      return { ok: true, json: async () => ({ flowId: "f" }) } as any;
+    }) as any;
+    await gatewayClaudeSsoClient().start({
+      gatewayId: "bender",
+      agentId: "octogee-x-coach",
+    });
+    expect(seen).toEqual(["gateway-token"]);
+  });
+
+  it("submits the browser code to the pod-side Claude SSO manager", async () => {
+    const seen: Array<{ url: string; body: string | null }> = [];
+    globalThis.fetch = vi.fn(async (url: any, init: any) => {
+      seen.push({ url: String(url), body: init.body ?? null });
+      return { ok: true, json: async () => ({ state: "submitting" }) } as any;
+    }) as any;
+    await gatewayClaudeSsoClient().submit({
+      gatewayId: "bender",
+      flowId: "flow-1",
+      code: "code#state",
+    });
+    expect(seen[0]).toEqual({
+      url: "http://octogee-gateway-bender.octogee.svc.cluster.local:3003/internal/byosub/claude-sso/submit",
+      body: JSON.stringify({ flowId: "flow-1", code: "code#state" }),
+    });
   });
 });
 

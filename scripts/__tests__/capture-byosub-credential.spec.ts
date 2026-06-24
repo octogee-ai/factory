@@ -42,10 +42,10 @@ describe("parseCaptureArgs", () => {
     ).toThrow(/agent/i);
   });
 
-  it("defers --provider=anthropic to Chunk E; rejects unknown providers", () => {
+  it("routes Anthropic subscription capture through the product SSO flow; rejects unknown providers", () => {
     expect(() =>
       parseCaptureArgs(ok.map((a) => (a.startsWith("--provider") ? "--provider=anthropic" : a))),
-    ).toThrow(/anthropic|Chunk E/i);
+    ).toThrow(/Claude SSO|OpenAI auth\.json/i);
     expect(() =>
       parseCaptureArgs(ok.map((a) => (a.startsWith("--provider") ? "--provider=grok" : a))),
     ).toThrow(/provider/i);

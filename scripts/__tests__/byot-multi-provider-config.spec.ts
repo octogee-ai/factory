@@ -323,6 +323,22 @@ describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION coach model (native cla
 describe("buildClaudeCliAuthProfilesStore — claude-cli per-agent OAuth profile from a setup-token", () => {
   const NOW = 1_700_000_000_000;
   const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+  const ssoCredential = JSON.stringify({
+    claudeAiOauth: {
+      accessToken: "sk-ant-oat01-access",
+      refreshToken: "sk-ant-oat01-refresh",
+      expiresAt: 1_782_344_797_336,
+      scopes: [
+        "org:create_api_key",
+        "user:profile",
+        "user:inference",
+        "user:sessions:claude_code",
+        "user:mcp_servers",
+      ],
+      subscriptionType: "max",
+      rateLimitTier: "claude-code-max-20x",
+    },
+  });
 
   it("maps a setup-token bearer into the anthropic:claude-cli OAuthCredential (no refresh — the sub token has none)", () => {
     expect(buildClaudeCliAuthProfilesStore("sk-ant-oat01-abc", NOW)).toEqual({
@@ -339,6 +355,22 @@ describe("buildClaudeCliAuthProfilesStore — claude-cli per-agent OAuth profile
     });
   });
 
+  it("maps Claude SSO .credentials.json into the same per-agent OAuthCredential with refresh", () => {
+    expect(buildClaudeCliAuthProfilesStore(ssoCredential, NOW)).toEqual({
+      version: 1,
+      profiles: {
+        [CLAUDE_CLI_DEFAULT_PROFILE_ID]: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "sk-ant-oat01-access",
+          refresh: "sk-ant-oat01-refresh",
+          expires: 1_782_344_797_336,
+          copyToAgents: true,
+        },
+      },
+    });
+  });
+
   it("CLAUDE_CLI_DEFAULT_PROFILE_ID is the claude-cli profile key", () => {
     expect(CLAUDE_CLI_DEFAULT_PROFILE_ID).toBe("anthropic:claude-cli");
   });
@@ -346,6 +378,18 @@ describe("buildClaudeCliAuthProfilesStore — claude-cli per-agent OAuth profile
   it("fail-loud on an empty token (a useless credential)", () => {
     expect(() => buildClaudeCliAuthProfilesStore("", NOW)).toThrow();
     expect(() => buildClaudeCliAuthProfilesStore("   ", NOW)).toThrow();
+  });
+
+  it("fail-loud on malformed Claude SSO payloads", () => {
+    expect(() => buildClaudeCliAuthProfilesStore('{"claudeAiOauth":{}}', NOW)).toThrow(
+      /accessToken/i,
+    );
+    expect(() =>
+      buildClaudeCliAuthProfilesStore(
+        JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: 0 } }),
+        NOW,
+      ),
+    ).toThrow(/expiresAt/i);
   });
 
   it("expires is stable for a given mint time (1yr out) — not boot-volatile when the same now is threaded", () => {

@@ -9,9 +9,11 @@ import {
 import {
   byosubSecretName,
   validateCodexCredential,
+  validateClaudeCliCredential,
   validateClaudeCliToken,
   coachAgentId,
   gatewayDeviceAuthClient,
+  gatewayClaudeSsoClient,
   byosubConnectionView,
   isSafeGatewayId,
 } from "../lib/byosub.js";
@@ -27,9 +29,7 @@ interface FlowDoc {
   gatewayId: string;
   agentId: string;
   provider: string;
-
-consumedAt?: number;
-  
+  consumedAt?: number;
   expireAt?: number;
 }
 
@@ -48,18 +48,11 @@ router.post(
     try {
       const uid = req.uid!;
       const provider = String((req.body || {}).provider ?? "openai");
-      if (provider === "anthropic") {
-        // Anthropic has no device-auth flow — the Claude subscription is captured
-        // by pasting a `claude setup-token` to POST /byosub/subscription.
+      if (provider !== "openai" && provider !== "anthropic") {
         res.status(400).json({
-          error: "Anthropic Claude subscription uses POST /byosub/subscription (paste a setup-token), not the device-auth /connect flow",
+          error: `Unsupported provider: ${provider}`,
+          supported: ["openai", "anthropic"],
         });
-        return;
-      }
-      if (provider !== "openai") {
-        res
-          .status(400)
-          .json({ error: `Unsupported provider: ${provider}`, supported: ["openai"] });
         return;
       }
       const resolved = await resolveUserGateway(uid);
@@ -71,12 +64,17 @@ router.post(
       }
       const agentId = coachAgentId(resolved.slug);
       try {
-        const out = await gatewayDeviceAuthClient().start({
-          gatewayId: resolved.gatewayId,
-          agentId,
-        });
+        const out = provider === "anthropic"
+          ? await gatewayClaudeSsoClient().start({
+              gatewayId: resolved.gatewayId,
+              agentId,
+            })
+          : await gatewayDeviceAuthClient().start({
+              gatewayId: resolved.gatewayId,
+              agentId,
+            });
 
-await db
+        await db
           .collection("byosubFlows")
           .doc(out.flowId)
           .set({
@@ -90,7 +88,7 @@ await db
         res.json(out);
       } catch (e) {
         res.status(503).json({
-          error: `Gateway device-auth unavailable: ${(e as Error).message}`,
+          error: `Gateway auth flow unavailable: ${(e as Error).message}`,
         });
       }
     } catch (e) {
@@ -106,20 +104,64 @@ router.get(
     try {
       const flow = await readFlow(req.params.flowId as string);
 
-if (!flow || flow.uid !== req.uid!) {
+      if (!flow || flow.uid !== req.uid!) {
         res.status(404).json({ error: "flow not found" });
         return;
       }
       try {
-        const out = await gatewayDeviceAuthClient().status({
-          gatewayId: flow.gatewayId,
-          flowId: req.params.flowId as string,
-        });
+        const flowId = req.params.flowId as string;
+        const out = flow.provider === "anthropic"
+          ? await gatewayClaudeSsoClient().status({
+              gatewayId: flow.gatewayId,
+              flowId,
+            })
+          : await gatewayDeviceAuthClient().status({
+              gatewayId: flow.gatewayId,
+              flowId,
+            });
         res.json(out);
       } catch (e) {
         res
           .status(503)
           .json({ error: `Gateway status unavailable: ${(e as Error).message}` });
+      }
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.post(
+  "/sso/submit",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const b = (req.body || {}) as { flowId?: string; code?: string };
+      if (!b.flowId || typeof b.code !== "string" || !b.code) {
+        res.status(400).json({ error: "flowId and code required" });
+        return;
+      }
+      const flow = await readFlow(b.flowId);
+      if (!flow || flow.uid !== req.uid!) {
+        res.status(404).json({ error: "flow not found" });
+        return;
+      }
+      if (flow.provider !== "anthropic") {
+        res.status(400).json({ error: "flow is not an Anthropic SSO flow" });
+        return;
+      }
+      try {
+        res.json(
+          await gatewayClaudeSsoClient().submit({
+            gatewayId: flow.gatewayId,
+            flowId: b.flowId,
+            code: b.code,
+          }),
+        );
+      } catch (e) {
+        res
+          .status(503)
+          .json({ error: `Gateway Claude SSO unavailable: ${(e as Error).message}` });
       }
     } catch (e) {
       next(e);
@@ -216,7 +258,10 @@ function triggerUnifiedByosOffSync(req: Request, resolved: { gatewayId: string; 
   });
 }
 
-function triggerUnifiedByosSyncForFlow(flow: FlowDoc, provider: "openai-codex"): void {
+function triggerUnifiedByosSyncForFlow(
+  flow: FlowDoc,
+  provider: "openai-codex" | "claude-cli",
+): void {
   const slug = slugFromCoachAgentId(flow.agentId);
   if (!slug) {
     logger.warn(`BYOS sync trigger skipped for malformed agentId=${flow.agentId}`);
@@ -350,21 +395,29 @@ router.post(
         return;
       }
       if (flow.provider !== "openai") {
-        res
-          .status(400)
-          .json({ error: `Unsupported provider: ${flow.provider}` });
-        return;
+        if (flow.provider !== "anthropic") {
+          res
+            .status(400)
+            .json({ error: `Unsupported provider: ${flow.provider}` });
+          return;
+        }
       }
-      const secretName = byosubSecretName(flow.uid, flow.provider);
+      const signalProvider =
+        flow.provider === "anthropic" ? "claude-cli" : "openai-codex";
+      const secretProvider =
+        flow.provider === "anthropic" ? "anthropic" : flow.provider;
+      const secretName = byosubSecretName(flow.uid, secretProvider);
 
-if (flow.consumedAt) {
-
-await flipUnifiedByosSignal(flow.uid, "openai-codex");
-        triggerUnifiedByosSyncForFlow(flow, "openai-codex");
+      if (flow.consumedAt) {
+        await flipUnifiedByosSignal(flow.uid, signalProvider);
+        triggerUnifiedByosSyncForFlow(flow, signalProvider);
         res.json({ ok: true, secretName, alreadyConsumed: true });
         return;
       }
-      const v = validateCodexCredential(b.credential);
+      const v =
+        flow.provider === "anthropic"
+          ? validateClaudeCliCredential(b.credential)
+          : validateCodexCredential(b.credential);
       if (!v.ok) {
         res.status(400).json({ error: `invalid credential: ${v.reason}` });
         return;
@@ -372,7 +425,7 @@ await flipUnifiedByosSignal(flow.uid, "openai-codex");
       await writeSecret({
         name: secretName,
         value: b.credential,
-        labels: { byosub: "true", provider: flow.provider },
+        labels: { byosub: "true", provider: secretProvider },
       });
       await db
         .collection("glmGateways")
@@ -381,9 +434,8 @@ await flipUnifiedByosSignal(flow.uid, "openai-codex");
           {
             byosub: {
               [flow.agentId]: {
-                provider: flow.provider,
+                provider: secretProvider,
                 secretName,
-                
                 status: "connected",
               },
             },
@@ -391,10 +443,10 @@ await flipUnifiedByosSignal(flow.uid, "openai-codex");
           { merge: true },
         );
 
-await flipUnifiedByosSignal(flow.uid, "openai-codex");
-      triggerUnifiedByosSyncForFlow(flow, "openai-codex");
+      await flipUnifiedByosSignal(flow.uid, signalProvider);
+      triggerUnifiedByosSyncForFlow(flow, signalProvider);
 
-await db
+      await db
         .collection("byosubFlows")
         .doc(b.flowId)
         .set({ consumedAt: Date.now() }, { merge: true });
@@ -421,8 +473,7 @@ router.post(
         !isSafeAgentId(b.agentId) ||
         b.state !== "needs_reauth"
       ) {
-
-res.status(400).json({
+        res.status(400).json({
           error: "path-safe gatewayId, path-safe agentId, state:'needs_reauth' required",
         });
         return;

@@ -44,7 +44,9 @@ export function parseCaptureArgs(argv: string[]): CaptureArgs {
     throw new Error(`--agent must match [a-z0-9-]+ — path-safe (got: '${agent}')\n${USAGE}`);
   }
   if (provider === "anthropic") {
-    throw new Error(`--provider=anthropic is deferred to Chunk E\n${USAGE}`);
+    throw new Error(
+      `--provider=anthropic uses the product Claude SSO flow; this tool captures only OpenAI auth.json\n${USAGE}`,
+    );
   }
   if (provider !== "openai") {
     throw new Error(`--provider must be openai (got: '${provider}')\n${USAGE}`);

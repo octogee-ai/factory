@@ -57,10 +57,11 @@ export function validateCodexCredential(
 // distinguishes the subscription from a BYOT key, and routing them differently
 // matters (sub → claude-cli runtime, key → anthropic api_key profile).
 const CLAUDE_OAT_PREFIX = "sk-ant-oat";
+type CredentialValidation = { ok: true } | { ok: false; reason: string };
 
 export function validateClaudeCliToken(
   raw: string,
-): { ok: true } | { ok: false; reason: string } {
+): CredentialValidation {
   const token = (raw ?? "").trim();
   if (!token) return { ok: false, reason: "empty token" };
   if (token.length > MAX_CREDENTIAL_BYTES) {
@@ -72,6 +73,50 @@ export function validateClaudeCliToken(
       reason:
         "not a Claude subscription token — expected an sk-ant-oat… token from `claude setup-token`",
     };
+  }
+  return { ok: true };
+}
+
+export function validateClaudeCliCredential(
+  raw: string,
+): CredentialValidation {
+  const credential = (raw ?? "").trim();
+  if (!credential) return { ok: false, reason: "empty credential" };
+  if (credential.length > MAX_CREDENTIAL_BYTES) {
+    return { ok: false, reason: "credential too large" };
+  }
+  if (!credential.startsWith("{")) return validateClaudeCliToken(credential);
+  return validateClaudeSsoCredentialJson(credential);
+}
+
+function validateClaudeSsoCredentialJson(credential: string): CredentialValidation {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(credential);
+  } catch {
+    return { ok: false, reason: "Claude SSO credential is not valid JSON" };
+  }
+  return validateClaudeSsoCredentialObject(parsed);
+}
+
+function validateClaudeSsoCredentialObject(parsed: unknown): CredentialValidation {
+  const oauth = (parsed as { claudeAiOauth?: unknown } | null)?.claudeAiOauth;
+  if (!oauth || typeof oauth !== "object" || Array.isArray(oauth)) {
+    return { ok: false, reason: "missing claudeAiOauth object" };
+  }
+  const fields = oauth as Record<string, unknown>;
+  if (typeof fields.accessToken !== "string" || !fields.accessToken) {
+    return { ok: false, reason: "missing claudeAiOauth.accessToken" };
+  }
+  if (typeof fields.refreshToken !== "string" || !fields.refreshToken) {
+    return { ok: false, reason: "missing claudeAiOauth.refreshToken" };
+  }
+  if (
+    typeof fields.expiresAt !== "number" ||
+    !Number.isFinite(fields.expiresAt) ||
+    fields.expiresAt <= 0
+  ) {
+    return { ok: false, reason: "invalid claudeAiOauth.expiresAt" };
   }
   return { ok: true };
 }
@@ -151,41 +196,84 @@ export interface GatewayDeviceAuthClient {
   status(args: { gatewayId: string; flowId: string }): Promise<DeviceAuthStatus>;
 }
 
-export function gatewayDeviceAuthClient(): GatewayDeviceAuthClient {
-  const key = process.env.INTERNAL_SERVICE_KEY ?? "";
+export interface ClaudeSsoStart {
+  flowId: string;
+  verificationUrl: string;
+  expiresInMinutes: number | null;
+  state: string;
+}
+export interface ClaudeSsoStatus {
+  state: string;
+  expiresInMinutes?: number;
+  reason?: string;
+}
+export interface GatewayClaudeSsoClient {
+  start(args: { gatewayId: string; agentId: string }): Promise<ClaudeSsoStart>;
+  status(args: { gatewayId: string; flowId: string }): Promise<ClaudeSsoStatus>;
+  submit(args: { gatewayId: string; flowId: string; code: string }): Promise<ClaudeSsoStatus>;
+}
+
+function gatewayInternalBase(gatewayId: string): string {
   const ns = process.env.K8S_NAMESPACE ?? "octogee";
-  const base = (gatewayId: string): string =>
-    process.env.GATEWAY_INTERNAL_URL_TEMPLATE
-      ? process.env.GATEWAY_INTERNAL_URL_TEMPLATE.replace(
-          "{gatewayId}",
-          gatewayId,
-        )
-      : `http://octogee-gateway-${gatewayId}.${ns}.svc.cluster.local:3003`;
-  async function call<T>(url: string, init: RequestInit): Promise<T> {
-    const r = await internalFetch(url, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init.headers || {}),
-      },
-    }, {
-      internalServiceKey: key,
-    });
-    if (!r.ok) {
-      throw new Error(`gateway ${r.status} ${await r.text().catch(() => "")}`);
-    }
-    return (await r.json()) as T;
+  return process.env.GATEWAY_INTERNAL_URL_TEMPLATE
+    ? process.env.GATEWAY_INTERNAL_URL_TEMPLATE.replace("{gatewayId}", gatewayId)
+    : `http://octogee-gateway-${gatewayId}.${ns}.svc.cluster.local:3003`;
+}
+
+async function gatewayInternalCall<T>(
+  gatewayId: string,
+  path: string,
+  init: RequestInit,
+): Promise<T> {
+  const r = await internalFetch(`${gatewayInternalBase(gatewayId)}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    },
+  }, {
+    internalServiceKey:
+      process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.INTERNAL_SERVICE_KEY ?? "",
+  });
+  if (!r.ok) {
+    throw new Error(`gateway ${r.status} ${await r.text().catch(() => "")}`);
   }
+  return (await r.json()) as T;
+}
+
+export function gatewayDeviceAuthClient(): GatewayDeviceAuthClient {
   return {
     start: ({ gatewayId, agentId }) =>
-      call(`${base(gatewayId)}/internal/byosub/device-auth/start`, {
+      gatewayInternalCall(gatewayId, "/internal/byosub/device-auth/start", {
         method: "POST",
         body: JSON.stringify({ agentId }),
       }),
     status: ({ gatewayId, flowId }) =>
-      call(
-        `${base(gatewayId)}/internal/byosub/device-auth/status/${encodeURIComponent(flowId)}`,
+      gatewayInternalCall(
+        gatewayId,
+        `/internal/byosub/device-auth/status/${encodeURIComponent(flowId)}`,
         { method: "GET" },
       ),
+  };
+}
+
+export function gatewayClaudeSsoClient(): GatewayClaudeSsoClient {
+  return {
+    start: ({ gatewayId, agentId }) =>
+      gatewayInternalCall(gatewayId, "/internal/byosub/claude-sso/start", {
+        method: "POST",
+        body: JSON.stringify({ agentId }),
+      }),
+    status: ({ gatewayId, flowId }) =>
+      gatewayInternalCall(
+        gatewayId,
+        `/internal/byosub/claude-sso/status/${encodeURIComponent(flowId)}`,
+        { method: "GET" },
+      ),
+    submit: ({ gatewayId, flowId, code }) =>
+      gatewayInternalCall(gatewayId, "/internal/byosub/claude-sso/submit", {
+        method: "POST",
+        body: JSON.stringify({ flowId, code }),
+      }),
   };
 }

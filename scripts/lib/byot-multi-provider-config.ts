@@ -280,6 +280,47 @@ export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 export const CLAUDE_CLI_DEFAULT_PROFILE_ID = "anthropic:claude-cli";
 const CLAUDE_CLI_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
+function parseClaudeCliSsoCredential(raw: string): OAuthCredential | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("claude-cli SSO credential: not valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("claude-cli SSO credential: expected JSON object");
+  }
+  const oauth = (parsed as { claudeAiOauth?: unknown }).claudeAiOauth;
+  if (!oauth || typeof oauth !== "object" || Array.isArray(oauth)) {
+    throw new Error("claude-cli SSO credential: missing claudeAiOauth object");
+  }
+  const fields = oauth as Record<string, unknown>;
+  const accessToken = fields.accessToken;
+  if (typeof accessToken !== "string" || accessToken.length === 0) {
+    throw new Error("claude-cli SSO credential: missing claudeAiOauth.accessToken");
+  }
+  const refreshToken = fields.refreshToken;
+  if (typeof refreshToken !== "string" || refreshToken.length === 0) {
+    throw new Error("claude-cli SSO credential: missing claudeAiOauth.refreshToken");
+  }
+  const expiresAt = fields.expiresAt;
+  if (
+    typeof expiresAt !== "number" ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= 0
+  ) {
+    throw new Error("claude-cli SSO credential: invalid claudeAiOauth.expiresAt");
+  }
+  return {
+    type: "oauth",
+    provider: "claude-cli",
+    access: accessToken,
+    refresh: refreshToken,
+    expires: Math.floor(expiresAt),
+    copyToAgents: true,
+  };
+}
+
 // Claude SUBSCRIPTION (claude setup-token) → the per-agent claude-cli OAuth
 // profile. The credential is a single long-lived bearer (sk-ant-oat01-…) with
 // NO refresh token, so — unlike codex — there is no JWT to parse and nothing to
@@ -293,16 +334,22 @@ export function buildClaudeCliAuthProfilesStore(
   if (!token || !token.trim()) {
     throw new Error("claude-cli credential: empty setup-token");
   }
-  const profile: OAuthCredential = {
-    type: "oauth",
-    provider: "claude-cli",
-    access: token,
-    expires: nowMs + CLAUDE_CLI_TOKEN_TTL_MS,
-    copyToAgents: true,
-  };
+  const trimmed = token.trim();
+  const profile =
+    trimmed.startsWith("{")
+      ? parseClaudeCliSsoCredential(trimmed)
+      : null;
   return {
     version: 1,
-    profiles: { [CLAUDE_CLI_DEFAULT_PROFILE_ID]: profile },
+    profiles: {
+      [CLAUDE_CLI_DEFAULT_PROFILE_ID]: profile ?? {
+        type: "oauth",
+        provider: "claude-cli",
+        access: trimmed,
+        expires: nowMs + CLAUDE_CLI_TOKEN_TTL_MS,
+        copyToAgents: true,
+      },
+    },
   };
 }
 
