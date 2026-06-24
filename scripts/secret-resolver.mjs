@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * OpenClaw exec SecretRef resolver → GCP Secret Manager.
+ * OpenClaw exec SecretRef resolver → octogee-api byok broker → GCP Secret Manager.
  *
  * Protocol (docs/gateway/secrets.md):
  *   stdin  → { protocolVersion: 1, provider, ids: ["byok-{slug}-anthropic/latest", ...] }
@@ -14,16 +14,18 @@
  *           "source": "exec",
  *           "command": "/usr/local/bin/node",
  *           "args": ["/octogee/scripts/secret-resolver.mjs"],
- *           "passEnv": ["GOOGLE_APPLICATION_CREDENTIALS", "GCP_PROJECT_ID"],
+ *           "passEnv": ["FLEET_BROKER_URL", "OCTOGEE_API_URL", "OCTOGEE_API_SA_TOKEN_PATH", "INTERNAL_SERVICE_KEY", "OPENCLAW_AGENTS_DIR", "HOME"],
  *           "jsonOnly": true
  *         }
  *       }
  *     }
  *   }
  *
- * Auth: uses ADC via Workload Identity on GKE. The gateway pod's
- * ServiceAccount must have roles/secretmanager.secretAccessor on the
- * byok-* secrets (or project-level for simplicity).
+ * Auth: brokers to octogee-api with the gateway's projected KSA token
+ * (x-k8s-sa-token header, /var/run/secrets/octogee-api/token). octogee-api holds
+ * the Secret Manager access and roster-scopes the slug — cattle gateways hold no
+ * GCP creds. The provider id stays "gcp-secret-manager" (the SecretRef contract);
+ * only the resolution path moved to the broker.
  *
  * Logging: stderr only, never stdout. OpenClaw expects `jsonOnly` on
  * stdout; any non-JSON write corrupts the resolution protocol.
@@ -46,20 +48,30 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
+import { pathToFileURL } from "url";
 
-const PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
-if (!PROJECT_ID) {
-  process.stderr.write("[secret-resolver] GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT not set\n");
-  process.stdout.write(
-    JSON.stringify({
-      protocolVersion: 1,
-      values: {},
-      errors: { _all: { message: "GCP_PROJECT_ID not set in gateway env" } },
-    }) + "\n",
-  );
-  process.exit(0); // stay within OpenClaw's protocol; errors surface via `errors`
-}
+// Cattle gateways are egress-blocked from the GCP metadata server, so this
+// resolver materializes byok-* keys through the octogee-api broker
+// (POST /internal/byok/api-key) instead of reaching Secret Manager directly.
+// KSA-authed via the gateway's projected token — same contract as
+// scripts/lib/internal-fetch.ts.
+//
+// The DEFAULTS must work without the broker env: openclaw forwards only the
+// resolver's `passEnv` allowlist, and existing gateways preserve a pre-broker
+// openclaw.json (entrypoint.sh keeps the PVC config) whose passEnv predates these
+// vars. So default to the same-namespace SHORT service name — k8s DNS search
+// domains resolve `octogee-api` to THIS pod's namespace, correct on every
+// namespace with no K8S_NAMESPACE needed — and the gateway pod's mounted
+// broker-token path. FLEET_BROKER_URL / OCTOGEE_API_URL / OCTOGEE_API_SA_TOKEN_PATH
+// still override when a (new) gateway passes them through.
+// http is by design (in-cluster ClusterIP, no TLS); host via an env-overridable
+// var, both as a single source of truth and matching the rest of the repo's
+// in-cluster URL idiom.
+const BROKER_HOST = process.env.OCTOGEE_API_HOST || "octogee-api";
+export const BROKER_BASE_URL =
+  process.env.FLEET_BROKER_URL || process.env.OCTOGEE_API_URL || `http://${BROKER_HOST}:3001`;
+export const KSA_TOKEN_PATH =
+  process.env.OCTOGEE_API_SA_TOKEN_PATH || "/var/run/secrets/octogee-gateway-broker/token";
 
 const AGENTS_DIR =
   process.env.OPENCLAW_AGENTS_DIR ||
@@ -132,8 +144,6 @@ function validateId(id) {
   return null;
 }
 
-const client = new SecretManagerServiceClient();
-
 /** Parse the exec request from stdin (it arrives as one JSON line). */
 async function readRequest() {
   const chunks = [];
@@ -144,23 +154,33 @@ async function readRequest() {
 }
 
 /**
- * The id grammar for our BYOT refs is `byok-{slug}-{provider}/{version}`.
- * Strip the `/version` suffix to get the Secret Manager secret name, and
- * treat the suffix as a version reference. "latest" is the default.
+ * Materialize one byok-* ref via the octogee-api broker. The broker re-validates
+ * the id grammar, roster-scopes the slug to THIS gateway, and reads Secret
+ * Manager on our behalf — the resolver holds no GCP creds. The full id
+ * (byok-{slug}-{provider}[/version]) goes to the broker, which parses it. `deps`
+ * (token, fetchImpl) are injectable for tests; production reads the projected KSA
+ * token from disk and uses the global fetch.
  */
-function parseId(id) {
-  const lastSlash = id.lastIndexOf("/");
-  if (lastSlash === -1) return { name: id, version: "latest" };
-  return { name: id.slice(0, lastSlash), version: id.slice(lastSlash + 1) };
-}
-
-async function resolveOne(id) {
-  const { name, version } = parseId(id);
-  const fq = `projects/${PROJECT_ID}/secrets/${name}/versions/${version}`;
-  const [response] = await client.accessSecretVersion({ name: fq });
-  const payload = response.payload?.data;
-  if (!payload) throw new Error(`empty payload for ${fq}`);
-  return Buffer.isBuffer(payload) ? payload.toString("utf8") : String(payload);
+export async function resolveOne(id, deps = {}) {
+  const token = deps.token ?? fs.readFileSync(KSA_TOKEN_PATH, "utf8").trim();
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const headers = { "content-type": "application/json", "x-k8s-sa-token": token };
+  if (process.env.INTERNAL_SERVICE_KEY) {
+    headers["x-internal-service-key"] = process.env.INTERNAL_SERVICE_KEY;
+  }
+  const res = await fetchImpl(`${BROKER_BASE_URL}/internal/byok/api-key`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) {
+    throw new Error(`byok broker returned ${res.status}`);
+  }
+  const body = await res.json();
+  if (typeof body?.value !== "string") {
+    throw new Error("byok broker: malformed response (no value)");
+  }
+  return body.value;
 }
 
 /** Cap on per-call audit-log lines for rejects. A flood of rejects
@@ -217,16 +237,20 @@ async function main() {
   process.stdout.write(JSON.stringify(response) + "\n");
 }
 
-main().catch((err) => {
-  // Protocol-level failure — write an `errors._all` sentinel so OpenClaw
-  // can surface the problem without crashing the resolver loop.
-  process.stderr.write(`[secret-resolver] fatal: ${err?.stack || err}\n`);
-  process.stdout.write(
-    JSON.stringify({
-      protocolVersion: 1,
-      values: {},
-      errors: { _all: { message: err?.message || String(err) } },
-    }) + "\n",
-  );
-  process.exit(0);
-});
+// Run main() only when invoked directly (node secret-resolver.mjs), not when a
+// test imports resolveOne for unit coverage.
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+  main().catch((err) => {
+    // Protocol-level failure — write an `errors._all` sentinel so OpenClaw
+    // can surface the problem without crashing the resolver loop.
+    process.stderr.write(`[secret-resolver] fatal: ${err?.stack || err}\n`);
+    process.stdout.write(
+      JSON.stringify({
+        protocolVersion: 1,
+        values: {},
+        errors: { _all: { message: err?.message || String(err) } },
+      }) + "\n",
+    );
+    process.exit(0);
+  });
+}

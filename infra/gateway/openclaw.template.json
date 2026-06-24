@@ -29,8 +29,10 @@
           "/octogee/scripts/secret-resolver.mjs"
         ],
         "passEnv": [
-          "GOOGLE_APPLICATION_CREDENTIALS",
-          "GCP_PROJECT_ID",
+          "FLEET_BROKER_URL",
+          "OCTOGEE_API_URL",
+          "OCTOGEE_API_SA_TOKEN_PATH",
+          "INTERNAL_SERVICE_KEY",
           "OPENCLAW_AGENTS_DIR",
           "HOME"
         ],

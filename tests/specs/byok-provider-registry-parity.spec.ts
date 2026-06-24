@@ -29,6 +29,13 @@ function resolverGrammarProviders(): string[] {
   return m[1].split("|").sort();
 }
 
+function brokerRouteProviders(): string[] {
+  const src = readFileSync(path.join(repoRoot, "octogee-api/src/routes/byok-broker.ts"), "utf8");
+  const m = src.match(/\(\?<provider>([^)]+)\)/);
+  if (!m) throw new Error("could not find the BYOK_API_KEY_RE provider group in byok-broker.ts");
+  return m[1].split("|").sort();
+}
+
 describe("BYOK provider registry parity (scripts PROVIDERS ↔ route ↔ resolver)", () => {
   it("gateway-edge SUPPORTED == scripts PROVIDERS api_key providers", () => {
     expect([...SUPPORTED].sort()).toEqual(apiKeyProviders);
@@ -36,6 +43,10 @@ describe("BYOK provider registry parity (scripts PROVIDERS ↔ route ↔ resolve
 
   it("the secret-resolver grammar accepts exactly the api_key providers", () => {
     expect(resolverGrammarProviders()).toEqual(apiKeyProviders);
+  });
+
+  it("the byok-broker api-key route grammar accepts exactly the api_key providers", () => {
+    expect(brokerRouteProviders()).toEqual(apiKeyProviders);
   });
 
   it("CANONICAL_BASE_URL matches scripts PROVIDERS.baseUrl for every canonical provider", () => {

@@ -4,6 +4,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+// resolveOne is exported for in-process unit coverage of the broker call; the
+// resolver's main() is import-guarded, so this import is inert.
+import { resolveOne as resolveOneRaw, BROKER_BASE_URL, KSA_TOKEN_PATH } from "../secret-resolver.mjs";
+const resolveOne = resolveOneRaw as (
+  id: string,
+  deps?: {
+    token?: string;
+    fetchImpl?: (
+      url: string,
+      init: { method: string; headers: Record<string, string>; body: string },
+    ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+  },
+) => Promise<string>;
+
 const RESOLVER = path.join(__dirname, "..", "secret-resolver.mjs");
 
 interface SpawnOutcome {
@@ -118,7 +132,7 @@ describe("secret-resolver — defense-in-depth", () => {
     expect(res.errors?.[id]?.message).toMatch(/Refused by resolver:/);
   });
 
-  it("accepts a known slug + provider and forwards to SM (which fails on the test creds, surfacing in errors)", async () => {
+  it("accepts a known slug + provider and forwards to the broker (which fails without a KSA token here → errors, not a Refusal)", async () => {
     const id = "byok-alice-anthropic/latest";
     const stdin = JSON.stringify({
       protocolVersion: 1,
@@ -184,6 +198,52 @@ describe("secret-resolver — defense-in-depth", () => {
     expect(res.errors?.["byok-eve-anthropic/latest"]?.message).toMatch(/^Refused by resolver:/);
     if (res.errors?.["byok-alice-anthropic/latest"]) {
       expect(res.errors["byok-alice-anthropic/latest"].message).not.toMatch(/^Refused by resolver:/);
+    }
+  });
+});
+
+describe("resolveOne — brokered byok materialization (unit, injected deps)", () => {
+  it("POSTs { id } to /internal/byok/api-key with the KSA token and returns the value", async () => {
+    let seen: { url: string; init: { headers: Record<string, string>; body: string } } | undefined;
+    const v = await resolveOne("byok-tester5-grok", {
+      token: "ksa-tok",
+      fetchImpl: async (url, init) => {
+        seen = { url, init };
+        return { ok: true, status: 200, json: async () => ({ value: "xai-key-tester5" }) };
+      },
+    });
+    expect(v).toBe("xai-key-tester5");
+    expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/api-key`);
+    expect(seen?.init.headers["x-k8s-sa-token"]).toBe("ksa-tok");
+    expect(JSON.parse(seen!.init.body)).toEqual({ id: "byok-tester5-grok" });
+  });
+
+  it("throws on a non-ok broker response (fail loud → surfaces as errors[id], never a silent empty)", async () => {
+    await expect(
+      resolveOne("byok-tester5-grok", {
+        token: "t",
+        fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({}) }),
+      }),
+    ).rejects.toThrow(/403/);
+  });
+
+  it("throws on a malformed broker response with no value", async () => {
+    await expect(
+      resolveOne("byok-tester5-grok", {
+        token: "t",
+        fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+      }),
+    ).rejects.toThrow(/malformed/);
+  });
+
+  it("defaults (no broker env) to same-namespace short DNS + the mounted gateway-broker token — existing-config compatible (#1730 P1)", () => {
+    // Existing gateways preserve a pre-broker passEnv, so the resolver must work
+    // without FLEET_BROKER_URL / OCTOGEE_API_SA_TOKEN_PATH being forwarded.
+    if (!process.env.FLEET_BROKER_URL && !process.env.OCTOGEE_API_URL) {
+      expect(BROKER_BASE_URL).toBe("http://octogee-api:3001");
+    }
+    if (!process.env.OCTOGEE_API_SA_TOKEN_PATH) {
+      expect(KSA_TOKEN_PATH).toBe("/var/run/secrets/octogee-gateway-broker/token");
     }
   });
 });
