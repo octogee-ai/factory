@@ -4,6 +4,8 @@ import type { Firestore } from "firebase-admin/firestore";
 import { readSecret } from "../../../scripts/lib/secret-manager.js";
 import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
 import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
+import { createFirestoreModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
+import { findAssignedUserByAgentId } from "./fleet-broker.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -22,6 +24,11 @@ const BYOSUB_SECRET_RE = /^byosub-[A-Za-z0-9_-]+-(?:openai|anthropic)$/;
 // secret.
 const BYOK_API_KEY_RE =
   /^byok-(?<slug>[a-z0-9][a-z0-9-]{0,62})-(?<provider>anthropic|openai|openai-compatible|grok|openrouter|minimax)(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
+
+// Per-customer broker tokens are re-minted whenever the resolver re-resolves the
+// keyRef; a generous TTL spans a normal agent session (so it is not re-minted
+// mid-session) while still bounding how long stale tokens linger before TTL cleanup.
+const AGENT_MODEL_TOKEN_TTL_SECONDS = 24 * 60 * 60;
 
 function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
@@ -110,6 +117,45 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
 
     const value = await readSecret(`byok-${slug}-${provider}`, version ?? "latest");
     res.json({ value });
+  });
+
+  // Mint an owner-scoped, METER-ONLY broker token for one customer-agent on a
+  // shared (multi-tenant) gateway. The agent resolves anthropic through the broker
+  // with its OWN token, so the broker resolves per-owner (platform key, or the
+  // owner's byok-<slug>-anthropic) and meters per ownerUid. Roster-scoped via
+  // findAssignedUserByAgentId — a gateway can only mint for a customer assigned to
+  // it. `limits: null` = meter-only; the per-builder cap stays on the in-pod L3
+  // throttle (shared customers throttle exactly as before).
+  router.post("/agent-model-token", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+
+    const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
+    if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
+      res.status(400).json({ error: "valid agentId required" });
+      return;
+    }
+
+    const assigned = await findAssignedUserByAgentId(db, bound.gatewayId, agentId);
+    if (!assigned) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+
+    const issued = await createFirestoreModelBrokerTokenStore(db).issueToken({
+      gatewayId: bound.gatewayId,
+      ownerUid: assigned.uid,
+      provider: "anthropic",
+      // a descriptive label, NOT a readable Secret Manager secret — the broker
+      // resolves the provider key per ownerUid, never via this name.
+      secretName: `agent-model-token-${bound.gatewayId}-${assigned.uid}`,
+      // standalone + TTL-bounded: no revoke-on-reissue, so a re-mint can't yank a
+      // still-in-flight token (the prior one expires by TTL instead).
+      skipPointer: true,
+      ttlSeconds: AGENT_MODEL_TOKEN_TTL_SECONDS,
+      limits: null,
+    });
+    res.json({ value: issued.token });
   });
 
   return router;

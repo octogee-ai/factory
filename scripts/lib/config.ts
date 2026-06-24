@@ -20,6 +20,13 @@ export function isOperatorGateway(): boolean {
   return GATEWAY_PROFILE === "operator";
 }
 
+// A shared (multi-tenant) pod routes EACH customer-agent's anthropic through the
+// broker with its OWN per-customer token (agent-model-token-<agentId>), unlike
+// builder/operator which carry one per-gateway env broker token.
+export function isSharedGateway(): boolean {
+  return GATEWAY_CLASS === "shared";
+}
+
 export function usesLlmBrokerToken(): boolean {
   return GATEWAY_CLASS === "builder" || GATEWAY_CLASS === "operator";
 }

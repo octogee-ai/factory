@@ -87,6 +87,14 @@ const AGENTS_DIR =
 const BYOK_ID_RE =
   /^byok-(?<slug>[a-z0-9][a-z0-9-]{0,62})-(?<provider>anthropic|openai|openai-compatible|grok|openrouter|minimax)(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
 
+// Per-customer broker-token ref for shared (multi-tenant) gateways. Each
+// customer-agent's anthropic auth-profile resolves through this id; the broker
+// mints an owner-scoped, meter-only token for it. The agentId is embedded — the
+// exec protocol passes no requesting-agent context (see the header note), so the
+// id IS the per-agent scope — and the slug is allowlisted exactly like byok.
+const AGENT_MODEL_TOKEN_ID_RE =
+  /^agent-model-token-(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
  *  exec-provider contract — see fork src/secrets/resolve.ts:452), so any
@@ -133,11 +141,12 @@ function validateId(id) {
   if (typeof id !== "string" || id.length === 0 || id.length > 256) {
     return `id is not a non-empty string ≤256 chars`;
   }
-  const m = id.match(BYOK_ID_RE);
-  if (!m || !m.groups) {
-    return `id does not match byok-{slug}-{anthropic|openai|openai-compatible|grok|openrouter|minimax}[/version]`;
+  const byok = id.match(BYOK_ID_RE);
+  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
+  if (!byok?.groups && !agentToken?.groups) {
+    return `id does not match byok-{slug}-{provider}[/version] or agent-model-token-octogee-{slug}-coach`;
   }
-  const slug = m.groups.slug;
+  const slug = byok?.groups?.slug ?? agentToken?.groups?.slug;
   if (!KNOWN_SLUGS.has(slug)) {
     return `slug "${slug}" has no provisioned agent dir`;
   }
@@ -168,10 +177,17 @@ export async function resolveOne(id, deps = {}) {
   if (process.env.INTERNAL_SERVICE_KEY) {
     headers["x-internal-service-key"] = process.env.INTERNAL_SERVICE_KEY;
   }
-  const res = await fetchImpl(`${BROKER_BASE_URL}/internal/byok/api-key`, {
+  // agent-model-token-{agentId} → the per-customer broker-token route; every
+  // other id is a byok-* key. Both routes return { value } and roster-scope
+  // server-side (the resolver holds no GCP creds and no agent identity).
+  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
+  const { route, payload } = agentToken
+    ? { route: "/internal/byok/agent-model-token", payload: { agentId: agentToken.groups.agentId } }
+    : { route: "/internal/byok/api-key", payload: { id } };
+  const res = await fetchImpl(`${BROKER_BASE_URL}${route}`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ id }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     throw new Error(`byok broker returned ${res.status}`);

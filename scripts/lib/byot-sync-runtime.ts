@@ -11,7 +11,15 @@ import { internalFetch } from "./internal-fetch.js";
 import { isOauthProvider } from "./byot-multi-provider-config.js";
 import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
-import { OPENCLAW_DIR, isOperatorGateway, log, usesLlmBrokerToken } from "./config.js";
+import {
+  AGENTS_DIR,
+  OPENCLAW_DIR,
+  isOperatorGateway,
+  isSharedGateway,
+  log,
+  usesLlmBrokerToken,
+} from "./config.js";
+import { upsertAnthropicBrokerProfile } from "./agent-model-token-materializer.js";
 
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -200,11 +208,13 @@ return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0 };
 
 export interface SyncByotForCustomerDeps {
   isOperatorGateway?: () => boolean;
+  isSharedGateway?: () => boolean;
   usesLlmBrokerToken?: () => boolean;
   applyByotState?: typeof applyByotState;
   restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch?: typeof applyCoachModelPatch;
   triggerSecretsReload?: typeof triggerSecretsReload;
+  materializeAnthropicBroker?: (slug: string) => boolean;
 }
 
 type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
@@ -215,6 +225,12 @@ interface SyncByotActions {
   restoreOauthStoreForSlug: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch: typeof applyCoachModelPatch;
   triggerSecretsReload: typeof triggerSecretsReload;
+  materializeAnthropicBroker: (slug: string) => boolean;
+}
+
+function materializeAnthropicBroker(slug: string): boolean {
+  const agentId = `octogee-${slug}-coach`;
+  return upsertAnthropicBrokerProfile(path.join(AGENTS_DIR, agentId, "agent"), agentId);
 }
 
 function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
@@ -223,6 +239,7 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     restoreOauthStoreForSlug: deps?.restoreOauthStoreForSlug ?? restoreOauthStoreForSlug,
     applyCoachModelPatch: deps?.applyCoachModelPatch ?? applyCoachModelPatch,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
+    materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
   };
 }
 
@@ -268,17 +285,61 @@ async function syncStandardByotState(
   if (changed || restore.restored || patched) await actions.triggerSecretsReload();
 }
 
+// Shared (multi-tenant) pods route EACH customer-agent's anthropic through the
+// broker with its own per-customer token. Unlike builder/operator (one env gateway
+// token), the per-agent anthropic:default broker-token profile is the load-bearing
+// credential — the primary for platform/anthropic-BYOK customers and the Haiku
+// fallback for BYOS / non-anthropic-BYOK ones — so it is always (re)asserted, the
+// auth-profile store is never torn down, and byosub OAuth + custom-provider
+// models.json coexist alongside it.
+async function syncSharedBrokerByotState(
+  slug: string,
+  desired: DesiredByotState,
+  actions: SyncByotActions,
+): Promise<void> {
+  const provider = desired.input?.provider;
+  const isOauth = Boolean(provider && isOauthProvider(provider));
+  const isNonAnthropicKey = Boolean(provider && provider !== "anthropic" && !isOauth);
+
+  const restore = isOauth
+    ? await actions.restoreOauthStoreForSlug(slug)
+    : { restored: false, present: true };
+
+  const changed = actions.applyByotState(
+    slug,
+    isNonAnthropicKey ? desired.input : null,
+    undefined,
+    { preserveAuthProfileStore: true },
+  );
+
+  const materialized = actions.materializeAnthropicBroker(slug);
+
+  const patched = desired.coachModelInput
+    ? await actions.applyCoachModelPatch(desired.coachModelInput)
+    : false;
+
+  if (changed || restore.restored || materialized || patched) {
+    await actions.triggerSecretsReload();
+  }
+}
+
 export async function syncByotForCustomer(
   userData: SyncByotUserData,
   deps?: SyncByotForCustomerDeps,
 ): Promise<void> {
   const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
+  const isShared = deps?.isSharedGateway ?? isSharedGateway;
   const usesBrokerToken = deps?.usesLlmBrokerToken ?? usesLlmBrokerToken;
   const actions = syncActions(deps);
 
   const desired = deriveDesiredByotState(userData);
   const slug = userData.username;
   if (!slug) return;
+
+  if (isShared()) {
+    await syncSharedBrokerByotState(slug, desired, actions);
+    return;
+  }
 
   if (isBrokerResolvedAnthropic(desired, usesBrokerToken())) {
     await clearBrokerResolvedAnthropic(slug, actions);

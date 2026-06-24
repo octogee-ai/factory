@@ -555,7 +555,7 @@ function agentBelongsToAssignedWorkspace(
   return agentIds.includes(agentId);
 }
 
-async function findAssignedUserByAgentId(
+export async function findAssignedUserByAgentId(
   db: Firestore,
   gatewayId: string,
   agentId: string,

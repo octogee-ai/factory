@@ -203,11 +203,15 @@ function removeManagedByotState(
   dir: string,
   markerPath: string,
   filePath: (f: string) => string,
+  preserveAuthProfileStore: boolean,
 ): boolean {
   if (!fs.existsSync(markerPath)) return false;
   let changed = false;
   for (const f of BYOT_FILES) changed = removeIfExists(filePath(f)) || changed;
-  if (readAuthProfileStore(dir) !== null) {
+  // On a shared (per-agent broker-token) pod the auth-profile store holds the
+  // anthropic:default broker token (+ any byosub OAuth) that the materializer owns;
+  // tearing down a customer's local BYOT files must NOT delete it.
+  if (!preserveAuthProfileStore && readAuthProfileStore(dir) !== null) {
     deleteAuthProfileStore(dir);
     changed = true;
   }
@@ -243,7 +247,11 @@ function writeDesiredByotFiles(
   return changed;
 }
 
-function syncAuthProfileStore(dir: string, input: ByotInput): boolean {
+function syncAuthProfileStore(
+  dir: string,
+  input: ByotInput,
+  preserveAuthProfileStore: boolean,
+): boolean {
   if (isOauthProvider(input.provider)) return false;
   const cfg = buildByotConfigForProvider(input);
   if (cfg.authProfiles) {
@@ -254,7 +262,11 @@ function syncAuthProfileStore(dir: string, input: ByotInput): boolean {
     }
     return false;
   }
-  if (readAuthProfileStore(dir) === null) return false;
+  // Custom-provider BYOK (grok/openrouter/minimax) keeps its key in models.json,
+  // not the profile store — so the store would normally be cleared here. On a
+  // shared broker-token pod it instead holds the anthropic:default broker token,
+  // so preserve it.
+  if (preserveAuthProfileStore || readAuthProfileStore(dir) === null) return false;
   deleteAuthProfileStore(dir);
   return true;
 }
@@ -263,13 +275,15 @@ export function applyByotState(
   slug: string,
   input: ByotInput | null,
   agentsDir: string = AGENTS_DIR,
+  opts: { preserveAuthProfileStore?: boolean } = {},
 ): boolean {
   const dir = agentDirForSlug(slug, agentsDir);
   const filePath = (f: string) => path.join(dir, f);
   const markerPath = filePath(BYOT_MARKER);
+  const preserve = opts.preserveAuthProfileStore ?? false;
 
   if (!input) {
-    return removeManagedByotState(slug, dir, markerPath, filePath);
+    return removeManagedByotState(slug, dir, markerPath, filePath, preserve);
   }
 
   if (!fs.existsSync(dir)) {
@@ -278,7 +292,7 @@ export function applyByotState(
   }
 
   let changed = writeDesiredByotFiles(desiredByotFiles(input), filePath);
-  changed = syncAuthProfileStore(dir, input) || changed;
+  changed = syncAuthProfileStore(dir, input, preserve) || changed;
 
   if (!fs.existsSync(markerPath)) {
     writeAtomic(markerPath, JSON.stringify({ managedSince: new Date().toISOString() }) + "\n");

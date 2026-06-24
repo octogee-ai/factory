@@ -133,8 +133,13 @@ async function gatewayBindingAuthorized(
   }
   // The byok brokers carry only { agentId } / { id } and do their own scoping
   // (byosub-cred → glmGateways/{gatewayId}.byosub; api-key → the gateway's
-  // assigned roster) — same shape as the connector broker.
-  if (req.path === "/internal/byok/byosub-cred" || req.path === "/internal/byok/api-key") {
+  // assigned roster; agent-model-token → findAssignedUserByAgentId) — same shape
+  // as the connector broker.
+  if (
+    req.path === "/internal/byok/byosub-cred" ||
+    req.path === "/internal/byok/api-key" ||
+    req.path === "/internal/byok/agent-model-token"
+  ) {
     return true;
   }
   if (gatewayIds.length > 0) return true;

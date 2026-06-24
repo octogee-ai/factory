@@ -4,6 +4,7 @@ import {
   restoreByosubForAgents,
   agentIdsFromConfig,
 } from "../lib/byosub-restore.js";
+import { materializeAnthropicBrokerForAgents } from "../lib/agent-model-token-materializer.js";
 
 const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
@@ -457,6 +458,19 @@ let configRaw: string;
     log("openclaw.json patched (per-gateway overrides / env / stale-key cleanup)");
   } else {
     log("no changes needed");
+  }
+
+  // Shared (multi-tenant) pods serve every customer-agent's anthropic through the
+  // broker with its OWN per-customer token — materialize each agent's
+  // anthropic:default broker-token profile before openclaw boots. Local write
+  // (db-less-safe); the secret-resolver fetches the token at runtime.
+  if (process.env.GATEWAY_CLASS === "shared") {
+    const materialized = materializeAnthropicBrokerForAgents(agentIdsFromConfig(config), {
+      logFn: log,
+    });
+    if (materialized > 0) {
+      log(`anthropic broker-token profiles materialized for ${materialized} shared agent(s)`);
+    }
   }
 
 try {

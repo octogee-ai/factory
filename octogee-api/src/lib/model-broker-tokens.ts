@@ -27,6 +27,17 @@ export interface IssueModelBrokerTokenInput {
   ownerUid?: string;
   provider: ModelBrokerProvider;
   secretName: string;
+  // Revocation scope. Defaults to gatewayId (one active token per gateway, for
+  // single-tenant builder/operator pods). A multi-tenant shared pod issues one
+  // owner-scoped token per customer-agent, so it passes `${gatewayId}:${ownerUid}`
+  // to keep each customer's pointer independent — reissuing one customer's token
+  // must not revoke a sibling's.
+  pointerKey?: string;
+  // Mint a standalone token with NO pointer (no revoke-on-reissue). Per-customer
+  // shared tokens are re-minted whenever the secret-resolver re-resolves the keyRef,
+  // so skipPointer prevents a re-mint from yanking a still-in-flight token — stale
+  // tokens expire by TTL instead. Requires ttlSeconds to bound accumulation.
+  skipPointer?: boolean;
   ttlSeconds?: number | null;
   limits?: Partial<ModelBrokerTokenLimits> | null;
   now?: number;
@@ -38,6 +49,7 @@ export interface RevokeModelBrokerTokenInput {
   ownerUid?: string;
   provider: ModelBrokerProvider;
   secretName: string;
+  pointerKey?: string;
   now?: number;
 }
 
@@ -130,15 +142,6 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
     const randomBytes = input.randomBytes ?? crypto.randomBytes;
     const token = `ogk_${input.gatewayId}_${randomBytes(32).toString("base64url")}`;
     const tokenHash = hashModelBrokerToken(token);
-    const previousHash = this.pointers.get(input.gatewayId);
-    if (previousHash && this.tokens.has(previousHash)) {
-      const previous = this.tokens.get(previousHash)!;
-      this.tokens.set(previousHash, {
-        ...previous,
-        revoked: true,
-        revokedAt: now,
-      });
-    }
     const record: ModelBrokerTokenRecord = {
       tokenHash,
       gatewayId: input.gatewayId,
@@ -152,15 +155,24 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
       revoked: false,
     };
     this.tokens.set(tokenHash, record);
-    this.pointers.set(input.gatewayId, tokenHash);
+    if (!input.skipPointer) {
+      const pointerKey = input.pointerKey ?? input.gatewayId;
+      const previousHash = this.pointers.get(pointerKey);
+      if (previousHash && previousHash !== tokenHash && this.tokens.has(previousHash)) {
+        const previous = this.tokens.get(previousHash)!;
+        this.tokens.set(previousHash, { ...previous, revoked: true, revokedAt: now });
+      }
+      this.pointers.set(pointerKey, tokenHash);
+    }
     return { token, record };
   }
 
   async revokeGatewayToken(input: RevokeModelBrokerTokenInput): Promise<{ revoked: boolean }> {
-    const tokenHash = this.pointers.get(input.gatewayId);
+    const pointerKey = input.pointerKey ?? input.gatewayId;
+    const tokenHash = this.pointers.get(pointerKey);
     if (!tokenHash) return { revoked: false };
     const existing = this.tokens.get(tokenHash);
-    this.pointers.delete(input.gatewayId);
+    this.pointers.delete(pointerKey);
     if (!existing || existing.provider !== input.provider || existing.secretName !== input.secretName) {
       return { revoked: false };
     }
@@ -193,23 +205,6 @@ export function createFirestoreModelBrokerTokenStore(
       const randomBytes = input.randomBytes ?? crypto.randomBytes;
       const token = `ogk_${input.gatewayId}_${randomBytes(32).toString("base64url")}`;
       const tokenHash = hashModelBrokerToken(token);
-      const pointerRef = pointers.doc(input.gatewayId);
-      const pointer = await pointerRef.get();
-      const previousHash = pointer.exists
-        ? (pointer.data() as { tokenHash?: unknown } | undefined)?.tokenHash
-        : undefined;
-      if (typeof previousHash === "string" && previousHash && previousHash !== tokenHash) {
-        const previousRef = tokens.doc(previousHash);
-        const previous = await previousRef.get();
-        // A stale pointer should not create a revoked-only tombstone token doc.
-        if (previous.exists) {
-          await previousRef.set(
-            { revoked: true, revokedAt: now },
-            { merge: true },
-          );
-        }
-      }
-
       const record: ModelBrokerTokenRecord = {
         tokenHash,
         gatewayId: input.gatewayId,
@@ -223,19 +218,36 @@ export function createFirestoreModelBrokerTokenStore(
         revoked: false,
       };
       await tokens.doc(tokenHash).set(record);
-      await pointerRef.set({
-        gatewayId: input.gatewayId,
-        ownerUid: input.ownerUid ?? null,
-        provider: input.provider,
-        secretName: input.secretName,
-        tokenHash,
-        updatedAt: now,
-      });
+      if (!input.skipPointer) {
+        const pointerKey = input.pointerKey ?? input.gatewayId;
+        const pointerRef = pointers.doc(pointerKey);
+        const pointer = await pointerRef.get();
+        const previousHash = pointer.exists
+          ? (pointer.data() as { tokenHash?: unknown } | undefined)?.tokenHash
+          : undefined;
+        if (typeof previousHash === "string" && previousHash && previousHash !== tokenHash) {
+          const previousRef = tokens.doc(previousHash);
+          const previous = await previousRef.get();
+          // A stale pointer should not create a revoked-only tombstone token doc.
+          if (previous.exists) {
+            await previousRef.set({ revoked: true, revokedAt: now }, { merge: true });
+          }
+        }
+        await pointerRef.set({
+          gatewayId: input.gatewayId,
+          ownerUid: input.ownerUid ?? null,
+          provider: input.provider,
+          secretName: input.secretName,
+          tokenHash,
+          updatedAt: now,
+        });
+      }
       return { token, record };
     },
 
     async revokeGatewayToken(input) {
-      const pointerRef = pointers.doc(input.gatewayId);
+      const pointerKey = input.pointerKey ?? input.gatewayId;
+      const pointerRef = pointers.doc(pointerKey);
       const pointer = await pointerRef.get();
       if (!pointer.exists) return { revoked: false };
       const data = pointer.data() as

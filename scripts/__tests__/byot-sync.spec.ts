@@ -785,6 +785,107 @@ describe("standard gateway — BYOS materialization", () => {
   });
 });
 
+describe("shared gateway — per-customer broker-token materialization", () => {
+  const PRESERVE = { preserveAuthProfileStore: true };
+  const baseDeps = (overrides: Record<string, unknown>) => ({
+    isSharedGateway: () => true,
+    isOperatorGateway: () => false,
+    applyCoachModelPatch: vi.fn(async () => false),
+    triggerSecretsReload: vi.fn(async () => {}),
+    ...overrides,
+  });
+
+  it("platform (non-BYOK) customer: materializes the anthropic broker profile, PRESERVES the store, reloads", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const materializeFn = vi.fn(() => true);
+    const restoreOauthFn = vi.fn(async () => ({ restored: false, present: true }));
+    const reloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
+      baseDeps({
+        applyByotState: applyByotStateFn,
+        materializeAnthropicBroker: materializeFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        triggerSecretsReload: reloadFn,
+      }),
+    );
+
+    expect(materializeFn).toHaveBeenCalledWith("tester-70");
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
+    expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(reloadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("anthropic BYOK: no local key (broker resolves per-owner), but the broker profile is still materialized", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const materializeFn = vi.fn(() => true);
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "anthropic" } },
+      },
+      baseDeps({ applyByotState: applyByotStateFn, materializeAnthropicBroker: materializeFn }),
+    );
+
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
+    expect(materializeFn).toHaveBeenCalledWith("tester-70");
+  });
+
+  it("claude-cli BYOS: restores the OAuth profile AND materializes the anthropic fallback (both coexist)", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const materializeFn = vi.fn(() => true);
+    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const reloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "claude-cli" } },
+      },
+      baseDeps({
+        applyByotState: applyByotStateFn,
+        materializeAnthropicBroker: materializeFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        triggerSecretsReload: reloadFn,
+      }),
+    );
+
+    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
+    expect(materializeFn).toHaveBeenCalledWith("tester-70");
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
+    expect(reloadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("grok (non-anthropic) BYOK: writes the custom-provider models.json (store preserved) + materializes the anthropic fallback", async () => {
+    const applyByotStateFn = vi.fn(() => true);
+    const materializeFn = vi.fn(() => false);
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "grok", model: "grok-2" } },
+      },
+      baseDeps({ applyByotState: applyByotStateFn, materializeAnthropicBroker: materializeFn }),
+    );
+
+    expect(applyByotStateFn).toHaveBeenCalledWith(
+      "tester-70",
+      expect.objectContaining({ provider: "grok" }),
+      undefined,
+      PRESERVE,
+    );
+    expect(materializeFn).toHaveBeenCalledWith("tester-70");
+  });
+});
+
 describe("operator gateway — runtime sync stays narrow", () => {
   it("restoreOauthStoreForSlug: returns {restored:false, present:false} without fetching", async () => {
     const fetchByosubCred = vi.fn(async () => null);

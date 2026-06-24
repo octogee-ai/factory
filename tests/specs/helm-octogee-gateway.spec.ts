@@ -661,15 +661,19 @@ expect(gw).toMatch(
 });
 
 describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
-  it("renders the platform ANTHROPIC_API_KEY fallback on the standard gateway container (from octogee-anthropic)", () => {
+  it("routes the shared (default) gateway's anthropic through the broker with NO pod-level platform key", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
     const gw = containerBlock(dep ?? "", "gateway");
-    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
-    expect(gw).toMatch(/secretKeyRef:\s*\n\s*name:\s*octogee-anthropic\s*\n\s*key:\s*api_key/);
+    // per-customer broker tokens live in the auth-profile store, not the pod env
+    expect(gw).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
+    expect(gw).toMatch(
+      /name:\s*ANTHROPIC_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010"/,
+    );
   });
 
-  it("renders ANTHROPIC_API_KEY when profile is explicitly standard (cattle BYOK/BYOS platform fallback)", () => {
+  it("renders no pod-level ANTHROPIC_API_KEY when profile is explicitly standard (shared → per-customer broker tokens)", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", { profile: "standard" }),
       "Deployment",
@@ -677,7 +681,8 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     );
     expect(dep).not.toBeNull();
     const gw = containerBlock(dep ?? "", "gateway");
-    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
   });
 
   it("renders builder fallback as a broker token plus ANTHROPIC_BASE_URL", () => {
@@ -698,10 +703,11 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
   });
 
-  it("does not route shared fallback traffic through the broker", () => {
+  it("routes shared fallback traffic through the broker (base URL set, no direct platform key)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
-    expect(gw).not.toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
+    expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
+    expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
   });
 
   it("renders operator model access as a broker token plus ANTHROPIC_BASE_URL", () => {
@@ -740,10 +746,11 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
       "MM_ADMIN_USER_ID",
       "DISCORD_OPS_WEBHOOK_URL",
       "INTERNAL_SERVICE_KEY",
-      // ANTHROPIC_API_KEY is the one deliberate exception — a shared-compute
-      // (not cross-tenant) platform fallback, standard/cattle only, never
-      // operator. Its presence + gating is pinned by the dedicated
-      // ANTHROPIC_API_KEY tests above.
+      // Shared pods no longer carry ANTHROPIC_API_KEY either — each customer-agent's
+      // anthropic:default is a per-customer broker token in the auth-profile store, so
+      // the platform key never lands on the pod. (Builder/operator keep a per-gateway
+      // broker token; pinned by the ANTHROPIC tests above.)
+      "ANTHROPIC_API_KEY",
     ]) {
       expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
     }

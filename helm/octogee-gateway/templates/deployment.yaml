@@ -220,35 +220,30 @@ spec:
             {{- end }}
             - name: OPERATOR_SHELLS_ENABLED
               value: {{ ternary "true" "false" $operatorShellsEnabled | quote }}
-            {{- if eq $gatewayClass "shared" }}
-            # Shared gateways fall back to the shared platform Anthropic
-            # key when a Builder has no BYOK/BYOS profile (openclaw's
-            # Anthropic auth profile + the L3-throttle fallback).
-            # NEVER on builder/operator gateways — they are exec-capable and must
-            # use a broker token, with provider keys resolved off-pod.
-            # optional: a missing secret degrades to the agent's own no-key error,
-            # never a pod crash-loop.
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: octogee-anthropic
-                  key: api_key
-                  optional: true
-            {{- else if or (eq $gatewayClass "builder") (eq $gatewayClass "operator") }}
-            # Builder/operator gateways are exec-capable, so they must not receive
-            # a provider key. This optional per-gateway secret contains an opaque
-            # LLM broker token; the broker resolves platform/BYOT provider keys
-            # off-pod and pre-boot-config.ts wires ANTHROPIC_BASE_URL into
-            # models.providers.anthropic.baseUrl. The pod still boots if
-            # issuance is temporarily absent.
+            # Every class routes anthropic through the LLM broker — no provider key
+            # is served from a pod to api.anthropic.com directly. The base URL is
+            # pod-level for all; pre-boot-config.ts syncs it into
+            # models.providers.anthropic.baseUrl.
+            - name: ANTHROPIC_BASE_URL
+              value: {{ .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) | quote }}
+            {{- if or (eq $gatewayClass "builder") (eq $gatewayClass "operator") }}
+            # Builder/operator (exec-capable, single tenant) carry ONE per-gateway
+            # broker token; the broker resolves platform/BYOT provider keys off-pod.
+            # optional: the pod still boots if issuance is temporarily absent.
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: gateway-model-key-{{ .Values.gatewayId }}
                   key: anthropic_api_key
                   optional: true
-            - name: ANTHROPIC_BASE_URL
-              value: {{ .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) | quote }}
+            {{- end }}
+            {{- if eq $gatewayClass "shared" }}
+            # Shared (multi-tenant) pods carry NO pod-level provider key. Each
+            # customer-agent's anthropic:default is its OWN per-customer broker token
+            # (agent-model-token-<agentId>), materialized into the agent's auth-profile
+            # store by pre-boot-config.ts / byot-sync and fetched at runtime via the
+            # secret-resolver → POST /internal/byok/agent-model-token. The broker
+            # resolves platform-or-BYOK per owner and meters per ownerUid.
             {{- end }}
             {{- if eq $gatewayClass "operator" }}
             # Operator gateway shells run inside the tenant shell container,
