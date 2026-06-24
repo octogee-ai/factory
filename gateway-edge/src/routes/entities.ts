@@ -16,8 +16,12 @@ router.use(requireAuth);
 
 type EntityKind = "workspace" | "project";
 
+interface RouteError {
+  status: number;
+  body: Record<string, unknown>;
+}
+
 interface MemberResponse {
-  
   uid: string | null;
   mmUserId: string;
   username: string;
@@ -39,6 +43,28 @@ interface MmUser {
   last_name: string;
 }
 
+interface RemovalTarget {
+  ownerUid: string;
+  mmChannelId: string;
+  projectRef?: FirebaseFirestore.DocumentReference;
+}
+
+function routeError(status: number, body: Record<string, unknown>): RouteError {
+  return { status, body };
+}
+
+function isRouteError<T>(value: T | RouteError): value is RouteError {
+  return typeof (value as RouteError).status === "number" && "body" in (value as RouteError);
+}
+
+function sendRouteError(res: Response, error: RouteError): void {
+  res.status(error.status).json(error.body);
+}
+
+function isEntityKind(kind: string): kind is EntityKind {
+  return kind === "workspace" || kind === "project";
+}
+
 async function getCallerMmToken(uid: string): Promise<string | null> {
   const secretDoc = await db.doc(`users/${uid}/secrets/mattermost`).get();
   const token = secretDoc.data()?.personalToken;
@@ -58,7 +84,7 @@ async function resolveEntityChannel(
     const storedChannelId = ownerCtx?.generalChannelId;
     if (storedChannelId) return { mmChannelId: storedChannelId, ownerUid };
 
-const teamId = ownerCtx?.teamId;
+    const teamId = ownerCtx?.teamId;
     if (!teamId) return { mmChannelId: null, ownerUid, error: "Workspace not yet provisioned" };
     try {
       const expected = workspaceGeneralChannelName(id);
@@ -76,7 +102,7 @@ const teamId = ownerCtx?.teamId;
     }
   }
 
-const parts = decomposeProjectId(id);
+  const parts = decomposeProjectId(id);
   if (!parts) return { mmChannelId: null, ownerUid: null, error: "Invalid project id" };
 
   const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
@@ -132,11 +158,94 @@ async function hydrateFromFirestore(
   return byMmId;
 }
 
+async function ownerMmUserId(ownerUid: string | null): Promise<string | null> {
+  if (!ownerUid) return null;
+  const ownerDoc = await db.doc(`users/${ownerUid}`).get();
+  return ownerDoc.data()?.mattermost?.userId ?? null;
+}
+
+async function fetchChannelMembers(
+  mmChannelId: string,
+  callerToken: string,
+): Promise<MmChannelMember[] | RouteError> {
+  try {
+    return (await mmApi(
+      `/channels/${mmChannelId}/members`,
+      "GET",
+      undefined,
+      callerToken,
+    )) as MmChannelMember[];
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("403") || msg.includes("401")) {
+      return routeError(403, { error: "You are not a member of this channel" });
+    }
+    throw err;
+  }
+}
+
+async function fetchMmUsersById(mmUserIds: string[], callerToken: string): Promise<Map<string, MmUser>> {
+  const mmUsers = (await mmApi(
+    `/users/ids`,
+    "POST",
+    mmUserIds,
+    callerToken,
+  )) as MmUser[];
+  return new Map(mmUsers.map((user) => [user.id, user]));
+}
+
+function memberResponse(
+  member: MmChannelMember,
+  mmUsersById: Map<string, MmUser>,
+  firestoreByMmId: Map<string, { uid: string; avatarUrl: string | null; displayName: string | null }>,
+  ownerMmUserId: string | null,
+): MemberResponse {
+  const mmUser = mmUsersById.get(member.user_id);
+  const fs = firestoreByMmId.get(member.user_id);
+  const displayName =
+    fs?.displayName ||
+    mmUser?.first_name ||
+    mmUser?.username ||
+    "Unknown";
+  return {
+    uid: fs?.uid ?? null,
+    mmUserId: member.user_id,
+    username: mmUser?.username ?? member.user_id,
+    displayName,
+    avatarUrl: fs?.avatarUrl ?? null,
+    role: member.user_id === ownerMmUserId ? "owner" : "member",
+  };
+}
+
+function sortMembers(members: MemberResponse[]): MemberResponse[] {
+  return members.sort((a, b) => {
+    if (a.role === "owner" && b.role !== "owner") return -1;
+    if (a.role !== "owner" && b.role === "owner") return 1;
+    return a.displayName.localeCompare(b.displayName);
+  });
+}
+
+async function buildMemberResponses(
+  mmMembers: MmChannelMember[],
+  ownerUid: string | null,
+  callerToken: string,
+): Promise<MemberResponse[]> {
+  const mmUserIds = mmMembers.map((member) => member.user_id);
+  const [ownerUserId, mmUsersById, firestoreByMmId] = await Promise.all([
+    ownerMmUserId(ownerUid),
+    fetchMmUsersById(mmUserIds, callerToken),
+    hydrateFromFirestore(mmUserIds),
+  ]);
+  return sortMembers(
+    mmMembers.map((member) => memberResponse(member, mmUsersById, firestoreByMmId, ownerUserId)),
+  );
+}
+
 router.get("/:kind/:id/members", async (req: Request, res: Response) => {
   const uid = req.uid!;
   const { kind, id } = req.params as { kind: string; id: string };
 
-  if (kind !== "workspace" && kind !== "project") {
+  if (!isEntityKind(kind)) {
     res.status(400).json({ error: "kind must be 'workspace' or 'project'" });
     return;
   }
@@ -149,7 +258,7 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
     }
 
     const { mmChannelId, ownerUid, error } = await resolveEntityChannel(
-      kind as EntityKind,
+      kind,
       id,
       callerToken,
     );
@@ -163,27 +272,10 @@ router.get("/:kind/:id/members", async (req: Request, res: Response) => {
       return;
     }
 
-    let ownerMmUserId: string | null = null;
-    if (ownerUid) {
-      const od = await db.doc(`users/${ownerUid}`).get();
-      ownerMmUserId = od.data()?.mattermost?.userId ?? null;
-    }
-
-let mmMembers: MmChannelMember[] = [];
-    try {
-      mmMembers = (await mmApi(
-        `/channels/${mmChannelId}/members`,
-        "GET",
-        undefined,
-        callerToken,
-      )) as MmChannelMember[];
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("403") || msg.includes("401")) {
-        res.status(403).json({ error: "You are not a member of this channel" });
-        return;
-      }
-      throw err;
+    const mmMembers = await fetchChannelMembers(mmChannelId, callerToken);
+    if (isRouteError(mmMembers)) {
+      sendRouteError(res, mmMembers);
+      return;
     }
 
     if (mmMembers.length === 0) {
@@ -191,53 +283,105 @@ let mmMembers: MmChannelMember[] = [];
       return;
     }
 
-    const mmUserIds = mmMembers.map((m) => m.user_id);
-    const mmUsers = (await mmApi(
-      `/users/ids`,
-      "POST",
-      mmUserIds,
-      callerToken,
-    )) as MmUser[];
-    const mmUsersById = new Map(mmUsers.map((u) => [u.id, u]));
-
-    const firestoreByMmId = await hydrateFromFirestore(mmUserIds);
-
-    const members: MemberResponse[] = mmMembers.map((m) => {
-      const mmUser = mmUsersById.get(m.user_id);
-      const fs = firestoreByMmId.get(m.user_id);
-      const displayName =
-        fs?.displayName ||
-        mmUser?.first_name ||
-        mmUser?.username ||
-        "Unknown";
-      return {
-        uid: fs?.uid ?? null,
-        mmUserId: m.user_id,
-        username: mmUser?.username ?? m.user_id,
-        displayName,
-        avatarUrl: fs?.avatarUrl ?? null,
-        role: m.user_id === ownerMmUserId ? "owner" : "member",
-      };
-    });
-
-    members.sort((a, b) => {
-      if (a.role === "owner" && b.role !== "owner") return -1;
-      if (a.role !== "owner" && b.role === "owner") return 1;
-      return a.displayName.localeCompare(b.displayName);
-    });
-
-    res.json({ members });
+    res.json({ members: await buildMemberResponses(mmMembers, ownerUid, callerToken) });
   } catch (err) {
     logger.error(`[entities] Members fetch failed (${kind}/${id})`, { err: String(err) });
     res.status(500).json({ error: "Failed to load members" });
   }
 });
 
+async function resolveWorkspaceRemovalTarget(id: string, callerUid: string): Promise<RemovalTarget | RouteError> {
+  const ownerUid = await resolveWorkspaceUid(id);
+  if (!ownerUid) return routeError(404, { error: "Workspace not found" });
+  if (ownerUid !== callerUid) {
+    return routeError(403, { error: "Only the workspace owner can remove members" });
+  }
+  const ownerCtx = await getWorkspaceMmContext(ownerUid, id);
+  const mmChannelId = ownerCtx?.generalChannelId;
+  if (!mmChannelId) return routeError(422, { error: "Workspace has no general channel yet" });
+  return { ownerUid, mmChannelId };
+}
+
+async function resolveProjectRemovalTarget(id: string, callerUid: string): Promise<RemovalTarget | RouteError> {
+  const parts = decomposeProjectId(id);
+  if (!parts) return routeError(400, { error: "Invalid project id" });
+
+  const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
+  const project = await readProject(projectRef);
+  if (!project) return routeError(404, { error: "Project not found" });
+  if (project.ownerUid !== callerUid) {
+    return routeError(403, { error: "Only the project owner can remove members" });
+  }
+
+  const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
+  const mmChannelId = generalChan?.mattermost?.channelId;
+  if (!mmChannelId) return routeError(422, { error: "Project has no channel yet" });
+  return { ownerUid: project.ownerUid, mmChannelId, projectRef };
+}
+
+async function resolveRemovalTarget(
+  kind: EntityKind,
+  id: string,
+  callerUid: string,
+): Promise<RemovalTarget | RouteError> {
+  return kind === "workspace"
+    ? resolveWorkspaceRemovalTarget(id, callerUid)
+    : resolveProjectRemovalTarget(id, callerUid);
+}
+
+async function ownerRemovalError(ownerUid: string, mmUserId: string): Promise<RouteError | null> {
+  const ownerUserId = await ownerMmUserId(ownerUid);
+  return ownerUserId === mmUserId
+    ? routeError(400, { error: "Owners cannot remove themselves — delete the entity instead" })
+    : null;
+}
+
+async function deleteMattermostMember(mmChannelId: string, mmUserId: string): Promise<void> {
+  try {
+    await mmApi(`/channels/${mmChannelId}/members/${mmUserId}`, "DELETE");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("404")) {
+      logger.info(`[entities] ${mmUserId} already absent from ${mmChannelId}`);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function uidForMattermostUser(mmUserId: string): Promise<string | null> {
+  const targetSnap = await db
+    .collection("users")
+    .where("mattermost.userId", "==", mmUserId)
+    .limit(1)
+    .get();
+  return targetSnap.empty ? null : targetSnap.docs[0].id;
+}
+
+async function removeProjectMemberDocument(
+  projectRef: FirebaseFirestore.DocumentReference | undefined,
+  mmUserId: string,
+): Promise<void> {
+  if (!projectRef) return;
+  const targetUid = await uidForMattermostUser(mmUserId);
+  if (!targetUid) return;
+
+  const memberRef = projectRef.collection("members").doc(targetUid);
+  const memberDoc = await memberRef.get();
+  if (!memberDoc.exists) return;
+
+  await memberRef.delete();
+  await projectRef.update({
+    memberCount: FieldValue.increment(-1),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+}
+
 router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response) => {
   const callerUid = req.uid!;
   const { kind, id, mmUserId } = req.params as { kind: string; id: string; mmUserId: string };
 
-  if (kind !== "workspace" && kind !== "project") {
+  if (!isEntityKind(kind)) {
     res.status(400).json({ error: "kind must be 'workspace' or 'project'" });
     return;
   }
@@ -247,94 +391,20 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
   }
 
   try {
-
-let ownerUid: string | null = null;
-    let mmChannelId: string | null = null;
-
-    if (kind === "workspace") {
-      ownerUid = await resolveWorkspaceUid(id);
-      if (!ownerUid) {
-        res.status(404).json({ error: "Workspace not found" });
-        return;
-      }
-      if (ownerUid !== callerUid) {
-        res.status(403).json({ error: "Only the workspace owner can remove members" });
-        return;
-      }
-      const ownerCtx = await getWorkspaceMmContext(ownerUid, id);
-      mmChannelId = ownerCtx?.generalChannelId ?? null;
-      if (!mmChannelId) {
-        res.status(422).json({ error: "Workspace has no general channel yet" });
-        return;
-      }
-    } else {
-      const parts = decomposeProjectId(id);
-      if (!parts) {
-        res.status(400).json({ error: "Invalid project id" });
-        return;
-      }
-      const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
-      const project = await readProject(projectRef);
-      if (!project) {
-        res.status(404).json({ error: "Project not found" });
-        return;
-      }
-      ownerUid = project.ownerUid;
-      if (ownerUid !== callerUid) {
-        res.status(403).json({ error: "Only the project owner can remove members" });
-        return;
-      }
-      const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
-      mmChannelId = generalChan?.mattermost?.channelId ?? null;
-      if (!mmChannelId) {
-        res.status(422).json({ error: "Project has no channel yet" });
-        return;
-      }
-    }
-
-const ownerMmUserId = ownerUid
-      ? (await db.doc(`users/${ownerUid}`).get()).data()?.mattermost?.userId ?? null
-      : null;
-    if (ownerMmUserId && ownerMmUserId === mmUserId) {
-      res.status(400).json({ error: "Owners cannot remove themselves — delete the entity instead" });
+    const target = await resolveRemovalTarget(kind, id, callerUid);
+    if (isRouteError(target)) {
+      sendRouteError(res, target);
       return;
     }
 
-try {
-      await mmApi(`/channels/${mmChannelId}/members/${mmUserId}`, "DELETE");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("404")) {
-        
-        logger.info(`[entities] ${mmUserId} already absent from ${mmChannelId}`);
-      } else {
-        throw err;
-      }
+    const ownerError = await ownerRemovalError(target.ownerUid, mmUserId);
+    if (ownerError) {
+      sendRouteError(res, ownerError);
+      return;
     }
 
-if (kind === "project") {
-      const parts = decomposeProjectId(id);
-      if (parts) {
-        const targetSnap = await db
-          .collection("users")
-          .where("mattermost.userId", "==", mmUserId)
-          .limit(1)
-          .get();
-        if (!targetSnap.empty) {
-          const targetUid = targetSnap.docs[0].id;
-          const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
-          const memberRef = projectRef.collection("members").doc(targetUid);
-          const memberDoc = await memberRef.get();
-          if (memberDoc.exists) {
-            await memberRef.delete();
-            await projectRef.update({
-              memberCount: FieldValue.increment(-1),
-              updatedAt: FieldValue.serverTimestamp(),
-            });
-          }
-        }
-      }
-    }
+    await deleteMattermostMember(target.mmChannelId, mmUserId);
+    await removeProjectMemberDocument(target.projectRef, mmUserId);
 
     logger.info(`[entities] ${callerUid} removed mmUser ${mmUserId} from ${kind}/${id}`);
     res.json({ success: true });
