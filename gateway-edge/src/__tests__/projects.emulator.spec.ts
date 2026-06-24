@@ -864,7 +864,10 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(doc?.pendingVisibility).toBeNull();
     expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
       kind: "general",
-      mattermost: { channelId: "ch-retry-456" },
+      mattermost: {
+        channelId: "ch-retry-456",
+        activityChannelId: expect.any(String),
+      },
     });
     expect(mockMmApi).toHaveBeenCalledWith(
       "/teams/team-abc/channels/name/alice-proj-mygame-general",
@@ -974,7 +977,10 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(doc?.provisioningState).toBe("active");
     expect(doc?.visibility).toBe("public");
     expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
-      mattermost: { channelId: "ch-existing-999" },
+      mattermost: {
+        channelId: "ch-existing-999",
+        activityChannelId: "ch-activity-existing-999",
+      },
     });
     const primaryCreateCalls = mockMmApi.mock.calls.filter(
       (c) => c[1] === "POST" && c[0] === "/channels" && /general$/.test(c[2]?.name ?? ""),
