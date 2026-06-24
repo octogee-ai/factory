@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { agentExists, writeOpenClawConfig } from "../lib/config.js";
 
 describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
   let tmpDir: string;
@@ -21,10 +22,7 @@ describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
       agents: { list: [{ id: "test-agent" }] },
       bindings: [],
     };
-    
-    const tmp = configPath + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(config, null, 2), "utf-8");
-    fs.renameSync(tmp, configPath);
+    writeOpenClawConfig(config, configPath);
 
 const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(result.agents.list[0].id).toBe("test-agent");
@@ -41,9 +39,7 @@ const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
         entries: { "octogee-router": { config: { enforcementOverrides: {} } } },
       },
     };
-    const tmp = configPath + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(config, null, 2), "utf-8");
-    fs.renameSync(tmp, configPath);
+    writeOpenClawConfig(config, configPath);
 
     const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(result.agents.defaults.maxConcurrent).toBe(8);
@@ -52,11 +48,6 @@ const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
 });
 
 describe("agentExists", () => {
-  
-  function agentExists(config: any, agentId: string): boolean {
-    return config.agents?.list?.some((a: any) => a.id === agentId) ?? false;
-  }
-
   it("returns true when agent is in the list", () => {
     const config = { agents: { list: [{ id: "octogee-test-coach" }] } };
     expect(agentExists(config, "octogee-test-coach")).toBe(true);
@@ -80,5 +71,10 @@ describe("agentExists", () => {
   it("returns false when agents.list is undefined", () => {
     const config = { agents: {} };
     expect(agentExists(config, "anything")).toBe(false);
+  });
+
+  it("returns false when agents.list contains a non-object entry", () => {
+    const config = { agents: { list: ["octogee-test-coach"] } };
+    expect(agentExists(config, "octogee-test-coach")).toBe(false);
   });
 });

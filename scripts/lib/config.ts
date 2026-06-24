@@ -64,12 +64,57 @@ export function bootBanner(component: string): string {
   );
 }
 
-export function readOpenClawConfig(): any {
-  return JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, "utf-8"));
+export interface OpenClawAgentConfig {
+  id: string;
+  model?: string;
+  heartbeat?: unknown;
+  tools?: {
+    fs?: { workspaceOnly?: boolean };
+    deny?: string[];
+  };
+}
+
+export interface OpenClawConfig {
+  channels?: Record<string, unknown>;
+  agents?: {
+    defaults?: {
+      maxConcurrent?: number;
+      verboseDefault?: string;
+      subagents?: {
+        maxConcurrent?: number;
+        model?: string;
+        runTimeoutSeconds?: number;
+      };
+    };
+    list?: OpenClawAgentConfig[];
+  };
+  tools?: {
+    subagents?: {
+      tools?: {
+        deny?: string[];
+      };
+    };
+    elevated?: { enabled?: boolean };
+  };
+  gateway?: {
+    auth?: {
+      rateLimit?: {
+        maxAttempts: number;
+        windowMs: number;
+        lockoutMs: number;
+      };
+    };
+  };
+}
+
+export function readOpenClawConfig(): OpenClawConfig {
+  const config = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, "utf-8")) as unknown;
+  if (!isRecord(config)) throw new Error("openclaw.json must contain a JSON object");
+  return config as OpenClawConfig;
 }
 
 export function writeOpenClawConfig(
-  config: any,
+  config: unknown,
   configPath: string = OPENCLAW_CONFIG,
 ): void {
   const tmp = configPath + ".tmp";
@@ -78,6 +123,15 @@ export function writeOpenClawConfig(
   log("openclaw.json updated — gateway will hot-reload");
 }
 
-export function agentExists(config: any, agentId: string): boolean {
-  return config.agents?.list?.some((a: any) => a.id === agentId) ?? false;
+export function agentExists(config: unknown, agentId: string): boolean {
+  const agents = isRecord(config) && isRecord(config.agents) ? config.agents.list : undefined;
+  return Array.isArray(agents) && agents.some((agent) => isAgentWithId(agent, agentId));
+}
+
+function isAgentWithId(agent: unknown, agentId: string): boolean {
+  return isRecord(agent) && agent.id === agentId;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
