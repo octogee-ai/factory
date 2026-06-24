@@ -21,6 +21,7 @@ export type WithProjectOptions = {
   errorMessage?: string;
 };
 
+// eslint-disable-next-line max-params -- Route wrapper API keeps call sites readable until route handlers are split.
 export async function withProject(
   req: Request,
   res: Response,
@@ -60,8 +61,8 @@ export async function withProject(
     }
 
     await handler({ projectRef, project, uid: req.uid!, wid, pid });
-  } catch (err: any) {
-    logger.error(`${logTag} ${wid}/${pid}:`, err);
+  } catch (err: unknown) {
+    logger.error(`${logTag} ${wid}/${pid}:`, { err });
     if (!res.headersSent) {
       res.status(500).json({ error: opts.errorMessage ?? "Operation failed" });
     }
