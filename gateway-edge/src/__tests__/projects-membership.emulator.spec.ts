@@ -86,6 +86,22 @@ async function seedPublicAliceGame(
   });
 }
 
+async function seedProjectActivityChannel(): Promise<void> {
+  await db
+    .collection("workspaces")
+    .doc("alice")
+    .collection("projects")
+    .doc("game")
+    .collection("channels")
+    .doc("general")
+    .set({
+      mattermost: {
+        channelId: "ch-alice-game",
+        activityChannelId: "ch-alice-game-activity",
+      },
+    }, { merge: true });
+}
+
 async function getProjectDoc(): Promise<Record<string, unknown> | undefined> {
   const snap = await db
     .collection("workspaces")
@@ -219,6 +235,25 @@ describe("POST /api/projects/:wid/:pid/join", () => {
       { permission: "read" },
     );
   });
+
+  it("adds the caller to the activity sibling channel on first join", async () => {
+    await seedPublicAliceGame();
+    await seedProjectActivityChannel();
+    mockMmApi.mockResolvedValue({ ok: true });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/game/join")
+      .set(await authHeader())
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels/ch-alice-game-activity/members",
+      "POST",
+      { user_id: "mm-bob" },
+    );
+  });
 });
 
 describe("POST /api/projects/:wid/:pid/leave", () => {
@@ -291,6 +326,33 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
     expect(mockGiteaApi).toHaveBeenCalledWith(
       "alice",
       "game/collaborators/ws-bob",
+      "DELETE",
+    );
+  });
+
+  it("removes the caller from the activity sibling channel on leave", async () => {
+    await seedPublicAliceGame();
+    await seedProjectActivityChannel();
+    await db
+      .collection("workspaces")
+      .doc("alice")
+      .collection("projects")
+      .doc("game")
+      .collection("members")
+      .doc(CALLER_UID)
+      .set({ id: CALLER_UID, role: "member" });
+    mockMmApi.mockResolvedValue({ ok: true });
+    mockGiteaApi.mockResolvedValue({ ok: true });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/game/leave")
+      .set(await authHeader())
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockMmApi).toHaveBeenCalledWith(
+      "/channels/ch-alice-game-activity/members/mm-bob",
       "DELETE",
     );
   });
