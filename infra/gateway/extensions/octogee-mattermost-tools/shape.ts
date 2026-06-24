@@ -136,30 +136,38 @@ export function shapeBundle(
   const out: CoachPost[] = [];
   for (const id of bundle.order ?? []) {
     const post = bundle.posts?.[id];
-    if (!post) continue;
-    if (post.user_id === ctx.coachMmUserId) continue;
-    if ((post.delete_at ?? 0) > 0) continue;
-    if (post.type && post.type !== "") continue;
-
-    const channel = ctx.channels?.get(post.channel_id);
-    if (!channel) continue;
-    const author = ctx.users?.get(post.user_id);
-
-    out.push({
-      post_id: post.id,
-      channel: {
-        name: channel.name,
-        display_name: channel.display_name,
-      },
-      author: {
-        username: author?.username ?? "(unknown)",
-        display_name: displayName(author),
-      },
-      created_at: isoFromMs(post.create_at),
-      permalink: buildPermalink(ctx.siteUrl, ctx.teamName, post.id),
-      snippet: makeSnippet(post.message, ctx.query),
-      thread_root_id: post.root_id && post.root_id !== "" ? post.root_id : null,
-    });
+    if (!shouldShapePost(post, ctx)) continue;
+    const shaped = shapePost(post, ctx);
+    if (shaped) out.push(shaped);
   }
   return { posts: out, total: out.length };
+}
+
+function shouldShapePost(post: MmPost | undefined, ctx: ShapeContext): post is MmPost {
+  if (!post) return false;
+  if (post.user_id === ctx.coachMmUserId) return false;
+  if ((post.delete_at ?? 0) > 0) return false;
+  if (post.type && post.type !== "") return false;
+  return true;
+}
+
+function shapePost(post: MmPost, ctx: ShapeContext): CoachPost | null {
+  const channel = ctx.channels?.get(post.channel_id);
+  if (!channel) return null;
+  const author = ctx.users?.get(post.user_id);
+  return {
+    post_id: post.id,
+    channel: {
+      name: channel.name,
+      display_name: channel.display_name,
+    },
+    author: {
+      username: author?.username ?? "(unknown)",
+      display_name: displayName(author),
+    },
+    created_at: isoFromMs(post.create_at),
+    permalink: buildPermalink(ctx.siteUrl, ctx.teamName, post.id),
+    snippet: makeSnippet(post.message, ctx.query),
+    thread_root_id: post.root_id && post.root_id !== "" ? post.root_id : null,
+  };
 }
