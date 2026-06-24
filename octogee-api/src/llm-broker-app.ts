@@ -5,6 +5,7 @@ import express, { type Request, type Response as ExpressResponse, type NextFunct
 import type {
   ModelBrokerProviderKeyResolver,
   ModelBrokerProviderKey,
+  ModelBrokerProviderKeySource,
 } from "./lib/model-broker-provider-keys.js";
 import type {
   ModelBrokerProvider,
@@ -363,6 +364,7 @@ interface MeteringContext {
   usageStore?: ModelBrokerUsageStore;
   now: () => number;
   onMeteringError: (err: unknown) => void;
+  countsTowardSpendWindow: boolean;
 }
 
 async function recordUsage(
@@ -395,6 +397,7 @@ async function recordUsage(
       path: ctx.url.pathname,
       upstreamStatus: upstream.status,
       now: ctx.now(),
+      countsTowardSpendWindow: ctx.countsTowardSpendWindow,
     });
   } catch (err) {
     ctx.onMeteringError(err);
@@ -417,11 +420,13 @@ async function preflightGate(input: {
   req: Request;
   url: URL;
   record: ModelBrokerTokenRecord;
+  source: ModelBrokerProviderKeySource;
   usageStore?: ModelBrokerUsageStore;
   now: () => number;
   onMeteringError: (err: unknown) => void;
 }): Promise<GateDecision> {
   const { record } = input;
+  if (input.source === "owner_byot") return { allowed: true };
   if (input.req.method.toUpperCase() === "GET" && input.url.pathname === "/v1/models") {
     return { allowed: true };
   }
@@ -599,6 +604,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           req,
           url,
           record,
+          source: providerKey.source,
           usageStore: deps.usageStore,
           now,
           onMeteringError: deps.onMeteringError ?? (() => undefined),
@@ -633,6 +639,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
               usageStore: deps.usageStore,
               now,
               onMeteringError: deps.onMeteringError ?? (() => undefined),
+              countsTowardSpendWindow: providerKey.source !== "owner_byot",
             }
           : undefined;
         await writeUpstreamResponse(upstream, res, metering);

@@ -8,6 +8,7 @@ import {
 } from "./usage-log-tailer.js";
 import {
   WINDOW_LENGTH_HOURS,
+  resolveTier,
   windowBudgetUsdForTier,
 } from "../../shared/types/billing.js";
 import { computeThrottleLevel } from "../../shared/types/throttle.js";
@@ -165,7 +166,7 @@ export async function reportUsageForUid(input: ReportUsageForUidInput): Promise<
       const data = userDoc.data() || {};
       workspaceId = workspaceIdFromUserData(data, agentId);
       const usageData = data.usage || {};
-      const tier = data.selectedTier || data.subscription?.tier || "trial";
+      const tier = resolveTier(data);
       const subscriptionStatus = data.subscription?.status ?? "active";
       const byotActive = data.byotActive === true;
       const now = new Date();

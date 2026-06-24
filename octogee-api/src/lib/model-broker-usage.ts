@@ -37,6 +37,7 @@ export interface ModelBrokerUsageRecordInput {
   path: string;
   upstreamStatus: number;
   now?: number;
+  countsTowardSpendWindow?: boolean;
 }
 
 export interface ModelBrokerUsageStore {
@@ -379,21 +380,23 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
       costUsd: existing.costUsd + cost.total,
       requestCount: existing.requestCount + 1,
     });
-    const windowKey = windowDocId(input.gatewayId, windowStartMs);
-    const existingWindow = this.windows.get(windowKey) ?? {
-      gatewayId: input.gatewayId,
-      windowStartMs,
-      totalTokens: 0,
-      costUsd: 0,
-      requestCount: 0,
-    };
-    this.windows.set(windowKey, {
-      gatewayId: input.gatewayId,
-      windowStartMs,
-      totalTokens: existingWindow.totalTokens + totalTokens(input.usage),
-      costUsd: existingWindow.costUsd + cost.total,
-      requestCount: existingWindow.requestCount + 1,
-    });
+    if (input.countsTowardSpendWindow !== false) {
+      const windowKey = windowDocId(input.gatewayId, windowStartMs);
+      const existingWindow = this.windows.get(windowKey) ?? {
+        gatewayId: input.gatewayId,
+        windowStartMs,
+        totalTokens: 0,
+        costUsd: 0,
+        requestCount: 0,
+      };
+      this.windows.set(windowKey, {
+        gatewayId: input.gatewayId,
+        windowStartMs,
+        totalTokens: existingWindow.totalTokens + totalTokens(input.usage),
+        costUsd: existingWindow.costUsd + cost.total,
+        requestCount: existingWindow.requestCount + 1,
+      });
+    }
   }
 
   async readWindowUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot> {
@@ -475,20 +478,22 @@ export function createFirestoreModelBrokerUsageStore(
           },
           { merge: true },
         );
-        t.set(
-          windowRef,
-          {
-            gatewayId: input.gatewayId,
-            ownerUid: input.ownerUid,
-            provider: input.provider,
-            windowStartMs,
-            windowLengthHours: WINDOW_LENGTH_HOURS,
-            updatedAt: now,
-            expiresAt: expiresAt(now),
-            ...usageDocumentTotals(windowData, input.usage, cost),
-          },
-          { merge: true },
-        );
+        if (input.countsTowardSpendWindow !== false) {
+          t.set(
+            windowRef,
+            {
+              gatewayId: input.gatewayId,
+              ownerUid: input.ownerUid,
+              provider: input.provider,
+              windowStartMs,
+              windowLengthHours: WINDOW_LENGTH_HOURS,
+              updatedAt: now,
+              expiresAt: expiresAt(now),
+              ...usageDocumentTotals(windowData, input.usage, cost),
+            },
+            { merge: true },
+          );
+        }
       });
     },
 

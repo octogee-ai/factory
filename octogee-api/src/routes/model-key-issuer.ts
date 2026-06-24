@@ -8,7 +8,7 @@ import {
   type ModelBrokerTokenStore,
 } from "../lib/model-broker-tokens.js";
 import type { Firestore } from "firebase-admin/firestore";
-import { windowBudgetUsdForTier } from "../../../shared/types/billing.js";
+import { resolveTier, windowBudgetUsdForTier } from "../../../shared/types/billing.js";
 import {
   GATEWAY_ID_REQUIREMENT,
   isValidGatewayId,
@@ -134,12 +134,6 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function ownerTier(data: Record<string, unknown>, subscription: Record<string, unknown>): string {
-  if (typeof data.selectedTier === "string") return data.selectedTier;
-  if (typeof subscription.tier === "string") return subscription.tier;
-  return "trial";
-}
-
 async function readOwnerTierLimit(
   db: Pick<Firestore, "collection"> | undefined,
   ownerUid: string | undefined,
@@ -154,7 +148,7 @@ async function readOwnerTierLimit(
       ? (data.subscription as Record<string, unknown>)
       : {};
   return windowBudgetUsdForTier(
-    ownerTier(data, subscription),
+    resolveTier(data),
     timestampDate(subscription.trialStartedAt),
     new Date(now),
   );

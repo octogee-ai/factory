@@ -71,6 +71,8 @@ export {
   trialWindowBudgetUsd,
   trialDayN,
   windowBudgetUsdForTier,
+  resolveTier,
+  FREE_MONTHLY_LLM_BUDGET_USD,
 } from './billing.js';
 
 export type {
