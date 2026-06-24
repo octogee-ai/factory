@@ -108,6 +108,11 @@ describe("applyTemplatePlaceholders", () => {
     expect(result).toBe("yes {{unknown}}");
   });
 
+  it("treats placeholder keys as literal strings", () => {
+    const result = applyTemplatePlaceholders("{{a.b}} {{axb}}", { "a.b": "literal" });
+    expect(result).toBe("literal {{axb}}");
+  });
+
   it("handles empty vars object", () => {
     const result = applyTemplatePlaceholders("{{x}}", {});
     expect(result).toBe("{{x}}");

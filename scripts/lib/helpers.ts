@@ -36,7 +36,7 @@ export function copyDirSync(src: string, dest: string): void {
 export function applyTemplatePlaceholders(template: string, vars: Record<string, string>): string {
   let result = template;
   for (const [key, value] of Object.entries(vars)) {
-    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+    result = result.split(`{{${key}}}`).join(value);
   }
   return result;
 }
