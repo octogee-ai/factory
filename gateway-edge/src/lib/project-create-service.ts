@@ -1,7 +1,7 @@
 import { FieldValue, db } from "./db.js";
 import { logger } from "../middleware/logging.js";
 import { mmApi } from "./mattermost.js";
-import { getWorkspaceMmContext } from "./mattermost-context.js";
+import { getWorkspaceMmContext, type WorkspaceMmContext } from "./mattermost-context.js";
 import {
   projectGeneralChannelName,
   isValidProjectId,
@@ -33,6 +33,38 @@ export interface ProjectCreateResult {
   body: Record<string, unknown>;
 }
 
+interface ProjectCreatePlan {
+  uid: string;
+  userData: FirebaseFirestore.DocumentData | undefined;
+  workspaceId: string;
+  slug: string;
+  trimmedName: string;
+  trimmedTagline: string;
+  category: string;
+  projectType: string | null;
+  status: string;
+  targetVisibility: string;
+  ghRepoSource: { provider: "github"; owner: string; repo: string } | null;
+  giteaRepoName: string;
+  source: "ui" | "agent";
+}
+
+interface NormalizedProjectCreateRequest {
+  name: string;
+  slug: string;
+  tagline: string;
+  category: string;
+  projectType: string | null;
+  status: string;
+  visibility: string;
+  repoSource: unknown;
+}
+
+interface MattermostMemberAdd {
+  id: string | null;
+  label: string;
+}
+
 function validateProjectSlug(slug: string): string | null {
   if (!isValidProjectId(slug)) {
     return `Slug must be ${PROJECT_ID_MIN_LENGTH}-${PROJECT_ID_MAX_LENGTH} chars, lowercase letters and digits only (no hyphens).`;
@@ -62,159 +94,262 @@ export async function createProjectForActor(
   actor: ProjectCreateActor,
   input: ProjectCreateInput | null | undefined,
 ): Promise<ProjectCreateResult> {
-  const request = input && typeof input === "object" ? input : {};
-  const { uid, userData, workspaceId } = actor;
-  const name = typeof request.name === "string" ? request.name : "";
-  const slug = typeof request.slug === "string" ? request.slug : "";
-  const tagline = typeof request.tagline === "string" ? request.tagline : "";
-  const category =
-    typeof request.category === "string" && request.category.length > 0
-      ? request.category
-      : "other";
-  const projectType =
-    typeof request.projectType === "string" && request.projectType.length > 0
-      ? request.projectType
-      : null;
-  const status =
-    typeof request.status === "string" && request.status.length > 0
-      ? request.status
-      : "building";
-  const visibility =
-    typeof request.visibility === "string" && request.visibility.length > 0
-      ? request.visibility
-      : "private";
-  const { repoSource } = request;
-
-  const trimmedName = name.trim();
-  const trimmedTagline = tagline.trim();
-
-  if (trimmedName.length === 0) {
-    return bad(400, "Project name is required");
-  }
-  if (slug.length === 0) {
-    return bad(400, "Project slug is required");
-  }
-
-  const slugErr = validateProjectSlug(slug);
-  if (slugErr) return bad(400, slugErr);
-
-  const rs = resolveCreateRepoSource(repoSource, actor.isAdmin === true);
-  if (!rs.ok) return bad(rs.status, rs.error);
-  const ghRepoSource = rs.value;
-
-  if (!workspaceId) {
-    return bad(422, "Workspace not provisioned");
-  }
-
-  const projectRef = db.doc(`workspaces/${workspaceId}/projects/${slug}`);
+  const planResult = buildProjectCreatePlan(actor, input);
+  if (!planResult.ok) return planResult.result;
+  const plan = planResult.plan;
+  const projectRef = db.doc(`workspaces/${plan.workspaceId}/projects/${plan.slug}`);
   const existing = await projectRef.get();
   if (existing.exists) {
     return bad(409, "A project with this slug already exists in your workspace");
   }
 
-  const targetVisibility = visibility || "private";
-  const giteaRepoName = projectRepoName(slug);
+  await writeProvisioningProject(projectRef, plan);
+  await writeProjectOwnerMember(projectRef, plan.uid);
 
+  const callerCtx = await getWorkspaceMmContext(plan.uid, plan.workspaceId, plan.userData);
+  const channelResult = await provisionProjectMattermost(projectRef, plan, callerCtx);
+  if (!channelResult.ok) return channelResult.result;
+
+  const activityResult = await provisionProjectActivityPair(projectRef, plan, channelResult);
+  if (!activityResult.ok) return activityResult.result;
+
+  const repoResult = await provisionProjectCodeRepo(projectRef, plan);
+  if (!repoResult.ok) return repoResult.result;
+
+  await markProjectActive(projectRef, plan.targetVisibility);
+  logger.info(`[projects] Created project ${plan.workspaceId}/${plan.slug}`, {
+    source: plan.source,
+    uid: plan.uid,
+  });
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      workspaceId: plan.workspaceId,
+      slug: plan.slug,
+      channelId: channelResult.mmChannelId,
+    },
+  };
+}
+
+function buildProjectCreatePlan(
+  actor: ProjectCreateActor,
+  input: ProjectCreateInput | null | undefined,
+): { ok: true; plan: ProjectCreatePlan } | { ok: false; result: ProjectCreateResult } {
+  const { uid, userData, workspaceId } = actor;
+  const request = normalizeProjectCreateRequest(input);
+  const validation = validateProjectCreateRequest(request);
+  if (!validation.ok) return validation;
+
+  const rs = resolveCreateRepoSource(request.repoSource, actor.isAdmin === true);
+  if (!rs.ok) return { ok: false, result: bad(rs.status, rs.error) };
+
+  if (!workspaceId) {
+    return { ok: false, result: bad(422, "Workspace not provisioned") };
+  }
+
+  return {
+    ok: true,
+    plan: {
+      uid,
+      userData,
+      workspaceId,
+      slug: request.slug,
+      trimmedName: validation.trimmedName,
+      trimmedTagline: request.tagline.trim(),
+      category: request.category,
+      projectType: request.projectType,
+      status: request.status,
+      targetVisibility: request.visibility,
+      ghRepoSource: rs.value,
+      giteaRepoName: projectRepoName(request.slug),
+      source: actor.source ?? "ui",
+    },
+  };
+}
+
+function normalizeProjectCreateRequest(
+  input: ProjectCreateInput | null | undefined,
+): NormalizedProjectCreateRequest {
+  const request = input && typeof input === "object" ? input : {};
+  return {
+    name: stringValue(request.name),
+    slug: stringValue(request.slug),
+    tagline: stringValue(request.tagline),
+    category: nonEmptyStringOr(request.category, "other"),
+    projectType: nonEmptyStringOr(request.projectType, null),
+    status: nonEmptyStringOr(request.status, "building"),
+    visibility: nonEmptyStringOr(request.visibility, "private"),
+    repoSource: request.repoSource,
+  };
+}
+
+function validateProjectCreateRequest(
+  request: NormalizedProjectCreateRequest,
+): { ok: true; trimmedName: string } | { ok: false; result: ProjectCreateResult } {
+  const trimmedName = request.name.trim();
+  if (trimmedName.length === 0) {
+    return { ok: false, result: bad(400, "Project name is required") };
+  }
+  if (request.slug.length === 0) {
+    return { ok: false, result: bad(400, "Project slug is required") };
+  }
+  const slugErr = validateProjectSlug(request.slug);
+  return slugErr
+    ? { ok: false, result: bad(400, slugErr) }
+    : { ok: true, trimmedName };
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function nonEmptyStringOr<T>(value: unknown, fallback: T): string | T {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+async function writeProvisioningProject(
+  projectRef: FirebaseFirestore.DocumentReference,
+  plan: ProjectCreatePlan,
+): Promise<void> {
   await projectRef.set({
-    id: slug,
-    ownerUid: uid,
-    workspaceId,
-    slug,
-    name: trimmedName,
-    tagline: trimmedTagline,
+    id: plan.slug,
+    ownerUid: plan.uid,
+    workspaceId: plan.workspaceId,
+    slug: plan.slug,
+    name: plan.trimmedName,
+    tagline: plan.trimmedTagline,
     description: "",
-    category,
-    projectType,
-    status,
+    category: plan.category,
+    projectType: plan.projectType,
+    status: plan.status,
     visibility: "private",
-    pendingVisibility: targetVisibility,
+    pendingVisibility: plan.targetVisibility,
     provisioningState: "provisioning",
     canvasFile: "README.md",
     previewUrl: null,
-    giteaRepoName,
-    repoSource: ghRepoSource,
+    giteaRepoName: plan.giteaRepoName,
+    repoSource: plan.ghRepoSource,
     starCount: 0,
     memberCount: 1,
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   });
+}
 
+async function writeProjectOwnerMember(
+  projectRef: FirebaseFirestore.DocumentReference,
+  uid: string,
+): Promise<void> {
   await projectRef.collection("members").doc(uid).set({
     id: uid,
     role: "owner",
     joinedAt: FieldValue.serverTimestamp(),
   });
+}
 
-  const callerCtx = await getWorkspaceMmContext(uid, workspaceId, userData);
+async function provisionProjectMattermost(
+  projectRef: FirebaseFirestore.DocumentReference,
+  plan: ProjectCreatePlan,
+  callerCtx: WorkspaceMmContext | null,
+): Promise<
+  | { ok: true; teamId: string; mmChannelId: string; memberAdds: MattermostMemberAdd[] }
+  | { ok: false; result: ProjectCreateResult }
+> {
   const teamId = callerCtx?.teamId;
   if (!teamId) {
-    await projectRef.update({
-      provisioningState: "failed",
+    return failProjectProvisioning(projectRef, {
+      workspaceId: plan.workspaceId,
+      slug: plan.slug,
       provisioningError: "Workspace has no Mattermost team context",
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    logger.error(`[projects] Create failed - no MM teamId for workspace ${workspaceId}`);
-    return bad(502, "Project provisioning failed - workspace chat is not ready", {
-      workspaceId,
-      slug,
+      logMessage: `[projects] Create failed - no MM teamId for workspace ${plan.workspaceId}`,
+      responseError: "Project provisioning failed - workspace chat is not ready",
     });
   }
 
-  const channelName = projectGeneralChannelName(workspaceId, slug);
-  let mmChannelId: string;
+  const channelResult = await createMattermostProjectChannel(projectRef, plan, teamId);
+  if (!channelResult.ok) return channelResult;
+
+  const memberAdds = mattermostMemberAdds(callerCtx);
+  const memberFailure = await addMattermostChannelMembers(channelResult.mmChannelId, memberAdds);
+  if (memberFailure) {
+    return failProjectProvisioning(projectRef, {
+      workspaceId: plan.workspaceId,
+      slug: plan.slug,
+      provisioningError: memberFailure,
+      logMessage: `[projects] Channel membership failed for ${plan.workspaceId}/${plan.slug}: ${memberFailure}`,
+      responseError: "Project provisioning failed - could not add channel members",
+    });
+  }
+
+  await writeProjectGeneralChannel(projectRef, channelResult.mmChannelId);
+  return { ok: true, teamId, mmChannelId: channelResult.mmChannelId, memberAdds };
+}
+
+async function createMattermostProjectChannel(
+  projectRef: FirebaseFirestore.DocumentReference,
+  plan: ProjectCreatePlan,
+  teamId: string,
+): Promise<{ ok: true; mmChannelId: string } | { ok: false; result: ProjectCreateResult }> {
+  const channelName = projectGeneralChannelName(plan.workspaceId, plan.slug);
   try {
     const ch = (await mmApi("/channels", "POST", {
       team_id: teamId,
       name: channelName,
-      display_name: trimmedName,
+      display_name: plan.trimmedName,
       type: "P",
     })) as { id?: string };
     if (!ch?.id) throw new Error("MM returned no channel id");
-    mmChannelId = ch.id;
+    return { ok: true, mmChannelId: ch.id };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await projectRef.update({
-      provisioningState: "failed",
-      provisioningError: message.slice(0, 500),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    logger.error(`[projects] MM channel creation failed for ${workspaceId}/${slug}:`, { err });
-    return bad(502, "Project provisioning failed - could not create chat channel", {
-      workspaceId,
-      slug,
+    return failProjectProvisioning(projectRef, {
+      workspaceId: plan.workspaceId,
+      slug: plan.slug,
+      provisioningError: message,
+      logMessage: `[projects] MM channel creation failed for ${plan.workspaceId}/${plan.slug}:`,
+      logMeta: { err },
+      responseError: "Project provisioning failed - could not create chat channel",
     });
   }
+}
 
-  const memberAdds: Array<{ id: string | null; label: string }> = [
+function mattermostMemberAdds(callerCtx: WorkspaceMmContext): MattermostMemberAdd[] {
+  return [
     { id: callerCtx.userId, label: "owner" },
     { id: callerCtx.coachUserId, label: "agent" },
   ];
-  const memberFailure = await (async (): Promise<string | null> => {
-    for (const m of memberAdds) {
-      if (!m.id) {
-        return `${m.label} has no Mattermost userId - provisioning incomplete`;
-      }
-      try {
-        await mmApi(`/channels/${mmChannelId}/members`, "POST", { user_id: m.id });
-      } catch (err) {
-        return `Add ${m.label} ${m.id} failed: ${err instanceof Error ? err.message : String(err)}`;
-      }
-    }
-    return null;
-  })();
-  if (memberFailure) {
-    await projectRef.update({
-      provisioningState: "failed",
-      provisioningError: memberFailure.slice(0, 500),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    logger.error(`[projects] Channel membership failed for ${workspaceId}/${slug}: ${memberFailure}`);
-    return bad(502, "Project provisioning failed - could not add channel members", {
-      workspaceId,
-      slug,
-    });
-  }
+}
 
+async function addMattermostChannelMembers(
+  mmChannelId: string,
+  memberAdds: MattermostMemberAdd[],
+): Promise<string | null> {
+  for (const m of memberAdds) {
+    const failure = await addMattermostChannelMember(mmChannelId, m);
+    if (failure) return failure;
+  }
+  return null;
+}
+
+async function addMattermostChannelMember(
+  mmChannelId: string,
+  member: MattermostMemberAdd,
+): Promise<string | null> {
+  if (!member.id) return `${member.label} has no Mattermost userId - provisioning incomplete`;
+  try {
+    await mmApi(`/channels/${mmChannelId}/members`, "POST", { user_id: member.id });
+    return null;
+  } catch (err) {
+    return `Add ${member.label} ${member.id} failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function writeProjectGeneralChannel(
+  projectRef: FirebaseFirestore.DocumentReference,
+  mmChannelId: string,
+): Promise<void> {
   await projectRef.collection("channels").doc("general").set({
     id: "general",
     kind: "general",
@@ -222,16 +357,22 @@ export async function createProjectForActor(
     mattermost: { channelId: mmChannelId },
     createdAt: FieldValue.serverTimestamp(),
   });
+}
 
+async function provisionProjectActivityPair(
+  projectRef: FirebaseFirestore.DocumentReference,
+  plan: ProjectCreatePlan,
+  channel: { teamId: string; mmChannelId: string; memberAdds: MattermostMemberAdd[] },
+): Promise<{ ok: true } | { ok: false; result: ProjectCreateResult }> {
   try {
     const { provisionActivityPair } = await import("./activityPair.js");
     await provisionActivityPair({
-      primaryName: channelName,
-      primaryChannelId: mmChannelId,
-      teamId,
+      primaryName: projectGeneralChannelName(plan.workspaceId, plan.slug),
+      primaryChannelId: channel.mmChannelId,
+      teamId: channel.teamId,
       type: "P",
       kind: "project",
-      members: memberAdds.map((m) => m.id),
+      members: channel.memberAdds.map((m) => m.id),
       recordActivityChannelId: async (activityChannelId) => {
         await projectRef
           .collection("channels")
@@ -239,41 +380,75 @@ export async function createProjectForActor(
           .set({ mattermost: { activityChannelId } }, { merge: true });
       },
     });
+    return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await projectRef.update({
-      provisioningState: "failed",
-      provisioningError: message.slice(0, 500),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    logger.error(`[projects] activity-pair provisioning failed for ${workspaceId}/${slug}: ${message}`);
-    return bad(502, "Project provisioning failed - could not create activity channel", {
-      workspaceId,
-      slug,
+    return failProjectProvisioning(projectRef, {
+      workspaceId: plan.workspaceId,
+      slug: plan.slug,
+      provisioningError: message,
+      logMessage: `[projects] activity-pair provisioning failed for ${plan.workspaceId}/${plan.slug}: ${message}`,
+      responseError: "Project provisioning failed - could not create activity channel",
     });
   }
+}
 
+async function provisionProjectCodeRepo(
+  projectRef: FirebaseFirestore.DocumentReference,
+  plan: ProjectCreatePlan,
+): Promise<{ ok: true } | { ok: false; result: ProjectCreateResult }> {
   const repoErr = await provisionProjectRepo({
-    workspaceId,
-    slug,
-    name: trimmedName,
-    tagline: trimmedTagline,
-    projectType,
-    visibility: targetVisibility,
+    workspaceId: plan.workspaceId,
+    slug: plan.slug,
+    name: plan.trimmedName,
+    tagline: plan.trimmedTagline,
+    projectType: plan.projectType,
+    visibility: plan.targetVisibility,
   });
-  if (repoErr) {
-    await projectRef.update({
-      provisioningState: "failed",
-      provisioningError: repoErr.slice(0, 500),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    logger.error(`[projects] Gitea repo creation failed for ${workspaceId}/${slug}: ${repoErr}`);
-    return bad(502, "Project provisioning failed - could not create code repo", {
-      workspaceId,
-      slug,
-    });
-  }
+  if (!repoErr) return { ok: true };
+  return failProjectProvisioning(projectRef, {
+    workspaceId: plan.workspaceId,
+    slug: plan.slug,
+    provisioningError: repoErr,
+    logMessage: `[projects] Gitea repo creation failed for ${plan.workspaceId}/${plan.slug}: ${repoErr}`,
+    responseError: "Project provisioning failed - could not create code repo",
+  });
+}
 
+async function failProjectProvisioning(
+  projectRef: FirebaseFirestore.DocumentReference,
+  args: {
+    workspaceId: string;
+    slug: string;
+    provisioningError: string;
+    logMessage: string;
+    responseError: string;
+    logMeta?: Record<string, unknown>;
+  },
+): Promise<{ ok: false; result: ProjectCreateResult }> {
+  await projectRef.update({
+    provisioningState: "failed",
+    provisioningError: args.provisioningError.slice(0, 500),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  if (args.logMeta) {
+    logger.error(args.logMessage, args.logMeta);
+  } else {
+    logger.error(args.logMessage);
+  }
+  return {
+    ok: false,
+    result: bad(502, args.responseError, {
+      workspaceId: args.workspaceId,
+      slug: args.slug,
+    }),
+  };
+}
+
+async function markProjectActive(
+  projectRef: FirebaseFirestore.DocumentReference,
+  targetVisibility: string,
+): Promise<void> {
   await projectRef.update({
     provisioningState: "active",
     provisioningError: null,
@@ -281,21 +456,6 @@ export async function createProjectForActor(
     pendingVisibility: null,
     updatedAt: FieldValue.serverTimestamp(),
   });
-
-  logger.info(`[projects] Created project ${workspaceId}/${slug}`, {
-    source: actor.source ?? "ui",
-    uid,
-  });
-
-  return {
-    status: 200,
-    body: {
-      success: true,
-      workspaceId,
-      slug,
-      channelId: mmChannelId,
-    },
-  };
 }
 
 export function projectSlugAvailability(slug: string): { ok: true } | { ok: false; reason: string } {
