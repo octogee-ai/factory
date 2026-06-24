@@ -4,7 +4,7 @@
  */
 
 import type { MmClient } from "./mm-client.js";
-import type { MmChannelMeta, MmPostsBundle } from "./shape.js";
+import type { MmChannelMeta, MmPost, MmPostsBundle } from "./shape.js";
 
 export type Direction = "latest" | "before" | "after" | "unread" | "around";
 
@@ -152,7 +152,7 @@ function requireCursor(cursor: string | undefined, direction: Direction): void {
 
 function filterByUser(bundle: MmPostsBundle, userId: string): MmPostsBundle {
   const order: string[] = [];
-  const posts: Record<string, any> = {};
+  const posts: Record<string, MmPost> = {};
   for (const id of bundle.order) {
     const p = bundle.posts[id];
     if (p && p.user_id === userId) {
