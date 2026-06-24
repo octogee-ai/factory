@@ -1,4 +1,5 @@
 import {
+  TIERS,
   getTierConfig,
   calculateAvailableTokens,
   type TierName,
@@ -15,6 +16,43 @@ export function toISODate(val: unknown): string | null {
 
 export function isActiveStatus(status: string): boolean {
   return status === "active" || status === "trialing";
+}
+
+type CustomerDoc = Record<string, unknown>;
+
+function objectAt(src: CustomerDoc, key: string): CustomerDoc {
+  const value = src[key];
+  return value && typeof value === "object" ? value as CustomerDoc : {};
+}
+
+function stringAt(src: CustomerDoc, key: string, fallback = ""): string {
+  const value = src[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function nullableStringAt(src: CustomerDoc, key: string): string | null {
+  const value = src[key];
+  return typeof value === "string" ? value : null;
+}
+
+function numberAt(src: CustomerDoc, key: string, fallback = 0): number {
+  const value = src[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function tierAt(src: CustomerDoc): TierName {
+  const value = src.tier;
+  return typeof value === "string" && value in TIERS ? value as TierName : "trial";
+}
+
+function stringArrayAt(src: CustomerDoc, key: string): string[] {
+  const value = src[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function displayNameFor(d: CustomerDoc): string {
+  const email = stringAt(d, "email");
+  return stringAt(d, "displayName") || stringAt(d, "username") || email.split("@")[0] || "(unknown)";
 }
 
 export interface CustomerSummary {
@@ -52,21 +90,24 @@ export interface CustomerSummary {
 
 export function buildCustomerSummary(
   uid: string,
-  d: Record<string, any>,
+  d: CustomerDoc,
 ): CustomerSummary {
-  const subscription = d.subscription ?? {};
-  const tier: TierName = subscription.tier ?? "trial";
+  const subscription = objectAt(d, "subscription");
+  const tier = tierAt(subscription);
   const tierConfig = getTierConfig(tier);
-  const subscriptionStatus: string = subscription.status ?? "trial";
-  const usage = d.usage ?? {};
-  const costUsd: number = usage.costUsd ?? 0;
-  const throttleLevel: number = usage.throttleLevel ?? 0;
-  const agentIds: string[] = d.provisioning?.openclaw?.agentIds ?? [];
+  const subscriptionStatus = stringAt(subscription, "status", "trial");
+  const usage = objectAt(d, "usage");
+  const provisioning = objectAt(d, "provisioning");
+  const openclaw = objectAt(provisioning, "openclaw");
+  const mattermost = objectAt(d, "mattermost");
+  const costUsd = numberAt(usage, "costUsd");
+  const throttleLevel = numberAt(usage, "throttleLevel");
+  const agentIds = stringArrayAt(openclaw, "agentIds");
   const revenueUsd: number = isActiveStatus(subscriptionStatus)
     ? tierConfig.monthlyPrice
     : 0;
-  const windowTokensUsed = usage.windowTokensUsed ?? 0;
-  const windowStartedAt = usage.windowStartedAt?.toDate?.() ?? null;
+  const windowTokensUsed = numberAt(usage, "windowTokensUsed");
+  const windowStartedAt = toDateOrNull(usage.windowStartedAt);
   const { available, windowSize, nextRefillAt } = calculateAvailableTokens(
     tier,
     windowTokensUsed,
@@ -78,10 +119,9 @@ export function buildCustomerSummary(
 
   return {
     uid,
-    displayName:
-      d.displayName ?? d.username ?? d.email?.split("@")[0] ?? "(unknown)",
-    email: d.email ?? "",
-    username: d.username ?? "",
+    displayName: displayNameFor(d),
+    email: stringAt(d, "email"),
+    username: stringAt(d, "username"),
     tier,
     subscriptionStatus,
     byotActive: d.byotActive === true,
@@ -90,14 +130,14 @@ export function buildCustomerSummary(
     available,
     nextRefillAt: nextRefillAt?.toISOString() ?? null,
     weeklyBudget: tierConfig.weeklyTokenBudget,
-    totalTokensUsed: usage.totalTokensUsed ?? usage.tokensUsed ?? 0,
+    totalTokensUsed: numberAt(usage, "totalTokensUsed", numberAt(usage, "tokensUsed")),
     costUsd,
     throttleLevel,
-    faceModel: d.faceModel ?? null,
-    brainModel: d.brainModel ?? null,
+    faceModel: nullableStringAt(d, "faceModel"),
+    brainModel: nullableStringAt(d, "brainModel"),
     lastActive: toISODate(usage.lastUpdated),
-    mattermostConnected: !!d.mattermost?.userId,
-    mattermostUsername: d.mattermost?.username ?? null,
+    mattermostConnected: typeof mattermost.userId === "string" && mattermost.userId.length > 0,
+    mattermostUsername: nullableStringAt(mattermost, "username"),
     agentCount: agentIds.length,
     createdAt: toISODate(d.createdAt),
     percentUsed,
@@ -107,8 +147,15 @@ export function buildCustomerSummary(
     tokensLimit: windowSize,
 
     provisioningStatus:
-      d.provisioning?.openclaw?.status ??
-      d.provisioning?.status ??
-      null,
+      nullableStringAt(openclaw, "status") ??
+      nullableStringAt(provisioning, "status"),
   };
+}
+
+function toDateOrNull(value: unknown): Date | null {
+  if (value instanceof Date) return value;
+  if (value && typeof (value as { toDate?: unknown }).toDate === "function") {
+    return (value as { toDate: () => Date }).toDate();
+  }
+  return null;
 }
