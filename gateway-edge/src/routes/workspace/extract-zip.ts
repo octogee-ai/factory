@@ -14,128 +14,291 @@ import {
 } from "./helpers.js";
 
 const router = Router();
+const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
+const MAX_ENTRY_BYTES = 50 * 1024 * 1024;
+const MAX_ENTRIES = 10000;
+const MAX_DECOMPRESSED_BYTES = 500 * 1024 * 1024;
+
+type StorageBucket = ReturnType<typeof storage.bucket>;
+type StorageFile = ReturnType<StorageBucket["file"]>;
+type ExtractedKind = "git" | "blob";
+
+export interface ZipEntryLike {
+  dir: boolean;
+  async(format: "nodebuffer"): Promise<Buffer>;
+}
+
+export interface SafeZipEntry<T extends ZipEntryLike> {
+  relativePath: string;
+  targetPath: string;
+  zipEntry: T;
+}
+
+export type ZipEntriesValidation<T extends ZipEntryLike> =
+  | { ok: true; entries: Array<SafeZipEntry<T>> }
+  | { ok: false; status: 400 | 413; error: string };
+
+interface ExtractZipContext {
+  slug: string;
+  zipPath: string;
+  bucket: StorageBucket;
+  zipFile: StorageFile;
+  org: string;
+  sudoUser: string;
+  repoName: string;
+}
+
+interface ExtractZipResult {
+  gitPaths: string[];
+  blobPaths: string[];
+  manifestEntries: Record<string, unknown>;
+}
+
+interface WrittenEntry {
+  kind: ExtractedKind;
+  path: string;
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+export function extractedZipBaseDir(zipPath: string): string {
+  const zipName = zipPath.split("/").pop()?.replace(/\.zip$/i, "") ?? "extracted";
+  return zipPath.includes("/")
+    ? zipPath.slice(0, zipPath.lastIndexOf("/") + 1) + zipName
+    : zipName;
+}
+
+export function validatedZipEntries<T extends ZipEntryLike>(
+  zipFiles: Record<string, T>,
+  baseDir: string,
+): ZipEntriesValidation<T> {
+  const fileEntries = Object.entries(zipFiles).filter(([, entry]) => !entry.dir);
+  if (fileEntries.length > MAX_ENTRIES) {
+    return {
+      ok: false,
+      status: 413,
+      error: `Archive has ${fileEntries.length} entries (max ${MAX_ENTRIES})`,
+    };
+  }
+
+  const entries: Array<SafeZipEntry<T>> = [];
+  for (const [relativePath, zipEntry] of fileEntries) {
+    if (relativePath.startsWith("__MACOSX/") || relativePath.includes("/.DS_Store")) continue;
+
+    const targetPath = `${baseDir}/${relativePath}`;
+    const targetPathError = validateWorkspacePath(targetPath);
+    if (targetPathError) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Blocked entry "${relativePath}": ${targetPathError}`,
+      };
+    }
+
+    entries.push({ relativePath, targetPath, zipEntry });
+  }
+
+  return { ok: true, entries };
+}
+
+function extractZipContext(slug: string, zipPath: string): ExtractZipContext {
+  const bucket = storage.bucket();
+  const gcsZipPath = `customers/${slug}/${zipPath}`;
+  return {
+    slug,
+    zipPath,
+    bucket,
+    zipFile: bucket.file(gcsZipPath),
+    org: workspaceGiteaOrg(slug),
+    sudoUser: `ws-${slug}`,
+    repoName: workspaceRepoName(),
+  };
+}
+
+function requestZipPath(req: Request, res: Response): string | null {
+  const { zipPath } = req.body as { zipPath: string };
+  if (!zipPath) {
+    res.status(400).json({ error: "Missing zipPath" });
+    return null;
+  }
+
+  const zipPathError = validateWorkspacePath(zipPath);
+  if (zipPathError) {
+    res.status(400).json({ error: `Invalid zipPath: ${zipPathError}` });
+    return null;
+  }
+
+  return zipPath;
+}
+
+async function loadZipArchive(context: ExtractZipContext, res: Response): Promise<JSZip | null> {
+  const [zipBuffer] = await context.zipFile.download();
+  if (zipBuffer.length > MAX_ARCHIVE_BYTES) {
+    res.status(413).json({ error: "Archive exceeds 200MB limit" });
+    return null;
+  }
+
+  // eslint-disable-next-line sonarjs/no-unsafe-unzip -- size capped above; per-entry cap enforced before writes
+  return JSZip.loadAsync(zipBuffer);
+}
+
+async function existingTextSha(context: ExtractZipContext, targetPath: string): Promise<string | undefined> {
+  try {
+    const existing = (await giteaApiAsUser(
+      context.sudoUser,
+      context.org,
+      `${context.repoName}/contents/${targetPath}`,
+    )) as { sha?: string };
+    return existing.sha;
+  } catch (e) {
+    if (errorMessage(e).includes("404")) return undefined;
+    logger.warn(`Failed to read existing ZIP entry SHA for ${targetPath}: ${errorMessage(e)}`);
+    return undefined;
+  }
+}
+
+async function writeTextEntry(
+  context: ExtractZipContext,
+  entry: SafeZipEntry<ZipEntryLike>,
+  fileBuffer: Buffer,
+): Promise<WrittenEntry> {
+  const sha = await existingTextSha(context, entry.targetPath);
+  await giteaApiAsUser(context.sudoUser, context.org, `${context.repoName}/contents/${entry.targetPath}`, "PUT", {
+    message: `zip-extract: ${entry.relativePath}`,
+    content: fileBuffer.toString("base64"),
+    ...(sha ? { sha } : {}),
+  });
+
+  return { kind: "git", path: entry.targetPath };
+}
+
+async function writeBlobEntry(
+  context: ExtractZipContext,
+  entry: SafeZipEntry<ZipEntryLike>,
+  fileBuffer: Buffer,
+  manifestEntries: Record<string, unknown>,
+): Promise<WrittenEntry> {
+  const ext = getExtension(entry.relativePath);
+  const gcsPath = `customers/${context.slug}/${entry.targetPath}`;
+  const mimeType = getMimeType(ext);
+  await context.bucket.file(gcsPath).save(fileBuffer, { metadata: { contentType: mimeType } });
+  manifestEntries[entry.targetPath] = {
+    type: "blob",
+    gcsPath,
+    size: fileBuffer.length,
+    mimeType,
+    uploadedAt: new Date().toISOString(),
+  };
+
+  return { kind: "blob", path: entry.targetPath };
+}
+
+async function writeExtractedEntry(
+  context: ExtractZipContext,
+  entry: SafeZipEntry<ZipEntryLike>,
+  fileBuffer: Buffer,
+  manifestEntries: Record<string, unknown>,
+): Promise<WrittenEntry> {
+  if (isTextFile(entry.relativePath)) {
+    return writeTextEntry(context, entry, fileBuffer);
+  }
+
+  return writeBlobEntry(context, entry, fileBuffer, manifestEntries);
+}
+
+function entrySizeError(relativePath: string, fileSize: number, totalSize: number): string | null {
+  if (fileSize > MAX_ENTRY_BYTES) {
+    return `Entry "${relativePath}" exceeds ${MAX_ENTRY_BYTES} bytes`;
+  }
+
+  if (totalSize > MAX_DECOMPRESSED_BYTES) {
+    return `Total decompressed size exceeds ${MAX_DECOMPRESSED_BYTES} bytes`;
+  }
+
+  return null;
+}
+
+async function extractEntries(
+  context: ExtractZipContext,
+  entries: Array<SafeZipEntry<ZipEntryLike>>,
+  res: Response,
+): Promise<ExtractZipResult | null> {
+  const result: ExtractZipResult = { gitPaths: [], blobPaths: [], manifestEntries: {} };
+  let totalDecompressedBytes = 0;
+
+  for (const entry of entries) {
+    const fileBuffer = await entry.zipEntry.async("nodebuffer");
+    totalDecompressedBytes += fileBuffer.length;
+
+    const sizeError = entrySizeError(entry.relativePath, fileBuffer.length, totalDecompressedBytes);
+    if (sizeError) {
+      res.status(413).json({ error: sizeError });
+      return null;
+    }
+
+    const written = await writeExtractedEntry(context, entry, fileBuffer, result.manifestEntries);
+    if (written.kind === "git") {
+      result.gitPaths.push(written.path);
+    } else {
+      result.blobPaths.push(written.path);
+    }
+  }
+
+  return result;
+}
+
+async function deleteOriginalZip(context: ExtractZipContext): Promise<void> {
+  try {
+    await context.zipFile.delete();
+  } catch (e) {
+    logger.warn(`Failed to delete ZIP after extraction: ${errorMessage(e)}`);
+  }
+}
+
+async function finalizeExtraction(context: ExtractZipContext, result: ExtractZipResult): Promise<void> {
+  if (Object.keys(result.manifestEntries).length > 0) {
+    await updateManifest(context.sudoUser, context.org, context.repoName, result.manifestEntries);
+  }
+
+  await deleteOriginalZip(context);
+  await removeFromManifest(
+    context.sudoUser,
+    context.org,
+    context.repoName,
+    context.zipPath,
+    `blob: remove extracted zip ${context.zipPath} from manifest`,
+  );
+}
+
+async function extractZip(req: Request, res: Response): Promise<void> {
+  const slug = ensureSlug(req, res);
+  if (!slug) return;
+
+  const zipPath = requestZipPath(req, res);
+  if (!zipPath) return;
+
+  const context = extractZipContext(slug, zipPath);
+  const zip = await loadZipArchive(context, res);
+  if (!zip) return;
+
+  const validation = validatedZipEntries(zip.files, extractedZipBaseDir(zipPath));
+  if (!validation.ok) {
+    res.status(validation.status).json({ error: validation.error });
+    return;
+  }
+
+  const result = await extractEntries(context, validation.entries, res);
+  if (!result) return;
+
+  await finalizeExtraction(context, result);
+  res.json({ success: true, extracted: { git: result.gitPaths, blob: result.blobPaths } });
+}
 
 router.post("/extract-zip", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const slug = ensureSlug(req, res);
-    if (!slug) return;
-
-    const { zipPath } = req.body as { zipPath: string };
-    if (!zipPath) { res.status(400).json({ error: "Missing zipPath" }); return; }
-
-    const zipPathError = validateWorkspacePath(zipPath);
-    if (zipPathError) { res.status(400).json({ error: `Invalid zipPath: ${zipPathError}` }); return; }
-
-    const bucket = storage.bucket();
-    const gcsZipPath = `customers/${slug}/${zipPath}`;
-    const org = workspaceGiteaOrg(slug);
-    const sudoUser = `ws-${slug}`;
-    const repoName = workspaceRepoName();
-
-    const zipFile = bucket.file(gcsZipPath);
-    const [zipBuffer] = await zipFile.download();
-    const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
-    if (zipBuffer.length > MAX_ARCHIVE_BYTES) {
-      res.status(413).json({ error: "Archive exceeds 200MB limit" });
-      return;
-    }
-    // eslint-disable-next-line sonarjs/no-unsafe-unzip -- size capped above; per-entry cap enforced in the loop below
-    const zip = await JSZip.loadAsync(zipBuffer);
-
-    const gitPaths: string[] = [];
-    const blobPaths: string[] = [];
-    const manifestEntries: Record<string, unknown> = {};
-
-    const zipName = zipPath.split("/").pop()?.replace(/\.zip$/i, "") ?? "extracted";
-    const baseDir = zipPath.includes("/")
-      ? zipPath.slice(0, zipPath.lastIndexOf("/") + 1) + zipName
-      : zipName;
-
-    const fileEntries = Object.entries(zip.files).filter(([, f]) => !f.dir);
-
-    const MAX_ENTRY_BYTES = 50 * 1024 * 1024;
-    const MAX_ENTRIES = 10000;
-    if (fileEntries.length > MAX_ENTRIES) {
-      res.status(413).json({ error: `Archive has ${fileEntries.length} entries (max ${MAX_ENTRIES})` });
-      return;
-    }
-
-    const safeEntries: Array<[string, typeof fileEntries[number][1]]> = [];
-    for (const [relativePath, zipEntry] of fileEntries) {
-      if (relativePath.startsWith("__MACOSX/") || relativePath.includes("/.DS_Store")) continue;
-      const targetPath = `${baseDir}/${relativePath}`;
-      const targetPathError = validateWorkspacePath(targetPath);
-      if (targetPathError) {
-        res.status(400).json({ error: `Blocked entry "${relativePath}": ${targetPathError}` });
-        return;
-      }
-      safeEntries.push([relativePath, zipEntry]);
-    }
-
-    let totalDecompressedBytes = 0;
-    const MAX_DECOMPRESSED_BYTES = 500 * 1024 * 1024;
-
-    for (const [relativePath, zipEntry] of safeEntries) {
-      const targetPath = `${baseDir}/${relativePath}`;
-      const fileBuffer = await zipEntry.async("nodebuffer");
-      if (fileBuffer.length > MAX_ENTRY_BYTES) {
-        res.status(413).json({ error: `Entry "${relativePath}" exceeds ${MAX_ENTRY_BYTES} bytes` });
-        return;
-      }
-      totalDecompressedBytes += fileBuffer.length;
-      if (totalDecompressedBytes > MAX_DECOMPRESSED_BYTES) {
-        res.status(413).json({ error: `Total decompressed size exceeds ${MAX_DECOMPRESSED_BYTES} bytes` });
-        return;
-      }
-      const ext = getExtension(relativePath);
-
-      if (isTextFile(relativePath)) {
-        const content = fileBuffer.toString("base64");
-        let sha: string | undefined;
-        try {
-          const existing = (await giteaApiAsUser(sudoUser, org, `${repoName}/contents/${targetPath}`)) as { sha?: string };
-          sha = existing.sha;
-        } catch { /* ignore */ }
-
-        await giteaApiAsUser(sudoUser, org, `${repoName}/contents/${targetPath}`, "PUT", {
-          message: `zip-extract: ${relativePath}`,
-          content,
-          ...(sha ? { sha } : {}),
-        });
-        gitPaths.push(targetPath);
-      } else {
-        const gcsPath = `customers/${slug}/${targetPath}`;
-        const storageFile = bucket.file(gcsPath);
-        await storageFile.save(fileBuffer, { metadata: { contentType: getMimeType(ext) } });
-        manifestEntries[targetPath] = {
-          type: "blob",
-          gcsPath,
-          size: fileBuffer.length,
-          mimeType: getMimeType(ext),
-          uploadedAt: new Date().toISOString(),
-        };
-        blobPaths.push(targetPath);
-      }
-    }
-
-    if (Object.keys(manifestEntries).length > 0) {
-      await updateManifest(sudoUser, org, repoName, manifestEntries);
-    }
-
-    try { await zipFile.delete(); } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      logger.warn(`Failed to delete ZIP after extraction: ${msg}`);
-    }
-
-    await removeFromManifest(
-      sudoUser,
-      org,
-      repoName,
-      zipPath,
-      `blob: remove extracted zip ${zipPath} from manifest`,
-    );
-
-    res.json({ success: true, extracted: { git: gitPaths, blob: blobPaths } });
+    await extractZip(req, res);
   } catch (e) {
     next(e);
   }
