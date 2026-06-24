@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { storage } from "../../lib/db.js";
+import { logger } from "../../middleware/logging.js";
 import { updateManifest } from "../../lib/manifest.js";
 import { giteaApiAsUser } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
@@ -12,124 +13,262 @@ import {
 } from "./helpers.js";
 
 const router = Router();
+const MAX_IMPORT_BLOB_BYTES = 10 * 1024 * 1024;
+const SKIP_IMPORT_PATHS = [/^\.git\//, /node_modules\//, /^\.DS_Store$/, /^__MACOSX\//];
+
+export interface GitHubRepoRef {
+  owner: string;
+  repo: string;
+}
+
+export interface GitHubTreeEntry {
+  path: string;
+  type: string;
+  sha: string;
+  size?: number;
+}
+
+export type ValidatedImportTargetDir =
+  | { ok: true; targetDir: string }
+  | { ok: false; error: string };
+
+interface ImportRepoRequest {
+  repoRef: GitHubRepoRef;
+  targetDir: string;
+}
+
+interface ImportRepoContext extends ImportRepoRequest {
+  slug: string;
+  org: string;
+  sudoUser: string;
+  workspaceRepo: string;
+  headers: Record<string, string>;
+}
+
+interface ImportedRepoResult {
+  fileCount: number;
+  manifestEntries: Record<string, unknown>;
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+export function parseGitHubRepoUrl(repoUrl: string): GitHubRepoRef | null {
+  const match = repoUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
+  if (!match) return null;
+
+  const [, owner, repo] = match;
+  if (!/^[A-Za-z0-9-]{1,39}$/.test(owner) || !/^[A-Za-z0-9._-]{1,100}$/.test(repo)) {
+    return null;
+  }
+
+  return { owner, repo };
+}
+
+export function validatedImportTargetDir(
+  repo: string,
+  targetDir?: string,
+): ValidatedImportTargetDir {
+  const resolvedTargetDir = targetDir || `builds/${repo}/src`;
+  const destDirError = validateWorkspacePath(resolvedTargetDir);
+  if (destDirError) {
+    return { ok: false, error: `Invalid targetDir: ${destDirError}` };
+  }
+
+  return { ok: true, targetDir: resolvedTargetDir };
+}
+
+export function importableGitHubBlob(entry: GitHubTreeEntry): boolean {
+  if (entry.type !== "blob") return false;
+  if (SKIP_IMPORT_PATHS.some((pattern) => pattern.test(entry.path))) return false;
+  if (entry.size && entry.size > MAX_IMPORT_BLOB_BYTES) return false;
+  return typeof entry.sha === "string" && /^[0-9a-f]{40}$/.test(entry.sha);
+}
+
+function githubHeaders(): Record<string, string> {
+  const ghToken = process.env.GITHUB_TOKEN;
+  return {
+    ...(ghToken ? { Authorization: `Bearer ${ghToken}` } : {}),
+    Accept: "application/vnd.github.v3+json",
+    "User-Agent": "octogee-workspace",
+  };
+}
+
+function githubTreeUrl({ owner, repo }: GitHubRepoRef): string {
+  return `https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`;
+}
+
+function githubBlobUrl({ owner, repo }: GitHubRepoRef, sha: string): string {
+  return `https://api.github.com/repos/${owner}/${repo}/git/blobs/${sha}`;
+}
+
+async function fetchGitHubTree(context: ImportRepoContext, res: Response): Promise<GitHubTreeEntry[] | null> {
+  const treeResp = await fetch(githubTreeUrl(context.repoRef), { headers: context.headers });
+  if (!treeResp.ok) {
+    if (treeResp.status === 404) {
+      res.status(404).json({ error: "Repository not found or not accessible." });
+      return null;
+    }
+    throw new Error(`Source repo API ${treeResp.status}`);
+  }
+
+  const treeData = (await treeResp.json()) as { tree?: GitHubTreeEntry[] };
+  return treeData.tree ?? [];
+}
+
+async function fetchGitHubBlobContent(context: ImportRepoContext, sha: string): Promise<string | null> {
+  const blobResp = await fetch(githubBlobUrl(context.repoRef, sha), { headers: context.headers });
+  if (!blobResp.ok) return null;
+
+  const blobData = (await blobResp.json()) as { content: string };
+  return blobData.content;
+}
+
+function importTargetPath(targetDir: string, blobPath: string): string | null {
+  const targetPath = `${targetDir}/${blobPath}`;
+  return validateWorkspacePath(targetPath) ? null : targetPath;
+}
+
+async function existingTextSha(context: ImportRepoContext, targetPath: string): Promise<string | undefined> {
+  try {
+    const existing = (await giteaApiAsUser(
+      context.sudoUser,
+      context.org,
+      `${context.workspaceRepo}/contents/${targetPath}`,
+    )) as { sha?: string };
+    return existing.sha;
+  } catch (e) {
+    if (errorMessage(e).includes("404")) return undefined;
+    logger.warn(`Failed to read existing imported repo entry SHA for ${targetPath}: ${errorMessage(e)}`);
+    return undefined;
+  }
+}
+
+async function writeTextImport(
+  context: ImportRepoContext,
+  blob: GitHubTreeEntry,
+  targetPath: string,
+  content: string,
+): Promise<void> {
+  const sha = await existingTextSha(context, targetPath);
+  await giteaApiAsUser(context.sudoUser, context.org, `${context.workspaceRepo}/contents/${targetPath}`, "PUT", {
+    message: `import: ${blob.path} from ${context.repoRef.owner}/${context.repoRef.repo}`,
+    content,
+    ...(sha ? { sha } : {}),
+  });
+}
+
+async function writeBlobImport(
+  context: ImportRepoContext,
+  blob: GitHubTreeEntry,
+  targetPath: string,
+  content: string,
+  manifestEntries: Record<string, unknown>,
+): Promise<void> {
+  const fileBuffer = Buffer.from(content, "base64");
+  const ext = getExtension(blob.path);
+  const gcsPath = `customers/${context.slug}/${targetPath}`;
+  const mimeType = getMimeType(ext);
+  await storage.bucket().file(gcsPath).save(fileBuffer, { metadata: { contentType: mimeType } });
+  manifestEntries[targetPath] = {
+    type: "blob",
+    gcsPath,
+    size: fileBuffer.length,
+    mimeType,
+    uploadedAt: new Date().toISOString(),
+  };
+}
+
+async function importGitHubBlob(
+  context: ImportRepoContext,
+  blob: GitHubTreeEntry,
+  manifestEntries: Record<string, unknown>,
+): Promise<boolean> {
+  const targetPath = importTargetPath(context.targetDir, blob.path);
+  if (!targetPath) return false;
+
+  const content = await fetchGitHubBlobContent(context, blob.sha);
+  if (content === null) return false;
+
+  if (isTextFile(blob.path)) {
+    await writeTextImport(context, blob, targetPath, content);
+  } else {
+    await writeBlobImport(context, blob, targetPath, content, manifestEntries);
+  }
+
+  return true;
+}
+
+async function importGitHubRepo(context: ImportRepoContext, res: Response): Promise<ImportedRepoResult | null> {
+  const tree = await fetchGitHubTree(context, res);
+  if (!tree) return null;
+
+  const manifestEntries: Record<string, unknown> = {};
+  let fileCount = 0;
+  for (const blob of tree.filter(importableGitHubBlob)) {
+    if (await importGitHubBlob(context, blob, manifestEntries)) {
+      fileCount += 1;
+    }
+  }
+
+  return { fileCount, manifestEntries };
+}
+
+function importRepoContext(slug: string, request: ImportRepoRequest): ImportRepoContext {
+  return {
+    ...request,
+    slug,
+    org: workspaceGiteaOrg(slug),
+    sudoUser: `ws-${slug}`,
+    workspaceRepo: workspaceRepoName(),
+    headers: githubHeaders(),
+  };
+}
+
+function importRepoRequest(body: unknown, res: Response): ImportRepoRequest | null {
+  const { repoUrl, targetDir } = body as { repoUrl: string; targetDir?: string };
+  if (!repoUrl) {
+    res.status(400).json({ error: "Missing repoUrl" });
+    return null;
+  }
+
+  const repoRef = parseGitHubRepoUrl(repoUrl);
+  if (!repoRef) {
+    res.status(400).json({ error: "Invalid repo URL. Use https://github.com/owner/repo format." });
+    return null;
+  }
+
+  const target = validatedImportTargetDir(repoRef.repo, targetDir);
+  if (!target.ok) {
+    res.status(400).json({ error: target.error });
+    return null;
+  }
+
+  return { repoRef, targetDir: target.targetDir };
+}
+
+async function handleImportRepo(req: Request, res: Response): Promise<void> {
+  const slug = ensureSlug(req, res);
+  if (!slug) return;
+
+  const request = importRepoRequest(req.body, res);
+  if (!request) return;
+
+  const context = importRepoContext(slug, request);
+  const result = await importGitHubRepo(context, res);
+  if (!result) return;
+
+  if (Object.keys(result.manifestEntries).length > 0) {
+    await updateManifest(context.sudoUser, context.org, context.workspaceRepo, result.manifestEntries);
+  }
+
+  res.json({ success: true, targetDir: context.targetDir, fileCount: result.fileCount });
+}
 
 router.post("/import-repo", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const slug = ensureSlug(req, res);
-    if (!slug) return;
-
-    const { repoUrl, targetDir } = req.body as { repoUrl: string; targetDir?: string };
-    if (!repoUrl) { res.status(400).json({ error: "Missing repoUrl" }); return; }
-
-    const match = repoUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
-    if (!match) {
-      res.status(400).json({ error: "Invalid repo URL. Use https://github.com/owner/repo format." });
-      return;
-    }
-
-    const [, owner, repo] = match;
-    if (!/^[A-Za-z0-9-]{1,39}$/.test(owner) || !/^[A-Za-z0-9._-]{1,100}$/.test(repo)) {
-      res.status(400).json({ error: "Invalid GitHub owner or repo name." });
-      return;
-    }
-    const destDir = targetDir || `builds/${repo}/src`;
-    const destDirError = validateWorkspacePath(destDir);
-    if (destDirError) {
-      res.status(400).json({ error: `Invalid targetDir: ${destDirError}` });
-      return;
-    }
-    const org = workspaceGiteaOrg(slug);
-    const sudoUser = `ws-${slug}`;
-    const workspaceRepo = workspaceRepoName();
-    const ghToken = process.env.GITHUB_TOKEN;
-
-    const treeResp = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`,
-      {
-        headers: {
-          ...(ghToken ? { Authorization: `Bearer ${ghToken}` } : {}),
-          Accept: "application/vnd.github.v3+json",
-          "User-Agent": "octogee-workspace",
-        },
-      },
-    );
-
-    if (!treeResp.ok) {
-      if (treeResp.status === 404) {
-        res.status(404).json({ error: "Repository not found or not accessible." });
-        return;
-      }
-      throw new Error(`Source repo API ${treeResp.status}`);
-    }
-
-    interface GitHubTreeEntry {
-      path: string;
-      type: string;
-      sha: string;
-      size?: number;
-    }
-    const treeData = (await treeResp.json()) as { tree: GitHubTreeEntry[] };
-    const blobs = (treeData.tree ?? []).filter((i) => i.type === "blob");
-    const SKIP = [/^\.git\//, /node_modules\//, /^\.DS_Store$/, /^__MACOSX\//];
-    const manifestEntries: Record<string, unknown> = {};
-    let fileCount = 0;
-
-    for (const blob of blobs) {
-      if (SKIP.some((p) => p.test(blob.path))) continue;
-      if (blob.size && blob.size > 10 * 1024 * 1024) continue;
-      if (typeof blob.sha !== "string" || !/^[0-9a-f]{40}$/.test(blob.sha)) continue;
-
-      const targetPath = `${destDir}/${blob.path}`;
-      if (validateWorkspacePath(targetPath)) continue;
-      const ext = getExtension(blob.path);
-
-      const blobResp = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/git/blobs/${blob.sha}`,
-        {
-          headers: {
-            ...(ghToken ? { Authorization: `Bearer ${ghToken}` } : {}),
-            Accept: "application/vnd.github.v3+json",
-            "User-Agent": "octogee-workspace",
-          },
-        },
-      );
-      if (!blobResp.ok) continue;
-
-      const blobData = (await blobResp.json()) as { content: string };
-
-      if (isTextFile(blob.path)) {
-        let sha: string | undefined;
-        try {
-          const existing = (await giteaApiAsUser(sudoUser, org, `${workspaceRepo}/contents/${targetPath}`)) as { sha?: string };
-          sha = existing.sha;
-        } catch { /* ignore */ }
-
-        await giteaApiAsUser(sudoUser, org, `${workspaceRepo}/contents/${targetPath}`, "PUT", {
-          message: `import: ${blob.path} from ${owner}/${repo}`,
-          content: blobData.content,
-          ...(sha ? { sha } : {}),
-        });
-      } else {
-        const fileBuffer = Buffer.from(blobData.content, "base64");
-        const gcsPath = `customers/${slug}/${targetPath}`;
-        const bucket = storage.bucket();
-        await bucket.file(gcsPath).save(fileBuffer, { metadata: { contentType: getMimeType(ext) } });
-        manifestEntries[targetPath] = {
-          type: "blob",
-          gcsPath,
-          size: fileBuffer.length,
-          mimeType: getMimeType(ext),
-          uploadedAt: new Date().toISOString(),
-        };
-      }
-      fileCount++;
-    }
-
-    if (Object.keys(manifestEntries).length > 0) {
-      await updateManifest(sudoUser, org, workspaceRepo, manifestEntries);
-    }
-
-    res.json({ success: true, targetDir: destDir, fileCount });
+    await handleImportRepo(req, res);
   } catch (e) {
     next(e);
   }
