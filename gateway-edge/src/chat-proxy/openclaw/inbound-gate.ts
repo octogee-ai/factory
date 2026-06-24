@@ -64,27 +64,49 @@ export function evaluateInboundFrame(
   if (!ALLOWED_METHODS.has(method)) return reject('method-not-allowlisted');
 
   const params = isRecord(parsed.params) ? parsed.params : {};
+  const sessionDecision = evaluateSessionKey(params, state);
+  if (sessionDecision) return sessionDecision;
 
+  if (method === 'chat.abort') {
+    return evaluateRunAbort(params, state);
+  }
+
+  if (method === 'exec.approval.resolve' || method === 'plugin.approval.resolve') {
+    return evaluateApprovalResolve(params, state);
+  }
+
+  return reject('method-not-allowlisted');
+}
+
+function evaluateSessionKey(
+  params: Record<string, unknown>,
+  state: GateState,
+): InboundDecision | null {
   const sessionKey = typeof params.sessionKey === 'string' ? params.sessionKey : undefined;
   if (sessionKey !== undefined && !sessionKey.startsWith(`agent:${state.expectedAgentId}:`)) {
     return reject('session-key-mismatch');
   }
+  return null;
+}
 
-  if (method === 'chat.abort') {
-    const runId = typeof params.runId === 'string' ? params.runId : '';
-    if (!runId) return reject('missing-required-param');
-    if (!state.observedRunIds.has(runId)) return reject('run-id-not-observed');
-    return { accept: true, reason: 'allowed' };
-  }
+function evaluateRunAbort(
+  params: Record<string, unknown>,
+  state: GateState,
+): InboundDecision {
+  const runId = typeof params.runId === 'string' ? params.runId : '';
+  if (!runId) return reject('missing-required-param');
+  if (!state.observedRunIds.has(runId)) return reject('run-id-not-observed');
+  return allow();
+}
 
-  if (method === 'exec.approval.resolve' || method === 'plugin.approval.resolve') {
-    const approvalId = typeof params.approvalId === 'string' ? params.approvalId : '';
-    if (!approvalId) return reject('missing-required-param');
-    if (!state.observedApprovalIds.has(approvalId)) return reject('approval-id-not-observed');
-    return { accept: true, reason: 'allowed' };
-  }
-
-  return reject('method-not-allowlisted');
+function evaluateApprovalResolve(
+  params: Record<string, unknown>,
+  state: GateState,
+): InboundDecision {
+  const approvalId = typeof params.approvalId === 'string' ? params.approvalId : '';
+  if (!approvalId) return reject('missing-required-param');
+  if (!state.observedApprovalIds.has(approvalId)) return reject('approval-id-not-observed');
+  return allow();
 }
 
 export function observeOutboundForState(rawFrame: string, state: GateState): void {
@@ -124,4 +146,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function reject(reason: Exclude<InboundReason, 'allowed'>): InboundDecision {
   return { accept: false, reason };
+}
+
+function allow(): InboundDecision {
+  return { accept: true, reason: 'allowed' };
 }

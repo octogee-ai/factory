@@ -48,80 +48,118 @@ export async function resolveFileTarget(
   opts: ResolveFileTargetOpts = {},
 ): Promise<FileTargetResult> {
   const { slug, projectSlug, callerUid, callerWorkspaceSlug } = input;
-  const resolveGithubToken = opts.resolveGithubToken ?? true;
 
   if (!slug) {
     return { ok: false, status: 400, error: "Missing slug" };
   }
 
   if (projectSlug) {
-    const projectRef = db.doc(`workspaces/${slug}/projects/${projectSlug}`);
-    const project = await readProject(projectRef);
-    if (!project) {
-      return { ok: false, status: 404, error: "Project not found" };
-    }
-    const isOwner = project.ownerUid === callerUid;
-    let isMember = false;
-    if (!isOwner && callerUid) {
-      const memberDoc = await projectRef.collection("members").doc(callerUid).get();
-      isMember = memberDoc.exists;
-    }
-    if (!isOwner && !isMember) {
-      return { ok: false, status: 403, error: "Forbidden" };
-    }
-    const github =
-      project.repoSource?.provider === "github" ? project.repoSource : null;
-    if (github) {
-      const githubTarget: FileTarget = {
-        slug,
-        projectSlug,
-        provider: "github",
-        org: github.owner,
-        repoName: github.repo,
-        gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
-        canvasFile: project.canvasFile,
-      };
-      if (!resolveGithubToken) {
-        return { ok: true, target: githubTarget };
-      }
-      const githubToken = await readConnectorAccessToken(project.ownerUid, "github", {
-        kind: "project",
-        requestingUid: callerUid!,
-        workspaceSlug: slug,
-        projectSlug,
-      });
-      if (!githubToken) {
-        return {
-          ok: false,
-          status: 422,
-          error: "GitHub files unavailable",
-          reason: "owner_github_not_connected",
-        };
-      }
-      logger.info(
-        `[fileTarget] owner-brokered github token repo=${github.owner}/${github.repo} caller=${callerUid} tokenOwner=${project.ownerUid}`,
-      );
-      return { ok: true, target: { ...githubTarget, githubToken, brokered: true } };
-    }
-    // Gitea project: act as the caller's own gitea identity (owner or collaborator —
-    // both hold real repo ACL, so Gitea enforces their permissions and authors commits
-    // as them). Unrestricted write, as today.
-    return {
-      ok: true,
-      target: {
-        slug,
-        projectSlug,
-        provider: "gitea",
-        org: workspaceGiteaOrg(slug),
-        repoName: projectRepoName(projectSlug),
-        gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
-        sudoUser: `ws-${callerWorkspaceSlug ?? slug}`,
-        brokered: false,
-        canvasFile: project.canvasFile,
-      },
-    };
+    return resolveProjectTarget({ ...input, projectSlug, slug }, opts);
   }
 
+  return resolveWorkspaceTarget(slug, callerUid, callerWorkspaceSlug, opts);
+}
+
+async function resolveProjectTarget(
+  input: FileTargetInput & { slug: string; projectSlug: string },
+  opts: ResolveFileTargetOpts,
+): Promise<FileTargetResult> {
+  const { slug, projectSlug, callerUid, callerWorkspaceSlug } = input;
+  const projectRef = db.doc(`workspaces/${slug}/projects/${projectSlug}`);
+  const project = await readProject(projectRef);
+  if (!project) {
+    return { ok: false, status: 404, error: "Project not found" };
+  }
+  const isOwner = project.ownerUid === callerUid;
+  const isMember = !isOwner && callerUid
+    ? (await projectRef.collection("members").doc(callerUid).get()).exists
+    : false;
+  if (!isOwner && !isMember) {
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
+  const github = project.repoSource?.provider === "github" ? project.repoSource : null;
+  if (github) {
+    return resolveGithubProjectTarget({
+      callerUid,
+      github,
+      project,
+      projectSlug,
+      resolveGithubToken: opts.resolveGithubToken ?? true,
+      slug,
+    });
+  }
+  return {
+    ok: true,
+    target: giteaProjectTarget(slug, projectSlug, callerWorkspaceSlug, project.canvasFile),
+  };
+}
+
+function giteaProjectTarget(
+  slug: string,
+  projectSlug: string,
+  callerWorkspaceSlug: string | null | undefined,
+  canvasFile: string | undefined,
+): FileTarget {
+  return {
+    slug,
+    projectSlug,
+    provider: "gitea",
+    org: workspaceGiteaOrg(slug),
+    repoName: projectRepoName(projectSlug),
+    gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
+    sudoUser: `ws-${callerWorkspaceSlug ?? slug}`,
+    brokered: false,
+    canvasFile,
+  };
+}
+
+async function resolveGithubProjectTarget(args: {
+  callerUid: string | undefined;
+  github: { owner: string; repo: string };
+  project: { ownerUid: string; canvasFile?: string };
+  projectSlug: string;
+  resolveGithubToken: boolean;
+  slug: string;
+}): Promise<FileTargetResult> {
+  const { callerUid, github, project, projectSlug, resolveGithubToken, slug } = args;
+  const githubTarget: FileTarget = {
+    slug,
+    projectSlug,
+    provider: "github",
+    org: github.owner,
+    repoName: github.repo,
+    gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
+    canvasFile: project.canvasFile,
+  };
+  if (!resolveGithubToken) {
+    return { ok: true, target: githubTarget };
+  }
+  const githubToken = await readConnectorAccessToken(project.ownerUid, "github", {
+    kind: "project",
+    requestingUid: callerUid!,
+    workspaceSlug: slug,
+    projectSlug,
+  });
+  if (!githubToken) {
+    return {
+      ok: false,
+      status: 422,
+      error: "GitHub files unavailable",
+      reason: "owner_github_not_connected",
+    };
+  }
+  logger.info(
+    `[fileTarget] owner-brokered github token repo=${github.owner}/${github.repo} caller=${callerUid} tokenOwner=${project.ownerUid}`,
+  );
+  return { ok: true, target: { ...githubTarget, githubToken, brokered: true } };
+}
+
+async function resolveWorkspaceTarget(
+  slug: string,
+  callerUid: string | undefined,
+  callerWorkspaceSlug: string | null | undefined,
+  opts: ResolveFileTargetOpts,
+): Promise<FileTargetResult> {
   const workspaceTarget: FileTarget = {
     slug,
     projectSlug: null,
