@@ -1,21 +1,29 @@
 // Single source of truth for which repo paths map to which CI test jobs.
 // Consumed by resolve.ts, the local runner, and (Phase 2) Cloud Build gating.
 
-export type JobKey =
-  | "gateway-edge"
-  | "octogee-api"
-  | "tests"
-  | "acceptance"
-  | "scripts"
-  | "octogee-router"
-  | "functions"
-  | "site"
-  | "renderer"
-  | "app"
-  | "firestore-rules"
-  | "customer-lifecycle-emulator"
-  | "functions-emulator"
-  | "gateway-edge-emulator";
+// Job-key registry: the literal lives once here, referenced everywhere else.
+export const JOBS = {
+  gatewayEdge: "gateway-edge",
+  octogeeApi: "octogee-api",
+  glmController: "glm-controller",
+  tests: "tests",
+  acceptance: "acceptance",
+  scripts: "scripts",
+  octogeeRouter: "octogee-router",
+  octogeeMattermostTools: "octogee-mattermost-tools",
+  functions: "functions",
+  site: "site",
+  renderer: "renderer",
+  app: "app",
+  firestoreRules: "firestore-rules",
+  customerLifecycleEmulator: "customer-lifecycle-emulator",
+  functionsEmulator: "functions-emulator",
+  gatewayEdgeEmulator: "gateway-edge-emulator",
+} as const;
+
+export type JobKey = (typeof JOBS)[keyof typeof JOBS];
+
+const TYPECHECK = "npm run typecheck";
 
 export interface UnitPackage {
   name: JobKey;
@@ -25,28 +33,34 @@ export interface UnitPackage {
 
 // The dynamic `test` matrix entries. `typecheck` runs after `npm ci`, before `npm test`.
 export const UNIT_PACKAGES: readonly UnitPackage[] = [
-  { name: "gateway-edge", dir: "gateway-edge", typecheck: "npm run typecheck" },
-  { name: "octogee-api", dir: "octogee-api", typecheck: "npm run typecheck" },
-  { name: "tests", dir: "tests", typecheck: "npm run typecheck" },
-  { name: "acceptance", dir: "acceptance", typecheck: "npm run typecheck" },
-  { name: "scripts", dir: "scripts", typecheck: "npx tsc --noEmit" },
+  { name: JOBS.gatewayEdge, dir: "gateway-edge", typecheck: TYPECHECK },
+  { name: JOBS.octogeeApi, dir: "octogee-api", typecheck: TYPECHECK },
+  { name: JOBS.glmController, dir: "glm-controller", typecheck: TYPECHECK },
+  { name: JOBS.tests, dir: "tests", typecheck: TYPECHECK },
+  { name: JOBS.acceptance, dir: "acceptance", typecheck: TYPECHECK },
+  { name: JOBS.scripts, dir: "scripts", typecheck: "npx tsc --noEmit" },
   {
-    name: "octogee-router",
+    name: JOBS.octogeeRouter,
     dir: "infra/gateway/extensions/octogee-router",
     typecheck: 'echo "octogee-router — no tsconfig; vitest is the gate"',
   },
-  { name: "functions", dir: "functions", typecheck: "npm run typecheck" },
-  { name: "site", dir: "site", typecheck: "npm run typecheck" },
-  { name: "renderer", dir: "renderer", typecheck: "npm run typecheck" },
+  {
+    name: JOBS.octogeeMattermostTools,
+    dir: "infra/gateway/extensions/octogee-mattermost-tools",
+    typecheck: 'echo "octogee-mattermost-tools — no tsconfig; vitest is the gate"',
+  },
+  { name: JOBS.functions, dir: "functions", typecheck: TYPECHECK },
+  { name: JOBS.site, dir: "site", typecheck: TYPECHECK },
+  { name: JOBS.renderer, dir: "renderer", typecheck: TYPECHECK },
 ] as const;
 
 // Jobs that JDK/emulator or sharding force out of the matrix; each gated by its own flag.
 export const STANDALONE_JOBS: readonly JobKey[] = [
-  "app",
-  "firestore-rules",
-  "customer-lifecycle-emulator",
-  "functions-emulator",
-  "gateway-edge-emulator",
+  JOBS.app,
+  JOBS.firestoreRules,
+  JOBS.customerLifecycleEmulator,
+  JOBS.functionsEmulator,
+  JOBS.gatewayEdgeEmulator,
 ] as const;
 
 export const ALL_JOBS: readonly JobKey[] = [
@@ -62,17 +76,22 @@ export interface Ownership {
 // dir-prefix → owned jobs. Resolution picks the LONGEST match so the nested
 // octogee-router dir wins over any shorter rule instead of failing open.
 export const OWNERSHIP: readonly Ownership[] = [
-  { dir: "gateway-edge/", jobs: ["gateway-edge", "gateway-edge-emulator"] },
-  { dir: "octogee-api/", jobs: ["octogee-api"] },
-  { dir: "tests/", jobs: ["tests"] },
-  { dir: "acceptance/", jobs: ["acceptance"] },
-  { dir: "scripts/", jobs: ["scripts", "customer-lifecycle-emulator"] },
-  { dir: "infra/gateway/extensions/octogee-router/", jobs: ["octogee-router"] },
-  { dir: "functions/", jobs: ["functions", "functions-emulator"] },
-  { dir: "site/", jobs: ["site"] },
-  { dir: "renderer/", jobs: ["renderer"] },
-  { dir: "app/", jobs: ["app"] },
-  { dir: "firestore-rules-tests/", jobs: ["firestore-rules"] },
+  { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
+  { dir: "octogee-api/", jobs: [JOBS.octogeeApi] },
+  { dir: "glm-controller/", jobs: [JOBS.glmController] },
+  { dir: "tests/", jobs: [JOBS.tests] },
+  { dir: "acceptance/", jobs: [JOBS.acceptance] },
+  { dir: "scripts/", jobs: [JOBS.scripts, JOBS.customerLifecycleEmulator] },
+  { dir: "infra/gateway/extensions/octogee-router/", jobs: [JOBS.octogeeRouter] },
+  {
+    dir: "infra/gateway/extensions/octogee-mattermost-tools/",
+    jobs: [JOBS.octogeeMattermostTools],
+  },
+  { dir: "functions/", jobs: [JOBS.functions, JOBS.functionsEmulator] },
+  { dir: "site/", jobs: [JOBS.site] },
+  { dir: "renderer/", jobs: [JOBS.renderer] },
+  { dir: "app/", jobs: [JOBS.app] },
+  { dir: "firestore-rules-tests/", jobs: [JOBS.firestoreRules] },
 ];
 
 export interface ScopeEdge {
@@ -86,23 +105,28 @@ export interface ScopeEdge {
 export const EDGES: readonly ScopeEdge[] = [
   {
     when: "scripts/lib/",
-    jobs: ["octogee-api", "gateway-edge", "gateway-edge-emulator"],
+    jobs: [
+      JOBS.octogeeApi,
+      JOBS.gatewayEdge,
+      JOBS.gatewayEdgeEmulator,
+      JOBS.glmController,
+    ],
     reason:
-      "octogee-api + gateway-edge compile scripts/lib via their tsconfig include (admin-fleet-router hazard)",
+      "octogee-api + gateway-edge + glm-controller compile scripts/lib (tsconfig include / source imports — admin-fleet-router hazard)",
   },
   {
     when: "gateway-edge/src/",
-    jobs: ["octogee-api"],
+    jobs: [JOBS.octogeeApi],
     reason: "octogee-api compiles gateway-edge route Routers (cross-package imports)",
   },
   {
     when: "site/firestore.rules",
-    jobs: ["firestore-rules"],
+    jobs: [JOBS.firestoreRules],
     reason: "the rules file lives under site/ but gates the firestore-rules suite",
   },
   {
     when: "site/firestore.indexes.json",
-    jobs: ["firestore-rules"],
+    jobs: [JOBS.firestoreRules],
     reason: "index shape drives rules-test expectations",
   },
 ];

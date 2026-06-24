@@ -33,6 +33,35 @@ function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
   return best;
 }
 
+interface PathScope {
+  everything: boolean;
+  jobs: JobKey[];
+  reasons: string[];
+}
+
+// The jobs a single changed path implies. Fail-open (everything) on repo-wide
+// paths and any path no package owns.
+function scopePath(path: string): PathScope {
+  if (isGlobal(path)) return { everything: true, jobs: [], reasons: [`global:${path}`] };
+  if (isInert(path)) return { everything: false, jobs: [], reasons: [`inert:${path}`] };
+
+  const jobs: JobKey[] = [];
+  const reasons: string[] = [];
+  const owner = ownerOf(path);
+  if (owner) {
+    jobs.push(...owner.jobs);
+  } else {
+    reasons.push(`unmapped:${path}`);
+  }
+  for (const edge of EDGES) {
+    if (path.startsWith(edge.when)) {
+      jobs.push(...edge.jobs);
+      reasons.push(`edge:${edge.when}`);
+    }
+  }
+  return { everything: !owner, jobs, reasons };
+}
+
 /**
  * The CI test jobs a diff must run. Pure. Fail-open: any repo-wide path or any
  * path no package owns escalates to the full set; an empty diff runs nothing.
@@ -44,28 +73,10 @@ export function resolveScope(changedPaths: string[]): ScopeResult {
   let everything = false;
 
   for (const path of changedPaths) {
-    if (isGlobal(path)) {
-      everything = true;
-      reasons.push(`global:${path}`);
-      continue;
-    }
-    if (isInert(path)) {
-      reasons.push(`inert:${path}`);
-      continue;
-    }
-    const owner = ownerOf(path);
-    if (owner) {
-      for (const j of owner.jobs) jobs.add(j);
-    } else {
-      everything = true;
-      reasons.push(`unmapped:${path}`);
-    }
-    for (const edge of EDGES) {
-      if (path.startsWith(edge.when)) {
-        for (const j of edge.jobs) jobs.add(j);
-        reasons.push(`edge:${edge.when}`);
-      }
-    }
+    const scope = scopePath(path);
+    everything ||= scope.everything;
+    for (const j of scope.jobs) jobs.add(j);
+    reasons.push(...scope.reasons);
   }
 
   if (everything) {

@@ -53,15 +53,27 @@ describe("resolveScope — ownership", () => {
     );
   });
 
+  it("glm-controller change runs only glm-controller (not fail-open to everything)", () => {
+    expectJobs(["glm-controller/src/index.ts"], ["glm-controller"]);
+  });
+
+  it("octogee-mattermost-tools resolves to its own job (sibling extension dir)", () => {
+    expectJobs(
+      ["infra/gateway/extensions/octogee-mattermost-tools/src/tools.ts"],
+      ["octogee-mattermost-tools"],
+    );
+  });
+
   it("app changes run the app gate", () => {
     expectJobs(["app/src/routes/appRoutes.ts"], ["app"]);
   });
 });
 
 describe("resolveScope — cross-package hazard edges", () => {
-  it("scripts/lib change ALSO runs octogee-api + gateway-edge (tsconfig include)", () => {
-    // The admin-fleet-router hazard: octogee-api + gateway-edge compile
-    // scripts/lib through their tsconfig, so a scripts/lib edit must re-run them.
+  it("scripts/lib change ALSO runs octogee-api + gateway-edge + glm-controller (they compile it)", () => {
+    // The admin-fleet-router hazard: octogee-api, gateway-edge, and glm-controller
+    // all compile scripts/lib (tsconfig include / source imports), so a scripts/lib
+    // edit must re-run them. glm-controller's typecheck pulls in 16 scripts/lib modules.
     expectJobs(
       ["scripts/lib/admin-fleet-router.ts"],
       [
@@ -70,6 +82,7 @@ describe("resolveScope — cross-package hazard edges", () => {
         "octogee-api",
         "gateway-edge",
         "gateway-edge-emulator",
+        "glm-controller",
       ],
     );
   });
