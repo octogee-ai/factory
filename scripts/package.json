@@ -10,7 +10,8 @@
     "bump-gateway-imagetag": "tsx ops/bump-gateway-imagetag.ts",
     "test": "npx vitest run __tests__",
     "test:emulator": "firebase emulators:exec --only firestore --project=octogee-test 'npx vitest run --config vitest.emulator.config.ts'",
-    "audit-coverage": "tsx ops/audit-coverage.ts"
+    "audit-coverage": "tsx ops/audit-coverage.ts",
+    "scope": "tsx ops/scope.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
