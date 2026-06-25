@@ -12,7 +12,7 @@ import type {
   HelmInstancesMap,
   Operation,
   OperationStep,
-} from "../../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 
 interface SharedState {
   helmReleases: Map<string, HelmInstanceValue>; 

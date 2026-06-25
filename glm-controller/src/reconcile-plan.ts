@@ -9,9 +9,9 @@ import {
   type GatewayDesiredState,
   type HelmInstanceValue,
   type HelmInstancesMap,
-} from "../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 import { resolveGatewayImageRepository } from "./gateway-profiles.js";
-import { isSizingTier } from "../../shared/types/sizing.js";
+import { isSizingTier } from "@octogee/shared/types/sizing";
 
 export type ReconcileChange =
   | { kind: "create"; gatewayId: string; to: HelmInstanceValue }

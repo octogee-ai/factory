@@ -7,11 +7,11 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
   addAdminFleetRoutes,
   type FleetLogger,
-} from "../../scripts/lib/admin-fleet-router.js";
+} from "@octogee/core/admin-fleet-router";
 import {
   addAdminCustomerRoutes,
   type WorkspaceMmContextLite,
-} from "../../scripts/lib/admin-customer-router.js";
+} from "@octogee/core/admin-customer-router";
 import {
   createRequireAdmin,
   type RequireAdminDeps,

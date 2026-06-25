@@ -1,5 +1,5 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { GLM_OPERATIONS_COLLECTION, type Operation } from "../../shared/types/glm.js";
+import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types/glm";
 
 export interface ResumeOrphanedOpsDeps {
   db: Firestore;

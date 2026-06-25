@@ -1,4 +1,4 @@
-import { operatorGatewayServiceAccountName } from "../../../shared/types/glm.js";
+import { operatorGatewayServiceAccountName } from "@octogee/shared/types/glm";
 
 // A minimal authed-requester seam over the IAM v1 REST API. Production wires
 // this to a google-auth-library client (ADC via the pod's Workload Identity);

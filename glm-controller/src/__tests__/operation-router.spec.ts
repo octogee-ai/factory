@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { Operation, OperationKind, OperationStep } from "../../../shared/types/glm";
+import type { Operation, OperationKind, OperationStep } from "@octogee/shared/types/glm";
 import {
   routeOperation,
   type OperationContext,

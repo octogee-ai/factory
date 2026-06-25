@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveGatewayImageRepository, PROFILE_IMAGE_NAME } from "../gateway-profiles";
 import { buildInstancesMap, buildHelmTargetMap, diffInstancesMap } from "../reconcile-plan";
-import type { GatewayDesiredState } from "../../../shared/types/glm";
+import type { GatewayDesiredState } from "@octogee/shared/types/glm";
 
 const STD_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 const OPERATOR_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";

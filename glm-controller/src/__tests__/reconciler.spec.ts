@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { startReconciler } from "../index";
-import type { HelmInstancesMap } from "../../../shared/types/glm";
+import type { HelmInstancesMap } from "@octogee/shared/types/glm";
 
 interface FakeSnapshot {
   docs: Array<{ id?: string; data: () => unknown }>;

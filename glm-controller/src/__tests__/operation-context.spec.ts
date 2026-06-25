@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { OperationStep } from "../../../shared/types/glm";
+import type { OperationStep } from "@octogee/shared/types/glm";
 import { createOperationContext } from "../operation-context";
 
 function makeDeps() {

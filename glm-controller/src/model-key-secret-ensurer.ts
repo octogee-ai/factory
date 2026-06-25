@@ -1,4 +1,4 @@
-import type { GatewayClass } from "../../shared/types/glm.js";
+import type { GatewayClass } from "@octogee/shared/types/glm";
 import type { KubectlSubprocess } from "./fleet-ingress.js";
 
 export const GATEWAY_MODEL_KEY_SECRET_PREFIX = "gateway-model-key-";

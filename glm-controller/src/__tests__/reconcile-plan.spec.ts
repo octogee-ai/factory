@@ -8,8 +8,8 @@ import {
   isReplicasOnlyUpdate,
   type ReconcileChange,
 } from "../reconcile-plan";
-import type { GatewayDesiredState, HelmInstancesMap } from "../../../shared/types/glm";
-import type { SizingTier } from "../../../shared/types/sizing";
+import type { GatewayDesiredState, HelmInstancesMap } from "@octogee/shared/types/glm";
+import type { SizingTier } from "@octogee/shared/types/sizing";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 

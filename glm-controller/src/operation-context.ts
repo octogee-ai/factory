@@ -1,4 +1,4 @@
-import type { OperationStep } from "../../shared/types/glm";
+import type { OperationStep } from "@octogee/shared/types/glm";
 import type { OperationContext } from "./operation-router.js";
 
 export interface PersistFn {

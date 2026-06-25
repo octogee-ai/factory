@@ -1,7 +1,7 @@
 
 
 import type { Firestore } from "firebase-admin/firestore";
-import { WORKSPACE_REPO } from "../../../../scripts/lib/gitea-naming.js";
+import { WORKSPACE_REPO } from "@octogee/core/gitea-naming";
 import type { CustomerCleanupContext } from "../../handlers/deprovision-customer.js";
 
 export interface ContextDeps {

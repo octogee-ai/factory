@@ -1,5 +1,5 @@
-import type { Operation, OperationStep, StepStatus } from "../../../shared/types/glm.js";
-import { isValidGatewayId } from "../../../shared/types/glm.js";
+import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
+import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
 

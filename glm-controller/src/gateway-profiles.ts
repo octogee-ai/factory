@@ -2,7 +2,7 @@ import {
   resolveGatewayImageProfile,
   type GatewayDesiredState,
   type GatewayProfile,
-} from "../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 
 export const PROFILE_IMAGE_NAME: Record<Exclude<GatewayProfile, "standard">, string> = {
   operator: "octogee-gateway-operator",

@@ -5,7 +5,7 @@ import {
   type DocumentReference,
   type Firestore,
 } from "firebase-admin/firestore";
-import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "../../../shared/types/glm.js";
+import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
 import {
   type FinishRsyncImportRequestBody,
   type ImportResponse,
@@ -14,10 +14,10 @@ import {
   type PrepareRsyncImportResponse,
   type PushRsyncStateRequestBody,
   SIGNATURE_HEADER,
-} from "../../../shared/types/fleet-controller.js";
-import type { MigrationSyncMode } from "../../../scripts/lib/fleet-migration.js";
-import type { MigrationClient } from "../../../scripts/lib/fleet-migration-client.js";
-import { signFleetRequest } from "../../../scripts/lib/fleet-signature.js";
+} from "@octogee/shared/types/fleet-controller";
+import type { MigrationSyncMode } from "@octogee/core/fleet-migration";
+import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import { signFleetRequest } from "@octogee/core/fleet-signature";
 
 const DEFAULT_LEASE_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
 const DEFAULT_WORKER_ID = `glm-${process.pid}`;

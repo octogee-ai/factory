@@ -1,13 +1,13 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import type { Operation, OperationStep } from "../../../shared/types/glm";
+import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import {
   createMigrateCustomerHandler,
   _resetMigrationConcurrencyForTests,
 } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
-import type { MigrationClient } from "../../../scripts/lib/fleet-migration-client";
-import type { FleetBrokerUserSnapshot } from "../../../shared/types/fleet-broker";
+import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 afterEach(() => {
   _resetMigrationConcurrencyForTests();

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { HelmInstancesMap } from "../../../shared/types/glm";
+import type { HelmInstancesMap } from "@octogee/shared/types/glm";
 import { computeBootstrapWrites } from "../bootstrap";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";

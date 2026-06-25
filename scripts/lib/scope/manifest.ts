@@ -124,7 +124,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.glmController,
     ],
     reason:
-      "@octogee/core is consumed (currently via scripts/lib re-export shims) by scripts + octogee-api + gateway-edge + glm-controller",
+      "@octogee/core is consumed by scripts + octogee-api + gateway-edge (via scripts/lib re-export shims) + glm-controller (direct package import)",
   },
   {
     when: "scripts/lib/",
@@ -132,10 +132,9 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.octogeeApi,
       JOBS.gatewayEdge,
       JOBS.gatewayEdgeEmulator,
-      JOBS.glmController,
     ],
     reason:
-      "octogee-api + gateway-edge + glm-controller compile scripts/lib (tsconfig include / source imports — admin-fleet-router hazard)",
+      "octogee-api + gateway-edge compile scripts/lib (tsconfig include / source imports — admin-fleet-router hazard); glm-controller cut over to @octogee/core",
   },
   {
     when: "gateway-edge/src/",

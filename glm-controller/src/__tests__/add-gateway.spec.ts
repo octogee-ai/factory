@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { Operation, OperationStep } from "../../../shared/types/glm";
+import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import { createAddGatewayHandler } from "../handlers/add-gateway";
 import type { AddGatewayDeps } from "../handlers/add-gateway";
 import type { OperationContext } from "../operation-router";

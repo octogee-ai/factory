@@ -18,7 +18,7 @@ import {
   type GatewayServiceAccountSpec,
   type HelmInstanceValue,
   type OperatorGatewayAccessSpec,
-} from "../../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
 import { resolveGatewayImageRepository } from "../gateway-profiles.js";

@@ -17,7 +17,7 @@ import {
   type HelmInstancesMap,
   type Operation,
   type OperationStep,
-} from "../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 import {
   parseHealthResponse,
   startOperatorHeartbeatPoller,
@@ -92,39 +92,39 @@ import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
-import { signFleetRequest } from "../../scripts/lib/fleet-signature.js";
+import { signFleetRequest } from "@octogee/core/fleet-signature";
 import {
   readAssignedSlugsForGateway,
   slugFromAssignedUser,
-} from "../../scripts/lib/assigned-roster.js";
+} from "@octogee/core/assigned-roster";
 import {
   byotSystemConfigFromDoc,
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
-} from "../../scripts/lib/customer-snapshot-mapping.js";
+} from "@octogee/core/customer-snapshot-mapping";
 import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   SIGNATURE_HEADER,
-} from "../../shared/types/fleet-controller.js";
+} from "@octogee/shared/types/fleet-controller";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
-import { createMigrationClient } from "../../scripts/lib/fleet-migration-client.js";
+import { createMigrationClient } from "@octogee/core/fleet-migration-client";
 import { createRsyncMigrationTransfer } from "./lib/migration-rsync-transfer.js";
 import {
   cutoverUserGatewayAndMarkMounted,
   type FleetStateFirestore,
-} from "../../scripts/lib/fleet-state.js";
+} from "@octogee/core/fleet-state";
 import {
   provisionGatewayAuthSecret,
   deleteSecret,
   readSecretWithLabels,
   writeSecret,
-} from "../../scripts/lib/secret-manager.js";
-import { listGatewayBuilds } from "../../scripts/lib/artifact-registry.js";
-import { workspaceSlugsForUser } from "../../scripts/lib/workspace-slugs.js";
-import { deleteAuthUserTolerantOfMissing } from "../../scripts/lib/firebase-auth-helpers.js";
-import { deleteHostingSitesForCustomer } from "../../scripts/lib/firebase-hosting.js";
+} from "@octogee/core/secret-manager";
+import { listGatewayBuilds } from "@octogee/core/artifact-registry";
+import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
+import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-helpers";
+import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer } from "./http-server.js";
 import { recordReconcile } from "./metrics.js";
@@ -159,7 +159,7 @@ import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectRestore,
   FleetBrokerUserSnapshot,
-} from "../../shared/types/fleet-broker.js";
+} from "@octogee/shared/types/fleet-broker";
 
 const logger = createLogger({
   color: process.env.NO_COLOR == null,

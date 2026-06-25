@@ -4,9 +4,9 @@ import type {
   GatewayImageProfile,
   GatewayProfile,
   HelmInstancesMap,
-} from "../../shared/types/glm.js";
-import type { SizingTier } from "../../shared/types/sizing.js";
-import { SIZING_TIERS } from "../../shared/types/sizing.js";
+} from "@octogee/shared/types/glm";
+import type { SizingTier } from "@octogee/shared/types/sizing";
+import { SIZING_TIERS } from "@octogee/shared/types/sizing";
 
 export interface HelmRunner {
 

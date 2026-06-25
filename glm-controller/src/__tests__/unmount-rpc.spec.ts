@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
-import { SIGNATURE_HEADER } from "../../../shared/types/fleet-controller.js";
-import { verifyFleetRequest } from "../../../scripts/lib/fleet-signature.js";
+import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
+import { verifyFleetRequest } from "@octogee/core/fleet-signature";
 import { buildOperatorHeartbeatPollerDeps, callUnmountRpc } from "../index.js";
-import { FLEET_KEY_PAIR } from "../../../scripts/__tests__/fixtures/fleet-keys.js";
+import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 function fakeDb(): Firestore {
   return {

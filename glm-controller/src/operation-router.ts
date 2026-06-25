@@ -1,4 +1,4 @@
-import type { Operation, OperationKind, OperationStep } from "../../shared/types/glm";
+import type { Operation, OperationKind, OperationStep } from "@octogee/shared/types/glm";
 
 export interface OperationResult {
   steps: OperationStep[];

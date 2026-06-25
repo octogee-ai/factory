@@ -1,7 +1,7 @@
 import type {
   GatewayClass,
   GatewayDesiredStatus,
-} from "../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 import {
   gatewayModelKeySecretName,
   gatewayModelKeySourceLabelErrors,

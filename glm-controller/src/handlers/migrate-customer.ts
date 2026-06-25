@@ -3,14 +3,14 @@ import type {
   Operation,
   OperationStep,
   StepStatus,
-} from "../../../shared/types/glm";
-import type { FleetBrokerUserSnapshot } from "../../../shared/types/fleet-broker";
+} from "@octogee/shared/types/glm";
+import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
-import type { MigrationClient } from "../../../scripts/lib/fleet-migration-client.js";
+import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import {
   runMigration,
   type ReportedStep,
-} from "../../../scripts/lib/fleet-migration-runner.js";
+} from "@octogee/core/fleet-migration-runner";
 
 export const MAX_CONCURRENT_MIGRATIONS_PER_TARGET = 1;
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { GatewayDesiredStatus, Operation, OperationStep } from "../../../shared/types/glm";
+import type { GatewayDesiredStatus, Operation, OperationStep } from "@octogee/shared/types/glm";
 import { createRecycleGatewayHandler } from "../handlers/recycle-gateway";
 import type { RecycleGatewayDeps } from "../handlers/recycle-gateway";
 import type { OperationContext } from "../operation-router";

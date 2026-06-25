@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
-import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "../../../shared/types/glm";
-import { FLEET_KEY_PAIR } from "../../../scripts/__tests__/fixtures/fleet-keys";
+import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
+import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import {
   createRsyncMigrationTransfer,
   migrationTransferTaskId,

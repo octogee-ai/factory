@@ -3,7 +3,7 @@ import type {
   Operation,
   OperationStep,
   StepStatus,
-} from "../../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
 // recycle-gateway — a REAL pod reroll, distinct from restart-gateway (which is

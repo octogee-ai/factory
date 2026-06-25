@@ -28,16 +28,15 @@ RUN apt-get update \
   && helm upgrade --help | grep -q -- '--force-conflicts' \
   && kubectl version --client=true
 
-# Mirror the repo layout under /app so the controller's tsconfig.json
-# (rootDir: .., includes ../shared/types/**) resolves identically to local
-# dev. Build context must be the repo root: `docker build -f
-# glm-controller/Dockerfile .` from the repo root.
+# Build context must be the repo root: `docker build -f
+# glm-controller/Dockerfile .` from the repo root. tsconfig rootDir: ".."
+# emits dist/glm-controller/src/ (matches the ENTRYPOINT below).
 WORKDIR /app/glm-controller
 
-# @octogee/core committed tarball at /app/core resolves the
-# committed tarball npm ci extracts (glm + scripts both file: it), tsc's .d.ts,
-# and the runtime import from the compiled shim under dist/scripts/lib.
-# Single-stage, so it stays for runtime.
+# @octogee/core + @octogee/shared committed tarballs. glm's package.json
+# file:-depends both (core peer-depends shared); npm ci extracts them. tsc
+# resolves the .d.ts via core's typesVersions, node the .js via core's exports.
+# Single-stage, so they stay for runtime.
 COPY core/octogee-core.tgz /app/core/octogee-core.tgz
 COPY shared/octogee-shared.tgz /app/shared/octogee-shared.tgz
 
@@ -49,20 +48,6 @@ RUN npm ci
 
 COPY glm-controller/tsconfig.json ./
 COPY glm-controller/src ./src
-COPY shared /app/shared
-# glm-controller imports several scripts/lib files via tsconfig rootDir: ".."
-# — fleet-migration-{client,runner,signature} (used by migrate-customer)
-# AND admin-fleet-router + secret-manager + artifact-registry +
-# workspace-slugs + firebase-auth-helpers (used by the http-server lift).
-# admin-fleet-router and friends import express, firebase-admin/firestore,
-# google-auth-library, @google-cloud/secret-manager. Node module resolution
-# walks UP from each .ts file's directory, so /app/scripts/lib/foo.ts
-# resolving "express" looks in /app/scripts/node_modules — NOT
-# /app/glm-controller/node_modules. Install scripts/'s deps so tsc
-# resolves cleanly. Builder stage only.
-COPY scripts/lib /app/scripts/lib
-COPY scripts/package.json scripts/package-lock.json* /app/scripts/
-RUN npm ci --prefix /app/scripts --ignore-scripts
 
 RUN npx tsc \
   && npm prune --omit=dev

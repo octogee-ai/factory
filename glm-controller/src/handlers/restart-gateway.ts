@@ -1,4 +1,4 @@
-import type { Operation, OperationStep, StepStatus } from "../../../shared/types/glm.js";
+import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { KubeOps } from "../lib/kube-ops.js";
 

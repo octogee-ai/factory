@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { resumeOrphanedRunningOps } from "../resume-orphaned-ops.js";
-import type { Operation } from "../../../shared/types/glm.js";
+import type { Operation } from "@octogee/shared/types/glm";
 
 interface FakeOpDoc {
   id: string;
