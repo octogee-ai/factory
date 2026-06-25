@@ -147,21 +147,16 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
 });
 
 describe("POST /api/admin/customer/:uid/ops", () => {
-  it("keeps billing throttle ops writable", async () => {
+  it("rejects setThrottle — the in-pod throttle was retired (#1880)", async () => {
     const app = makeApp({
-      "users/uid-ops": customerDoc({ billing: { throttleActive: true } }),
+      "users/uid-ops": customerDoc({}),
     });
 
     const res = await request(app)
       .post("/api/admin/customer/uid-ops/ops")
       .send({ action: "setThrottle", value: false })
-      .expect(200);
+      .expect(400);
 
-    expect(res.body).toMatchObject({
-      success: true,
-      action: "setThrottle",
-      field: "billing.throttleActive",
-      after: false,
-    });
+    expect(res.body.error).toMatch(/unknown ops action/i);
   });
 });

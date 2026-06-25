@@ -151,7 +151,6 @@ function applyCustomerFilters(
 
 const OPS_FIELD_MAP: Record<string, string> = {
   setTier: "selectedTier",
-  setThrottle: "billing.throttleActive",
 };
 
 function dottedRead(path: string, src: Record<string, unknown>): unknown {
@@ -380,7 +379,6 @@ router.get(
             complete: d.onboardingComplete || false,
             milestones: Object.fromEntries(onboardingSnap.docs.map((doc) => [doc.id, doc.data()])),
           },
-          throttleActive: d.billing?.throttleActive !== false,
           selectedTier: d.selectedTier || tier,
           workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
           usageLogs: logsSnap.docs.map((doc) => doc.data()),
