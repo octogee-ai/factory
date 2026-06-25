@@ -364,7 +364,7 @@ fi
 # Gateway is always emptyDir. Pod-local state is disposable: the fleet
 # controller restores customer workspaces from Gitea post-boot, MEMORY.md
 # rides the workspace tree (so it persists via the same Gitea path), and
-# coach session continuity on restart comes from mattermost_history. This
+# coach session continuity on restart comes from octogee_chat_history. This
 # check catches accidental PVC reintroductions.
 set_section infra
 header "5e. Gateway Storage Mode"

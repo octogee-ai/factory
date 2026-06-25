@@ -83,15 +83,15 @@ COPY --chown=node:node templates/ /octogee/templates/
 
 # ── Plugin extensions ────────────────────────────────────────────────────────
 # Staged at /octogee/extensions/ — entrypoint copies to ~/.openclaw/extensions/
-# octogee-mattermost-tools, octogee-preview-tools, and octogee-workspace-tools
+# octogee-chat-tools, octogee-preview-tools, and octogee-workspace-tools
 # are small, so we npm install them inline below; the entrypoint's
 # `elif [ -d "$ext_dir/node_modules" ]` fallback then symlinks to them.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
 
-# octogee-mattermost-tools runtime deps
-WORKDIR /octogee/extensions/octogee-mattermost-tools
+# octogee-chat-tools runtime deps
+WORKDIR /octogee/extensions/octogee-chat-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-mattermost-tools/node_modules
+    && chown -R node:node /octogee/extensions/octogee-chat-tools/node_modules
 
 # octogee-preview-tools runtime deps
 WORKDIR /octogee/extensions/octogee-preview-tools

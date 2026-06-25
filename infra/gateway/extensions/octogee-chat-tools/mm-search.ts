@@ -1,5 +1,5 @@
 /**
- * `mattermost_search` HTTP layer — pure data; no shaping, no caching of results.
+ * `octogee_chat_search` HTTP layer — pure data; no shaping, no caching of results.
  * Spec §4.1.
  */
 

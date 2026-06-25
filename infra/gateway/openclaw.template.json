@@ -178,7 +178,7 @@
       "mattermost",
       "anthropic",
       "memory-core",
-      "octogee-mattermost-tools",
+      "octogee-chat-tools",
       "octogee-preview-tools",
       "octogee-workspace-tools",
       "openai"
@@ -193,7 +193,7 @@
       "codex": {
         "enabled": false
       },
-      "octogee-mattermost-tools": {
+      "octogee-chat-tools": {
         "enabled": true,
         "config": {
           "mattermostUrl": "${MM_URL}",

@@ -50,10 +50,10 @@ describe("resolveScope — ownership", () => {
     expectJobs(["glm-controller/src/index.ts"], ["glm-controller"]);
   });
 
-  it("octogee-mattermost-tools resolves to its own job (sibling extension dir)", () => {
+  it("octogee-chat-tools resolves to its own job (sibling extension dir)", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-mattermost-tools/src/tools.ts"],
-      ["octogee-mattermost-tools"],
+      ["infra/gateway/extensions/octogee-chat-tools/src/tools.ts"],
+      ["octogee-chat-tools"],
     );
   });
 

@@ -1,5 +1,5 @@
 /**
- * `mattermost_history` HTTP layer — channel browsing in time order.
+ * `octogee_chat_history` HTTP layer — channel browsing in time order.
  * Spec §4.2.
  */
 
