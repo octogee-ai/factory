@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  byotSystemConfigFromDoc,
   deriveSlug,
   mapUserDocToSnapshot,
   mapWorkspaceChannelDoc,
@@ -54,7 +55,14 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
       greetingPosted: true,
       channels: ch,
       ownerName: "Acme Inc",
+      byotActive: false,
     });
+  });
+
+  it("byotActive mirrors Boolean(data.byotActive) — the mount re-assert reads it to avoid clobbering BYOT", () => {
+    expect(mapUserDocToSnapshot("u", { username: "a", byotActive: true }, ch).byotActive).toBe(true);
+    expect(mapUserDocToSnapshot("u", { username: "a", byotActive: false }, ch).byotActive).toBe(false);
+    expect(mapUserDocToSnapshot("u", { username: "a" }, ch).byotActive).toBe(false);
   });
 
   it("tier fallback chain: tier → subscription.tier → 'trial'", () => {
@@ -114,5 +122,26 @@ describe("channel-doc shaping (workspaces/{slug} producer → UserSnapshot.chann
       channelId: "C3",
     });
     expect(mapProjectChannelDoc("p1", { kind: "x" })).toBeNull();
+  });
+});
+
+describe("byotSystemConfigFromDoc — users/{uid}/system/config → snapshot.systemConfig", () => {
+  it("projects the byot provider/baseUrl/model the in-pod re-assert needs", () => {
+    expect(
+      byotSystemConfigFromDoc({ byot: { provider: "openai", baseUrl: "https://x", model: "gpt-4o" } }),
+    ).toEqual({ byot: { provider: "openai", baseUrl: "https://x", model: "gpt-4o" } });
+  });
+
+  it("drops non-string fields and keeps only what is present", () => {
+    expect(byotSystemConfigFromDoc({ byot: { provider: "anthropic", model: 123 } })).toEqual({
+      byot: { provider: "anthropic" },
+    });
+  });
+
+  it("returns undefined when there is no usable byot config (so the snapshot stays lean)", () => {
+    expect(byotSystemConfigFromDoc(undefined)).toBeUndefined();
+    expect(byotSystemConfigFromDoc({})).toBeUndefined();
+    expect(byotSystemConfigFromDoc({ byot: {} })).toBeUndefined();
+    expect(byotSystemConfigFromDoc({ byot: null as unknown as Record<string, unknown> })).toBeUndefined();
   });
 });

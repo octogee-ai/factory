@@ -39,6 +39,8 @@ giteaRegisteredPubKey: string | null;
 giteaReadShouldThrow: boolean;
 
   blobSyncShouldFail: boolean;
+  reassertByotShouldFail?: boolean;
+  reassertByotUserData?: Record<string, unknown>;
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
   healthy: boolean;
@@ -145,6 +147,11 @@ state.giteaRegisteredPubKey = pubKey;
     restoreByosubForAgent: async () => {
       record("restoreByosubForAgent");
       return state.byosub ?? { restored: false, present: false };
+    },
+    reassertByotForCustomer: async (userData) => {
+      record("reassertByotForCustomer");
+      state.reassertByotUserData = userData;
+      if (state.reassertByotShouldFail) throw new Error("byot reassert failed");
     },
 
     listProjectsNeedingClone: async () => state.pendingProjects,
@@ -267,6 +274,7 @@ expect(result.steps).toEqual([
       "blob-sync",
       "mattermost-provision",
       "config-patch",
+      "byot-reassert",
       "verify-channel-ready",
       "schedule-greeting-cron",
       "mark-complete",
@@ -310,7 +318,40 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
     expect(state.calls).toContain("restoreByosubForAgent");
     expect(result.steps).not.toContain("byosub-restore");
-    expect(state.lastConfigPatchByosActive).toBe(false); 
+    expect(state.lastConfigPatchByosActive).toBe(false);
+  });
+
+  it("first-time BYOT provision: forwards byot state with a COMPLETE runtime status (the agent is mounted by config-patch), so the non-anthropic key is written, not skipped/cleared", async () => {
+    // status "" is the first-provision reality: loadAndPrepareForMount never advances the
+    // in-memory snapshot, so forwarding snapshot.status would derive input=null and skip
+    // writing this BYOK customer's models.json. The reassert runs post-mount, so it must
+    // tell deriveDesiredByotState the runtime is complete.
+    state.user = snap({
+      status: "",
+      tier: "pro",
+      byotActive: true,
+      systemConfig: { byot: { provider: "openai", model: "gpt-4o" } },
+    });
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(state.calls).toContain("reassertByotForCustomer");
+    expect(result.steps).toContain("byot-reassert");
+
+    const ud = state.reassertByotUserData ?? {};
+    expect(ud.username).toBe("test");
+    expect(ud.byotActive).toBe(true);
+    expect(ud.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
+    expect(ud.tier).toBe("pro");
+    expect((ud.provisioning as { openclaw?: { status?: string } })?.openclaw?.status).toBe(
+      "complete",
+    );
+  });
+
+  it("a byot re-assert failure is non-fatal — the mount still completes", async () => {
+    state.reassertByotShouldFail = true;
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(state.calls).toContain("reassertByotForCustomer");
+    expect(result.steps).not.toContain("byot-reassert");
+    expect(result.steps).toContain("verify-channel-ready");
   });
 
   it("writes provisioning.git.repoUrl IMMEDIATELY after the repo init succeeds", async () => {

@@ -117,4 +117,6 @@ export interface FleetBrokerUserSnapshot {
   coachToken: string | null;
   coachMmUserId: string | null;
   coachIdentity?: FleetBrokerCoachIdentity;
+  byotActive?: boolean;
+  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
 }

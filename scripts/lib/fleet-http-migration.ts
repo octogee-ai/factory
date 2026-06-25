@@ -250,6 +250,10 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
     channels: Array.isArray(snapshot.channels) ? snapshot.channels as UserSnapshot["channels"] : [],
     ownerName: typeof snapshot.ownerName === "string" ? snapshot.ownerName : body.slug,
     projects: Array.isArray(snapshot.projects) ? snapshot.projects as UserSnapshot["projects"] : [],
+    byotActive: snapshot.byotActive === true,
+    systemConfig: isRecord(snapshot.systemConfig)
+      ? (snapshot.systemConfig as UserSnapshot["systemConfig"])
+      : undefined,
   };
 }
 

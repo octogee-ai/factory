@@ -64,6 +64,7 @@ import {
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
+import { syncByotForCustomer } from "./byot-sync-runtime.js";
 import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
@@ -174,6 +175,8 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     channels: snapshot.channels,
     ownerName: snapshot.ownerName,
     projects: snapshot.projects,
+    byotActive: snapshot.byotActive,
+    systemConfig: snapshot.systemConfig,
   };
 }
 
@@ -567,7 +570,14 @@ export function buildBrokeredLifecycleAdapter(
     blobSyncForSlug: async (slug) => {
       await blobSyncForSlug(slug, { store: createBrokeredBlobStore(opts.client) });
     },
+    // Db-less cattle path: BYOS oauth restore + the per-agent anthropic broker token are
+    // both re-asserted here (not via restoreByosubForAgent, which the broker path stubs).
+    // syncByotForCustomer is brokered (no Firestore on the pod) — local disk + RPC +
+    // internalFetch. This is the mount-time self-heal: a fresh emptyDir pod re-materializes
+    // the broker-routed Anthropic key it would otherwise be missing.
     restoreByosubForAgent: async () => ({ restored: false, present: false }),
+    reassertByotForCustomer: (userData) =>
+      syncByotForCustomer(userData as Parameters<typeof syncByotForCustomer>[0]),
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
     cloneProjectRepo,
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),

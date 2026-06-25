@@ -778,7 +778,26 @@ function snapshotBaseFields(
     lastName: stringAt(data, "lastName"),
     photoURL: stringAt(data, "photoURL"),
     onboardingVibe: snapshotOnboardingVibe(data),
+    byotActive: data.byotActive === true,
   };
+}
+
+// Project users/{uid}/system/config down to the byot fields the in-pod mount re-assert
+// needs. The pod is credential-stripped, so it cannot read this subdoc itself — the broker
+// (trusted side, with Firestore) must carry it on the snapshot. Without it the re-assert
+// would default a non-anthropic BYOT customer back to anthropic and clear their key.
+function snapshotByotConfig(
+  sysData: Record<string, unknown> | undefined,
+): FleetBrokerUserSnapshot["systemConfig"] {
+  const byot = readPath(sysData ?? {}, "byot") as
+    | { provider?: unknown; baseUrl?: unknown; model?: unknown }
+    | undefined;
+  if (!byot || typeof byot !== "object") return undefined;
+  const out: { provider?: string; baseUrl?: string; model?: string } = {};
+  if (typeof byot.provider === "string") out.provider = byot.provider;
+  if (typeof byot.baseUrl === "string") out.baseUrl = byot.baseUrl;
+  if (typeof byot.model === "string") out.model = byot.model;
+  return Object.keys(out).length > 0 ? { byot: out } : undefined;
 }
 
 function snapshotCoachFields(
@@ -806,14 +825,16 @@ async function loadSnapshot(
 ): Promise<FleetBrokerUserSnapshot | null> {
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
-  const [channels, projects, coachSecret, agentSnap] = await Promise.all([
+  const [channels, projects, coachSecret, agentSnap, sysConfig] = await Promise.all([
     collectChannelBindings(db, slug),
     collectProjects(db, slug),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
     db.collection("agents").doc(uid).get(),
+    db.collection("users").doc(uid).collection("system").doc("config").get(),
   ]);
   const coachData = coachSecret.data() as Record<string, unknown> | undefined;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
+  const systemConfig = snapshotByotConfig(sysConfig.data() as Record<string, unknown> | undefined);
   return {
     uid,
     slug,
@@ -822,6 +843,7 @@ async function loadSnapshot(
     projects,
     ...snapshotCoachFields(coachData),
     ...snapshotCoachIdentity(agentData),
+    ...(systemConfig ? { systemConfig } : {}),
   };
 }
 

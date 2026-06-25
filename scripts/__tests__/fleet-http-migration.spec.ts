@@ -240,6 +240,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     prepareImportDir: vi.fn(async () => "/tmp/import"),
     prepareKeyImportDir: vi.fn(async () => "/tmp/import"),
     activateImportedCustomer: vi.fn(async () => {}),
+    reassertByotForCustomer: vi.fn(async () => undefined),
     writeMountMarker: vi.fn(),
     waitForAccountHealthy: vi.fn(async () => true),
     hasCustomerDir: vi.fn(() => true),

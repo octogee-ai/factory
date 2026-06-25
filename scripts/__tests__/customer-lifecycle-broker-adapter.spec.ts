@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
 const patchMocks = vi.hoisted(() => ({
   applyConfigPatch: vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 })),
 }));
+const byotMocks = vi.hoisted(() => ({
+  syncByotForCustomer: vi.fn(async () => undefined),
+}));
 
 vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/migration-activation-manifest.js")>();
@@ -34,6 +37,13 @@ vi.mock("../lib/apply-config-patch.js", async (importOriginal) => {
   return {
     ...actual,
     applyConfigPatch: patchMocks.applyConfigPatch,
+  };
+});
+vi.mock("../lib/byot-sync-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/byot-sync-runtime.js")>();
+  return {
+    ...actual,
+    syncByotForCustomer: byotMocks.syncByotForCustomer,
   };
 });
 
@@ -288,5 +298,74 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );
+  });
+});
+
+describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-heal)", () => {
+  beforeEach(() => byotMocks.syncByotForCustomer.mockClear());
+
+  function fullSnapshot(overrides: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnapshot {
+    return {
+      uid: "uid-tester10",
+      slug: "tester10",
+      tier: "trial",
+      gatewayId: "default",
+      status: "complete",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: null,
+      customerMmUserId: null,
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Tester",
+      email: "",
+      displayName: "",
+      lastName: "",
+      photoURL: "",
+      onboardingVibe: null,
+      coachToken: null,
+      coachMmUserId: null,
+      ...overrides,
+    };
+  }
+
+  it("loadUserSnapshot carries byotActive + systemConfig from the broker snapshot (the in-pod re-assert must see the real BYOT state)", async () => {
+    const client = mkClient({
+      userSnapshot: vi.fn(async () =>
+        fullSnapshot({
+          byotActive: true,
+          systemConfig: { byot: { provider: "openai", model: "gpt-4o" } },
+        }),
+      ),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+
+    expect(snap?.byotActive).toBe(true);
+    expect(snap?.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
+  });
+
+  it("reassertByotForCustomer delegates to the brokered (Firestore-free) syncByotForCustomer with the userData verbatim", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    const userData = {
+      username: "tester10",
+      byotActive: false,
+      provisioning: { openclaw: { status: "complete" } },
+    };
+
+    await adapter.reassertByotForCustomer(userData);
+
+    expect(byotMocks.syncByotForCustomer).toHaveBeenCalledTimes(1);
+    expect(byotMocks.syncByotForCustomer).toHaveBeenCalledWith(userData);
   });
 });

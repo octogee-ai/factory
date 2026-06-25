@@ -98,6 +98,7 @@ import {
   slugFromAssignedUser,
 } from "../../scripts/lib/assigned-roster.js";
 import {
+  byotSystemConfigFromDoc,
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
 } from "../../scripts/lib/customer-snapshot-mapping.js";
@@ -1585,7 +1586,7 @@ function collectMigrationProjects(
 }
 
 // eslint-disable-next-line complexity -- Mirrors the octogee-api fleet broker snapshot shape.
-async function readMigrationUserSnapshot(
+export async function readMigrationUserSnapshot(
   db: Firestore,
   uid: string,
 ): Promise<FleetBrokerUserSnapshot | null> {
@@ -1595,11 +1596,12 @@ async function readMigrationUserSnapshot(
   const slug = slugFromAssignedUser(data);
   if (!slug) return null;
   const workspaceRef = db.collection("workspaces").doc(slug);
-  const [workspaceChannels, projectSnap, coachSecret, agentSnap] = await Promise.all([
+  const [workspaceChannels, projectSnap, coachSecret, agentSnap, sysConfig] = await Promise.all([
     workspaceRef.collection("channels").get(),
     workspaceRef.collection("projects").get(),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
     db.collection("agents").doc(uid).get(),
+    db.collection("users").doc(uid).collection("system").doc("config").get(),
   ]);
   const projectDocs = projectSnap.docs;
   const channels = await collectMigrationChannelBindings(workspaceChannels.docs, projectDocs);
@@ -1609,6 +1611,12 @@ async function readMigrationUserSnapshot(
   const name = typeof agentData?.name === "string" ? agentData.name : "";
   const emoji = typeof agentData?.avatarEmoji === "string" ? agentData.avatarEmoji : "";
   const status = stringAt(data, "provisioning.openclaw.status");
+  // byotActive + the system/config byot subdoc must ride along so the migration target's
+  // mount re-assert (reassertByot) sees the customer's real BYOT state — without it a
+  // non-anthropic BYOK customer's models.json is not re-written on the new pod.
+  const systemConfig = byotSystemConfigFromDoc(
+    sysConfig.data() as Record<string, unknown> | undefined,
+  );
   return {
     uid,
     slug,
@@ -1636,6 +1644,8 @@ async function readMigrationUserSnapshot(
     coachToken: typeof coachData?.personalToken === "string" ? coachData.personalToken : null,
     coachMmUserId:
       typeof coachData?.coachMmUserId === "string" ? coachData.coachMmUserId : null,
+    byotActive: data.byotActive === true,
+    ...(systemConfig ? { systemConfig } : {}),
     ...(name || emoji ? { coachIdentity: { name, emoji } } : {}),
   };
 }
