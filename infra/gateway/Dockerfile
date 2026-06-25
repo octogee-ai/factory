@@ -87,15 +87,20 @@ COPY --chown=node:node templates/ /octogee/templates/
 # octogee-router's node_modules are symlinked at runtime to
 # /opt/octogee-router-deps/ (base image pre-installed @huggingface/transformers
 # there to save build time; ~1.2 GB).
-# octogee-mattermost-tools is small (~50 MB firebase-admin + tiny typebox +
-# prom-client) so we npm install it inline below; the entrypoint's
-# `elif [ -d "$ext_dir/node_modules" ]` fallback then symlinks to it.
+# octogee-mattermost-tools and octogee-preview-tools are small (tiny typebox +
+# prom-client) so we npm install them inline below; the entrypoint's
+# `elif [ -d "$ext_dir/node_modules" ]` fallback then symlinks to them.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
 
 # octogee-mattermost-tools runtime deps
 WORKDIR /octogee/extensions/octogee-mattermost-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-mattermost-tools/node_modules
+
+# octogee-preview-tools runtime deps
+WORKDIR /octogee/extensions/octogee-preview-tools
+RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
+    && chown -R node:node /octogee/extensions/octogee-preview-tools/node_modules
 
 # octogee-workspace-tools runtime deps
 WORKDIR /octogee/extensions/octogee-workspace-tools

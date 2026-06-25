@@ -179,6 +179,7 @@
       "anthropic",
       "memory-core",
       "octogee-mattermost-tools",
+      "octogee-preview-tools",
       "octogee-workspace-tools",
       "octogee-router",
       "openai"
@@ -200,6 +201,10 @@
           "siteUrl": "${MM_SITE_URL}",
           "patCacheTtlSeconds": 300
         }
+      },
+      "octogee-preview-tools": {
+        "enabled": true,
+        "config": {}
       },
       "octogee-workspace-tools": {
         "enabled": true,
