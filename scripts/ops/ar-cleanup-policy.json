@@ -8,18 +8,18 @@
     }
   },
   {
-    "name": "keep-recent-2-per-image",
+    "name": "keep-recent-3-per-image",
     "action": { "type": "Keep" },
-    "mostRecentVersions": { "keepCount": 2 }
+    "mostRecentVersions": { "keepCount": 3 }
   },
   {
     "name": "delete-untagged",
     "action": { "type": "Delete" },
-    "condition": { "tagState": "untagged", "olderThan": "604800s" }
+    "condition": { "tagState": "untagged", "olderThan": "86400s" }
   },
   {
     "name": "delete-stale-tagged",
     "action": { "type": "Delete" },
-    "condition": { "tagState": "tagged", "olderThan": "1209600s" }
+    "condition": { "tagState": "tagged", "olderThan": "432000s" }
   }
 ]
