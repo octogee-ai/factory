@@ -1048,6 +1048,206 @@ export function buildOperatorHeartbeatPollerDeps(
   };
 }
 
+type ControllerStopper = () => void;
+
+interface DeferredRolloutMarkerDoc {
+  id: string;
+  data(): { rollout?: unknown };
+}
+
+interface ControllerBackgroundTasksDeps {
+  db: Firestore;
+  deps: ControllerDeps;
+  helm: HelmRunner;
+  fleetControllerPrivateKey: string;
+}
+
+export function deferredRolloutMarkersFromDocs(
+  docs: ReadonlyArray<DeferredRolloutMarkerDoc>,
+): Array<{ gatewayId: string; marker: RolloutDeferMarker }> {
+  const out: Array<{ gatewayId: string; marker: RolloutDeferMarker }> = [];
+  for (const doc of docs) {
+    const r = doc.data().rollout;
+    if (
+      r &&
+      typeof r === "object" &&
+      typeof (r as RolloutDeferMarker).imageTag === "string" &&
+      typeof (r as RolloutDeferMarker).imageRepository === "string"
+    ) {
+      const m = r as RolloutDeferMarker;
+      out.push({
+        gatewayId: doc.id,
+        marker: {
+          imageTag: m.imageTag,
+          imageRepository: m.imageRepository,
+          ...(m.profile ? { profile: m.profile } : {}),
+          ...(m.gatewayClass ? { gatewayClass: m.gatewayClass } : {}),
+          ...(m.imageProfile ? { imageProfile: m.imageProfile } : {}),
+        },
+      });
+    }
+  }
+  return out;
+}
+
+function startDeferredRolloutSweeperForController(
+  db: Firestore,
+  log: (msg: string) => void,
+): ControllerStopper {
+  return startDeferredRolloutSweeper({
+    listDeferredRollouts: async () => {
+      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
+      return deferredRolloutMarkersFromDocs(snap.docs);
+    },
+    readShellActivity: async (gatewayId) => ({
+      hasActiveSession: (await readShellLiveness(db, gatewayId, Date.now())).reallyActive,
+    }),
+    hasInFlightRollout: async (gatewayId) => {
+      const snap = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("gatewayId", "==", gatewayId)
+        .get();
+      return snap.docs.some((d) => {
+        const data = d.data() as { kind?: unknown; status?: unknown };
+        return (
+          data.kind === "rollout" &&
+          (data.status === "pending" || data.status === "running")
+        );
+      });
+    },
+    enqueueRolloutAndClearMarker: async (gatewayId, marker) => {
+      const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+      const batch = db.batch();
+      batch.set(opRef, {
+        kind: "rollout",
+        status: "pending",
+        createdBy: "glm-controller-rollout-defer-sweeper",
+        createdAt: Date.now(),
+        startedAt: null,
+        completedAt: null,
+        input: {
+          gatewayId,
+          imageTag: marker.imageTag,
+          imageRepository: marker.imageRepository,
+          ...(marker.profile ? { profile: marker.profile } : {}),
+          ...(marker.gatewayClass ? { gatewayClass: marker.gatewayClass } : {}),
+          ...(marker.imageProfile ? { imageProfile: marker.imageProfile } : {}),
+        },
+        steps: [],
+        gatewayId,
+      });
+      batch.update(db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId), {
+        rollout: FieldValue.delete(),
+      });
+      await batch.commit();
+      return opRef.id;
+    },
+    now: () => Date.now(),
+    log,
+  });
+}
+
+function startControllerBackgroundTasks({
+  db,
+  deps,
+  helm,
+  fleetControllerPrivateKey,
+}: ControllerBackgroundTasksDeps): ControllerStopper[] {
+  const stopReconciler = startReconciler(deps);
+  const stopWorker = startOperationWorker(deps);
+  const stopPoller = startOperatorHeartbeatPoller(
+    buildOperatorHeartbeatPollerDeps(db, log, fleetControllerPrivateKey),
+    OPERATOR_HEARTBEAT_POLL_MS,
+  );
+  const stopReaper = startOrphanHeartbeatReaper({
+    db,
+    log,
+    intervalMs: 60_000,
+    stalenessMs: 5 * 60 * 1000,
+    now: () => Date.now(),
+  });
+  const stopStuckOpReaper = startStuckOpReaper({
+    db,
+    log,
+    intervalMs: 60_000,
+    stalenessMs: 15 * 60 * 1000,
+    now: () => Date.now(),
+  });
+  const stopHelmRecoverySweeper = startHelmRecoverySweeper({
+    listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
+    recover: (gatewayId) => helm.recoverRelease({ namespace: NAMESPACE, gatewayId }),
+    now: () => Date.now(),
+    staleMs: HELM_RECOVERY_STALE_MS,
+    intervalMs: HELM_RECOVERY_SWEEP_MS,
+    log,
+  });
+  const stopActivationSweeper = startBuilderActivationLeaseSweeper(
+    { db, workspaceSlugsForUser, now: () => Date.now(), log },
+    ACTIVATION_LEASE_SWEEP_MS,
+  );
+  const stopIdleSweeper = startDedicatedGatewayIdleSweeper(
+    {
+      db,
+      idleMs: DEDICATED_GATEWAY_IDLE_MS,
+      namespace: NAMESPACE,
+      flushGateway: ({ gatewayId, slug, reason }) =>
+        callFlushRpc(db, {
+          privateKey: fleetControllerPrivateKey,
+          gatewayId,
+          slug,
+          reason,
+          log,
+          tag: "idle-sleep",
+        }),
+      now: () => Date.now(),
+      log,
+    },
+    DEDICATED_GATEWAY_IDLE_SWEEP_MS,
+  );
+  const stopPreemptionHandoffSweeper = startPreemptionHandoffSweeper(
+    { db, now: () => Date.now(), log },
+    PREEMPTION_HANDOFF_SWEEP_MS,
+  );
+  const stopDeferredRolloutSweeper = startDeferredRolloutSweeperForController(db, log);
+  const stopHttp = startHttpServer({
+    db,
+    log,
+    port: HTTP_PORT,
+    verifyIdToken: async (token) => {
+      const decoded = await getAuth().verifyIdToken(token);
+      return { uid: decoded.uid };
+    },
+    workspaceSlugsForUser,
+    provisionGatewayAuthSecret,
+    listGatewayBuilds,
+    deleteAuthUserTolerantOfMissing: (uid) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
+  });
+  return [
+    stopReconciler,
+    stopWorker,
+    stopPoller,
+    stopReaper,
+    stopStuckOpReaper,
+    stopHelmRecoverySweeper,
+    stopActivationSweeper,
+    stopIdleSweeper,
+    stopPreemptionHandoffSweeper,
+    stopDeferredRolloutSweeper,
+    stopHttp,
+  ];
+}
+
+function createControllerShutdown(
+  stoppers: ReadonlyArray<ControllerStopper>,
+  log: (msg: string) => void,
+): () => void {
+  return () => {
+    log("[glm-controller] shutdown signal — stopping subscribers");
+    for (const stop of stoppers) stop();
+    process.exit(0);
+  };
+}
+
 async function main(): Promise<void> {
   initializeApp({
     credential: applicationDefault(),
@@ -1182,176 +1382,13 @@ async function main(): Promise<void> {
     ),
   );
 
-  const stopReconciler = startReconciler(deps);
-  const stopWorker = startOperationWorker(deps);
-  const stopPoller = startOperatorHeartbeatPoller(
-    buildOperatorHeartbeatPollerDeps(db, log, fleetControllerPrivateKey),
-    OPERATOR_HEARTBEAT_POLL_MS,
-  );
-
-const stopReaper = startOrphanHeartbeatReaper({
+  const stoppers = startControllerBackgroundTasks({
     db,
-    log,
-    intervalMs: 60_000,
-    stalenessMs: 5 * 60 * 1000,
-    now: () => Date.now(),
+    deps,
+    helm,
+    fleetControllerPrivateKey,
   });
-
-const stopStuckOpReaper = startStuckOpReaper({
-    db,
-    log,
-    intervalMs: 60_000,
-    stalenessMs: 15 * 60 * 1000,
-    now: () => Date.now(),
-  });
-  // Heal helm releases left pending-* by an interrupted op that no later op
-  // re-upserts (the upsert pre-flight only recovers releases it's about to touch).
-  const stopHelmRecoverySweeper = startHelmRecoverySweeper({
-    listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
-    recover: (gatewayId) => helm.recoverRelease({ namespace: NAMESPACE, gatewayId }),
-    now: () => Date.now(),
-    staleMs: HELM_RECOVERY_STALE_MS,
-    intervalMs: HELM_RECOVERY_SWEEP_MS,
-    log,
-  });
-  const stopActivationSweeper = startBuilderActivationLeaseSweeper(
-    {
-      db,
-      workspaceSlugsForUser,
-      now: () => Date.now(),
-      log,
-    },
-    ACTIVATION_LEASE_SWEEP_MS,
-  );
-  const stopIdleSweeper = startDedicatedGatewayIdleSweeper(
-    {
-      db,
-      idleMs: DEDICATED_GATEWAY_IDLE_MS,
-      namespace: NAMESPACE,
-      flushGateway: ({ gatewayId, slug, reason }) =>
-        callFlushRpc(db, {
-          privateKey: fleetControllerPrivateKey,
-          gatewayId,
-          slug,
-          reason,
-          log,
-          tag: "idle-sleep",
-        }),
-      now: () => Date.now(),
-      log,
-    },
-    DEDICATED_GATEWAY_IDLE_SWEEP_MS,
-  );
-  const stopPreemptionHandoffSweeper = startPreemptionHandoffSweeper(
-    {
-      db,
-      now: () => Date.now(),
-      log,
-    },
-    PREEMPTION_HANDOFF_SWEEP_MS,
-  );
-  const stopDeferredRolloutSweeper = startDeferredRolloutSweeper({
-    listDeferredRollouts: async () => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
-      const out: Array<{ gatewayId: string; marker: RolloutDeferMarker }> = [];
-      for (const doc of snap.docs) {
-        const r = (doc.data() as { rollout?: unknown }).rollout;
-        if (
-          r &&
-          typeof r === "object" &&
-          typeof (r as RolloutDeferMarker).imageTag === "string" &&
-          typeof (r as RolloutDeferMarker).imageRepository === "string"
-        ) {
-          const m = r as RolloutDeferMarker;
-          out.push({
-            gatewayId: doc.id,
-            marker: {
-              imageTag: m.imageTag,
-              imageRepository: m.imageRepository,
-              ...(m.profile ? { profile: m.profile } : {}),
-              ...(m.gatewayClass ? { gatewayClass: m.gatewayClass } : {}),
-              ...(m.imageProfile ? { imageProfile: m.imageProfile } : {}),
-            },
-          });
-        }
-      }
-      return out;
-    },
-    readShellActivity: async (gatewayId) => ({
-      hasActiveSession: (await readShellLiveness(db, gatewayId, Date.now())).reallyActive,
-    }),
-    hasInFlightRollout: async (gatewayId) => {
-      const snap = await db
-        .collection(GLM_OPERATIONS_COLLECTION)
-        .where("gatewayId", "==", gatewayId)
-        .get();
-      return snap.docs.some((d) => {
-        const data = d.data() as { kind?: unknown; status?: unknown };
-        return (
-          data.kind === "rollout" &&
-          (data.status === "pending" || data.status === "running")
-        );
-      });
-    },
-    enqueueRolloutAndClearMarker: async (gatewayId, marker) => {
-      const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-      const batch = db.batch();
-      batch.set(opRef, {
-        kind: "rollout",
-        status: "pending",
-        createdBy: "glm-controller-rollout-defer-sweeper",
-        createdAt: Date.now(),
-        startedAt: null,
-        completedAt: null,
-        input: {
-          gatewayId,
-          imageTag: marker.imageTag,
-          imageRepository: marker.imageRepository,
-          ...(marker.profile ? { profile: marker.profile } : {}),
-          ...(marker.gatewayClass ? { gatewayClass: marker.gatewayClass } : {}),
-          ...(marker.imageProfile ? { imageProfile: marker.imageProfile } : {}),
-        },
-        steps: [],
-        gatewayId,
-      });
-      batch.update(db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId), {
-        rollout: FieldValue.delete(),
-      });
-      await batch.commit();
-      return opRef.id;
-    },
-    now: () => Date.now(),
-    log,
-  });
-  const stopHttp = startHttpServer({
-    db,
-    log,
-    port: HTTP_PORT,
-    verifyIdToken: async (token) => {
-      const decoded = await getAuth().verifyIdToken(token);
-      return { uid: decoded.uid };
-    },
-    workspaceSlugsForUser,
-    provisionGatewayAuthSecret,
-    listGatewayBuilds,
-    deleteAuthUserTolerantOfMissing: (uid) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
-  });
-
-  const shutdown = () => {
-    log("[glm-controller] shutdown signal — stopping subscribers");
-    stopReconciler();
-    stopWorker();
-    stopPoller();
-    stopReaper();
-    stopStuckOpReaper();
-    stopHelmRecoverySweeper();
-    stopActivationSweeper();
-    stopIdleSweeper();
-    stopPreemptionHandoffSweeper();
-    stopDeferredRolloutSweeper();
-    stopHttp();
-    process.exit(0);
-  };
+  const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }
