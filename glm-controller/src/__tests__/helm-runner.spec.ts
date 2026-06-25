@@ -1537,3 +1537,61 @@ describe("spawnHelm — real subprocess wrapper", () => {
       expect(result.code).not.toBe(0);
     }));
 });
+
+describe("createHelmSubprocessRunner — listPendingReleases", () => {
+  it("returns gatewayIds of releases stuck in any pending-* state, skipping deployed", async () => {
+    const { runHelm } = mockSubprocess([
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-default-green", namespace: "octogee", status: "deployed" },
+          { name: "octogee-gw-default-blue", namespace: "octogee", status: "pending-upgrade" },
+          { name: "octogee-gw-bender", namespace: "octogee", status: "pending-install" },
+        ]),
+      },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const pending = await runner.listPendingReleases({ namespace: "octogee" });
+    expect(pending.sort()).toEqual(["bender", "default-blue"]);
+  });
+
+  it("returns empty when every release is deployed", async () => {
+    const { runHelm } = mockSubprocess([
+      {
+        stdout: JSON.stringify([
+          { name: "octogee-gw-default-blue", namespace: "octogee", status: "deployed" },
+        ]),
+      },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    expect(await runner.listPendingReleases({ namespace: "octogee" })).toEqual([]);
+  });
+});
+
+describe("createHelmSubprocessRunner — recoverRelease", () => {
+  it("rolls a stuck release back to its last good revision", async () => {
+    const { runHelm, calls } = mockSubprocess([
+      {
+        stdout: JSON.stringify([
+          { revision: 1, status: "deployed" },
+          { revision: 2, status: "pending-upgrade" },
+        ]),
+      },
+      { stdout: "Rollback was a success" },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const result = await runner.recoverRelease({ namespace: "octogee", gatewayId: "default-green" });
+    expect(result).toMatch(/rolled back .*default-green.* revision 1/);
+    expect(calls.some((c) => c[0] === "rollback" && c.includes("1"))).toBe(true);
+  });
+
+  it("uninstalls a stuck first-install when there is no good revision to roll back to", async () => {
+    const { runHelm, calls } = mockSubprocess([
+      { stdout: JSON.stringify([{ revision: 1, status: "pending-install" }]) },
+      { stdout: "release uninstalled" },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+    const result = await runner.recoverRelease({ namespace: "octogee", gatewayId: "default-blue" });
+    expect(result).toMatch(/uninstalled stuck first-install/);
+    expect(calls.some((c) => c[0] === "uninstall")).toBe(true);
+  });
+});

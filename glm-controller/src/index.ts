@@ -130,6 +130,7 @@ import { recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
+import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import {
   ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
@@ -201,6 +202,17 @@ const DEDICATED_GATEWAY_IDLE_SWEEP_MS = parseNonNegativeInt(
 const PREEMPTION_HANDOFF_SWEEP_MS = parseNonNegativeInt(
   process.env.PREEMPTION_HANDOFF_SWEEP_MS,
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
+);
+const HELM_RECOVERY_SWEEP_MS = parseNonNegativeInt(
+  process.env.HELM_RECOVERY_SWEEP_MS,
+  3 * 60 * 1000,
+);
+// A helm release must be pending continuously for longer than this before the
+// recovery sweeper treats it as an orphaned wedge. Set > the helm `--wait` upgrade
+// timeout (10m) so a legitimately in-progress install/upgrade is never recovered.
+const HELM_RECOVERY_STALE_MS = parseNonNegativeInt(
+  process.env.HELM_RECOVERY_STALE_MS,
+  15 * 60 * 1000,
 );
 
 // One shared edge ingress carries both the api host (/api/g/<id>/* locality
@@ -1192,6 +1204,16 @@ const stopStuckOpReaper = startStuckOpReaper({
     stalenessMs: 15 * 60 * 1000,
     now: () => Date.now(),
   });
+  // Heal helm releases left pending-* by an interrupted op that no later op
+  // re-upserts (the upsert pre-flight only recovers releases it's about to touch).
+  const stopHelmRecoverySweeper = startHelmRecoverySweeper({
+    listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
+    recover: (gatewayId) => helm.recoverRelease({ namespace: NAMESPACE, gatewayId }),
+    now: () => Date.now(),
+    staleMs: HELM_RECOVERY_STALE_MS,
+    intervalMs: HELM_RECOVERY_SWEEP_MS,
+    log,
+  });
   const stopActivationSweeper = startBuilderActivationLeaseSweeper(
     {
       db,
@@ -1322,6 +1344,7 @@ const stopStuckOpReaper = startStuckOpReaper({
     stopPoller();
     stopReaper();
     stopStuckOpReaper();
+    stopHelmRecoverySweeper();
     stopActivationSweeper();
     stopIdleSweeper();
     stopPreemptionHandoffSweeper();

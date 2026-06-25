@@ -45,6 +45,15 @@ removeInstance(opts: {
     namespace: string;
     gatewayId: string;
   }): Promise<void>;
+
+  // gatewayIds of releases stuck in a helm pending-* state (an interrupted
+  // install/upgrade/rollback). Used by the stuck-release recovery sweeper.
+  listPendingReleases(opts: { namespace: string }): Promise<string[]>;
+
+  // Recover one stuck release: roll it back to its last good revision, or
+  // uninstall a stuck first-install (no good revision). Returns a human-readable
+  // description of what it did — the same recovery the upsert pre-flight runs.
+  recoverRelease(opts: { namespace: string; gatewayId: string }): Promise<string>;
 }
 
 export interface HelmSubprocessResult {
@@ -676,6 +685,24 @@ if (
         `[helm-runner] uninstalled release=${release} ns=${namespace}`,
       );
     },
+
+    async listPendingReleases({ namespace }) {
+      const items = await listGatewayReleases(deps, namespace);
+      return items
+        .filter((item) => PENDING_STATUSES.has(item.status))
+        .map((item) => gatewayIdFromRelease(item.name))
+        .filter((id): id is string => id !== null);
+    },
+
+    async recoverRelease({ namespace, gatewayId }) {
+      return recoverStuckRelease(
+        deps,
+        namespace,
+        releaseNameForGateway(gatewayId),
+        upgradeTimeout,
+        uninstallTimeout,
+      );
+    },
   };
 }
 
@@ -719,6 +746,16 @@ export function createLoggingHelmRunner(log: (msg: string) => void): HelmRunner 
       log(
         `[helm-runner:stub] removeInstance ns=${opts.namespace} gatewayId=${opts.gatewayId} — no exec`,
       );
+    },
+    listPendingReleases: async ({ namespace }) => {
+      log(`[helm-runner:stub] listPendingReleases ns=${namespace} — returning none`);
+      return [];
+    },
+    recoverRelease: async ({ namespace, gatewayId }) => {
+      log(
+        `[helm-runner:stub] recoverRelease ns=${namespace} gatewayId=${gatewayId} — no exec`,
+      );
+      return "no-op (stub)";
     },
   };
 }
