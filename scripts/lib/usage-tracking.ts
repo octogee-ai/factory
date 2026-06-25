@@ -1,4 +1,9 @@
-import { Firestore, FieldValue } from "firebase-admin/firestore";
+import {
+  Firestore,
+  FieldValue,
+  type DocumentReference,
+  type Transaction,
+} from "firebase-admin/firestore";
 import { formatUsageLogLine } from "./usage-log-line.js";
 import {
   extractRole,
@@ -40,6 +45,18 @@ function modelKey(model: string): string {
   return model.replace(/\//g, "_").slice(0, 100);
 }
 
+export function workspaceUsageDocumentIds(model: string, today: string): {
+  sessionId: string;
+  modelId: string;
+  summaryId: string;
+} {
+  return {
+    sessionId: today,
+    modelId: `${modelKey(model)}_${today}`,
+    summaryId: "current",
+  };
+}
+
 export interface ReportUsageInput {
   db: Firestore;
   agentId: string;
@@ -71,6 +88,7 @@ export interface StartUsageTrackingOptions {
 }
 
 type FirestoreUpdate = Record<string, unknown>;
+type ThrottleDecision = { level: 0 | 1 | 3; reason: string };
 
 function decideTrialBackfill(
   tier: string,
@@ -134,7 +152,7 @@ function decideThrottle(args: {
   windowBudgetUsd: number;
   subscriptionStatus: string;
   windowStartedAt: Date | null;
-}): { level: 0 | 1 | 3; reason: string } {
+}): ThrottleDecision {
   if (args.byotActive) {
     return { level: 0, reason: "byot_skip" };
   }
@@ -151,6 +169,226 @@ function decideThrottle(args: {
   return { level, reason: state.reason };
 }
 
+interface UsageTransactionState {
+  workspaceId: string | null;
+  windowUpdates: FirestoreUpdate;
+  throttleLevel: 0 | 1 | 3;
+  throttleReason: string;
+}
+
+interface UsageTransactionInput {
+  db: Firestore;
+  userRef: DocumentReference;
+  logRef: DocumentReference;
+  uid: string;
+  agentId: string;
+  role: string;
+  usage: UsageData;
+  log: LogFn;
+  gatewayId: string;
+  today: string;
+}
+
+function usageTransactionState(args: {
+  data: FirebaseFirestore.DocumentData;
+  uid: string;
+  agentId: string;
+  usage: UsageData;
+  log: LogFn;
+}): UsageTransactionState {
+  const { data, uid, agentId, usage, log } = args;
+  const workspaceId = workspaceIdFromUserData(data, agentId);
+  const usageData = data.usage || {};
+  const tier = resolveTier(data);
+  const subscriptionStatus = data.subscription?.status ?? "active";
+  const byotActive = data.byotActive === true;
+  const now = new Date();
+
+  const initialTrialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
+  const backfill = decideTrialBackfill(tier, initialTrialStartedAt, byotActive, now);
+  if (Object.keys(backfill.update).length) {
+    log(`usage: backfilled subscription.trialStartedAt=now for trial user ${uid} (was missing)`);
+  }
+
+  const windowBudgetUsd = windowBudgetUsdForTier(tier, backfill.trialStartedAt);
+  const startedAt = usageData.windowStartedAt?.toDate?.() ?? null;
+  const { newWindowCostUsd, windowUpdates, windowStartedAt } = buildWindowUpdates(
+    usage,
+    { windowCostUsd: usageData.windowCostUsd, windowStartedAt: startedAt },
+    windowBudgetUsd,
+    now,
+  );
+
+  if (tier === "trial" && !backfill.trialStartedAt && !byotActive) {
+    log(`⚠ usage: trial user ${uid} has no subscription.trialStartedAt — running on platform key with no USD budget`);
+  }
+
+  const throttle = decideThrottle({
+    byotActive,
+    tier,
+    newWindowCostUsd,
+    windowBudgetUsd,
+    subscriptionStatus,
+    windowStartedAt,
+  });
+
+  return {
+    workspaceId,
+    windowUpdates: { ...windowUpdates, ...backfill.update },
+    throttleLevel: throttle.level,
+    throttleReason: throttle.reason,
+  };
+}
+
+function userUsageUpdate(state: UsageTransactionState, usage: UsageData): FirestoreUpdate {
+  return {
+    ...state.windowUpdates,
+    "usage.totalTokensUsed":    FieldValue.increment(usage.totalTokens),
+    "usage.tokensUsed":         FieldValue.increment(usage.totalTokens),
+    "usage.costUsd":            FieldValue.increment(usage.costUsd),
+    "usage.interactionCount":   FieldValue.increment(1),
+    "usage.requestsThisHour":   FieldValue.increment(1),
+    "usage.throttleLevel":      state.throttleLevel,
+    "usage.throttleReason":     state.throttleReason,
+    "usage.lastUpdated":        FieldValue.serverTimestamp(),
+  };
+}
+
+function usageLogData(args: {
+  today: string;
+  usage: UsageData;
+  gatewayId: string;
+  role: string;
+}): FirestoreUpdate {
+  const { today, usage, gatewayId, role } = args;
+  return {
+    date:             today,
+    tokensUsed:       FieldValue.increment(usage.totalTokens),
+    costUsd:          FieldValue.increment(usage.costUsd),
+    interactions:     FieldValue.increment(1),
+    gatewayId,
+    breakdown: {
+      [role]: FieldValue.increment(usage.totalTokens),
+      ...tokenBreakdownIncrements(usage),
+      costInput:      FieldValue.increment(usage.costBreakdown.input),
+      costOutput:     FieldValue.increment(usage.costBreakdown.output),
+      costCacheRead:  FieldValue.increment(usage.costBreakdown.cacheRead),
+      costCacheWrite: FieldValue.increment(usage.costBreakdown.cacheWrite),
+    },
+  };
+}
+
+function workspaceSessionData(args: {
+  today: string;
+  usage: UsageData;
+  gatewayId: string;
+  workspaceId: string;
+  role: string;
+}): FirestoreUpdate {
+  const { today, usage, gatewayId, workspaceId, role } = args;
+  return {
+    date:            today,
+    tokensUsed:      FieldValue.increment(usage.totalTokens),
+    costUsd:         FieldValue.increment(usage.costUsd),
+    interactions:    FieldValue.increment(1),
+    gatewayId,
+    workspaceId,
+    roles: { [role]: FieldValue.increment(usage.totalTokens) },
+    token_breakdown: tokenBreakdownIncrements(usage),
+  };
+}
+
+function workspaceModelData(args: {
+  today: string;
+  usage: UsageData;
+  workspaceId: string;
+  role: string;
+}): FirestoreUpdate {
+  const { today, usage, workspaceId, role } = args;
+  return {
+    date:              today,
+    model:             usage.model,
+    workspaceId,
+    tokens:            FieldValue.increment(usage.totalTokens),
+    cost_usd:          FieldValue.increment(usage.costUsd),
+    interaction_count: FieldValue.increment(1),
+    role,
+    lastUsedAt:        FieldValue.serverTimestamp(),
+    token_breakdown:   tokenBreakdownIncrements(usage),
+  };
+}
+
+function workspaceSummaryData(args: {
+  usage: UsageData;
+  workspaceId: string;
+}): FirestoreUpdate {
+  const { usage, workspaceId } = args;
+  return {
+    workspaceId,
+    totalTokens:        FieldValue.increment(usage.totalTokens),
+    totalCostUsd:       FieldValue.increment(usage.costUsd),
+    totalInteractions:  FieldValue.increment(1),
+    lastUpdated:        FieldValue.serverTimestamp(),
+    modelCosts: { [modelKey(usage.model)]: FieldValue.increment(usage.costUsd) },
+  };
+}
+
+function writeWorkspaceUsageDocuments(
+  t: Transaction,
+  db: Firestore,
+  args: {
+    today: string;
+    usage: UsageData;
+    gatewayId: string;
+    workspaceId: string;
+    role: string;
+  },
+): void {
+  const ids = workspaceUsageDocumentIds(args.usage.model, args.today);
+  const wsRef = db.collection("workspaces").doc(args.workspaceId);
+
+  t.set(
+    wsRef.collection("usage_sessions").doc(ids.sessionId),
+    workspaceSessionData(args),
+    { merge: true },
+  );
+  t.set(
+    wsRef.collection("usage_models").doc(ids.modelId),
+    workspaceModelData(args),
+    { merge: true },
+  );
+  t.set(
+    wsRef.collection("usage_summary").doc(ids.summaryId),
+    workspaceSummaryData(args),
+    { merge: true },
+  );
+}
+
+async function writeUsageTransaction(t: Transaction, input: UsageTransactionInput): Promise<string | null> {
+  const userDoc = await t.get(input.userRef);
+  const data = userDoc.data() || {};
+  const state = usageTransactionState({
+    data,
+    uid: input.uid,
+    agentId: input.agentId,
+    usage: input.usage,
+    log: input.log,
+  });
+
+  t.update(input.userRef, userUsageUpdate(state, input.usage));
+  t.set(
+    input.logRef,
+    usageLogData(input),
+    { merge: true },
+  );
+
+  if (state.workspaceId) {
+    writeWorkspaceUsageDocuments(t, input.db, { ...input, workspaceId: state.workspaceId });
+  }
+
+  return state.workspaceId;
+}
+
 export async function reportUsageForUid(input: ReportUsageForUidInput): Promise<void> {
   const { db, uid, agentId, usage, log, gatewayId } = input;
   const role = input.role ?? extractRole(agentId);
@@ -161,112 +399,18 @@ export async function reportUsageForUid(input: ReportUsageForUidInput): Promise<
   let workspaceId: string | null = null;
 
   try {
-    await db.runTransaction(async (t) => {
-      const userDoc = await t.get(userRef);
-      const data = userDoc.data() || {};
-      workspaceId = workspaceIdFromUserData(data, agentId);
-      const usageData = data.usage || {};
-      const tier = resolveTier(data);
-      const subscriptionStatus = data.subscription?.status ?? "active";
-      const byotActive = data.byotActive === true;
-      const now = new Date();
-
-      const initialTrialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
-      const backfill = decideTrialBackfill(tier, initialTrialStartedAt, byotActive, now);
-      if (Object.keys(backfill.update).length) {
-        log(`usage: backfilled subscription.trialStartedAt=now for trial user ${uid} (was missing)`);
-      }
-
-      const windowBudgetUsd = windowBudgetUsdForTier(tier, backfill.trialStartedAt);
-      const startedAt = usageData.windowStartedAt?.toDate?.() ?? null;
-      const { newWindowCostUsd, windowUpdates, windowStartedAt } = buildWindowUpdates(
-        usage,
-        { windowCostUsd: usageData.windowCostUsd, windowStartedAt: startedAt },
-        windowBudgetUsd,
-        now,
-      );
-
-      if (tier === "trial" && !backfill.trialStartedAt && !byotActive) {
-        log(`⚠ usage: trial user ${uid} has no subscription.trialStartedAt — running on platform key with no USD budget`);
-      }
-
-      const throttle = decideThrottle({
-        byotActive,
-        tier,
-        newWindowCostUsd,
-        windowBudgetUsd,
-        subscriptionStatus,
-        windowStartedAt,
-      });
-      const throttleLevel = throttle.level;
-      const throttleReason = throttle.reason;
-
-      t.update(userRef, {
-        ...windowUpdates,
-        ...backfill.update,
-        "usage.totalTokensUsed":    FieldValue.increment(usage.totalTokens),
-        "usage.tokensUsed":         FieldValue.increment(usage.totalTokens),
-        "usage.costUsd":            FieldValue.increment(usage.costUsd),
-        "usage.interactionCount":   FieldValue.increment(1),
-        "usage.requestsThisHour":   FieldValue.increment(1),
-        "usage.throttleLevel":      throttleLevel,
-        "usage.throttleReason":     throttleReason,
-        "usage.lastUpdated":        FieldValue.serverTimestamp(),
-      });
-
-t.set(logRef, {
-        date:             today,
-        tokensUsed:       FieldValue.increment(usage.totalTokens),
-        costUsd:          FieldValue.increment(usage.costUsd),
-        interactions:     FieldValue.increment(1),
-        gatewayId,
-        breakdown: {
-          [role]: FieldValue.increment(usage.totalTokens),
-          ...tokenBreakdownIncrements(usage),
-          costInput:      FieldValue.increment(usage.costBreakdown.input),
-          costOutput:     FieldValue.increment(usage.costBreakdown.output),
-          costCacheRead:  FieldValue.increment(usage.costBreakdown.cacheRead),
-          costCacheWrite: FieldValue.increment(usage.costBreakdown.cacheWrite),
-        },
-      }, { merge: true });
-
-if (workspaceId) {
-        const wsRef = db.collection("workspaces").doc(workspaceId);
-
-t.set(wsRef.collection("usage_sessions").doc(today), {
-          date:            today,
-          tokensUsed:      FieldValue.increment(usage.totalTokens),
-          costUsd:         FieldValue.increment(usage.costUsd),
-          interactions:    FieldValue.increment(1),
-          gatewayId,
-          workspaceId,
-          roles: { [role]: FieldValue.increment(usage.totalTokens) },
-          token_breakdown: tokenBreakdownIncrements(usage),
-        }, { merge: true });
-
-const mk = `${modelKey(usage.model)}_${today}`;
-        t.set(wsRef.collection("usage_models").doc(mk), {
-          date:              today,
-          model:             usage.model,
-          workspaceId,
-          tokens:            FieldValue.increment(usage.totalTokens),
-          cost_usd:          FieldValue.increment(usage.costUsd),
-          interaction_count: FieldValue.increment(1),
-          role,
-          lastUsedAt:        FieldValue.serverTimestamp(),
-          token_breakdown:   tokenBreakdownIncrements(usage),
-        }, { merge: true });
-
-t.set(wsRef.collection("usage_summary").doc("current"), {
-          workspaceId,
-          totalTokens:        FieldValue.increment(usage.totalTokens),
-          totalCostUsd:       FieldValue.increment(usage.costUsd),
-          totalInteractions:  FieldValue.increment(1),
-          lastUpdated:        FieldValue.serverTimestamp(),
-          modelCosts: { [modelKey(usage.model)]: FieldValue.increment(usage.costUsd) },
-        }, { merge: true });
-      }
-    });
+    workspaceId = await db.runTransaction((t) => writeUsageTransaction(t, {
+      db,
+      userRef,
+      logRef,
+      uid,
+      agentId,
+      role,
+      usage,
+      log,
+      gatewayId,
+      today,
+    }));
 
     log(formatUsageLogLine({
       totalTokens: usage.totalTokens,
@@ -277,8 +421,7 @@ t.set(wsRef.collection("usage_summary").doc("current"), {
       workspaceId: workspaceId ?? null,
     }));
   } catch (err) {
-
-const e = err as { code?: string; stack?: string };
+    const e = err as { code?: string; stack?: string };
     const codeTag = e.code ? ` [${e.code}]` : "";
     const stackSuffix = e.stack ? `\n${e.stack}` : "";
     log(`\u2717 usage write failed for ${agentId}${codeTag}: ${err}${stackSuffix}`);
