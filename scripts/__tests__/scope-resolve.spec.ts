@@ -70,6 +70,24 @@ describe("resolveScope — ownership", () => {
 });
 
 describe("resolveScope — cross-package hazard edges", () => {
+  it("core/ change runs the core job + every consumer (they compile its re-export shims)", () => {
+    // @octogee/core is consumed (via scripts/lib shims today) by scripts +
+    // octogee-api + gateway-edge + glm-controller. Editing core must re-run
+    // them all, plus the core job itself (which also guards committed dist/).
+    expectJobs(
+      ["core/src/workspace-slugs.ts"],
+      [
+        "core",
+        "scripts",
+        "customer-lifecycle-emulator",
+        "octogee-api",
+        "gateway-edge",
+        "gateway-edge-emulator",
+        "glm-controller",
+      ],
+    );
+  });
+
   it("scripts/lib change ALSO runs octogee-api + gateway-edge + glm-controller (they compile it)", () => {
     // The admin-fleet-router hazard: octogee-api, gateway-edge, and glm-controller
     // all compile scripts/lib (tsconfig include / source imports), so a scripts/lib

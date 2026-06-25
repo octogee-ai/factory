@@ -16,6 +16,11 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 USER root
 
+# @octogee/core (scripts depends on it via file:../core) — committed dist copied
+# before the scripts install so the file: symlink resolves, and present on disk
+# for the build-time typecheck (npx tsc) + provisioner runtime resolution.
+COPY --chown=node:node core/ /octogee/core/
+
 # ── Octogee provisioner + site API ──────────────────────────────────────────
 COPY --chown=node:node scripts/package.json scripts/package-lock.json* /octogee/scripts/
 WORKDIR /octogee/scripts

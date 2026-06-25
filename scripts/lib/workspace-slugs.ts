@@ -1,28 +1,4 @@
-export interface WorkspaceSlugSource {
-  username?: string | null;
-  provisioning?: {
-    openclaw?: {
-      slug?: string | null;
-    } | null;
-  } | null;
-}
-
-function coerceString(v: unknown): string | null {
-  return typeof v === "string" && v.length > 0 ? v : null;
-}
-
-export function primaryWorkspaceSlug(
-  data: WorkspaceSlugSource | null | undefined,
-): string | null {
-  return (
-    coerceString(data?.provisioning?.openclaw?.slug) ??
-    coerceString(data?.username)
-  );
-}
-
-export function workspaceSlugsForUser(
-  data: WorkspaceSlugSource | null | undefined,
-): string[] {
-  const slug = primaryWorkspaceSlug(data);
-  return slug ? [slug] : [];
-}
+// Moved to @octogee/core. This re-export keeps existing
+// `scripts/lib/workspace-slugs` importers working until they migrate to the
+// package boundary directly (see docs/specs/OCTOGEE-CORE-EXTRACTION-SPEC.md).
+export * from "@octogee/core/workspace-slugs";

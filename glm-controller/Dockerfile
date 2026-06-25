@@ -34,6 +34,12 @@ RUN apt-get update \
 # glm-controller/Dockerfile .` from the repo root.
 WORKDIR /app/glm-controller
 
+# @octogee/core (file:../core dep) — committed dist at /app/core resolves the
+# file: symlink (glm + scripts both point here), tsc's .d.ts, and the runtime
+# import from the compiled shim under dist/scripts/lib. Single-stage, so it
+# stays for runtime.
+COPY core/ /app/core/
+
 # Two-stage install: dev deps for the build (typescript), then prune to
 # runtime-only after `tsc` finishes. Avoids `npx tsc` falling back to a
 # downloaded unpinned compiler.

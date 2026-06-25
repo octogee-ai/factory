@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { primaryWorkspaceSlug, workspaceSlugsForUser } from "../lib/workspace-slugs";
+import { primaryWorkspaceSlug, workspaceSlugsForUser } from "./workspace-slugs.js";
 
 describe("primaryWorkspaceSlug", () => {
   it("returns the username when set", () => {

@@ -9,6 +9,7 @@ export const JOBS = {
   tests: "tests",
   acceptance: "acceptance",
   scripts: "scripts",
+  core: "core",
   octogeeRouter: "octogee-router",
   octogeeMattermostTools: "octogee-mattermost-tools",
   functions: "functions",
@@ -33,6 +34,13 @@ export interface UnitPackage {
 
 // The dynamic `test` matrix entries. `typecheck` runs after `npm ci`, before `npm test`.
 export const UNIT_PACKAGES: readonly UnitPackage[] = [
+  // core ships committed dist/; its typecheck rebuilds and fails on any drift
+  // between the committed build output and source (npm can't build a file: dep).
+  {
+    name: JOBS.core,
+    dir: "core",
+    typecheck: "npm run typecheck && npm run build && git diff --exit-code dist",
+  },
   { name: JOBS.gatewayEdge, dir: "gateway-edge", typecheck: TYPECHECK },
   { name: JOBS.octogeeApi, dir: "octogee-api", typecheck: TYPECHECK },
   { name: JOBS.glmController, dir: "glm-controller", typecheck: TYPECHECK },
@@ -76,6 +84,7 @@ export interface Ownership {
 // dir-prefix → owned jobs. Resolution picks the LONGEST match so the nested
 // octogee-router dir wins over any shorter rule instead of failing open.
 export const OWNERSHIP: readonly Ownership[] = [
+  { dir: "core/", jobs: [JOBS.core] },
   { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
   { dir: "octogee-api/", jobs: [JOBS.octogeeApi] },
   { dir: "glm-controller/", jobs: [JOBS.glmController] },
@@ -103,6 +112,19 @@ export interface ScopeEdge {
 // Cross-package edges, additive on top of ownership. The correctness hazards —
 // each pinned by a test in scope-resolve.spec.ts.
 export const EDGES: readonly ScopeEdge[] = [
+  {
+    when: "core/",
+    jobs: [
+      JOBS.scripts,
+      JOBS.customerLifecycleEmulator,
+      JOBS.octogeeApi,
+      JOBS.gatewayEdge,
+      JOBS.gatewayEdgeEmulator,
+      JOBS.glmController,
+    ],
+    reason:
+      "@octogee/core is consumed (currently via scripts/lib re-export shims) by scripts + octogee-api + gateway-edge + glm-controller",
+  },
   {
     when: "scripts/lib/",
     jobs: [
