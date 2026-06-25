@@ -36,7 +36,7 @@ export interface WorkspaceGitLogEntry {
 
 const SAFE_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 
-function isSafeSlug(slug: string): boolean {
+export function isSafeSlug(slug: string): boolean {
   return SAFE_SLUG_RE.test(slug);
 }
 
@@ -177,6 +177,64 @@ const commitRes = await runGit(
   const shaRes = await runGit(customerDir, ["rev-parse", "HEAD"]);
   if (!shaRes.ok) return shaRes;
   return { ok: true, result: { sha: shaRes.stdout.trim(), empty: false } };
+}
+
+export interface CommitAndPushResult {
+  committed: boolean;
+  pushed: boolean;
+  nothingToCommit: boolean;
+  pushError?: string;
+}
+
+export interface CommitAndPushDeps {
+  gitCommit: typeof gitCommit;
+  gitPush: typeof gitPush;
+}
+
+/**
+ * Commit local workspace changes and push them — the explicit "save now" an
+ * exec-off agent triggers via `workspace_commit`. `gitCommit` reports `empty`
+ * when there was nothing to stage (a clean no-op). A push that fails AFTER a
+ * successful commit is not fatal: the commit is durable on the PVC and the
+ * autosave / pre-stop flush retries the push — we surface `pushed:false` +
+ * `pushError` so the caller can tell the user rather than silently swallow it.
+ */
+export async function commitAndPushWorkspace(
+  customerDir: string,
+  options: { message: string; author: CommitAuthor },
+  deps: CommitAndPushDeps = { gitCommit, gitPush },
+): Promise<{ ok: true; result: CommitAndPushResult } | { ok: false; error: WorkspaceGitError }> {
+  const commitRes = await deps.gitCommit(customerDir, options);
+  if (!commitRes.ok) return commitRes;
+  if (commitRes.result.empty) {
+    return { ok: true, result: { committed: false, pushed: false, nothingToCommit: true } };
+  }
+  const pushRes = await deps.gitPush(customerDir, {});
+  if (!pushRes.ok) {
+    return {
+      ok: true,
+      result: {
+        committed: true,
+        pushed: false,
+        nothingToCommit: false,
+        pushError: describeGitError(pushRes.error),
+      },
+    };
+  }
+  return { ok: true, result: { committed: true, pushed: true, nothingToCommit: false } };
+}
+
+function describeGitError(err: WorkspaceGitError): string {
+  switch (err.code) {
+    case "GIT_FAILED":
+      return `git failed (status ${err.status})`;
+    case "TIMEOUT":
+      return "git push timed out";
+    case "NOT_A_REPO":
+      return "not a git repository";
+    default:
+      return err.code;
+  }
 }
 
 export interface WorkspaceGitBranchEntry {

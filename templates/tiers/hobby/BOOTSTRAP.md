@@ -97,13 +97,9 @@ At each milestone, write `_pending_milestones.json` in your workspace root. The 
 
 All three milestones fired. SOUL.md rewritten. USER.md filled in. You know who you are, who they are, and what you're building together.
 
-**Delete this file**, then run this exactly once to publish the bootstrapped state:
-
-```bash
-git add -A && git commit -m "bootstrap complete" && git push -u origin main
-```
-
-From there, your workspace auto-syncs every few minutes.
+**Delete this file.** Your workspace saves automatically, so there's nothing to run —
+the bootstrapped state publishes on the next autosave. If you'd rather publish it
+right now, use the `workspace_commit` tool.
 
 ---
 
