@@ -326,17 +326,10 @@ log "File permissions hardened"
 
 # ── Install plugin extensions (staged in image → runtime location) ──────────
 # Use rsync to copy extension source files only (excludes node_modules).
-# node_modules are symlinked from /opt/octogee-router-deps (pre-built in base
-# image) so the 1.2GB @huggingface/transformers is never copied at startup.
-ROUTER_ENABLED="${OCTOGEE_ROUTER_ENABLED:-true}"
 if [ -d /octogee/extensions ]; then
   mkdir -p "$OPENCLAW_DIR/extensions"
   for ext_dir in /octogee/extensions/*/; do
     ext_name=$(basename "$ext_dir")
-    if [ "$ROUTER_ENABLED" != "true" ] && [ "$ext_name" = "octogee-router" ]; then
-      log "Extensions: skipping ${ext_name} because OCTOGEE_ROUTER_ENABLED=${ROUTER_ENABLED}"
-      continue
-    fi
     target="$OPENCLAW_DIR/extensions/$ext_name"
     mkdir -p "$target"
     # Copy source files only (no node_modules)

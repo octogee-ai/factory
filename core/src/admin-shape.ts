@@ -72,8 +72,6 @@ export interface CustomerSummary {
   totalTokensUsed:     number;
   costUsd:             number;
   degraded:            boolean;
-  faceModel:           string | null;
-  brainModel:          string | null;
   lastActive:          string | null;
   mattermostConnected: boolean;
   mattermostUsername:  string | null;
@@ -143,8 +141,6 @@ export function buildCustomerSummary(
     totalTokensUsed: numberAt(usage, "totalTokensUsed", numberAt(usage, "tokensUsed")),
     costUsd,
     degraded,
-    faceModel: nullableStringAt(d, "faceModel"),
-    brainModel: nullableStringAt(d, "brainModel"),
     lastActive: toISODate(usage.lastUpdated),
     mattermostConnected: typeof mattermost.userId === "string" && mattermost.userId.length > 0,
     mattermostUsername: nullableStringAt(mattermost, "username"),

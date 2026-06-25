@@ -46,13 +46,6 @@ describe("resolveScope — ownership", () => {
     );
   });
 
-  it("resolves the deeply-nested octogee-router dir (longest-prefix wins, not fail-open)", () => {
-    expectJobs(
-      ["infra/gateway/extensions/octogee-router/src/handler.ts"],
-      ["octogee-router"],
-    );
-  });
-
   it("glm-controller change runs only glm-controller (not fail-open to everything)", () => {
     expectJobs(["glm-controller/src/index.ts"], ["glm-controller"]);
   });

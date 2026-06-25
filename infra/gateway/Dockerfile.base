@@ -9,8 +9,6 @@
 # What lives here (changes rarely → cached across gateway builds):
 #   - OpenClaw npm install
 #   - All apt packages (curl, jq, python3, git, ripgrep, ffmpeg, gh, etc.)
-#   - @huggingface/transformers (1.2GB — heaviest dep, almost never changes)
-#   - octogee-router npm install (node_modules for the classifier extension)
 # ─────────────────────────────────────────────────────────────────────────────
 # Node 24 matches OpenClaw upstream's publishing + CI target image
 # (node:24-bookworm-slim, per their Dockerfile). OpenClaw 2026.4.20's
@@ -93,44 +91,6 @@ RUN groupadd -r node 2>/dev/null || true && \
 
 ENV HOME=/home/node
 
-# ── Heavy extension deps — extracted from GCS-cached tarball ────────────────
-# octogee-router needs @huggingface/transformers (~1.2GB) for the NN
-# classifier. We don't `npm install` here — the resolved node_modules tree
-# is packed once per lockfile by `scripts/pack-router-deps.sh` and stored
-# at gs://octogee-openclaw-fork/router-deps-<sha8>.tgz, keyed by
-# sha256(package-lock.json)[:8]. The fetch-router-deps Cloud Build step
-# stages it into the build context as node_modules.tgz before this layer
-# runs. Eliminates ~177 npm-registry fetches + the onnxruntime-node native
-# binary download per base build → no upstream rate-limit exposure on the
-# heaviest dep tree. Cache miss = build fails fast (no implicit npm
-# install fallback); operator runs the pack script to populate.
-# Entrypoint symlinks /octogee/extensions/octogee-router/node_modules → here.
-COPY infra/gateway/extensions/octogee-router/package.json \
-     infra/gateway/extensions/octogee-router/package-lock.json \
-     /opt/octogee-router-deps/
-COPY infra/gateway/extensions/octogee-router/node_modules.tgz /tmp/router-deps.tgz
-RUN tar -xzf /tmp/router-deps.tgz -C /opt/octogee-router-deps \
-    && rm /tmp/router-deps.tgz \
-    && test -d /opt/octogee-router-deps/node_modules/@huggingface/transformers \
-    && chown -R node:node /opt/octogee-router-deps
-
-# ── Pre-bake classifier ONNX model into image ──────────────────────────────
-# octogee-router's classifier needs Xenova/all-MiniLM-L6-v2 (~90MB fp32 ONNX)
-# at runtime. Downloading at gateway boot from the HF CDN is unreliable:
-#   - Partial writes corrupt the EmptyDir cache (poisons every subsequent boot)
-#   - CDN hangs stall classifier init for 70+ seconds
-#   - Plugin hot-reloads retrigger the same fetch, freezing the event loop
-# Baking the model into the image makes classifier init fully offline.
-# If the download or warm-up inference fails, the base image build fails loud.
-RUN mkdir -p /opt/octogee-router-models && chown -R node:node /opt/octogee-router-models
-COPY --chown=node:node infra/gateway/extensions/octogee-router/prebake-model.mjs \
-     /opt/octogee-router-deps/prebake-model.mjs
-USER node
-RUN cd /opt/octogee-router-deps && node prebake-model.mjs
-USER root
-RUN rm /opt/octogee-router-deps/prebake-model.mjs \
-    && ls -la /opt/octogee-router-models/Xenova/all-MiniLM-L6-v2/onnx/
-
 # ── OpenClaw Mattermost plugin ───────────────────────────────────────────────
 # No build-time install. `@openclaw/mattermost` ships as a *bundled*
 # extension in the OpenClaw dist tree (dist/extensions/mattermost/index.js)
@@ -151,8 +111,7 @@ RUN rm /opt/octogee-router-deps/prebake-model.mjs \
 # writes under $HOME/.openclaw/npm — but /home/node/.openclaw is an emptyDir
 # at runtime (no PVC) that shadows the image copy on every boot. So install
 # at build, then STAGE the tree to /opt/openclaw-codex-deps (non-shadowed);
-# entrypoint.sh restores it into the emptyDir at boot — the same
-# stage→runtime pattern as /opt/octogee-router-deps. Fail-loud on both the
+# entrypoint.sh restores it into the emptyDir at boot. Fail-loud on both the
 # install and the staging (no `| tail`: sh has no pipefail).
 #
 # The package's location WITHIN ~/.openclaw/npm is an upstream impl detail

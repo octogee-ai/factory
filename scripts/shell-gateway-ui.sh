@@ -17,7 +17,6 @@
 #
 # Known endpoints once port-forward is up (OC 2026.5.12 surface):
 #   http://localhost:{PORT}/healthz           — gateway liveness
-#   Prometheus metrics moved to :9091/metrics (not forwarded here)
 #   Control UI / canvas are not built into the gateway image
 #
 # Ctrl+C tears down the tunnel cleanly.
@@ -70,7 +69,7 @@ URL="http://localhost:${LOCAL_PORT}"
 
 echo "→ Port-forwarding octogee-gateway:18789 → ${URL} (env=${ENV}, namespace=${NAMESPACE})"
 echo "  Health:   ${URL}/healthz"
-echo "  (metrics moved to :9091/metrics; Control UI/canvas not built into the image)"
+echo "  (Control UI/canvas not built into the image)"
 echo "  (Ctrl+C to tear down)"
 
 if $OPEN_BROWSER; then

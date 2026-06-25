@@ -36,14 +36,14 @@ const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
         list: [],
       },
       plugins: {
-        entries: { "octogee-router": { config: { enforcementOverrides: {} } } },
+        entries: { codex: { enabled: false, config: { appServer: { sandbox: "workspace-write" } } } },
       },
     };
     writeOpenClawConfig(config, configPath);
 
     const result = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(result.agents.defaults.maxConcurrent).toBe(8);
-    expect(result.plugins.entries["octogee-router"].config.enforcementOverrides).toEqual({});
+    expect(result.plugins.entries.codex.config.appServer.sandbox).toBe("workspace-write");
   });
 });
 

@@ -77,7 +77,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "Agent activity (openclaw :9091)",
+      "title": "Agent activity",
       "collapsed": false,
       "gridPos": {
         "h": 1,

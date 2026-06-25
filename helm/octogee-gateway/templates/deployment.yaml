@@ -151,8 +151,6 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           ports:
             - containerPort: 18789
-            - containerPort: 9091
-              name: metrics
             - containerPort: 9092
               name: runner-metrics
             - containerPort: 9080
@@ -286,14 +284,8 @@ spec:
               value: {{ .Values.env.gitSshHost | default (printf "octogee-gitea-ssh.%s.svc.cluster.local" .Release.Namespace) | quote }}
             - name: API_PUBLIC_URL
               value: {{ .Values.env.apiPublicUrl | quote }}
-            - name: OCTOGEE_ROUTER_ENABLED
-              value: {{ .Values.env.octogeeRouterEnabled | quote }}
             - name: OPENCLAW_LOG_LEVEL
               value: {{ .Values.env.openclawLogLevel | default "info" | quote }}
-            {{- if .Values.env.openclawFaceModel }}
-            - name: OPENCLAW_FACE_MODEL
-              value: {{ .Values.env.openclawFaceModel | quote }}
-            {{- end }}
             - name: FLEET_CONTROLLER_PORT
               value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
             - name: MIGRATION_RSYNC_PORT

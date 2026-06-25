@@ -181,7 +181,6 @@
       "octogee-mattermost-tools",
       "octogee-preview-tools",
       "octogee-workspace-tools",
-      "octogee-router",
       "openai"
     ],
     "entries": {
@@ -209,13 +208,6 @@
       "octogee-workspace-tools": {
         "enabled": true,
         "config": {}
-      },
-      "octogee-router": {
-        "enabled": true,
-        "config": {},
-        "hooks": {
-          "allowConversationAccess": true
-        }
       }
     }
   }

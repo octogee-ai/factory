@@ -11,7 +11,6 @@ export const JOBS = {
   scripts: "scripts",
   core: "core",
   shared: "shared",
-  octogeeRouter: "octogee-router",
   octogeeMattermostTools: "octogee-mattermost-tools",
   functions: "functions",
   site: "site",
@@ -57,11 +56,6 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   { name: JOBS.acceptance, dir: "acceptance", typecheck: TYPECHECK },
   { name: JOBS.scripts, dir: "scripts", typecheck: "npx tsc --noEmit" },
   {
-    name: JOBS.octogeeRouter,
-    dir: "infra/gateway/extensions/octogee-router",
-    typecheck: 'echo "octogee-router — no tsconfig; vitest is the gate"',
-  },
-  {
     name: JOBS.octogeeMattermostTools,
     dir: "infra/gateway/extensions/octogee-mattermost-tools",
     typecheck: 'echo "octogee-mattermost-tools — no tsconfig; vitest is the gate"',
@@ -90,8 +84,7 @@ export interface Ownership {
   jobs: readonly JobKey[];
 }
 
-// dir-prefix → owned jobs. Resolution picks the LONGEST match so the nested
-// octogee-router dir wins over any shorter rule instead of failing open.
+// dir-prefix → owned jobs. Resolution picks the LONGEST match.
 export const OWNERSHIP: readonly Ownership[] = [
   { dir: "core/", jobs: [JOBS.core] },
   { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
@@ -100,7 +93,6 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "tests/", jobs: [JOBS.tests] },
   { dir: "acceptance/", jobs: [JOBS.acceptance] },
   { dir: "scripts/", jobs: [JOBS.scripts, JOBS.customerLifecycleEmulator] },
-  { dir: "infra/gateway/extensions/octogee-router/", jobs: [JOBS.octogeeRouter] },
   {
     dir: "infra/gateway/extensions/octogee-mattermost-tools/",
     jobs: [JOBS.octogeeMattermostTools],

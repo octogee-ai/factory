@@ -31,19 +31,12 @@ type AgentConfig = NonNullable<OpenClawConfig["agents"]>;
 type AgentDefaults = NonNullable<AgentConfig["defaults"]>;
 type SubagentDefaults = NonNullable<AgentDefaults["subagents"]>;
 type ToolsConfig = NonNullable<OpenClawConfig["tools"]>;
-type SubagentToolsConfig = NonNullable<NonNullable<ToolsConfig["subagents"]>["tools"]>;
 type GatewayConfig = NonNullable<OpenClawConfig["gateway"]>;
 type GatewayAuthConfig = NonNullable<GatewayConfig["auth"]>;
 
 const MIN_AGENT_CONCURRENCY = 8;
 const MIN_SUBAGENT_RUN_TIMEOUT_SECONDS = 900;
-const DEFAULT_FACE_MODEL = "anthropic/claude-sonnet-4-6";
 const DEFAULT_HEARTBEAT = { every: "60m", target: "last", lightContext: true };
-const ROUTER_PLUGIN_DENY_ITEMS = new Set(["exec", "process"]);
-
-function openClawFaceModel(): string {
-  return process.env.OPENCLAW_FACE_MODEL ?? DEFAULT_FACE_MODEL;
-}
 
 function ensureAgents(config: OpenClawConfig): AgentConfig {
   config.agents ??= {};
@@ -63,12 +56,6 @@ function ensureSubagentDefaults(defaults: AgentDefaults): SubagentDefaults {
 function ensureTools(config: OpenClawConfig): ToolsConfig {
   config.tools ??= {};
   return config.tools;
-}
-
-function ensureSubagentTools(tools: ToolsConfig): SubagentToolsConfig {
-  tools.subagents ??= {};
-  tools.subagents.tools ??= {};
-  return tools.subagents.tools;
 }
 
 function ensureGatewayAuth(config: OpenClawConfig): GatewayAuthConfig {
@@ -101,15 +88,6 @@ function setStringDefault(target: object, key: string, value: string, message: s
   return true;
 }
 
-function removeRouterPluginDenyItems(items: string[] | undefined, missingIsChanged = false): {
-  changed: boolean;
-  deny: string[];
-} {
-  const deny = items ?? [];
-  const filtered = deny.filter((item) => !ROUTER_PLUGIN_DENY_ITEMS.has(item));
-  return { changed: filtered.length !== deny.length || (missingIsChanged && items === undefined), deny: filtered };
-}
-
 function isCoachAgent(agent: OpenClawAgentConfig): boolean {
   return /^octogee-.+-coach$/.test(agent.id);
 }
@@ -122,25 +100,6 @@ function ensureCoachWorkspaceFs(agent: OpenClawAgentConfig): boolean {
   return true;
 }
 
-function ensureCoachDenyList(agent: OpenClawAgentConfig): boolean {
-  agent.tools ??= {};
-  const { changed, deny } = removeRouterPluginDenyItems(agent.tools.deny);
-  if (!changed) return false;
-
-  agent.tools.deny = deny;
-  log(`${agent.id} → removed exec/process from agent deny (moved to router plugin)`);
-  return true;
-}
-
-function ensureCoachModel(agent: OpenClawAgentConfig, faceModel: string): boolean {
-  if (agent.model === faceModel) return false;
-
-  const oldModel = agent.model ?? "default";
-  agent.model = faceModel;
-  log(`Model: ${agent.id} → ${faceModel} (was ${oldModel})`);
-  return true;
-}
-
 function ensureCoachHeartbeat(agent: OpenClawAgentConfig): boolean {
   if (agent.heartbeat != null) return false;
 
@@ -149,24 +108,21 @@ function ensureCoachHeartbeat(agent: OpenClawAgentConfig): boolean {
   return true;
 }
 
-function applyCoachAgentDefaults(agent: OpenClawAgentConfig, faceModel: string): boolean {
+function applyCoachAgentDefaults(agent: OpenClawAgentConfig): boolean {
   if (!isCoachAgent(agent)) return false;
 
   const changed = [
     ensureCoachWorkspaceFs(agent),
-    ensureCoachDenyList(agent),
-    ensureCoachModel(agent, faceModel),
     ensureCoachHeartbeat(agent),
   ].some(Boolean);
 
   if (changed) {
-    const denyList = agent.tools?.deny ?? [];
-    log(`Security: ${agent.id} → fs.workspaceOnly=true, deny=[${denyList.join(",")}]`);
+    log(`Gateway defaults: ${agent.id} → fs.workspaceOnly=true, heartbeat defaulted`);
   }
   return changed;
 }
 
-function applyAgentDefaults(defaults: AgentDefaults, faceModel: string): boolean {
+function applyAgentDefaults(defaults: AgentDefaults): boolean {
   const subagents = ensureSubagentDefaults(defaults);
   return [
     raiseNumber(
@@ -187,7 +143,6 @@ function applyAgentDefaults(defaults: AgentDefaults, faceModel: string): boolean
       "on",
       'Set agents.defaults.verboseDefault = "on" (Activity Stream Phase 1)',
     ),
-    setStringDefault(subagents, "model", faceModel, `Set agents.defaults.subagents.model = ${faceModel}`),
     raiseNumber(
       subagents,
       "runTimeoutSeconds",
@@ -197,17 +152,8 @@ function applyAgentDefaults(defaults: AgentDefaults, faceModel: string): boolean
   ].some(Boolean);
 }
 
-function applyAgentListDefaults(agents: OpenClawAgentConfig[] | undefined, faceModel: string): boolean {
-  return (agents ?? []).map((agent) => applyCoachAgentDefaults(agent, faceModel)).some(Boolean);
-}
-
-function applySubagentToolDefaults(tools: SubagentToolsConfig): boolean {
-  const { changed, deny } = removeRouterPluginDenyItems(tools.deny, true);
-  if (!changed) return false;
-
-  tools.deny = deny;
-  log("Brain tool access: ensured exec/process NOT denied for sub-agents");
-  return true;
+function applyAgentListDefaults(agents: OpenClawAgentConfig[] | undefined): boolean {
+  return (agents ?? []).map((agent) => applyCoachAgentDefaults(agent)).some(Boolean);
 }
 
 function applyElevatedToolDefaults(tools: ToolsConfig): boolean {
@@ -226,18 +172,16 @@ function applyGatewayAuthDefaults(auth: GatewayAuthConfig): boolean {
   return true;
 }
 
-export function applyGatewayDefaults(config: OpenClawConfig, faceModel = openClawFaceModel()): boolean {
+export function applyGatewayDefaults(config: OpenClawConfig): boolean {
   config.channels ??= {};
   const agents = ensureAgents(config);
   const defaults = ensureAgentDefaults(agents);
   const tools = ensureTools(config);
-  const subagentTools = ensureSubagentTools(tools);
   const auth = ensureGatewayAuth(config);
 
   return [
-    applyAgentDefaults(defaults, faceModel),
-    applyAgentListDefaults(agents.list, faceModel),
-    applySubagentToolDefaults(subagentTools),
+    applyAgentDefaults(defaults),
+    applyAgentListDefaults(agents.list),
     applyElevatedToolDefaults(tools),
     applyGatewayAuthDefaults(auth),
   ].some(Boolean);

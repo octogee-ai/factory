@@ -25,13 +25,6 @@ gcloud builds submit --config cloudbuild.yaml \
 
 # Rebuild base image (only when upgrading OpenClaw)
 # See infra/gateway/openclaw-tarball/README.md for the full patch routine.
-# Local docker builds also need the router-deps tarball staged into the build
-# context (the cloudbuild fetch-router-deps step does this in CI):
-#   HASH=$(sha256sum infra/gateway/extensions/octogee-router/package-lock.json | cut -c1-8)
-#   gcloud storage cp gs://octogee-openclaw-fork/router-deps-${HASH}.tgz \
-#     infra/gateway/extensions/octogee-router/node_modules.tgz --project=octogee
-# (Same shape as the openclaw-fork tarball stage. See
-#  infra/gateway/extensions/octogee-router/README.md for the bump ritual.)
 gcloud builds submit --config cloudbuild-base.yaml \
   --substitutions=_OPENCLAW_VERSION=2026.5.4,_OPENCLAW_FORK_SHA=20479cf6 \
   --project=octogee

@@ -297,48 +297,21 @@ describe("preBootFirestoreEnabled", () => {
   });
 });
 
-describe("applyPreBootPatches — octogee-router cleanup", () => {
-  it("removes the router from plugins.allow + plugins.entries when OCTOGEE_ROUTER_ENABLED=false", () => {
+describe("applyPreBootPatches — plugin config", () => {
+  it("does not mutate plugin allowlists through retired router env switches", () => {
     const config: any = {
       plugins: {
-        allow: ["octogee-router", "other-plugin"],
-        entries: { "octogee-router": { config: {} }, "other-plugin": {} },
+        allow: ["codex", "other-plugin"],
+        entries: { codex: { enabled: false }, "other-plugin": {} },
       },
     };
-    applyPreBootPatches(config, { OCTOGEE_ROUTER_ENABLED: "false" });
-    expect(config.plugins.allow).toEqual(["other-plugin"]);
-    expect(config.plugins.entries["octogee-router"]).toBeUndefined();
+    applyPreBootPatches(config, { OCTOGEE_UNKNOWN_PLUGIN_FLAG: "false" });
+    expect(config.plugins.allow).toEqual(["codex", "other-plugin"]);
+    expect(config.plugins.entries.codex).toEqual({ enabled: false });
     expect(config.plugins.entries["other-plugin"]).toBeDefined();
   });
 
-  it("strips the documented stale config keys when router is enabled", () => {
-    const config: any = {
-      plugins: {
-        entries: {
-          "octogee-router": {
-            config: {
-              advisorySlugs: ["x"],
-              enforcementOverrides: {},
-              brainGatedSlugs: [],
-              faceModelOverrides: {},
-              brainModelOverrides: {},
-              keepThisOne: "yes",
-            },
-          },
-        },
-      },
-    };
-    applyPreBootPatches(config, {});
-    const cfg = config.plugins.entries["octogee-router"].config;
-    expect(cfg.advisorySlugs).toBeUndefined();
-    expect(cfg.enforcementOverrides).toBeUndefined();
-    expect(cfg.brainGatedSlugs).toBeUndefined();
-    expect(cfg.faceModelOverrides).toBeUndefined();
-    expect(cfg.brainModelOverrides).toBeUndefined();
-    expect(cfg.keepThisOne).toBe("yes");
-  });
-
-  it("is a no-op when there is no octogee-router plugin entry", () => {
+  it("is a no-op when there are no plugin entries", () => {
     const config: any = { plugins: { entries: {} } };
     applyPreBootPatches(config, {});
     expect(config.plugins.entries).toEqual({});

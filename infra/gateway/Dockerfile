@@ -7,7 +7,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Base image (octogee-gateway-base) already contains:
 #   - OpenClaw npm install
 #   - All apt packages (curl, jq, python3, chromium, git, sqlite3, etc.)
-#   - @huggingface/transformers (1.2GB) at /opt/octogee-router-deps/node_modules
 #   - npm cache with correct ownership
 #
 # This image only adds NuCrew-specific code that changes per commit.
@@ -82,13 +81,10 @@ RUN npx tsc -p tsconfig.json --noEmit 2>&1; \
 # ── Workspace templates ─────────────────────────────────────────────────────
 COPY --chown=node:node templates/ /octogee/templates/
 
-# ── Plugin extensions (Face/Brain router, etc.) ─────────────────────────────
+# ── Plugin extensions ────────────────────────────────────────────────────────
 # Staged at /octogee/extensions/ — entrypoint copies to ~/.openclaw/extensions/
-# octogee-router's node_modules are symlinked at runtime to
-# /opt/octogee-router-deps/ (base image pre-installed @huggingface/transformers
-# there to save build time; ~1.2 GB).
-# octogee-mattermost-tools and octogee-preview-tools are small (tiny typebox +
-# prom-client) so we npm install them inline below; the entrypoint's
+# octogee-mattermost-tools, octogee-preview-tools, and octogee-workspace-tools
+# are small, so we npm install them inline below; the entrypoint's
 # `elif [ -d "$ext_dir/node_modules" ]` fallback then symlinks to them.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
 
@@ -149,7 +145,5 @@ ARG OPENCLAW_VERSION=unknown
 ENV OPENCLAW_VERSION=${OPENCLAW_VERSION}
 ARG OPENCLAW_FORK_SHA=unknown
 ENV OPENCLAW_FORK_SHA=${OPENCLAW_FORK_SHA}
-
-EXPOSE 9091
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

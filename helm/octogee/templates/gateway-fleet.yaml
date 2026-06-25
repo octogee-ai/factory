@@ -40,9 +40,6 @@ spec:
     - name: http
       port: 18789
       targetPort: 18789
-    - name: metrics
-      port: 9091
-      targetPort: 9091
     - name: preview
       port: 9080
       targetPort: 9080

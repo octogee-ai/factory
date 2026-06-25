@@ -302,7 +302,7 @@ def d_postgres():
 def d_agent():
     g = '$gateway'
     p = [
-        row("Agent activity (openclaw :9091)"),
+        row("Agent activity"),
         stat("Customers on fleet", [f'sum(octogee_customers_total{{namespace="{NS}",job=~"{g}"}})']),
         stat("Throttle level (max)", [f'max(octogee_throttle_level{{namespace="{NS}",job=~"{g}"}}) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}]),

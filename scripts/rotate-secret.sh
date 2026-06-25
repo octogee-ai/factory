@@ -208,7 +208,7 @@ case "$SECRET" in
 
     # Shared gateways mount octogee-anthropic directly. Builder/operator
     # gateways hold broker tokens; llm-broker is the provider-key holder.
-    info "Restarting llm-broker and shared gateways (classifier reload ~90s)..."
+    info "Restarting llm-broker and shared gateways..."
     rollout_restart llm-broker
     SHARED_GWS=$(kubectl get deploy -n "$K8S_NAMESPACE" \
       -l 'app=octogee-gateway,gateway-class=shared' \

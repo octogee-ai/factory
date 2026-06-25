@@ -98,7 +98,7 @@ it("session + model + summary docs carry (role, model, slug, gateway, tokens, co
     await reportUsage({
       db: db as never,
       agentId: "octogee-christopher-coach",
-      role: "brain",
+      role: "builder",
       agentDir,
       usage: {
         input: 10,
@@ -130,13 +130,13 @@ it("session + model + summary docs carry (role, model, slug, gateway, tokens, co
     expect(session?.tokensUsed).toBe(35);
     expect(session?.costUsd).toBeCloseTo(0.01);
     expect(session?.interactions).toBe(1);
-    expect((session?.roles as Record<string, number>)?.brain).toBe(35);
+    expect((session?.roles as Record<string, number>)?.builder).toBe(35);
     expect((session?.token_breakdown as Record<string, number>)?.input).toBe(10);
     expect((session?.token_breakdown as Record<string, number>)?.output).toBe(20);
     expect((session?.token_breakdown as Record<string, number>)?.cacheRead).toBe(5);
 
     expect(model?.model).toBe("anthropic/claude-sonnet-4-6");
-    expect(model?.role).toBe("brain");
+    expect(model?.role).toBe("builder");
     expect(model?.workspaceId).toBe("christopher");
     expect(model?.tokens).toBe(35);
     expect(model?.cost_usd).toBeCloseTo(0.01);
@@ -406,7 +406,7 @@ describe("reportUsage — accumulation across multiple calls", () => {
   it("two calls with DIFFERENT roles populate distinct roles.* entries (both accumulate to session.tokensUsed)", async () => {
     await seedUser("u-roles", { selectedTier: "pro", usage: {} });
     const agentDirCoach = makeAgentDir("acme");
-    const agentDirBrain = makeAgentDir("acme");
+    const agentDirBuilder = makeAgentDir("acme");
     await reportUsage({
       db: db as never,
       agentId: "octogee-acme-coach",
@@ -425,8 +425,8 @@ describe("reportUsage — accumulation across multiple calls", () => {
     await reportUsage({
       db: db as never,
       agentId: "octogee-acme-coach",
-      role: "brain",
-      agentDir: agentDirBrain,
+      role: "builder",
+      agentDir: agentDirBuilder,
       usage: {
         input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
         totalTokens: 100, costUsd: 0.05,
@@ -440,7 +440,7 @@ describe("reportUsage — accumulation across multiple calls", () => {
     const session = await readDoc(`workspaces/acme/usage_sessions/${today}`);
     const roles = session?.roles as Record<string, number>;
     expect(roles.coach).toBe(35);
-    expect(roles.brain).toBe(100);
+    expect(roles.builder).toBe(100);
     expect(session?.tokensUsed).toBe(135);
   });
 

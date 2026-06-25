@@ -4,11 +4,6 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
-import {
-  buildGatewayMetricsFetcher,
-  startMetricsBaseline,
-  type PluginLookupSample,
-} from "./openclaw/metrics-baseline.js";
 import { generateIdentity, type DeviceIdentity } from "../../../shared/types/device-identity.js";
 import { WsUpgradeRouter } from "../../../shared/ws/upgrade-router.js";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
@@ -196,14 +191,6 @@ const ocWsInboundGateTotal = new Counter({
   name: 'chat_proxy_openclaw_ws_inbound_gate_total',
   help: 'Browser-to-gateway frame allowlist decisions',
   labelNames: ['decision', 'reason'] as const,
-  registers: [metricsRegistry],
-});
-
-const ocPluginLookupDurationMs = new Histogram({
-  name: 'octogee_oc_plugin_lookup_duration_ms',
-  help: 'OpenClaw plugin lookup duration scraped from gateway /metrics, by stage',
-  labelNames: ['stage'] as const,
-  buckets: [0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500],
   registers: [metricsRegistry],
 });
 
@@ -960,14 +947,6 @@ async function buildEditDiffFetcher() {
   });
 }
 
-function observePluginLookupSample(sample: PluginLookupSample): void {
-  ocPluginLookupDurationMs.observe({ stage: 'registrySnapshot' }, sample.registrySnapshotMs);
-  ocPluginLookupDurationMs.observe({ stage: 'manifestRegistry' }, sample.manifestRegistryMs);
-  ocPluginLookupDurationMs.observe({ stage: 'startupPlan' }, sample.startupPlanMs);
-  ocPluginLookupDurationMs.observe({ stage: 'ownerMaps' }, sample.ownerMapsMs);
-  ocPluginLookupDurationMs.observe({ stage: 'total' }, sample.totalMs);
-}
-
 function buildMountedCustomersReader(
   reconcileGatewayId: string | null,
 ): (() => Promise<string[] | null>) | undefined {
@@ -996,13 +975,6 @@ function buildMountedCustomersReader(
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
-
-  startMetricsBaseline({
-    fetchGatewayMetrics: buildGatewayMetricsFetcher(process.env),
-    intervalMs: 30_000,
-    log: bridgeLog,
-    onSample: observePluginLookupSample,
-  });
 
   void (async () => {
     const gatewayIdResult = resolveBridgeGatewayId(process.env);

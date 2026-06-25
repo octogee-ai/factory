@@ -32,12 +32,20 @@ function fakeDoc(path: string, store: DocStore) {
   return {
     get: async () => docSnapshot(path, store.get(path)),
     collection: (collectionId: string) => fakeCollection(`${path}/${collectionId}`, store),
+    update: async (patch: DocData) => {
+      const current = store.get(path);
+      if (!current) throw new Error(`missing doc: ${path}`);
+      store.set(path, { ...current, ...patch });
+    },
+    set: async (data: DocData) => {
+      store.set(path, data);
+    },
   };
 }
 
 function fakeCollection(path: string, store: DocStore) {
   const query = {
-    doc: (docId: string) => fakeDoc(`${path}/${docId}`, store),
+    doc: (docId = `auto-${store.size + 1}`) => fakeDoc(`${path}/${docId}`, store),
     where: () => query,
     orderBy: () => query,
     limit: () => query,
@@ -134,5 +142,26 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
 
     expect(res.body.modelCredential).toBeNull();
     expect(res.body.byot).toEqual({ active: true });
+  });
+
+});
+
+describe("POST /api/admin/customer/:uid/ops", () => {
+  it("keeps billing throttle ops writable", async () => {
+    const app = makeApp({
+      "users/uid-ops": customerDoc({ billing: { throttleActive: true } }),
+    });
+
+    const res = await request(app)
+      .post("/api/admin/customer/uid-ops/ops")
+      .send({ action: "setThrottle", value: false })
+      .expect(200);
+
+    expect(res.body).toMatchObject({
+      success: true,
+      action: "setThrottle",
+      field: "billing.throttleActive",
+      after: false,
+    });
   });
 });

@@ -42,12 +42,16 @@ describe("advisory mode removal", () => {
 });
 
 describe("ensureGatewayDefaults — config transformation", () => {
-  it("applies gateway, tool, subagent, and coach defaults in one pure pass", () => {
+  it("applies gateway, tool, concurrency, and coach workspace defaults without touching model or deny ownership", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
           maxConcurrent: 2,
-          subagents: { maxConcurrent: 1, runTimeoutSeconds: 30 },
+          subagents: {
+            maxConcurrent: 1,
+            model: "anthropic/claude-haiku-4-5",
+            runTimeoutSeconds: 30,
+          },
         },
         list: [
           {
@@ -60,19 +64,19 @@ describe("ensureGatewayDefaults — config transformation", () => {
       tools: { subagents: { tools: { deny: ["exec", "other"] } }, elevated: { enabled: true } },
     };
 
-    expect(applyGatewayDefaults(config, "openai/gpt-5.5")).toBe(true);
+    expect(applyGatewayDefaults(config)).toBe(true);
     expect(config.channels).toEqual({});
     expect(config.agents?.defaults).toMatchObject({
       maxConcurrent: 8,
       verboseDefault: "on",
       subagents: {
         maxConcurrent: 8,
-        model: "openai/gpt-5.5",
+        model: "anthropic/claude-haiku-4-5",
         runTimeoutSeconds: 900,
       },
     });
     expect(config.tools).toMatchObject({
-      subagents: { tools: { deny: ["other"] } },
+      subagents: { tools: { deny: ["exec", "other"] } },
       elevated: { enabled: false },
     });
     expect(config.gateway?.auth?.rateLimit).toEqual({
@@ -81,9 +85,9 @@ describe("ensureGatewayDefaults — config transformation", () => {
       lockoutMs: 300000,
     });
     expect(config.agents?.list?.[0]).toMatchObject({
-      model: "openai/gpt-5.5",
+      model: "old-model",
       heartbeat: { every: "60m", target: "last", lightContext: true },
-      tools: { fs: { workspaceOnly: true }, deny: ["other"] },
+      tools: { fs: { workspaceOnly: true }, deny: ["exec", "process", "other"] },
     });
   });
 
@@ -96,21 +100,21 @@ describe("ensureGatewayDefaults — config transformation", () => {
           verboseDefault: "on",
           subagents: {
             maxConcurrent: 8,
-            model: "openai/gpt-5.5",
+            model: "anthropic/claude-haiku-4-5",
             runTimeoutSeconds: 900,
           },
         },
         list: [
           {
             id: "octogee-acme-coach",
-            model: "openai/gpt-5.5",
+            model: "old-model",
             heartbeat: { every: "60m", target: "last", lightContext: true },
-            tools: { fs: { workspaceOnly: true }, deny: ["other"] },
+            tools: { fs: { workspaceOnly: true }, deny: ["exec", "process", "other"] },
           },
         ],
       },
       tools: {
-        subagents: { tools: { deny: ["other"] } },
+        subagents: { tools: { deny: ["exec", "other"] } },
         elevated: { enabled: false },
       },
       gateway: {
@@ -120,7 +124,7 @@ describe("ensureGatewayDefaults — config transformation", () => {
       },
     };
 
-    expect(applyGatewayDefaults(config, "openai/gpt-5.5")).toBe(false);
+    expect(applyGatewayDefaults(config)).toBe(false);
   });
 
 it("sets maxConcurrent to 8 when missing", () => {
@@ -153,33 +157,38 @@ it("sets maxConcurrent to 8 when missing", () => {
     expect(agent.tools.fs.workspaceOnly).toBe(true);
   });
 
-  it("removes exec/process from deny list", () => {
-    const agent: any = { id: "octogee-biz-coach", tools: { deny: ["exec", "process", "other"] } };
-    if (/^octogee-.+-coach$/.test(agent.id)) {
-      agent.tools.deny = agent.tools.deny.filter((t: string) => t !== "exec" && t !== "process");
-    }
-    expect(agent.tools.deny).toEqual(["other"]);
+  it("preserves exec/process deny lists because gateway class policy owns tool access", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { maxConcurrent: 8, verboseDefault: "on", subagents: { maxConcurrent: 8, runTimeoutSeconds: 900 } },
+        list: [
+          {
+            id: "octogee-biz-coach",
+            heartbeat: { every: "60m", target: "last", lightContext: true },
+            tools: { fs: { workspaceOnly: true }, deny: ["exec", "process", "other"] },
+          },
+        ],
+      },
+      tools: { subagents: { tools: { deny: ["exec", "process", "other"] } }, elevated: { enabled: false } },
+      gateway: { auth: { rateLimit: { maxAttempts: 10, windowMs: 60000, lockoutMs: 300000 } } },
+    };
+
+    expect(applyGatewayDefaults(config)).toBe(false);
+    expect(config.agents?.list?.[0]?.tools?.deny).toEqual(["exec", "process", "other"]);
+    expect(config.tools?.subagents?.tools?.deny).toEqual(["exec", "process", "other"]);
   });
 
-  it("sets coach model to sonnet 4.6 by default", () => {
-    const agent: any = { id: "octogee-foo-coach", model: "anthropic/claude-haiku-4-5" };
-    if (/^octogee-.+-coach$/.test(agent.id)) {
-      const faceModel = process.env.OPENCLAW_FACE_MODEL ?? "anthropic/claude-sonnet-4-6";
-      agent.model = faceModel;
-    }
-    expect(agent.model).toBe("anthropic/claude-sonnet-4-6");
+  it("does not write coach or subagent model defaults", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {},
+        list: [{ id: "octogee-foo-coach", model: "anthropic/claude-haiku-4-5", tools: {} }],
+      },
+    };
+
+    expect(applyGatewayDefaults(config)).toBe(true);
+    expect(config.agents?.defaults?.subagents).not.toHaveProperty("model");
+    expect(config.agents?.list?.[0]?.model).toBe("anthropic/claude-haiku-4-5");
   });
 
-  it("respects OPENCLAW_FACE_MODEL env override for coach model", () => {
-    const prev = process.env.OPENCLAW_FACE_MODEL;
-    process.env.OPENCLAW_FACE_MODEL = "openai/gpt-5.5";
-    const agent: any = { id: "octogee-foo-coach", model: "anthropic/claude-sonnet-4-6" };
-    if (/^octogee-.+-coach$/.test(agent.id)) {
-      const faceModel = process.env.OPENCLAW_FACE_MODEL ?? "anthropic/claude-sonnet-4-6";
-      agent.model = faceModel;
-    }
-    expect(agent.model).toBe("openai/gpt-5.5");
-    if (prev === undefined) delete process.env.OPENCLAW_FACE_MODEL;
-    else process.env.OPENCLAW_FACE_MODEL = prev;
-  });
 });

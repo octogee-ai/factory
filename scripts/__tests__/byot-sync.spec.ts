@@ -470,7 +470,6 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
   const CURRENT = {
     agents: {
       list: [
-        { id: "octogee-router", name: "router" },
         { id: "octogee-tester-70-coach", name: "coach", model: "old", mmAccount: "a" },
         { id: "octogee-zed-coach", model: "z/y" },
       ],
@@ -500,7 +499,6 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       {
         agents: {
           list: [
-            { id: "octogee-router", name: "router" },
             { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
@@ -525,7 +523,6 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       {
         agents: {
           list: [
-            { id: "octogee-router", name: "router" },
             { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5.5"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
@@ -558,7 +555,6 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       {
         agents: {
           list: [
-            { id: "octogee-router", name: "router" },
             { id: "octogee-tester-70-coach", name: "coach", model: withFallback("claude-cli/claude-opus-4-8"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],

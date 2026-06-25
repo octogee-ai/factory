@@ -16,9 +16,6 @@ spec:
     - name: http
       port: 18789
       targetPort: 18789
-    - name: metrics
-      port: 9091
-      targetPort: 9091
     - name: runner-metrics
       port: 9092
       targetPort: 9092

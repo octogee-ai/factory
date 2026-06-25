@@ -294,7 +294,6 @@ function workspaceGitignore(): string {
     ".system/",
     ".openclaw/",
     ".ssh/",
-    "brain/",
     "",
     "# Blob cache (provisioner-managed, synced from GCS)",
     ".blobs/",

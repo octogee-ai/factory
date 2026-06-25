@@ -19,7 +19,7 @@ spec:
       path: /metrics
       interval: 30s
 ---
-# openclaw (:9091) + in-pod runner heartbeats (:9092) on the gateway pod.
+# In-pod runner heartbeats (:9092) on the gateway pod.
 apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
@@ -29,9 +29,6 @@ spec:
     matchLabels:
       app: octogee-gateway
   endpoints:
-    - port: 9091
-      path: /metrics
-      interval: 30s
     - port: 9092
       path: /metrics
       interval: 30s

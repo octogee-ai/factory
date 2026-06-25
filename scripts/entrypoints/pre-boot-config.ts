@@ -11,14 +11,6 @@ const OPENCLAW_DIR = process.env.HOME
   : "/home/node/.openclaw";
 const CONFIG_PATH = path.join(OPENCLAW_DIR, "openclaw.json");
 
-const STALE_ROUTER_CONFIG_KEYS = [
-  "advisorySlugs",
-  "enforcementOverrides",
-  "brainGatedSlugs",
-  "faceModelOverrides",
-  "brainModelOverrides",
-];
-
 function log(msg: string): void {
   const ts = new Date().toISOString().replace("Z", "+00:00");
   console.log(`${ts} [pre-boot] ${msg}`);
@@ -57,46 +49,6 @@ function applyToolsProfilePatch(
   tools.profile = "coding";
   logFn(`set tools.profile=coding (gateway policy: openclaw "coding" defaults)`);
   return true;
-}
-
-export function applyRouterPluginPatch(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  logFn: (msg: string) => void,
-): boolean {
-  const plugins = objectProperty(config, "plugins");
-  const entries = objectProperty(plugins, "entries");
-  const routerEntry = objectProperty(entries, "octogee-router");
-
-  if (env.OCTOGEE_ROUTER_ENABLED === "false") {
-    let changed = false;
-    const allow = plugins?.allow;
-    if (plugins && Array.isArray(allow)) {
-      const filteredAllow = allow.filter((id) => id !== "octogee-router");
-      if (filteredAllow.length !== allow.length) {
-        plugins.allow = filteredAllow;
-        changed = true;
-      }
-    }
-    if (entries && Object.prototype.hasOwnProperty.call(entries, "octogee-router")) {
-      delete entries["octogee-router"];
-      changed = true;
-      logFn("removed octogee-router from config because OCTOGEE_ROUTER_ENABLED=false");
-    }
-    return changed;
-  }
-
-  const pluginCfg = objectProperty(routerEntry, "config");
-  if (!pluginCfg) return false;
-  let changed = false;
-  for (const key of STALE_ROUTER_CONFIG_KEYS) {
-    if (pluginCfg[key] !== undefined) {
-      delete pluginCfg[key];
-      changed = true;
-      logFn(`removed stale ${key} from octogee-router config (F&F: runtime syncs disabled)`);
-    }
-  }
-  return changed;
 }
 
 export function applyMattermostPreBootPatches(
@@ -191,7 +143,6 @@ export function applyPreBootPatches(
 ): boolean {
   return [
     applyToolsProfilePatch(config, logFn),
-    applyRouterPluginPatch(config, env, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
     applyAnthropicBaseUrlPatch(config, env, logFn),
   ].some(Boolean);

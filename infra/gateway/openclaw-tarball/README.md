@@ -527,23 +527,9 @@ gcloud builds list --project=octogee --ongoing
 > gateway build until the new-fork base actually lands, instead of
 > building FROM the stale base. Closed the gap #990's existence-only
 > gate left for no-version-bump cycles (the 2026.5.18 `6ed39d7e` case).
-
-> **Flake recovery — `prebake-model.mjs` HF connect-timeout.** The base
-> build downloads the octogee-router embedding model (`Xenova/all-MiniLM-L6-v2`)
-> from the HF CDN at build time. Cloud Build egress to that CDN
-> occasionally connect-times-out, failing one base in the set with
-> `prebake-model.mjs … TypeError: fetch failed … ConnectTimeoutError`.
-> It's transient and tends to hit a *different* base each run. Recovery:
-> re-run the failed job — `gh run rerun <gateway-base-rebuild-run-id> --failed`
-> — and re-watch; already-SUCCESS bases are cache-skipped, so reruns
-> converge. As of the 6.9-beta.1 cycle `prebake-model.mjs` retries the
-> download 5× with backoff, so this should now be rare; the re-run recipe
-> stands if it slips through.
->
 > **Flake recovery — base build `TIMEOUT` on `RUN npm install -g …fork.tgz`
-> (Step 6/23).** Distinct from the HF prebake flake above: this one times
-> out at the 30m wall-clock on the *fork-tarball npm install*, not the
-> model download. Seen on the 6.9 GA promotion when `rebuild-matrix-bases.sh
+> (Step 6/23).** This one times out at the 30m wall-clock on the
+> *fork-tarball npm install*. Seen on the 6.9 GA promotion when `rebuild-matrix-bases.sh
 > --apply` fired all three bases at once — registry/network contention
 > stalled one `npm install -g` while the other two sailed through (same
 > Dockerfile, so it's the environment, not the build). Recovery: re-submit
@@ -1261,18 +1247,6 @@ When the patches all land upstream and we no longer need a fork:
 2. Delete the `fetch-fork-tarball` step and `_OPENCLAW_FORK_*`
    substitutions from `cloudbuild-base.yaml` *and* `cloudbuild.yaml`.
 3. Drop the boot-banner `fork=` field in `infra/gateway/entrypoint.sh`.
-4. Delete this directory + the GCS bucket (note: the bucket also holds
-   `router-deps-*.tgz` objects — see the cross-link below).
+4. Delete this directory + the GCS bucket.
 
 ---
-
-## See also
-
-The same `gs://octogee-openclaw-fork/` bucket also holds the
-**octogee-router dep tree cache** — `router-deps-<sha8>.tgz`, keyed by
-`sha256(package-lock.json)[:8]`. Same fetch pattern (parallel step in
-`cloudbuild-base.yaml`), separate bump ritual at
-[../extensions/octogee-router/README.md](../extensions/octogee-router/README.md).
-Whenever you `npm install` something in that package, run
-`scripts/pack-router-deps.sh` before pushing or the next base build
-404s on the new cache key.

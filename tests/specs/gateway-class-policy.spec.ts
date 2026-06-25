@@ -36,7 +36,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         subagents: { tools: { deny: ["write"] } },
       },
       plugins: {
-        allow: ["codex", "octogee-router"],
+        allow: ["codex"],
         entries: {
           codex: { enabled: true, config: { appServer: { sandbox: "danger-full-access" } } },
         },
@@ -49,7 +49,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     // BYOS codex may run on a shared pod, but only sandboxed: the policy clamps a
     // danger-full-access request down to workspace-write and keeps codex
     // allowlisted so byot-sync can enable it per-customer.
-    expect(out.plugins.allow).toEqual(["codex", "octogee-router"]);
+    expect(out.plugins.allow).toEqual(["codex"]);
     expect(out.plugins.entries.codex.config.appServer.sandbox).toBe("workspace-write");
     expect(out.plugins.entries.codex.config.appServer.approvalPolicy).toBe("never");
   });
@@ -62,7 +62,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         subagents: { tools: { deny: ["exec", "process", "write"] } },
       },
       plugins: {
-        allow: ["codex", "octogee-router"],
+        allow: ["codex"],
         entries: { codex: { enabled: true } },
       },
     });
@@ -70,7 +70,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.tools.deny).toEqual(["read"]);
     expect(out.tools.exec).toBeUndefined();
     expect(out.tools.subagents.tools.deny).toEqual(["write"]);
-    expect(out.plugins.allow).toEqual(["octogee-router"]);
+    expect(out.plugins.allow).toEqual([]);
     expect(out.plugins.entries.codex.enabled).toBe(false);
   });
 

@@ -1004,8 +1004,6 @@ expect(open).not.toMatch(/port:\s*8080/);
     expect(open).not.toMatch(/port:\s*9092/);
     
     expect(open).toMatch(/port:\s*9080/);
-    
-    expect(open).toMatch(/port:\s*9091/);
 
 expect(open).toMatch(/port:\s*18789/);
   });

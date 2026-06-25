@@ -112,6 +112,20 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     expect(written).toEqual(expect.arrayContaining(["AGENTS.md", "SOUL.md", "TOOLS.md"]));
   });
 
+  it("does not copy retired context directories into customer workspaces", async () => {
+    seedTier("hobby", ["AGENTS.md"]);
+    const retiredContextDir = path.join(tmpRoot, ["br", "ain-context"].join(""));
+    fs.mkdirSync(retiredContextDir, { recursive: true });
+    fs.writeFileSync(path.join(retiredContextDir, "DEVELOPER.md"), "# Retired\n", "utf-8");
+    const dir = customerDir("legacy");
+
+    const { writeTierTemplateFiles } = await load();
+    const written = writeTierTemplateFiles(dir, "hobby", {}, "2026-05-30");
+
+    expect(written.filter((item) => item.endsWith("/"))).toEqual([]);
+    expect(fs.readdirSync(dir).sort()).toEqual(["AGENTS.md", "memory"]);
+  });
+
   it("is a no-op when every file already exists", async () => {
     seedTier("hobby", ["AGENTS.md"]);
     const dir = customerDir("carol");
