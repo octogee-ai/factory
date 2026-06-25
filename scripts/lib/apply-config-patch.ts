@@ -46,6 +46,28 @@ function parseRetryAfterMs(message: string): number | null {
   return seconds * 1000;
 }
 
+export interface ConfigPatchRetryPlan {
+  delayMs: number;
+  missingRetryAfterHint: boolean;
+  source: "server retry-after" | "exp backoff";
+}
+
+export function configPatchRetryPlan(
+  err: OpenclawWireError,
+  currentBackoffMs: number,
+  remainingMs: number,
+): ConfigPatchRetryPlan {
+  const serverHintMs = parseRetryAfterMs(err.message);
+  const source = serverHintMs != null ? "server retry-after" : "exp backoff";
+  const candidateBackoff = serverHintMs ?? currentBackoffMs;
+  return {
+    delayMs: Math.min(candidateBackoff, Math.max(0, remainingMs)),
+    missingRetryAfterHint:
+      err.code === "rpc-error" && serverHintMs == null && /retry/i.test(err.message),
+    source,
+  };
+}
+
 function seedCacheFromFetch(cache: ConfigCache | undefined, config: unknown, hash: string): void {
   if (!cache) return;
   cache.current = config;
@@ -69,6 +91,55 @@ function invalidateCacheForHashMismatch(cache: ConfigCache | undefined): void {
   if (!cache) return;
   cache.hash = "";
   cache.current = undefined;
+}
+
+function createAbortableSleep(
+  signal: AbortSignal | undefined,
+  providedSleep: ((ms: number) => Promise<void>) | undefined,
+): (ms: number) => Promise<void> {
+  return (
+    providedSleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, ms);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(t);
+            resolve();
+          },
+          { once: true },
+        );
+      }))
+  );
+}
+
+function throwIfConfigPatchAborted(signal: AbortSignal | undefined, prefix: string): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  throw reason instanceof Error
+    ? reason
+    : new Error(`${prefix}config.patch aborted: ${String(reason ?? "signal aborted")}`);
+}
+
+function configPatchReplacePathOptions(
+  replacePaths: string[] | undefined,
+): { replacePaths: string[] } | undefined {
+  return replacePaths && replacePaths.length > 0 ? { replacePaths } : undefined;
+}
+
+async function readConfigForPatch(
+  rpc: GatewayRpcClient,
+  cache: ConfigCache | undefined,
+  now: () => number,
+): Promise<{ config: unknown; hash: string; getMs: number }> {
+  if (cache && cache.hash !== "" && cache.current !== undefined) {
+    return { config: cache.current, hash: cache.hash, getMs: 0 };
+  }
+  const getStart = now();
+  const fetched = await rpc.configGet();
+  seedCacheFromFetch(cache, fetched.config, fetched.hash);
+  return { config: fetched.config, hash: fetched.hash, getMs: now() - getStart };
 }
 
 function handleHashMismatch(
@@ -101,6 +172,142 @@ function handleHashMismatch(
   );
 }
 
+async function runConfigPatchAttempt(
+  args: ApplyConfigPatchArgs,
+  ctx: {
+    attempts: number;
+    cache: ConfigCache | undefined;
+    log: (msg: string) => void;
+    now: () => number;
+    prefix: string;
+    rpc: GatewayRpcClient;
+    startedAt: number;
+  },
+): Promise<ApplyConfigPatchResult> {
+  const { config, hash, getMs } = await readConfigForPatch(ctx.rpc, ctx.cache, ctx.now);
+  const patch = args.buildPatch(config);
+  const replacePaths = args.buildReplacePaths?.(config);
+  const patchStart = ctx.now();
+  const patchResult = await ctx.rpc.configPatch(
+    patch,
+    hash,
+    configPatchReplacePathOptions(replacePaths),
+  );
+  const patchMs = ctx.now() - patchStart;
+
+  updateCacheAfterPatch(ctx.cache, patchResult);
+
+  ctx.log(
+    `${ctx.prefix}config.patch OK attempt=${ctx.attempts} configGet=${getMs}ms configPatch=${patchMs}ms totalMs=${ctx.now() - ctx.startedAt}`,
+  );
+  return { mode: "rpc", attempts: ctx.attempts };
+}
+
+function isPermanentConfigPatchError(err: OpenclawWireError): boolean {
+  return (
+    err.code === "auth-failed" ||
+    err.code === "invalid-patch" ||
+    err.code === "invalid-response"
+  );
+}
+
+function isDestructiveArrayGuardError(err: OpenclawWireError): boolean {
+  return err.code === "rpc-error" && /would remove entries from array path/i.test(err.message);
+}
+
+function throwIfPermanentConfigPatchFailure(
+  err: OpenclawWireError,
+  ctx: { elapsed: number; log: (msg: string) => void; prefix: string },
+): void {
+  if (isPermanentConfigPatchError(err)) {
+    ctx.log(
+      `⚠ ${ctx.prefix}config.patch ${err.code} (permanent) after ${ctx.elapsed}ms — giving up: ${err.message}`,
+    );
+    throw err;
+  }
+
+  if (isDestructiveArrayGuardError(err)) {
+    ctx.log(
+      `⚠ ${ctx.prefix}config.patch rejected by the destructive-array guard (permanent — identical retries cannot pass). ` +
+        `The caller's buildReplacePaths must confirm every shrunk array path: ${err.message}`,
+    );
+    throw err;
+  }
+}
+
+function throwIfConfigPatchRetryUnavailable(
+  err: OpenclawWireError,
+  ctx: {
+    attempts: number;
+    maxRetries: number;
+    remainingMs: () => number;
+    startedAt: number;
+    totalDeadlineMs: number;
+    now: () => number;
+    log: (msg: string) => void;
+    prefix: string;
+  },
+): void {
+  if (ctx.attempts >= ctx.maxRetries) {
+    ctx.log(
+      `⚠ ${ctx.prefix}config.patch retry exhausted (${err.code} x${ctx.attempts}: ${err.message}) totalMs=${ctx.now() - ctx.startedAt} — bubbling`,
+    );
+    throw err;
+  }
+  if (ctx.remainingMs() <= 0) {
+    throw new Error(
+      `${ctx.prefix}config.patch totalDeadlineMs=${ctx.totalDeadlineMs}ms exceeded after attempts=${ctx.attempts} (last error: ${err.code}: ${err.message})`,
+    );
+  }
+}
+
+async function handleConfigPatchFailure(
+  err: OpenclawWireError,
+  ctx: {
+    attemptStartedAt: number;
+    attempts: number;
+    cache: ConfigCache | undefined;
+    currentBackoff: number;
+    log: (msg: string) => void;
+    maxBackoff: number;
+    maxRetries: number;
+    now: () => number;
+    prefix: string;
+    remainingMs: () => number;
+    sleep: (ms: number) => Promise<void>;
+    startedAt: number;
+    throwIfAborted: () => void;
+    totalDeadlineMs: number;
+  },
+): Promise<number> {
+  const elapsed = ctx.now() - ctx.attemptStartedAt;
+  throwIfPermanentConfigPatchFailure(err, { elapsed, log: ctx.log, prefix: ctx.prefix });
+
+  if (err.code === "hash-mismatch") {
+    handleHashMismatch(err, { ...ctx, elapsed });
+    return ctx.currentBackoff;
+  }
+
+  throwIfConfigPatchRetryUnavailable(err, ctx);
+  const retryPlan = configPatchRetryPlan(err, ctx.currentBackoff, ctx.remainingMs());
+  if (retryPlan.missingRetryAfterHint) {
+    ctx.log(
+      `⚠ ${ctx.prefix}config.patch rpc-error mentions "retry" but no parsed hint — server wording may have drifted (msg: ${err.message})`,
+    );
+  }
+  if (retryPlan.delayMs <= 0) {
+    throw new Error(
+      `${ctx.prefix}config.patch totalDeadlineMs=${ctx.totalDeadlineMs}ms exceeded — no time left for backoff after attempts=${ctx.attempts} (last error: ${err.code}: ${err.message})`,
+    );
+  }
+  ctx.log(
+    `🟡 ${ctx.prefix}config.patch attempt=${ctx.attempts} failed (${err.code}: ${err.message}) after ${elapsed}ms — retrying in ${retryPlan.delayMs}ms (${retryPlan.source})`,
+  );
+  await ctx.sleep(retryPlan.delayMs);
+  ctx.throwIfAborted();
+  return Math.min(ctx.currentBackoff * 2, ctx.maxBackoff);
+}
+
 export interface ApplyConfigPatchResult {
   mode: "rpc";
   attempts: number;
@@ -117,23 +324,8 @@ export async function applyConfigPatch(
   const maxRetries = opts.maxRetries ?? Number.POSITIVE_INFINITY;
   const totalDeadlineMs = opts.totalDeadlineMs ?? Number.POSITIVE_INFINITY;
   const now = opts.now ?? Date.now;
-
-const signalRef = opts.signal;
-  const sleep =
-    opts.sleep ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, ms);
-        signalRef?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(t);
-            resolve();
-          },
-          { once: true },
-        );
-      }));
-
+  const signal = opts.signal;
+  const sleep = createAbortableSleep(signal, opts.sleep);
   const rpc = opts.rpc ?? createGatewayRpc({
     allowLegacyGatewayTokenFallback: true,
   });
@@ -144,17 +336,8 @@ const signalRef = opts.signal;
   let currentBackoff = initialBackoff;
 
   const remainingMs = (): number => totalDeadlineMs - (now() - startedAt);
-
   const cache = opts.cache;
-  const signal = opts.signal;
-  const throwIfAborted = () => {
-    if (signal?.aborted) {
-      const reason = signal.reason;
-      throw reason instanceof Error
-        ? reason
-        : new Error(`${prefix}config.patch aborted: ${String(reason ?? "signal aborted")}`);
-    }
-  };
+  const throwIfAborted = () => throwIfConfigPatchAborted(signal, prefix);
 
   try {
     throwIfAborted();
@@ -162,110 +345,35 @@ const signalRef = opts.signal;
       attempts++;
       const attemptStartedAt = now();
       try {
-        let config: unknown;
-        let hash: string;
-        let getMs = 0;
-        if (cache && cache.hash !== "" && cache.current !== undefined) {
-          config = cache.current;
-          hash = cache.hash;
-        } else {
-          const getStart = now();
-          const fetched = await rpc.configGet();
-          getMs = now() - getStart;
-          config = fetched.config;
-          hash = fetched.hash;
-          seedCacheFromFetch(cache, config, hash);
-        }
-
-        const patch = args.buildPatch(config);
-        const replacePaths = args.buildReplacePaths?.(config);
-
-        const patchStart = now();
-        const patchResult = await rpc.configPatch(
-          patch,
-          hash,
-          replacePaths && replacePaths.length > 0 ? { replacePaths } : undefined,
-        );
-        const patchMs = now() - patchStart;
-
-        updateCacheAfterPatch(cache, patchResult);
-
-        log(
-          `${prefix}config.patch OK attempt=${attempts} configGet=${getMs}ms configPatch=${patchMs}ms totalMs=${now() - startedAt}`,
-        );
-        return { mode: "rpc", attempts };
+        return await runConfigPatchAttempt(args, {
+          attempts,
+          cache,
+          log,
+          now,
+          prefix,
+          rpc,
+          startedAt,
+        });
       } catch (err) {
         if (!(err instanceof OpenclawWireError)) {
           throw err;
         }
-
-        const elapsed = now() - attemptStartedAt;
-
-        if (
-          err.code === "auth-failed" ||
-          err.code === "invalid-patch" ||
-          err.code === "invalid-response"
-        ) {
-          log(
-            `⚠ ${prefix}config.patch ${err.code} (permanent) after ${elapsed}ms — giving up: ${err.message}`,
-          );
-          throw err;
-        }
-
-        if (err.code === "rpc-error" && /would remove entries from array path/i.test(err.message)) {
-          log(
-            `⚠ ${prefix}config.patch rejected by the destructive-array guard (permanent — identical retries cannot pass). ` +
-              `The caller's buildReplacePaths must confirm every shrunk array path: ${err.message}`,
-          );
-          throw err;
-        }
-
-        if (err.code === "hash-mismatch") {
-          handleHashMismatch(err, {
-            attempts,
-            maxRetries,
-            remainingMs,
-            totalDeadlineMs,
-            elapsed,
-            cache,
-            log,
-            prefix,
-          });
-          continue;
-        }
-
-        if (attempts >= maxRetries) {
-          log(
-            `⚠ ${prefix}config.patch retry exhausted (${err.code} x${attempts}: ${err.message}) totalMs=${now() - startedAt} — bubbling`,
-          );
-          throw err;
-        }
-        if (remainingMs() <= 0) {
-          throw new Error(
-            `${prefix}config.patch totalDeadlineMs=${totalDeadlineMs}ms exceeded after attempts=${attempts} (last error: ${err.code}: ${err.message})`,
-          );
-        }
-        const serverHintMs = parseRetryAfterMs(err.message);
-        if (err.code === "rpc-error" && serverHintMs == null && /retry/i.test(err.message)) {
-          log(
-            `⚠ ${prefix}config.patch rpc-error mentions "retry" but no parsed hint — server wording may have drifted (msg: ${err.message})`,
-          );
-        }
-        const candidateBackoff = serverHintMs ?? currentBackoff;
-        const clamped = Math.min(candidateBackoff, Math.max(0, remainingMs()));
-        if (clamped <= 0) {
-          throw new Error(
-            `${prefix}config.patch totalDeadlineMs=${totalDeadlineMs}ms exceeded — no time left for backoff after attempts=${attempts} (last error: ${err.code}: ${err.message})`,
-          );
-        }
-        const source = serverHintMs != null ? "server retry-after" : "exp backoff";
-        log(
-          `🟡 ${prefix}config.patch attempt=${attempts} failed (${err.code}: ${err.message}) after ${elapsed}ms — retrying in ${clamped}ms (${source})`,
-        );
-        await sleep(clamped);
-        throwIfAborted();
-
-currentBackoff = Math.min(currentBackoff * 2, maxBackoff);
+        currentBackoff = await handleConfigPatchFailure(err, {
+          attemptStartedAt,
+          attempts,
+          cache,
+          currentBackoff,
+          log,
+          maxBackoff,
+          maxRetries,
+          now,
+          prefix,
+          remainingMs,
+          sleep,
+          startedAt,
+          throwIfAborted,
+          totalDeadlineMs,
+        });
       }
     }
   } finally {

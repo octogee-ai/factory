@@ -4,6 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import {
   applyConfigPatch,
+  configPatchRetryPlan,
   customerConfigFullAgentListReplacePaths,
   customerConfigReplacePaths,
 } from "../lib/apply-config-patch.js";
@@ -381,6 +382,32 @@ describe("applyConfigPatch — totalDeadlineMs", () => {
 });
 
 describe("applyConfigPatch — server retry-after hint", () => {
+  it("plans retry delays from server hints and flags retry wording without a parsed hint", () => {
+    expect(
+      configPatchRetryPlan(
+        new OpenclawWireError("rpc-error", "rate limit exceeded; retry after 44s"),
+        2_000,
+        30_000,
+      ),
+    ).toEqual({
+      delayMs: 30_000,
+      missingRetryAfterHint: false,
+      source: "server retry-after",
+    });
+
+    expect(
+      configPatchRetryPlan(
+        new OpenclawWireError("rpc-error", "please retry later"),
+        2_000,
+        30_000,
+      ),
+    ).toEqual({
+      delayMs: 2_000,
+      missingRetryAfterHint: true,
+      source: "exp backoff",
+    });
+  });
+
   it("honors `retry after Ns` from rpc-error messages instead of local backoff", async () => {
     const sleep = vi.fn(async () => {});
     const configPatch = vi
