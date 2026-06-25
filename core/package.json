@@ -6,6 +6,10 @@
   "type": "module",
   "files": ["dist"],
   "exports": {
+    "./secret-manager": {
+      "types": "./dist/secret-manager.d.ts",
+      "default": "./dist/secret-manager.js"
+    },
     "./workspace-slugs": {
       "types": "./dist/workspace-slugs.d.ts",
       "default": "./dist/workspace-slugs.js"
@@ -13,6 +17,7 @@
   },
   "typesVersions": {
     "*": {
+      "secret-manager": ["dist/secret-manager.d.ts"],
       "workspace-slugs": ["dist/workspace-slugs.d.ts"]
     }
   },
@@ -22,6 +27,9 @@
     "verify:tarball": "bash verify-tarball.sh",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@google-cloud/secret-manager": "^6.2.0"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

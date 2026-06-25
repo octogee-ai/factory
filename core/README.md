@@ -50,9 +50,17 @@ operator uses, while costing a standing auth/publish/version-bump pipeline.
 cd core
 # …edit src/…
 npm run pack:tarball          # rebuild dist + repack → octogee-core.tgz
-# refresh each consumer's lock (the tarball's integrity changed):
-for c in scripts octogee-api gateway-edge glm-controller; do ( cd ../$c && npm install ); done
+# refresh each consumer's lock to the new tarball integrity. The EXPLICIT @file:
+# spec is required — a plain `npm install` keeps the cached OLD integrity since
+# the path didn't change, only the tarball's content. --no-save avoids npm
+# reformatting package.json (unicode-escape churn):
+for c in scripts octogee-api gateway-edge glm-controller; do
+  ( cd "../$c" && rm -rf node_modules/@octogee && npm install "@octogee/core@file:../core/octogee-core.tgz" --no-save )
+done
 ```
+
+A CI miss here is loud, not silent: a consumer whose lock integrity ≠ the
+committed tarball fails its `npm ci` with `EINTEGRITY`.
 
 The `core` CI job runs `npm run verify:tarball` — it rebuilds and fails if the
 committed tarball drifts from `src` (compares extracted *contents*, not bytes, so

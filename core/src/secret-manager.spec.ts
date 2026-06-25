@@ -27,7 +27,7 @@ import {
   provisionGatewayAuthSecret,
   deleteSecret,
   SINGLE_REGION_REPLICATION,
-} from "../lib/secret-manager.js";
+} from "./secret-manager.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
