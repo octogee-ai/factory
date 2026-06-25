@@ -10,6 +10,7 @@ export const JOBS = {
   acceptance: "acceptance",
   scripts: "scripts",
   core: "core",
+  shared: "shared",
   octogeeRouter: "octogee-router",
   octogeeMattermostTools: "octogee-mattermost-tools",
   functions: "functions",
@@ -39,6 +40,14 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   {
     name: JOBS.core,
     dir: "core",
+    typecheck: "npm run typecheck && npm run verify:tarball",
+  },
+  // shared ships a committed tarball (octogee-shared.tgz) too; same guard. A shared/
+  // change still fails open to every consumer (it's the type substrate); this entry
+  // just makes the shared job exist so its freshness + lock guard runs in CI.
+  {
+    name: JOBS.shared,
+    dir: "shared",
     typecheck: "npm run typecheck && npm run verify:tarball",
   },
   { name: JOBS.gatewayEdge, dir: "gateway-edge", typecheck: TYPECHECK },

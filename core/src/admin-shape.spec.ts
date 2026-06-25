@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCustomerSummary } from "../lib/admin-shape.js";
+import { buildCustomerSummary } from "./admin-shape.js";
 
 describe("buildCustomerSummary", () => {
   it("normalizes malformed nested customer fields instead of leaking them", () => {

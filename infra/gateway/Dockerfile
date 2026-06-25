@@ -20,6 +20,7 @@ USER root
 # install so npm ci extracts it, present for the build-time typecheck (npx tsc)
 # + provisioner runtime resolution.
 COPY --chown=node:node core/octogee-core.tgz /octogee/core/octogee-core.tgz
+COPY --chown=node:node shared/octogee-shared.tgz /octogee/shared/octogee-shared.tgz
 
 # ── Octogee provisioner + site API ──────────────────────────────────────────
 COPY --chown=node:node scripts/package.json scripts/package-lock.json* /octogee/scripts/

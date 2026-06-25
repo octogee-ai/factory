@@ -4,8 +4,14 @@
   "description": "Octogee shared runtime — consumers depend on its built interface, never its source.",
   "private": true,
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
+    "./admin-shape": {
+      "types": "./dist/admin-shape.d.ts",
+      "default": "./dist/admin-shape.js"
+    },
     "./auth-profile-sqlite": {
       "types": "./dist/auth-profile-sqlite.d.ts",
       "default": "./dist/auth-profile-sqlite.js"
@@ -61,19 +67,48 @@
   },
   "typesVersions": {
     "*": {
-      "auth-profile-sqlite": ["dist/auth-profile-sqlite.d.ts"],
-      "byosub-onboarding": ["dist/byosub-onboarding.d.ts"],
-      "config": ["dist/config.d.ts"],
-      "deploy-records": ["dist/deploy-records.d.ts"],
-      "firebase-auth-helpers": ["dist/firebase-auth-helpers.d.ts"],
-      "firebase-hosting": ["dist/firebase-hosting.d.ts"],
-      "fleet-migration": ["dist/fleet-migration.d.ts"],
-      "fleet-signature": ["dist/fleet-signature.d.ts"],
-      "gitea-naming": ["dist/gitea-naming.d.ts"],
-      "hosting": ["dist/hosting.d.ts"],
-      "secret-manager": ["dist/secret-manager.d.ts"],
-      "site-id": ["dist/site-id.d.ts"],
-      "workspace-slugs": ["dist/workspace-slugs.d.ts"]
+      "admin-shape": [
+        "dist/admin-shape.d.ts"
+      ],
+      "auth-profile-sqlite": [
+        "dist/auth-profile-sqlite.d.ts"
+      ],
+      "byosub-onboarding": [
+        "dist/byosub-onboarding.d.ts"
+      ],
+      "config": [
+        "dist/config.d.ts"
+      ],
+      "deploy-records": [
+        "dist/deploy-records.d.ts"
+      ],
+      "firebase-auth-helpers": [
+        "dist/firebase-auth-helpers.d.ts"
+      ],
+      "firebase-hosting": [
+        "dist/firebase-hosting.d.ts"
+      ],
+      "fleet-migration": [
+        "dist/fleet-migration.d.ts"
+      ],
+      "fleet-signature": [
+        "dist/fleet-signature.d.ts"
+      ],
+      "gitea-naming": [
+        "dist/gitea-naming.d.ts"
+      ],
+      "hosting": [
+        "dist/hosting.d.ts"
+      ],
+      "secret-manager": [
+        "dist/secret-manager.d.ts"
+      ],
+      "site-id": [
+        "dist/site-id.d.ts"
+      ],
+      "workspace-slugs": [
+        "dist/workspace-slugs.d.ts"
+      ]
     }
   },
   "scripts": {
@@ -91,7 +126,11 @@
     "uuid": "^11.1.1"
   },
   "devDependencies": {
+    "@octogee/shared": "file:../shared/octogee-shared.tgz",
     "typescript": "^5.5.0",
     "vitest": "^4.1.9"
+  },
+  "peerDependencies": {
+    "@octogee/shared": "file:../shared/octogee-shared.tgz"
   }
 }

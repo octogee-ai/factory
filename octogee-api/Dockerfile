@@ -15,6 +15,7 @@ WORKDIR /octogee-api
 # @octogee/core ships as a committed tarball (file:../core/octogee-core.tgz);
 # npm ci extracts it into node_modules. Copy it before any npm ci. Builder stage.
 COPY core/octogee-core.tgz /core/octogee-core.tgz
+COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
 
 COPY octogee-api/package.json octogee-api/package-lock.json* ./
 RUN npm ci --ignore-scripts
@@ -55,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # @octogee/core tarball at runtime; the compiled shim under dist/scripts/lib
 # resolves @octogee/core/* from the node_modules npm ci extracts it into.
 COPY core/octogee-core.tgz /core/octogee-core.tgz
+COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
 
 COPY octogee-api/package.json octogee-api/package-lock.json* ./
 RUN npm ci --omit=dev

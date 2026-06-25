@@ -3,23 +3,259 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "types/index.ts",
-  "types": "types/index.ts",
+  "main": "dist/types/index.js",
+  "types": "dist/types/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./types/agent": {
+      "types": "./dist/types/agent.d.ts",
+      "default": "./dist/types/agent.js"
+    },
+    "./types/billing": {
+      "types": "./dist/types/billing.d.ts",
+      "default": "./dist/types/billing.js"
+    },
+    "./types/billing-tiers": {
+      "types": "./dist/types/billing-tiers.d.ts",
+      "default": "./dist/types/billing-tiers.js"
+    },
+    "./types/builder-shell": {
+      "types": "./dist/types/builder-shell.d.ts",
+      "default": "./dist/types/builder-shell.js"
+    },
+    "./types/builder-shell-pty": {
+      "types": "./dist/types/builder-shell-pty.d.ts",
+      "default": "./dist/types/builder-shell-pty.js"
+    },
+    "./types/channel": {
+      "types": "./dist/types/channel.d.ts",
+      "default": "./dist/types/channel.js"
+    },
+    "./types/connectors": {
+      "types": "./dist/types/connectors.d.ts",
+      "default": "./dist/types/connectors.js"
+    },
+    "./types/cost-estimator": {
+      "types": "./dist/types/cost-estimator.d.ts",
+      "default": "./dist/types/cost-estimator.js"
+    },
+    "./types/device-identity": {
+      "types": "./dist/types/device-identity.d.ts",
+      "default": "./dist/types/device-identity.js"
+    },
+    "./types/display-names": {
+      "types": "./dist/types/display-names.d.ts",
+      "default": "./dist/types/display-names.js"
+    },
+    "./types/fleet-broker": {
+      "types": "./dist/types/fleet-broker.d.ts",
+      "default": "./dist/types/fleet-broker.js"
+    },
+    "./types/fleet-controller": {
+      "types": "./dist/types/fleet-controller.d.ts",
+      "default": "./dist/types/fleet-controller.js"
+    },
+    "./types/glm": {
+      "types": "./dist/types/glm.d.ts",
+      "default": "./dist/types/glm.js"
+    },
+    "./types/identity": {
+      "types": "./dist/types/identity.d.ts",
+      "default": "./dist/types/identity.js"
+    },
+    "./types/image-tag": {
+      "types": "./dist/types/image-tag.d.ts",
+      "default": "./dist/types/image-tag.js"
+    },
+    "./types/index": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/types/index.js"
+    },
+    "./types/legal": {
+      "types": "./dist/types/legal.d.ts",
+      "default": "./dist/types/legal.js"
+    },
+    "./types/member": {
+      "types": "./dist/types/member.d.ts",
+      "default": "./dist/types/member.js"
+    },
+    "./types/model-credentials": {
+      "types": "./dist/types/model-credentials.d.ts",
+      "default": "./dist/types/model-credentials.js"
+    },
+    "./types/notifications": {
+      "types": "./dist/types/notifications.d.ts",
+      "default": "./dist/types/notifications.js"
+    },
+    "./types/openclaw-wire": {
+      "types": "./dist/types/openclaw-wire.d.ts",
+      "default": "./dist/types/openclaw-wire.js"
+    },
+    "./types/openclaw-wire-core": {
+      "types": "./dist/types/openclaw-wire-core.d.ts",
+      "default": "./dist/types/openclaw-wire-core.js"
+    },
+    "./types/post": {
+      "types": "./dist/types/post.d.ts",
+      "default": "./dist/types/post.js"
+    },
+    "./types/project": {
+      "types": "./dist/types/project.d.ts",
+      "default": "./dist/types/project.js"
+    },
+    "./types/shells": {
+      "types": "./dist/types/shells.d.ts",
+      "default": "./dist/types/shells.js"
+    },
+    "./types/sizing": {
+      "types": "./dist/types/sizing.d.ts",
+      "default": "./dist/types/sizing.js"
+    },
+    "./types/social": {
+      "types": "./dist/types/social.d.ts",
+      "default": "./dist/types/social.js"
+    },
+    "./types/throttle": {
+      "types": "./dist/types/throttle.d.ts",
+      "default": "./dist/types/throttle.js"
+    },
+    "./types/workspace": {
+      "types": "./dist/types/workspace.d.ts",
+      "default": "./dist/types/workspace.js"
+    },
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/types/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "types/agent": [
+        "dist/types/agent.d.ts"
+      ],
+      "types/billing": [
+        "dist/types/billing.d.ts"
+      ],
+      "types/billing-tiers": [
+        "dist/types/billing-tiers.d.ts"
+      ],
+      "types/builder-shell": [
+        "dist/types/builder-shell.d.ts"
+      ],
+      "types/builder-shell-pty": [
+        "dist/types/builder-shell-pty.d.ts"
+      ],
+      "types/channel": [
+        "dist/types/channel.d.ts"
+      ],
+      "types/connectors": [
+        "dist/types/connectors.d.ts"
+      ],
+      "types/cost-estimator": [
+        "dist/types/cost-estimator.d.ts"
+      ],
+      "types/device-identity": [
+        "dist/types/device-identity.d.ts"
+      ],
+      "types/display-names": [
+        "dist/types/display-names.d.ts"
+      ],
+      "types/fleet-broker": [
+        "dist/types/fleet-broker.d.ts"
+      ],
+      "types/fleet-controller": [
+        "dist/types/fleet-controller.d.ts"
+      ],
+      "types/glm": [
+        "dist/types/glm.d.ts"
+      ],
+      "types/identity": [
+        "dist/types/identity.d.ts"
+      ],
+      "types/image-tag": [
+        "dist/types/image-tag.d.ts"
+      ],
+      "types/index": [
+        "dist/types/index.d.ts"
+      ],
+      "types/legal": [
+        "dist/types/legal.d.ts"
+      ],
+      "types/member": [
+        "dist/types/member.d.ts"
+      ],
+      "types/model-credentials": [
+        "dist/types/model-credentials.d.ts"
+      ],
+      "types/notifications": [
+        "dist/types/notifications.d.ts"
+      ],
+      "types/openclaw-wire": [
+        "dist/types/openclaw-wire.d.ts"
+      ],
+      "types/openclaw-wire-core": [
+        "dist/types/openclaw-wire-core.d.ts"
+      ],
+      "types/post": [
+        "dist/types/post.d.ts"
+      ],
+      "types/project": [
+        "dist/types/project.d.ts"
+      ],
+      "types/shells": [
+        "dist/types/shells.d.ts"
+      ],
+      "types/sizing": [
+        "dist/types/sizing.d.ts"
+      ],
+      "types/social": [
+        "dist/types/social.d.ts"
+      ],
+      "types/throttle": [
+        "dist/types/throttle.d.ts"
+      ],
+      "types/workspace": [
+        "dist/types/workspace.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "pack:tarball": "npm run build && npm pack && mv -f octogee-shared-*.tgz octogee-shared.tgz",
+    "verify:tarball": "bash verify-tarball.sh",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
   "dependencies": {
     "ws": "^8.21.0"
   },
   "peerDependencies": {
     "firebase": "^12.0.0",
-    "firebase-admin": "^13.0.0",
+    "firebase-admin": "^13.0.0 || ^14.0.0",
     "vitest": "^4.0.0"
   },
   "devDependencies": {
+    "@types/node": "^26.0.1",
+    "@types/ws": "^8.5.14",
     "firebase-admin": "^13.10.0",
-    "vitest": "^4.1.9",
-    "@types/ws": "^8.5.14"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
   },
   "overrides": {
     "uuid": "^11.1.1",
     "protobufjs": "^7.6.3"
+  },
+  "peerDependenciesMeta": {
+    "firebase": {
+      "optional": true
+    },
+    "firebase-admin": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
   }
 }

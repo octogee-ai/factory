@@ -14,6 +14,7 @@ WORKDIR /gateway-edge
 # @octogee/core committed tarball, before npm ci (which extracts it) for tsc
 # .d.ts resolution. Builder stage.
 COPY core/octogee-core.tgz /core/octogee-core.tgz
+COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
 COPY gateway-edge/package.json gateway-edge/package-lock.json* ./
 RUN npm ci --ignore-scripts
 
@@ -58,6 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # @octogee/core tarball at runtime; the compiled shim under dist/scripts/lib
 # resolves @octogee/core/* from the extracted node_modules.
 COPY core/octogee-core.tgz /core/octogee-core.tgz
+COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
 COPY gateway-edge/package.json gateway-edge/package-lock.json* ./
 RUN npm ci --omit=dev
 COPY --from=builder /gateway-edge/dist ./dist
