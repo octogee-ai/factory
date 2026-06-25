@@ -9,7 +9,7 @@ import {
   fullPlan,
   rollbackPlan,
   describeStep,
-} from "../lib/fleet-migration";
+} from "./fleet-migration";
 
 const baseCtx = {
   slug: "ceckert",

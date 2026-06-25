@@ -6,7 +6,7 @@ import {
   workspaceRepoName,
   systemConfigRepoName,
   projectRepoName,
-} from "../lib/gitea-naming.js";
+} from "./gitea-naming.js";
 
 describe("gitea-naming", () => {
   it("org is the bare workspace slug (1:1 with MM team)", () => {

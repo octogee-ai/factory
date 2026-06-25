@@ -3,7 +3,7 @@ import {
   canonicalPayload,
   signFleetRequest,
   verifyFleetRequest,
-} from "../lib/fleet-signature.js";
+} from "./fleet-signature.js";
 import { FLEET_KEY_PAIR, OTHER_FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const { privateKey: PRIVATE_KEY, publicKey: PUBLIC_KEY } = FLEET_KEY_PAIR;

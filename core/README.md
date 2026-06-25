@@ -9,7 +9,11 @@ compilation and no "install some other package's node_modules first" luck.
 `shared/` stays types-only; `core/` is where shared **runtime** code lives.
 Modules migrate here over time (`workspace-slugs` is the first); ones with real
 runtime deps — secret-manager, firebase-admin, express — bring those deps with
-them into `core/package.json`.
+them into `core/package.json`. A dep that consumers pin at **different majors**
+(firebase-admin is `^13` in most, `^14` in glm-controller) is declared as an
+OR-range (`"^13.10.0 || ^14.0.0"`) so npm dedupes it to each consumer's existing
+major — do not collapse it to one major, which forces a second nested copy (and,
+for a stateful SDK like firebase-admin, a second app instance).
 
 ## How consumers wire it
 
@@ -50,21 +54,25 @@ operator uses, while costing a standing auth/publish/version-bump pipeline.
 cd core
 # …edit src/…
 npm run pack:tarball          # rebuild dist + repack → octogee-core.tgz
-# refresh each consumer's lock to the new tarball integrity. The EXPLICIT @file:
-# spec is required — a plain `npm install` keeps the cached OLD integrity since
-# the path didn't change, only the tarball's content. --no-save avoids npm
-# reformatting package.json (unicode-escape churn):
+# Refresh every consumer's lock to the new tarball. npm keys a file: tarball by the
+# lock's integrity and will NOT re-read a changed tarball at the same path — so
+# clear the cache first. Install WITHOUT --no-save: that flag skips the lock write
+# entirely (it only suppresses the package.json edit), which silently strands the
+# lock on the OLD integrity. We revert the package.json afterward instead.
+npm cache clean --force
 for c in scripts octogee-api gateway-edge glm-controller; do
-  ( cd "../$c" && rm -rf node_modules/@octogee && npm install "@octogee/core@file:../core/octogee-core.tgz" --no-save )
+  ( cd "../$c" && rm -rf node_modules/@octogee \
+      && npm install "@octogee/core@file:../core/octogee-core.tgz" )
+  git checkout "../$c/package.json"   # drop any unicode-escape churn; keeps the lock
 done
 ```
 
-A CI miss here is loud, not silent: a consumer whose lock integrity ≠ the
-committed tarball fails its `npm ci` with `EINTEGRITY`.
-
-The `core` CI job runs `npm run verify:tarball` — it rebuilds and fails if the
-committed tarball drifts from `src` (compares extracted *contents*, not bytes, so
-it's robust across npm versions).
+There is no safety net at install time: `npm ci` does NOT verify a file: tarball's
+content against its lock, so a stale consumer silently installs old code with no
+`EINTEGRITY`. The net is `npm run verify:tarball` (run by the `core` CI job): it
+fails if the committed tarball drifts from `src` (compares extracted *contents*,
+not bytes — robust across npm versions) OR if any consumer lock's integrity ≠ the
+committed tarball. So a forgotten refresh is loud in CI, just not at `npm ci`.
 
 ## Layout
 

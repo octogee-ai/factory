@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { agentExists, writeOpenClawConfig } from "../lib/config.js";
+import { agentExists, writeOpenClawConfig } from "./config.js";
 
 describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
   let tmpDir: string;

@@ -4,7 +4,7 @@ import {
   nextFlowState,
   coachAgentId,
   type FlowState,
-} from "../lib/byosub-onboarding.js";
+} from "./byosub-onboarding.js";
 
 const AW = (): FlowState =>
   startFlow({ url: "https://auth.openai.com/codex/device", code: "5BLJ-IWPLN", expiresAt: 1000 });

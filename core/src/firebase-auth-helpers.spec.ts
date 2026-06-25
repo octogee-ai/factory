@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { deleteAuthUserTolerantOfMissing } from "../lib/firebase-auth-helpers";
+import { deleteAuthUserTolerantOfMissing } from "./firebase-auth-helpers";
 
 describe("deleteAuthUserTolerantOfMissing", () => {
   it("delegates to deleteUser and resolves on success", async () => {

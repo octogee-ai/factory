@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import zlib from "node:zlib";
 
-import { collectDistFiles, deployCollectedFiles } from "../lib/hosting";
+import { collectDistFiles, deployCollectedFiles } from "./hosting";
 
 const tmpDirs: string[] = [];
 function makeDist(tree: Record<string, string>): string {

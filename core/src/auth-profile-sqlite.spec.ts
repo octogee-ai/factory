@@ -9,7 +9,7 @@ import {
   writeAuthProfileStore,
   deleteAuthProfileStore,
   readAuthProfileState,
-} from "../lib/auth-profile-sqlite.js";
+} from "./auth-profile-sqlite.js";
 
 const tmps: string[] = [];
 function mk(): string {
