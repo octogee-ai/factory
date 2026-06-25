@@ -1,3 +1,4 @@
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -187,6 +188,60 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       /missing activation manifest/,
     );
     expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildBrokeredLifecycleAdapter template files", () => {
+  const previousTemplatesDir = process.env.OCTOGEE_TEMPLATES_DIR;
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "broker-templates-"));
+    process.env.OCTOGEE_TEMPLATES_DIR = tempRoot;
+    await fs.mkdir(path.join(tempRoot, "tiers", "trial"), { recursive: true });
+    await fs.writeFile(path.join(tempRoot, "tiers", "trial", "AGENTS.md"), "Agent {{slug}}\n");
+    await fs.writeFile(path.join(tempRoot, "tiers", "trial", "TOOLS.md"), "Tools\n");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+    if (previousTemplatesDir === undefined) delete process.env.OCTOGEE_TEMPLATES_DIR;
+    else process.env.OCTOGEE_TEMPLATES_DIR = previousTemplatesDir;
+  });
+
+  it("seeds customer-owned context files and removes legacy gitignore entries", async () => {
+    const customerDir = path.join(tempRoot, "customers", "alice");
+    await fs.mkdir(customerDir, { recursive: true });
+    await fs.writeFile(
+      path.join(customerDir, ".gitignore"),
+      "AGENTS.md\nTOOLS.md\n.ssh/\n",
+    );
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    await adapter.writeCustomerTemplateFiles({
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "trial",
+      ownerName: "Alice",
+      customerDir,
+      today: "2026-06-25",
+      username: "alice",
+      templateVars: { slug: "alice" },
+      userData: {},
+    });
+
+    expect(fsSync.readFileSync(path.join(customerDir, "AGENTS.md"), "utf-8")).toBe(
+      "Agent alice\n",
+    );
+    expect(fsSync.existsSync(path.join(customerDir, "TOOLS.md"))).toBe(true);
+    expect(fsSync.existsSync(path.join(customerDir, "memory", "2026-06-25.md"))).toBe(true);
+    expect(fsSync.readFileSync(path.join(customerDir, ".gitignore"), "utf-8")).toBe(
+      ".ssh/\n",
+    );
   });
 });
 

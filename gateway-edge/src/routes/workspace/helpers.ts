@@ -59,7 +59,7 @@ export async function repoContentsApi(
 }
 
 export const HIDDEN = new Set([
-  "AGENTS.md", "TOOLS.md", "BUILDS.md", "HEARTBEAT.md", "IDENTITY.md",
+  "BUILDS.md", "HEARTBEAT.md", "IDENTITY.md",
   ".gitignore",
   ".git", ".system", "preview", "node_modules",
   "crew-webhooks.json",

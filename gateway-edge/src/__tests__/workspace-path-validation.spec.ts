@@ -11,6 +11,8 @@ describe('validateWorkspacePath', () => {
     expect(validateWorkspacePath('docs/notes.md')).toBeNull();
     expect(validateWorkspacePath('NOTES.md')).toBeNull();
     expect(validateWorkspacePath('builds/site/src/index.tsx')).toBeNull();
+    expect(validateWorkspacePath('AGENTS.md')).toBeNull();
+    expect(validateWorkspacePath('TOOLS.md')).toBeNull();
   });
 
   it('rejects parent traversal', () => {
@@ -28,10 +30,8 @@ describe('validateWorkspacePath', () => {
   });
 
   it('rejects HIDDEN reserved names anywhere in the path', () => {
-    expect(validateWorkspacePath('AGENTS.md')).toMatch(/reserved/i);
-    expect(validateWorkspacePath('subdir/AGENTS.md')).toMatch(/reserved/i);
-    expect(validateWorkspacePath('TOOLS.md')).toMatch(/reserved/i);
     expect(validateWorkspacePath('node_modules/foo')).toMatch(/reserved/i);
+    expect(validateWorkspacePath('HEARTBEAT.md')).toMatch(/reserved/i);
   });
 
   it('rejects hidden segments (starting with dot)', () => {
@@ -66,10 +66,12 @@ describe('pathHasReservedOrHiddenSegment', () => {
   it('returns null for normal paths', () => {
     expect(pathHasReservedOrHiddenSegment('docs/notes.md')).toBeNull();
     expect(pathHasReservedOrHiddenSegment('NOTES.md')).toBeNull();
+    expect(pathHasReservedOrHiddenSegment('AGENTS.md')).toBeNull();
+    expect(pathHasReservedOrHiddenSegment('TOOLS.md')).toBeNull();
   });
 
   it('flags HIDDEN reserved names', () => {
-    expect(pathHasReservedOrHiddenSegment('AGENTS.md')).toMatch(/reserved/i);
+    expect(pathHasReservedOrHiddenSegment('HEARTBEAT.md')).toMatch(/reserved/i);
     expect(pathHasReservedOrHiddenSegment('subdir/node_modules/foo')).toMatch(/reserved/i);
   });
 

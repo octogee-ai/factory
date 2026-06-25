@@ -453,7 +453,7 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
     expect(result.steps).not.toContain("init-workspace-repo");
   });
 
-  it("ensures gitignored system files after the clone (AGENTS.md etc. are never in the repo)", async () => {
+  it("ensures customer workspace templates after the clone", async () => {
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.steps).toContain("write-templates");

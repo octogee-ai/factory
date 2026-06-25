@@ -74,6 +74,7 @@ import {
   readActivationManifest,
   removeActivationManifest,
 } from "./migration-activation-manifest.js";
+import { writeTierTemplateFiles } from "./tier-template-files.js";
 
 const DEFAULT_COACH = {
   name: "Octo",
@@ -189,12 +190,10 @@ function ensureCustomerDirectories(slug: string): void {
 }
 
 async function writeCustomerTemplateFiles(ctx: CustomerContext): Promise<void> {
-  ensureCustomerDirectories(ctx.slug);
-  const memoryNote = path.join(ctx.customerDir, "memory", `${ctx.today}.md`);
-  if (!fs.existsSync(memoryNote)) {
-    fs.mkdirSync(path.dirname(memoryNote), { recursive: true });
-    fs.writeFileSync(memoryNote, `# Coach - ${ctx.today}\n\n`, "utf8");
-  }
+  fs.mkdirSync(path.join(ctx.customerDir, "projects"), { recursive: true });
+  fs.mkdirSync(path.join(ctx.customerDir, "ideas"), { recursive: true });
+  fs.mkdirSync(path.join(ctx.customerDir, ".system"), { recursive: true });
+  writeTierTemplateFiles(ctx.customerDir, ctx.tier, ctx.templateVars, ctx.today);
 }
 
 async function listProjectsNeedingClone(

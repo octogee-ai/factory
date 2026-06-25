@@ -99,6 +99,25 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     expect(written).not.toContain("SOUL.md");
   });
 
+  it("removes legacy AGENTS.md and TOOLS.md ignores so context files are customer-owned", async () => {
+    seedTier("hobby", ["AGENTS.md", "TOOLS.md"]);
+    const dir = customerDir("owned");
+    fs.writeFileSync(
+      path.join(dir, ".gitignore"),
+      ["AGENTS.md", "TOOLS.md", ".ssh/", "node_modules/", ""].join("\n"),
+      "utf-8",
+    );
+
+    const { writeTierTemplateFiles } = await load();
+    writeTierTemplateFiles(dir, "hobby", {}, "2026-05-30");
+
+    const gitignore = fs.readFileSync(path.join(dir, ".gitignore"), "utf-8");
+    expect(gitignore).not.toMatch(/^AGENTS\.md$/m);
+    expect(gitignore).not.toMatch(/^TOOLS\.md$/m);
+    expect(gitignore).toMatch(/^\.ssh\/$/m);
+    expect(gitignore).toMatch(/^node_modules\/$/m);
+  });
+
   it("writes every template file on a fresh dir", async () => {
     seedTier("hobby", ["AGENTS.md", "SOUL.md", "TOOLS.md"]);
     const dir = customerDir("bob");

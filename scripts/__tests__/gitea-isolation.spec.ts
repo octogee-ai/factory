@@ -118,7 +118,7 @@ describe("Gitea username", () => {
 });
 
 describe("workspace .gitignore excludes .ssh/", () => {
-  it("initWorkspaceRepo gitignore template contains .ssh/", () => {
+  it("initWorkspaceRepo gitignore template contains .ssh/ but keeps context files customer-owned", () => {
     
     const gitTs = fs.readFileSync(
       path.resolve(__dirname, "..", "lib", "git.ts"),
@@ -126,6 +126,9 @@ describe("workspace .gitignore excludes .ssh/", () => {
     );
     
     expect(gitTs).toContain('".ssh/",');
+    expect(gitTs).not.toContain('"AGENTS.md",');
+    expect(gitTs).not.toContain('"TOOLS.md",');
+    expect(gitTs).toContain("# AGENTS.md, TOOLS.md");
   });
 });
 

@@ -284,8 +284,6 @@ function workspaceGitignore(): string {
     "# Octogee workspace — track user-visible files, exclude system/build artifacts",
     "",
     "# System files (provisioner-managed, not user-visible)",
-    "AGENTS.md",
-    "TOOLS.md",
     "PROJECTS.md",
     "HEARTBEAT.md",
     "crew-webhooks.json",
@@ -307,7 +305,7 @@ function workspaceGitignore(): string {
     "node_modules/",
     "",
     "# User-visible files are tracked:",
-    "# SOUL.md, USER.md, MEMORY.md, memory/*, projects/*/src/",
+    "# AGENTS.md, TOOLS.md, SOUL.md, USER.md, MEMORY.md, memory/*, projects/*/src/",
   ].join("\n") + "\n";
 }
 

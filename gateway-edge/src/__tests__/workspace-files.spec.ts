@@ -17,7 +17,7 @@ vi.mock("../lib/fileTarget", () => ({
 }));
 
 vi.mock("../routes/workspace/helpers", () => ({
-  HIDDEN: new Set(["AGENTS.md", ".git"]),
+  HIDDEN: new Set([".git"]),
   giteaSudoUser: vi.fn(),
   isTargetPathWritable: vi.fn(),
   pathHasReservedOrHiddenSegment: vi.fn(),
@@ -46,7 +46,7 @@ const giteaTarget: FileTarget = {
 };
 
 describe("workspace file list helpers", () => {
-  it("maps visible repo entries and hides reserved or dot-prefixed names", () => {
+  it("maps visible repo entries, including customer-owned context files, and hides reserved or dot-prefixed names", () => {
     const files = repoFileEntries([
       { name: "src", path: "src", type: "dir" },
       { name: "README.md", path: "README.md", type: "file", size: 12 },
@@ -57,6 +57,7 @@ describe("workspace file list helpers", () => {
     expect(files).toEqual([
       { name: "src", path: "src", type: "dir", size: 0, source: "git" },
       { name: "README.md", path: "README.md", type: "file", size: 12, source: "git" },
+      { name: "AGENTS.md", path: "AGENTS.md", type: "file", size: 8, source: "git" },
     ]);
   });
 
