@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  applyAnthropicBaseUrlPatch,
   applyPreBootPatches,
   applyGatewayOverrides,
+  applyMattermostPreBootPatches,
   buildGitconfigContent,
   hydrateGitIdentity,
   pickSoleTenantSlug,
@@ -224,6 +226,54 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
 
     expect(config.auth.profiles["anthropic:default"].baseUrl).toBeUndefined();
     expect(config.models?.providers?.anthropic?.baseUrl).toBeUndefined();
+  });
+
+  it("preserves an existing non-object Anthropic provider entry", () => {
+    const config: any = {
+      auth: {
+        profiles: {
+          "anthropic:default": {
+            provider: "anthropic",
+            mode: "api_key",
+          },
+        },
+      },
+      models: { providers: { anthropic: "legacy-provider-shape" } },
+    };
+
+    const changed = applyAnthropicBaseUrlPatch(config, {
+      ANTHROPIC_BASE_URL: "http://llm-broker.octogee-test.svc.cluster.local:3010",
+    }, () => {});
+
+    expect(changed).toBe(false);
+    expect(config.models.providers.anthropic).toBe("legacy-provider-shape");
+  });
+});
+
+describe("applyMattermostPreBootPatches — non-object preservation", () => {
+  it("does not replace existing non-object account or commands values", () => {
+    const config: any = {
+      channels: {
+        mattermost: {
+          baseUrl: "https://mm.example",
+          commands: "legacy-commands",
+          accounts: {
+            default: "legacy-default",
+            coach: { commands: "legacy-account-commands" },
+          },
+        },
+      },
+    };
+
+    const changed = applyMattermostPreBootPatches(config, {
+      MM_BOT_TOKEN: "tok",
+      MM_URL: "https://mm.example",
+    }, () => {});
+
+    expect(changed).toBe(false);
+    expect(config.channels.mattermost.commands).toBe("legacy-commands");
+    expect(config.channels.mattermost.accounts.default).toBe("legacy-default");
+    expect(config.channels.mattermost.accounts.coach.commands).toBe("legacy-account-commands");
   });
 });
 

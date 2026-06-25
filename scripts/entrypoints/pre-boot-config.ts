@@ -24,126 +24,177 @@ function log(msg: string): void {
   console.log(`${ts} [pre-boot] ${msg}`);
 }
 
-export function applyPreBootPatches(
-  config: any,
-  env: NodeJS.ProcessEnv,
-  logFn: (msg: string) => void = () => {},
+type OpenClawConfig = Record<string, unknown>;
+
+function objectProperty(
+  parent: Record<string, unknown> | null,
+  key: string,
+): Record<string, unknown> | null {
+  if (!parent) return null;
+  const value = parent[key];
+  return isPlainObject(value) ? value : null;
+}
+
+function ensureNullishObjectProperty(
+  parent: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | null {
+  const value = parent[key];
+  if (isPlainObject(value)) return value;
+  if (value !== null && value !== undefined) return null;
+  const created: Record<string, unknown> = {};
+  parent[key] = created;
+  return created;
+}
+
+function applyToolsProfilePatch(
+  config: OpenClawConfig,
+  logFn: (msg: string) => void,
 ): boolean {
-  let changed = false;
+  const tools = ensureNullishObjectProperty(config, "tools");
+  if (!tools) return false;
+  if (tools.profile === "coding") return false;
+  tools.profile = "coding";
+  logFn(`set tools.profile=coding (gateway policy: openclaw "coding" defaults)`);
+  return true;
+}
 
-config.tools ??= {};
-  if (config.tools.profile !== "coding") {
-    config.tools.profile = "coding";
-    changed = true;
-    logFn(`set tools.profile=coding (gateway policy: openclaw "coding" defaults)`);
-  }
+export function applyRouterPluginPatch(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  logFn: (msg: string) => void,
+): boolean {
+  const plugins = objectProperty(config, "plugins");
+  const entries = objectProperty(plugins, "entries");
+  const routerEntry = objectProperty(entries, "octogee-router");
 
-if (env.OCTOGEE_ROUTER_ENABLED === "false") {
-    if (config.plugins?.allow && Array.isArray(config.plugins.allow)) {
-      const before = config.plugins.allow.length;
-      config.plugins.allow = config.plugins.allow.filter(
-        (id: string) => id !== "octogee-router",
-      );
-      if (config.plugins.allow.length !== before) changed = true;
+  if (env.OCTOGEE_ROUTER_ENABLED === "false") {
+    let changed = false;
+    const allow = plugins?.allow;
+    if (plugins && Array.isArray(allow)) {
+      const filteredAllow = allow.filter((id) => id !== "octogee-router");
+      if (filteredAllow.length !== allow.length) {
+        plugins.allow = filteredAllow;
+        changed = true;
+      }
     }
-    if (config.plugins?.entries?.["octogee-router"]) {
-      delete config.plugins.entries["octogee-router"];
+    if (entries && Object.prototype.hasOwnProperty.call(entries, "octogee-router")) {
+      delete entries["octogee-router"];
       changed = true;
       logFn("removed octogee-router from config because OCTOGEE_ROUTER_ENABLED=false");
     }
-  } else {
+    return changed;
+  }
 
-const pluginCfg = config.plugins?.entries?.["octogee-router"]?.config;
-    if (pluginCfg && typeof pluginCfg === "object") {
-      for (const key of STALE_ROUTER_CONFIG_KEYS) {
-        if (pluginCfg[key] !== undefined) {
-          delete pluginCfg[key];
-          changed = true;
-          logFn(`removed stale ${key} from octogee-router config (F&F: runtime syncs disabled)`);
-        }
-      }
+  const pluginCfg = objectProperty(routerEntry, "config");
+  if (!pluginCfg) return false;
+  let changed = false;
+  for (const key of STALE_ROUTER_CONFIG_KEYS) {
+    if (pluginCfg[key] !== undefined) {
+      delete pluginCfg[key];
+      changed = true;
+      logFn(`removed stale ${key} from octogee-router config (F&F: runtime syncs disabled)`);
+    }
+  }
+  return changed;
+}
+
+export function applyMattermostPreBootPatches(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  logFn: (msg: string) => void,
+): boolean {
+  const mattermost = objectProperty(objectProperty(config, "channels"), "mattermost");
+  if (!mattermost) return false;
+  let changed = false;
+
+  if (env.MM_BOT_TOKEN) {
+    const accounts = ensureNullishObjectProperty(mattermost, "accounts");
+    const defaultAccount = accounts
+      ? ensureNullishObjectProperty(accounts, "default")
+      : null;
+    if (defaultAccount && defaultAccount.botToken !== env.MM_BOT_TOKEN) {
+      defaultAccount.botToken = env.MM_BOT_TOKEN;
+      changed = true;
+      logFn(`MM bot token synced into accounts.default from MM_BOT_TOKEN env var`);
     }
   }
 
-const envBotToken = env.MM_BOT_TOKEN;
-  const envMmUrl = env.MM_URL;
-  const envAnthropicBaseUrl = env.ANTHROPIC_BASE_URL;
-  if (config.channels?.mattermost) {
-    const mm = config.channels.mattermost;
-    if (envBotToken) {
-      mm.accounts ??= {};
-      mm.accounts.default ??= {};
-      if (mm.accounts.default.botToken !== envBotToken) {
-        mm.accounts.default.botToken = envBotToken;
-        changed = true;
-        logFn(`MM bot token synced into accounts.default from MM_BOT_TOKEN env var`);
-      }
-    }
-    if (envMmUrl && mm.baseUrl !== envMmUrl) {
-      mm.baseUrl = envMmUrl;
-      changed = true;
-      logFn(`MM baseUrl synced from MM_URL env var: ${envMmUrl}`);
-    }
-
-mm.commands ??= {};
-    if (mm.commands.native !== false) {
-      mm.commands.native = false;
-      changed = true;
-      logFn(`forced channels.mattermost.commands.native=false (slash commands disabled)`);
-    }
-
-if (mm.accounts && typeof mm.accounts === "object") {
-      for (const [accountId, account] of Object.entries(mm.accounts as Record<string, any>)) {
-        if (!account || typeof account !== "object") continue;
-        account.commands ??= {};
-        if (account.commands.native !== false) {
-          account.commands.native = false;
-          changed = true;
-          logFn(`forced commands.native=false on accounts.${accountId}`);
-        }
-      }
-    }
+  if (env.MM_URL && mattermost.baseUrl !== env.MM_URL) {
+    mattermost.baseUrl = env.MM_URL;
+    changed = true;
+    logFn(`MM baseUrl synced from MM_URL env var: ${env.MM_URL}`);
   }
 
-if (envAnthropicBaseUrl) {
-    config.auth ??= {};
-    config.auth.profiles ??= {};
-    config.auth.profiles["anthropic:default"] ??= {
+  const commands = ensureNullishObjectProperty(mattermost, "commands");
+  if (commands && commands.native !== false) {
+    commands.native = false;
+    changed = true;
+    logFn(`forced channels.mattermost.commands.native=false (slash commands disabled)`);
+  }
+
+  const accounts = objectProperty(mattermost, "accounts");
+  if (!accounts) return changed;
+  for (const [accountId, account] of Object.entries(accounts)) {
+    if (!isPlainObject(account)) continue;
+    const accountCommands = ensureNullishObjectProperty(account, "commands");
+    if (accountCommands && accountCommands.native !== false) {
+      accountCommands.native = false;
+      changed = true;
+      logFn(`forced commands.native=false on accounts.${accountId}`);
+    }
+  }
+  return changed;
+}
+
+export function applyAnthropicBaseUrlPatch(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  logFn: (msg: string) => void,
+): boolean {
+  if (!env.ANTHROPIC_BASE_URL) return false;
+  let changed = false;
+
+  const auth = ensureNullishObjectProperty(config, "auth");
+  const profiles = auth ? ensureNullishObjectProperty(auth, "profiles") : null;
+  if (profiles) {
+    profiles["anthropic:default"] ??= {
       provider: "anthropic",
       mode: "api_key",
     };
-    const anthropic = config.auth.profiles["anthropic:default"];
-    if (anthropic && typeof anthropic === "object") {
-      if (anthropic.baseUrl !== undefined) {
-        delete anthropic.baseUrl;
-        changed = true;
-        logFn(`removed stale auth.profiles.anthropic:default.baseUrl (OpenClaw expects provider baseUrl)`);
-      }
-    }
-    config.models ??= {};
-    if (!config.models || typeof config.models !== "object" || Array.isArray(config.models)) {
-      config.models = {};
-    }
-    config.models.providers ??= {};
-    if (
-      !config.models.providers ||
-      typeof config.models.providers !== "object" ||
-      Array.isArray(config.models.providers)
-    ) {
-      config.models.providers = {};
-    }
-    config.models.providers.anthropic ??= {};
-    const anthropicProvider = config.models.providers.anthropic;
-    if (anthropicProvider && typeof anthropicProvider === "object") {
-      if (anthropicProvider.baseUrl !== envAnthropicBaseUrl) {
-        anthropicProvider.baseUrl = envAnthropicBaseUrl;
-        changed = true;
-        logFn(`Anthropic provider baseUrl synced from ANTHROPIC_BASE_URL env var`);
-      }
+    const anthropicProfile = objectProperty(profiles, "anthropic:default");
+    if (anthropicProfile?.baseUrl !== undefined) {
+      delete anthropicProfile.baseUrl;
+      changed = true;
+      logFn(`removed stale auth.profiles.anthropic:default.baseUrl (OpenClaw expects provider baseUrl)`);
     }
   }
 
+  const models = ensureNullishObjectProperty(config, "models");
+  const providers = models ? ensureNullishObjectProperty(models, "providers") : null;
+  if (!providers) return changed;
+  providers.anthropic ??= {};
+  const anthropicProvider = objectProperty(providers, "anthropic");
+  if (!anthropicProvider) return changed;
+  if (anthropicProvider.baseUrl !== env.ANTHROPIC_BASE_URL) {
+    anthropicProvider.baseUrl = env.ANTHROPIC_BASE_URL;
+    changed = true;
+    logFn(`Anthropic provider baseUrl synced from ANTHROPIC_BASE_URL env var`);
+  }
   return changed;
+}
+
+export function applyPreBootPatches(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  logFn: (msg: string) => void = () => {},
+): boolean {
+  return [
+    applyToolsProfilePatch(config, logFn),
+    applyRouterPluginPatch(config, env, logFn),
+    applyMattermostPreBootPatches(config, env, logFn),
+    applyAnthropicBaseUrlPatch(config, env, logFn),
+  ].some(Boolean);
 }
 
 const SECRET_BEARING_KEYS = new Set([
