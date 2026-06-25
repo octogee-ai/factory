@@ -14,7 +14,7 @@ vi.mock("google-auth-library", () => ({
   },
 }));
 
-import { listGatewayBuilds } from "../lib/artifact-registry";
+import { listGatewayBuilds } from "./artifact-registry";
 
 const fetchMock = vi.fn<typeof fetch>();
 beforeEach(() => {

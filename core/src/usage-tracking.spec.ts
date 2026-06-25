@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { workspaceUsageDocumentIds } from "../lib/usage-tracking.js";
+import { workspaceUsageDocumentIds } from "./usage-tracking.js";
 
 describe("usage-tracking helpers", () => {
   it("builds stable workspace usage document ids from the model and date", () => {

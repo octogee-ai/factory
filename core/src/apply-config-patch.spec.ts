@@ -7,8 +7,8 @@ import {
   configPatchRetryPlan,
   customerConfigFullAgentListReplacePaths,
   customerConfigReplacePaths,
-} from "../lib/apply-config-patch.js";
-import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
+} from "./apply-config-patch.js";
+import { OpenclawWireError, type GatewayRpcClient } from "./gateway-rpc.js";
 
 function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
   return {

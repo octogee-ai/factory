@@ -7,8 +7,8 @@ import {
   createGatewayRpc,
   type ConnectTrace,
   type GatewayRpcClient,
-} from "../lib/gateway-rpc.js";
-import type { DeviceIdentity } from "../lib/gateway-device-identity.js";
+} from "./gateway-rpc.js";
+import type { DeviceIdentity } from "./gateway-device-identity.js";
 
 function makeTestIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");

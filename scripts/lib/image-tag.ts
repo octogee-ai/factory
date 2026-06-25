@@ -1,3 +1,1 @@
-
-
-export { IMAGE_TAG_PATTERN } from "../../shared/types/image-tag.js";
+export * from "@octogee/core/image-tag";

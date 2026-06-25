@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { runMigration } from "../lib/fleet-migration-runner";
-import type { MigrationClient } from "../lib/fleet-migration-client";
-import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker";
+import { runMigration } from "./fleet-migration-runner";
+import type { MigrationClient } from "./fleet-migration-client";
+import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 const SNAPSHOT: FleetBrokerUserSnapshot = {
   uid: "uid-alice",

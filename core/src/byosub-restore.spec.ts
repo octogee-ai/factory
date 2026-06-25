@@ -16,15 +16,15 @@ import {
   shouldRestoreCodexCredential,
   isSafeAgentId,
   readCodexAuthStateText,
-} from "../lib/byosub-restore.js";
-import * as authProfileSqlite from "../lib/auth-profile-sqlite.js";
+} from "./byosub-restore.js";
+import * as authProfileSqlite from "./auth-profile-sqlite.js";
 const {
   readAuthProfileStore,
   writeAuthProfileStore,
   resolveAuthDbPath,
 } = authProfileSqlite;
 import { DatabaseSync } from "node:sqlite";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../lib/model-credential-materializer.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./model-credential-materializer.js";
 
 const tmpDirs: string[] = [];
 function mkTmp(): string {

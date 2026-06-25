@@ -9,7 +9,7 @@ import {
   type CustomerLifecycleAdapter,
   type UserSnapshot,
   type MmUpdate,
-} from "../lib/customer-lifecycle.js";
+} from "./customer-lifecycle.js";
 
 interface DiskState {
   customerDir: boolean;

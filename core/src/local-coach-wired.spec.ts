@@ -15,7 +15,7 @@ import {
   readOpenclawConfig,
   writeMigratingInPin,
   writeMountedMarker,
-} from "../lib/local-coach-wired";
+} from "./local-coach-wired";
 
 const tmp: string[] = [];
 function writeConfig(obj: unknown): string {

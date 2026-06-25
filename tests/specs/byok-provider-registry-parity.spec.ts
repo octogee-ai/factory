@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS } from "../../scripts/lib/model-credential-materializer.js";
@@ -21,6 +21,14 @@ import {
 //   3. scripts/secret-resolver.mjs BYOK_ID_RE — what the gateway resolver will resolve
 
 const repoRoot = path.resolve(__dirname, "../..");
+
+// Source-inspection guards: a module/spec that moved into @octogee/core is read
+// from core/src; scripts/lib + scripts/__tests__ paths fall back to their origin.
+const readSrc = (rel: string) => {
+  const moved = rel.replace(/^scripts\/(lib|__tests__)\//, "core/src/");
+  const target = existsSync(path.join(repoRoot, moved)) ? moved : rel;
+  return readFileSync(path.join(repoRoot, target), "utf8");
+};
 
 const apiKeyProviders = Object.entries(MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS)
   .filter(([, spec]) => spec.mode === "api_key")
@@ -46,7 +54,7 @@ async function resolverGrammarProviders(): Promise<string[]> {
 }
 
 function brokerRouteProviders(): string[] {
-  const src = readFileSync(path.join(repoRoot, "octogee-api/src/routes/byok-broker.ts"), "utf8");
+  const src = readSrc("octogee-api/src/routes/byok-broker.ts");
   if (src.includes("MODEL_CREDENTIAL_STATIC_PROVIDER_IDS")) {
     return catalogStaticProviders;
   }
@@ -58,13 +66,13 @@ function brokerRouteProviders(): string[] {
 describe("BYOK provider registry parity (scripts PROVIDERS ↔ route ↔ resolver)", () => {
   it("static provider projections are backed by the shared model credential catalog", async () => {
     expect(
-      readFileSync(path.join(repoRoot, "gateway-edge/src/billing/provider-key-format.ts"), "utf8"),
+      readSrc("gateway-edge/src/billing/provider-key-format.ts"),
     ).toContain("MODEL_CREDENTIAL_STATIC_PROVIDER_IDS");
     expect(
-      readFileSync(path.join(repoRoot, "scripts/lib/model-credential-materializer.ts"), "utf8"),
+      readSrc("scripts/lib/model-credential-materializer.ts"),
     ).toContain("MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS");
     expect(
-      readFileSync(path.join(repoRoot, "octogee-api/src/routes/byok-broker.ts"), "utf8"),
+      readSrc("octogee-api/src/routes/byok-broker.ts"),
     ).toContain("MODEL_CREDENTIAL_STATIC_PROVIDER_IDS");
 
     const resolver = await import(

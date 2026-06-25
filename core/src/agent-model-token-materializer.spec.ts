@@ -6,12 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   readAuthProfileStore,
   writeAuthProfileStore,
-} from "../lib/auth-profile-sqlite.js";
+} from "./auth-profile-sqlite.js";
 import {
   agentModelTokenProfileEntry,
   materializeAnthropicBrokerForAgents,
   upsertAnthropicBrokerProfile,
-} from "../lib/agent-model-token-materializer.js";
+} from "./agent-model-token-materializer.js";
 
 describe("agent-model-token materializer", () => {
   let agentDir: string;

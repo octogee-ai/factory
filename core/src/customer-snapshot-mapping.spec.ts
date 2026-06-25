@@ -6,7 +6,7 @@ import {
   mapUserDocToSnapshot,
   mapWorkspaceChannelDoc,
   mapProjectChannelDoc,
-} from "../lib/customer-snapshot-mapping.js";
+} from "./customer-snapshot-mapping.js";
 
 describe("deriveSlug", () => {
   it("prefers provisioning.openclaw.slug, falls back to username", () => {

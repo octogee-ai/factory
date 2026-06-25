@@ -5,7 +5,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import {
   addAdminCustomerRoutes,
   type AdminCustomerRouterDeps,
-} from "../lib/admin-customer-router.js";
+} from "./admin-customer-router.js";
 
 type DocData = Record<string, unknown>;
 type DocStore = Map<string, DocData>;

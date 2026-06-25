@@ -8,21 +8,73 @@
     "dist"
   ],
   "exports": {
+    "./admin-customer-router": {
+      "types": "./dist/admin-customer-router.d.ts",
+      "default": "./dist/admin-customer-router.js"
+    },
+    "./admin-fleet-router": {
+      "types": "./dist/admin-fleet-router.d.ts",
+      "default": "./dist/admin-fleet-router.js"
+    },
     "./admin-shape": {
       "types": "./dist/admin-shape.d.ts",
       "default": "./dist/admin-shape.js"
+    },
+    "./agent-model-token-materializer": {
+      "types": "./dist/agent-model-token-materializer.d.ts",
+      "default": "./dist/agent-model-token-materializer.js"
+    },
+    "./apply-config-patch": {
+      "types": "./dist/apply-config-patch.d.ts",
+      "default": "./dist/apply-config-patch.js"
+    },
+    "./artifact-registry": {
+      "types": "./dist/artifact-registry.d.ts",
+      "default": "./dist/artifact-registry.js"
+    },
+    "./assigned-roster": {
+      "types": "./dist/assigned-roster.d.ts",
+      "default": "./dist/assigned-roster.js"
     },
     "./auth-profile-sqlite": {
       "types": "./dist/auth-profile-sqlite.d.ts",
       "default": "./dist/auth-profile-sqlite.js"
     },
+    "./builder-activation-lease": {
+      "types": "./dist/builder-activation-lease.d.ts",
+      "default": "./dist/builder-activation-lease.js"
+    },
     "./byosub-onboarding": {
       "types": "./dist/byosub-onboarding.d.ts",
       "default": "./dist/byosub-onboarding.js"
     },
+    "./byosub-restore": {
+      "types": "./dist/byosub-restore.d.ts",
+      "default": "./dist/byosub-restore.js"
+    },
+    "./byot-sync": {
+      "types": "./dist/byot-sync.d.ts",
+      "default": "./dist/byot-sync.js"
+    },
+    "./byot-sync-runtime": {
+      "types": "./dist/byot-sync-runtime.d.ts",
+      "default": "./dist/byot-sync-runtime.js"
+    },
+    "./codex-auth-health": {
+      "types": "./dist/codex-auth-health.d.ts",
+      "default": "./dist/codex-auth-health.js"
+    },
     "./config": {
       "types": "./dist/config.d.ts",
       "default": "./dist/config.js"
+    },
+    "./customer-lifecycle": {
+      "types": "./dist/customer-lifecycle.d.ts",
+      "default": "./dist/customer-lifecycle.js"
+    },
+    "./customer-snapshot-mapping": {
+      "types": "./dist/customer-snapshot-mapping.d.ts",
+      "default": "./dist/customer-snapshot-mapping.js"
     },
     "./deploy-records": {
       "types": "./dist/deploy-records.d.ts",
@@ -40,9 +92,29 @@
       "types": "./dist/fleet-migration.d.ts",
       "default": "./dist/fleet-migration.js"
     },
+    "./fleet-migration-client": {
+      "types": "./dist/fleet-migration-client.d.ts",
+      "default": "./dist/fleet-migration-client.js"
+    },
+    "./fleet-migration-runner": {
+      "types": "./dist/fleet-migration-runner.d.ts",
+      "default": "./dist/fleet-migration-runner.js"
+    },
     "./fleet-signature": {
       "types": "./dist/fleet-signature.d.ts",
       "default": "./dist/fleet-signature.js"
+    },
+    "./fleet-state": {
+      "types": "./dist/fleet-state.d.ts",
+      "default": "./dist/fleet-state.js"
+    },
+    "./gateway-device-identity": {
+      "types": "./dist/gateway-device-identity.d.ts",
+      "default": "./dist/gateway-device-identity.js"
+    },
+    "./gateway-rpc": {
+      "types": "./dist/gateway-rpc.d.ts",
+      "default": "./dist/gateway-rpc.js"
     },
     "./gitea-naming": {
       "types": "./dist/gitea-naming.d.ts",
@@ -52,6 +124,34 @@
       "types": "./dist/hosting.d.ts",
       "default": "./dist/hosting.js"
     },
+    "./image-tag": {
+      "types": "./dist/image-tag.d.ts",
+      "default": "./dist/image-tag.js"
+    },
+    "./internal-fetch": {
+      "types": "./dist/internal-fetch.d.ts",
+      "default": "./dist/internal-fetch.js"
+    },
+    "./local-coach-wired": {
+      "types": "./dist/local-coach-wired.d.ts",
+      "default": "./dist/local-coach-wired.js"
+    },
+    "./migration-activation-manifest": {
+      "types": "./dist/migration-activation-manifest.d.ts",
+      "default": "./dist/migration-activation-manifest.js"
+    },
+    "./model-credential-materializer": {
+      "types": "./dist/model-credential-materializer.d.ts",
+      "default": "./dist/model-credential-materializer.js"
+    },
+    "./model-credential-sync": {
+      "types": "./dist/model-credential-sync.d.ts",
+      "default": "./dist/model-credential-sync.js"
+    },
+    "./model-credential-sync-runtime": {
+      "types": "./dist/model-credential-sync-runtime.d.ts",
+      "default": "./dist/model-credential-sync-runtime.js"
+    },
     "./secret-manager": {
       "types": "./dist/secret-manager.d.ts",
       "default": "./dist/secret-manager.js"
@@ -60,6 +160,18 @@
       "types": "./dist/site-id.d.ts",
       "default": "./dist/site-id.js"
     },
+    "./usage-log-line": {
+      "types": "./dist/usage-log-line.d.ts",
+      "default": "./dist/usage-log-line.js"
+    },
+    "./usage-log-tailer": {
+      "types": "./dist/usage-log-tailer.d.ts",
+      "default": "./dist/usage-log-tailer.js"
+    },
+    "./usage-tracking": {
+      "types": "./dist/usage-tracking.d.ts",
+      "default": "./dist/usage-tracking.js"
+    },
     "./workspace-slugs": {
       "types": "./dist/workspace-slugs.d.ts",
       "default": "./dist/workspace-slugs.js"
@@ -67,17 +179,56 @@
   },
   "typesVersions": {
     "*": {
+      "admin-customer-router": [
+        "dist/admin-customer-router.d.ts"
+      ],
+      "admin-fleet-router": [
+        "dist/admin-fleet-router.d.ts"
+      ],
       "admin-shape": [
         "dist/admin-shape.d.ts"
+      ],
+      "agent-model-token-materializer": [
+        "dist/agent-model-token-materializer.d.ts"
+      ],
+      "apply-config-patch": [
+        "dist/apply-config-patch.d.ts"
+      ],
+      "artifact-registry": [
+        "dist/artifact-registry.d.ts"
+      ],
+      "assigned-roster": [
+        "dist/assigned-roster.d.ts"
       ],
       "auth-profile-sqlite": [
         "dist/auth-profile-sqlite.d.ts"
       ],
+      "builder-activation-lease": [
+        "dist/builder-activation-lease.d.ts"
+      ],
       "byosub-onboarding": [
         "dist/byosub-onboarding.d.ts"
       ],
+      "byosub-restore": [
+        "dist/byosub-restore.d.ts"
+      ],
+      "byot-sync": [
+        "dist/byot-sync.d.ts"
+      ],
+      "byot-sync-runtime": [
+        "dist/byot-sync-runtime.d.ts"
+      ],
+      "codex-auth-health": [
+        "dist/codex-auth-health.d.ts"
+      ],
       "config": [
         "dist/config.d.ts"
+      ],
+      "customer-lifecycle": [
+        "dist/customer-lifecycle.d.ts"
+      ],
+      "customer-snapshot-mapping": [
+        "dist/customer-snapshot-mapping.d.ts"
       ],
       "deploy-records": [
         "dist/deploy-records.d.ts"
@@ -91,8 +242,23 @@
       "fleet-migration": [
         "dist/fleet-migration.d.ts"
       ],
+      "fleet-migration-client": [
+        "dist/fleet-migration-client.d.ts"
+      ],
+      "fleet-migration-runner": [
+        "dist/fleet-migration-runner.d.ts"
+      ],
       "fleet-signature": [
         "dist/fleet-signature.d.ts"
+      ],
+      "fleet-state": [
+        "dist/fleet-state.d.ts"
+      ],
+      "gateway-device-identity": [
+        "dist/gateway-device-identity.d.ts"
+      ],
+      "gateway-rpc": [
+        "dist/gateway-rpc.d.ts"
       ],
       "gitea-naming": [
         "dist/gitea-naming.d.ts"
@@ -100,11 +266,41 @@
       "hosting": [
         "dist/hosting.d.ts"
       ],
+      "image-tag": [
+        "dist/image-tag.d.ts"
+      ],
+      "internal-fetch": [
+        "dist/internal-fetch.d.ts"
+      ],
+      "local-coach-wired": [
+        "dist/local-coach-wired.d.ts"
+      ],
+      "migration-activation-manifest": [
+        "dist/migration-activation-manifest.d.ts"
+      ],
+      "model-credential-materializer": [
+        "dist/model-credential-materializer.d.ts"
+      ],
+      "model-credential-sync": [
+        "dist/model-credential-sync.d.ts"
+      ],
+      "model-credential-sync-runtime": [
+        "dist/model-credential-sync-runtime.d.ts"
+      ],
       "secret-manager": [
         "dist/secret-manager.d.ts"
       ],
       "site-id": [
         "dist/site-id.d.ts"
+      ],
+      "usage-log-line": [
+        "dist/usage-log-line.d.ts"
+      ],
+      "usage-log-tailer": [
+        "dist/usage-log-tailer.d.ts"
+      ],
+      "usage-tracking": [
+        "dist/usage-tracking.d.ts"
       ],
       "workspace-slugs": [
         "dist/workspace-slugs.d.ts"
@@ -120,13 +316,20 @@
   },
   "dependencies": {
     "@google-cloud/secret-manager": "^6.2.0",
-    "firebase-admin": "^13.10.0 || ^14.0.0"
+    "express": "^5.2.1",
+    "firebase-admin": "^13.10.0 || ^14.0.0",
+    "google-auth-library": "^10.7.0",
+    "ws": "^8.21.0"
   },
   "overrides": {
     "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@octogee/shared": "file:../shared/octogee-shared.tgz",
+    "@types/express": "^5.0.6",
+    "@types/supertest": "^7.2.0",
+    "@types/ws": "^8.18.1",
+    "supertest": "^7.2.2",
     "typescript": "^5.5.0",
     "vitest": "^4.1.9"
   },

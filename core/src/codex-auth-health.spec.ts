@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import {
   deriveCodexAuthHealth,
   checkCodexAuthHealthForAgents,
-} from "../lib/codex-auth-health.js";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../lib/model-credential-materializer.js";
+} from "./codex-auth-health.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./model-credential-materializer.js";
 
 const P = OPENAI_CODEX_DEFAULT_PROFILE_ID; 
 const NOW = 1_780_000_000_000;

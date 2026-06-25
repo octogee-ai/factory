@@ -14,7 +14,7 @@ const { secretsReloadSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
   return { secretsReloadSpy, closeSpy, createGatewayRpcSpy };
 });
 
-vi.mock("../lib/gateway-rpc", () => ({
+vi.mock("./gateway-rpc", () => ({
   OpenclawWireError: class OpenclawWireError extends Error {
     code: string;
     constructor(code: string, message: string) {
@@ -45,9 +45,9 @@ vi.mock("child_process", async () => {
   };
 });
 
-vi.mock("../lib/internal-fetch", () => ({ internalFetch: vi.fn() }));
+vi.mock("./internal-fetch", () => ({ internalFetch: vi.fn() }));
 
-import { deriveDesiredByotState, byosCoachConfigPatch, coachFullAgentList } from "../lib/byot-sync.js";
+import { deriveDesiredByotState, byosCoachConfigPatch, coachFullAgentList } from "./byot-sync.js";
 import {
   triggerSecretsReload,
   restoreOauthStoreForSlug,
@@ -55,10 +55,10 @@ import {
   applyCoachModelPatch,
   syncByotForCustomer,
   markerProviderForSlot,
-} from "../lib/byot-sync-runtime";
-import { internalFetch } from "../lib/internal-fetch.js";
-import { codexAuthJsonPath, codexAgentDir } from "../lib/byosub-restore.js";
-import { readAuthProfileStore } from "../lib/auth-profile-sqlite.js";
+} from "./byot-sync-runtime";
+import { internalFetch } from "./internal-fetch.js";
+import { codexAuthJsonPath, codexAgentDir } from "./byosub-restore.js";
+import { readAuthProfileStore } from "./auth-profile-sqlite.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";

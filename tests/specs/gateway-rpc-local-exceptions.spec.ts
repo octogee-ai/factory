@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const repoRoot = path.resolve(__dirname, "../..");
 
+// Source-inspection guards: a module/spec that moved into @octogee/core is read
+// from core/src; scripts/lib + scripts/__tests__ paths fall back to their origin.
+const readSrc = (rel: string) => {
+  const moved = rel.replace(/^scripts\/(lib|__tests__)\//, "core/src/");
+  const target = existsSync(path.join(repoRoot, moved)) ? moved : rel;
+  return readFileSync(path.join(repoRoot, target), "utf8");
+};
+
 function source(rel: string): string {
-  return readFileSync(path.join(repoRoot, rel), "utf8");
+  return readSrc(rel);
 }
 
 function expectLocalGatewayRpcException(rel: string): void {

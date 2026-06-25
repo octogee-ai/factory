@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { internalFetch } from "../lib/internal-fetch.js";
+import { internalFetch } from "./internal-fetch.js";
 
 const tempDirs: string[] = [];
 

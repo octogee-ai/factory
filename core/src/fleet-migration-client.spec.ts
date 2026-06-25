@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { signFleetRequest } from "../lib/fleet-signature";
+import { signFleetRequest } from "./fleet-signature";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys";
 import {
   SIGNATURE_HEADER,
@@ -7,9 +7,9 @@ import {
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
-} from "../../shared/types/fleet-controller";
-import { createMigrationClient } from "../lib/fleet-migration-client";
-import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker";
+} from "@octogee/shared/types/fleet-controller";
+import { createMigrationClient } from "./fleet-migration-client";
+import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 interface CapturedCall {
   url: string;

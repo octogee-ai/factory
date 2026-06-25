@@ -9,7 +9,7 @@ import {
   readActivationManifest,
   writeActivationManifest,
   type MigrationActivationManifest,
-} from "../lib/migration-activation-manifest";
+} from "./migration-activation-manifest";
 
 const tmpDirs: string[] = [];
 

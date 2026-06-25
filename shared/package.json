@@ -9,6 +9,10 @@
     "dist"
   ],
   "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/types/index.js"
+    },
     "./types/agent": {
       "types": "./dist/types/agent.d.ts",
       "default": "./dist/types/agent.js"
@@ -81,6 +85,10 @@
       "types": "./dist/types/member.d.ts",
       "default": "./dist/types/member.js"
     },
+    "./types/model-broker-usage": {
+      "types": "./dist/types/model-broker-usage.d.ts",
+      "default": "./dist/types/model-broker-usage.js"
+    },
     "./types/model-credentials": {
       "types": "./dist/types/model-credentials.d.ts",
       "default": "./dist/types/model-credentials.js"
@@ -117,17 +125,9 @@
       "types": "./dist/types/social.d.ts",
       "default": "./dist/types/social.js"
     },
-    "./types/throttle": {
-      "types": "./dist/types/throttle.d.ts",
-      "default": "./dist/types/throttle.js"
-    },
     "./types/workspace": {
       "types": "./dist/types/workspace.d.ts",
       "default": "./dist/types/workspace.js"
-    },
-    ".": {
-      "types": "./dist/types/index.d.ts",
-      "default": "./dist/types/index.js"
     }
   },
   "typesVersions": {
@@ -186,6 +186,9 @@
       "types/member": [
         "dist/types/member.d.ts"
       ],
+      "types/model-broker-usage": [
+        "dist/types/model-broker-usage.d.ts"
+      ],
       "types/model-credentials": [
         "dist/types/model-credentials.d.ts"
       ],
@@ -212,9 +215,6 @@
       ],
       "types/social": [
         "dist/types/social.d.ts"
-      ],
-      "types/throttle": [
-        "dist/types/throttle.d.ts"
       ],
       "types/workspace": [
         "dist/types/workspace.d.ts"
