@@ -122,6 +122,9 @@ interface PerReleaseValues {
   replicas?: unknown;
 }
 
+type HelmInstanceKnobs = Partial<HelmInstancesMap[string]>;
+type PersonalKnobReader = (v: PerReleaseValues) => HelmInstanceKnobs;
+
 function coerceIdentityField(v: unknown): string | null {
   if (typeof v === "string") return v;
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
@@ -193,50 +196,54 @@ async function readInstanceValue(
   };
 }
 
-function readPersonalKnobs(
+const PROFILE_VALUES = new Set<GatewayProfile>(["standard", "operator"]);
+const GATEWAY_CLASS_VALUES = new Set<GatewayClass>(["shared", "builder", "operator"]);
+const IMAGE_PROFILE_VALUES = new Set<GatewayImageProfile>(["standard", "operator"]);
+const SIZING_TIER_VALUES = new Set<SizingTier>(SIZING_TIERS);
+
+function nonEmptyString(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+function enumString<T extends string>(v: unknown, values: ReadonlySet<T>): T | undefined {
+  return typeof v === "string" && values.has(v as T) ? v as T : undefined;
+}
+
+function integerAtLeastZero(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined;
+}
+
+function plainObjectKnob<T>(v: unknown): T | undefined {
+  return isPlainObject(v) ? v as T : undefined;
+}
+
+function knob<K extends keyof HelmInstanceKnobs>(
+  key: K,
+  value: HelmInstanceKnobs[K] | undefined,
+): HelmInstanceKnobs {
+  return value === undefined ? {} : { [key]: value } as HelmInstanceKnobs;
+}
+
+const PERSONAL_KNOB_READERS: PersonalKnobReader[] = [
+  (v) => knob("serviceAccountName", nonEmptyString(v.serviceAccountName)),
+  (v) => knob("serviceAccount", plainObjectKnob<HelmInstancesMap[string]["serviceAccount"]>(v.serviceAccount)),
+  (v) => knob("gatewayContainerSecurityContext", plainObjectKnob<Record<string, unknown>>(
+    v.gatewayContainerSecurityContext,
+  )),
+  (v) => knob("persistence", plainObjectKnob<HelmInstancesMap[string]["persistence"]>(v.persistence)),
+  (v) => knob("operatorAccess", plainObjectKnob<HelmInstancesMap[string]["operatorAccess"]>(v.operatorAccess)),
+  (v) => knob("computeClassOverride", nonEmptyString(v.computeClassOverride)),
+  (v) => knob("profile", enumString(v.profile, PROFILE_VALUES)),
+  (v) => knob("gatewayClass", enumString(v.gatewayClass, GATEWAY_CLASS_VALUES)),
+  (v) => knob("imageProfile", enumString(v.imageProfile, IMAGE_PROFILE_VALUES)),
+  (v) => knob("sizingTier", enumString(v.sizingTier, SIZING_TIER_VALUES)),
+  (v) => knob("replicas", integerAtLeastZero(v.replicas)),
+];
+
+export function readPersonalKnobs(
   v: PerReleaseValues,
 ): Partial<HelmInstancesMap[string]> {
-  const out: Partial<HelmInstancesMap[string]> = {};
-  if (typeof v.serviceAccountName === "string" && v.serviceAccountName.length > 0) {
-    out.serviceAccountName = v.serviceAccountName;
-  }
-  if (isPlainObject(v.serviceAccount)) {
-    out.serviceAccount = v.serviceAccount as unknown as HelmInstancesMap[string]["serviceAccount"];
-  }
-  if (isPlainObject(v.gatewayContainerSecurityContext)) {
-    out.gatewayContainerSecurityContext = v.gatewayContainerSecurityContext;
-  }
-  if (isPlainObject(v.persistence)) {
-    out.persistence = v.persistence as unknown as HelmInstancesMap[string]["persistence"];
-  }
-  if (isPlainObject(v.operatorAccess)) {
-    out.operatorAccess = v.operatorAccess as unknown as HelmInstancesMap[string]["operatorAccess"];
-  }
-  if (typeof v.computeClassOverride === "string" && v.computeClassOverride.length > 0) {
-    out.computeClassOverride = v.computeClassOverride;
-  }
-  if (typeof v.profile === "string" && (v.profile === "standard" || v.profile === "operator")) {
-    out.profile = v.profile;
-  }
-  if (
-    typeof v.gatewayClass === "string" &&
-    (v.gatewayClass === "shared" || v.gatewayClass === "builder" || v.gatewayClass === "operator")
-  ) {
-    out.gatewayClass = v.gatewayClass;
-  }
-  if (
-    typeof v.imageProfile === "string" &&
-    (v.imageProfile === "standard" || v.imageProfile === "operator")
-  ) {
-    out.imageProfile = v.imageProfile;
-  }
-  if (typeof v.sizingTier === "string" && (SIZING_TIERS as readonly string[]).includes(v.sizingTier)) {
-    out.sizingTier = v.sizingTier as SizingTier;
-  }
-  if (typeof v.replicas === "number" && Number.isInteger(v.replicas) && v.replicas >= 0) {
-    out.replicas = v.replicas;
-  }
-  return out;
+  return Object.assign({}, ...PERSONAL_KNOB_READERS.map((read) => read(v)));
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -251,7 +258,7 @@ function pushSetJson(args: string[], key: string, value: unknown): void {
   args.push(HELM_SET_JSON, `${key}=${JSON.stringify(value)}`);
 }
 
-interface BuildUpgradeArgsOpts {
+export interface BuildUpgradeArgsOpts {
   release: string;
   chartPath: string;
   namespace: string;
@@ -277,26 +284,51 @@ interface BuildUpgradeArgsOpts {
   takeOwnership?: boolean;
 }
 
-/**
- * Builds the `helm upgrade --install` argv. Extracted from upsertInstance
- * so the per-knob conditionals don't push the orchestrator over the
- * complexity-15 threshold.
- *
- * Note: gcpProject is the BYO-GCP escape hatch — when set, overrides the
- * chart's gatewayEdge.env.GCP_PROJECT_ID. Otherwise the chart's
- * values.yaml + values.{prod,test}.yaml are the single source of truth
- * (no Cowboy --set, no kubectl-set-env field-manager collision risk on
- * the next upgrade — see post-mortem in PR #TBD).
- */
-function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
-  // String-typed fields use `--set-string` so a digit-only value (e.g.
-  // imageTag="3280519" from a CI build-number tag without a SHA suffix)
-  // doesn't get coerced to a number by helm's `--set` parser and rejected
-  // by the chart schema. Discovered the hard way 2026-05-25 when gw-bender's
-  // imageTag carried just digits and every reconcile failed with
-  // "at '/imageTag': got number, want string". Numeric fields (replicas)
-  // still use `--set` — they want number semantics.
-  const args: string[] = [
+type UpgradeStringOption = {
+  option: keyof Pick<
+    BuildUpgradeArgsOpts,
+    | "chartFingerprint"
+    | "builderSlug"
+    | "profile"
+    | "gatewayClass"
+    | "imageProfile"
+    | "sizingTier"
+    | "serviceAccountName"
+    | "computeClassOverride"
+    | "gcpProject"
+  >;
+  key: string;
+};
+
+type UpgradeJsonOption = {
+  option: keyof Pick<
+    BuildUpgradeArgsOpts,
+    "serviceAccount" | "gatewayContainerSecurityContext" | "persistence" | "operatorAccess"
+  >;
+  key: string;
+};
+
+const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
+  { option: "chartFingerprint", key: "chartFingerprint" },
+  { option: "builderSlug", key: "builderSlug" },
+  { option: "profile", key: "profile" },
+  { option: "gatewayClass", key: "gatewayClass" },
+  { option: "imageProfile", key: "imageProfile" },
+  { option: "sizingTier", key: "sizingTier" },
+  { option: "serviceAccountName", key: "serviceAccountName" },
+  { option: "computeClassOverride", key: "computeClassOverride" },
+  { option: "gcpProject", key: "gatewayEdge.env.GCP_PROJECT_ID" },
+];
+
+const UPGRADE_JSON_OPTIONS: UpgradeJsonOption[] = [
+  { option: "serviceAccount", key: "serviceAccount" },
+  { option: "gatewayContainerSecurityContext", key: "gatewayContainerSecurityContext" },
+  { option: "persistence", key: "persistence" },
+  { option: "operatorAccess", key: "operatorAccess" },
+];
+
+function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
+  return [
     "upgrade",
     "--install",
     opts.release,
@@ -310,24 +342,64 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     HELM_SET_STRING,
     `image.repository=${opts.imageRepository}`,
   ];
-  if (opts.chartFingerprint) args.push(HELM_SET_STRING, `chartFingerprint=${opts.chartFingerprint}`);
-  if (opts.builderSlug) args.push(HELM_SET_STRING, `builderSlug=${opts.builderSlug}`);
-  if (opts.profile) args.push(HELM_SET_STRING, `profile=${opts.profile}`);
-  if (opts.gatewayClass) args.push(HELM_SET_STRING, `gatewayClass=${opts.gatewayClass}`);
-  if (opts.imageProfile) args.push(HELM_SET_STRING, `imageProfile=${opts.imageProfile}`);
-  if (opts.sizingTier) args.push(HELM_SET_STRING, `sizingTier=${opts.sizingTier}`);
-  if (opts.replicas !== undefined) args.push(HELM_SET, `replicas=${opts.replicas}`);
-  if (opts.serviceAccountName) args.push(HELM_SET_STRING, `serviceAccountName=${opts.serviceAccountName}`);
-  if (opts.serviceAccount) pushSetJson(args, "serviceAccount", opts.serviceAccount);
-  if (opts.gatewayContainerSecurityContext) {
-    pushSetJson(args, "gatewayContainerSecurityContext", opts.gatewayContainerSecurityContext);
+}
+
+function appendOptionalStringArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
+  for (const { option, key } of UPGRADE_STRING_OPTIONS) {
+    const value = opts[option];
+    if (typeof value === "string" && value.length > 0) args.push(HELM_SET_STRING, `${key}=${value}`);
   }
-  if (opts.persistence) pushSetJson(args, "persistence", opts.persistence);
-  if (opts.operatorAccess) pushSetJson(args, "operatorAccess", opts.operatorAccess);
-  if (opts.computeClassOverride) args.push(HELM_SET_STRING, `computeClassOverride=${opts.computeClassOverride}`);
-  if (opts.gcpProject) args.push(HELM_SET_STRING, `gatewayEdge.env.GCP_PROJECT_ID=${opts.gcpProject}`);
+}
+
+function appendOptionalJsonArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
+  for (const { option, key } of UPGRADE_JSON_OPTIONS) {
+    const value = opts[option];
+    if (value) pushSetJson(args, key, value);
+  }
+}
+
+function appendOptionalNumberArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
+  if (opts.replicas !== undefined) args.push(HELM_SET, `replicas=${opts.replicas}`);
+}
+
+function appendOptionalFileArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
   if (opts.valuesFile) args.push("-f", opts.valuesFile);
+}
+
+function appendOptionalFlagArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
   if (opts.takeOwnership) args.push("--take-ownership");
+}
+
+function appendUpgradeApplyArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
+  args.push("--server-side=true", "--force-conflicts");
+  args.push("--wait", `--timeout=${opts.upgradeTimeout}`);
+}
+
+/**
+ * Builds the `helm upgrade --install` argv. Extracted from upsertInstance
+ * so the per-knob conditionals don't push the orchestrator over the
+ * complexity-15 threshold.
+ *
+ * Note: gcpProject is the BYO-GCP escape hatch — when set, overrides the
+ * chart's gatewayEdge.env.GCP_PROJECT_ID. Otherwise the chart's
+ * values.yaml + values.{prod,test}.yaml are the single source of truth
+ * (no Cowboy --set, no kubectl-set-env field-manager collision risk on
+ * the next upgrade — see post-mortem in PR #TBD).
+ */
+export function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
+  // String-typed fields use `--set-string` so a digit-only value (e.g.
+  // imageTag="3280519" from a CI build-number tag without a SHA suffix)
+  // doesn't get coerced to a number by helm's `--set` parser and rejected
+  // by the chart schema. Discovered the hard way 2026-05-25 when gw-bender's
+  // imageTag carried just digits and every reconcile failed with
+  // "at '/imageTag': got number, want string". Numeric fields (replicas)
+  // still use `--set` — they want number semantics.
+  const args = baseUpgradeArgs(opts);
+  appendOptionalStringArgs(args, opts);
+  appendOptionalNumberArgs(args, opts);
+  appendOptionalJsonArgs(args, opts);
+  appendOptionalFileArgs(args, opts);
+  appendOptionalFlagArgs(args, opts);
   // Server-side apply + force-conflicts: matches the umbrella install path
   // that the CI deploy job has used since #913 + #1056. Cowboy was left
   // behind on strategic-merge through v3.16.4 of helm in glm-controller's
@@ -344,8 +416,7 @@ function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   // (no `=true`) parses as `--server-side="--force-conflicts"` — invalid
   // value silently defaulting to "auto", and the literal `--force-conflicts`
   // is never applied (#1054 post-mortem). Always `--server-side=true`.
-  args.push("--server-side=true", "--force-conflicts");
-  args.push("--wait", `--timeout=${opts.upgradeTimeout}`);
+  appendUpgradeApplyArgs(args, opts);
   return args;
 }
 

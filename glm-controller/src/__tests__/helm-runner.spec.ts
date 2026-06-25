@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  buildUpgradeArgs,
   createHelmSubprocessRunner,
+  readPersonalKnobs,
   spawnHelm,
   type HelmSubprocess,
 } from "../helm-runner";
@@ -33,6 +35,96 @@ function withPreflightStatusNotFound(inner: HelmSubprocess): HelmSubprocess {
 }
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+
+describe("helm-runner helpers", () => {
+  it("reads supported personal knobs while dropping invalid values from helm values", () => {
+    expect(readPersonalKnobs({
+      serviceAccountName: "octogee-gateway-bender",
+      serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
+      gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
+      persistence: { enabled: true, size: "20Gi" },
+      operatorAccess: { enabled: true, audiences: ["octogee-api"] },
+      computeClassOverride: "octogee-gateway-spot",
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      sizingTier: "large",
+      replicas: 0,
+    })).toEqual({
+      serviceAccountName: "octogee-gateway-bender",
+      serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
+      gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
+      persistence: { enabled: true, size: "20Gi" },
+      operatorAccess: { enabled: true, audiences: ["octogee-api"] },
+      computeClassOverride: "octogee-gateway-spot",
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      sizingTier: "large",
+      replicas: 0,
+    });
+
+    expect(readPersonalKnobs({
+      serviceAccountName: "",
+      serviceAccount: [],
+      gatewayContainerSecurityContext: null,
+      profile: "admin",
+      gatewayClass: "unknown",
+      imageProfile: "debug",
+      sizingTier: "tiny",
+      replicas: 1.5,
+    })).toEqual({});
+  });
+
+  it("builds upgrade args with string, numeric, JSON, values-file, and ownership knobs", () => {
+    const args = buildUpgradeArgs({
+      release: "octogee-gw-bender",
+      chartPath: "/charts/octogee-gateway",
+      namespace: "octogee",
+      gatewayId: "bender",
+      builderSlug: "ceckert",
+      imageTag: "3280519",
+      imageRepository: REPO,
+      upgradeTimeout: "10m",
+      chartFingerprint: "f".repeat(64),
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      sizingTier: "large",
+      replicas: 0,
+      serviceAccountName: "octogee-gateway-bender",
+      serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
+      gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
+      persistence: { enabled: true, size: "20Gi" },
+      operatorAccess: { enabled: true },
+      computeClassOverride: "octogee-gateway-spot",
+      gcpProject: "builder-bender",
+      valuesFile: "/charts/octogee-gateway/values.prod.yaml",
+      takeOwnership: true,
+    });
+
+    const stringPair = (key: string): string | undefined => {
+      const idx = args.findIndex((arg, index) => arg === "--set-string" && args[index + 1]?.startsWith(`${key}=`));
+      return idx === -1 ? undefined : args[idx + 1];
+    };
+    expect(stringPair("gatewayId")).toBe("gatewayId=bender");
+    expect(stringPair("imageTag")).toBe("imageTag=3280519");
+    expect(stringPair("serviceAccountName")).toBe("serviceAccountName=octogee-gateway-bender");
+    expect(args).toContain("--set");
+    expect(args).toContain("replicas=0");
+    expect(args).toContain(
+      'serviceAccount={"annotations":{"iam.gke.io/gcp-service-account":"gw@example.iam.gserviceaccount.com"}}',
+    );
+    expect(args).toContain('operatorAccess={"enabled":true}');
+    expect(args).toContain("-f");
+    expect(args).toContain("/charts/octogee-gateway/values.prod.yaml");
+    expect(args).toContain("--take-ownership");
+    expect(args).toContain("--server-side=true");
+    expect(args).toContain("--force-conflicts");
+    expect(args).toContain("--wait");
+    expect(args).toContain("--timeout=10m");
+  });
+});
 
 describe("createHelmSubprocessRunner — readDeployedInstances", () => {
   it("filters helm list to octogee-gw-* releases and pulls each release's values", async () => {
