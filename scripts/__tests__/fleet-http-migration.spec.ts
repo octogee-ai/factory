@@ -23,6 +23,7 @@ import {
   createUnmountHandler,
   createVerifyHandler,
   findPathTraversalViolation,
+  sendPushStateImportResponse,
   type MigrationHandlerDeps,
 } from "../lib/fleet-http-migration.js";
 import { signFleetRequest } from "../lib/fleet-signature.js";
@@ -192,6 +193,30 @@ const sink = new Writable({
     destroyed: () => destroyError,
   };
 }
+
+describe("sendPushStateImportResponse", () => {
+  it("relays successful target import responses and logs the target gateway", async () => {
+    const { res, getStatus, getBody } = mkResponse();
+    const log = vi.fn();
+    const importResponse = new Response(
+      JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+    await sendPushStateImportResponse(
+      importResponse,
+      { migrationId: "mig-1", slug: "chris", targetGatewayId: "gw-b" },
+      res,
+      log,
+    );
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({ migrationId: "mig-1", slug: "chris", imported: true });
+    expect(log).toHaveBeenCalledWith(
+      "[migration-http] ✅ push-state migrationId=mig-1 slug=chris target=gw-b done",
+    );
+  });
+});
 
 function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerLifecycleAdapter {
   const everythingElseThrows = new Proxy(

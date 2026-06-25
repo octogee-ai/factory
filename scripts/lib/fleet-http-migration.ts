@@ -690,6 +690,35 @@ async function finishPushStateAlreadyMounted(
   res.status(200).json(parsed);
 }
 
+export async function sendPushStateImportResponse(
+  importRes: globalThis.Response,
+  params: { migrationId: string; slug: string; targetGatewayId: string },
+  res: Response,
+  log: (msg: string) => void,
+): Promise<void> {
+  if (!importRes.ok) {
+    const text = await importRes.text().catch(() => "<no body>");
+    log(
+      `[migration-http] ❌ push-state migrationId=${params.migrationId} slug=${params.slug} target import failed status=${importRes.status}: ${text}`,
+    );
+    res
+      .status(502)
+      .json({ error: "target import failed", status: importRes.status, message: text });
+    return;
+  }
+
+  const parsed = (await importRes.json()) as ImportResponse;
+  if (parsed.alreadyMounted) {
+    await finishPushStateAlreadyMounted(res, parsed, params.targetGatewayId, log);
+    return;
+  }
+
+  log(
+    `[migration-http] ✅ push-state migrationId=${params.migrationId} slug=${params.slug} target=${params.targetGatewayId} done`,
+  );
+  res.status(200).json(parsed);
+}
+
 const RSYNC_IMPORT_MODULE = "state";
 const RSYNC_READY_TIMEOUT_MS = 5_000;
 const RSYNC_BIN = "/usr/bin/rsync";
@@ -1323,27 +1352,16 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
         throw sourceTarError ?? err;
       }
 
-      if (!importRes.ok) {
-        const text = await importRes.text().catch(() => "<no body>");
-        log(
-          `[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug} target import failed status=${importRes.status}: ${text}`,
-        );
-        res
-          .status(502)
-          .json({ error: "target import failed", status: importRes.status, message: text });
-        return;
-      }
-
-      const parsed = (await importRes.json()) as ImportResponse;
-      if (parsed.alreadyMounted) {
-        await finishPushStateAlreadyMounted(res, parsed, target.targetGatewayId, log);
-        return;
-      }
-
-      log(
-        `[migration-http] ✅ push-state migrationId=${body.migrationId} slug=${body.slug} target=${target.targetGatewayId} done`,
+      await sendPushStateImportResponse(
+        importRes,
+        {
+          migrationId: body.migrationId,
+          slug: body.slug,
+          targetGatewayId: target.targetGatewayId,
+        },
+        res,
+        log,
       );
-      res.status(200).json(parsed);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
