@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { syncByotForCustomer } from "../../../../scripts/lib/byot-sync-runtime.js";
+import { syncModelCredentialsForCustomer } from "../../../../scripts/lib/model-credential-sync-runtime.js";
 import { requireByotSyncInternalAuth } from "../../middleware/byot-sync-auth.js";
 
 const router = Router();
@@ -8,7 +8,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isValidPayload(value: unknown): value is Parameters<typeof syncByotForCustomer>[0] {
+function isValidPayload(value: unknown): value is Parameters<typeof syncModelCredentialsForCustomer>[0] {
   if (!isRecord(value)) return false;
   if (typeof value.username !== "string" || value.username.trim().length === 0) return false;
   const provisioning = value.provisioning;
@@ -19,7 +19,7 @@ function isValidPayload(value: unknown): value is Parameters<typeof syncByotForC
 }
 
 router.post(
-  "/byot-sync",
+  ["/model-credential-sync", "/byot-sync"],
   requireByotSyncInternalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -27,7 +27,7 @@ router.post(
         res.status(400).json({ error: "username and provisioning.openclaw.status required" });
         return;
       }
-      await syncByotForCustomer(req.body);
+      await syncModelCredentialsForCustomer(req.body);
       res.json({ ok: true });
     } catch (e) {
       next(e);

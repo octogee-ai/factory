@@ -77,15 +77,30 @@ const AGENTS_DIR =
   process.env.OPENCLAW_AGENTS_DIR ||
   path.join(process.env.HOME || "/home/node", ".openclaw", "agents");
 
-/** byok-{slug}-{provider}[/version]. Slug is lowercase alnum + hyphens, 1-63
- *  chars. Provider is a closed enum. Version is "latest" or a 1-32 char
- *  alnum/hyphen string (Secret Manager versions are integers but `latest`
- *  + future labels are also valid). */
-// Provider enum must stay in sync with the api_key providers in
-// scripts/lib byot-multi-provider-config PROVIDERS and gateway-edge
-// provider-key-format SUPPORTED — asserted by the registry-parity spec.
-const BYOK_ID_RE =
-  /^byok-(?<slug>[a-z0-9][a-z0-9-]{0,62})-(?<provider>anthropic|openai|openai-compatible|grok|openrouter|minimax)(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
+export const BYOK_API_KEY_PROVIDER_IDS = [
+  "openai",
+  "anthropic",
+  "openrouter",
+  "grok",
+  "minimax",
+  "openai-compatible",
+];
+const BYOK_ID_RE = /^byok-(?<body>[a-z0-9][a-z0-9-]{0,128})(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const BYOK_API_KEY_PROVIDER_SUFFIXES = BYOK_API_KEY_PROVIDER_IDS
+  .map((provider) => ({ provider, suffix: `-${provider}` }))
+  .sort((a, b) => b.suffix.length - a.suffix.length);
+
+function parseByokApiKeyId(id) {
+  const m = id.match(BYOK_ID_RE);
+  const body = m?.groups?.body;
+  if (!body) return null;
+  const match = BYOK_API_KEY_PROVIDER_SUFFIXES.find(({ suffix }) => body.endsWith(suffix));
+  if (!match) return null;
+  const slug = body.slice(0, -match.suffix.length);
+  if (!SLUG_RE.test(slug)) return null;
+  return { slug, provider: match.provider, version: m.groups?.version };
+}
 
 // Per-customer broker-token ref for shared (multi-tenant) gateways. Each
 // customer-agent's anthropic auth-profile resolves through this id; the broker
@@ -141,12 +156,12 @@ function validateId(id) {
   if (typeof id !== "string" || id.length === 0 || id.length > 256) {
     return `id is not a non-empty string ≤256 chars`;
   }
-  const byok = id.match(BYOK_ID_RE);
+  const byok = parseByokApiKeyId(id);
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
-  if (!byok?.groups && !agentToken?.groups) {
+  if (!byok && !agentToken?.groups) {
     return `id does not match byok-{slug}-{provider}[/version] or agent-model-token-octogee-{slug}-coach`;
   }
-  const slug = byok?.groups?.slug ?? agentToken?.groups?.slug;
+  const slug = byok?.slug ?? agentToken?.groups?.slug;
   if (!KNOWN_SLUGS.has(slug)) {
     return `slug "${slug}" has no provisioned agent dir`;
   }

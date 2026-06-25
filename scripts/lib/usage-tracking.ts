@@ -154,7 +154,7 @@ function decideThrottle(args: {
   windowStartedAt: Date | null;
 }): ThrottleDecision {
   if (args.byotActive) {
-    return { level: 0, reason: "byot_skip" };
+    return { level: 0, reason: "customer_model_credential_skip" };
   }
   if (args.tier === "free") {
     return { level: 3, reason: "free_tier_house_key" };

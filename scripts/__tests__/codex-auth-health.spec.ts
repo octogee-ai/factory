@@ -3,7 +3,7 @@ import {
   deriveCodexAuthHealth,
   checkCodexAuthHealthForAgents,
 } from "../lib/codex-auth-health.js";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../lib/byot-multi-provider-config.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../lib/model-credential-materializer.js";
 
 const P = OPENAI_CODEX_DEFAULT_PROFILE_ID; 
 const NOW = 1_780_000_000_000;

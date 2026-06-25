@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  byotSnapshotProjectionFromSystemConfig,
   byotSystemConfigFromDoc,
   deriveSlug,
   mapUserDocToSnapshot,
@@ -126,6 +127,57 @@ describe("channel-doc shaping (workspaces/{slug} producer → UserSnapshot.chann
 });
 
 describe("byotSystemConfigFromDoc — users/{uid}/system/config → snapshot.systemConfig", () => {
+  it("projects active modelCredential into the byot-shaped mount snapshot", () => {
+    expect(
+      byotSystemConfigFromDoc({
+        modelCredential: {
+          active: true,
+          provider: "openai-codex",
+          mode: "oauth",
+          status: "active",
+          reasonCode: "ok",
+          secretName: "byosub-uid-openai",
+          model: "openai/gpt-5.5",
+        },
+      }),
+    ).toEqual({ byot: { provider: "openai-codex", model: "openai/gpt-5.5" } });
+  });
+
+  it("reports active from modelCredential so callers no longer need users/{uid}.byotActive", () => {
+    expect(
+      byotSnapshotProjectionFromSystemConfig({
+        modelCredential: {
+          active: true,
+          provider: "anthropic",
+          mode: "api_key",
+          status: "active",
+          reasonCode: "ok",
+          secretName: "byok-acme-anthropic",
+          fingerprint: "sk-ant...1234",
+        },
+      }),
+    ).toEqual({
+      byotActive: true,
+      systemConfig: { byot: { provider: "anthropic" } },
+    });
+  });
+
+  it("treats inactive modelCredential as authoritative over stale legacy byot", () => {
+    expect(
+      byotSnapshotProjectionFromSystemConfig({
+        modelCredential: {
+          active: false,
+          provider: "openai",
+          mode: "api_key",
+          status: "missing",
+          reasonCode: "missing_credential",
+          secretName: "byok-acme-openai",
+        },
+        byot: { provider: "openai", model: "gpt-4o" },
+      }),
+    ).toEqual({ byotActive: false });
+  });
+
   it("projects the byot provider/baseUrl/model the in-pod re-assert needs", () => {
     expect(
       byotSystemConfigFromDoc({ byot: { provider: "openai", baseUrl: "https://x", model: "gpt-4o" } }),

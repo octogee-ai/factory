@@ -1,20 +1,19 @@
 
+import {
+  MODEL_CREDENTIAL_CATALOG,
+  type ModelCredentialActiveStaticProviderId,
+  type ModelCredentialOAuthProviderId,
+} from "../../shared/types/model-credentials.js";
 
-export type Provider =
-  | "anthropic"
-  | "openai"
-  | "openai-compatible"
-  | "openai-codex"
-  | "claude-cli"
-  | "grok"
-  | "openrouter"
-  | "minimax";
+export type ModelCredentialMaterializerProvider =
+  | ModelCredentialActiveStaticProviderId
+  | ModelCredentialOAuthProviderId;
 
-export type CredentialMode = "api_key" | "oauth";
+export type ModelCredentialMaterializerMode = "api_key" | "oauth";
 
-export interface ByotConfigInput {
+export interface ModelCredentialConfigInput {
   slug: string;
-  provider: Provider;
+  provider: ModelCredentialMaterializerProvider;
   baseUrl?: string;
   model?: string;
 }
@@ -44,98 +43,51 @@ export interface ModelsJson {
   providers: Record<string, CustomProviderEntry>;
 }
 
-export interface ByotConfigOutput {
+export interface ModelCredentialConfigOutput {
   authProfiles: AuthProfilesJson | null;
   models: ModelsJson | null;
   agentModelOverride: string | null;
 }
 
-export interface ProviderSpec {
-  mode: CredentialMode;
+export interface ModelCredentialMaterializerProviderSpec {
+  mode: ModelCredentialMaterializerMode;
   shape: "profile" | "customProvider";
-  
+
   profileKey?: string;
-  
+
   authProvider: string;
   defaultModel: string | null;
-  
+
   baseUrl?: string;
 }
 
-export const PROVIDERS: Record<Provider, ProviderSpec> = {
-  anthropic: {
-    mode: "api_key",
-    shape: "profile",
-    profileKey: "anthropic:default",
-    authProvider: "anthropic",
-    defaultModel: null,
-  },
-  openai: {
-    mode: "api_key",
-    shape: "profile",
-    profileKey: "openai:default",
-    authProvider: "openai",
-    defaultModel: "openai/gpt-5",
-  },
-  "openai-codex": {
-
-    mode: "oauth",
-    shape: "profile",
-    profileKey: "openai-codex",
-    authProvider: "openai-codex",
-    defaultModel: "openai/gpt-5.5",
-  },
-  "claude-cli": {
-    // Claude SUBSCRIPTION (claude setup-token) — distinct from `anthropic`
-    // (api_key). Routes the agent through the claude-cli runtime on the
-    // customer's own sub. Opus 4.8 is a distinct model id from the shared-pool
-    // Sonnet default, so the global runtime mapping is per-customer-safe.
-    mode: "oauth",
-    shape: "profile",
-    profileKey: "anthropic:claude-cli",
-    authProvider: "claude-cli",
-    // openclaw exposes the Claude-sub model as claude-cli/<model> (the provider
-    // prefix selects the native claude-cli runtime); allowlisted with an empty
-    // entry. NOT anthropic/<model>+agentRuntime — that id is rejected (proven live).
-    defaultModel: "claude-cli/claude-opus-4-8",
-  },
-  "openai-compatible": {
-    mode: "api_key",
-    shape: "customProvider",
-    authProvider: "openai-compatible",
-    defaultModel: null,
-  },
-  // Native-HTTP OpenAI-compatible providers — work on every gateway class
-  // (no exec). Canonical baseUrl so the Builder supplies only a model + key.
-  grok: {
-    mode: "api_key",
-    shape: "customProvider",
-    authProvider: "grok",
-    defaultModel: null,
-    baseUrl: "https://api.x.ai/v1",
-  },
-  openrouter: {
-    mode: "api_key",
-    shape: "customProvider",
-    authProvider: "openrouter",
-    defaultModel: null,
-    baseUrl: "https://openrouter.ai/api/v1",
-  },
-  minimax: {
-    mode: "api_key",
-    shape: "customProvider",
-    authProvider: "minimax",
-    defaultModel: null,
-    // OpenAI-compatible base, confirmed against platform.minimax.io's OpenAI-SDK
-    // docs — chat/completions served at {baseUrl}/chat/completions.
-    baseUrl: "https://api.minimax.io/v1",
-  },
-};
+export const MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS = Object.fromEntries(
+  MODEL_CREDENTIAL_CATALOG
+    .filter((entry) => entry.activeSlotEligible)
+    .map((entry) => [
+      entry.id,
+      {
+        mode: entry.modes[0],
+        shape:
+          entry.materialization.kind === "custom-openai-provider"
+            ? "customProvider"
+            : "profile",
+        ...(entry.openclaw.configProfileId
+          ? { profileKey: entry.openclaw.configProfileId }
+          : {}),
+        authProvider: entry.openclaw.authProvider,
+        defaultModel: entry.defaults.model,
+        ...(entry.baseUrl.kind === "canonical"
+          ? { baseUrl: entry.baseUrl.value }
+          : {}),
+      },
+    ]),
+) as Record<ModelCredentialMaterializerProvider, ModelCredentialMaterializerProviderSpec>;
 
 const SECRET_RESOLVER_PROVIDER = "gcp-secret-manager";
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
-function secretIdFor(slug: string, provider: Provider): string {
+function secretIdFor(slug: string, provider: ModelCredentialMaterializerProvider): string {
   return `byok-${slug}-${provider}/latest`;
 }
 
@@ -177,14 +129,14 @@ function assertModel(input: string): void {
   if (input.split("/").includes("..")) fail("must not contain .. segments");
 }
 
-function execRef(slug: string, provider: Provider): ExecSecretRef {
+function execRef(slug: string, provider: ModelCredentialMaterializerProvider): ExecSecretRef {
   return { source: "exec", provider: SECRET_RESOLVER_PROVIDER, id: secretIdFor(slug, provider) };
 }
 
-export function buildByotConfigForProvider(input: ByotConfigInput): ByotConfigOutput {
+export function buildModelCredentialConfigForProvider(input: ModelCredentialConfigInput): ModelCredentialConfigOutput {
   assertSlug(input.slug);
 
-  const spec = PROVIDERS[input.provider];
+  const spec = MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS[input.provider];
   if (!spec) {
     throw new Error(`Unsupported provider: ${String(input.provider)}`);
   }
@@ -231,20 +183,20 @@ export function buildByotConfigForProvider(input: ByotConfigInput): ByotConfigOu
   };
 }
 
-export function secretNameFor(slug: string, provider: Provider): string {
+export function modelCredentialSecretNameFor(slug: string, provider: ModelCredentialMaterializerProvider): string {
   assertSlug(slug);
   return `byok-${slug}-${provider}`;
 }
 
-export function isOauthProvider(provider: Provider): boolean {
-  return PROVIDERS[provider].mode === "oauth";
+export function isModelCredentialOauthProvider(provider: ModelCredentialMaterializerProvider): boolean {
+  return MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS[provider].mode === "oauth";
 }
 
 export function codexRuntimeConfig(): {
   model: string;
   modelsDef: Record<string, { agentRuntime: { id: "codex" } }>;
 } {
-  const model = PROVIDERS["openai-codex"].defaultModel!;
+  const model = MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS["openai-codex"].defaultModel!;
   return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
 }
 
@@ -252,7 +204,7 @@ export function claudeCliRuntimeConfig(): {
   model: string;
   modelsDef: Record<string, Record<string, never>>;
 } {
-  const model = PROVIDERS["claude-cli"].defaultModel!;
+  const model = MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS["claude-cli"].defaultModel!;
   // Empty entry = allowlist the native claude-cli/<model> id; the prefix selects
   // the runtime, so no agentRuntime remap (unlike codex, a plugin).
   return { model, modelsDef: { [model]: {} } };

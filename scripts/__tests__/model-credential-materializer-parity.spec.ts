@@ -1,21 +1,21 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildByotConfigForProvider,
+  buildModelCredentialConfigForProvider,
   buildCodexAuthProfilesStore,
   buildCodexAuthJsonFromStore,
   buildClaudeCliAuthProfilesStore,
   claudeCliRuntimeConfig,
   codexRuntimeConfig,
   CLAUDE_CLI_DEFAULT_PROFILE_ID,
-  type ByotConfigInput,
-} from "../lib/byot-multi-provider-config.js";
+  type ModelCredentialConfigInput,
+} from "../lib/model-credential-materializer.js";
 
 const jwt = (claims: Record<string, unknown>) =>
   "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".sig";
 
-describe("buildByotConfigForProvider — provider parity (BYOT api_key cases)", () => {
+describe("buildModelCredentialConfigForProvider — provider parity (BYOT api_key cases)", () => {
   it("anthropic → api_key profile via SecretRef, no model override", () => {
-    const out = buildByotConfigForProvider({ slug: "tester-70", provider: "anthropic" });
+    const out = buildModelCredentialConfigForProvider({ slug: "tester-70", provider: "anthropic" });
     expect(out.agentModelOverride).toBeNull();
     expect(out.models).toBeNull();
     const p = out.authProfiles!.profiles["anthropic:default"];
@@ -25,19 +25,19 @@ describe("buildByotConfigForProvider — provider parity (BYOT api_key cases)", 
   });
 
   it("openai → api_key profile + model override", () => {
-    const out = buildByotConfigForProvider({ slug: "tester-70", provider: "openai" });
+    const out = buildModelCredentialConfigForProvider({ slug: "tester-70", provider: "openai" });
     expect(out.agentModelOverride).toBeTruthy();
     const p = out.authProfiles!.profiles["openai:default"];
     expect(p.type).toBe("api_key");
   });
 });
 
-describe("buildByotConfigForProvider — openai-codex (BYOS, ChatGPT sub) at parity", () => {
+describe("buildModelCredentialConfigForProvider — openai-codex (BYOS, ChatGPT sub) at parity", () => {
 
-const input: ByotConfigInput = { slug: "tester-70", provider: "openai-codex" };
+const input: ModelCredentialConfigInput = { slug: "tester-70", provider: "openai-codex" };
 
   it("emits an oauth profile (no keyRef) — credential is the per-agent codex-home", () => {
-    const out = buildByotConfigForProvider(input);
+    const out = buildModelCredentialConfigForProvider(input);
     const p = out.authProfiles!.profiles["openai-codex"];
     expect(p).toEqual({ type: "oauth", provider: "openai-codex" });
     expect((p as { keyRef?: unknown }).keyRef).toBeUndefined();
@@ -45,27 +45,27 @@ const input: ByotConfigInput = { slug: "tester-70", provider: "openai-codex" };
   });
 
   it("overrides the agent model to the codex agentRuntime model", () => {
-    expect(buildByotConfigForProvider(input).agentModelOverride).toBe("openai/gpt-5.5");
+    expect(buildModelCredentialConfigForProvider(input).agentModelOverride).toBe("openai/gpt-5.5");
   });
 
   it("honors an explicit model override", () => {
     expect(
-      buildByotConfigForProvider({ ...input, model: "openai/gpt-5.5-pro" })
+      buildModelCredentialConfigForProvider({ ...input, model: "openai/gpt-5.5-pro" })
         .agentModelOverride,
     ).toBe("openai/gpt-5.5-pro");
   });
 
   it("still validates the slug (parity with the api_key cases)", () => {
     expect(() =>
-      buildByotConfigForProvider({ slug: "Bad/Slug", provider: "openai-codex" }),
+      buildModelCredentialConfigForProvider({ slug: "Bad/Slug", provider: "openai-codex" }),
     ).toThrow();
   });
 });
 
-describe("buildByotConfigForProvider — openai-compatible (custom provider) characterization", () => {
+describe("buildModelCredentialConfigForProvider — openai-compatible (custom provider) characterization", () => {
   
   it("emits a custom models.provider (no auth profile) + namespaced model override", () => {
-    const out = buildByotConfigForProvider({
+    const out = buildModelCredentialConfigForProvider({
       slug: "tester-70",
       provider: "openai-compatible",
       baseUrl: "https://llm.example.com",
@@ -91,10 +91,10 @@ describe("buildByotConfigForProvider — openai-compatible (custom provider) cha
 
   it("requires baseUrl and model", () => {
     expect(() =>
-      buildByotConfigForProvider({ slug: "tester-70", provider: "openai-compatible" }),
+      buildModelCredentialConfigForProvider({ slug: "tester-70", provider: "openai-compatible" }),
     ).toThrow(/baseUrl is required/);
     expect(() =>
-      buildByotConfigForProvider({
+      buildModelCredentialConfigForProvider({
         slug: "tester-70",
         provider: "openai-compatible",
         baseUrl: "https://llm.example.com",
@@ -103,7 +103,7 @@ describe("buildByotConfigForProvider — openai-compatible (custom provider) cha
   });
 });
 
-describe("buildByotConfigForProvider — canonical OpenAI-compatible providers (Grok / OpenRouter / MiniMax)", () => {
+describe("buildModelCredentialConfigForProvider — canonical OpenAI-compatible providers (Grok / OpenRouter / MiniMax)", () => {
   it.each([
     ["grok", "https://api.x.ai/v1"],
     ["openrouter", "https://openrouter.ai/api/v1"],
@@ -111,7 +111,7 @@ describe("buildByotConfigForProvider — canonical OpenAI-compatible providers (
   ] as const)(
     "%s uses its canonical baseUrl + the builder's chosen model + a byok key ref (no baseUrl needed from the user)",
     (provider, baseUrl) => {
-      const out = buildByotConfigForProvider({ slug: "tester-70", provider, model: "some-model" });
+      const out = buildModelCredentialConfigForProvider({ slug: "tester-70", provider, model: "some-model" });
       expect(out.authProfiles).toBeNull();
       expect(out.models).toEqual({
         providers: {
@@ -134,7 +134,7 @@ describe("buildByotConfigForProvider — canonical OpenAI-compatible providers (
   it.each(["grok", "openrouter", "minimax"] as const)(
     "%s requires a model (baseUrl is canonical, so only the model is user-supplied)",
     (provider) => {
-      expect(() => buildByotConfigForProvider({ slug: "tester-70", provider })).toThrow(
+      expect(() => buildModelCredentialConfigForProvider({ slug: "tester-70", provider })).toThrow(
         /model is required/,
       );
     },
@@ -401,11 +401,11 @@ describe("buildClaudeCliAuthProfilesStore — claude-cli per-agent OAuth profile
   });
 });
 
-describe("buildByotConfigForProvider — claude-cli (Claude subscription) at parity with codex", () => {
-  const base: ByotConfigInput = { slug: "acme", provider: "claude-cli" };
+describe("buildModelCredentialConfigForProvider — claude-cli (Claude subscription) at parity with codex", () => {
+  const base: ModelCredentialConfigInput = { slug: "acme", provider: "claude-cli" };
 
   it("emits an oauth profile (no keyRef) — the credential is the per-agent claude-cli store", () => {
-    const out = buildByotConfigForProvider(base);
+    const out = buildModelCredentialConfigForProvider(base);
     expect(out.authProfiles).toEqual({
       profiles: { "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" } },
     });
@@ -413,7 +413,7 @@ describe("buildByotConfigForProvider — claude-cli (Claude subscription) at par
   });
 
   it("overrides the agent model to the native Opus 4.8 sub id (claude-cli/claude-opus-4-8)", () => {
-    expect(buildByotConfigForProvider(base).agentModelOverride).toBe(
+    expect(buildModelCredentialConfigForProvider(base).agentModelOverride).toBe(
       "claude-cli/claude-opus-4-8",
     );
   });

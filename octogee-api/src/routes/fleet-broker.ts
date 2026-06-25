@@ -24,6 +24,7 @@ import {
   resolveGatewayClass,
 } from "../../../shared/types/glm.js";
 import {
+  byotSnapshotProjectionFromSystemConfig,
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
 } from "../../../scripts/lib/customer-snapshot-mapping.js";
@@ -782,24 +783,6 @@ function snapshotBaseFields(
   };
 }
 
-// Project users/{uid}/system/config down to the byot fields the in-pod mount re-assert
-// needs. The pod is credential-stripped, so it cannot read this subdoc itself — the broker
-// (trusted side, with Firestore) must carry it on the snapshot. Without it the re-assert
-// would default a non-anthropic BYOT customer back to anthropic and clear their key.
-function snapshotByotConfig(
-  sysData: Record<string, unknown> | undefined,
-): FleetBrokerUserSnapshot["systemConfig"] {
-  const byot = readPath(sysData ?? {}, "byot") as
-    | { provider?: unknown; baseUrl?: unknown; model?: unknown }
-    | undefined;
-  if (!byot || typeof byot !== "object") return undefined;
-  const out: { provider?: string; baseUrl?: string; model?: string } = {};
-  if (typeof byot.provider === "string") out.provider = byot.provider;
-  if (typeof byot.baseUrl === "string") out.baseUrl = byot.baseUrl;
-  if (typeof byot.model === "string") out.model = byot.model;
-  return Object.keys(out).length > 0 ? { byot: out } : undefined;
-}
-
 function snapshotCoachFields(
   coachData: Record<string, unknown> | undefined,
 ): Pick<FleetBrokerUserSnapshot, "coachToken" | "coachMmUserId"> {
@@ -834,16 +817,20 @@ async function loadSnapshot(
   ]);
   const coachData = coachSecret.data() as Record<string, unknown> | undefined;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
-  const systemConfig = snapshotByotConfig(sysConfig.data() as Record<string, unknown> | undefined);
+  const credentialProjection = byotSnapshotProjectionFromSystemConfig(
+    sysConfig.data() as Record<string, unknown> | undefined,
+  );
+  const baseFields = snapshotBaseFields(data, slug);
   return {
     uid,
     slug,
-    ...snapshotBaseFields(data, slug),
+    ...baseFields,
+    byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
     channels,
     projects,
     ...snapshotCoachFields(coachData),
     ...snapshotCoachIdentity(agentData),
-    ...(systemConfig ? { systemConfig } : {}),
+    ...(credentialProjection.systemConfig ? { systemConfig: credentialProjection.systemConfig } : {}),
   };
 }
 

@@ -145,7 +145,7 @@ export function byosubConnectionView(
 // working credential. This crosses that expectation with pod REALITY — is the
 // auth-profile store actually present on this pod, and does codex consider it
 // alive — so a silent boot-sync materialization failure surfaces as `missing`
-// instead of a false `connected`. Used by /api/byosub/health on the customer's
+// instead of a false `connected`. Used by /api/g/<gatewayId>/byosub/health on the customer's
 // own pod (the durability harness's real proof) and to fix the product
 // false-"connected" the ref-only read can't catch.
 export type ByosubHealthStatus =

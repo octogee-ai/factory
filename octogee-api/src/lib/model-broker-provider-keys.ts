@@ -6,7 +6,7 @@ import type {
 } from "./model-broker-tokens.js";
 import { readSecret as defaultReadSecret } from "../../../scripts/lib/secret-manager.js";
 
-export type ModelBrokerProviderKeySource = "platform" | "owner_byot";
+export type ModelBrokerProviderKeySource = "platform" | "owner_model_credential";
 
 export interface ModelBrokerProviderKey {
   apiKey: string;
@@ -29,6 +29,15 @@ export interface AnthropicProviderKeyResolverDeps {
   readSecret?: (name: string) => Promise<string>;
 }
 
+type AnthropicConfiguredCredentialResolution =
+  | { kind: "platform" }
+  | { kind: "deny" }
+  | { kind: "owner_model_credential"; secretName: string };
+
+export type AnthropicModelCredentialResolution =
+  | { kind: "fallback" }
+  | AnthropicConfiguredCredentialResolution;
+
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -50,21 +59,50 @@ function byotRecord(
   return objectRecord(configData?.byot);
 }
 
+function modelCredentialRecord(
+  configData: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+  return objectRecord(configData?.modelCredential);
+}
+
 function expectedAnthropicSecretName(slug: string): string {
   return `byok-${slug}-anthropic`;
 }
 
-function configuredAnthropicByotSecret(
+export function configuredAnthropicModelCredentialResolution(
   userData: Record<string, unknown> | undefined,
   configData: Record<string, unknown> | undefined,
-): string | null | undefined {
-  if (userData?.byotActive !== true) return undefined;
-  const byot = byotRecord(configData);
-  if (byot?.provider !== "anthropic") return undefined;
+): AnthropicModelCredentialResolution {
+  const credential = modelCredentialRecord(configData);
+  if (!credential) return { kind: "fallback" };
+  if (
+    credential.active !== true ||
+    credential.provider !== "anthropic" ||
+    credential.mode !== "api_key"
+  ) {
+    return { kind: "platform" };
+  }
   const slug = ownerSlug(userData);
-  if (!slug) return null;
+  if (!slug) return { kind: "deny" };
   const expected = expectedAnthropicSecretName(slug);
-  return byot.secretName === expected ? expected : null;
+  return credential.secretName === expected
+    ? { kind: "owner_model_credential", secretName: expected }
+    : { kind: "deny" };
+}
+
+function configuredAnthropicByotResolution(
+  userData: Record<string, unknown> | undefined,
+  configData: Record<string, unknown> | undefined,
+): AnthropicConfiguredCredentialResolution {
+  if (userData?.byotActive !== true) return { kind: "platform" };
+  const byot = byotRecord(configData);
+  if (byot?.provider !== "anthropic") return { kind: "platform" };
+  const slug = ownerSlug(userData);
+  if (!slug) return { kind: "deny" };
+  const expected = expectedAnthropicSecretName(slug);
+  return byot.secretName === expected
+    ? { kind: "owner_model_credential", secretName: expected }
+    : { kind: "deny" };
 }
 
 function platformKeyResolution(platformKey: string | undefined): ModelBrokerProviderKey | null {
@@ -86,13 +124,19 @@ export function createAnthropicProviderKeyResolver(
     ]);
     const userData = userSnap.data() as Record<string, unknown> | undefined;
     const configData = configSnap.data() as Record<string, unknown> | undefined;
-    const byotSecretName = configuredAnthropicByotSecret(userData, configData);
-    if (byotSecretName === null) return null;
-    if (!byotSecretName) return platformKeyResolution(deps.platformKey);
+    const modelCredentialResolution = configuredAnthropicModelCredentialResolution(
+      userData,
+      configData,
+    );
+    const resolution = modelCredentialResolution.kind === "fallback"
+      ? configuredAnthropicByotResolution(userData, configData)
+      : modelCredentialResolution;
+    if (resolution.kind === "deny") return null;
+    if (resolution.kind === "platform") return platformKeyResolution(deps.platformKey);
 
-    const apiKey = (await readSecret(byotSecretName)).trim();
+    const apiKey = (await readSecret(resolution.secretName)).trim();
     return apiKey
-      ? { apiKey, source: "owner_byot", secretName: byotSecretName }
+      ? { apiKey, source: "owner_model_credential", secretName: resolution.secretName }
       : null;
   };
 }

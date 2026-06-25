@@ -4,7 +4,7 @@ import {
   buildCodexAuthProfilesStore,
   buildClaudeCliAuthProfilesStore,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
-} from "./byot-multi-provider-config.js";
+} from "./model-credential-materializer.js";
 import {
   readAuthProfileState,
   readAuthProfileStore,

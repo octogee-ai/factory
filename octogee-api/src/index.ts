@@ -35,9 +35,9 @@ import type { ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TENANT_BOUND_API_ROUTES = new Set([
-  "/api/byosub/auth-state",
-  "/api/byosub/capture",
-  "/api/byosub/sync-back",
+  "/api/model-credentials/subscription/auth-state",
+  "/api/model-credentials/subscription/capture",
+  "/api/model-credentials/subscription/sync-back",
   "/api/notifications/ingest",
   // Operator gateways broker their Firebase Hosting deploy here over the KSA
   // tenant-binding token; the handler authorizes via req.boundTenant.

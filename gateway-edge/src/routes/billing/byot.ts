@@ -1,5 +1,4 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";
 import { db, FieldValue } from "../../lib/db.js";
 import {
@@ -11,7 +10,8 @@ import {
 import { probeProviderKey } from "../../billing/provider-probe.js";
 import { writeSecret, archiveSecret } from "../../../../scripts/lib/secret-manager.js";
 import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers.js";
-import { triggerGatewayByotSync } from "../../lib/byot-sync-trigger.js";
+import { triggerGatewayModelCredentialSync } from "../../lib/byot-sync-trigger.js";
+import { modelCredentialApiKeyState } from "@shared/types/model-credentials.js";
 
 const router = Router();
 
@@ -41,7 +41,7 @@ function triggerByotSync(args: {
     logger.warn(`[billing] BYOT sync trigger skipped for ${args.slug}: missing gatewayId`);
     return;
   }
-  triggerGatewayByotSync({
+  triggerGatewayModelCredentialSync({
     gatewayId,
     userData: {
       byotActive: args.byotActive,
@@ -53,8 +53,31 @@ function triggerByotSync(args: {
   });
 }
 
-// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- BYOT-key submission flow: validates provider, dedupes against existing, probes the upstream, persists secret + Firestore state in one atomic-feeling sequence. Splitting it would scatter the flow across files.
-router.post("/byot-key", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function staticCredentialProviderFromConfig(
+  config: Record<string, unknown> | undefined,
+): Provider | undefined {
+  const modelCredential = objectRecord(config?.modelCredential);
+  if (modelCredential) {
+    const provider = modelCredential.active === true ? modelCredential.provider : undefined;
+    return isSupportedProvider(provider) ? provider : undefined;
+  }
+
+  const byot = objectRecord(config?.byot);
+  return isSupportedProvider(byot?.provider) ? byot.provider : undefined;
+}
+
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- key submission flow: validates provider, dedupes against existing, probes the upstream, persists secret + Firestore state in one atomic-feeling sequence. Splitting it would scatter the flow across files.
+export async function saveModelCredentialKey(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
   try {
     const uid = req.uid!;
     const body = (req.body || {}) as {
@@ -132,18 +155,15 @@ const probe = await probeProviderKey({ provider, apiKey: key, baseUrl: body.base
     const keyHash = keyHashFor(key);
 
 const cfgSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
-    const previousProvider = cfgSnap.data()?.byot?.provider;
-    if (
-      isSupportedProvider(previousProvider) &&
-      previousProvider !== provider
-    ) {
+    const previousProvider = staticCredentialProviderFromConfig(cfgSnap.data());
+    if (previousProvider && previousProvider !== provider) {
       const oldSecretName = byotSecretName(slug, previousProvider);
       try {
         const { disabledCount } = await archiveSecret(oldSecretName);
-        logger.info(`[billing] BYOT provider switch — archived old ${previousProvider} secret ${oldSecretName} (${disabledCount} version(s))`);
+        logger.info(`[billing] model credential provider switch — archived old ${previousProvider} secret ${oldSecretName} (${disabledCount} version(s))`);
       } catch (err) {
 
-logger.warn(`[billing] BYOT provider switch — failed to archive old ${oldSecretName}: ${err}`);
+logger.warn(`[billing] model credential provider switch — failed to archive old ${oldSecretName}: ${err}`);
       }
     }
 
@@ -153,20 +173,34 @@ const { versionName } = await writeSecret({
       labels: { slug, provider, uid: uid.toLowerCase().slice(0, 63) },
     });
 
-const byotMetadata: Record<string, unknown> = {
+const addedAt = FieldValue.serverTimestamp();
+    const byotMetadata: Record<string, unknown> = {
       provider,
       secretName,
       fingerprint,
       keyHash,
       status: "active",
-      addedAt: FieldValue.serverTimestamp(),
+      addedAt,
       lastUsedAt: null,
+      baseUrl: body.baseUrl ? body.baseUrl : FieldValue.delete(),
+      model: body.model ? body.model : FieldValue.delete(),
     };
-    if (body.baseUrl) byotMetadata.baseUrl = body.baseUrl;
-    if (body.model)   byotMetadata.model   = body.model;
+    const modelCredential: Record<string, unknown> = {
+      ...modelCredentialApiKeyState({
+        provider,
+        secretName,
+        fingerprint,
+        keyHash,
+        ...(body.baseUrl ? { baseUrl: body.baseUrl } : {}),
+        ...(body.model ? { model: body.model } : {}),
+        addedAt,
+      }),
+      baseUrl: body.baseUrl ? body.baseUrl : FieldValue.delete(),
+      model: body.model ? body.model : FieldValue.delete(),
+    };
 
     await db.collection("users").doc(uid).collection("system").doc("config").set(
-      { byot: byotMetadata },
+      { byot: byotMetadata, modelCredential },
       { merge: true },
     );
 
@@ -175,7 +209,7 @@ await db.collection("users").doc(uid).update({
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    logger.info(`[billing] BYOT key saved for ${uid} provider=${provider} (${fingerprint}) version=${versionName}`);
+    logger.info(`[billing] model credential key saved for ${uid} provider=${provider} (${fingerprint}) version=${versionName}`);
     triggerByotSync({
       req,
       slug,
@@ -191,23 +225,26 @@ await db.collection("users").doc(uid).update({
       provider,
       fingerprint,
       status: "active",
-      message: "Key validated and stored.",
+      message: "Model credential validated and stored.",
     });
   } catch (e) { next(e); }
-});
+}
 
-router.delete("/byot-key", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+export async function deleteModelCredentialKey(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
   try {
     const uid = req.uid!;
     const slug = req.workspaceSlug;
     if (!slug) {
-      res.status(400).json({ error: "No BYOT key to remove" });
+      res.status(400).json({ error: "No model credential to remove" });
       return;
     }
 
 const cfgSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
-    const cfgProvider = cfgSnap.data()?.byot?.provider;
-    const provider: Provider = isSupportedProvider(cfgProvider) ? cfgProvider : "anthropic";
+    const provider = staticCredentialProviderFromConfig(cfgSnap.data()) ?? "anthropic";
     const secretName = byotSecretName(slug, provider);
 
 const { disabledCount } = await archiveSecret(secretName);
@@ -215,6 +252,7 @@ const { disabledCount } = await archiveSecret(secretName);
 await db.collection("users").doc(uid).collection("system").doc("config").set(
       {
         byot: FieldValue.delete(),
+        modelCredential: FieldValue.delete(),
       },
       { merge: true },
     );
@@ -223,13 +261,13 @@ await db.collection("users").doc(uid).collection("system").doc("config").set(
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    logger.info(`[billing] BYOT key removed for ${uid} provider=${provider} (disabled ${disabledCount} SM version(s))`);
+    logger.info(`[billing] model credential key removed for ${uid} provider=${provider} (disabled ${disabledCount} SM version(s))`);
     triggerByotSync({ req, slug, byotActive: false });
     res.json({
       success: true,
-      message: "BYOT key removed. Reverting to platform billing.",
+      message: "Model credential removed. Reverting to platform billing.",
     });
   } catch (e) { next(e); }
-});
+}
 
 export default router;

@@ -1,9 +1,9 @@
 import * as crypto from "node:crypto";
 import { Request, Response, NextFunction } from "express";
 import {
-  BYOT_SYNC_SIGNATURE_HEADER,
-  BYOT_SYNC_TIMESTAMP_HEADER,
-  isValidByotSyncSignature,
+  MODEL_CREDENTIAL_SYNC_SIGNATURE_HEADER,
+  MODEL_CREDENTIAL_SYNC_TIMESTAMP_HEADER,
+  isValidModelCredentialSyncSignature,
 } from "../lib/byot-sync-internal-auth.js";
 import { logger } from "./logging.js";
 
@@ -32,7 +32,7 @@ function timingSafeStringEqual(provided: string | undefined, expected: string): 
   }
 }
 
-async function handleByotSyncInternalAuth(
+async function handleModelCredentialSyncInternalAuth(
   req: Request,
   res: Response,
   next: NextFunction,
@@ -45,22 +45,22 @@ async function handleByotSyncInternalAuth(
 
   const signingSecret = nonBlank(process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET);
   if (!signingSecret) {
-    logger.error("BYOT sync internal signing secret is not configured");
+    logger.error("model credential sync internal signing secret is not configured");
     res.status(503).json({ error: "Internal auth unavailable" });
     return;
   }
 
-  if (isValidByotSyncSignature({
+  if (isValidModelCredentialSyncSignature({
     body: req.body,
     secret: signingSecret,
-    timestamp: readHeader(req, BYOT_SYNC_TIMESTAMP_HEADER),
-    signature: readHeader(req, BYOT_SYNC_SIGNATURE_HEADER),
+    timestamp: readHeader(req, MODEL_CREDENTIAL_SYNC_TIMESTAMP_HEADER),
+    signature: readHeader(req, MODEL_CREDENTIAL_SYNC_SIGNATURE_HEADER),
   })) {
     next();
     return;
   }
 
-  logger.warn(`BYOT sync internal auth rejected from ${req.ip}`);
+  logger.warn(`model credential sync internal auth rejected from ${req.ip}`);
   res.status(401).json({ error: "Invalid internal auth" });
 }
 
@@ -69,5 +69,5 @@ export function requireByotSyncInternalAuth(
   res: Response,
   next: NextFunction,
 ): void {
-  handleByotSyncInternalAuth(req, res, next).catch(next);
+  handleModelCredentialSyncInternalAuth(req, res, next).catch(next);
 }

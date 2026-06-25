@@ -1,12 +1,12 @@
 import { describe, test, expect } from "vitest";
 import {
-  buildByotConfigForProvider,
-  type ByotConfigInput,
-} from "../../scripts/lib/byot-multi-provider-config";
+  buildModelCredentialConfigForProvider,
+  type ModelCredentialConfigInput,
+} from "../../scripts/lib/model-credential-materializer";
 
-describe("buildByotConfigForProvider — anthropic (Phase 1 shape preserved)", () => {
+describe("buildModelCredentialConfigForProvider — anthropic (Phase 1 shape preserved)", () => {
   test("emits auth-profiles.json with anthropic:default + provider + keyRef", () => {
-    const out = buildByotConfigForProvider({
+    const out = buildModelCredentialConfigForProvider({
       slug: "smile-wring-011b",
       provider: "anthropic",
     });
@@ -28,9 +28,9 @@ describe("buildByotConfigForProvider — anthropic (Phase 1 shape preserved)", (
   });
 });
 
-describe("buildByotConfigForProvider — openai (direct)", () => {
+describe("buildModelCredentialConfigForProvider — openai (direct)", () => {
   test("emits auth-profiles.json with openai:default + provider + keyRef", () => {
-    const out = buildByotConfigForProvider({
+    const out = buildModelCredentialConfigForProvider({
       slug: "smile-wring-011b",
       provider: "openai",
       model: "openai/gpt-5",
@@ -53,15 +53,15 @@ describe("buildByotConfigForProvider — openai (direct)", () => {
   });
 
   test("agentModelOverride defaults when no model is specified", () => {
-    const out = buildByotConfigForProvider({ slug: "x", provider: "openai" });
+    const out = buildModelCredentialConfigForProvider({ slug: "x", provider: "openai" });
     expect(out.agentModelOverride).toBeTruthy();
     expect(out.agentModelOverride!.startsWith("openai/")).toBe(true);
   });
 });
 
-describe("buildByotConfigForProvider — openai-compatible", () => {
+describe("buildModelCredentialConfigForProvider — openai-compatible", () => {
   test("emits models.json with api adapter, baseUrl, keyRef apiKey, and explicit models[]", () => {
-    const out = buildByotConfigForProvider({
+    const out = buildModelCredentialConfigForProvider({
       slug: "smile-wring-011b",
       provider: "openai-compatible",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -87,13 +87,13 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
 
   test("rejects missing baseUrl", () => {
     expect(() =>
-      buildByotConfigForProvider({ slug: "x", provider: "openai-compatible" }),
+      buildModelCredentialConfigForProvider({ slug: "x", provider: "openai-compatible" }),
     ).toThrow(/baseUrl is required/i);
   });
 
   test("rejects malformed baseUrl (must be http(s) URL)", () => {
     expect(() =>
-      buildByotConfigForProvider({
+      buildModelCredentialConfigForProvider({
         slug: "x",
         provider: "openai-compatible",
         baseUrl: "not-a-url",
@@ -103,7 +103,7 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
 
   test("rejects missing model (openai-compatible needs explicit model)", () => {
     expect(() =>
-      buildByotConfigForProvider({
+      buildModelCredentialConfigForProvider({
         slug: "x",
         provider: "openai-compatible",
         baseUrl: "https://openrouter.ai/api/v1",
@@ -114,7 +114,7 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
   test("rejects model strings with characters outside [A-Za-z0-9._/-]", () => {
     for (const bad of ["../etc/passwd", "model;rm", "model name", "model$x", "model\\x"]) {
       expect(() =>
-        buildByotConfigForProvider({
+        buildModelCredentialConfigForProvider({
           slug: "x",
           provider: "openai-compatible",
           baseUrl: "https://example.com/v1",
@@ -126,7 +126,7 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
 
   test("rejects baseUrls with query strings or fragments (avoid surprise composition)", () => {
     expect(() =>
-      buildByotConfigForProvider({
+      buildModelCredentialConfigForProvider({
         slug: "x",
         provider: "openai-compatible",
         baseUrl: "https://example.com/v1?foo=bar",
@@ -134,7 +134,7 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
       }),
     ).toThrow(/baseUrl/i);
     expect(() =>
-      buildByotConfigForProvider({
+      buildModelCredentialConfigForProvider({
         slug: "x",
         provider: "openai-compatible",
         baseUrl: "https://example.com/v1#frag",
@@ -144,7 +144,7 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
   });
 
   test("does not accept inline plaintext apiKey field (defense in depth)", () => {
-    const out = buildByotConfigForProvider({
+    const out = buildModelCredentialConfigForProvider({
       slug: "smile-wring-011b",
       provider: "openai-compatible",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -156,18 +156,18 @@ describe("buildByotConfigForProvider — openai-compatible", () => {
   });
 });
 
-describe("buildByotConfigForProvider — slug grammar", () => {
+describe("buildModelCredentialConfigForProvider — slug grammar", () => {
   test("rejects slugs with characters that would break SM ids", () => {
     for (const bad of ["has/slash", "has.dot", "has space", ""]) {
-      expect(() => buildByotConfigForProvider({ slug: bad, provider: "anthropic" })).toThrow(
+      expect(() => buildModelCredentialConfigForProvider({ slug: bad, provider: "anthropic" })).toThrow(
         /invalid slug/i,
       );
     }
   });
 });
 
-describe("buildByotConfigForProvider — never embeds plaintext", () => {
-  test.each<ByotConfigInput>([
+describe("buildModelCredentialConfigForProvider — never embeds plaintext", () => {
+  test.each<ModelCredentialConfigInput>([
     { slug: "smile-wring-011b", provider: "anthropic" },
     { slug: "smile-wring-011b", provider: "openai", model: "openai/gpt-5" },
     {
@@ -177,7 +177,7 @@ describe("buildByotConfigForProvider — never embeds plaintext", () => {
       model: "x/y",
     },
   ])("provider=$provider produces no plaintext key", (input) => {
-    const out = buildByotConfigForProvider(input);
+    const out = buildModelCredentialConfigForProvider(input);
     const json = JSON.stringify(out);
     expect(json).not.toContain("sk-");
     expect(json).not.toContain("gsk_");

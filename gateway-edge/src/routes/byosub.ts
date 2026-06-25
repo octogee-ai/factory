@@ -19,8 +19,17 @@ import {
 } from "../lib/byosub.js";
 import { resolveUserGateway } from "../lib/user-gateway.js";
 import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
-import { triggerGatewayByotSync } from "../lib/byot-sync-trigger.js";
+import { triggerGatewayModelCredentialSync } from "../lib/byot-sync-trigger.js";
 import { logger } from "../middleware/logging.js";
+import {
+  MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS,
+  modelCredentialOAuthState,
+  modelCredentialOAuthEntryByProviderId,
+  modelCredentialOAuthEntryBySubscriptionProvider,
+  type ModelCredentialOAuthCatalogEntry,
+  type ModelCredentialOAuthProviderId,
+  type ModelCredentialSubscriptionProviderId,
+} from "@shared/types/model-credentials.js";
 
 const router = Router();
 
@@ -29,6 +38,7 @@ interface FlowDoc {
   gatewayId: string;
   agentId: string;
   provider: string;
+  modelCredentialProvider?: string;
   consumedAt?: number;
   expireAt?: number;
 }
@@ -41,6 +51,32 @@ async function readFlow(flowId: string): Promise<FlowDoc | null> {
   return (snap.data() || null) as FlowDoc | null;
 }
 
+function subscriptionProviderIds(): ModelCredentialSubscriptionProviderId[] {
+  return [...MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS];
+}
+
+function oauthEntryFromFlow(flow: FlowDoc): ModelCredentialOAuthCatalogEntry | null {
+  if (flow.modelCredentialProvider) {
+    try {
+      return modelCredentialOAuthEntryByProviderId(
+        flow.modelCredentialProvider as ModelCredentialOAuthProviderId,
+      );
+    } catch {
+      return null;
+    }
+  }
+  return modelCredentialOAuthEntryBySubscriptionProvider(flow.provider);
+}
+
+function validateCredentialForEntry(
+  entry: ModelCredentialOAuthCatalogEntry,
+  credential: string,
+): { ok: true } | { ok: false; reason: string } {
+  return entry.id === "claude-cli"
+    ? validateClaudeCliCredential(credential)
+    : validateCodexCredential(credential);
+}
+
 router.post(
   "/connect",
   requireAuth,
@@ -48,10 +84,11 @@ router.post(
     try {
       const uid = req.uid!;
       const provider = String((req.body || {}).provider ?? "openai");
-      if (provider !== "openai" && provider !== "anthropic") {
+      const entry = modelCredentialOAuthEntryBySubscriptionProvider(provider);
+      if (!entry) {
         res.status(400).json({
           error: `Unsupported provider: ${provider}`,
-          supported: ["openai", "anthropic"],
+          supported: subscriptionProviderIds(),
         });
         return;
       }
@@ -64,7 +101,7 @@ router.post(
       }
       const agentId = coachAgentId(resolved.slug);
       try {
-        const out = provider === "anthropic"
+        const out = entry.oauth.gatewayFlow === "claude-sso"
           ? await gatewayClaudeSsoClient().start({
               gatewayId: resolved.gatewayId,
               agentId,
@@ -81,7 +118,8 @@ router.post(
             uid,
             gatewayId: resolved.gatewayId,
             agentId,
-            provider,
+            provider: entry.oauth.subscriptionProvider,
+            modelCredentialProvider: entry.id,
             createdAt: Date.now(),
             expireAt: Date.now() + FLOW_TTL_MS,
           });
@@ -110,7 +148,12 @@ router.get(
       }
       try {
         const flowId = req.params.flowId as string;
-        const out = flow.provider === "anthropic"
+        const entry = oauthEntryFromFlow(flow);
+        if (!entry) {
+          res.status(400).json({ error: `Unsupported provider: ${flow.provider}` });
+          return;
+        }
+        const out = entry.oauth.gatewayFlow === "claude-sso"
           ? await gatewayClaudeSsoClient().status({
               gatewayId: flow.gatewayId,
               flowId,
@@ -146,7 +189,8 @@ router.post(
         res.status(404).json({ error: "flow not found" });
         return;
       }
-      if (flow.provider !== "anthropic") {
+      const entry = oauthEntryFromFlow(flow);
+      if (entry?.oauth.gatewayFlow !== "claude-sso") {
         res.status(400).json({ error: "flow is not an Anthropic SSO flow" });
         return;
       }
@@ -203,14 +247,42 @@ res.json(byosubConnectionView(ref));
 // "claude-cli" for a Claude subscription.
 async function flipUnifiedByosSignal(
   uid: string,
-  signalProvider: "openai-codex" | "claude-cli",
+  signalProvider: ModelCredentialOAuthProviderId,
+  secretName: string,
 ): Promise<void> {
+  const addedAt = FieldValue.serverTimestamp();
   await db
     .collection("users")
     .doc(uid)
     .collection("system")
     .doc("config")
-    .set({ byot: { provider: signalProvider } }, { merge: true });
+    .set(
+      {
+        byot: {
+          provider: signalProvider,
+          secretName: FieldValue.delete(),
+          fingerprint: FieldValue.delete(),
+          keyHash: FieldValue.delete(),
+          status: FieldValue.delete(),
+          addedAt: FieldValue.delete(),
+          lastUsedAt: FieldValue.delete(),
+          baseUrl: FieldValue.delete(),
+          model: FieldValue.delete(),
+        },
+        modelCredential: {
+          ...modelCredentialOAuthState({
+            provider: signalProvider,
+            secretName,
+            addedAt,
+          }),
+          fingerprint: FieldValue.delete(),
+          keyHash: FieldValue.delete(),
+          baseUrl: FieldValue.delete(),
+          model: FieldValue.delete(),
+        },
+      },
+      { merge: true },
+    );
   await db.collection("users").doc(uid).set({ byotActive: true }, { merge: true });
 }
 
@@ -224,9 +296,9 @@ function slugFromCoachAgentId(agentId: string): string | null {
 function triggerUnifiedByosSync(args: {
   gatewayId: string;
   slug: string;
-  provider: "openai-codex" | "claude-cli";
+  provider: ModelCredentialOAuthProviderId;
 }): void {
-  triggerGatewayByotSync({
+  triggerGatewayModelCredentialSync({
     gatewayId: args.gatewayId,
     userData: {
       byotActive: true,
@@ -247,7 +319,7 @@ function tierFieldsFromRequest(req: Request): Record<string, unknown> {
 }
 
 function triggerUnifiedByosOffSync(req: Request, resolved: { gatewayId: string; slug: string }): void {
-  triggerGatewayByotSync({
+  triggerGatewayModelCredentialSync({
     gatewayId: resolved.gatewayId,
     userData: {
       byotActive: false,
@@ -260,7 +332,7 @@ function triggerUnifiedByosOffSync(req: Request, resolved: { gatewayId: string; 
 
 function triggerUnifiedByosSyncForFlow(
   flow: FlowDoc,
-  provider: "openai-codex" | "claude-cli",
+  provider: ModelCredentialOAuthProviderId,
 ): void {
   const slug = slugFromCoachAgentId(flow.agentId);
   if (!slug) {
@@ -290,7 +362,13 @@ router.post(
         .doc(uid)
         .collection("system")
         .doc("config")
-        .set({ byot: null }, { merge: true });
+        .set(
+          {
+            byot: FieldValue.delete(),
+            modelCredential: FieldValue.delete(),
+          },
+          { merge: true },
+        );
 
       if (resolved) {
         const agentId = coachAgentId(resolved.slug);
@@ -324,14 +402,15 @@ router.post(
 // coach model to Opus 4.8 on the customer's own subscription. User-authed (the
 // token is provided directly), unlike codex's internal /capture callback.
 router.post(
-  "/subscription",
+  "/token",
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = req.uid!;
       const b = (req.body || {}) as { provider?: string; token?: string };
       const provider = String(b.provider ?? "anthropic");
-      if (provider !== "anthropic") {
+      const entry = modelCredentialOAuthEntryBySubscriptionProvider(provider);
+      if (entry?.id !== "claude-cli") {
         res.status(400).json({
           error: `Unsupported subscription provider: ${provider}`,
           supported: ["anthropic"],
@@ -353,24 +432,32 @@ router.post(
         return;
       }
       const agentId = coachAgentId(resolved.slug);
-      const secretName = byosubSecretName(uid, "anthropic");
+      const secretName = byosubSecretName(uid, entry.oauth.secretProvider);
       await writeSecret({
         name: secretName,
         value: b.token.trim(),
-        labels: { byosub: "true", provider: "anthropic" },
+        labels: { byosub: "true", provider: entry.oauth.secretProvider },
       });
       await db
         .collection("glmGateways")
         .doc(resolved.gatewayId)
         .set(
-          { byosub: { [agentId]: { provider: "anthropic", secretName, status: "connected" } } },
+          {
+            byosub: {
+              [agentId]: {
+                provider: entry.oauth.secretProvider,
+                secretName,
+                status: "connected",
+              },
+            },
+          },
           { merge: true },
         );
-      await flipUnifiedByosSignal(uid, "claude-cli");
+      await flipUnifiedByosSignal(uid, entry.id, secretName);
       triggerUnifiedByosSync({
         gatewayId: resolved.gatewayId,
         slug: resolved.slug,
-        provider: "claude-cli",
+        provider: entry.id,
       });
       res.json({ ok: true, secretName });
     } catch (e) {
@@ -394,30 +481,24 @@ router.post(
         res.status(400).json({ error: "unknown flow" });
         return;
       }
-      if (flow.provider !== "openai") {
-        if (flow.provider !== "anthropic") {
-          res
-            .status(400)
-            .json({ error: `Unsupported provider: ${flow.provider}` });
-          return;
-        }
+      const entry = oauthEntryFromFlow(flow);
+      if (!entry) {
+        res
+          .status(400)
+          .json({ error: `Unsupported provider: ${flow.provider}` });
+        return;
       }
-      const signalProvider =
-        flow.provider === "anthropic" ? "claude-cli" : "openai-codex";
-      const secretProvider =
-        flow.provider === "anthropic" ? "anthropic" : flow.provider;
+      const signalProvider = entry.id;
+      const secretProvider = entry.oauth.secretProvider;
       const secretName = byosubSecretName(flow.uid, secretProvider);
 
       if (flow.consumedAt) {
-        await flipUnifiedByosSignal(flow.uid, signalProvider);
+        await flipUnifiedByosSignal(flow.uid, signalProvider, secretName);
         triggerUnifiedByosSyncForFlow(flow, signalProvider);
         res.json({ ok: true, secretName, alreadyConsumed: true });
         return;
       }
-      const v =
-        flow.provider === "anthropic"
-          ? validateClaudeCliCredential(b.credential)
-          : validateCodexCredential(b.credential);
+      const v = validateCredentialForEntry(entry, b.credential);
       if (!v.ok) {
         res.status(400).json({ error: `invalid credential: ${v.reason}` });
         return;
@@ -443,7 +524,7 @@ router.post(
           { merge: true },
         );
 
-      await flipUnifiedByosSignal(flow.uid, signalProvider);
+      await flipUnifiedByosSignal(flow.uid, signalProvider, secretName);
       triggerUnifiedByosSyncForFlow(flow, signalProvider);
 
       await db

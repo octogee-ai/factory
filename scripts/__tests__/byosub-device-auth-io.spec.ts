@@ -38,7 +38,7 @@ describe("realDeviceAuthDeps postCapture", () => {
     await expect(deps.postCapture("flow-1", "{\"ok\":true}")).resolves.toEqual({ ok: true });
     expect(calls).toEqual([
       {
-        url: "http://octogee-api.octogee-test.svc.cluster.local:3001/api/byosub/capture",
+        url: "http://octogee-api.octogee-test.svc.cluster.local:3001/api/model-credentials/subscription/capture",
         body: { flowId: "flow-1", credential: "{\"ok\":true}" },
         key: null,
       },
@@ -62,6 +62,8 @@ describe("realDeviceAuthDeps postCapture", () => {
     });
 
     await expect(deps.postCapture("flow-1", "{}")).resolves.toEqual({ ok: true });
-    expect(calls).toEqual(["http://octogee-api.custom:3001/api/byosub/capture"]);
+    expect(calls).toEqual([
+      "http://octogee-api.custom:3001/api/model-credentials/subscription/capture",
+    ]);
   });
 });

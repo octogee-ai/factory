@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
+import { MODEL_CREDENTIAL_STATIC_PROVIDER_IDS } from "@shared/types/model-credentials.js";
 
 import { readSecret } from "../../../scripts/lib/secret-manager.js";
 import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
@@ -17,13 +18,27 @@ const FORBIDDEN = { error: "forbidden" } as const;
 // corrupted glmGateways.byosub ref from steering readSecret onto an unrelated
 // Secret Manager secret (e.g. gateway-auth-token-*) and leaking it to the pod.
 const BYOSUB_SECRET_RE = /^byosub-[A-Za-z0-9_-]+-(?:openai|anthropic)$/;
-// byok API-key ref: byok-<slug>-<provider>[/version], slug-keyed (the customer
-// username). Provider enum mirrors scripts/secret-resolver.mjs BYOK_ID_RE + the
-// api_key catalog. Pins the shape before the secret read; the slug is then
-// roster-checked so a corrupted ref can't reach another tenant's / an unrelated
-// secret.
-const BYOK_API_KEY_RE =
-  /^byok-(?<slug>[a-z0-9][a-z0-9-]{0,62})-(?<provider>anthropic|openai|openai-compatible|grok|openrouter|minimax)(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
+export const BYOK_API_KEY_PROVIDER_IDS = [...MODEL_CREDENTIAL_STATIC_PROVIDER_IDS];
+const BYOK_API_KEY_RE = /^byok-(?<body>[a-z0-9][a-z0-9-]{0,128})(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const BYOK_API_KEY_PROVIDER_SUFFIXES = BYOK_API_KEY_PROVIDER_IDS
+  .map((provider) => ({ provider, suffix: `-${provider}` }))
+  .sort((a, b) => b.suffix.length - a.suffix.length);
+
+function parseByokApiKeyId(id: string): { slug: string; provider: string; version?: string } | null {
+  const m = id.match(BYOK_API_KEY_RE);
+  const body = m?.groups?.body;
+  if (!body) return null;
+  const match = BYOK_API_KEY_PROVIDER_SUFFIXES.find(({ suffix }) => body.endsWith(suffix));
+  if (!match) return null;
+  const slug = body.slice(0, -match.suffix.length);
+  if (!SLUG_RE.test(slug)) return null;
+  return {
+    slug,
+    provider: match.provider,
+    ...(m.groups?.version ? { version: m.groups.version } : {}),
+  };
+}
 
 // Per-customer broker tokens are re-minted whenever the resolver re-resolves the
 // keyRef; a generous TTL spans a normal agent session (so it is not re-minted
@@ -102,12 +117,12 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       res.status(400).json({ error: "valid id required" });
       return;
     }
-    const m = id.match(BYOK_API_KEY_RE);
-    if (!m?.groups) {
+    const parsed = parseByokApiKeyId(id);
+    if (!parsed) {
       res.status(400).json({ error: "malformed byok id" });
       return;
     }
-    const { slug, provider, version } = m.groups;
+    const { slug, provider, version } = parsed;
 
     const roster = await readAssignedSlugsForGateway(db, bound.gatewayId);
     if (!roster.includes(slug)) {

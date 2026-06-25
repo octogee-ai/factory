@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 
-export const BYOT_SYNC_TIMESTAMP_HEADER = "x-byot-sync-timestamp";
-export const BYOT_SYNC_SIGNATURE_HEADER = "x-byot-sync-signature";
+export const MODEL_CREDENTIAL_SYNC_TIMESTAMP_HEADER = "x-byot-sync-timestamp";
+export const MODEL_CREDENTIAL_SYNC_SIGNATURE_HEADER = "x-byot-sync-signature";
 
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
@@ -38,21 +38,23 @@ function timingSafeStringEqual(provided: string | undefined, expected: string): 
   }
 }
 
-export function createByotSyncAuthHeaders(args: {
+export function createModelCredentialSyncAuthHeaders(args: {
   body: unknown;
   secret: string;
   nowMs?: number;
 }): Record<string, string> {
   const secret = args.secret.trim();
-  if (!secret) throw new Error("BYOT_SYNC_INTERNAL_SIGNING_SECRET is required for BYOT sync");
+  if (!secret) {
+    throw new Error("BYOT_SYNC_INTERNAL_SIGNING_SECRET is required for model credential sync");
+  }
   const timestamp = `${Math.floor(args.nowMs ?? Date.now())}`;
   return {
-    [BYOT_SYNC_TIMESTAMP_HEADER]: timestamp,
-    [BYOT_SYNC_SIGNATURE_HEADER]: signatureFor(args.body, timestamp, secret),
+    [MODEL_CREDENTIAL_SYNC_TIMESTAMP_HEADER]: timestamp,
+    [MODEL_CREDENTIAL_SYNC_SIGNATURE_HEADER]: signatureFor(args.body, timestamp, secret),
   };
 }
 
-export function isValidByotSyncSignature(args: {
+export function isValidModelCredentialSyncSignature(args: {
   body: unknown;
   secret: string;
   timestamp: string | undefined;

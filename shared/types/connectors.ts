@@ -24,6 +24,9 @@ export type ConnectorId =
   | 'openai'
   | 'anthropic'
   | 'openrouter'
+  | 'grok'
+  | 'minimax'
+  | 'openai-compatible'
   | 'gemini'
   | 'aws'
   | 'gcp'
@@ -175,8 +178,41 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
   },
   {
     id: 'openrouter',
-    tagline: 'Any OpenAI-compatible model endpoint',
+    tagline: 'Models through OpenRouter',
     displayName: 'OpenRouter',
+    family: 'ai',
+    captureMethods: ['pat'],
+    consumption: AGENT_RUNTIME,
+    clientSource: 'platform',
+    scopes: [],
+    implemented: false,
+  },
+  {
+    id: 'grok',
+    tagline: 'xAI Grok models',
+    displayName: 'Grok',
+    family: 'ai',
+    captureMethods: ['pat'],
+    consumption: AGENT_RUNTIME,
+    clientSource: 'platform',
+    scopes: [],
+    implemented: false,
+  },
+  {
+    id: 'minimax',
+    tagline: 'MiniMax models',
+    displayName: 'MiniMax',
+    family: 'ai',
+    captureMethods: ['pat'],
+    consumption: AGENT_RUNTIME,
+    clientSource: 'platform',
+    scopes: [],
+    implemented: false,
+  },
+  {
+    id: 'openai-compatible',
+    tagline: 'Custom OpenAI-compatible endpoint',
+    displayName: 'Custom OpenAI-compatible',
     family: 'ai',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,

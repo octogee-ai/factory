@@ -95,7 +95,7 @@ describe("realClaudeSsoDeps", () => {
         ok: true,
       });
       expect(seen[0]).toEqual({
-        url: "http://octogee-api:3001/api/byosub/capture",
+        url: "http://octogee-api:3001/api/model-credentials/subscription/capture",
         body: JSON.stringify({ flowId: "flow-1", credential: '{"claudeAiOauth":{}}' }),
       });
     } finally {

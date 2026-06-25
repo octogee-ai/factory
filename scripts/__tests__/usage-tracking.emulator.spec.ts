@@ -262,7 +262,7 @@ it("session + model + summary docs carry (role, model, slug, gateway, tokens, co
     expect(usage.throttleReason).toBe("free_tier_house_key");
   });
 
-  it("BYOT customer: tracks cost but throttleLevel stays 0 even at 200% of budget", async () => {
+  it("customer model credential: tracks cost but throttleLevel stays 0 even at 200% of budget", async () => {
     await seedUser("byot-uid", {
       selectedTier: "hobby",
       subscription: { tier: "hobby" },
@@ -299,6 +299,7 @@ it("session + model + summary docs carry (role, model, slug, gateway, tokens, co
     const user = await readDoc("users/byot-uid");
     const usage = user?.usage as Record<string, unknown>;
     expect(usage.throttleLevel).toBe(0);
+    expect(usage.throttleReason).toBe("customer_model_credential_skip");
     expect(usage.windowCostUsd).toBeDefined();
   });
 

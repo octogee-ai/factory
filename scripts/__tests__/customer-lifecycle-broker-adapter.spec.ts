@@ -19,8 +19,8 @@ const mocks = vi.hoisted(() => ({
 const patchMocks = vi.hoisted(() => ({
   applyConfigPatch: vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 })),
 }));
-const byotMocks = vi.hoisted(() => ({
-  syncByotForCustomer: vi.fn(async () => undefined),
+const modelCredentialMocks = vi.hoisted(() => ({
+  syncModelCredentialsForCustomer: vi.fn(async () => undefined),
 }));
 
 vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
@@ -39,11 +39,11 @@ vi.mock("../lib/apply-config-patch.js", async (importOriginal) => {
     applyConfigPatch: patchMocks.applyConfigPatch,
   };
 });
-vi.mock("../lib/byot-sync-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/byot-sync-runtime.js")>();
+vi.mock("../lib/model-credential-sync-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/model-credential-sync-runtime.js")>();
   return {
     ...actual,
-    syncByotForCustomer: byotMocks.syncByotForCustomer,
+    syncModelCredentialsForCustomer: modelCredentialMocks.syncModelCredentialsForCustomer,
   };
 });
 
@@ -302,7 +302,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 });
 
 describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-heal)", () => {
-  beforeEach(() => byotMocks.syncByotForCustomer.mockClear());
+  beforeEach(() => modelCredentialMocks.syncModelCredentialsForCustomer.mockClear());
 
   function fullSnapshot(overrides: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnapshot {
     return {
@@ -351,7 +351,7 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(snap?.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
   });
 
-  it("reassertByotForCustomer delegates to the brokered (Firestore-free) syncByotForCustomer with the userData verbatim", async () => {
+  it("reassertByotForCustomer delegates to the brokered model credential sync with the userData verbatim", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
       rpc: {} as unknown as GatewayRpcClient,
@@ -365,7 +365,7 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
 
     await adapter.reassertByotForCustomer(userData);
 
-    expect(byotMocks.syncByotForCustomer).toHaveBeenCalledTimes(1);
-    expect(byotMocks.syncByotForCustomer).toHaveBeenCalledWith(userData);
+    expect(modelCredentialMocks.syncModelCredentialsForCustomer).toHaveBeenCalledTimes(1);
+    expect(modelCredentialMocks.syncModelCredentialsForCustomer).toHaveBeenCalledWith(userData);
   });
 });

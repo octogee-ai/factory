@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createAnthropicProviderKeyResolver } from "../lib/model-broker-provider-keys.js";
+import {
+  configuredAnthropicModelCredentialResolution,
+  createAnthropicProviderKeyResolver,
+} from "../lib/model-broker-provider-keys.js";
 import type { ModelBrokerTokenRecord } from "../lib/model-broker-tokens.js";
 
 const record: ModelBrokerTokenRecord = {
@@ -34,7 +37,140 @@ function fakeDb(docs: Record<string, Record<string, unknown> | undefined>) {
 }
 
 describe("createAnthropicProviderKeyResolver", () => {
-  it("uses the owner's Anthropic BYOT key when active and bound to the owner slug", async () => {
+  it("represents modelCredential source decisions as named outcomes", () => {
+    expect(configuredAnthropicModelCredentialResolution(undefined, undefined)).toEqual({
+      kind: "fallback",
+    });
+    expect(
+      configuredAnthropicModelCredentialResolution(
+        { username: "smile-wring-011b" },
+        {
+          modelCredential: {
+            active: false,
+            provider: "anthropic",
+            mode: "api_key",
+            secretName: "byok-smile-wring-011b-anthropic",
+          },
+        },
+      ),
+    ).toEqual({ kind: "platform" });
+    expect(
+      configuredAnthropicModelCredentialResolution(
+        { username: "smile-wring-011b" },
+        {
+          modelCredential: {
+            active: true,
+            provider: "anthropic",
+            mode: "api_key",
+            secretName: "byok-other-builder-anthropic",
+          },
+        },
+      ),
+    ).toEqual({ kind: "deny" });
+    expect(
+      configuredAnthropicModelCredentialResolution(
+        { username: "smile-wring-011b" },
+        {
+          modelCredential: {
+            active: true,
+            provider: "anthropic",
+            mode: "api_key",
+            secretName: "byok-smile-wring-011b-anthropic",
+          },
+        },
+      ),
+    ).toEqual({
+      kind: "owner_model_credential",
+      secretName: "byok-smile-wring-011b-anthropic",
+    });
+  });
+
+  it("uses the owner's active Anthropic modelCredential key without legacy byotActive", async () => {
+    const readSecret = vi.fn(async () => " sk-ant-owner ");
+    const resolver = createAnthropicProviderKeyResolver({
+      db: fakeDb({
+        "users/uid-jack": {
+          username: "smile-wring-011b",
+          provisioning: { openclaw: { slug: "smile-wring-011b" } },
+        },
+        "users/uid-jack/system/config": {
+          modelCredential: {
+            active: true,
+            provider: "anthropic",
+            mode: "api_key",
+            secretName: "byok-smile-wring-011b-anthropic",
+          },
+        },
+      }) as never,
+      platformKey: "sk-ant-platform",
+      readSecret,
+    });
+
+    await expect(resolver({ provider: "anthropic", record })).resolves.toEqual({
+      apiKey: "sk-ant-owner",
+      source: "owner_model_credential",
+      secretName: "byok-smile-wring-011b-anthropic",
+    });
+    expect(readSecret).toHaveBeenCalledWith("byok-smile-wring-011b-anthropic");
+  });
+
+  it("does not revive stale legacy BYOT when modelCredential is inactive", async () => {
+    const readSecret = vi.fn(async () => "sk-ant-owner");
+    const resolver = createAnthropicProviderKeyResolver({
+      db: fakeDb({
+        "users/uid-jack": {
+          byotActive: true,
+          username: "smile-wring-011b",
+        },
+        "users/uid-jack/system/config": {
+          modelCredential: {
+            active: false,
+            provider: "anthropic",
+            mode: "api_key",
+            secretName: "byok-smile-wring-011b-anthropic",
+          },
+          byot: {
+            provider: "anthropic",
+            secretName: "byok-smile-wring-011b-anthropic",
+          },
+        },
+      }) as never,
+      platformKey: " sk-ant-platform ",
+      readSecret,
+    });
+
+    await expect(resolver({ provider: "anthropic", record })).resolves.toEqual({
+      apiKey: "sk-ant-platform",
+      source: "platform",
+    });
+    expect(readSecret).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on an Anthropic modelCredential secret-name mismatch", async () => {
+    const readSecret = vi.fn(async () => "sk-ant-owner");
+    const resolver = createAnthropicProviderKeyResolver({
+      db: fakeDb({
+        "users/uid-jack": {
+          username: "smile-wring-011b",
+        },
+        "users/uid-jack/system/config": {
+          modelCredential: {
+            active: true,
+            provider: "anthropic",
+            mode: "api_key",
+            secretName: "byok-other-builder-anthropic",
+          },
+        },
+      }) as never,
+      platformKey: "sk-ant-platform",
+      readSecret,
+    });
+
+    await expect(resolver({ provider: "anthropic", record })).resolves.toBeNull();
+    expect(readSecret).not.toHaveBeenCalled();
+  });
+
+  it("uses the owner's legacy Anthropic BYOT key when active and bound to the owner slug", async () => {
     const readSecret = vi.fn(async () => " sk-ant-owner ");
     const resolver = createAnthropicProviderKeyResolver({
       db: fakeDb({
@@ -56,7 +192,7 @@ describe("createAnthropicProviderKeyResolver", () => {
 
     await expect(resolver({ provider: "anthropic", record })).resolves.toEqual({
       apiKey: "sk-ant-owner",
-      source: "owner_byot",
+      source: "owner_model_credential",
       secretName: "byok-smile-wring-011b-anthropic",
     });
     expect(readSecret).toHaveBeenCalledWith("byok-smile-wring-011b-anthropic");

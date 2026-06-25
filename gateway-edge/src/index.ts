@@ -153,7 +153,7 @@ function mountSidecarLocalitySurface(app: Express): void {
 
   // Deep byosub health runs on the customer's own pod (reached via the
   // /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
-  // auth-profile store — the proof /api/byosub/connection's ref-read can't give.
+  // auth-profile store — the proof /api/model-credentials/subscription/connection's ref-read can't give.
   const byosubLocality = Router();
   byosubLocality.use("/health", requireAuth);
   byosubLocality.use(byosubHealthRoutes);

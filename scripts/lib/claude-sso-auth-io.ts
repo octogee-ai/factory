@@ -117,7 +117,7 @@ export function realClaudeSsoDeps(cfg: ClaudeSsoIoConfig): ClaudeSsoDeps {
     },
     postCapture: async (flowId: string, credential: string) => {
       try {
-        const r = await internalFetch(`${base}/api/byosub/capture`, {
+        const r = await internalFetch(`${base}/api/model-credentials/subscription/capture`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ flowId, credential }),

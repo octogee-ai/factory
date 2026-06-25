@@ -8,7 +8,7 @@ import {
 } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { internalFetch } from "./internal-fetch.js";
-import { isOauthProvider } from "./byot-multi-provider-config.js";
+import { isModelCredentialOauthProvider } from "./model-credential-materializer.js";
 import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import {
@@ -267,7 +267,9 @@ async function restoreOauthIfNeeded(
   actions: SyncByotActions,
 ): Promise<OauthStoreRestoreResult> {
   const provider = desired.input?.provider;
-  if (!provider || !isOauthProvider(provider)) return { restored: false, present: true };
+  if (!provider || !isModelCredentialOauthProvider(provider)) {
+    return { restored: false, present: true };
+  }
   return actions.restoreOauthStoreForSlug(slug);
 }
 
@@ -298,7 +300,7 @@ async function syncSharedBrokerByotState(
   actions: SyncByotActions,
 ): Promise<void> {
   const provider = desired.input?.provider;
-  const isOauth = Boolean(provider && isOauthProvider(provider));
+  const isOauth = Boolean(provider && isModelCredentialOauthProvider(provider));
   const isNonAnthropicKey = Boolean(provider && provider !== "anthropic" && !isOauth);
 
   const restore = isOauth

@@ -1,19 +1,28 @@
 import { internalFetch } from "./internal-fetch.js";
 import { logger } from "../middleware/logging.js";
 import { isSafeGatewayId } from "./byosub.js";
-import { createByotSyncAuthHeaders } from "./byot-sync-internal-auth.js";
+import { createModelCredentialSyncAuthHeaders } from "./byot-sync-internal-auth.js";
 
-export interface ByotSyncUserData {
+export interface ModelCredentialSyncUserData {
   byotActive?: boolean;
   username?: string;
   tier?: string;
   selectedTier?: string;
   trialExpired?: boolean;
   provisioning?: { openclaw?: { status?: string } };
-  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
+  systemConfig?: {
+    byot?: { provider?: string; baseUrl?: string; model?: string };
+    modelCredential?: {
+      active?: boolean;
+      provider?: string;
+      mode?: string;
+      baseUrl?: string;
+      model?: string;
+    };
+  };
 }
 
-export interface GatewayByotSyncEnv {
+export interface GatewayModelCredentialSyncEnv {
   K8S_NAMESPACE?: string;
   GATEWAY_EDGE_INTERNAL_URL_TEMPLATE?: string;
   INTERNAL_SERVICE_KEY?: string;
@@ -26,9 +35,9 @@ function trimTrailingSlash(value: string): string {
   return out;
 }
 
-export function gatewayByotSyncUrl(
+export function gatewayModelCredentialSyncUrl(
   gatewayId: string,
-  env: GatewayByotSyncEnv = process.env,
+  env: GatewayModelCredentialSyncEnv = process.env,
 ): string {
   if (!isSafeGatewayId(gatewayId)) {
     throw new Error(`invalid gatewayId ${JSON.stringify(gatewayId)}`);
@@ -36,13 +45,13 @@ export function gatewayByotSyncUrl(
   const base = env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE
     ? env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE.replace("{gatewayId}", gatewayId)
     : `http://gateway-edge-${gatewayId}.${env.K8S_NAMESPACE ?? "octogee"}.svc.cluster.local:3001`;
-  return `${trimTrailingSlash(base)}/api/g/${encodeURIComponent(gatewayId)}/internal/byot-sync`;
+  return `${trimTrailingSlash(base)}/api/g/${encodeURIComponent(gatewayId)}/internal/model-credential-sync`;
 }
 
-export async function postGatewayByotSync(args: {
+export async function postGatewayModelCredentialSync(args: {
   gatewayId: string;
-  userData: ByotSyncUserData;
-  env?: GatewayByotSyncEnv;
+  userData: ModelCredentialSyncUserData;
+  env?: GatewayModelCredentialSyncEnv;
   fetchImpl?: typeof fetch;
 }): Promise<void> {
   const env = args.env ?? process.env;
@@ -50,13 +59,13 @@ export async function postGatewayByotSync(args: {
   const internalServiceKey = env.INTERNAL_SERVICE_KEY ?? "";
   const signingSecret = env.BYOT_SYNC_INTERNAL_SIGNING_SECRET ?? "";
   if (!internalServiceKey && !signingSecret.trim()) {
-    throw new Error("BYOT_SYNC_INTERNAL_SIGNING_SECRET is required for BYOT sync");
+    throw new Error("BYOT_SYNC_INTERNAL_SIGNING_SECRET is required for model credential sync");
   }
   const authHeaders = signingSecret.trim()
-    ? createByotSyncAuthHeaders({ body: args.userData, secret: signingSecret })
+    ? createModelCredentialSyncAuthHeaders({ body: args.userData, secret: signingSecret })
     : {};
   const res = await internalFetch(
-    gatewayByotSyncUrl(args.gatewayId, env),
+    gatewayModelCredentialSyncUrl(args.gatewayId, env),
     {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
@@ -69,19 +78,21 @@ export async function postGatewayByotSync(args: {
   );
   if (!res.ok) {
     const body = (await res.text().catch(() => "")).slice(0, 200);
-    throw new Error(`gateway BYOT sync ${res.status} ${body}`.trim());
+    throw new Error(`gateway model credential sync ${res.status} ${body}`.trim());
   }
 }
 
-export function triggerGatewayByotSync(args: {
+export function triggerGatewayModelCredentialSync(args: {
   gatewayId: string;
-  userData: ByotSyncUserData;
-  env?: GatewayByotSyncEnv;
+  userData: ModelCredentialSyncUserData;
+  env?: GatewayModelCredentialSyncEnv;
   fetchImpl?: typeof fetch;
   logWarn?: (msg: string) => void;
 }): void {
-  postGatewayByotSync(args).catch((err: unknown) => {
+  postGatewayModelCredentialSync(args).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
-    (args.logWarn ?? ((m) => logger.warn(m)))(`BYOT sync trigger failed for ${args.gatewayId}: ${msg}`);
+    (args.logWarn ?? ((m) => logger.warn(m)))(
+      `model credential sync trigger failed for ${args.gatewayId}: ${msg}`,
+    );
   });
 }

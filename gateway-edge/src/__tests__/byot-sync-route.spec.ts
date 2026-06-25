@@ -2,10 +2,11 @@ import request from "supertest";
 import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const syncByotForCustomerSpy = vi.fn(async () => {});
+const syncModelCredentialsForCustomerSpy = vi.fn(async () => {});
 
-vi.mock("../../../scripts/lib/byot-sync-runtime", () => ({
-  syncByotForCustomer: (userData: Record<string, unknown>) => syncByotForCustomerSpy(userData),
+vi.mock("../../../scripts/lib/model-credential-sync-runtime", () => ({
+  syncModelCredentialsForCustomer: (userData: Record<string, unknown>) =>
+    syncModelCredentialsForCustomerSpy(userData),
 }));
 
 const { createApp } = await import("../index.js");
@@ -16,6 +17,9 @@ const userData = {
   provisioning: { openclaw: { status: "complete" } },
   systemConfig: { byot: { provider: "openai" } },
 };
+
+const PRIMARY_SYNC_PATH = "/api/g/bender/internal/model-credential-sync";
+const LEGACY_SYNC_PATH = "/api/g/bender/internal/byot-sync";
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -40,7 +44,7 @@ function byotSyncHeaders(body: unknown, secret = "byot-sync-secret", timestamp =
 
 describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
   beforeEach(() => {
-    syncByotForCustomerSpy.mockClear();
+    syncModelCredentialsForCustomerSpy.mockClear();
     delete process.env.INTERNAL_SERVICE_KEY;
     process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "byot-sync-secret";
     delete process.env.GATEWAY_PROFILE;
@@ -56,59 +60,91 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
 
   it("rejects unauthenticated calls before sync", async () => {
     const res = await request(createApp({ surface: "sidecar" }))
-      .post("/api/g/bender/internal/byot-sync")
+      .post(PRIMARY_SYNC_PATH)
       .send(userData);
     expect(res.status).toBe(401);
-    expect(syncByotForCustomerSpy).not.toHaveBeenCalled();
+    expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
   });
 
   it("validates the sync payload", async () => {
     const body = { byotActive: true };
     const res = await request(createApp({ surface: "sidecar" }))
-      .post("/api/g/bender/internal/byot-sync")
+      .post(PRIMARY_SYNC_PATH)
       .set(byotSyncHeaders(body))
       .send(body);
     expect(res.status).toBe(400);
-    expect(syncByotForCustomerSpy).not.toHaveBeenCalled();
+    expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
   });
 
   it("runs pod-local sync with a valid BYOT sync signature", async () => {
     const res = await request(createApp({ surface: "sidecar" }))
-      .post("/api/g/bender/internal/byot-sync")
+      .post(PRIMARY_SYNC_PATH)
       .set(byotSyncHeaders(userData))
       .send(userData);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(syncByotForCustomerSpy).toHaveBeenCalledWith(userData);
+    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(userData);
+  });
+
+  it("keeps the legacy BYOT sync route as an authenticated alias", async () => {
+    const res = await request(createApp({ surface: "sidecar" }))
+      .post(LEGACY_SYNC_PATH)
+      .set(byotSyncHeaders(userData))
+      .send(userData);
+
+    expect(res.status).toBe(200);
+    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(userData);
+  });
+
+  it("accepts canonical model credential sync payloads", async () => {
+    const body = {
+      username: userData.username,
+      provisioning: userData.provisioning,
+      systemConfig: {
+        modelCredential: {
+          active: true,
+          provider: "claude-cli",
+          mode: "oauth",
+        },
+      },
+    };
+
+    const res = await request(createApp({ surface: "sidecar" }))
+      .post(PRIMARY_SYNC_PATH)
+      .set(byotSyncHeaders(body))
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(body);
   });
 
   it("rejects projected service-account tokens without the BYOT sync signature", async () => {
     process.env.GATEWAY_PROFILE = "standard";
 
     const res = await request(createApp({ surface: "sidecar" }))
-      .post("/api/g/bender/internal/byot-sync")
+      .post(PRIMARY_SYNC_PATH)
       .set("X-K8s-SA-Token", "octogee-api-jwt")
       .send(userData);
 
     expect(res.status).toBe(401);
-    expect(syncByotForCustomerSpy).not.toHaveBeenCalled();
+    expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
   });
 
   it("rejects stale BYOT sync signatures", async () => {
     const staleTimestamp = `${Date.now() - 10 * 60 * 1000}`;
     const res = await request(createApp({ surface: "sidecar" }))
-      .post("/api/g/bender/internal/byot-sync")
+      .post(PRIMARY_SYNC_PATH)
       .set(byotSyncHeaders(userData, "byot-sync-secret", staleTimestamp))
       .send(userData);
 
     expect(res.status).toBe(401);
-    expect(syncByotForCustomerSpy).not.toHaveBeenCalled();
+    expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
   });
 
   it("surfaces sync failures to the internal caller", async () => {
-    syncByotForCustomerSpy.mockRejectedValueOnce(new Error("config.patch failed"));
+    syncModelCredentialsForCustomerSpy.mockRejectedValueOnce(new Error("config.patch failed"));
     const res = await request(createApp({ surface: "sidecar" }))
-      .post("/api/g/bender/internal/byot-sync")
+      .post(PRIMARY_SYNC_PATH)
       .set(byotSyncHeaders(userData))
       .send(userData);
     expect(res.status).toBe(500);

@@ -1,14 +1,14 @@
 import * as fs from "fs";
 import * as path from "path";
 import {
-  buildByotConfigForProvider,
-  codexRuntimeConfig,
+  buildModelCredentialConfigForProvider,
   claudeCliRuntimeConfig,
-  isOauthProvider,
-  PROVIDERS,
-  type Provider,
-  type ByotConfigInput,
-} from "./byot-multi-provider-config.js";
+  codexRuntimeConfig,
+  isModelCredentialOauthProvider,
+  MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS,
+  type ModelCredentialConfigInput,
+  type ModelCredentialMaterializerProvider,
+} from "./model-credential-materializer.js";
 import { AGENTS_DIR, log } from "./config.js";
 import {
   deleteAuthProfileStore,
@@ -32,7 +32,7 @@ type ByotFile = (typeof BYOT_FILES)[number];
 
 const BYOT_MARKER = ".byot-managed";
 
-export type ByotInput = ByotConfigInput;
+export type ByotInput = ModelCredentialConfigInput;
 export interface FreeTierCoachModelInput {
   slug: string;
   model: typeof PLATFORM_FALLBACK_MODEL;
@@ -93,7 +93,7 @@ export function byosCoachConfigPatch(
       },
     };
   }
-  const cfg = buildByotConfigForProvider(input);
+  const cfg = buildModelCredentialConfigForProvider(input);
   if (cfg.agentModelOverride == null) return null;
   const patch: CoachModelPatch = {
     agents: {
@@ -180,8 +180,11 @@ function byotInputForSlug(
   slug: string,
   cfg: { provider?: string; baseUrl?: string; model?: string } | undefined,
 ): ByotInput {
-  const provider = cfg?.provider && Object.prototype.hasOwnProperty.call(PROVIDERS, cfg.provider)
-    ? (cfg.provider as Provider)
+  const provider = cfg?.provider && Object.prototype.hasOwnProperty.call(
+    MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS,
+    cfg.provider,
+  )
+    ? (cfg.provider as ModelCredentialMaterializerProvider)
     : "anthropic";
   return { slug, provider, baseUrl: cfg?.baseUrl, model: cfg?.model };
 }
@@ -221,7 +224,7 @@ function removeManagedByotState(
 }
 
 function desiredByotFiles(input: ByotInput): Record<ByotFile, string | null> {
-  const cfg = buildByotConfigForProvider(input);
+  const cfg = buildModelCredentialConfigForProvider(input);
   return {
     "models.json": cfg.models ? JSON.stringify(cfg.models, null, 2) : null,
   };
@@ -252,8 +255,8 @@ function syncAuthProfileStore(
   input: ByotInput,
   preserveAuthProfileStore: boolean,
 ): boolean {
-  if (isOauthProvider(input.provider)) return false;
-  const cfg = buildByotConfigForProvider(input);
+  if (isModelCredentialOauthProvider(input.provider)) return false;
+  const cfg = buildModelCredentialConfigForProvider(input);
   if (cfg.authProfiles) {
     const before = readAuthProfileStore(dir);
     if (JSON.stringify(before) !== JSON.stringify(cfg.authProfiles)) {

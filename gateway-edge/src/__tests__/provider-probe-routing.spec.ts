@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import { MODEL_CREDENTIAL_CATALOG } from "../../../shared/types/model-credentials.js";
 
 const fetchSpy = vi.fn();
 beforeEach(() => {
@@ -58,6 +59,22 @@ describe("probeProviderKey routing", () => {
     });
     const [url] = fetchSpy.mock.calls[0];
     expect(url).toBe("https://openrouter.ai/api/v1/models");
+  });
+
+  test.each(
+    MODEL_CREDENTIAL_CATALOG
+      .filter((entry) => entry.activeSlotEligible && entry.baseUrl.kind === "canonical")
+      .map((entry) => [entry.id, entry.baseUrl.value] as const),
+  )("%s → GET catalog canonical baseUrl /models", async (provider, baseUrl) => {
+    fetchSpy.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const r = await probeProviderKey({
+      provider,
+      apiKey: "provider-key",
+      baseUrl: "https://ignored.example.com/v1",
+    });
+    expect(r.ok).toBe(true);
+    const [url] = fetchSpy.mock.calls[0];
+    expect(url).toBe(`${baseUrl}/models`);
   });
 
   test("openai-compatible without baseUrl returns user-fault probe failure", async () => {

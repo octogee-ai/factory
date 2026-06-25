@@ -1,32 +1,22 @@
+import {
+  MODEL_CREDENTIAL_CATALOG,
+  MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
+  type ModelCredentialActiveStaticProviderId,
+} from "@shared/types/model-credentials.js";
 import { validateAnthropicKey, type KeyValidationResult } from "./anthropic-key-format.js";
 
-export type Provider =
-  | "anthropic"
-  | "openai"
-  | "openai-compatible"
-  | "grok"
-  | "openrouter"
-  | "minimax";
+export type Provider = ModelCredentialActiveStaticProviderId;
 
-// Must stay in sync with the api_key providers in scripts/lib
-// byot-multi-provider-config PROVIDERS and the secret-resolver id grammar —
-// asserted by tests/specs/byok-provider-registry-parity.spec.ts.
-export const SUPPORTED: Provider[] = [
-  "anthropic",
-  "openai",
-  "openai-compatible",
-  "grok",
-  "openrouter",
-  "minimax",
-];
+export const SUPPORTED = [...MODEL_CREDENTIAL_STATIC_PROVIDER_IDS];
 
-// Grok / OpenRouter / MiniMax are OpenAI-compatible with a CANONICAL upstream,
-// so the Builder supplies only a key (+ model); the probe uses this baseUrl.
-export const CANONICAL_BASE_URL: Partial<Record<Provider, string>> = {
-  grok: "https://api.x.ai/v1",
-  openrouter: "https://openrouter.ai/api/v1",
-  minimax: "https://api.minimax.io/v1",
-};
+export const CANONICAL_BASE_URL = Object.fromEntries(
+  MODEL_CREDENTIAL_CATALOG
+    .flatMap((entry) =>
+      entry.activeSlotEligible && entry.baseUrl.kind === "canonical"
+        ? [[entry.id, entry.baseUrl.value] as const]
+        : [],
+    ),
+) as Partial<Record<Provider, string>>;
 
 export function isSupportedProvider(input: unknown): input is Provider {
   return typeof input === "string" && (SUPPORTED as string[]).includes(input);

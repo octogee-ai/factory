@@ -15,11 +15,11 @@ import {
   readCodexAuthStateText,
 } from "../../../scripts/lib/byosub-restore.js";
 import { readAuthProfileStore } from "../../../scripts/lib/auth-profile-sqlite.js";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../../../scripts/lib/byot-multi-provider-config.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../../../scripts/lib/model-credential-materializer.js";
 
 // GET /api/g/<gatewayId>/byosub/health — the DEEP byosub durability check.
 //
-// /api/byosub/connection (cluster) reads only the glmGateways.byosub Firestore
+// /api/model-credentials/subscription/connection (cluster) reads only the glmGateways.byosub Firestore
 // ref, which survives a reroll/relocation regardless of whether the destination
 // pod re-materialized a working credential. This route runs ON the customer's
 // own pod (locality seam) and crosses that expectation with pod reality — is the

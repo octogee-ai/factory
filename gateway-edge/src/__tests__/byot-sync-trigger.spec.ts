@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as crypto from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const internalFetchSpy = vi.fn();
 
@@ -8,11 +10,12 @@ vi.mock("../lib/internal-fetch", () => ({
     internalFetchSpy(url, init, opts),
 }));
 
+const modelCredentialSyncTrigger = await import("../lib/byot-sync-trigger.js");
 const {
-  gatewayByotSyncUrl,
-  postGatewayByotSync,
-  triggerGatewayByotSync,
-} = await import("../lib/byot-sync-trigger.js");
+  gatewayModelCredentialSyncUrl,
+  postGatewayModelCredentialSync,
+  triggerGatewayModelCredentialSync,
+} = modelCredentialSyncTrigger;
 
 const userData = {
   byotActive: true,
@@ -39,7 +42,7 @@ function expectedSignature(body: unknown, timestamp: string, secret: string): st
     .digest("hex");
 }
 
-describe("BYOT sync trigger", () => {
+describe("model credential sync trigger", () => {
   beforeEach(() => {
     internalFetchSpy.mockReset();
     delete process.env.K8S_NAMESPACE;
@@ -49,28 +52,34 @@ describe("BYOT sync trigger", () => {
   });
 
   it("builds the per-instance gateway-edge URL, never the round-robin gateway alias", () => {
-    expect(gatewayByotSyncUrl("bender", { K8S_NAMESPACE: "octogee-test" })).toBe(
-      "http://gateway-edge-bender.octogee-test.svc.cluster.local:3001/api/g/bender/internal/byot-sync",
+    expect(gatewayModelCredentialSyncUrl("bender", { K8S_NAMESPACE: "octogee-test" })).toBe(
+      "http://gateway-edge-bender.octogee-test.svc.cluster.local:3001/api/g/bender/internal/model-credential-sync",
     );
   });
 
   it("honors an explicit gateway-edge URL template", () => {
     expect(
-      gatewayByotSyncUrl("gw-1", {
+      gatewayModelCredentialSyncUrl("gw-1", {
         GATEWAY_EDGE_INTERNAL_URL_TEMPLATE: "http://custom-{gatewayId}.svc:3001/root/",
       }),
-    ).toBe("http://custom-gw-1.svc:3001/root/api/g/gw-1/internal/byot-sync");
+    ).toBe("http://custom-gw-1.svc:3001/root/api/g/gw-1/internal/model-credential-sync");
   });
 
-  it("POSTs the userData through internalFetch with a BYOT sync HMAC", async () => {
+  it("does not export legacy BYOT trigger helper aliases", () => {
+    expect("gatewayByotSyncUrl" in modelCredentialSyncTrigger).toBe(false);
+    expect("postGatewayByotSync" in modelCredentialSyncTrigger).toBe(false);
+    expect("triggerGatewayByotSync" in modelCredentialSyncTrigger).toBe(false);
+  });
+
+  it("POSTs the userData through internalFetch with a model credential sync HMAC", async () => {
     internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
-    await postGatewayByotSync({
+    await postGatewayModelCredentialSync({
       gatewayId: "bender",
       userData,
       env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
     });
     expect(internalFetchSpy).toHaveBeenCalledWith(
-      "http://gateway-edge-bender.octogee-test.svc.cluster.local:3001/api/g/bender/internal/byot-sync",
+      "http://gateway-edge-bender.octogee-test.svc.cluster.local:3001/api/g/bender/internal/model-credential-sync",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify(userData),
@@ -89,7 +98,11 @@ describe("BYOT sync trigger", () => {
 
   it("fails before network I/O when no BYOT sync signing secret or legacy service key is configured", async () => {
     await expect(
-      postGatewayByotSync({ gatewayId: "bender", userData, env: { K8S_NAMESPACE: "octogee-test" } }),
+      postGatewayModelCredentialSync({
+        gatewayId: "bender",
+        userData,
+        env: { K8S_NAMESPACE: "octogee-test" },
+      }),
     ).rejects.toThrow(/BYOT_SYNC_INTERNAL_SIGNING_SECRET/);
     expect(internalFetchSpy).not.toHaveBeenCalled();
   });
@@ -97,7 +110,7 @@ describe("BYOT sync trigger", () => {
   it("throws on non-2xx responses so the fire-and-forget wrapper can log", async () => {
     internalFetchSpy.mockResolvedValue(new Response("nope", { status: 503 }));
     await expect(
-      postGatewayByotSync({
+      postGatewayModelCredentialSync({
         gatewayId: "bender",
         userData,
         env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
@@ -109,7 +122,7 @@ describe("BYOT sync trigger", () => {
     internalFetchSpy.mockResolvedValue(new Response("nope", { status: 503 }));
     const warn = vi.fn();
     expect(() =>
-      triggerGatewayByotSync({
+      triggerGatewayModelCredentialSync({
         gatewayId: "bender",
         userData,
         env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
@@ -117,5 +130,15 @@ describe("BYOT sync trigger", () => {
       }),
     ).not.toThrow();
     await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("503 nope")));
+  });
+
+  it.each([
+    "routes/billing/byot.ts",
+    "routes/byosub.ts",
+    "routes/internal/billing.ts",
+  ])("%s imports the model credential trigger name", (relativePath) => {
+    const src = readFileSync(join(import.meta.dirname, "..", relativePath), "utf8");
+    expect(src).toContain("triggerGatewayModelCredentialSync");
+    expect(src).not.toContain("triggerGatewayByotSync");
   });
 });

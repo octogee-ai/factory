@@ -133,7 +133,7 @@ onExit: (cb) => {
     },
     postCapture: async (flowId: string, credential: string) => {
       try {
-        const r = await internalFetch(`${base}/api/byosub/capture`, {
+        const r = await internalFetch(`${base}/api/model-credentials/subscription/capture`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

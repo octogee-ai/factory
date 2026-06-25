@@ -6,7 +6,7 @@ import {
   createByosubHealthRouter,
   type ByosubHealthDeps,
 } from "../routes/byosub-health.js";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../../../scripts/lib/byot-multi-provider-config.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../../../scripts/lib/model-credential-materializer.js";
 
 const PROFILE = OPENAI_CODEX_DEFAULT_PROFILE_ID;
 const NOW = 1_700_000_000_000;
@@ -89,7 +89,7 @@ function appWith(deps: ByosubHealthDeps) {
     next();
   });
   app.use("/api/g/:gatewayId/byosub", createByosubHealthRouter(deps));
-  app.use("/api/byosub", createByosubHealthRouter(deps));
+  app.use("/probe/byosub", createByosubHealthRouter(deps));
   return app;
 }
 
@@ -114,7 +114,7 @@ describe("GET /byosub/health route glue", () => {
   it("200 not_on_this_pod on the unscoped alias — no gateway-local proof without /api/g/<gatewayId>", async () => {
     const resolve = vi.fn(async () => ({ slug: "smile-wring-011b", gatewayId: "default" }));
     const res = await request(appWith(fakeDeps({ resolveUserGateway: resolve }))).get(
-      "/api/byosub/health",
+      "/probe/byosub/health",
     );
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ connected: false, status: "not_on_this_pod" });

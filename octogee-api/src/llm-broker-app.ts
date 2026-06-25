@@ -426,7 +426,7 @@ async function preflightGate(input: {
   onMeteringError: (err: unknown) => void;
 }): Promise<GateDecision> {
   const { record } = input;
-  if (input.source === "owner_byot") return { allowed: true };
+  if (input.source === "owner_model_credential") return { allowed: true };
   if (input.req.method.toUpperCase() === "GET" && input.url.pathname === "/v1/models") {
     return { allowed: true };
   }
@@ -639,7 +639,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
               usageStore: deps.usageStore,
               now,
               onMeteringError: deps.onMeteringError ?? (() => undefined),
-              countsTowardSpendWindow: providerKey.source !== "owner_byot",
+              countsTowardSpendWindow: providerKey.source !== "owner_model_credential",
             }
           : undefined;
         await writeUpstreamResponse(upstream, res, metering);

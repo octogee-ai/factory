@@ -22,7 +22,7 @@ describe("scripts internalFetch", () => {
   it("adds both internal key and projected service-account token headers", async () => {
     const seen: RequestInit[] = [];
     await internalFetch(
-      "http://gateway-edge.local/api/byosub/auth-state",
+      "http://gateway-edge.local/api/model-credentials/subscription/auth-state",
       { method: "POST" },
       {
         internalServiceKey: "service-key",
@@ -42,7 +42,7 @@ describe("scripts internalFetch", () => {
   it("omits the service-account token header when the projected token is missing", async () => {
     const seen: RequestInit[] = [];
     await internalFetch(
-      "http://gateway-edge.local/api/byosub/auth-state",
+      "http://gateway-edge.local/api/model-credentials/subscription/auth-state",
       {},
       {
         internalServiceKey: "service-key",
