@@ -136,59 +136,88 @@ const defaultCreateProjectForActor: CreateProjectForActor = async (actor, input)
   return createProjectForActor(actor, input);
 };
 
-const defaultApplyMilestoneSignal: ApplyMilestoneSignal = async (input) => {
-  const { mmApi } = await import("../../../gateway-edge/src/lib/mattermost.js");
+const AGENT_MILESTONE_KEYS = new Set(["coachName", "coachPersonality", "avatarEmoji"]);
+
+function userMilestoneUpdate(milestones: Record<string, unknown>): Record<string, unknown> {
   const userUpdate: Record<string, unknown> = {
     "onboarding.updatedAt": FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   };
-  for (const [key, value] of Object.entries(input.milestones)) {
-    if (key === "coachName" || key === "coachPersonality" || key === "avatarEmoji") {
-      continue;
-    }
+  for (const [key, value] of Object.entries(milestones)) {
+    if (AGENT_MILESTONE_KEYS.has(key)) continue;
     userUpdate[`onboarding.${key}`] = value;
   }
-  if (input.milestones.complete === true) {
+  if (milestones.complete === true) {
     userUpdate["onboarding.complete"] = true;
   }
-  await input.db.collection("users").doc(input.uid).update(userUpdate);
+  return userUpdate;
+}
 
+function agentMilestoneUpdate(
+  uid: string,
+  milestones: Record<string, unknown>,
+): Record<string, unknown> | null {
   const agentUpdate: Record<string, unknown> = {};
-  if (typeof input.milestones.coachName === "string" && input.milestones.coachName) {
-    agentUpdate.name = input.milestones.coachName;
+  if (typeof milestones.coachName === "string" && milestones.coachName) {
+    agentUpdate.name = milestones.coachName;
   }
-  if (typeof input.milestones.coachPersonality === "string") {
-    agentUpdate.persona = input.milestones.coachPersonality;
+  if (typeof milestones.coachPersonality === "string") {
+    agentUpdate.persona = milestones.coachPersonality;
   }
-  if (typeof input.milestones.avatarEmoji === "string" && input.milestones.avatarEmoji) {
-    agentUpdate.avatarEmoji = input.milestones.avatarEmoji;
+  if (typeof milestones.avatarEmoji === "string" && milestones.avatarEmoji) {
+    agentUpdate.avatarEmoji = milestones.avatarEmoji;
   }
-  if (Object.keys(agentUpdate).length > 0) {
-    agentUpdate.id = input.uid;
-    agentUpdate.updatedAt = FieldValue.serverTimestamp();
-    await input.db.doc(`agents/${input.uid}`).set(agentUpdate, { merge: true });
-  }
+  if (Object.keys(agentUpdate).length === 0) return null;
+  return {
+    ...agentUpdate,
+    id: uid,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+}
 
-  if (typeof input.milestones.coachName === "string" && input.milestones.coachName) {
-    try {
-      const [sysDoc, userDoc] = await Promise.all([
-        input.db.doc(`users/${input.uid}/system/config`).get(),
-        input.db.collection("users").doc(input.uid).get(),
-      ]);
-      const coachMmUserId =
-        stringAt(sysDoc.data() as Record<string, unknown> | undefined, "mattermost.coachUserId") ||
-        stringAt(userDoc.data() as Record<string, unknown> | undefined, "mattermost.coachUserId");
-      if (coachMmUserId) {
-        await mmApi("PUT", `/bots/${coachMmUserId}`, {
-          display_name: input.milestones.coachName,
-        });
-      }
-    } catch (err) {
-      logger.warn("[milestones] failed to patch coach Mattermost display", {
-        slug: input.slug,
-        err,
+async function patchCoachMattermostDisplay(input: {
+  db: Firestore;
+  uid: string;
+  slug: string;
+  coachName: string;
+}): Promise<void> {
+  try {
+    const [sysDoc, userDoc] = await Promise.all([
+      input.db.doc(`users/${input.uid}/system/config`).get(),
+      input.db.collection("users").doc(input.uid).get(),
+    ]);
+    const coachMmUserId =
+      stringAt(sysDoc.data() as Record<string, unknown> | undefined, "mattermost.coachUserId") ||
+      stringAt(userDoc.data() as Record<string, unknown> | undefined, "mattermost.coachUserId");
+    if (coachMmUserId) {
+      const { mmApi } = await import("../../../gateway-edge/src/lib/mattermost.js");
+      await mmApi("PUT", `/bots/${coachMmUserId}`, {
+        display_name: input.coachName,
       });
     }
+  } catch (err) {
+    logger.warn("[milestones] failed to patch coach Mattermost display", {
+      slug: input.slug,
+      err,
+    });
+  }
+}
+
+const defaultApplyMilestoneSignal: ApplyMilestoneSignal = async (input) => {
+  await input.db.collection("users").doc(input.uid).update(
+    userMilestoneUpdate(input.milestones),
+  );
+  const agentUpdate = agentMilestoneUpdate(input.uid, input.milestones);
+  if (agentUpdate) {
+    await input.db.doc(`agents/${input.uid}`).set(agentUpdate, { merge: true });
+  }
+  if (typeof input.milestones.coachName === "string" && input.milestones.coachName) {
+    await patchCoachMattermostDisplay({
+      db: input.db,
+      uid: input.uid,
+      slug: input.slug,
+      coachName: input.milestones.coachName,
+    });
   }
 };
 
@@ -450,53 +479,48 @@ function finiteNonNegative(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function validUsageData(value: unknown): FleetBrokerUsageData | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const data = value as Record<string, unknown>;
-  const cost = data.costBreakdown;
-  if (!cost || typeof cost !== "object" || Array.isArray(cost)) return null;
-  const costBreakdown = cost as Record<string, unknown>;
-  const input = finiteNonNegative(data.input);
-  const output = finiteNonNegative(data.output);
-  const cacheRead = finiteNonNegative(data.cacheRead);
-  const cacheWrite = finiteNonNegative(data.cacheWrite);
-  const totalTokens = finiteNonNegative(data.totalTokens);
-  const costUsd = finiteNonNegative(data.costUsd);
-  const model = typeof data.model === "string" ? data.model.trim() : "";
-  const costInput = finiteNonNegative(costBreakdown.input);
-  const costOutput = finiteNonNegative(costBreakdown.output);
-  const costCacheRead = finiteNonNegative(costBreakdown.cacheRead);
-  const costCacheWrite = finiteNonNegative(costBreakdown.cacheWrite);
-  if (
-    input === null ||
-    output === null ||
-    cacheRead === null ||
-    cacheWrite === null ||
-    totalTokens === null ||
-    costUsd === null ||
-    model.length === 0 ||
-    model.length > 200 ||
-    costInput === null ||
-    costOutput === null ||
-    costCacheRead === null ||
-    costCacheWrite === null
-  ) {
-    return null;
+const USAGE_NUMBER_FIELDS = [
+  "input",
+  "output",
+  "cacheRead",
+  "cacheWrite",
+  "totalTokens",
+  "costUsd",
+] as const;
+const USAGE_COST_FIELDS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+function finiteNonNegativeFields<T extends string>(
+  data: Record<string, unknown>,
+  fields: readonly T[],
+): Record<T, number> | null {
+  const out = {} as Record<T, number>;
+  for (const field of fields) {
+    const value = finiteNonNegative(data[field]);
+    if (value === null) return null;
+    out[field] = value;
   }
+  return out;
+}
+
+function validUsageModel(value: unknown): string {
+  const model = typeof value === "string" ? value.trim() : "";
+  return model.length > 0 && model.length <= 200 ? model : "";
+}
+
+export function validFleetBrokerUsageData(value: unknown): FleetBrokerUsageData | null {
+  const data = recordBodyValue(value);
+  if (!data) return null;
+  const usageNumbers = finiteNonNegativeFields(data, USAGE_NUMBER_FIELDS);
+  const costBreakdown = finiteNonNegativeFields(
+    recordBodyValue(data.costBreakdown) ?? {},
+    USAGE_COST_FIELDS,
+  );
+  const model = validUsageModel(data.model);
+  if (!usageNumbers || !costBreakdown || !model) return null;
   return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalTokens,
-    costUsd,
+    ...usageNumbers,
     model,
-    costBreakdown: {
-      input: costInput,
-      output: costOutput,
-      cacheRead: costCacheRead,
-      cacheWrite: costCacheWrite,
-    },
+    costBreakdown,
   };
 }
 
@@ -716,6 +740,65 @@ async function isAssignedToGateway(
   return stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) === gatewayId ? userData : null;
 }
 
+function snapshotProvisioningStatus(data: Record<string, unknown>): FleetBrokerProvisioningStatus {
+  const status = stringAt(data, "provisioning.openclaw.status");
+  return status === "provisioning" || status === "complete" ? status : "";
+}
+
+function snapshotOnboardingVibe(data: Record<string, unknown>): string | null {
+  const value = readPath(data, "onboarding.vibe");
+  return typeof value === "string" ? value : null;
+}
+
+function snapshotGreetingPosted(data: Record<string, unknown>): boolean {
+  const greeting = readPath(data, "provisioning.openclaw.greeting");
+  return Boolean((greeting as { ok?: unknown } | undefined)?.ok);
+}
+
+function snapshotBaseFields(
+  data: Record<string, unknown>,
+  slug: string,
+): Omit<
+  FleetBrokerUserSnapshot,
+  "uid" | "slug" | "channels" | "projects" | "coachToken" | "coachMmUserId" | "coachIdentity"
+> {
+  const mattermostUserId = stringAt(data, "mattermost.userId") || null;
+  return {
+    tier: stringAt(data, "tier") || stringAt(data, "subscription.tier") || "trial",
+    gatewayId: stringAt(data, OPENCLAW_GATEWAY_ID_FIELD),
+    status: snapshotProvisioningStatus(data),
+    agentIds: stringArray(readPath(data, "provisioning.openclaw.agentIds")),
+    repoUrl: stringAt(data, "provisioning.git.repoUrl"),
+    mattermostUserId,
+    customerMmUserId: mattermostUserId,
+    greetingPosted: snapshotGreetingPosted(data),
+    ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
+    email: stringAt(data, "email"),
+    displayName: stringAt(data, "displayName"),
+    lastName: stringAt(data, "lastName"),
+    photoURL: stringAt(data, "photoURL"),
+    onboardingVibe: snapshotOnboardingVibe(data),
+  };
+}
+
+function snapshotCoachFields(
+  coachData: Record<string, unknown> | undefined,
+): Pick<FleetBrokerUserSnapshot, "coachToken" | "coachMmUserId"> {
+  return {
+    coachToken: typeof coachData?.personalToken === "string" ? coachData.personalToken : null,
+    coachMmUserId:
+      typeof coachData?.coachMmUserId === "string" ? coachData.coachMmUserId : null,
+  };
+}
+
+function snapshotCoachIdentity(
+  agentData: Record<string, unknown> | undefined,
+): Pick<FleetBrokerUserSnapshot, "coachIdentity"> | Record<string, never> {
+  const name = typeof agentData?.name === "string" ? agentData.name : "";
+  const emoji = typeof agentData?.avatarEmoji === "string" ? agentData.avatarEmoji : "";
+  return name || emoji ? { coachIdentity: { name, emoji } } : {};
+}
+
 async function loadSnapshot(
   db: Firestore,
   uid: string,
@@ -731,35 +814,14 @@ async function loadSnapshot(
   ]);
   const coachData = coachSecret.data() as Record<string, unknown> | undefined;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
-  const name = typeof agentData?.name === "string" ? agentData.name : "";
-  const emoji = typeof agentData?.avatarEmoji === "string" ? agentData.avatarEmoji : "";
-  const status = stringAt(data, "provisioning.openclaw.status");
   return {
     uid,
     slug,
-    tier: stringAt(data, "tier") || stringAt(data, "subscription.tier") || "trial",
-    gatewayId: stringAt(data, OPENCLAW_GATEWAY_ID_FIELD),
-    status: status === "provisioning" || status === "complete" ? status : "",
-    agentIds: stringArray(readPath(data, "provisioning.openclaw.agentIds")),
-    repoUrl: stringAt(data, "provisioning.git.repoUrl"),
-    mattermostUserId: stringAt(data, "mattermost.userId") || null,
-    customerMmUserId: stringAt(data, "mattermost.userId") || null,
-    greetingPosted: Boolean((readPath(data, "provisioning.openclaw.greeting") as { ok?: unknown } | undefined)?.ok),
+    ...snapshotBaseFields(data, slug),
     channels,
     projects,
-    ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
-    email: stringAt(data, "email"),
-    displayName: stringAt(data, "displayName"),
-    lastName: stringAt(data, "lastName"),
-    photoURL: stringAt(data, "photoURL"),
-    onboardingVibe:
-      typeof readPath(data, "onboarding.vibe") === "string"
-        ? (readPath(data, "onboarding.vibe") as string)
-        : null,
-    coachToken: typeof coachData?.personalToken === "string" ? coachData.personalToken : null,
-    coachMmUserId:
-      typeof coachData?.coachMmUserId === "string" ? coachData.coachMmUserId : null,
-    ...(name || emoji ? { coachIdentity: { name, emoji } } : {}),
+    ...snapshotCoachFields(coachData),
+    ...snapshotCoachIdentity(agentData),
   };
 }
 
@@ -780,20 +842,40 @@ async function findAssignedUidBySlug(
   return null;
 }
 
-export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRouteDeps): Router {
-  const router = Router();
-  const { db } = opts;
-  const provisionMattermost = opts.provisionMattermost ?? defaultProvisionMattermost;
-  const markProvisioningComplete =
-    opts.markProvisioningComplete ?? defaultMarkProvisioningComplete;
-  const notifyOpsOfSignup = opts.notifyOpsOfSignup ?? defaultNotifyOpsOfSignup;
-  const createProjectForActor =
-    opts.createProjectForActor ?? defaultCreateProjectForActor;
-  const applyMilestoneSignal =
-    opts.applyMilestoneSignal ?? defaultApplyMilestoneSignal;
-  const recordUsageEvent = opts.recordUsageEvent ?? defaultRecordUsageEvent;
-  const createBlobSignedUrl = opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl;
-  const mintMacOpsToken = opts.mintMacOpsToken ?? defaultMintMacOpsToken;
+type ResolvedFleetBrokerRouteDeps = {
+  db: Firestore;
+  provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
+  markProvisioningComplete: NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]>;
+  notifyOpsOfSignup: NonNullable<FleetBrokerRouteDeps["notifyOpsOfSignup"]>;
+  createProjectForActor: CreateProjectForActor;
+  applyMilestoneSignal: ApplyMilestoneSignal;
+  recordUsageEvent: RecordUsageEvent;
+  createBlobSignedUrl: CreateBlobSignedUrl;
+  mintMacOpsToken: MintMacOpsToken;
+};
+
+function resolveFleetBrokerRouteDeps(
+  opts: { db: Firestore } & FleetBrokerRouteDeps,
+): ResolvedFleetBrokerRouteDeps {
+  return {
+    db: opts.db,
+    provisionMattermost: opts.provisionMattermost ?? defaultProvisionMattermost,
+    markProvisioningComplete:
+      opts.markProvisioningComplete ?? defaultMarkProvisioningComplete,
+    notifyOpsOfSignup: opts.notifyOpsOfSignup ?? defaultNotifyOpsOfSignup,
+    createProjectForActor: opts.createProjectForActor ?? defaultCreateProjectForActor,
+    applyMilestoneSignal: opts.applyMilestoneSignal ?? defaultApplyMilestoneSignal,
+    recordUsageEvent: opts.recordUsageEvent ?? defaultRecordUsageEvent,
+    createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,
+    mintMacOpsToken: opts.mintMacOpsToken ?? defaultMintMacOpsToken,
+  };
+}
+
+function installSnapshotRoutes(
+  router: Router,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  const { db } = deps;
 
   router.post("/assigned-users", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -852,6 +934,13 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
     }
     res.json({ user: snapshot });
   });
+}
+
+function installProvisioningRoutes(
+  router: Router,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  const { db, provisionMattermost, markProvisioningComplete, notifyOpsOfSignup } = deps;
 
   router.post("/set-provisioning-status", async (req, res) => {
     const assigned = await requireAssignedUser(db, req, res);
@@ -1014,6 +1103,13 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
       res.status(204).end();
     });
   });
+}
+
+function installGatewayOpsRoutes(
+  router: Router,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  const { db, mintMacOpsToken, recordUsageEvent, createBlobSignedUrl } = deps;
 
   router.post("/mac-ops-token", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -1102,7 +1198,7 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
       res.status(400).json({ error: "invalid_agent_id" });
       return;
     }
-    const usage = validUsageData(body.usage);
+    const usage = validFleetBrokerUsageData(body.usage);
     if (!usage) {
       res.status(400).json({ error: "invalid_usage" });
       return;
@@ -1164,6 +1260,13 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
       res.json(signed);
     });
   });
+}
+
+function installAgentRoutes(
+  router: Router,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  const { db, createProjectForActor, applyMilestoneSignal } = deps;
 
   router.post("/agent/create-project", async (req, res) => {
     const assigned = await requireAssignedAgentWorkspace(db, req, res);
@@ -1207,5 +1310,14 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
     });
   });
 
+}
+
+export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRouteDeps): Router {
+  const router = Router();
+  const deps = resolveFleetBrokerRouteDeps(opts);
+  installSnapshotRoutes(router, deps);
+  installProvisioningRoutes(router, deps);
+  installGatewayOpsRoutes(router, deps);
+  installAgentRoutes(router, deps);
   return router;
 }
