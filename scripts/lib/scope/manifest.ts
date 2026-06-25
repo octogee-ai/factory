@@ -34,12 +34,12 @@ export interface UnitPackage {
 
 // The dynamic `test` matrix entries. `typecheck` runs after `npm ci`, before `npm test`.
 export const UNIT_PACKAGES: readonly UnitPackage[] = [
-  // core ships committed dist/; its typecheck rebuilds and fails on any drift
-  // between the committed build output and source (npm can't build a file: dep).
+  // core ships a committed tarball (octogee-core.tgz); verify:tarball fails if it
+  // drifts from a fresh build of core/src (npm can't build a file: dependency).
   {
     name: JOBS.core,
     dir: "core",
-    typecheck: "npm run typecheck && npm run build && git diff --exit-code dist",
+    typecheck: "npm run typecheck && npm run verify:tarball",
   },
   { name: JOBS.gatewayEdge, dir: "gateway-edge", typecheck: TYPECHECK },
   { name: JOBS.octogeeApi, dir: "octogee-api", typecheck: TYPECHECK },

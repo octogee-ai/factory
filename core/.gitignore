@@ -1,7 +1,4 @@
 node_modules/
-
-# core/dist/ is committed — it's the built interface consumers resolve (npm can't
-# build a file: dependency on install). The root .gitignore's recursive `dist/`
-# would otherwise exclude it, so re-include the directory and its contents here.
-!dist/
-!dist/**
+dist/
+*.tgz
+!octogee-core.tgz

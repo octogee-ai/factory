@@ -1,11 +1,10 @@
 # @octogee/core
 
 Octogee's shared **runtime** library. Platform packages (`gateway-edge`,
-`octogee-api`, `glm-controller`, `scripts`, `tests`) depend on its **built
-interface** — `@octogee/core/<module>` — never its source. That package
-boundary is what lets each package typecheck and test standalone, with no
-cross-package source compilation and no "install some other package's
-node_modules first" luck.
+`octogee-api`, `glm-controller`, `scripts`) depend on its **built interface** —
+`@octogee/core/<module>` — never its source. That package boundary is what lets
+each package typecheck and test standalone, with no cross-package source
+compilation and no "install some other package's node_modules first" luck.
 
 `shared/` stays types-only; `core/` is where shared **runtime** code lives.
 Modules migrate here over time (`workspace-slugs` is the first); ones with real
@@ -16,40 +15,52 @@ them into `core/package.json`.
 
 ```jsonc
 // <consumer>/package.json
-"dependencies": { "@octogee/core": "file:../core" }
+"dependencies": { "@octogee/core": "file:../core/octogee-core.tgz" }
 ```
 
-`npm ci` symlinks `core/` into the consumer's `node_modules`. The consumer
-imports the declared subpaths:
+`npm ci` **extracts the committed tarball** into the consumer's `node_modules` as
+a real package (not a symlink) and installs core's own deps — so the consumer
+resolves the declared subpaths, and runtime-dep modules work, with nothing else
+installed:
 
 ```ts
 import { primaryWorkspaceSlug } from "@octogee/core/workspace-slugs";
 ```
 
-Resolution is set up for both module systems the monorepo uses: the `exports`
-map serves `NodeNext` consumers (gateway-edge, octogee-api) and `typesVersions`
-serves `node`/node10 consumers (scripts, glm-controller).
+Resolution serves both module systems the monorepo uses: the `exports` map for
+`NodeNext` consumers (gateway-edge, octogee-api), `typesVersions` for `node`/node10
+(scripts, glm-controller).
 
-## `dist/` is committed — on purpose
+## Why a committed tarball (`octogee-core.tgz`)
 
-npm installs a `file:` directory dependency as a **symlink** and does **not**
-run its `prepare`/build (its devDeps aren't installed in the symlink). So a
-consumer's `npm ci` cannot build core. Committing `dist/` is what makes
-`cd <consumer> && npm ci && npm test` work with nothing else installed — the
-whole point of the package boundary.
+npm installs a `file:` *directory* dep as a **symlink** and never builds it — and
+a symlinked package can't even reach its own runtime deps from a sibling location.
+A `file:` *tarball* is different: npm extracts it as a real package and hoists its
+deps. It's the only no-registry way `cd <consumer> && npm ci && npm test` "just
+works" for a module that imports an npm package. `npm pack` is deterministic by
+content, so the tarball is safe to commit and guard.
 
-CI guards freshness: it rebuilds `dist/` and fails if it differs from what's
-committed. So when you change anything under `src/`:
+No registry on purpose: this is one private monorepo — one commit, one release
+cycle — so a registry's versioning + auth overhead would buy nothing a solo
+operator uses, while costing a standing auth/publish/version-bump pipeline.
+
+## Changing core
 
 ```bash
-cd core && npm ci && npm run build   # regenerate dist/
-git add src dist                     # commit source AND built output together
+cd core
+# …edit src/…
+npm run pack:tarball          # rebuild dist + repack → octogee-core.tgz
+# refresh each consumer's lock (the tarball's integrity changed):
+for c in scripts octogee-api gateway-edge glm-controller; do ( cd ../$c && npm install ); done
 ```
 
-Forget the rebuild and the `core` CI job goes red (`git diff --exit-code dist`).
+The `core` CI job runs `npm run verify:tarball` — it rebuilds and fails if the
+committed tarball drifts from `src` (compares extracted *contents*, not bytes, so
+it's robust across npm versions).
 
 ## Layout
 
 - `src/<module>.ts` — one file per public module; each is a package subpath.
-- `dist/<module>.{js,d.ts}` — committed build output (the consumed interface).
+- `octogee-core.tgz` — the committed, consumed artifact (contains `dist/` + package.json).
+- `dist/` — gitignored; built transiently for packing.
 - `src/<module>.spec.ts` — vitest, run against source (`npm test`).

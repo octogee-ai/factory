@@ -11,9 +11,9 @@
 # dist/app/src/index.js and broke the runtime module resolution.
 FROM node:26-slim AS builder
 WORKDIR /gateway-edge
-# @octogee/core (file:../core dep) — committed dist, before npm ci for the file:
-# symlink + tsc .d.ts resolution. Builder stage.
-COPY core/ /core/
+# @octogee/core committed tarball, before npm ci (which extracts it) for tsc
+# .d.ts resolution. Builder stage.
+COPY core/octogee-core.tgz /core/octogee-core.tgz
 COPY gateway-edge/package.json gateway-edge/package-lock.json* ./
 RUN npm ci --ignore-scripts
 
@@ -55,9 +55,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
-# @octogee/core (file:../core dep) — committed dist at runtime; the compiled shim
-# under dist/scripts/lib resolves @octogee/core/* through here.
-COPY core/ /core/
+# @octogee/core tarball at runtime; the compiled shim under dist/scripts/lib
+# resolves @octogee/core/* from the extracted node_modules.
+COPY core/octogee-core.tgz /core/octogee-core.tgz
 COPY gateway-edge/package.json gateway-edge/package-lock.json* ./
 RUN npm ci --omit=dev
 COPY --from=builder /gateway-edge/dist ./dist
