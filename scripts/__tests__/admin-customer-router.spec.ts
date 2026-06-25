@@ -52,6 +52,8 @@ function fakeDb(docs: Record<string, DocData>): Firestore {
   return {
     collection: (path: string) => fakeCollection(path, store),
     doc: (path: string) => fakeDoc(path, store),
+    getAll: async (...refs: Array<{ get: () => Promise<unknown> }>) =>
+      Promise.all(refs.map((ref) => ref.get())),
   } as unknown as Firestore;
 }
 

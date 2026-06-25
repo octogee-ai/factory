@@ -2169,7 +2169,6 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
       uid: "uid-alice",
       username: "alice",
       email: "alice@octogee.com",
-      throttleLevel: 0,
     });
     expect(res.body.recentOperations).toHaveLength(1);
     expect(res.body.recentOperations[0].id).toBe("op-this-gw");

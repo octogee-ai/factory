@@ -16,7 +16,6 @@ import {
   resolveTier,
   windowBudgetUsdForTier,
 } from "../../shared/types/billing.js";
-import { computeThrottleLevel } from "../../shared/types/throttle.js";
 import { isValidUsername } from "../../shared/types/identity.js";
 export { extractRole, findSessionFiles, parseLineForUsage } from "./usage-log-tailer.js";
 export type { LogFn, UsageData, UsageEvent } from "./usage-log-tailer.js";
@@ -88,7 +87,6 @@ export interface StartUsageTrackingOptions {
 }
 
 type FirestoreUpdate = Record<string, unknown>;
-type ThrottleDecision = { level: 0 | 1 | 3; reason: string };
 
 function decideTrialBackfill(
   tier: string,
@@ -145,35 +143,9 @@ function tokenBreakdownIncrements(usage: UsageData): Record<string, ReturnType<t
   };
 }
 
-function decideThrottle(args: {
-  byotActive: boolean;
-  tier: string;
-  newWindowCostUsd: number;
-  windowBudgetUsd: number;
-  subscriptionStatus: string;
-  windowStartedAt: Date | null;
-}): ThrottleDecision {
-  if (args.byotActive) {
-    return { level: 0, reason: "customer_model_credential_skip" };
-  }
-  if (args.tier === "free") {
-    return { level: 3, reason: "free_tier_house_key" };
-  }
-  const state = computeThrottleLevel(
-    args.newWindowCostUsd,
-    args.windowBudgetUsd,
-    args.subscriptionStatus,
-    args.windowStartedAt,
-  );
-  const level = (state.level === 2 ? 3 : state.level) as 0 | 1 | 3;
-  return { level, reason: state.reason };
-}
-
 interface UsageTransactionState {
   workspaceId: string | null;
   windowUpdates: FirestoreUpdate;
-  throttleLevel: 0 | 1 | 3;
-  throttleReason: string;
 }
 
 interface UsageTransactionInput {
@@ -200,7 +172,6 @@ function usageTransactionState(args: {
   const workspaceId = workspaceIdFromUserData(data, agentId);
   const usageData = data.usage || {};
   const tier = resolveTier(data);
-  const subscriptionStatus = data.subscription?.status ?? "active";
   const byotActive = data.byotActive === true;
   const now = new Date();
 
@@ -212,7 +183,7 @@ function usageTransactionState(args: {
 
   const windowBudgetUsd = windowBudgetUsdForTier(tier, backfill.trialStartedAt);
   const startedAt = usageData.windowStartedAt?.toDate?.() ?? null;
-  const { newWindowCostUsd, windowUpdates, windowStartedAt } = buildWindowUpdates(
+  const { windowUpdates } = buildWindowUpdates(
     usage,
     { windowCostUsd: usageData.windowCostUsd, windowStartedAt: startedAt },
     windowBudgetUsd,
@@ -223,20 +194,9 @@ function usageTransactionState(args: {
     log(`⚠ usage: trial user ${uid} has no subscription.trialStartedAt — running on platform key with no USD budget`);
   }
 
-  const throttle = decideThrottle({
-    byotActive,
-    tier,
-    newWindowCostUsd,
-    windowBudgetUsd,
-    subscriptionStatus,
-    windowStartedAt,
-  });
-
   return {
     workspaceId,
     windowUpdates: { ...windowUpdates, ...backfill.update },
-    throttleLevel: throttle.level,
-    throttleReason: throttle.reason,
   };
 }
 
@@ -248,8 +208,6 @@ function userUsageUpdate(state: UsageTransactionState, usage: UsageData): Firest
     "usage.costUsd":            FieldValue.increment(usage.costUsd),
     "usage.interactionCount":   FieldValue.increment(1),
     "usage.requestsThisHour":   FieldValue.increment(1),
-    "usage.throttleLevel":      state.throttleLevel,
-    "usage.throttleReason":     state.throttleReason,
     "usage.lastUpdated":        FieldValue.serverTimestamp(),
   };
 }

@@ -446,7 +446,6 @@ interface DrawerMountedCustomer {
   slug: string;
   username: string;
   email: string;
-  throttleLevel: number;
   lastActive: string | null;
 }
 
@@ -1362,8 +1361,6 @@ function buildMountedCustomer(
     slug,
     username: typeof data.username === "string" ? data.username : "",
     email: typeof data.email === "string" ? data.email : "",
-    throttleLevel:
-      typeof data.throttleLevel === "number" ? data.throttleLevel : 0,
     lastActive: toIso(data.lastActive),
   };
 }

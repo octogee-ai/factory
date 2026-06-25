@@ -60,7 +60,7 @@ export async function repoContentsApi(
 
 export const HIDDEN = new Set([
   "AGENTS.md", "TOOLS.md", "BUILDS.md", "HEARTBEAT.md", "IDENTITY.md",
-  "_throttle.json", ".gitignore",
+  ".gitignore",
   "brain", ".git", ".system", "preview", "node_modules",
   "crew-webhooks.json",
 ]);

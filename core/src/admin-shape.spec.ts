@@ -34,12 +34,26 @@ describe("buildCustomerSummary", () => {
       tier: "trial",
       subscriptionStatus: "trial",
       costUsd: 0,
-      throttleLevel: 0,
       windowTokensUsed: 0,
       agentCount: 0,
       mattermostConnected: false,
       mattermostUsername: null,
       provisioningStatus: "queued",
     });
+  });
+
+  it("derives `degraded` from the broker window spend, not the legacy throttle field", () => {
+    // free tier is always on the house model
+    expect(buildCustomerSummary("u", { subscription: { tier: "free" } }).degraded).toBe(true);
+
+    // a builder on their own credential (BYOT) is never throttled
+    expect(
+      buildCustomerSummary("u", { subscription: { tier: "free" }, byotActive: true }).degraded,
+    ).toBe(false);
+
+    // paid tier: under window budget (3rd arg = broker window spend) vs over it
+    const paid = { selectedTier: "pro", subscription: { tier: "pro" } };
+    expect(buildCustomerSummary("u", paid, 0).degraded).toBe(false);
+    expect(buildCustomerSummary("u", paid, 9999).degraded).toBe(true);
   });
 });

@@ -4,6 +4,7 @@ import {
   calculateAvailableTokens,
   type TierName,
 } from "@octogee/shared/types/billing-tiers";
+import { spendDegradeState, windowBudgetUsdForTier } from "@octogee/shared/types/billing";
 
 export function toISODate(val: unknown): string | null {
   if (!val) return null;
@@ -70,7 +71,7 @@ export interface CustomerSummary {
   weeklyBudget:        number;
   totalTokensUsed:     number;
   costUsd:             number;
-  throttleLevel:       number;
+  degraded:            boolean;
   faceModel:           string | null;
   brainModel:          string | null;
   lastActive:          string | null;
@@ -91,6 +92,7 @@ export interface CustomerSummary {
 export function buildCustomerSummary(
   uid: string,
   d: CustomerDoc,
+  brokerWindowCostUsd = 0,
 ): CustomerSummary {
   const subscription = objectAt(d, "subscription");
   const tier = tierAt(subscription);
@@ -101,7 +103,15 @@ export function buildCustomerSummary(
   const openclaw = objectAt(provisioning, "openclaw");
   const mattermost = objectAt(d, "mattermost");
   const costUsd = numberAt(usage, "costUsd");
-  const throttleLevel = numberAt(usage, "throttleLevel");
+  // Degraded = the LLM broker is serving the house model because this builder is
+  // over their tier window budget (or on the free tier). BYOT spend is uncounted,
+  // so their broker window is ~$0 → not degraded; byotActive makes that explicit.
+  const degraded = spendDegradeState({
+    tier,
+    windowCostUsd: brokerWindowCostUsd,
+    windowBudgetUsd: windowBudgetUsdForTier(tier, toDateOrNull(subscription.trialStartedAt)),
+    onOwnerCredential: d.byotActive === true,
+  }).degraded;
   const agentIds = stringArrayAt(openclaw, "agentIds");
   const revenueUsd: number = isActiveStatus(subscriptionStatus)
     ? tierConfig.monthlyPrice
@@ -132,7 +142,7 @@ export function buildCustomerSummary(
     weeklyBudget: tierConfig.weeklyTokenBudget,
     totalTokensUsed: numberAt(usage, "totalTokensUsed", numberAt(usage, "tokensUsed")),
     costUsd,
-    throttleLevel,
+    degraded,
     faceModel: nullableStringAt(d, "faceModel"),
     brainModel: nullableStringAt(d, "brainModel"),
     lastActive: toISODate(usage.lastUpdated),

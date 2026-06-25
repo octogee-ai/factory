@@ -6,6 +6,10 @@ import { readSecret } from "../../../scripts/lib/secret-manager.js";
 import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
 import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
 import { createFirestoreModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
+import {
+  envDefaultModelBrokerLimits,
+  resolveOwnerModelBrokerGrant,
+} from "../lib/model-broker-limits.js";
 import { findAssignedUserByAgentId } from "./fleet-broker.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
@@ -134,13 +138,12 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
     res.json({ value });
   });
 
-  // Mint an owner-scoped, METER-ONLY broker token for one customer-agent on a
-  // shared (multi-tenant) gateway. The agent resolves anthropic through the broker
-  // with its OWN token, so the broker resolves per-owner (platform key, or the
-  // owner's byok-<slug>-anthropic) and meters per ownerUid. Roster-scoped via
-  // findAssignedUserByAgentId — a gateway can only mint for a customer assigned to
-  // it. `limits: null` = meter-only; the per-builder cap stays on the in-pod L3
-  // throttle (shared customers throttle exactly as before).
+  // Mint an owner-scoped broker token for one customer-agent on a shared
+  // (multi-tenant) gateway. The agent resolves anthropic through the broker with
+  // its OWN token, so the broker resolves per-owner (platform key, or the owner's
+  // byok-<slug>-anthropic), meters per ownerUid, and enforces the owner's tier
+  // spend cap (degrade to the house model when exhausted). Roster-scoped via
+  // findAssignedUserByAgentId — a gateway can only mint for a customer assigned to it.
   router.post("/agent-model-token", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -157,6 +160,13 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       return;
     }
 
+    const grant = await resolveOwnerModelBrokerGrant({
+      db,
+      gatewayId: bound.gatewayId,
+      ownerUid: assigned.uid,
+      now: Date.now(),
+      defaults: envDefaultModelBrokerLimits(),
+    });
     const issued = await createFirestoreModelBrokerTokenStore(db).issueToken({
       gatewayId: bound.gatewayId,
       ownerUid: assigned.uid,
@@ -168,7 +178,8 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       // still-in-flight token (the prior one expires by TTL instead).
       skipPointer: true,
       ttlSeconds: AGENT_MODEL_TOKEN_TTL_SECONDS,
-      limits: null,
+      limits: grant.limits,
+      policy: grant.policy,
     });
     res.json({ value: issued.token });
   });

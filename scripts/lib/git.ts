@@ -288,7 +288,6 @@ function workspaceGitignore(): string {
     "TOOLS.md",
     "PROJECTS.md",
     "HEARTBEAT.md",
-    "_throttle.json",
     "crew-webhooks.json",
     "_pending_*.json",
     ".byot-managed",

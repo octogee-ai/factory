@@ -29,6 +29,9 @@ export interface LlmBrokerAppDeps {
   providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
   providerKeyResolver?: ModelBrokerProviderKeyResolver;
   upstreamBaseUrl?: string;
+  // Model a builder is degraded to when over budget (or always, on the free tier),
+  // served on the platform "house" key and not billed to the builder's window.
+  houseModel?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
   bodyLimit?: string;
@@ -36,6 +39,7 @@ export interface LlmBrokerAppDeps {
 }
 
 const DEFAULT_UPSTREAM_BASE_URL = "https://api.anthropic.com";
+const DEFAULT_HOUSE_MODEL = "claude-haiku-4-5";
 const DEFAULT_BODY_LIMIT = "32mb";
 const MAX_SSE_METERING_BUFFER_CHARS = 1_000_000;
 
@@ -168,6 +172,21 @@ function readRequestMetadata(body: unknown): {
     };
   } catch {
     return { model: null, cacheWriteTtl: "5m" };
+  }
+}
+
+// Degrade rewrites only the top-level `model`, preserving the rest of the request
+// (messages, cache_control breakpoints, tools). Returns null on a non-JSON body so
+// the caller forwards the original bytes unchanged.
+function rewriteRequestModel(body: unknown, model: string): Buffer | null {
+  if (!Buffer.isBuffer(body)) return null;
+  try {
+    const parsed = JSON.parse(body.toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    (parsed as Record<string, unknown>).model = model;
+    return Buffer.from(JSON.stringify(parsed), "utf8");
+  } catch {
+    return null;
   }
 }
 
@@ -343,11 +362,15 @@ function finishSseUsageCollection(
 
 interface GateDecisionAllowed {
   allowed: true;
+  // Serve the house model on the house key, uncounted. True when the builder is
+  // over their spend window or on the free tier. Spend exhaustion degrades — it
+  // never rejects — so the builder keeps working on cheap Haiku.
+  degrade: boolean;
 }
 
 interface GateDecisionDenied {
   allowed: false;
-  status: 402 | 429 | 503;
+  status: 429 | 503;
   error: string;
   retryAfterSeconds?: number;
 }
@@ -416,7 +439,7 @@ function usageEventId(
     .digest("hex")}`;
 }
 
-async function preflightGate(input: {
+interface PreflightGateInput {
   req: Request;
   url: URL;
   record: ModelBrokerTokenRecord;
@@ -424,53 +447,64 @@ async function preflightGate(input: {
   usageStore?: ModelBrokerUsageStore;
   now: () => number;
   onMeteringError: (err: unknown) => void;
-}): Promise<GateDecision> {
+}
+
+async function spendWindowGate(
+  input: PreflightGateInput,
+  spendWindowUsd: number,
+): Promise<{ degrade: boolean } | GateDecisionDenied> {
+  if (!input.usageStore?.readWindowUsage) {
+    return { allowed: false, status: 503, error: "model broker spend gate unavailable" };
+  }
+  const usage = await input.usageStore.readWindowUsage({
+    gatewayId: input.record.gatewayId,
+    ownerUid: input.record.ownerUid,
+    now: input.now(),
+  });
+  return { degrade: usage.costUsd >= spendWindowUsd };
+}
+
+async function rateWindowDenial(
+  input: PreflightGateInput,
+  requestsPerMinute: number,
+): Promise<GateDecisionDenied | null> {
+  if (!input.usageStore?.reserveRateWindow) {
+    return { allowed: false, status: 503, error: "model broker rate gate unavailable" };
+  }
+  const rate = await input.usageStore.reserveRateWindow({
+    gatewayId: input.record.gatewayId,
+    ownerUid: input.record.ownerUid,
+    now: input.now(),
+  });
+  return rate.requestCount > requestsPerMinute
+    ? { allowed: false, status: 429, error: "model broker rate limit exceeded", retryAfterSeconds: 60 }
+    : null;
+}
+
+async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
   const { record } = input;
-  if (input.source === "owner_model_credential") return { allowed: true };
+  if (input.source === "owner_model_credential") return { allowed: true, degrade: false };
   if (input.req.method.toUpperCase() === "GET" && input.url.pathname === "/v1/models") {
-    return { allowed: true };
+    return { allowed: true, degrade: false };
   }
   const spendWindowUsd = record.limits.spendWindowUsd;
   const requestsPerMinute = record.limits.requestsPerMinute;
-  if (spendWindowUsd === null && requestsPerMinute === null) return { allowed: true };
-  if (!input.usageStore) {
-    return { allowed: false, status: 503, error: "model broker limit store unavailable" };
+  if (!record.policy.freeTier && spendWindowUsd === null && requestsPerMinute === null) {
+    return { allowed: true, degrade: false };
   }
   try {
-    if (spendWindowUsd !== null) {
-      if (!input.usageStore.readWindowUsage) {
-        return { allowed: false, status: 503, error: "model broker spend gate unavailable" };
-      }
-      const usage = await input.usageStore.readWindowUsage({
-        gatewayId: record.gatewayId,
-        now: input.now(),
-      });
-      if (usage.costUsd >= spendWindowUsd) {
-        return {
-          allowed: false,
-          status: 402,
-          error: "model broker spend cap exceeded",
-        };
-      }
+    // Free tier always degrades; a paid builder degrades once their window is spent.
+    let degrade = record.policy.freeTier;
+    if (!degrade && spendWindowUsd !== null) {
+      const spend = await spendWindowGate(input, spendWindowUsd);
+      if ("allowed" in spend) return spend;
+      degrade = spend.degrade;
     }
     if (requestsPerMinute !== null) {
-      if (!input.usageStore.reserveRateWindow) {
-        return { allowed: false, status: 503, error: "model broker rate gate unavailable" };
-      }
-      const rate = await input.usageStore.reserveRateWindow({
-        gatewayId: record.gatewayId,
-        now: input.now(),
-      });
-      if (rate.requestCount > requestsPerMinute) {
-        return {
-          allowed: false,
-          status: 429,
-          error: "model broker rate limit exceeded",
-          retryAfterSeconds: 60,
-        };
-      }
+      const denial = await rateWindowDenial(input, requestsPerMinute);
+      if (denial) return denial;
     }
-    return { allowed: true };
+    return { allowed: true, degrade };
   } catch (err) {
     input.onMeteringError(err);
     return { allowed: false, status: 503, error: "model broker limit check failed" };
@@ -557,10 +591,63 @@ async function writeUpstreamResponse(
   }
 }
 
+// Gate has passed → degrade the model if needed, forward to Anthropic on the
+// resolved key, and meter the response. Split out of the route handler to keep
+// its cyclomatic complexity in check.
+async function forwardAllowed(args: {
+  req: Request;
+  res: ExpressResponse;
+  url: URL;
+  record: ModelBrokerTokenRecord;
+  providerKey: ModelBrokerProviderKey;
+  gate: GateDecisionAllowed;
+  fetchImpl: typeof fetch;
+  upstreamBaseUrl: string;
+  houseModel: string;
+  usageStore?: ModelBrokerUsageStore;
+  now: () => number;
+  onMeteringError: (err: unknown) => void;
+}): Promise<void> {
+  const { req, res, url, record, providerKey, gate } = args;
+  const degradedBody = gate.degrade ? rewriteRequestModel(req.body, args.houseModel) : null;
+  const effectiveBody = degradedBody ?? req.body;
+  const body =
+    req.method === "GET" || req.method === "HEAD"
+      ? undefined
+      : (effectiveBody as unknown as BodyInit);
+  const requestMetadata = readRequestMetadata(effectiveBody);
+  const requestId = crypto.randomUUID();
+  const upstream = await args.fetchImpl(`${args.upstreamBaseUrl}${url.pathname}${url.search}`, {
+    method: req.method,
+    headers: Object.fromEntries(upstreamHeaders(req, providerKey.apiKey).entries()),
+    body,
+    redirect: "manual",
+  });
+  const metering: MeteringContext | undefined = shouldMeter(req, url, upstream)
+    ? {
+        req,
+        url,
+        record,
+        requestId,
+        requestModel: requestMetadata.model,
+        cacheWriteTtl: requestMetadata.cacheWriteTtl,
+        usageStore: args.usageStore,
+        now: args.now,
+        onMeteringError: args.onMeteringError,
+        // Degraded + free-tier traffic runs "on the house": metered for our
+        // books (rollup) but never debited against the builder's window.
+        countsTowardSpendWindow:
+          providerKey.source !== "owner_model_credential" && !gate.degrade,
+      }
+    : undefined;
+  await writeUpstreamResponse(upstream, res, metering);
+}
+
 export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
   const app = express();
   const fetchImpl = deps.fetchImpl ?? fetch;
   const upstreamBaseUrl = trimTrailingSlash(deps.upstreamBaseUrl ?? DEFAULT_UPSTREAM_BASE_URL);
+  const houseModel = deps.houseModel ?? DEFAULT_HOUSE_MODEL;
   const now = deps.now ?? Date.now;
 
   app.disable("x-powered-by");
@@ -616,33 +703,20 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           res.status(gate.status).json({ error: gate.error });
           return;
         }
-        const body =
-          req.method === "GET" || req.method === "HEAD"
-            ? undefined
-            : (req.body as unknown as BodyInit);
-        const requestMetadata = readRequestMetadata(req.body);
-        const requestId = crypto.randomUUID();
-        const upstream = await fetchImpl(`${upstreamBaseUrl}${url.pathname}${url.search}`, {
-          method: req.method,
-          headers: Object.fromEntries(upstreamHeaders(req, providerKey.apiKey).entries()),
-          body,
-          redirect: "manual",
+        await forwardAllowed({
+          req,
+          res,
+          url,
+          record,
+          providerKey,
+          gate,
+          fetchImpl,
+          upstreamBaseUrl,
+          houseModel,
+          usageStore: deps.usageStore,
+          now,
+          onMeteringError: deps.onMeteringError ?? (() => undefined),
         });
-        const metering = shouldMeter(req, url, upstream)
-          ? {
-              req,
-              url,
-              record,
-              requestId,
-              requestModel: requestMetadata.model,
-              cacheWriteTtl: requestMetadata.cacheWriteTtl,
-              usageStore: deps.usageStore,
-              now,
-              onMeteringError: deps.onMeteringError ?? (() => undefined),
-              countsTowardSpendWindow: providerKey.source !== "owner_model_credential",
-            }
-          : undefined;
-        await writeUpstreamResponse(upstream, res, metering);
       } catch (err) {
         next(err);
       }

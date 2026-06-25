@@ -2,6 +2,17 @@ import * as crypto from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
 
 import { WINDOW_LENGTH_HOURS } from "../../../shared/types/billing.js";
+import {
+  MODEL_BROKER_USAGE_EVENTS_COLLECTION,
+  MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
+  MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
+  MODEL_BROKER_RATE_WINDOWS_COLLECTION,
+  MODEL_BROKER_RATE_WINDOW_MS,
+  modelBrokerWindowDocId as windowDocId,
+  rateWindowStartMs,
+  usageWindowStartMs,
+  windowOwnerKey,
+} from "../../../shared/types/model-broker-usage.js";
 
 export type ModelBrokerUsageProvider = "anthropic";
 export type AnthropicCacheWriteTtl = "5m" | "1h";
@@ -48,11 +59,12 @@ export interface ModelBrokerUsageStore {
 
 export interface ModelBrokerUsageWindowReadInput {
   gatewayId: string;
+  ownerUid?: string | null;
   now?: number;
 }
 
 export interface ModelBrokerUsageWindowSnapshot {
-  gatewayId: string;
+  ownerKey: string;
   windowStartMs: number;
   requestCount: number;
   totalTokens: number;
@@ -61,23 +73,29 @@ export interface ModelBrokerUsageWindowSnapshot {
 
 export interface ModelBrokerRateWindowReserveInput {
   gatewayId: string;
+  ownerUid?: string | null;
   now?: number;
 }
 
 export interface ModelBrokerRateWindowSnapshot {
-  gatewayId: string;
+  ownerKey: string;
   windowStartMs: number;
   requestCount: number;
 }
 
-export const MODEL_BROKER_USAGE_EVENTS_COLLECTION = "modelBrokerUsageEvents";
-export const MODEL_BROKER_USAGE_ROLLUPS_COLLECTION = "modelBrokerUsageRollups";
-export const MODEL_BROKER_USAGE_WINDOWS_COLLECTION = "modelBrokerUsageWindows";
-export const MODEL_BROKER_RATE_WINDOWS_COLLECTION = "modelBrokerRateWindows";
+// Storage contract (collection names + window-key math) is single-sourced in
+// shared/ so the read side (gateway-edge usage panel) can't drift from it.
+export {
+  MODEL_BROKER_USAGE_EVENTS_COLLECTION,
+  MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
+  MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
+  MODEL_BROKER_RATE_WINDOWS_COLLECTION,
+  rateWindowStartMs,
+  usageWindowStartMs,
+  windowOwnerKey,
+};
 
 const TOKENS_PER_MILLION = 1_000_000;
-const WINDOW_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
-const RATE_WINDOW_MS = 60 * 1000;
 const USAGE_RETENTION_DAYS = 180;
 
 interface AnthropicPricing {
@@ -212,17 +230,6 @@ export function modelRollupKey(model: string): string {
   return model.replace(/[/.]/g, "_").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100) || "unknown";
 }
 
-export function usageWindowStartMs(now: number): number {
-  return Math.floor(now / WINDOW_MS) * WINDOW_MS;
-}
-
-export function rateWindowStartMs(now: number): number {
-  return Math.floor(now / RATE_WINDOW_MS) * RATE_WINDOW_MS;
-}
-
-function windowDocId(gatewayId: string, windowStartMs: number): string {
-  return `${gatewayId}_${windowStartMs}`;
-}
 
 function expiresAt(now: number): Date {
   return new Date(now + USAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
@@ -360,6 +367,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
     if (this.eventIds.has(eventId)) return;
     this.eventIds.add(eventId);
     const windowStartMs = usageWindowStartMs(now);
+    const ownerKey = windowOwnerKey(input);
     this.events.push(
       eventDocument({
         ...input,
@@ -370,27 +378,27 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         windowStartMs,
       }),
     );
-    const existing = this.rollups.get(input.gatewayId) ?? {
+    const existing = this.rollups.get(ownerKey) ?? {
       totalTokens: 0,
       costUsd: 0,
       requestCount: 0,
     };
-    this.rollups.set(input.gatewayId, {
+    this.rollups.set(ownerKey, {
       totalTokens: existing.totalTokens + totalTokens(input.usage),
       costUsd: existing.costUsd + cost.total,
       requestCount: existing.requestCount + 1,
     });
     if (input.countsTowardSpendWindow !== false) {
-      const windowKey = windowDocId(input.gatewayId, windowStartMs);
+      const windowKey = windowDocId(ownerKey, windowStartMs);
       const existingWindow = this.windows.get(windowKey) ?? {
-        gatewayId: input.gatewayId,
+        ownerKey,
         windowStartMs,
         totalTokens: 0,
         costUsd: 0,
         requestCount: 0,
       };
       this.windows.set(windowKey, {
-        gatewayId: input.gatewayId,
+        ownerKey,
         windowStartMs,
         totalTokens: existingWindow.totalTokens + totalTokens(input.usage),
         costUsd: existingWindow.costUsd + cost.total,
@@ -402,9 +410,10 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   async readWindowUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot> {
     const now = input.now ?? Date.now();
     const windowStartMs = usageWindowStartMs(now);
+    const ownerKey = windowOwnerKey(input);
     return (
-      this.windows.get(windowDocId(input.gatewayId, windowStartMs)) ?? {
-        gatewayId: input.gatewayId,
+      this.windows.get(windowDocId(ownerKey, windowStartMs)) ?? {
+        ownerKey,
         windowStartMs,
         requestCount: 0,
         totalTokens: 0,
@@ -416,9 +425,10 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   async reserveRateWindow(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot> {
     const now = input.now ?? Date.now();
     const windowStartMs = rateWindowStartMs(now);
-    const key = windowDocId(input.gatewayId, windowStartMs);
+    const ownerKey = windowOwnerKey(input);
+    const key = windowDocId(ownerKey, windowStartMs);
     const current = this.rateWindows.get(key) ?? {
-      gatewayId: input.gatewayId,
+      ownerKey,
       windowStartMs,
       requestCount: 0,
     };
@@ -438,11 +448,12 @@ export function createFirestoreModelBrokerUsageStore(
       const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
       const cost = estimateAnthropicCost(input.model, input.usage, cacheWriteTtl);
       const windowStartMs = usageWindowStartMs(now);
+      const ownerKey = windowOwnerKey(input);
       const eventRef = db.collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION).doc(eventId);
-      const rollupRef = db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(input.gatewayId);
+      const rollupRef = db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(ownerKey);
       const windowRef = db
         .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-        .doc(windowDocId(input.gatewayId, windowStartMs));
+        .doc(windowDocId(ownerKey, windowStartMs));
       const modelKey = modelRollupKey(input.model);
 
       await db.runTransaction(async (t) => {
@@ -469,6 +480,7 @@ export function createFirestoreModelBrokerUsageStore(
         t.set(
           rollupRef,
           {
+            ownerKey,
             gatewayId: input.gatewayId,
             ownerUid: input.ownerUid,
             provider: input.provider,
@@ -482,6 +494,7 @@ export function createFirestoreModelBrokerUsageStore(
           t.set(
             windowRef,
             {
+              ownerKey,
               gatewayId: input.gatewayId,
               ownerUid: input.ownerUid,
               provider: input.provider,
@@ -500,13 +513,14 @@ export function createFirestoreModelBrokerUsageStore(
     async readWindowUsage(input) {
       const now = input.now ?? Date.now();
       const windowStartMs = usageWindowStartMs(now);
+      const ownerKey = windowOwnerKey(input);
       const snap = await db
         .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-        .doc(windowDocId(input.gatewayId, windowStartMs))
+        .doc(windowDocId(ownerKey, windowStartMs))
         .get();
       const data = snap.data() ?? {};
       return {
-        gatewayId: input.gatewayId,
+        ownerKey,
         windowStartMs,
         requestCount: numberField(data, "requestCount"),
         totalTokens: numberField(data, "totalTokens"),
@@ -517,9 +531,10 @@ export function createFirestoreModelBrokerUsageStore(
     async reserveRateWindow(input) {
       const now = input.now ?? Date.now();
       const windowStartMs = rateWindowStartMs(now);
+      const ownerKey = windowOwnerKey(input);
       const rateRef = db
         .collection(MODEL_BROKER_RATE_WINDOWS_COLLECTION)
-        .doc(windowDocId(input.gatewayId, windowStartMs));
+        .doc(windowDocId(ownerKey, windowStartMs));
       return db.runTransaction(async (t) => {
         const snap = await t.get(rateRef);
         const data = snap.data() ?? {};
@@ -527,16 +542,16 @@ export function createFirestoreModelBrokerUsageStore(
         t.set(
           rateRef,
           {
-            gatewayId: input.gatewayId,
+            ownerKey,
             windowStartMs,
-            windowLengthMs: RATE_WINDOW_MS,
+            windowLengthMs: MODEL_BROKER_RATE_WINDOW_MS,
             requestCount,
             updatedAt: now,
             expiresAt: expiresAt(now),
           },
           { merge: true },
         );
-        return { gatewayId: input.gatewayId, windowStartMs, requestCount };
+        return { ownerKey, windowStartMs, requestCount };
       });
     },
   };

@@ -1,12 +1,31 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  InMemoryModelBrokerUsageStore,
   estimateAnthropicCost,
   mergeAnthropicUsage,
   modelRollupKey,
   normalizeAnthropicUsage,
   usageWindowStartMs,
+  windowOwnerKey,
 } from "../lib/model-broker-usage.js";
+
+const baseRecord = {
+  requestId: "req",
+  provider: "anthropic" as const,
+  gatewayId: "shared-blue",
+  model: "claude-sonnet-4-6",
+  usage: {
+    inputTokens: 100,
+    outputTokens: 50,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+  },
+  method: "POST",
+  path: "/v1/messages",
+  upstreamStatus: 200,
+  now: 10_000,
+};
 
 describe("model broker usage helpers", () => {
   it("normalizes Anthropic usage and merges streaming cumulative counters", () => {
@@ -89,5 +108,38 @@ describe("model broker usage helpers", () => {
       "anthropic_claude_sonnet_4_6",
     );
     expect(usageWindowStartMs(4 * 60 * 60 * 1000 + 123)).toBe(4 * 60 * 60 * 1000);
+  });
+
+  it("keys the spend counter on the owner, falling back to the gateway", () => {
+    expect(windowOwnerKey({ ownerUid: "uid-a", gatewayId: "shared-blue" })).toBe("uid-a");
+    expect(windowOwnerKey({ ownerUid: null, gatewayId: "builder-7" })).toBe("builder-7");
+  });
+});
+
+describe("InMemoryModelBrokerUsageStore owner isolation", () => {
+  it("never lets one builder's spend bleed into another's window on a shared gateway", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    await store.recordUsage({ ...baseRecord, eventId: "a", ownerUid: "uid-a" });
+    await store.recordUsage({ ...baseRecord, eventId: "b1", ownerUid: "uid-b" });
+    await store.recordUsage({ ...baseRecord, eventId: "b2", ownerUid: "uid-b" });
+
+    const a = await store.readWindowUsage({ gatewayId: "shared-blue", ownerUid: "uid-a", now: 10_000 });
+    const b = await store.readWindowUsage({ gatewayId: "shared-blue", ownerUid: "uid-b", now: 10_000 });
+    expect(a.requestCount).toBe(1);
+    expect(b.requestCount).toBe(2);
+    expect(b.costUsd).toBeGreaterThan(a.costUsd);
+  });
+
+  it("does not count house/free traffic toward the spend window", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "free",
+      ownerUid: "uid-free",
+      countsTowardSpendWindow: false,
+    });
+    const w = await store.readWindowUsage({ gatewayId: "shared-blue", ownerUid: "uid-free", now: 10_000 });
+    expect(w.costUsd).toBe(0);
+    expect(w.requestCount).toBe(0);
   });
 });

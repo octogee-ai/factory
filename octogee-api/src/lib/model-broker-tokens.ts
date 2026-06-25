@@ -8,6 +8,14 @@ export interface ModelBrokerTokenLimits {
   requestsPerMinute: number | null;
 }
 
+// Plan/routing policy, distinct from spend limits. `freeTier` means "always serve
+// the house model on the house key, never billed" — degrade unconditionally rather
+// than only on window exhaustion. Paid tiers carry `freeTier: false` and degrade
+// only when their `spendWindowUsd` is exhausted.
+export interface ModelBrokerTokenPolicy {
+  freeTier: boolean;
+}
+
 export interface ModelBrokerTokenRecord {
   tokenHash: string;
   gatewayId: string;
@@ -18,6 +26,7 @@ export interface ModelBrokerTokenRecord {
   createdAt: number;
   expiresAt: number | null;
   limits: ModelBrokerTokenLimits;
+  policy: ModelBrokerTokenPolicy;
   revoked: boolean;
   revokedAt?: number;
 }
@@ -40,6 +49,7 @@ export interface IssueModelBrokerTokenInput {
   skipPointer?: boolean;
   ttlSeconds?: number | null;
   limits?: Partial<ModelBrokerTokenLimits> | null;
+  policy?: Partial<ModelBrokerTokenPolicy> | null;
   now?: number;
   randomBytes?: (size: number) => Buffer;
 }
@@ -88,6 +98,14 @@ export function normalizeModelBrokerTokenLimits(
   };
 }
 
+export function normalizeModelBrokerTokenPolicy(
+  policy: Partial<ModelBrokerTokenPolicy> | null | undefined,
+): ModelBrokerTokenPolicy {
+  return {
+    freeTier: policy?.freeTier === true,
+  };
+}
+
 function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerTokenRecord | null {
   if (!recordHasRequiredShape(data)) return null;
   const ownerUid = typeof data.ownerUid === "string" ? data.ownerUid : null;
@@ -97,6 +115,10 @@ function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerToke
     data.limits && typeof data.limits === "object" && !Array.isArray(data.limits)
       ? normalizeModelBrokerTokenLimits(data.limits as Partial<ModelBrokerTokenLimits>)
       : normalizeModelBrokerTokenLimits(null);
+  const policy =
+    data.policy && typeof data.policy === "object" && !Array.isArray(data.policy)
+      ? normalizeModelBrokerTokenPolicy(data.policy as Partial<ModelBrokerTokenPolicy>)
+      : normalizeModelBrokerTokenPolicy(null);
   return {
     tokenHash: data.tokenHash,
     gatewayId: data.gatewayId,
@@ -107,6 +129,7 @@ function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerToke
     createdAt: data.createdAt,
     expiresAt,
     limits,
+    policy,
     revoked: data.revoked === true,
     ...(revokedAt === undefined ? {} : { revokedAt }),
   };
@@ -152,6 +175,7 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
       createdAt: now,
       expiresAt: ttl ? now + ttl * 1000 : null,
       limits: normalizeModelBrokerTokenLimits(input.limits),
+      policy: normalizeModelBrokerTokenPolicy(input.policy),
       revoked: false,
     };
     this.tokens.set(tokenHash, record);
@@ -215,6 +239,7 @@ export function createFirestoreModelBrokerTokenStore(
         createdAt: now,
         expiresAt: ttl ? now + ttl * 1000 : null,
         limits: normalizeModelBrokerTokenLimits(input.limits),
+        policy: normalizeModelBrokerTokenPolicy(input.policy),
         revoked: false,
       };
       await tokens.doc(tokenHash).set(record);
