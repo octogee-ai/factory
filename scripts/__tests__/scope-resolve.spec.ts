@@ -97,20 +97,23 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
-  it("scripts/lib change ALSO runs octogee-api (it compiles it)", () => {
-    // The admin-fleet-router hazard: octogee-api compiles scripts/lib (tsconfig
-    // include / source imports), so a scripts/lib edit must re-run it. glm-controller
-    // + gateway-edge import @octogee/core directly — they react to core/, not scripts/lib.
+  it("scripts/lib change runs only scripts — nothing compiles its source anymore", () => {
+    // octogee-api, gateway-edge, and glm-controller all import @octogee/core
+    // directly now; no package compiles scripts/lib source, so a scripts/lib edit
+    // re-runs only scripts (+ its emulator suite via ownership).
     expectJobs(
       ["scripts/lib/admin-fleet-router.ts"],
-      ["scripts", "customer-lifecycle-emulator", "octogee-api"],
+      ["scripts", "customer-lifecycle-emulator"],
     );
   });
 
   it("records ownership and edge reasons for diagnostics", () => {
-    const result = resolveScope(["scripts/lib/admin-fleet-router.ts"]);
+    const result = resolveScope(["gateway-edge/src/routes/git.ts"]);
 
-    expect(result.reasons).toEqual(["owner:scripts/", "edge:scripts/lib/"]);
+    expect(result.reasons).toEqual([
+      "owner:gateway-edge/",
+      "edge:gateway-edge/src/",
+    ]);
   });
 
   it("a scripts change OUTSIDE lib/ does NOT pull octogee-api/gateway-edge (edge is path-specific)", () => {

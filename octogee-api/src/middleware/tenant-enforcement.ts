@@ -3,7 +3,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import {
   hasRunningInboundMigrationForSlug,
   readAssignedSlugsForGateway,
-} from "../../../scripts/lib/assigned-roster.js";
+} from "@octogee/core/assigned-roster";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;

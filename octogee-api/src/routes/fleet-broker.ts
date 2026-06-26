@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
-import { isValidUsername } from "../../../shared/types/identity.js";
+import { isValidUsername } from "@octogee/shared/types/identity";
 import type {
   FleetBrokerBlobSignedUrl,
   FleetBrokerChannelBinding,
@@ -16,19 +16,19 @@ import type {
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
-} from "../../../shared/types/fleet-broker.js";
+} from "@octogee/shared/types/fleet-broker";
 import {
   GLM_GATEWAYS_COLLECTION,
   isGatewayClass,
   isGatewayProfile,
   resolveGatewayClass,
-} from "../../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 import {
   byotSnapshotProjectionFromSystemConfig,
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
-} from "../../../scripts/lib/customer-snapshot-mapping.js";
-import { slugFromAssignedUser } from "../../../scripts/lib/assigned-roster.js";
+} from "@octogee/core/customer-snapshot-mapping";
+import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -103,7 +103,7 @@ async function defaultProvisionMattermost(input: {
   userData: Record<string, unknown>;
 }): Promise<FleetBrokerMattermostUpdate> {
   const { buildProvisioningContext, provisionMattermost } = await import(
-    "../../../scripts/lib/provisionSteps.js"
+    "@octogee/core/provisionSteps"
   );
   return provisionMattermost(buildProvisioningContext(input.uid, input.userData));
 }
@@ -114,7 +114,7 @@ async function defaultMarkProvisioningComplete(input: {
   mmUpdate: FleetBrokerMattermostUpdate;
 }): Promise<void> {
   const { buildProvisioningContext, markProvisioningComplete } = await import(
-    "../../../scripts/lib/provisionSteps.js"
+    "@octogee/core/provisionSteps"
   );
   const ctx = buildProvisioningContext(input.uid, input.userData);
   await markProvisioningComplete(ctx, input.mmUpdate, [`octogee-${ctx.slug}-coach`]);
@@ -125,7 +125,7 @@ async function defaultNotifyOpsOfSignup(input: {
   userData: Record<string, unknown>;
 }): Promise<void> {
   const { buildProvisioningContext, notifyOpsOfSignup } = await import(
-    "../../../scripts/lib/provisionSteps.js"
+    "@octogee/core/provisionSteps"
   );
   await notifyOpsOfSignup(buildProvisioningContext(input.uid, input.userData));
 }
@@ -224,7 +224,7 @@ const defaultApplyMilestoneSignal: ApplyMilestoneSignal = async (input) => {
 
 const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
   const { extractRole, reportUsageForUid } = await import(
-    "../../../scripts/lib/usage-tracking.js"
+    "@octogee/core/usage-tracking"
   );
   await reportUsageForUid({
     db: input.db,

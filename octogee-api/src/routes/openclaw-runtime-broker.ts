@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 
-import { isValidUsername } from "../../../shared/types/identity.js";
-import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
+import { isValidUsername } from "@octogee/shared/types/identity";
+import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 

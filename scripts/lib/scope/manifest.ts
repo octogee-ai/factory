@@ -145,12 +145,6 @@ export const EDGES: readonly ScopeEdge[] = [
       "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs",
   },
   {
-    when: "scripts/lib/",
-    jobs: [JOBS.octogeeApi],
-    reason:
-      "octogee-api compiles scripts/lib (tsconfig include / source imports — admin-fleet-router hazard); glm-controller + gateway-edge cut over to @octogee/core",
-  },
-  {
     when: "gateway-edge/src/",
     jobs: [JOBS.octogeeApi],
     reason: "octogee-api compiles gateway-edge route Routers (cross-package imports)",

@@ -7,8 +7,8 @@
 # the bulk of the route code moves out of that tree and this
 # Dockerfile's COPY surface shrinks accordingly.
 #
-# Mirror of gateway-edge's build pattern (rootDir=.., tsc-alias for
-# @shared/* alias rewriting, post-build alias-leakage guard).
+# Mirror of gateway-edge's build pattern: rootDir=.. so tsc emits
+# dist/octogee-api/src/ alongside dist/gateway-edge/src/ (the routes).
 FROM node:26-slim AS builder
 WORKDIR /octogee-api
 
@@ -25,27 +25,15 @@ COPY test-helpers/octogee-test-helpers.tgz /test-helpers/octogee-test-helpers.tg
 COPY octogee-api/package.json octogee-api/package-lock.json* ./
 RUN npm ci --ignore-scripts
 
-# gateway-edge source files reference npm packages (express, firebase-admin,
-# etc.); Node module resolution walks up from their location. Install
-# gateway-edge's deps so files in /gateway-edge/src/ resolve cleanly
-# during tsc. Builder stage only.
+# octogee-api compiles gateway-edge/src/* (the cluster route handlers). Install
+# gateway-edge's deps so its npm packages AND @octogee/* tarball imports resolve
+# during tsc by walking up from /gateway-edge/src/. Builder stage only.
 COPY gateway-edge/package.json gateway-edge/package-lock.json* /gateway-edge/
 RUN npm ci --prefix /gateway-edge --ignore-scripts
-
-# scripts/lib/* is included in tsc (admin-fleet-router etc.); install its
-# deps for the same module-resolution reason.
-COPY scripts/package.json scripts/package-lock.json* /scripts/
-RUN npm ci --prefix /scripts --ignore-scripts
 
 COPY octogee-api/tsconfig.json ./
 COPY octogee-api/src/ ./src/
 COPY gateway-edge/src/ /gateway-edge/src/
-COPY shared/ /shared/
-COPY scripts/lib/ /scripts/lib/
-# shared/ws/upgrade-router.ts imports `ws` at build time; tsc resolves it
-# by walking up from /shared, which can't see /octogee-api/node_modules.
-# Install shared's own declared deps (ws + @types/ws) at /shared.
-RUN npm ci --prefix /shared --ignore-scripts
 
 RUN npm run build
 
@@ -58,8 +46,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# @octogee/core tarball at runtime; the compiled shim under dist/scripts/lib
-# resolves @octogee/core/* from the node_modules npm ci extracts it into.
+# @octogee/core + @octogee/shared tarballs at runtime; the compiled route code
+# under dist/octogee-api + dist/gateway-edge resolves @octogee/* from the
+# node_modules npm ci extracts them into.
 COPY core/octogee-core.tgz /core/octogee-core.tgz
 COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
 

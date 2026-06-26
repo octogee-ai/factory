@@ -1,14 +1,6 @@
 import { defineConfig } from 'vitest/config';
-import path from 'node:path';
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      // Mirror the tsconfig `paths` mapping so vitest + tsx resolve
-      // `@shared/types/identity` and other shared modules at runtime.
-      '@shared': path.resolve(__dirname, '../shared'),
-    },
-  },
   test: {
     setupFiles: ['./src/test-setup/firebase-offline.ts'],
     // Run files serially: under concurrent file execution the forks pool

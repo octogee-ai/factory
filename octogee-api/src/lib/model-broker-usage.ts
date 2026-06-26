@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
 
-import { WINDOW_LENGTH_HOURS } from "../../../shared/types/billing.js";
+import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/billing";
 import {
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
@@ -12,7 +12,7 @@ import {
   rateWindowStartMs,
   usageWindowStartMs,
   windowOwnerKey,
-} from "../../../shared/types/model-broker-usage.js";
+} from "@octogee/shared/types/model-broker-usage";
 
 export type ModelBrokerUsageProvider = "anthropic";
 export type AnthropicCacheWriteTtl = "5m" | "1h";

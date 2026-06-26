@@ -1,10 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
-import { MODEL_CREDENTIAL_STATIC_PROVIDER_IDS } from "@shared/types/model-credentials.js";
+import { MODEL_CREDENTIAL_STATIC_PROVIDER_IDS } from "@octogee/shared/types/model-credentials";
 
-import { readSecret } from "../../../scripts/lib/secret-manager.js";
-import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
-import { readAssignedSlugsForGateway } from "../../../scripts/lib/assigned-roster.js";
+import { readSecret } from "@octogee/core/secret-manager";
+import { isSafeAgentId } from "@octogee/core/byosub-restore";
+import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { createFirestoreModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
 import {
   envDefaultModelBrokerLimits,

@@ -4,7 +4,7 @@ import type {
   ModelBrokerProvider,
   ModelBrokerTokenRecord,
 } from "./model-broker-tokens.js";
-import { readSecret as defaultReadSecret } from "../../../scripts/lib/secret-manager.js";
+import { readSecret as defaultReadSecret } from "@octogee/core/secret-manager";
 
 export type ModelBrokerProviderKeySource = "platform" | "owner_model_credential";
 

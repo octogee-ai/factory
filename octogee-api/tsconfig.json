@@ -11,25 +11,16 @@
     "declaration": false,
     "sourceMap": true,
     "skipLibCheck": true,
-    "noUnusedLocals": false,
-    "paths": {
-      "@shared/*": ["../shared/*"]
-    }
+    "noUnusedLocals": false
   },
   "include": [
     "src/**/*.ts",
-    "../shared/types/**/*.ts",
-    "../gateway-edge/src/**/*.ts",
-    "../scripts/lib/admin-fleet-router.ts",
-    "../scripts/lib/secret-manager.ts",
-    "../scripts/lib/artifact-registry.ts",
-    "../scripts/lib/workspace-slugs.ts"
+    "../gateway-edge/src/**/*.ts"
   ],
   "exclude": [
     "src/__tests__",
     "node_modules",
     "dist",
-    "../shared/**/*.spec.ts",
     "../gateway-edge/src/**/__tests__/**/*",
     "../gateway-edge/src/chat-proxy/**",
     "../gateway-edge/src/index.ts"

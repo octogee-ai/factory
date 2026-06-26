@@ -14,7 +14,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import {
   GATEWAY_ID_REQUIREMENT,
   isValidGatewayId,
-} from "../../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 
 export interface ModelKeyIssuerRouteDeps {
   db?: Pick<Firestore, "collection">;

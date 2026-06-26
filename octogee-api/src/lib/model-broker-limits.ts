@@ -1,6 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 
-import { resolveTier, windowBudgetUsdForTier } from "../../../shared/types/billing.js";
+import { resolveTier, windowBudgetUsdForTier } from "@octogee/shared/types/billing";
 import {
   normalizeModelBrokerTokenLimits,
   normalizeModelBrokerTokenPolicy,

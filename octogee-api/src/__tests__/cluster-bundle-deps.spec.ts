@@ -28,14 +28,8 @@ function packageNameOf(specifier: string): string {
 }
 
 function resolveInternal(fromFile: string, specifier: string): string | null {
-  let base: string;
-  if (specifier.startsWith("@shared/")) {
-    base = path.join(REPO_ROOT, "shared", specifier.slice("@shared/".length));
-  } else if (specifier.startsWith(".")) {
-    base = path.resolve(path.dirname(fromFile), specifier);
-  } else {
-    return null;
-  }
+  if (!specifier.startsWith(".")) return null;
+  const base = path.resolve(path.dirname(fromFile), specifier);
   const candidates = [
     base.replace(/\.js$/, ".ts"),
     base.replace(/\.js$/, ".tsx"),
