@@ -16,7 +16,7 @@
     "@octogee/core": "file:../core/octogee-core.tgz",
     "@octogee/shared": "file:../shared/octogee-shared.tgz",
     "express": "^5.2.1",
-    "firebase-admin": "^14.1.0",
+    "firebase-admin": "^13.10.0",
     "google-auth-library": "^10.9.0",
     "tsx": "^4.22.4"
   },
