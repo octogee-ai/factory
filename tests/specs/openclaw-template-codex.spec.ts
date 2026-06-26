@@ -19,6 +19,12 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
     expect(template.tools.subagents.tools.deny).toEqual(["exec", "process"]);
   });
 
+  it("scopes session tools to the owning agent (visibility=agent) so a coach reaches all its own channels but no other tenant's sessions", () => {
+    const template = readTemplate();
+
+    expect(template.tools.sessions).toEqual({ visibility: "agent" });
+  });
+
   it("disables the Codex plugin and removes the gpt-5.5 Codex runtime route", () => {
     const template = readTemplate();
 

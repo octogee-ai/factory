@@ -104,6 +104,9 @@
     "exec": {
       "mode": "deny"
     },
+    "sessions": {
+      "visibility": "agent"
+    },
     "subagents": {
       "tools": {
         "deny": ["exec", "process"]
