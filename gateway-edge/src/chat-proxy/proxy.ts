@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
 import { generateIdentity, type DeviceIdentity } from "../../../shared/types/device-identity.js";
-import { WsUpgradeRouter } from "../../../shared/ws/upgrade-router.js";
+import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
 import {
   clearGatewayDeviceToken,

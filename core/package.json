@@ -175,6 +175,14 @@
     "./workspace-slugs": {
       "types": "./dist/workspace-slugs.d.ts",
       "default": "./dist/workspace-slugs.js"
+    },
+    "./ws/upgrade-router": {
+      "types": "./dist/ws/upgrade-router.d.ts",
+      "default": "./dist/ws/upgrade-router.js"
+    },
+    "./templates/project-readmes": {
+      "types": "./dist/templates/project-readmes/index.d.ts",
+      "default": "./dist/templates/project-readmes/index.js"
     }
   },
   "typesVersions": {
@@ -304,6 +312,12 @@
       ],
       "workspace-slugs": [
         "dist/workspace-slugs.d.ts"
+      ],
+      "ws/upgrade-router": [
+        "dist/ws/upgrade-router.d.ts"
+      ],
+      "templates/project-readmes": [
+        "dist/templates/project-readmes/index.d.ts"
       ]
     }
   },

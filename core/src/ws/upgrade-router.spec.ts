@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import WebSocket from "ws";
 import type { AddressInfo } from "node:net";
 
-import { WsUpgradeRouter } from "../../shared/ws/upgrade-router";
+import { WsUpgradeRouter } from "./upgrade-router";
 
 const servers: Server[] = [];
 
