@@ -7,7 +7,7 @@ import {
 import {
   GATEWAY_ID_REQUIREMENT,
   isValidGatewayId,
-} from "../../../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 
 export type GatewayTokenErrorCode =
   | "empty-token"

@@ -1,4 +1,4 @@
-import { USERNAME_RE } from "@shared/types/identity.js";
+import { USERNAME_RE } from "@octogee/shared/types/identity";
 import { db } from "./db.js";
 
 export interface UserWorkspaceIdentityData {

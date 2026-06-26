@@ -4,7 +4,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
-import { generateIdentity, type DeviceIdentity } from "../../../shared/types/device-identity.js";
+import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
 import {
@@ -31,7 +31,7 @@ import {
   listLocalCoachWiredSlugs,
   readOpenclawConfig,
   coachWiredInParsedConfig,
-} from "../../../scripts/lib/local-coach-wired.js";
+} from "@octogee/core/local-coach-wired";
 
 // The operator pod holds no platform credentials, so the bridge's coach reconcile
 // derives the mounted set locally (PVC + openclaw config) instead of reading

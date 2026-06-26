@@ -4,7 +4,7 @@ import { db } from "../../lib/db.js";
 import {
   BuilderGatewayListEntry,
   BuilderGatewaysMeResponse,
-} from "../../../../shared/types/builder-shell.js";
+} from "@octogee/shared/types/builder-shell";
 import {
   isGatewayClassShellAccessEnabled,
   isGatewayClass,
@@ -14,7 +14,7 @@ import {
   type GatewayClass,
   type GatewayImageProfile,
   type OperatorGatewayAccessSpec,
-} from "../../../../shared/types/glm.js";
+} from "@octogee/shared/types/glm";
 
 const router = Router();
 router.use(requireAuth);

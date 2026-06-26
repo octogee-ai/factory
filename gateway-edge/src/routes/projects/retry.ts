@@ -3,7 +3,7 @@ import { strictRateLimit } from "../../middleware/security.js";
 import { db, FieldValue } from "../../lib/db.js";
 import { mmApi } from "../../lib/mattermost.js";
 import { logger } from "../../middleware/logging.js";
-import { projectGeneralChannelName } from "@shared/types/identity.js";
+import { projectGeneralChannelName } from "@octogee/shared/types/identity";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
 import { withProject, type ProjectCtx } from "../../lib/withProject.js";
 import { provisionProjectRepo } from "./provisioning.js";

@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
-import type { ConnectorCaptureMethod } from "@shared/types/connectors.js";
+import type { ConnectorCaptureMethod } from "@octogee/shared/types/connectors";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";

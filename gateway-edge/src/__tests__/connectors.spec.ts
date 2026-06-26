@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { CONNECTOR_CATALOG } from '@shared/types/connectors.js';
+import { CONNECTOR_CATALOG } from "@octogee/shared/types/connectors";
 import { getConnector, connectorRedirectUri } from '../lib/connectors/index.js';
 
 afterEach(() => {

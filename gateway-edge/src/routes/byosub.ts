@@ -5,7 +5,7 @@ import { db } from "../lib/db.js";
 import {
   writeSecret,
   addSecretVersionIfExists,
-} from "../../../scripts/lib/secret-manager.js";
+} from "@octogee/core/secret-manager";
 import {
   byosubSecretName,
   validateCodexCredential,
@@ -18,7 +18,7 @@ import {
   isSafeGatewayId,
 } from "../lib/byosub.js";
 import { resolveUserGateway } from "../lib/user-gateway.js";
-import { isSafeAgentId } from "../../../scripts/lib/byosub-restore.js";
+import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { triggerGatewayModelCredentialSync } from "../lib/byot-sync-trigger.js";
 import { logger } from "../middleware/logging.js";
 import {
@@ -29,7 +29,7 @@ import {
   type ModelCredentialOAuthCatalogEntry,
   type ModelCredentialOAuthProviderId,
   type ModelCredentialSubscriptionProviderId,
-} from "@shared/types/model-credentials.js";
+} from "@octogee/shared/types/model-credentials";
 
 const router = Router();
 

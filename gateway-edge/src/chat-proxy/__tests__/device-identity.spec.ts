@@ -4,7 +4,7 @@ import {
   buildDeviceAuthPayloadV3,
   signConnectDevice,
   publicKeyRawBase64UrlFromPem,
-} from '../../../../shared/types/device-identity.js';
+} from "@octogee/shared/types/device-identity";
 import * as crypto from 'node:crypto';
 
 describe('generateIdentity', () => {

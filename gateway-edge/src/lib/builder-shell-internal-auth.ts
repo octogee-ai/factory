@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import { readFileSync } from "node:fs";
-import { operatorGatewayServiceAccountName } from "../../../shared/types/glm.js";
+import { operatorGatewayServiceAccountName } from "@octogee/shared/types/glm";
 import {
   createKubernetesTokenReviewer,
   TOKEN_REVIEW_AUDIENCE,

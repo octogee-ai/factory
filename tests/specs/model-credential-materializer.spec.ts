@@ -138,8 +138,8 @@ describe("model credential materializer consumers", () => {
   test("byosub health route consumes the model credential materializer facade", () => {
     const src = readSrc("gateway-edge/src/routes/byosub-health.ts");
 
-    expect(src).toContain("../../../scripts/lib/model-credential-materializer.js");
-    expect(src).not.toContain("../../../scripts/lib/byot-multi-provider-config.js");
+    expect(src).toContain("@octogee/core/model-credential-materializer");
+    expect(src).not.toContain("@octogee/core/byot-multi-provider-config");
   });
 
   test.each([

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const syncModelCredentialsForCustomerSpy = vi.fn(async () => {});
 
-vi.mock("../../../scripts/lib/model-credential-sync-runtime", () => ({
+vi.mock("@octogee/core/model-credential-sync-runtime", () => ({
   syncModelCredentialsForCustomer: (userData: Record<string, unknown>) =>
     syncModelCredentialsForCustomerSpy(userData),
 }));

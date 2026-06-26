@@ -6,7 +6,7 @@ import * as giteaAdmin from "../lib/gitea-admin.js";
 import {
   hasRunningInboundMigrationForSlug,
   readAssignedSlugsForGateway,
-} from "../../../scripts/lib/assigned-roster.js";
+} from "@octogee/core/assigned-roster";
 import giteaAdminRoutes from "../routes/internal/gitea-admin.js";
 
 const mocks = vi.hoisted(() => {
@@ -75,7 +75,7 @@ vi.mock("../lib/db.js", () => ({
   db: mocks.db,
 }));
 
-vi.mock("../../../scripts/lib/assigned-roster.js", () => ({
+vi.mock("@octogee/core/assigned-roster", () => ({
   hasRunningInboundMigrationForSlug: vi.fn(async () => false),
   readAssignedSlugsForGateway: vi.fn(async () => ["acme"]),
   slugFromAssignedUser: vi.fn((data: Record<string, unknown> | undefined) => {

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { MODEL_CREDENTIAL_CATALOG } from "../../../shared/types/model-credentials.js";
+import { MODEL_CREDENTIAL_CATALOG } from "@octogee/shared/types/model-credentials";
 
 const fetchSpy = vi.fn();
 beforeEach(() => {

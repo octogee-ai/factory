@@ -2,11 +2,11 @@ import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
-import { isValidGatewayId } from "../../../shared/types/glm.js";
+import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
   activationLeaseMissCanMintTicket,
   requestBuilderActivationLease,
-} from "../../../scripts/lib/builder-activation-lease.js";
+} from "@octogee/core/builder-activation-lease";
 
 const router = Router();
 

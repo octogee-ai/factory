@@ -7,11 +7,11 @@ import {
   isValidProjectId,
   PROJECT_ID_MIN_LENGTH,
   PROJECT_ID_MAX_LENGTH,
-} from "@shared/types/identity.js";
+} from "@octogee/shared/types/identity";
 import { projectRepoName } from "./gitea-naming.js";
 import { provisionProjectRepo } from "../routes/projects/provisioning.js";
 import { isValidGithubRepoSource } from "./github.js";
-import type { FleetBrokerProjectCreateInput } from "@shared/types/fleet-broker.js";
+import type { FleetBrokerProjectCreateInput } from "@octogee/shared/types/fleet-broker";
 
 const RESERVED_PROJECT_SLUGS = new Set([
   "channels", "members", "files", "canvas", "chat",

@@ -5,7 +5,7 @@ import { openUpstream } from "../openclaw/upstream.js";
 import {
   buildDeviceAuthPayloadV3,
   generateIdentity,
-} from "../../../../shared/types/device-identity.js";
+} from "@octogee/shared/types/device-identity";
 
 function decodeBase64Url(value: string): Buffer {
   return Buffer.from(

@@ -7,7 +7,7 @@ import { mmApi } from "../lib/mattermost.js";
 import { resolveWorkspaceUid } from "../lib/workspace-resolution.js";
 import { decomposeProjectId } from "../lib/projectId.js";
 import { logger } from "../middleware/logging.js";
-import { workspaceGeneralChannelName } from "@shared/types/identity.js";
+import { workspaceGeneralChannelName } from "@octogee/shared/types/identity";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
 import { readChannel, readProject } from "../lib/firestoreReads.js";
 

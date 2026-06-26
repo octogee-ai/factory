@@ -1,46 +1,23 @@
-# Build context: repo root (see gateway-edge/cloudbuild.yaml).
-# gateway-edge, shared/, and scripts/lib/ are all copied in so tsc can
-# compile @shared/types/identity AND the shared admin-fleet-router
-# factory (mounted by both gateway-edge and glm-controller) along
-# with src/.
+# Build context: repo root (see gateway-edge/cloudbuild.yaml). gateway-edge
+# consumes @octogee/core + @octogee/shared (+ @octogee/test-helpers, a devDep
+# for the emulator specs) as committed tarballs — no sibling source is compiled.
 #
-# WORKDIR must be /gateway-edge (not /app) so that tsc's emit paths —
-# which mirror each source file's location relative to rootDir (the
-# container root /) — produce dist/gateway-edge/src/index.js, matching
-# package.json main + CMD. Changing WORKDIR to /app made tsc emit
-# dist/app/src/index.js and broke the runtime module resolution.
+# WORKDIR must be /gateway-edge (not /app) so that tsc's emit paths — which
+# mirror each source file's location relative to rootDir ("..", the container
+# root /) — produce dist/gateway-edge/src/index.js, matching package.json
+# main + CMD.
 FROM node:26-slim AS builder
 WORKDIR /gateway-edge
-# @octogee/core committed tarball, before npm ci (which extracts it) for tsc
-# .d.ts resolution. Builder stage.
+# Committed tarballs, before npm ci (which extracts them) for tsc .d.ts
+# resolution. test-helpers is a devDep; npm ci installs it (builder only).
 COPY core/octogee-core.tgz /core/octogee-core.tgz
 COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
+COPY test-helpers/octogee-test-helpers.tgz /test-helpers/octogee-test-helpers.tgz
 COPY gateway-edge/package.json gateway-edge/package-lock.json* ./
 RUN npm ci --ignore-scripts
 
-# scripts/lib/admin-fleet-router.ts (et al.) live in gateway-edge's tsc
-# include but are physically at /scripts/lib/. Node module resolution
-# walks UP from each file's directory, so `import "express"` inside
-# /scripts/lib/admin-fleet-router.ts resolves through /scripts/node_modules
-# — not /gateway-edge/node_modules. Install scripts/'s deps so the
-# compile resolves cleanly. Builder stage only — runtime image still
-# only copies /gateway-edge/dist (where the layout reverses: dist is
-# inside /gateway-edge so its imports do resolve through
-# /gateway-edge/node_modules).
-COPY scripts/package.json scripts/package-lock.json* /scripts/
-RUN npm ci --prefix /scripts --ignore-scripts
-
 COPY gateway-edge/tsconfig.json ./
 COPY gateway-edge/src/ ./src/
-COPY shared/ /shared/
-COPY scripts/lib/ /scripts/lib/
-# shared/ws/upgrade-router.ts imports `ws` at build time (pulled in
-# transitively by the folded chat-proxy). tsc resolves `ws` by walking
-# up from /shared, which can't see /gateway-edge/node_modules — so
-# install shared's own declared deps (ws + @types/ws) at /shared.
-# Runtime resolution is unaffected: the emitted dist lives under
-# /gateway-edge and resolves `ws` from /gateway-edge/node_modules.
-RUN npm ci --prefix /shared --ignore-scripts
 # `npm run build` = tsc → tsc-alias → verify:no-alias-leakage. The
 # alias rewriter and post-build grep guard together prevent the
 # MODULE_NOT_FOUND @shared/* runtime failure. See README "Shared code".

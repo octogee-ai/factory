@@ -8,10 +8,10 @@ import {
   type Provider,
 } from "../../billing/provider-key-format.js";
 import { probeProviderKey } from "../../billing/provider-probe.js";
-import { writeSecret, archiveSecret } from "../../../../scripts/lib/secret-manager.js";
+import { writeSecret, archiveSecret } from "@octogee/core/secret-manager";
 import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers.js";
 import { triggerGatewayModelCredentialSync } from "../../lib/byot-sync-trigger.js";
-import { modelCredentialApiKeyState } from "@shared/types/model-credentials.js";
+import { modelCredentialApiKeyState } from "@octogee/shared/types/model-credentials";
 
 const router = Router();
 

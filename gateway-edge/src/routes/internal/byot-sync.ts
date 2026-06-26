@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { syncModelCredentialsForCustomer } from "../../../../scripts/lib/model-credential-sync-runtime.js";
+import { syncModelCredentialsForCustomer } from "@octogee/core/model-credential-sync-runtime";
 import { requireByotSyncInternalAuth } from "../../middleware/byot-sync-auth.js";
 
 const router = Router();

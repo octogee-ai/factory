@@ -2,7 +2,7 @@ import {
   MODEL_CREDENTIAL_CATALOG,
   MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
   type ModelCredentialActiveStaticProviderId,
-} from "@shared/types/model-credentials.js";
+} from "@octogee/shared/types/model-credentials";
 import { validateAnthropicKey, type KeyValidationResult } from "./anthropic-key-format.js";
 
 export type Provider = ModelCredentialActiveStaticProviderId;

@@ -1,6 +1,6 @@
-import { coachAgentId } from "../../../scripts/lib/byosub-onboarding.js";
-import { isValidGatewayId } from "../../../shared/types/glm.js";
-import { deriveCodexAuthHealth } from "../../../scripts/lib/codex-auth-health.js";
+import { coachAgentId } from "@octogee/core/byosub-onboarding";
+import { isValidGatewayId } from "@octogee/shared/types/glm";
+import { deriveCodexAuthHealth } from "@octogee/core/codex-auth-health";
 import { internalFetch } from "./internal-fetch.js";
 
 export { coachAgentId };

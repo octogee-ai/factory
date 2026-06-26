@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
-import { isResponseFrame } from "../../../../shared/types/openclaw-wire-core.js";
+import { isResponseFrame } from "@octogee/shared/types/openclaw-wire-core";
 
 export interface UpstreamRpcClient {
   call<T = unknown>(

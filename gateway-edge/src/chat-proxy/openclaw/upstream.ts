@@ -1,20 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
-import { OPENCLAW_PROTOCOL_VERSION } from "../../../../shared/types/openclaw-wire.js";
+import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import {
   startConnectChallengeTracker,
   waitForWsOpen,
   sendWsRequest,
-} from "../../../../shared/types/openclaw-wire-core.js";
+} from "@octogee/shared/types/openclaw-wire-core";
 import {
   signConnectDevice,
   type DeviceIdentity,
-} from "../../../../shared/types/device-identity.js";
+} from "@octogee/shared/types/device-identity";
 
 export {
   OpenclawWireError,
   type OpenclawWireErrorCode,
-} from "../../../../shared/types/openclaw-wire-core.js";
+} from "@octogee/shared/types/openclaw-wire-core";
 
 const PROTOCOL_VERSION = OPENCLAW_PROTOCOL_VERSION;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;

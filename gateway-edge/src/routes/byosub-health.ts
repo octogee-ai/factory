@@ -13,9 +13,9 @@ import {
   codexAgentDir,
   isSafeAgentId,
   readCodexAuthStateText,
-} from "../../../scripts/lib/byosub-restore.js";
-import { readAuthProfileStore } from "../../../scripts/lib/auth-profile-sqlite.js";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../../../scripts/lib/model-credential-materializer.js";
+} from "@octogee/core/byosub-restore";
+import { readAuthProfileStore } from "@octogee/core/auth-profile-sqlite";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "@octogee/core/model-credential-materializer";
 
 // GET /api/g/<gatewayId>/byosub/health — the DEEP byosub durability check.
 //

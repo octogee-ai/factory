@@ -97,19 +97,13 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
-  it("scripts/lib change ALSO runs octogee-api + gateway-edge (they compile it)", () => {
-    // The admin-fleet-router hazard: octogee-api and gateway-edge compile scripts/lib
-    // (tsconfig include / source imports), so a scripts/lib edit must re-run them.
-    // glm-controller imports @octogee/core directly — it reacts to core/, not scripts/lib.
+  it("scripts/lib change ALSO runs octogee-api (it compiles it)", () => {
+    // The admin-fleet-router hazard: octogee-api compiles scripts/lib (tsconfig
+    // include / source imports), so a scripts/lib edit must re-run it. glm-controller
+    // + gateway-edge import @octogee/core directly — they react to core/, not scripts/lib.
     expectJobs(
       ["scripts/lib/admin-fleet-router.ts"],
-      [
-        "scripts",
-        "customer-lifecycle-emulator",
-        "octogee-api",
-        "gateway-edge",
-        "gateway-edge-emulator",
-      ],
+      ["scripts", "customer-lifecycle-emulator", "octogee-api"],
     );
   });
 

@@ -1,5 +1,5 @@
 
-import { isValidGatewayId } from "../../../shared/types/glm.js";
+import { isValidGatewayId } from "@octogee/shared/types/glm";
 
 const FLEET_PREFIX = "/api/g/";
 

@@ -11,18 +11,8 @@
     "declaration": true,
     "sourceMap": true,
     "skipLibCheck": true,
-    "noUnusedLocals": false,
-    "paths": {
-      "@shared/*": ["../shared/*"]
-    }
+    "noUnusedLocals": false
   },
-  "include": [
-    "src/**/*.ts",
-    "../shared/types/**/*.ts",
-    "../scripts/lib/admin-fleet-router.ts",
-    "../scripts/lib/secret-manager.ts",
-    "../scripts/lib/artifact-registry.ts",
-    "../scripts/lib/workspace-slugs.ts"
-  ],
-  "exclude": ["src/**/__tests__/**", "node_modules", "dist", "../shared/**/*.spec.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/__tests__/**", "node_modules", "dist"]
 }

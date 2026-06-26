@@ -230,7 +230,7 @@ function makeBatch() {
 const provisionerCalls: Array<{ gatewayId: string; gatewayServiceAccount: string }> = [];
 let provisionerNextError: Error | null = null;
 
-vi.mock("../../../scripts/lib/secret-manager", () => ({
+vi.mock("@octogee/core/secret-manager", () => ({
   provisionGatewayAuthSecret: async (params: {
     gatewayId: string;
     gatewayServiceAccount: string;
@@ -250,7 +250,7 @@ const builderCalls: Array<{ service: string; limit?: number }> = [];
 let nextBuildsResult: BuildResult[] = [];
 let nextBuildsError: Error | null = null;
 
-vi.mock("../../../scripts/lib/artifact-registry", () => ({
+vi.mock("@octogee/core/artifact-registry", () => ({
   listGatewayBuilds: async (opts: { service: string; limit?: number }) => {
     builderCalls.push({ service: opts.service, limit: opts.limit });
     if (nextBuildsError) {

@@ -1,5 +1,5 @@
 import { db } from "./db.js";
-import { primaryWorkspaceSlug } from "../../../scripts/lib/workspace-slugs.js";
+import { primaryWorkspaceSlug } from "@octogee/core/workspace-slugs";
 
 export interface ResolvedGateway {
   slug: string;

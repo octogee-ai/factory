@@ -4,7 +4,7 @@ import { giteaApi } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { readProject } from "../../lib/firestoreReads.js";
 import { logger } from "../../middleware/logging.js";
-import { isValidProjectId } from "@shared/types/identity.js";
+import { isValidProjectId } from "@octogee/shared/types/identity";
 
 const router = Router();
 

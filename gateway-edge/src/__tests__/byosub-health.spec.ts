@@ -6,7 +6,7 @@ import {
   createByosubHealthRouter,
   type ByosubHealthDeps,
 } from "../routes/byosub-health.js";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../../../scripts/lib/model-credential-materializer.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "@octogee/core/model-credential-materializer";
 
 const PROFILE = OPENAI_CODEX_DEFAULT_PROFILE_ID;
 const NOW = 1_700_000_000_000;

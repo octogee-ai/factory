@@ -1,10 +1,10 @@
 import { Router, type Request, type Response } from "express";
 
-import { isValidProjectId, isValidUsername } from "@shared/types/identity.js";
+import { isValidProjectId, isValidUsername } from "@octogee/shared/types/identity";
 import {
   hasRunningInboundMigrationForSlug,
   readAssignedSlugsForGateway,
-} from "../../../../scripts/lib/assigned-roster.js";
+} from "@octogee/core/assigned-roster";
 import { db } from "../../lib/db.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";

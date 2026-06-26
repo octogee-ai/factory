@@ -6,12 +6,12 @@ import { liftSuppression } from "../lib/email-suppression.js";
 import { runEmailPreflight } from "../lib/email-preflight.js";
 import { getResend } from "../lib/resend.js";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
-import { workspaceSlugsForUser } from "../../../scripts/lib/workspace-slugs.js";
-import { provisionGatewayAuthSecret } from "../../../scripts/lib/secret-manager.js";
-import { listGatewayBuilds } from "../../../scripts/lib/artifact-registry.js";
-import { addAdminFleetRoutes } from "../../../scripts/lib/admin-fleet-router.js";
-import { addAdminCustomerRoutes } from "../../../scripts/lib/admin-customer-router.js";
-import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "../../../scripts/lib/firebase-auth-helpers.js";
+import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
+import { provisionGatewayAuthSecret } from "@octogee/core/secret-manager";
+import { listGatewayBuilds } from "@octogee/core/artifact-registry";
+import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
+import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
+import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "@octogee/core/firebase-auth-helpers";
 
 const router = Router();
 router.use(requireAdmin);

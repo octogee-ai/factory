@@ -1,4 +1,4 @@
-import type { ConnectorId } from "@shared/types/connectors.js";
+import type { ConnectorId } from "@octogee/shared/types/connectors";
 import type { ConnectorDef } from "./def.js";
 import { githubConnector } from "./github.js";
 import { googleConnector } from "./google.js";

@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { db } from "./db.js";
 import { readProject } from "./firestoreReads.js";
-import { USERNAME_RE } from "@shared/types/identity.js";
+import { USERNAME_RE } from "@octogee/shared/types/identity";
 import { readConnectorAccessToken } from "./connector-tokens.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming.js";
 import { logger } from "../middleware/logging.js";

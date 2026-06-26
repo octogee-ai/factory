@@ -1,5 +1,5 @@
-import type { ConnectorId, ConnectorMeta } from "@shared/types/connectors.js";
-import { CONNECTOR_CATALOG } from "@shared/types/connectors.js";
+import type { ConnectorId, ConnectorMeta } from "@octogee/shared/types/connectors";
+import { CONNECTOR_CATALOG } from "@octogee/shared/types/connectors";
 
 export interface ConnectorOAuthWebDef {
   authorizeUrl: string;
