@@ -156,7 +156,7 @@ describe("resolveScope — inert paths run nothing", () => {
   });
 
   it("inert + a real package change runs only the package", () => {
-    expectJobs(["docs/x.md", "renderer/src/security.ts"], ["renderer"]);
+    expectJobs(["docs/x.md", "site/src/x.ts"], ["site"]);
   });
 });
 

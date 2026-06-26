@@ -14,7 +14,6 @@ export const JOBS = {
   octogeeChatTools: "octogee-chat-tools",
   functions: "functions",
   site: "site",
-  renderer: "renderer",
   app: "app",
   firestoreRules: "firestore-rules",
   customerLifecycleEmulator: "customer-lifecycle-emulator",
@@ -62,7 +61,6 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   },
   { name: JOBS.functions, dir: "functions", typecheck: TYPECHECK },
   { name: JOBS.site, dir: "site", typecheck: TYPECHECK },
-  { name: JOBS.renderer, dir: "renderer", typecheck: TYPECHECK },
 ] as const;
 
 // Jobs that JDK/emulator or sharding force out of the matrix; each gated by its own flag.
@@ -99,7 +97,6 @@ export const OWNERSHIP: readonly Ownership[] = [
   },
   { dir: "functions/", jobs: [JOBS.functions, JOBS.functionsEmulator] },
   { dir: "site/", jobs: [JOBS.site] },
-  { dir: "renderer/", jobs: [JOBS.renderer] },
   { dir: "app/", jobs: [JOBS.app] },
   { dir: "firestore-rules-tests/", jobs: [JOBS.firestoreRules] },
 ];
