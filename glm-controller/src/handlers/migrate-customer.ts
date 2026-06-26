@@ -1,5 +1,4 @@
 import type {
-  GatewayImageProfile,
   Operation,
   OperationStep,
   StepStatus,
@@ -44,8 +43,6 @@ export interface MigrateCustomerDeps {
 
   readUserSnapshot: (uid: string) => Promise<FleetBrokerUserSnapshot | null>;
 
-  readGatewayImageProfile: (gatewayId: string) => Promise<GatewayImageProfile>;
-  
   cutoverFirestore: (uid: string, toGatewayId: string, slug: string) => Promise<void>;
 
 resolveGatewayUrl: (gatewayId: string) => Promise<string>;
@@ -121,12 +118,10 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       const migrationId = deps.genMigrationId();
       let fromUrl: string;
       let toUrl: string;
-      let sourceImageProfile: GatewayImageProfile;
       let restoreSnapshot: FleetBrokerUserSnapshot | null;
       try {
         fromUrl = await deps.resolveGatewayUrl(user.currentGatewayId);
         toUrl = await deps.resolveGatewayUrl(toGatewayId);
-        sourceImageProfile = await deps.readGatewayImageProfile(user.currentGatewayId);
         restoreSnapshot = await deps.readUserSnapshot(uid);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -134,12 +129,6 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       }
       if (!restoreSnapshot) {
         return { steps: [], success: false, error: `durable snapshot not found for ${uid}` };
-      }
-      const includeActivationManifest = sourceImageProfile !== "operator";
-      if (!includeActivationManifest) {
-        deps.log(
-          `[migrate-customer] skipping customer activation manifest for operator source gateway=${user.currentGatewayId} slug=${user.slug}`,
-        );
       }
       const urls = new Map<string, string>([
         [user.currentGatewayId, fromUrl],
@@ -163,7 +152,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           fromGatewayId: user.currentGatewayId,
           toGatewayId,
           restoreSnapshot,
-          includeActivationManifest,
+          includeActivationManifest: true,
           sourceDisposable,
         },
         {
