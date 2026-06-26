@@ -42,6 +42,51 @@ export async function githubContentsApi(
   return resp.json();
 }
 
+export function githubRepoUrl(owner: string, repo: string, suffix: string): string {
+  if (!OWNER_RE.test(owner)) throw new Error(`Invalid GitHub owner: ${owner}`);
+  if (!REPO_RE.test(repo)) throw new Error(`Invalid GitHub repo: ${repo}`);
+  return `${GITHUB_API}/repos/${owner}/${repo}${suffix}`;
+}
+
+export async function githubJson(
+  method: string,
+  url: string,
+  token: string | undefined,
+  body?: unknown,
+): Promise<unknown> {
+  const resp = await fetch(url, {
+    method,
+    headers: { ...githubHeaders(token), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    logger.error(`GitHub API error: ${resp.status} ${method} ${url}`, { response: text.slice(0, 500) });
+    throw new Error(`GitHub API ${resp.status}`);
+  }
+  if (resp.status === 204) return null;
+  const text = await resp.text();
+  return text ? JSON.parse(text) : null;
+}
+
+export const GITHUB_ISSUES_PER_PAGE = 100;
+
+export async function githubIssuesApi(
+  owner: string,
+  repo: string,
+  token: string | undefined,
+): Promise<unknown> {
+  return githubJson("GET", githubRepoUrl(owner, repo, `/issues?state=all&per_page=${GITHUB_ISSUES_PER_PAGE}`), token);
+}
+
+export async function githubLabelsApi(
+  owner: string,
+  repo: string,
+  token: string | undefined,
+): Promise<unknown> {
+  return githubJson("GET", githubRepoUrl(owner, repo, `/labels?per_page=${GITHUB_ISSUES_PER_PAGE}`), token);
+}
+
 export interface GithubContentsPutBody {
   message: string;
   contentBase64: string;
