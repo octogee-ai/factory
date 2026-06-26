@@ -159,7 +159,7 @@ case "$SECRET" in
 
   list)
     echo "  Rotatable via this script (test + prod only):"
-    echo "    anthropic             — ANTHROPIC_API_KEY, standard/cattle BYOK/BYOS fallback (octogee-anthropic; standard gateways only, never operator)"
+    echo "    anthropic             — ANTHROPIC_API_KEY, platform provider key (octogee-anthropic; consumer: llm-broker only — no gateway carries it)"
     echo "    model-key-issuer      — GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN, consumers: octogee-api, glm-controller"
     echo "    social-notification-bearer — SOCIAL_NOTIFICATION_BEARER_TOKEN, consumers: octogee-api /social, social functions"
     echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: octogee-api, glm-controller"
@@ -206,18 +206,20 @@ case "$SECRET" in
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     ok "K8s secret octogee-anthropic updated"
 
-    # Shared gateways mount octogee-anthropic directly. Builder/operator
-    # gateways hold broker tokens; llm-broker is the provider-key holder.
-    info "Restarting llm-broker and shared gateways..."
+    # llm-broker is the SOLE consumer of octogee-anthropic — the platform
+    # provider-key resolver lives there. No gateway carries this key: shared pods
+    # route every agent turn through the broker (ANTHROPIC_BASE_URL), and
+    # builder/operator pods hold their own per-gateway broker token
+    # (gateway-model-key-<id>), never octogee-anthropic. So restarting gateways
+    # here is pure downtime — and a shared-gateway bounce is a hard reset of a
+    # live multi-tenant pod, NOT a Cowboy blue/green roll. Restart only the broker;
+    # its rollout is a graceful 2-replica roll.
+    info "Restarting llm-broker..."
     rollout_restart llm-broker
-    SHARED_GWS=$(kubectl get deploy -n "$K8S_NAMESPACE" \
-      -l 'app=octogee-gateway,gateway-class=shared' \
-      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null)
-    [[ -n "$SHARED_GWS" ]] && rollout_restart $SHARED_GWS || warn "No shared gateways found to restart"
 
-    info "Verifying gateway startup..."
-    kubectl logs -n "$K8S_NAMESPACE" -l 'app=octogee-gateway,gateway-class=shared' \
-      --tail=15 --max-log-requests=20 2>/dev/null | grep -iE 'anthropic|auth|error' || true
+    info "Verifying llm-broker startup..."
+    kubectl logs -n "$K8S_NAMESPACE" -l 'app=llm-broker' \
+      --tail=15 --max-log-requests=20 2>/dev/null | grep -iE 'boot|anthropic|auth|error' || true
     ok "Rotation complete"
     ;;
 
