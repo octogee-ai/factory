@@ -26,6 +26,7 @@ import shellsRoutes from "./shells.js";
 import workspaceDisplayNameRoutes from "./workspace/display-name.js";
 import workspaceFilesRoutes from "./workspace/files.js";
 import workspaceIssuesRoutes from "./workspace/issues.js";
+import workspacePulseRoutes from "./workspace/pulse.js";
 import workspaceSaveRoutes from "./workspace/save.js";
 import workspaceUploadRoutes from "./workspace/upload.js";
 import workspaceDeleteBlobRoutes from "./workspace/delete-blob.js";
@@ -61,6 +62,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   app.use(WORKSPACE, workspaceDisplayNameRoutes);
   app.use(WORKSPACE, workspaceFilesRoutes);
   app.use(WORKSPACE, workspaceIssuesRoutes);
+  app.use(WORKSPACE, workspacePulseRoutes);
   app.use(WORKSPACE, workspaceSaveRoutes);
   app.use(WORKSPACE, workspaceUploadRoutes);
   app.use(WORKSPACE, workspaceDeleteBlobRoutes);
