@@ -65,10 +65,9 @@ spec:
 {{- end }}
 {{- if .Values.gatewayFleet.computeClass.spotName }}
 ---
-# Sibling Spot compute class for standard/shared gateway pods. This keeps the
-# existing on-demand class available for operator/Bender until the operator
-# emptyDir + Spot proof lands, while shared gateways can take the Spot cost win
-# immediately.
+# Spot compute class for every gateway pod (shared, builder, operator). The
+# on-demand sibling above stays as the umbrella default + fallback, but all
+# gateway classes target Spot via computeClassByClass.
 apiVersion: cloud.google.com/v1
 kind: ComputeClass
 metadata:
