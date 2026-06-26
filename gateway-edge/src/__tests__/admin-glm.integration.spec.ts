@@ -1163,7 +1163,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     expect(res.body.stats.fleetCost.monthlyUsd).toBe(running.sizing.monthlyCostUsd.compute);
   });
 
-  it("projects PVC storage and the PROD operator on-demand reservation default", async () => {
+  it("projects PVC storage and the PROD operator Spot reservation default", async () => {
     for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
     gatewaysDocs["bender"] = { gatewayId: "bender", status: "ready", mountedCustomers: [] };
     glmGatewaysDocs["bender"] = {
@@ -1189,13 +1189,13 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
       accessModes: ["ReadWriteOnce"],
     });
     expect(bender.reservation).toMatchObject({
-      type: "on-demand",
-      computeClass: "octogee-gateway",
+      type: "spot",
+      computeClass: "octogee-gateway-spot",
     });
-    expect(bender.sizing.monthlyCostUsd.compute).toBe(
+    expect(bender.sizing.monthlyCostUsd.compute).toBeLessThan(
       bender.sizing.monthlyCostUsd.onDemandCompute,
     );
-    expect(res.body.stats.fleetCost.savingsUsd).toBe(0);
+    expect(res.body.stats.fleetCost.savingsUsd).toBeGreaterThan(0);
   });
 
   it("keeps on-demand pricing when a gateway is explicitly on the on-demand compute class", async () => {

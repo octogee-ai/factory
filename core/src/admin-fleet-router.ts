@@ -259,29 +259,7 @@ function gatewayComputeClassBase(): string {
     : "octogee-gateway";
 }
 
-function gatewayClassFromGlmDoc(glmDoc: GlmDoc | undefined): GatewayClass {
-  const gatewayClass = isGatewayClass(glmDoc?.gatewayClass)
-    ? glmDoc.gatewayClass
-    : undefined;
-  const profile = isGatewayProfile(glmDoc?.profile)
-    ? glmDoc.profile
-    : undefined;
-  const imageProfile =
-    typeof glmDoc?.imageProfile === "string" &&
-    (GATEWAY_IMAGE_PROFILES as readonly string[]).includes(glmDoc.imageProfile)
-      ? (glmDoc.imageProfile as GatewayImageProfile)
-      : undefined;
-  return resolveGatewayClass({ gatewayClass, profile, imageProfile });
-}
-
-function defaultGatewayScheduling(gatewayClass: GatewayClass): GatewayPricingMode {
-  if (resolveFleetNamespace() !== "octogee-test" && gatewayClass === "operator") {
-    return "on-demand";
-  }
-  return "spot";
-}
-
-function projectGatewayReservation(
+export function projectGatewayReservation(
   glmDoc: GlmDoc | undefined,
 ): {
   type: GatewayPricingMode;
@@ -295,7 +273,7 @@ function projectGatewayReservation(
   const scheduling =
     glmDoc?.scheduling === "on-demand" || glmDoc?.scheduling === "spot"
       ? glmDoc.scheduling
-      : defaultGatewayScheduling(gatewayClassFromGlmDoc(glmDoc));
+      : "spot";
   const base = gatewayComputeClassBase();
   const computeClass = explicitComputeClass ?? (scheduling === "spot" ? `${base}-spot` : base);
   const type: GatewayPricingMode = computeClass.includes("spot") ? "spot" : "on-demand";
