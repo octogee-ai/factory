@@ -210,7 +210,9 @@ resource "google_service_account" "firebase_deployer" {
 resource "google_project_iam_member" "firebase_deployer" {
   for_each = toset([
     "roles/firebase.admin",                    # firestore rules + hosting + project resolution
-    "roles/cloudfunctions.admin",              # functions deploy
+    "roles/cloudfunctions.admin",              # functions deploy (control plane)
+    "roles/run.admin",                         # Gen2 functions back onto Cloud Run
+    "roles/cloudscheduler.admin",              # onSchedule functions create Cloud Scheduler jobs
     "roles/iam.serviceAccountUser",            # actAs the functions runtime + Cloud Build SAs
     "roles/cloudbuild.builds.builder",         # functions source build
     "roles/artifactregistry.writer",           # functions container image push
@@ -219,5 +221,32 @@ resource "google_project_iam_member" "firebase_deployer" {
   ])
   project = var.project_id
   role    = each.value
+  member  = "serviceAccount:${google_service_account.firebase_deployer.email}"
+}
+
+# Gen2 functions in functions/ use 7 `defineSecret` params; firebase-tools binds
+# each secret to the function's runtime SA on deploy. That needs get +
+# get/setIamPolicy on the secrets — NOT roles/secretmanager.admin: a leaked
+# deploy key must not read or mutate the platform's Anthropic / gateway-auth
+# secrets. versions.{get,list} confirm an enabled version exists WITHOUT
+# versions.access (the value read). If a deploy ever needs the value, scope
+# versions.access to the specific function secrets, never project-wide.
+resource "google_project_iam_custom_role" "firebase_deployer_secret_binding" {
+  role_id     = "octogeeFirebaseDeployerSecretBinding"
+  title       = "Octogee Firebase Deployer Secret Binding"
+  description = "Bind defineSecret secrets to function runtime SAs on deploy (no value read)."
+  project     = var.project_id
+  permissions = [
+    "secretmanager.secrets.get",
+    "secretmanager.secrets.getIamPolicy",
+    "secretmanager.secrets.setIamPolicy",
+    "secretmanager.versions.get",
+    "secretmanager.versions.list",
+  ]
+}
+
+resource "google_project_iam_member" "firebase_deployer_secret_binding" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.firebase_deployer_secret_binding.id
   member  = "serviceAccount:${google_service_account.firebase_deployer.email}"
 }
