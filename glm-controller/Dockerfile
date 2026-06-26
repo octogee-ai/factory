@@ -5,9 +5,10 @@ FROM node:26-slim
 # and the operator toolkit (infra/gateway/Dockerfile.operator-toolkit) — so the
 # umbrella upgrade and Cowboy's per-gateway upgrades share identical
 # server-side-apply semantics. helm-runner.ts relies on v4's `--server-side=true
-# --force-conflicts` string-flag syntax; the build verifies those flags below
-# before publishing. Bump all three sites together. kubectl tracks stable (it is
-# not SSA-version-sensitive).
+# --force-conflicts` string-flag syntax + `--take-ownership` (adopts leftover
+# unowned resources rather than wedging a roll); the build verifies all three
+# flags below before publishing. Bump all three sites together. kubectl tracks
+# stable (it is not SSA-version-sensitive).
 ARG HELM_VERSION=v4.2.2
 
 RUN apt-get update \
@@ -26,6 +27,7 @@ RUN apt-get update \
   && helm version --short \
   && helm upgrade --help | grep -q -- '--server-side' \
   && helm upgrade --help | grep -q -- '--force-conflicts' \
+  && helm upgrade --help | grep -q -- '--take-ownership' \
   && kubectl version --client=true
 
 # Build context must be the repo root: `docker build -f

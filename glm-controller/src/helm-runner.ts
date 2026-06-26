@@ -26,7 +26,6 @@ upsertInstance(opts: {
     computeClassOverride?: string;
     chartPath: string;
     valuesFile?: string;
-    takeOwnership?: boolean;
 
 chartFingerprint?: string;
 
@@ -290,7 +289,6 @@ export interface BuildUpgradeArgsOpts {
   computeClassOverride?: string;
   gcpProject?: string;
   valuesFile?: string;
-  takeOwnership?: boolean;
 }
 
 type UpgradeStringOption = {
@@ -375,12 +373,14 @@ function appendOptionalFileArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
   if (opts.valuesFile) args.push("-f", opts.valuesFile);
 }
 
-function appendOptionalFlagArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
-  if (opts.takeOwnership) args.push("--take-ownership");
-}
-
 function appendUpgradeApplyArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
   args.push("--server-side=true", "--force-conflicts");
+  // Cowboy is the sole owner of every gateway release's resources (uniquely
+  // named per gateway+colour), so a same-named resource missing Helm ownership
+  // metadata is always a leftover — e.g. a hand-created operator WI
+  // ServiceAccount. Adopt it rather than wedge the blue/green roll forever on
+  // "exists and cannot be imported into the current release".
+  args.push("--take-ownership");
   args.push("--wait", `--timeout=${opts.upgradeTimeout}`);
 }
 
@@ -408,7 +408,6 @@ export function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   appendOptionalNumberArgs(args, opts);
   appendOptionalJsonArgs(args, opts);
   appendOptionalFileArgs(args, opts);
-  appendOptionalFlagArgs(args, opts);
   // Server-side apply + force-conflicts: matches the umbrella install path
   // that the CI deploy job has used since #913 + #1056. Cowboy was left
   // behind on strategic-merge through v3.16.4 of helm in glm-controller's
@@ -582,8 +581,7 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
     },
 
     async upsertInstance(opts) {
-      const { namespace, gatewayId, imageTag, chartFingerprint, takeOwnership } =
-        opts;
+      const { namespace, gatewayId, imageTag, chartFingerprint } = opts;
       const release = releaseNameForGateway(gatewayId);
       const args = buildUpgradeArgs({
         ...opts,
@@ -634,9 +632,8 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
         );
       }
       const fpTag = chartFingerprint ? ` chartFingerprint=${chartFingerprint.slice(0, 12)}` : "";
-      const ownershipTag = takeOwnership ? " (took ownership)" : "";
       deps.log(
-        `[helm-runner] upserted release=${release} ns=${namespace} gatewayId=${gatewayId} imageTag=${imageTag}${fpTag}${ownershipTag}`,
+        `[helm-runner] upserted release=${release} ns=${namespace} gatewayId=${gatewayId} imageTag=${imageTag}${fpTag}`,
       );
     },
 

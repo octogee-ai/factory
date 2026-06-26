@@ -76,7 +76,7 @@ describe("helm-runner helpers", () => {
     })).toEqual({});
   });
 
-  it("builds upgrade args with string, numeric, JSON, values-file, and ownership knobs", () => {
+  it("builds upgrade args with string, numeric, JSON, and values-file knobs", () => {
     const args = buildUpgradeArgs({
       release: "octogee-gw-bender",
       chartPath: "/charts/octogee-gateway",
@@ -100,7 +100,6 @@ describe("helm-runner helpers", () => {
       computeClassOverride: "octogee-gateway-spot",
       gcpProject: "builder-bender",
       valuesFile: "/charts/octogee-gateway/values.prod.yaml",
-      takeOwnership: true,
     });
 
     const stringPair = (key: string): string | undefined => {
@@ -123,6 +122,23 @@ describe("helm-runner helpers", () => {
     expect(args).toContain("--force-conflicts");
     expect(args).toContain("--wait");
     expect(args).toContain("--timeout=10m");
+  });
+
+  // Regression: a leftover resource (e.g. a hand-created operator WI SA) without
+  // Helm ownership metadata wedged a bender blue/green roll forever. Cowboy owns
+  // every gateway resource, so the upgrade must ALWAYS --take-ownership, with no
+  // opt-in knob to forget.
+  it("always passes --take-ownership so a leftover unowned resource can't wedge the roll", () => {
+    const args = buildUpgradeArgs({
+      release: "octogee-gw-bender-green",
+      chartPath: "/charts/octogee-gateway",
+      namespace: "octogee",
+      gatewayId: "bender-green",
+      imageTag: "abc1234",
+      imageRepository: REPO,
+      upgradeTimeout: "10m",
+    });
+    expect(args).toContain("--take-ownership");
   });
 });
 
@@ -425,7 +441,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(upgrade).not.toContain("--server-side");
   });
 
-  it("passes --take-ownership when set (cutover from umbrella-managed pods)", async () => {
+  it("always passes --take-ownership (Cowboy owns every gateway resource; adopt leftovers, never wedge)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
@@ -435,25 +451,9 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
-      takeOwnership: true,
     });
 
     expect(calls[0]).toContain("--take-ownership");
-  });
-
-  it("omits --take-ownership by default (steady-state ops)", async () => {
-    const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
-    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
-
-    await runner.upsertInstance({
-      namespace: "octogee-test",
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "abc1234",
-      chartPath: "/charts/octogee-gateway",
-    });
-
-    expect(calls[0]).not.toContain("--take-ownership");
   });
 
   it("threads -f <valuesFile> when provided so per-namespace defaults follow", async () => {
