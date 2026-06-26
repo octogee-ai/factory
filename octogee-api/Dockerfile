@@ -16,6 +16,11 @@ WORKDIR /octogee-api
 # npm ci extracts it into node_modules. Copy it before any npm ci. Builder stage.
 COPY core/octogee-core.tgz /core/octogee-core.tgz
 COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
+# @octogee/test-helpers is a devDep (firestore-emulator); the builder's full
+# npm ci needs its tarball — for octogee-api here AND the /gateway-edge prefix
+# install below (gateway-edge declares it too, resolving to the same path).
+# The runtime stage's --omit=dev skips it, so it is not copied there.
+COPY test-helpers/octogee-test-helpers.tgz /test-helpers/octogee-test-helpers.tgz
 
 COPY octogee-api/package.json octogee-api/package-lock.json* ./
 RUN npm ci --ignore-scripts
