@@ -18,7 +18,6 @@ import byosubHealthRoutes from "./routes/byosub-health.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
-import internalSiteDeployRoutes from "./routes/internal/site-deploy.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
@@ -124,10 +123,6 @@ return app;
 
 function mountClusterSurface(app: Express): void {
   app.use("/internal/billing", internalBillingRoutes);
-  // Hosting-deploy broker route. Operator gateways no longer wire site-build-api to
-  // this path; their publishing is CI/CD-owned. Kept fail-closed behind internal auth
-  // for any trusted caller that explicitly configures OCTOGEE_API_URL.
-  app.use("/internal/site", internalSiteDeployRoutes);
   // Legacy in-process Gitea broker surface. The durable broker lives on octogee-api;
   // the gateway-edge sidecar surface intentionally does not mount this.
   app.use("/internal/gitea", internalGiteaAdminRoutes);

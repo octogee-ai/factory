@@ -70,14 +70,6 @@ describe("gateway-edge sidecar surface", () => {
           .send({})
       ).status,
     ).toBe(404);
-    expect(
-      (
-        await request(app)
-          .post("/internal/site/hosting-deploy")
-          .set("X-Internal-Service-Key", "surface-test-key")
-          .send({})
-      ).status,
-    ).toBe(404);
   });
 
   it("does not let locality auth middleware mask removed cluster APIs", async () => {

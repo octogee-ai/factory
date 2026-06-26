@@ -76,10 +76,6 @@
       "types": "./dist/customer-snapshot-mapping.d.ts",
       "default": "./dist/customer-snapshot-mapping.js"
     },
-    "./deploy-records": {
-      "types": "./dist/deploy-records.d.ts",
-      "default": "./dist/deploy-records.js"
-    },
     "./firebase-auth-helpers": {
       "types": "./dist/firebase-auth-helpers.d.ts",
       "default": "./dist/firebase-auth-helpers.js"
@@ -321,9 +317,6 @@
       ],
       "customer-snapshot-mapping": [
         "dist/customer-snapshot-mapping.d.ts"
-      ],
-      "deploy-records": [
-        "dist/deploy-records.d.ts"
       ],
       "firebase-auth-helpers": [
         "dist/firebase-auth-helpers.d.ts"

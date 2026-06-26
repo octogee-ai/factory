@@ -13,7 +13,6 @@ import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/git
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
-import { createSiteDeployRoutes } from "./routes/site-deploy.js";
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
@@ -39,9 +38,6 @@ const TENANT_BOUND_API_ROUTES = new Set([
   "/api/model-credentials/subscription/capture",
   "/api/model-credentials/subscription/sync-back",
   "/api/notifications/ingest",
-  // Operator gateways broker their Firebase Hosting deploy here over the KSA
-  // tenant-binding token; the handler authorizes via req.boundTenant.
-  "/api/site/hosting-deploy",
 ]);
 
 export interface CreateAppOptions {
@@ -196,9 +192,6 @@ export function createApp(opts: CreateAppOptions = {}) {
       ttlSeconds: opts.modelKeyIssuerTtlSeconds,
     }),
   );
-  // octogee-api-only: the Hosting-deploy broker. Mounted after the tenant-binding
-  // middleware so req.boundTenant is attached; never mounted on the in-pod gateway-edge.
-  app.use("/api/site/hosting-deploy", createSiteDeployRoutes({ db }));
 
   app.use(errorHandler);
 

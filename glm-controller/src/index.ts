@@ -2144,7 +2144,6 @@ function buildDeprovisionCustomerHandler(
         const userRef = db.collection("users").doc(uid);
         await db.recursiveDelete(userRef.collection("secrets"));
         await db.recursiveDelete(userRef.collection("settings"));
-        await db.recursiveDelete(userRef.collection("deploys"));
         await db.recursiveDelete(userRef.collection("customers"));
         await db.recursiveDelete(userRef.collection("workspaces"));
         await userRef.delete();
