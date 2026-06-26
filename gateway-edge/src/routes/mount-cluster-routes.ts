@@ -41,6 +41,7 @@ import projectsDeleteRoutes from "./projects/delete.js";
 
 import internalNotificationRoutes from "./internal/notifications.js";
 import internalWorkspaceCommitRoutes from "./internal/workspace-commit.js";
+import internalProjectPublishRoutes from "./internal/project-publish.js";
 
 import { requireAuth } from "../middleware/auth.js";
 
@@ -108,4 +109,5 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   app.use("/internal/notifications", notificationRoutes);
   app.use("/internal/notifications", internalNotificationRoutes);
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
+  app.use("/internal/project", internalProjectPublishRoutes);
 }

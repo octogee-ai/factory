@@ -184,6 +184,7 @@
       "octogee-chat-tools",
       "octogee-preview-tools",
       "octogee-workspace-tools",
+      "octogee-publish-tools",
       "openai"
     ],
     "entries": {
@@ -209,6 +210,10 @@
         "config": {}
       },
       "octogee-workspace-tools": {
+        "enabled": true,
+        "config": {}
+      },
+      "octogee-publish-tools": {
         "enabled": true,
         "config": {}
       }

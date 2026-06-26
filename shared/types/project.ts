@@ -34,7 +34,7 @@ pendingVisibility?: ProjectVisibility | null;
   repoSource?: ProjectRepoSource | null;
 
 canvasFile: string;
-  sharedUrl: string | null;
+  publishedUrl: string | null;
   starCount: number;
   memberCount: number;
   createdAt: unknown; 

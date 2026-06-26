@@ -13,7 +13,7 @@ import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
 import githubReposRoutes from "./routes/workspace/github-repos.js";
-import shareRoutes from "./routes/projects/share.js";
+import publishRoutes from "./routes/projects/publish.js";
 import byosubHealthRoutes from "./routes/byosub-health.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
@@ -142,8 +142,8 @@ function mountSidecarLocalitySurface(app: Express): void {
   mountApi(app, "/workspace", workspaceLocality);
 
   const projectsLocality = Router();
-  projectsLocality.use("/:wid/:pid/share", requireAuth);
-  projectsLocality.use(shareRoutes);
+  projectsLocality.use("/:wid/:pid/publish", requireAuth);
+  projectsLocality.use(publishRoutes);
   mountApi(app, "/projects", projectsLocality);
 
   // Deep byosub health runs on the customer's own pod (reached via the
