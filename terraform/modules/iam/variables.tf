@@ -42,3 +42,9 @@ variable "cluster_project_id" {
   type        = string
   default     = "octogee"
 }
+
+variable "firebase_deployer_sa_name" {
+  description = "Service account ID for the CI Firebase deploy SA (firestore rules + hosting + functions)"
+  type        = string
+  default     = "firebase-deployer"
+}

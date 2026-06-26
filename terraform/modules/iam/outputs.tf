@@ -32,3 +32,8 @@ output "glm_controller_sa_email" {
   description = "Cowboy / glm-controller dedicated service account email"
   value       = google_service_account.glm_controller.email
 }
+
+output "firebase_deployer_sa_email" {
+  description = "CI Firebase deploy service account email"
+  value       = google_service_account.firebase_deployer.email
+}

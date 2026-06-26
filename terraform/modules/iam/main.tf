@@ -190,3 +190,34 @@ resource "google_project_iam_member" "functions_firebaseauth_viewer" {
   role    = "roles/firebaseauth.viewer"
   member  = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
 }
+
+# ── Service Account: firebase-deployer (CI `firebase deploy`) ────────────────
+# Dedicated least-privilege identity for the GitHub Actions firebase-tools
+# deploy steps (firestore rules, hosting, functions). firebase-tools reads a
+# JSON key from GOOGLE_APPLICATION_CREDENTIALS and authenticates by JWT
+# signing — robust, unlike its bundled google-auth-library WIF/external_account
+# token exchange, which decayed and broke every release (gcloud's exchange,
+# used by the image-push jobs, is unaffected). The key is created out-of-band
+# and lives in the FIREBASE_DEPLOYER_KEY GitHub secret — never in Terraform
+# state. Scope is deploy reach only: none of github-actions@'s billing /
+# container / scheduler / secret-admin / run.admin authority.
+resource "google_service_account" "firebase_deployer" {
+  account_id   = var.firebase_deployer_sa_name
+  display_name = "Octogee Firebase deployer — CI (${var.environment})"
+  project      = var.project_id
+}
+
+resource "google_project_iam_member" "firebase_deployer" {
+  for_each = toset([
+    "roles/firebase.admin",                    # firestore rules + hosting + project resolution
+    "roles/cloudfunctions.admin",              # functions deploy
+    "roles/iam.serviceAccountUser",            # actAs the functions runtime + Cloud Build SAs
+    "roles/cloudbuild.builds.builder",         # functions source build
+    "roles/artifactregistry.writer",           # functions container image push
+    "roles/storage.admin",                     # functions source-staging bucket
+    "roles/serviceusage.serviceUsageConsumer", # quota project / API enablement checks
+  ])
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.firebase_deployer.email}"
+}
