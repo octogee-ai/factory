@@ -11,6 +11,7 @@ export const JOBS = {
   scripts: "scripts",
   core: "core",
   shared: "shared",
+  testHelpers: "test-helpers",
   octogeeChatTools: "octogee-chat-tools",
   functions: "functions",
   site: "site",
@@ -46,6 +47,13 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   {
     name: JOBS.shared,
     dir: "shared",
+    typecheck: "npm run typecheck && npm run verify:tarball",
+  },
+  // test-helpers ships a committed tarball (octogee-test-helpers.tgz) too — shared
+  // test infra (firestore-emulator) for the emulator suites. Same freshness + lock guard.
+  {
+    name: JOBS.testHelpers,
+    dir: "test-helpers",
     typecheck: "npm run typecheck && npm run verify:tarball",
   },
   { name: JOBS.gatewayEdge, dir: "gateway-edge", typecheck: TYPECHECK },
@@ -85,6 +93,7 @@ export interface Ownership {
 // dir-prefix → owned jobs. Resolution picks the LONGEST match.
 export const OWNERSHIP: readonly Ownership[] = [
   { dir: "core/", jobs: [JOBS.core] },
+  { dir: "test-helpers/", jobs: [JOBS.testHelpers] },
   { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
   { dir: "octogee-api/", jobs: [JOBS.octogeeApi] },
   { dir: "glm-controller/", jobs: [JOBS.glmController] },
@@ -122,6 +131,18 @@ export const EDGES: readonly ScopeEdge[] = [
     ],
     reason:
       "@octogee/core is consumed by scripts + octogee-api + gateway-edge (via scripts/lib re-export shims) + glm-controller (direct package import)",
+  },
+  {
+    when: "test-helpers/",
+    jobs: [
+      JOBS.gatewayEdge,
+      JOBS.gatewayEdgeEmulator,
+      JOBS.octogeeApi,
+      JOBS.functions,
+      JOBS.functionsEmulator,
+    ],
+    reason:
+      "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs",
   },
   {
     when: "scripts/lib/",

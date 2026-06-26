@@ -7,7 +7,7 @@ import { db } from "../lib/db.js";
 import {
   getIdTokenForUid,
   setupEmulatorTest,
-} from "@shared/test-helpers/firestore-emulator.js";
+} from "@octogee/test-helpers/firestore-emulator";
 
 setupEmulatorTest({
   env: { API_PUBLIC_URL: "https://chat-proxy.test.octogee.com" },

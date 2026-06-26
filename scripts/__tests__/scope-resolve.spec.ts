@@ -81,6 +81,22 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
+  it("test-helpers/ change runs the test-helpers job + its emulator-spec consumers", () => {
+    // @octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge,
+    // octogee-api, and functions emulator specs.
+    expectJobs(
+      ["test-helpers/src/firestore-emulator.ts"],
+      [
+        "test-helpers",
+        "gateway-edge",
+        "gateway-edge-emulator",
+        "octogee-api",
+        "functions",
+        "functions-emulator",
+      ],
+    );
+  });
+
   it("scripts/lib change ALSO runs octogee-api + gateway-edge (they compile it)", () => {
     // The admin-fleet-router hazard: octogee-api and gateway-edge compile scripts/lib
     // (tsconfig include / source imports), so a scripts/lib edit must re-run them.

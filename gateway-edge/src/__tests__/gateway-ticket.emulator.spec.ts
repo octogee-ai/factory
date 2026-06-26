@@ -7,7 +7,7 @@ import {
   _testInternal,
 } from "../lib/gateway-ticket.js";
 import { db } from "../lib/db.js";
-import { setupEmulatorTest } from "@shared/test-helpers/firestore-emulator.js";
+import { setupEmulatorTest } from "@octogee/test-helpers/firestore-emulator";
 
 setupEmulatorTest();
 

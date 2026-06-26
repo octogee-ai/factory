@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getIdTokenForUid,
   setupEmulatorTest,
-} from "@shared/test-helpers/firestore-emulator.js";
+} from "@octogee/test-helpers/firestore-emulator";
 
 import { createApp } from "../index.js";
 import { db } from "../lib/db.js";

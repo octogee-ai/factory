@@ -5,7 +5,7 @@ import { db } from "../lib/db.js";
 import {
   setupEmulatorTest,
   getIdTokenForUid,
-} from "@shared/test-helpers/firestore-emulator.js";
+} from "@octogee/test-helpers/firestore-emulator";
 
 // Positional mock for the Sudo client: giteaApiAsUser(sudoUser, org, path, method, body).
 // c[0]=sudoUser (was token in the PAT era), c[2]=path, c[3]=method, c[4]=body.

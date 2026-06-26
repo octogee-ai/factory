@@ -1,0 +1,53 @@
+{
+  "name": "@octogee/test-helpers",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/firestore-emulator.js",
+  "types": "dist/firestore-emulator.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./firestore-emulator": {
+      "types": "./dist/firestore-emulator.d.ts",
+      "default": "./dist/firestore-emulator.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "firestore-emulator": [
+        "dist/firestore-emulator.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "pack:tarball": "npm run build && npm pack && mv -f octogee-test-helpers-*.tgz octogee-test-helpers.tgz",
+    "verify:tarball": "bash verify-tarball.sh",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "peerDependencies": {
+    "firebase-admin": "^13.0.0",
+    "vitest": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "firebase-admin": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "firebase-admin": "^13.10.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  },
+  "overrides": {
+    "uuid": "^11.1.1",
+    "protobufjs": "^7.6.3"
+  }
+}

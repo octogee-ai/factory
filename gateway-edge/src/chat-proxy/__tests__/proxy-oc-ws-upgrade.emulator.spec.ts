@@ -7,7 +7,7 @@ import {
   getAdminDb,
   requireEmulator,
   resetEmulator,
-} from '../../../../shared/test-helpers/firestore-emulator.js';
+} from "@octogee/test-helpers/firestore-emulator";
 import { TICKETS_COLLECTION } from './helpers/collections.js';
 
 process.env.NODE_ENV = 'test';

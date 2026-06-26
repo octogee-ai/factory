@@ -4,7 +4,7 @@ import request from "supertest";
 import {
   setupEmulatorTest,
   useAuthToken,
-} from "@shared/test-helpers/firestore-emulator.js";
+} from "@octogee/test-helpers/firestore-emulator";
 import { db } from "../lib/db.js";
 import { _setKmsClientForTesting, type KmsClient } from "../lib/kms.js";
 import { generateConnectState } from "../lib/connect-state.js";

@@ -9,7 +9,7 @@ import {
 import {
   getAdminDb,
   setupEmulatorTest,
-} from "@shared/test-helpers/firestore-emulator.js";
+} from "@octogee/test-helpers/firestore-emulator";
 
 setupEmulatorTest();
 
