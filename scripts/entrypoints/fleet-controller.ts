@@ -93,7 +93,6 @@ async function main(): Promise<void> {
     // only the local mount reconcile from brokered assigned snapshots; all
     // trusted-side provisioning mutations go through octogee-api.
     reportState: false,
-    enableDeviceAuthRoutes: !operator,
     internalServiceKey: process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
   });
 

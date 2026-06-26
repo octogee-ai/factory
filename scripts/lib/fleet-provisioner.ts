@@ -46,7 +46,7 @@ const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 
 const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
-function registerByosubDeviceAuth(
+export function registerByosubDeviceAuth(
   app: express.Express,
   opts: StartFleetOptions,
 ): void {
@@ -102,7 +102,6 @@ export interface StartFleetOptions {
    *  Used by db-less gateway pods; desired roster and state mirrors are brokered
    *  through octogee-api. */
   localReconcile?: boolean;
-  enableDeviceAuthRoutes?: boolean;
   /** Credential-less local mount reconcile: trusted octogee-api returns the
    * assigned roster for this gateway identity. */
   readDesiredSlugs?: () => Promise<string[]>;
@@ -574,9 +573,7 @@ const waitForGatewayReady = async (): Promise<void> => {
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
 
-  if (opts.enableDeviceAuthRoutes ?? caps.provision) {
-    registerByosubDeviceAuth(app, opts);
-  }
+  registerByosubDeviceAuth(app, opts);
 
   const stopReconcileLoop = startMaybeReconcileLoop({
     provision: caps.provision,
