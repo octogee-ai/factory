@@ -228,7 +228,7 @@ async function writeProvisioningProject(
     pendingVisibility: plan.targetVisibility,
     provisioningState: "provisioning",
     canvasFile: "README.md",
-    previewUrl: null,
+    sharedUrl: null,
     giteaRepoName: plan.giteaRepoName,
     repoSource: plan.ghRepoSource,
     starCount: 0,

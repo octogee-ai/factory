@@ -87,7 +87,7 @@ describe("gateway-edge sidecar surface", () => {
     expect((await request(app).get("/api/g/gw-bender/workspace/git/status")).status).toBe(401);
     expect((await request(app).get("/api/g/gw-bender/byosub/health")).status).toBe(401);
     expect(
-      (await request(app).post("/api/g/gw-bender/projects/acme/widget/deploy-preview").send({}))
+      (await request(app).post("/api/g/gw-bender/projects/acme/widget/share").send({}))
         .status,
     ).toBe(401);
   });

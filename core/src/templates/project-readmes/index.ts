@@ -26,7 +26,7 @@ This is where **{{name}}** takes shape. Edit this file to tell visitors what you
 
 ---
 
-_Canvas renders this file. If you'd rather show a running app, set a \`previewUrl\` in project settings._
+_Canvas renders this file. If you'd rather show a running app, **Share** it and Canvas displays the live app._
 `;
 
 const GAME = `# {{name}}
@@ -49,12 +49,12 @@ Tell players what they'll do, why it's fun, and what makes it yours.
 
 - [ ] Write the one-sentence pitch above the idea section
 - [ ] Add a short GIF or screenshot
-- [ ] Ship a playable build and set \`previewUrl\` in project settings
+- [ ] Ship a playable build and **Share** it — Canvas switches to the live app
 - [ ] Invite a playtester
 
 ---
 
-_Canvas renders this file. Ship the game, set a \`previewUrl\`, and Canvas switches to the live app automatically._
+_Canvas renders this file. Ship the game and **Share** it, and Canvas switches to the live app automatically._
 `;
 
 const TRIP = `# {{name}}

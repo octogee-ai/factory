@@ -90,7 +90,7 @@ beforeEach(async () => {
   mockGiteaApi.mockReset();
 });
 
-describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
+describe("POST /api/projects/:wid/:pid/share", () => {
   const ORIG_BUILD_URL = process.env.SITE_BUILD_API_URL;
   const ORIG_INTERNAL_KEY = process.env.INTERNAL_SERVICE_KEY;
 
@@ -119,7 +119,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     process.env.INTERNAL_SERVICE_KEY = "secret";
     const app = createApp();
     const res = await request(app)
-      .post("/api/projects/alice/mygame/deploy-preview")
+      .post("/api/projects/alice/mygame/share")
       .send({});
     expect(res.status).toBe(401);
   });
@@ -130,7 +130,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
 
     const app = createApp();
     const res = await request(app)
-      .post("/api/projects/alice/mygame/deploy-preview")
+      .post("/api/projects/alice/mygame/share")
       .set(await authHeader())
       .send({});
 
@@ -143,7 +143,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     process.env.INTERNAL_SERVICE_KEY = "secret";
     const app = createApp();
     const res = await request(app)
-      .post("/api/projects/alice/ghost/deploy-preview")
+      .post("/api/projects/alice/ghost/share")
       .set(await authHeader())
       .send({});
     expect(res.status).toBe(404);
@@ -163,24 +163,24 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     });
     const app = createApp();
     const res = await request(app)
-      .post("/api/projects/alice/mygame/deploy-preview")
+      .post("/api/projects/alice/mygame/share")
       .set(await authHeader())
       .send({});
     expect(res.status).toBe(403);
   });
 
-  it("writes previewUrl on success + forwards slug/projectSlug/projectName in the body", async () => {
+  it("writes sharedUrl on success + forwards slug/projectSlug/projectName in the body", async () => {
     process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
     process.env.INTERNAL_SERVICE_KEY = "secret";
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(url)).toBe("http://gateway.local:3001/api/project-preview/deploy");
+      expect(String(url)).toBe("http://gateway.local:3001/api/project/share");
       const headers = new Headers(init?.headers);
       expect(headers.get("X-Internal-Service-Key")).toBe("secret");
       const body = init?.body ? JSON.parse(String(init.body)) : {};
       expect(body).toMatchObject({ slug: "alice", projectSlug: "mygame", projectName: "My Game" });
       return new Response(
-        JSON.stringify({ success: true, previewUrl: "https://octogee-alice-mygame.web.app" }),
+        JSON.stringify({ success: true, sharedUrl: "https://octogee-alice-mygame.web.app" }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
@@ -188,19 +188,19 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     try {
       const app = createApp();
       const res = await request(app)
-        .post("/api/projects/alice/mygame/deploy-preview")
+        .post("/api/projects/alice/mygame/share")
         .set(await authHeader())
         .send({});
       expect(res.status).toBe(200);
-      expect(res.body.previewUrl).toBe("https://octogee-alice-mygame.web.app");
+      expect(res.body.sharedUrl).toBe("https://octogee-alice-mygame.web.app");
       const proj = await getProject("alice", "mygame");
-      expect(proj?.previewUrl).toBe("https://octogee-alice-mygame.web.app");
+      expect(proj?.sharedUrl).toBe("https://octogee-alice-mygame.web.app");
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("returns 502 + leaves previewUrl unchanged when site-build-api fails", async () => {
+  it("returns 502 + leaves sharedUrl unchanged when site-build-api fails", async () => {
     process.env.SITE_BUILD_API_URL = "http://gateway.local:3001";
     process.env.INTERNAL_SERVICE_KEY = "secret";
     await db
@@ -208,7 +208,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
       .doc("alice")
       .collection("projects")
       .doc("mygame")
-      .set({ previewUrl: null }, { merge: true });
+      .set({ sharedUrl: null }, { merge: true });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () => {
       return new Response("Build failed", { status: 500 });
@@ -217,12 +217,12 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     try {
       const app = createApp();
       const res = await request(app)
-        .post("/api/projects/alice/mygame/deploy-preview")
+        .post("/api/projects/alice/mygame/share")
         .set(await authHeader())
         .send({});
       expect(res.status).toBe(502);
       const proj = await getProject("alice", "mygame");
-      expect(proj?.previewUrl).toBeNull();
+      expect(proj?.sharedUrl).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -236,7 +236,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
       .doc("alice")
       .collection("projects")
       .doc("mygame")
-      .set({ previewUrl: null }, { merge: true });
+      .set({ sharedUrl: null }, { merge: true });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () => {
       const err = new Error("The operation was aborted") as Error & { name: string };
@@ -247,13 +247,13 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     try {
       const app = createApp();
       const res = await request(app)
-        .post("/api/projects/alice/mygame/deploy-preview")
+        .post("/api/projects/alice/mygame/share")
         .set(await authHeader())
         .send({});
       expect(res.status).toBe(504);
       expect(res.body.error).toMatch(/timed out/i);
       const proj = await getProject("alice", "mygame");
-      expect(proj?.previewUrl).toBeNull();
+      expect(proj?.sharedUrl).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -268,7 +268,7 @@ describe("POST /api/projects/:wid/:pid/deploy-preview", () => {
     try {
       const app = createApp();
       const r = await request(app)
-        .post("/api/projects/-bad/My-Bad/deploy-preview")
+        .post("/api/projects/-bad/My-Bad/share")
         .set(await authHeader())
         .send({});
       expect(r.status).toBe(404);
