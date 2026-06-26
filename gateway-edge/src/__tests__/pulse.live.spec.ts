@@ -45,5 +45,8 @@ describe.skipIf(!RUN_LIVE || !process.env.GITHUB_TOKEN)("Pulse — live dogfood 
     expect(report.trendPrs).toHaveLength(6);
     expect(report.trendPrs[5]).toBe(report.current.speed.prsMerged); // newest = current
     expect(report.week.until).toBe("2026-06-26");
+    expect(report.current.quality.reverts).toBe(report.reverts.length); // count matches evidence
+    expect(Array.isArray(report.stalePrs)).toBe(true);
+    expect(report.bugs).toHaveProperty("openNow");
   }, 90_000);
 });

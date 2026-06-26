@@ -18,9 +18,18 @@ export interface PulsePr {
   files?: FileChange[];
 }
 
+export interface RevertCommit {
+  subject: string;
+  url: string;
+}
+
 export interface PulseWindow {
   prs: PulsePr[];
   commits: number;
+  // Reverts come from commit subjects, not PR titles — a direct `Revert "…"` commit to
+  // main has no PR, so PR-title matching misses it (it read 0 when there were 2). The
+  // ingestion filters commits with isRevert and passes them here as evidence.
+  revertCommits: RevertCommit[];
   issuesClosed: number;
   issuesOpened: number;
 }
@@ -123,14 +132,12 @@ export function computeDxCore4(window: PulseWindow): DxCore4 {
   let fix = 0;
   let chore = 0;
   let other = 0;
-  let reverts = 0;
   let deps = 0;
   let added = 0;
   let removed = 0;
   const leads: number[] = [];
 
   for (const pr of window.prs) {
-    if (isRevert(pr.title)) reverts += 1;
     if (isDependencyBump(pr.title)) {
       deps += 1;
     } else {
@@ -154,7 +161,7 @@ export function computeDxCore4(window: PulseWindow): DxCore4 {
   const typed = feat + fix + chore + other;
   return {
     speed: { prsMerged: window.prs.length, commits: window.commits, leadTimeMedianHours: median(leads) },
-    quality: { reverts, fixes: fix },
+    quality: { reverts: window.revertCommits.length, fixes: fix },
     impact: {
       feat,
       fix,

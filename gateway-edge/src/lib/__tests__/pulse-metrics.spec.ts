@@ -95,38 +95,45 @@ describe("computeDxCore4", () => {
     commits: 286,
     issuesClosed: 22,
     issuesOpened: 1,
+    revertCommits: [{ subject: 'Revert "broke prod"', url: "https://x/commit/abc" }],
     prs: [
       pr({ title: "feat(board): kanban", mergedAt: "2026-06-20T00:00:00Z" }), // 0h
       pr({ title: "feat(pulse): engine", mergedAt: "2026-06-20T02:00:00Z" }), // 2h
       pr({ title: "fix: guard" }),
       pr({ title: "chore: tidy" }),
-      pr({ title: 'Revert "feat: oops"' }),
+      pr({ title: "Rename the thing" }), // descriptive → other
       pr({ title: "Bump vite from 8.0 to 8.1" }),
     ],
   };
 
-  it("rolls PRs into DX Core 4 dimensions", () => {
+  it("rolls PRs into DX Core 4 dimensions; reverts come from commits, not PR titles", () => {
     const m = computeDxCore4(window);
     expect(m.speed.prsMerged).toBe(6);
     expect(m.speed.commits).toBe(286);
     expect(m.speed.leadTimeMedianHours).toBe(1);
-    expect(m.quality.reverts).toBe(1);
+    expect(m.quality.reverts).toBe(1); // from revertCommits, even though no PR title is a revert
     expect(m.impact.feat).toBe(2);
     expect(m.impact.fix).toBe(1);
     expect(m.impact.chore).toBe(1);
+    expect(m.impact.other).toBe(1); // the descriptive "Rename" PR
     expect(m.impact.issuesClosed).toBe(22);
     expect(m.deps).toBe(1);
   });
 
+  it("counts zero reverts when no commit is a revert, regardless of PR titles", () => {
+    const m = computeDxCore4({ ...window, revertCommits: [] });
+    expect(m.quality.reverts).toBe(0);
+  });
+
   it("computes new-capability share from classified work (excluding deps)", () => {
-    // feat 2 / (feat 2 + fix 1 + chore 1 + other[revert counts as type 'revert'->other] 1) = 2/5
+    // feat 2 / (feat 2 + fix 1 + chore 1 + other 1) = 2/5
     const m = computeDxCore4(window);
     expect(m.impact.newCapabilityShare).toBeCloseTo(0.4, 3);
   });
 
   it("filters generated paths out of LOC totals", () => {
     const w: PulseWindow = {
-      commits: 1, issuesClosed: 0, issuesOpened: 0,
+      commits: 1, issuesClosed: 0, issuesOpened: 0, revertCommits: [],
       prs: [pr({ title: "feat: x", files: [
         { path: "app/src/a.ts", additions: 10, deletions: 2 },
         { path: "app/package-lock.json", additions: 5000, deletions: 4000 },
