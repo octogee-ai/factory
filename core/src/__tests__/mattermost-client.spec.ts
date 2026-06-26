@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const logMock = vi.fn();
-vi.mock("../lib/config.js", () => ({ log: logMock }));
+vi.mock("../config.js", () => ({ log: logMock }));
 
 beforeEach(async () => {
   process.env.MM_URL = "http://mm.test";
@@ -24,7 +24,7 @@ describe("mmApiCall — error log routing", () => {
       text: () => Promise.resolve('{"id":"unknown.error","message":"oops"}'),
     } as Response);
 
-    const { mmApiCall } = await import("../lib/mattermost/client.js");
+    const { mmApiCall } = await import("../mattermost/client.js");
     const result = await mmApiCall("POST", "/channels", { name: "test" });
 
     expect(result).toBeNull();
@@ -44,7 +44,7 @@ describe("mmApiCall — error log routing", () => {
         ),
     } as Response);
 
-    const { mmApiCall } = await import("../lib/mattermost/client.js");
+    const { mmApiCall } = await import("../mattermost/client.js");
     const result = await mmApiCall("POST", "/channels", { name: "general" });
 
     expect(result).toBeNull();
@@ -65,7 +65,7 @@ describe("mmApiCall — error log routing", () => {
         ),
     } as Response);
 
-    const { mmApiCall } = await import("../lib/mattermost/client.js");
+    const { mmApiCall } = await import("../mattermost/client.js");
     const result = await mmApiCall("POST", "/channels", { name: "x" });
 
     expect(result).toBeNull();
@@ -80,7 +80,7 @@ describe("mmApiCall — error log routing", () => {
       json: () => Promise.resolve({ id: "ch-1" }),
     } as Response);
 
-    const { mmApiCall } = await import("../lib/mattermost/client.js");
+    const { mmApiCall } = await import("../mattermost/client.js");
     const result = await mmApiCall("POST", "/channels", { name: "ok" });
 
     expect(result).toEqual({ id: "ch-1" });
@@ -100,27 +100,27 @@ describe("assertMattermostConfigured — fail loud when MM is not wired", () => 
 
   it("throws when MM_URL is missing (the octogee-api broker gap that 502'd provisioning)", async () => {
     process.env.MM_ADMIN_TOKEN = "admin";
-    const { assertMattermostConfigured } = await import("../lib/mattermost/client.js");
+    const { assertMattermostConfigured } = await import("../mattermost/client.js");
     expect(() => assertMattermostConfigured()).toThrow(/MM_URL/);
   });
 
   it("throws when neither an admin nor a bot token is present", async () => {
     process.env.MM_URL = "http://mm.test";
-    const { assertMattermostConfigured } = await import("../lib/mattermost/client.js");
+    const { assertMattermostConfigured } = await import("../mattermost/client.js");
     expect(() => assertMattermostConfigured()).toThrow(/token/i);
   });
 
   it("passes with MM_URL + MM_ADMIN_TOKEN (how octogee-api authenticates)", async () => {
     process.env.MM_URL = "http://mm.test";
     process.env.MM_ADMIN_TOKEN = "admin";
-    const { assertMattermostConfigured } = await import("../lib/mattermost/client.js");
+    const { assertMattermostConfigured } = await import("../mattermost/client.js");
     expect(() => assertMattermostConfigured()).not.toThrow();
   });
 
   it("passes with MM_URL + MM_BOT_TOKEN (the legacy in-pod fallback token)", async () => {
     process.env.MM_URL = "http://mm.test";
     process.env.MM_BOT_TOKEN = "bot";
-    const { assertMattermostConfigured } = await import("../lib/mattermost/client.js");
+    const { assertMattermostConfigured } = await import("../mattermost/client.js");
     expect(() => assertMattermostConfigured()).not.toThrow();
   });
 });

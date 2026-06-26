@@ -3,7 +3,7 @@ import {
   workspaceCoachChannelName,
   workspaceGeneralChannelName,
   workspaceAdminChannelName,
-} from "../../shared/types/identity.js";
+} from "@octogee/shared/types/identity";
 
 const h = vi.hoisted(() => {
   let docs: Record<string, unknown> = {};
@@ -27,21 +27,21 @@ const h = vi.hoisted(() => {
   };
 });
 
-vi.mock("../lib/firebase.js", () => ({ db: h.db }));
-vi.mock("../lib/mattermost/client.js", () => ({
+vi.mock("../firebase.js", () => ({ db: h.db }));
+vi.mock("../mattermost/client.js", () => ({
   mmApiCall: h.mmApiCall,
   assertMattermostConfigured: vi.fn(),
 }));
-vi.mock("../lib/mattermost/coach-pat.js", () => ({
+vi.mock("../mattermost/coach-pat.js", () => ({
   mintAndPersistCoachToken: h.mintAndPersistCoachToken,
 }));
-vi.mock("../lib/mattermost/channels.js", () => ({
+vi.mock("../mattermost/channels.js", () => ({
   createOrRestoreChannel: h.createOrRestoreChannel,
 }));
-vi.mock("../lib/mattermost/community.js", () => ({ communityChannelIds: [] }));
-vi.mock("../lib/mattermost/avatars.js", () => ({ mmUploadAvatar: h.mmUploadAvatar }));
+vi.mock("../mattermost/community.js", () => ({ communityChannelIds: [] }));
+vi.mock("../mattermost/avatars.js", () => ({ mmUploadAvatar: h.mmUploadAvatar }));
 
-import { provisionMattermostUser } from "../lib/mattermost/provision.js";
+import { provisionMattermostUser } from "../mattermost/provision.js";
 
 interface ProvisionInput {
   uid: string;

@@ -6,12 +6,12 @@ import { describe, it, expect } from "vitest";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PROVISION_SRC = path.resolve(__dirname, "../lib/mattermost/provision.ts");
-const PROFILE_SYNC_SRC = path.resolve(__dirname, "../lib/mattermost/profile-sync.ts");
-const MILESTONES_SRC = path.resolve(__dirname, "../lib/milestones.ts");
+const PROVISION_SRC = path.resolve(__dirname, "../mattermost/provision.ts");
+const PROFILE_SYNC_SRC = path.resolve(__dirname, "../mattermost/profile-sync.ts");
+const MILESTONES_SRC = path.resolve(__dirname, "../../../scripts/lib/milestones.ts");
 const GATEWAY_EDGE_AGENTS_SRC = path.resolve(
   __dirname,
-  "../../gateway-edge/src/routes/agents.ts",
+  "../../../gateway-edge/src/routes/agents.ts",
 );
 
 describe("coach is a MM bot — creation contract", () => {

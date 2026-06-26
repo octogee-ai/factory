@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PROVISION_SRC = path.resolve(__dirname, "../lib/mattermost/provision.ts");
+const PROVISION_SRC = path.resolve(__dirname, "../mattermost/provision.ts");
 
 describe("Builder MM user is created with least-privilege role (#766)", () => {
   function getUserCreateBody(): string {

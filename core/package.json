@@ -183,6 +183,90 @@
     "./templates/project-readmes": {
       "types": "./dist/templates/project-readmes/index.d.ts",
       "default": "./dist/templates/project-readmes/index.js"
+    },
+    "./provisionSteps": {
+      "types": "./dist/provisionSteps.d.ts",
+      "default": "./dist/provisionSteps.js"
+    },
+    "./crew": {
+      "types": "./dist/crew.d.ts",
+      "default": "./dist/crew.js"
+    },
+    "./firebase": {
+      "types": "./dist/firebase.d.ts",
+      "default": "./dist/firebase.js"
+    },
+    "./gateway": {
+      "types": "./dist/gateway.d.ts",
+      "default": "./dist/gateway.js"
+    },
+    "./helpers": {
+      "types": "./dist/helpers.d.ts",
+      "default": "./dist/helpers.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications.d.ts",
+      "default": "./dist/notifications.js"
+    },
+    "./tier-template-files": {
+      "types": "./dist/tier-template-files.d.ts",
+      "default": "./dist/tier-template-files.js"
+    },
+    "./mattermost": {
+      "types": "./dist/mattermost.d.ts",
+      "default": "./dist/mattermost.js"
+    },
+    "./mattermost/admin-creds": {
+      "types": "./dist/mattermost/admin-creds.d.ts",
+      "default": "./dist/mattermost/admin-creds.js"
+    },
+    "./mattermost/avatars": {
+      "types": "./dist/mattermost/avatars.d.ts",
+      "default": "./dist/mattermost/avatars.js"
+    },
+    "./mattermost/builder-pat": {
+      "types": "./dist/mattermost/builder-pat.d.ts",
+      "default": "./dist/mattermost/builder-pat.js"
+    },
+    "./mattermost/channel-members": {
+      "types": "./dist/mattermost/channel-members.d.ts",
+      "default": "./dist/mattermost/channel-members.js"
+    },
+    "./mattermost/channels": {
+      "types": "./dist/mattermost/channels.d.ts",
+      "default": "./dist/mattermost/channels.js"
+    },
+    "./mattermost/client": {
+      "types": "./dist/mattermost/client.d.ts",
+      "default": "./dist/mattermost/client.js"
+    },
+    "./mattermost/coach-pat": {
+      "types": "./dist/mattermost/coach-pat.d.ts",
+      "default": "./dist/mattermost/coach-pat.js"
+    },
+    "./mattermost/community": {
+      "types": "./dist/mattermost/community.d.ts",
+      "default": "./dist/mattermost/community.js"
+    },
+    "./mattermost/nuke": {
+      "types": "./dist/mattermost/nuke.d.ts",
+      "default": "./dist/mattermost/nuke.js"
+    },
+    "./mattermost/profile-sync": {
+      "types": "./dist/mattermost/profile-sync.d.ts",
+      "default": "./dist/mattermost/profile-sync.js"
+    },
+    "./mattermost/provision": {
+      "types": "./dist/mattermost/provision.d.ts",
+      "default": "./dist/mattermost/provision.js"
+    },
+    "./mattermost/provisionActivityPair": {
+      "types": "./dist/mattermost/provisionActivityPair.d.ts",
+      "default": "./dist/mattermost/provisionActivityPair.js"
+    },
+    "./mattermost/provisionWorkspaceActivityPairs": {
+      "types": "./dist/mattermost/provisionWorkspaceActivityPairs.d.ts",
+      "default": "./dist/mattermost/provisionWorkspaceActivityPairs.js"
     }
   },
   "typesVersions": {
@@ -318,6 +402,69 @@
       ],
       "templates/project-readmes": [
         "dist/templates/project-readmes/index.d.ts"
+      ],
+      "provisionSteps": [
+        "dist/provisionSteps.d.ts"
+      ],
+      "crew": [
+        "dist/crew.d.ts"
+      ],
+      "firebase": [
+        "dist/firebase.d.ts"
+      ],
+      "gateway": [
+        "dist/gateway.d.ts"
+      ],
+      "helpers": [
+        "dist/helpers.d.ts"
+      ],
+      "notifications": [
+        "dist/notifications.d.ts"
+      ],
+      "tier-template-files": [
+        "dist/tier-template-files.d.ts"
+      ],
+      "mattermost": [
+        "dist/mattermost.d.ts"
+      ],
+      "mattermost/admin-creds": [
+        "dist/mattermost/admin-creds.d.ts"
+      ],
+      "mattermost/avatars": [
+        "dist/mattermost/avatars.d.ts"
+      ],
+      "mattermost/builder-pat": [
+        "dist/mattermost/builder-pat.d.ts"
+      ],
+      "mattermost/channel-members": [
+        "dist/mattermost/channel-members.d.ts"
+      ],
+      "mattermost/channels": [
+        "dist/mattermost/channels.d.ts"
+      ],
+      "mattermost/client": [
+        "dist/mattermost/client.d.ts"
+      ],
+      "mattermost/coach-pat": [
+        "dist/mattermost/coach-pat.d.ts"
+      ],
+      "mattermost/community": [
+        "dist/mattermost/community.d.ts"
+      ],
+      "mattermost/nuke": [
+        "dist/mattermost/nuke.d.ts"
+      ],
+      "mattermost/profile-sync": [
+        "dist/mattermost/profile-sync.d.ts"
+      ],
+      "mattermost/provision": [
+        "dist/mattermost/provision.d.ts"
+      ],
+      "mattermost/provisionActivityPair": [
+        "dist/mattermost/provisionActivityPair.d.ts"
+      ],
+      "mattermost/provisionWorkspaceActivityPairs": [
+        "dist/mattermost/provisionWorkspaceActivityPairs.d.ts"
       ]
     }
   },
@@ -333,6 +480,7 @@
     "express": "^5.2.1",
     "firebase-admin": "^13.10.0 || ^14.0.0",
     "google-auth-library": "^10.7.0",
+    "unique-names-generator": "^4.7.1",
     "ws": "^8.21.0"
   },
   "overrides": {

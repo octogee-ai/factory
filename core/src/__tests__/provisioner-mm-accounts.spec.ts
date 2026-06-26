@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   wireCoachMattermostBindings,
   wireCoachMattermostAccount,
-} from "../lib/provisionSteps.js";
+} from "../provisionSteps.js";
 
-vi.mock("../lib/config.js", async () => {
-  const actual: any = await vi.importActual("../lib/config.js");
+vi.mock("../config.js", async () => {
+  const actual: any = await vi.importActual("../config.js");
   return { ...actual, log: vi.fn() };
 });
 
@@ -87,7 +87,7 @@ describe("wireCoachMattermostBindings", () => {
 describe("wireCoachMattermostAccount", () => {
   let logSpy: ReturnType<typeof vi.fn>;
   beforeEach(async () => {
-    const cfgMod: any = await import("../lib/config.js");
+    const cfgMod: any = await import("../config.js");
     logSpy = cfgMod.log as any;
     (logSpy as any).mockClear?.();
   });

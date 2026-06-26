@@ -5,22 +5,22 @@ const h = vi.hoisted(() => ({
   mmApiCall: vi.fn(),
 }));
 
-vi.mock("../lib/config.js", () => ({
+vi.mock("../config.js", () => ({
   log: h.log,
 }));
 
-vi.mock("../lib/mattermost/client.js", () => ({
+vi.mock("../mattermost/client.js", () => ({
   mmApiCall: h.mmApiCall,
 }));
 
-vi.mock("../lib/mattermost/channel-members.js", () => ({
+vi.mock("../mattermost/channel-members.js", () => ({
   customerChannelMembers: vi.fn(() => ["mm-customer", "mm-admin"]),
 }));
 
 import {
   createOrRestoreChannel,
   createProjectChannel,
-} from "../lib/mattermost/channels.js";
+} from "../mattermost/channels.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
