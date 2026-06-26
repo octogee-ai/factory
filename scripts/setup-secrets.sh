@@ -325,13 +325,29 @@ else
   ksecret octogee-brave --from-literal=key=""
 fi
 
-# ── 8. (removed) GitHub token ─────────────────────────────────────────────
-# GitHub integration retired 2026-05-14: Gitea is the canonical git host
-# for customer workspaces, and scripts/lib/collaboration.ts (GitHub org
-# add/remove) was the only deployed consumer — dead in current surfaces.
-# Matching removals: helm/octogee-gateway/values.yaml + deployment.yaml,
-# helm/octogee/charts/gateway-edge/values.yaml, and this script's
-# Firebase-function pre-create list.
+# ── 8. Connector OAuth client secrets (octogee-api /api/connect/<provider>) ─
+# octogee-api reads client_id + client_secret from these K8s secrets to run the
+# Connections OAuth flow (helm wires them with optional:true). Sourced from the
+# env file, Secret Manager fallback. The original single GitHub *token* was
+# dropped 2026-05-14 when GitHub was thought dead; GitHub returned as a
+# Connections connector, so the per-provider OAuth client secrets are
+# established here — a regression caused "GitHub connection is not configured".
+oauth_secret() {
+  local secret="$1" id_var="$2" sec_var="$3"
+  info "$secret"
+  set +u; local id="${!id_var:-}" sec="${!sec_var:-}"; set -u
+  [[ -z "$id" ]]  && id=$(sm_get "$id_var" 2>/dev/null || echo "")
+  [[ -z "$sec" ]] && sec=$(sm_get "$sec_var" 2>/dev/null || echo "")
+  if [[ -n "$id" && -n "$sec" ]]; then
+    ksecret "$secret" --from-literal=client_id="$id" --from-literal=client_secret="$sec"
+  else
+    warn "$id_var/$sec_var not set — creating empty $secret (optional; OAuth connect disabled for this provider)"
+    ksecret "$secret" --from-literal=client_id="" --from-literal=client_secret=""
+  fi
+}
+oauth_secret github-oauth    GITHUB_CLIENT_ID    GITHUB_CLIENT_SECRET
+oauth_secret google-oauth    GOOGLE_CLIENT_ID    GOOGLE_CLIENT_SECRET
+oauth_secret microsoft-oauth MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
 
 # ── 9a. Gateway model-key issuer bearer (glm-controller → octogee-api) ─
 # A dedicated bearer, separate from the gateway tenant-binding auth. It only
@@ -693,6 +709,9 @@ status "social-notification-bearer" "${SOCIAL_NOTIFICATION_BEARER:-}"
 status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
 status "resend-secrets / api_key" "${RESEND_API_KEY:-}"
 status "resend-secrets / from_email" "${RESEND_FROM_EMAIL:-}"
+status "github-oauth / client_id" "${GITHUB_CLIENT_ID:-}"
+status "google-oauth / client_id" "${GOOGLE_CLIENT_ID:-}"
+status "microsoft-oauth / client_id" "${MICROSOFT_CLIENT_ID:-}"
 
 echo ""
 if [[ -z "${MM_BOT_TOKEN:-}" || -z "${MM_BOT_USER_ID:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
