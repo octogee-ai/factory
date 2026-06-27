@@ -1,6 +1,9 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
-import { MODEL_CREDENTIAL_STATIC_PROVIDER_IDS } from "@octogee/shared/types/model-credentials";
+import {
+  MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
+  modelCredentialOAuthEntryBySubscriptionProvider,
+} from "@octogee/shared/types/model-credentials";
 
 import { readSecret } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
@@ -48,6 +51,12 @@ function parseByokApiKeyId(id: string): { slug: string; provider: string; versio
 // keyRef; a generous TTL spans a normal agent session (so it is not re-minted
 // mid-session) while still bounding how long stale tokens linger before TTL cleanup.
 const AGENT_MODEL_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+
+// Mirrors gateway-edge/src/routes/byosub.ts: a byosub OAuth flow is short-lived.
+const BYOSUB_FLOW_TTL_MS = 60 * 60 * 1000;
+// flowId is a crypto.randomUUID() minted in-pod (claude-sso/device-auth managers);
+// pin a path-safe shape so it cannot steer the byosubFlows doc id elsewhere.
+const SAFE_FLOW_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
 
 function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
@@ -182,6 +191,62 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       policy: grant.policy,
     });
     res.json({ value: issued.token });
+  });
+
+  // Record a byosub OAuth flow's owner mapping for a customer-agent assigned to
+  // this gateway. The sidecar /connect handler starts the in-pod auth flow
+  // locally (its OPENCLAW_GATEWAY_TOKEN matches the in-pod manager), then brokers
+  // the flowId->owner mapping here because cattle pods have no Firestore. The
+  // in-pod /capture callback later reads byosubFlows to persist the captured
+  // credential. Roster-scoped via findAssignedUserByAgentId — a gateway can only
+  // record flows for a customer assigned to it, and the owner uid is DERIVED from
+  // the assignment, never trusted from the caller.
+  router.post("/byosub-flow", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+
+    const body = (req.body || {}) as {
+      flowId?: unknown;
+      agentId?: unknown;
+      provider?: unknown;
+    };
+    if (typeof body.agentId !== "string" || !isSafeAgentId(body.agentId)) {
+      res.status(400).json({ error: "valid agentId required" });
+      return;
+    }
+    if (typeof body.flowId !== "string" || !SAFE_FLOW_ID_RE.test(body.flowId)) {
+      res.status(400).json({ error: "valid flowId required" });
+      return;
+    }
+    const entry =
+      typeof body.provider === "string"
+        ? modelCredentialOAuthEntryBySubscriptionProvider(body.provider)
+        : null;
+    if (!entry) {
+      res.status(400).json({ error: `unsupported subscription provider: ${String(body.provider)}` });
+      return;
+    }
+
+    const assigned = await findAssignedUserByAgentId(db, bound.gatewayId, body.agentId);
+    if (!assigned) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+
+    const now = Date.now();
+    await db
+      .collection("byosubFlows")
+      .doc(body.flowId)
+      .set({
+        uid: assigned.uid,
+        gatewayId: bound.gatewayId,
+        agentId: body.agentId,
+        provider: entry.oauth.subscriptionProvider,
+        modelCredentialProvider: entry.id,
+        createdAt: now,
+        expireAt: now + BYOSUB_FLOW_TTL_MS,
+      });
+    res.json({ ok: true });
   });
 
   return router;

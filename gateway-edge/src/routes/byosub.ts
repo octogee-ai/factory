@@ -12,8 +12,6 @@ import {
   validateClaudeCliCredential,
   validateClaudeCliToken,
   coachAgentId,
-  gatewayDeviceAuthClient,
-  gatewayClaudeSsoClient,
   byosubConnectionView,
   isSafeGatewayId,
 } from "../lib/byosub.js";
@@ -22,13 +20,11 @@ import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { triggerGatewayModelCredentialSync } from "../lib/byot-sync-trigger.js";
 import { logger } from "../middleware/logging.js";
 import {
-  MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS,
   modelCredentialOAuthState,
   modelCredentialOAuthEntryByProviderId,
   modelCredentialOAuthEntryBySubscriptionProvider,
   type ModelCredentialOAuthCatalogEntry,
   type ModelCredentialOAuthProviderId,
-  type ModelCredentialSubscriptionProviderId,
 } from "@octogee/shared/types/model-credentials";
 
 const router = Router();
@@ -43,16 +39,10 @@ interface FlowDoc {
   expireAt?: number;
 }
 
-const FLOW_TTL_MS = 60 * 60 * 1000;
-
 async function readFlow(flowId: string): Promise<FlowDoc | null> {
   const snap = await db.collection("byosubFlows").doc(flowId).get();
   if (!snap.exists) return null;
   return (snap.data() || null) as FlowDoc | null;
-}
-
-function subscriptionProviderIds(): ModelCredentialSubscriptionProviderId[] {
-  return [...MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS];
 }
 
 function oauthEntryFromFlow(flow: FlowDoc): ModelCredentialOAuthCatalogEntry | null {
@@ -77,142 +67,6 @@ function validateCredentialForEntry(
     : validateCodexCredential(credential);
 }
 
-router.post(
-  "/connect",
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const uid = req.uid!;
-      const provider = String((req.body || {}).provider ?? "openai");
-      const entry = modelCredentialOAuthEntryBySubscriptionProvider(provider);
-      if (!entry) {
-        res.status(400).json({
-          error: `Unsupported provider: ${provider}`,
-          supported: subscriptionProviderIds(),
-        });
-        return;
-      }
-      const resolved = await resolveUserGateway(uid);
-      if (!resolved) {
-        res
-          .status(400)
-          .json({ error: "No provisioned workspace/gateway for this user" });
-        return;
-      }
-      const agentId = coachAgentId(resolved.slug);
-      try {
-        const out = entry.oauth.gatewayFlow === "claude-sso"
-          ? await gatewayClaudeSsoClient().start({
-              gatewayId: resolved.gatewayId,
-              agentId,
-            })
-          : await gatewayDeviceAuthClient().start({
-              gatewayId: resolved.gatewayId,
-              agentId,
-            });
-
-        await db
-          .collection("byosubFlows")
-          .doc(out.flowId)
-          .set({
-            uid,
-            gatewayId: resolved.gatewayId,
-            agentId,
-            provider: entry.oauth.subscriptionProvider,
-            modelCredentialProvider: entry.id,
-            createdAt: Date.now(),
-            expireAt: Date.now() + FLOW_TTL_MS,
-          });
-        res.json(out);
-      } catch (e) {
-        res.status(503).json({
-          error: `Gateway auth flow unavailable: ${(e as Error).message}`,
-        });
-      }
-    } catch (e) {
-      next(e);
-    }
-  },
-);
-
-router.get(
-  "/status/:flowId",
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const flow = await readFlow(req.params.flowId as string);
-
-      if (!flow || flow.uid !== req.uid!) {
-        res.status(404).json({ error: "flow not found" });
-        return;
-      }
-      try {
-        const flowId = req.params.flowId as string;
-        const entry = oauthEntryFromFlow(flow);
-        if (!entry) {
-          res.status(400).json({ error: `Unsupported provider: ${flow.provider}` });
-          return;
-        }
-        const out = entry.oauth.gatewayFlow === "claude-sso"
-          ? await gatewayClaudeSsoClient().status({
-              gatewayId: flow.gatewayId,
-              flowId,
-            })
-          : await gatewayDeviceAuthClient().status({
-              gatewayId: flow.gatewayId,
-              flowId,
-            });
-        res.json(out);
-      } catch (e) {
-        res
-          .status(503)
-          .json({ error: `Gateway status unavailable: ${(e as Error).message}` });
-      }
-    } catch (e) {
-      next(e);
-    }
-  },
-);
-
-router.post(
-  "/sso/submit",
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const b = (req.body || {}) as { flowId?: string; code?: string };
-      if (!b.flowId || typeof b.code !== "string" || !b.code) {
-        res.status(400).json({ error: "flowId and code required" });
-        return;
-      }
-      const flow = await readFlow(b.flowId);
-      if (!flow || flow.uid !== req.uid!) {
-        res.status(404).json({ error: "flow not found" });
-        return;
-      }
-      const entry = oauthEntryFromFlow(flow);
-      if (entry?.oauth.gatewayFlow !== "claude-sso") {
-        res.status(400).json({ error: "flow is not an Anthropic SSO flow" });
-        return;
-      }
-      try {
-        res.json(
-          await gatewayClaudeSsoClient().submit({
-            gatewayId: flow.gatewayId,
-            flowId: b.flowId,
-            code: b.code,
-          }),
-        );
-      } catch (e) {
-        res
-          .status(503)
-          .json({ error: `Gateway Claude SSO unavailable: ${(e as Error).message}` });
-      }
-    } catch (e) {
-      next(e);
-    }
-  },
-);
-
 router.get(
   "/connection",
   requireAuth,
@@ -235,7 +89,9 @@ router.get(
       };
       const ref = data.byosub?.[coachAgentId(resolved.slug)];
 
-res.json(byosubConnectionView(ref));
+      // gatewayId lets the client target the sidecar locality seam
+      // (/api/g/<gatewayId>/byosub/*) for the connect/status/submit flow.
+      res.json({ ...byosubConnectionView(ref), gatewayId: resolved.gatewayId });
     } catch (e) {
       next(e);
     }

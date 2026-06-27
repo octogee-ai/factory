@@ -1,0 +1,153 @@
+import express from "express";
+import request from "supertest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const TEST_UID = "uid-tester5";
+
+vi.mock("../middleware/auth.js", () => ({
+  requireAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
+    (req as { uid?: string }).uid = TEST_UID;
+    next();
+  },
+}));
+
+const resolveUserGateway = vi.fn();
+vi.mock("../lib/user-gateway.js", () => ({
+  resolveUserGateway: (...a: unknown[]) => resolveUserGateway(...a),
+}));
+
+const ssoStart = vi.fn();
+const ssoStatus = vi.fn();
+const ssoSubmit = vi.fn();
+const deviceStart = vi.fn();
+const brokerByosubFlow = vi.fn();
+vi.mock("../lib/byosub.js", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    brokerByosubFlow: (...a: unknown[]) => brokerByosubFlow(...a),
+    gatewayClaudeSsoClient: () => ({ start: ssoStart, status: ssoStatus, submit: ssoSubmit }),
+    gatewayDeviceAuthClient: () => ({ start: deviceStart, status: vi.fn() }),
+  };
+});
+
+const flowStore = new Map<string, Record<string, unknown>>();
+vi.mock("../lib/db.js", () => ({
+  db: {
+    collection: (name: string) => ({
+      doc: (id: string) => ({
+        get: async () => ({
+          exists: name === "byosubFlows" && flowStore.has(id),
+          data: () => flowStore.get(id),
+        }),
+      }),
+    }),
+  },
+}));
+
+import { createByosubAuthRouter } from "../routes/byosub-auth.js";
+import { coachAgentId } from "../lib/byosub.js";
+
+const AGENT = coachAgentId("tester5");
+
+function app() {
+  const a = express();
+  a.use(express.json());
+  a.use("/byosub", createByosubAuthRouter());
+  return a;
+}
+
+describe("byosub-auth sidecar router", () => {
+  beforeEach(() => {
+    process.env.GATEWAY_ID = "bender";
+    resolveUserGateway.mockReset().mockResolvedValue({ slug: "tester5", gatewayId: "bender" });
+    ssoStart.mockReset();
+    ssoStatus.mockReset();
+    ssoSubmit.mockReset();
+    deviceStart.mockReset();
+    brokerByosubFlow.mockReset().mockResolvedValue(undefined);
+    flowStore.clear();
+  });
+  afterEach(() => {
+    delete process.env.GATEWAY_ID;
+  });
+
+  it("connect (anthropic): starts the in-pod SSO flow locally and brokers the flow write", async () => {
+    ssoStart.mockResolvedValue({ flowId: "f1", verificationUrl: "https://x", state: "pending" });
+    const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
+    expect(res.status).toBe(200);
+    expect(res.body.flowId).toBe("f1");
+    expect(ssoStart).toHaveBeenCalledWith({ gatewayId: "bender", agentId: AGENT });
+    expect(brokerByosubFlow).toHaveBeenCalledWith({
+      flowId: "f1",
+      agentId: AGENT,
+      provider: "anthropic",
+    });
+  });
+
+  it("connect: 409 not_on_this_pod when the user's gateway is not this pod", async () => {
+    resolveUserGateway.mockResolvedValue({ slug: "tester5", gatewayId: "other-gw" });
+    const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
+    expect(res.status).toBe(409);
+    expect(ssoStart).not.toHaveBeenCalled();
+    expect(brokerByosubFlow).not.toHaveBeenCalled();
+  });
+
+  it("connect: 400 on an unsupported provider", async () => {
+    const res = await request(app()).post("/byosub/connect").send({ provider: "nope" });
+    expect(res.status).toBe(400);
+  });
+
+  it("connect: 400 when the user has no provisioned gateway", async () => {
+    resolveUserGateway.mockResolvedValue(null);
+    const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
+    expect(res.status).toBe(400);
+  });
+
+  it("connect: 503 (surfaced) when the in-pod start fails — flow is NOT brokered", async () => {
+    ssoStart.mockRejectedValue(new Error("gateway 401 unauthorized"));
+    const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/401/);
+    expect(brokerByosubFlow).not.toHaveBeenCalled();
+  });
+
+  it("status: reads the flow locally and proxies the in-pod status for the owner", async () => {
+    flowStore.set("f1", { uid: TEST_UID, gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+    ssoStatus.mockResolvedValue({ state: "pending" });
+    const res = await request(app()).get("/byosub/status/f1");
+    expect(res.status).toBe(200);
+    expect(ssoStatus).toHaveBeenCalledWith({ gatewayId: "bender", flowId: "f1" });
+  });
+
+  it("status: 404 when the flow belongs to a different user", async () => {
+    flowStore.set("f1", { uid: "someone-else", gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+    const res = await request(app()).get("/byosub/status/f1");
+    expect(res.status).toBe(404);
+    expect(ssoStatus).not.toHaveBeenCalled();
+  });
+
+  it("status: 409 when the flow belongs to a different pod", async () => {
+    flowStore.set("f1", { uid: TEST_UID, gatewayId: "other-gw", agentId: AGENT, provider: "anthropic" });
+    const res = await request(app()).get("/byosub/status/f1");
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "not_on_this_pod" });
+    expect(ssoStatus).not.toHaveBeenCalled();
+  });
+
+  it("sso/submit: proxies the in-pod submit for the owner", async () => {
+    flowStore.set("f1", { uid: TEST_UID, gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+    ssoSubmit.mockResolvedValue({ state: "connected" });
+    const res = await request(app()).post("/byosub/sso/submit").send({ flowId: "f1", code: "abc" });
+    expect(res.status).toBe(200);
+    expect(ssoSubmit).toHaveBeenCalledWith({ gatewayId: "bender", flowId: "f1", code: "abc" });
+  });
+
+  it("sso/submit: 409 when the flow belongs to a different pod", async () => {
+    flowStore.set("f1", { uid: TEST_UID, gatewayId: "other-gw", agentId: AGENT, provider: "anthropic" });
+    const res = await request(app()).post("/byosub/sso/submit").send({ flowId: "f1", code: "abc" });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "not_on_this_pod" });
+    expect(ssoSubmit).not.toHaveBeenCalled();
+  });
+});

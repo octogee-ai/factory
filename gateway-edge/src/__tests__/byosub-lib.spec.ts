@@ -8,7 +8,44 @@ import {
   gatewayDeviceAuthClient,
   byosubConnectionView,
   isSafeGatewayId,
+  brokerByosubFlow,
 } from "../lib/byosub.js";
+
+describe("brokerByosubFlow — sidecar brokers the byosubFlows write via gateway identity", () => {
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    process.env.FLEET_BROKER_URL = "http://octogee-api.octogee.svc.cluster.local:3001";
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    delete process.env.FLEET_BROKER_URL;
+    delete process.env.OCTOGEE_API_URL;
+  });
+
+  it("POSTs flowId/agentId/provider to octogee-api /internal/byok/byosub-flow", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    globalThis.fetch = vi.fn(async (url: any, init: any) => {
+      calls.push({ url: String(url), body: JSON.parse(init.body) });
+      return { ok: true, json: async () => ({ ok: true }) } as any;
+    }) as any;
+    await brokerByosubFlow({ flowId: "f1", agentId: "octogee-x-coach", provider: "anthropic" });
+    expect(calls[0].url).toBe(
+      "http://octogee-api.octogee.svc.cluster.local:3001/internal/byok/byosub-flow",
+    );
+    expect(calls[0].body).toEqual({ flowId: "f1", agentId: "octogee-x-coach", provider: "anthropic" });
+  });
+
+  it("throws on a non-2xx broker response (no silent failure)", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      text: async () => "forbidden",
+    })) as any;
+    await expect(
+      brokerByosubFlow({ flowId: "f1", agentId: "a", provider: "anthropic" }),
+    ).rejects.toThrow(/403/);
+  });
+});
 
 describe("byosubSecretName", () => {
   it("is owner-scoped and matches Chunk A secretNameFor", () => {

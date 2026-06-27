@@ -16,6 +16,7 @@ import githubReposRoutes from "./routes/workspace/github-repos.js";
 import publishRoutes from "./routes/projects/publish.js";
 import { projectPreviewRoutes, workspacePreviewRoutes } from "./routes/previews.js";
 import byosubHealthRoutes from "./routes/byosub-health.js";
+import { createByosubAuthRouter } from "./routes/byosub-auth.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
@@ -161,6 +162,12 @@ function mountSidecarLocalitySurface(app: Express): void {
   byosubLocality.use("/health", requireAuth);
   byosubLocality.use(byosubHealthRoutes);
   mountApi(app, "/byosub", byosubLocality);
+  // connect/status/sso-submit run HERE (the customer's own pod) so the in-pod
+  // claude-sso/device-auth managers accept the pod's OPENCLAW_GATEWAY_TOKEN —
+  // octogee-api can't hold a per-gateway token. The flow write brokers back.
+  // Mount only on the fleet-scoped path; bare /api/byosub/* is a retired
+  // cluster alias and must not be masked by locality auth middleware.
+  app.use("/api/g/:gatewayId/byosub", createByosubAuthRouter());
 }
 
 const app = createApp({ surface: "sidecar" });

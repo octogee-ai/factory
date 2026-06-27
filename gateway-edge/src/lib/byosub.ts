@@ -213,6 +213,39 @@ export interface GatewayClaudeSsoClient {
   submit(args: { gatewayId: string; flowId: string; code: string }): Promise<ClaudeSsoStatus>;
 }
 
+function octogeeApiBrokerBase(env: NodeJS.ProcessEnv = process.env): string {
+  const base = env.FLEET_BROKER_URL || env.OCTOGEE_API_URL;
+  if (!base) {
+    throw new Error("FLEET_BROKER_URL or OCTOGEE_API_URL is required to broker the byosub flow");
+  }
+  let trimmed = base;
+  while (trimmed.endsWith("/")) trimmed = trimmed.slice(0, -1);
+  return trimmed;
+}
+
+// Record the byosubFlows owner mapping through octogee-api on the gateway's own
+// KSA identity (internalFetch attaches the projected SA token). Cattle pods are
+// datastore.viewer — they can READ Firestore (resolveUserGateway/readFlow) but
+// not WRITE, so the one write in the connect flow brokers here.
+export async function brokerByosubFlow(args: {
+  flowId: string;
+  agentId: string;
+  provider: string;
+}): Promise<void> {
+  const r = await internalFetch(
+    `${octogeeApiBrokerBase()}/internal/byok/byosub-flow`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args),
+    },
+    {},
+  );
+  if (!r.ok) {
+    throw new Error(`byosub-flow broker ${r.status} ${await r.text().catch(() => "")}`);
+  }
+}
+
 function gatewayInternalBase(gatewayId: string): string {
   const ns = process.env.K8S_NAMESPACE ?? "octogee";
   return process.env.GATEWAY_INTERNAL_URL_TEMPLATE

@@ -21,6 +21,14 @@ const PLATFORM_INTERNAL_ROUTES = new Set([
   "/internal/notifications/digest",
 ]);
 
+const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
+  "/internal/connectors/access-token",
+  "/internal/byok/byosub-cred",
+  "/internal/byok/api-key",
+  "/internal/byok/agent-model-token",
+  "/internal/byok/byosub-flow",
+]);
+
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
@@ -128,18 +136,12 @@ async function gatewayBindingAuthorized(
   if (gatewayIds.length > 0 && gatewayIds.some((gatewayId) => gatewayId !== bound.gatewayId)) {
     return false;
   }
-  if (req.path === "/internal/connectors/access-token") {
-    return true;
-  }
-  // The byok brokers carry only { agentId } / { id } and do their own scoping
+  // The byok brokers carry only { agentId } / { id } / { flowId, agentId }
+  // and do their own scoping
   // (byosub-cred → glmGateways/{gatewayId}.byosub; api-key → the gateway's
-  // assigned roster; agent-model-token → findAssignedUserByAgentId) — same shape
-  // as the connector broker.
-  if (
-    req.path === "/internal/byok/byosub-cred" ||
-    req.path === "/internal/byok/api-key" ||
-    req.path === "/internal/byok/agent-model-token"
-  ) {
+  // assigned roster; agent-model-token/byosub-flow → findAssignedUserByAgentId)
+  // — same shape as the connector broker.
+  if (SELF_SCOPED_INTERNAL_BROKER_ROUTES.has(req.path)) {
     return true;
   }
   if (gatewayIds.length > 0) return true;

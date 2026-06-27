@@ -88,6 +88,7 @@ function app(opts: {
   a.post("/internal/probe", enforcement, handler);
   a.post("/internal/probe/:uid", enforcement, handler);
   a.post("/internal/connectors/access-token", enforcement, handler);
+  a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
   return a;
@@ -185,6 +186,28 @@ describe("tenant enforcement middleware", () => {
           workspaceSlug: "victim",
           projectSlug: "octo",
         },
+      });
+
+    expect(ownedGateway.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
+  });
+
+  it("lets the byosub flow broker perform its own roster authorization for new flows", async () => {
+    const ownedGateway = await request(app({ boundTenant: BENDER, flows: {} }))
+      .post("/internal/byok/byosub-flow")
+      .send({
+        flowId: "fresh-flow-123",
+        agentId: "octogee-alice-coach",
+        provider: "anthropic",
+      });
+
+    const foreignGateway = await request(app({ boundTenant: BENDER, flows: {} }))
+      .post("/internal/byok/byosub-flow")
+      .send({
+        gatewayId: "other",
+        flowId: "fresh-flow-123",
+        agentId: "octogee-alice-coach",
+        provider: "anthropic",
       });
 
     expect(ownedGateway.status).toBe(200);
