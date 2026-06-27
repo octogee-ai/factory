@@ -349,6 +349,32 @@ oauth_secret github-oauth    GITHUB_CLIENT_ID    GITHUB_CLIENT_SECRET
 oauth_secret google-oauth    GOOGLE_CLIENT_ID    GOOGLE_CLIENT_SECRET
 oauth_secret microsoft-oauth MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
 
+# ── 8b. Connect-state signing secret (octogee-api OAuth state HMAC) ────────
+# HMAC secret that signs the OAuth `state` round-tripped through the provider
+# (CSRF + payload integrity, 10min TTL). Self-generated — not a provider cred.
+# Must NOT rotate during the lifetime of an in-flight connect (rotating
+# mid-flow invalidates states users are mid-redirect on). First install:
+# generate. Re-run: reuse what's already in Secret Manager. Its absence makes
+# every connect throw "CONNECT_STATE_SECRET environment variable is required".
+info "connect-state-secret"
+CONNECT_STATE_SM_KEY="connect-state-secret-${ENV}"
+[[ "$ENV" == "custom" ]] && CONNECT_STATE_SM_KEY="connect-state-secret-custom-${CUSTOM_NS}"
+CONNECT_STATE_SECRET=$(sm_get "$CONNECT_STATE_SM_KEY" octogee 2>/dev/null || echo "")
+if [[ -z "$CONNECT_STATE_SECRET" ]]; then
+  CONNECT_STATE_SECRET=$(openssl rand -hex 32)
+  info "  Generated new connect-state secret — saving to Secret Manager..."
+  if echo -n "$CONNECT_STATE_SECRET" | gcloud secrets create "$CONNECT_STATE_SM_KEY" \
+       --data-file=- --project=octogee \
+       --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
+    :
+  else
+    echo -n "$CONNECT_STATE_SECRET" | gcloud secrets versions add "$CONNECT_STATE_SM_KEY" \
+      --data-file=- --project=octogee \
+      || fail "Could not persist connect-state secret to Secret Manager (key=${CONNECT_STATE_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
+  fi
+fi
+ksecret connect-state-secret --from-literal=secret="$CONNECT_STATE_SECRET"
+
 # ── 9a. Gateway model-key issuer bearer (glm-controller → octogee-api) ─
 # A dedicated bearer, separate from the gateway tenant-binding auth. It only
 # authorizes Cowboy to mint and revoke opaque LLM broker tokens via
@@ -712,6 +738,7 @@ status "resend-secrets / from_email" "${RESEND_FROM_EMAIL:-}"
 status "github-oauth / client_id" "${GITHUB_CLIENT_ID:-}"
 status "google-oauth / client_id" "${GOOGLE_CLIENT_ID:-}"
 status "microsoft-oauth / client_id" "${MICROSOFT_CLIENT_ID:-}"
+status "connect-state-secret" "${CONNECT_STATE_SECRET:-}"
 
 echo ""
 if [[ -z "${MM_BOT_TOKEN:-}" || -z "${MM_BOT_USER_ID:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
