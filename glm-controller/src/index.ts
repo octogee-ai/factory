@@ -1210,6 +1210,7 @@ function startControllerBackgroundTasks({
     PREEMPTION_HANDOFF_SWEEP_MS,
   );
   const stopDeferredRolloutSweeper = startDeferredRolloutSweeperForController(db, log);
+  const httpKubeOps = deps.kubeOps;
   const stopHttp = startHttpServer({
     db,
     log,
@@ -1221,6 +1222,12 @@ function startControllerBackgroundTasks({
     workspaceSlugsForUser,
     provisionGatewayAuthSecret,
     listGatewayBuilds,
+    ...(httpKubeOps
+      ? {
+          readGatewayPodDiagnostics: (gatewayId: string) =>
+            httpKubeOps.readGatewayPodDiagnostics({ namespace: NAMESPACE, gatewayId }),
+        }
+      : {}),
     deleteAuthUserTolerantOfMissing: (uid) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
   });
   return [
@@ -1881,14 +1888,19 @@ async function buildHandlers(
     // hasRunningInboundMigrationForSlug authorizes the fresh sibling's restore
     // (pubkey/bootstrap) on before the Firestore assignment cuts over. We enqueue
     // it and await its terminal status.
-    migrateCustomer: ({ uid, toGatewayId }) =>
+    migrateCustomer: ({ uid, fromGatewayId, toGatewayId }) =>
       runBlueGreenMigrateOp(
-        { uid, toGatewayId },
+        { uid, fromGatewayId, toGatewayId },
         {
-          enqueueMigrateOp: async ({ uid: u, toGatewayId: to }) => {
+          enqueueMigrateOp: async ({ uid: u, fromGatewayId: from, toGatewayId: to }) => {
             const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
             await opRef.set(
-              buildBlueGreenMigrateOpDoc({ uid: u, toGatewayId: to, createdAt: Date.now() }),
+              buildBlueGreenMigrateOpDoc({
+                uid: u,
+                fromGatewayId: from,
+                toGatewayId: to,
+                createdAt: Date.now(),
+              }),
             );
             return opRef.id;
           },

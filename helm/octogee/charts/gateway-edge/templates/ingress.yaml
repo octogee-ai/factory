@@ -101,6 +101,13 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
+          - path: /api/admin/fleet-events
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
           # restore-jobs needs both the bare path (GET list) AND `/*`
           # (sub-paths like `<jobId>/kick`). GCE `/foo/*` is "starts with
           # /foo/", so it does NOT match the bare path — and `/foo` does

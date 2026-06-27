@@ -7,7 +7,12 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
   addAdminFleetRoutes,
   type FleetLogger,
+  type GatewayPodDiagnostics,
 } from "@octogee/core/admin-fleet-router";
+import {
+  GLM_GATEWAYS_COLLECTION,
+  GLM_OPERATIONS_COLLECTION,
+} from "@octogee/shared/types/glm";
 import {
   addAdminCustomerRoutes,
   type WorkspaceMmContextLite,
@@ -72,6 +77,7 @@ export interface HttpServerDeps {
     service: string;
     limit: number;
   }) => Promise<unknown[]>;
+  readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
 }
 
@@ -84,6 +90,72 @@ function adaptLogger(log: (msg: string) => void): FleetLogger {
     info: (msg, meta) => log(fmt(msg, meta)),
     warn: (msg, meta) => log(`⚠ ${fmt(msg, meta)}`),
   };
+}
+
+function writeSseEvent(res: Response, event: string, data: Record<string, unknown>): void {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function addAdminFleetEventRoute(router: Router, deps: HttpServerDeps): void {
+  router.get("/fleet-events", (req: Request, res: Response) => {
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    let closed = false;
+    const primed = new Set<string>();
+    const unsubscribes: Array<() => void> = [];
+    const closeAfterFirstChange = req.query.once === "1";
+    const keepalive = setInterval(() => {
+      if (!closed) res.write(": keepalive\n\n");
+    }, 30_000);
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(keepalive);
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      res.end();
+    };
+
+    const watch = (collection: string) => {
+      const unsubscribe = deps.db.collection(collection).onSnapshot(
+        () => {
+          if (closed) return;
+          if (!primed.has(collection)) {
+            primed.add(collection);
+            return;
+          }
+          writeSseEvent(res, "changed", { collection, at: Date.now() });
+          if (closeAfterFirstChange) close();
+        },
+        (err) => {
+          deps.log(
+            `[glm-controller] fleet event watch failed collection=${collection}: ${
+              (err as Error)?.message ?? String(err)
+            }`,
+          );
+          if (!closed) {
+            writeSseEvent(res, "error", {
+              collection,
+              error: (err as Error)?.message ?? "watch failed",
+            });
+          }
+        },
+      );
+      unsubscribes.push(unsubscribe);
+    };
+
+    writeSseEvent(res, "ready", { at: Date.now() });
+    watch("gateways");
+    watch(GLM_GATEWAYS_COLLECTION);
+    watch(GLM_OPERATIONS_COLLECTION);
+
+    req.on("close", close);
+  });
 }
 
 export function createHttpServer(deps: HttpServerDeps): Express {
@@ -111,6 +183,8 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     }),
   );
 
+  addAdminFleetEventRoute(adminRouter, deps);
+
 addAdminCustomerRoutes(adminRouter, {
     db: deps.db,
     FieldValue,
@@ -124,6 +198,7 @@ addAdminCustomerRoutes(adminRouter, {
     workspaceSlugsForUser: deps.workspaceSlugsForUser,
     provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
     listGatewayBuilds: deps.listGatewayBuilds,
+    readGatewayPodDiagnostics: deps.readGatewayPodDiagnostics,
     deleteAuthUserTolerantOfMissing: deps.deleteAuthUserTolerantOfMissing,
   });
   app.use("/api/admin", adminRouter);

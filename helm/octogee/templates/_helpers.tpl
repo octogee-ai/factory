@@ -25,6 +25,7 @@ YAML while leaving Cowboy the sole writer of spec.rules.
   "/api/admin/gateways/*"
   "/api/admin/gateways"
   "/api/admin/operations"
+  "/api/admin/fleet-events"
   "/api/admin/restore-jobs/*"
   "/api/admin/restore-jobs"
   "/api/admin/builds"

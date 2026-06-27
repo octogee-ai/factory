@@ -291,6 +291,7 @@ export async function requestBuilderActivationLease(opts: {
     };
   }
   const userData = userSnap.data() as Record<string, unknown>;
+  const currentGatewayId = readUserGatewayId(userData);
   if (userData.approved !== true) {
     return {
       statusCode: 409,
@@ -316,7 +317,7 @@ export async function requestBuilderActivationLease(opts: {
   const plan = resolveBuilderActivationPlan({
     uid,
     builderSlug,
-    currentGatewayId: readUserGatewayId(userData),
+    currentGatewayId,
     requestedGatewayClass: opts.requestedGatewayClass,
     glmGateways: glmSnap.docs as ReadonlyArray<FirestoreDocLike>,
     gatewayHeartbeats,
@@ -390,6 +391,7 @@ export async function requestBuilderActivationLease(opts: {
   const operationId = opRef.id;
   const operationInput = {
     uid,
+    ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
     toGatewayId: target.gatewayId,
     source: "builder-activation-lease",
     builderSlug,

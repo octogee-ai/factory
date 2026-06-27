@@ -16,6 +16,10 @@ export interface KubeOps {
     namespace: string;
     name: string;
   }): Promise<number | null>;
+  readGatewayPodDiagnostics(opts: {
+    namespace: string;
+    gatewayId: string;
+  }): Promise<GatewayPodDiagnostics>;
   deletePersistentVolumeClaim(opts: {
     namespace: string;
     name: string;
@@ -24,6 +28,28 @@ export interface KubeOps {
     namespace: string;
     name: string;
   }): Promise<void>;
+}
+
+export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
+
+export interface GatewayPodDiagnostic {
+  name: string;
+  phase: string;
+  readyContainers: number;
+  totalContainers: number;
+  restarts: number;
+  reason: string | null;
+  nodeName: string | null;
+  ageMs: number | null;
+}
+
+export interface GatewayPodDiagnostics {
+  status: GatewayPodDiagnosticsStatus;
+  totalPods: number;
+  readyPods: number;
+  totalRestarts: number;
+  pods: GatewayPodDiagnostic[];
+  error?: string;
 }
 
 export interface KubectlSubprocessResult {
@@ -37,12 +63,119 @@ export type KubectlSubprocess = (args: string[]) => Promise<KubectlSubprocessRes
 export interface KubeOpsRunnerDeps {
   runKubectl: KubectlSubprocess;
   log: (msg: string) => void;
+  now?: () => number;
 }
 
 const NOT_FOUND_PATTERN = /\(NotFound\)/;
 
 function isNotFound(stderr: string): boolean {
   return NOT_FOUND_PATTERN.test(stderr);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function containerWaitingReason(status: Record<string, unknown>): string | null {
+  const state = isRecord(status.state) ? status.state : {};
+  const waiting = isRecord(state.waiting) ? state.waiting : {};
+  const terminated = isRecord(state.terminated) ? state.terminated : {};
+  return stringOrNull(waiting.reason) ?? stringOrNull(terminated.reason);
+}
+
+function podConditionReason(status: Record<string, unknown>): string | null {
+  const conditions = Array.isArray(status.conditions) ? status.conditions : [];
+  for (const condition of conditions) {
+    if (!isRecord(condition)) continue;
+    if (condition.type === "Ready" && condition.status !== "True") {
+      return stringOrNull(condition.reason) ?? stringOrNull(condition.message);
+    }
+  }
+  return null;
+}
+
+function projectPodDiagnostic(pod: Record<string, unknown>, now: number): GatewayPodDiagnostic {
+  const metadata = isRecord(pod.metadata) ? pod.metadata : {};
+  const spec = isRecord(pod.spec) ? pod.spec : {};
+  const status = isRecord(pod.status) ? pod.status : {};
+  const containerStatuses = Array.isArray(status.containerStatuses)
+    ? status.containerStatuses.filter(isRecord)
+    : [];
+  const readyContainers = containerStatuses.filter((c) => c.ready === true).length;
+  const totalContainers = containerStatuses.length;
+  const restarts = containerStatuses.reduce(
+    (sum, c) => sum + numberOrZero(c.restartCount),
+    0,
+  );
+  const reason =
+    containerStatuses.map(containerWaitingReason).find((v): v is string => v !== null) ??
+    stringOrNull(status.reason) ??
+    podConditionReason(status);
+  const createdAt = stringOrNull(metadata.creationTimestamp);
+  const createdMs = createdAt ? Date.parse(createdAt) : NaN;
+  return {
+    name: stringOrNull(metadata.name) ?? "unknown",
+    phase: stringOrNull(status.phase) ?? "Unknown",
+    readyContainers,
+    totalContainers,
+    restarts,
+    reason,
+    nodeName: stringOrNull(spec.nodeName),
+    ageMs: Number.isFinite(createdMs) ? Math.max(0, now - createdMs) : null,
+  };
+}
+
+function summarizePodDiagnostics(
+  stdout: string,
+  now: number,
+): GatewayPodDiagnostics {
+  const parsed = JSON.parse(stdout) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed.items)) {
+    throw new Error("kubectl get pods returned invalid JSON shape");
+  }
+  const pods = parsed.items
+    .filter(isRecord)
+    .map((pod) => projectPodDiagnostic(pod, now));
+  const totalPods = pods.length;
+  const readyPods = pods.filter(
+    (pod) =>
+      pod.phase === "Running" &&
+      pod.totalContainers > 0 &&
+      pod.readyContainers === pod.totalContainers,
+  ).length;
+  const totalRestarts = pods.reduce((sum, pod) => sum + pod.restarts, 0);
+  let status: GatewayPodDiagnosticsStatus = "not-ready";
+  if (totalPods === 0) {
+    status = "missing";
+  } else if (readyPods === totalPods) {
+    status = "ready";
+  }
+  return {
+    status,
+    totalPods,
+    readyPods,
+    totalRestarts,
+    pods,
+  };
+}
+
+function unknownPodDiagnostics(error?: string): GatewayPodDiagnostics {
+  return {
+    status: "unknown",
+    totalPods: 0,
+    readyPods: 0,
+    totalRestarts: 0,
+    pods: [],
+    ...(error ? { error } : {}),
+  };
 }
 
 export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
@@ -174,6 +307,29 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       return n;
     },
 
+    async readGatewayPodDiagnostics({ namespace, gatewayId }) {
+      const args = [
+        "-n",
+        namespace,
+        "get",
+        "pods",
+        "-l",
+        `gateway-instance=${gatewayId}`,
+        "-o",
+        "json",
+      ];
+      const result = await deps.runKubectl(args);
+      if (result.code !== 0) {
+        if (isNotFound(result.stderr)) return unknownPodDiagnostics("pods not found");
+        throw new Error(
+          `kubectl get pods gateway-instance=${gatewayId} ns=${namespace} failed (code=${result.code}): ${
+            result.stderr.trim() || result.stdout.trim()
+          }`,
+        );
+      }
+      return summarizePodDiagnostics(result.stdout, deps.now?.() ?? Date.now());
+    },
+
     async deletePersistentVolumeClaim({ namespace, name }) {
       const args = [
         "-n",
@@ -229,6 +385,10 @@ export function createLoggingKubeOps(log: (msg: string) => void): KubeOps {
     readAvailableReplicas: async ({ namespace, name }) => {
       log(`[kube-ops:stub] readAvailableReplicas ns=${namespace} ${name} — returning null`);
       return null;
+    },
+    readGatewayPodDiagnostics: async ({ namespace, gatewayId }) => {
+      log(`[kube-ops:stub] readGatewayPodDiagnostics ns=${namespace} ${gatewayId} — returning unknown`);
+      return unknownPodDiagnostics();
     },
     deletePersistentVolumeClaim: async ({ namespace, name }) => {
       log(`[kube-ops:stub] delete pvc ns=${namespace} ${name} — no exec`);

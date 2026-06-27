@@ -1764,6 +1764,10 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
 
 describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
   it("creates a migrate-customer operation", async () => {
+    usersDocs["uid-alice"] = {
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+    };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-alice/migrate")
@@ -1773,7 +1777,12 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
     expect(op?.data).toMatchObject({
       kind: "migrate-customer",
       status: "pending",
-      input: { uid: "uid-alice", toGatewayId: "canary" },
+      input: {
+        uid: "uid-alice",
+        builderSlug: "alice",
+        fromGatewayId: "default",
+        toGatewayId: "canary",
+      },
       createdBy: "admin-user",
     });
   });

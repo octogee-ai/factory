@@ -211,6 +211,14 @@ function buildDb(store: FakeStore) {
         makeQuery(name, store, [{ field, value }]),
       orderBy: () => makeQuery(name, store),
       limit: () => makeQuery(name, store),
+      onSnapshot: (next: (snap: { docs: unknown[] }) => void) => {
+        const unsubscribe = vi.fn();
+        queueMicrotask(() => {
+          next({ docs: [] });
+          next({ docs: [] });
+        });
+        return unsubscribe;
+      },
       get: async () => {
         if (name === "gateways") {
           const docs = Object.entries(store.gateways).map(([id, data]) => ({
@@ -239,7 +247,7 @@ function buildDb(store: FakeStore) {
   };
 }
 
-function buildDeps(store: FakeStore): HttpServerDeps {
+function buildDeps(store: FakeStore, overrides: Partial<HttpServerDeps> = {}): HttpServerDeps {
   return {
     db: buildDb(store) as any,
     log: vi.fn(),
@@ -261,6 +269,7 @@ function buildDeps(store: FakeStore): HttpServerDeps {
     })),
     listGatewayBuilds: vi.fn(async () => []),
     deleteAuthUserTolerantOfMissing: vi.fn(async () => undefined),
+    ...overrides,
   };
 }
 
@@ -351,6 +360,19 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
+  it("streams server-driven fleet invalidation events after admin auth", async () => {
+    const app = createHttpServer(buildDeps(store));
+
+    const res = await request(app)
+      .get("/api/admin/fleet-events?once=1")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("event: ready");
+    expect(res.text).toContain("event: changed");
+    expect(res.text).toContain('"collection":"gateways"');
+  });
+
   it("serves /api/admin/gateways with populated fleet stats", async () => {
     store.gateways["gw-blue"] = {
       gatewayId: "gw-blue",
@@ -378,6 +400,49 @@ describe("createHttpServer — admin gateway routes", () => {
       unreachable: 1,
     });
     expect(res.body.stats.customersMounted).toBe(2);
+  });
+
+  it("includes Cowboy pod diagnostics in the gateway summaries when available", async () => {
+    store.gateways["bender"] = {
+      gatewayId: "bender",
+      status: "ready",
+      version: "8507a63",
+      mountedCustomers: [],
+      lastHeartbeatAt: Date.now(),
+    };
+    const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string) => ({
+      status: "ready" as const,
+      totalPods: 1,
+      readyPods: 1,
+      totalRestarts: 2,
+      pods: [
+        {
+          name: "octogee-gateway-bender-abc",
+          phase: "Running",
+          readyContainers: 2,
+          totalContainers: 2,
+          restarts: 2,
+          reason: null,
+          nodeName: "gke-node-1",
+          ageMs: 125_000,
+        },
+      ],
+    }));
+    const app = createHttpServer(buildDeps(store, { readGatewayPodDiagnostics }));
+
+    const res = await request(app)
+      .get("/api/admin/gateways")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(readGatewayPodDiagnostics).toHaveBeenCalledWith("bender");
+    expect(res.body.gateways[0].podDiagnostics).toMatchObject({
+      status: "ready",
+      totalPods: 1,
+      readyPods: 1,
+      totalRestarts: 2,
+      pods: [{ name: "octogee-gateway-bender-abc", nodeName: "gke-node-1" }],
+    });
   });
 
   it("serves /api/admin/operations as paginated list", async () => {

@@ -56,6 +56,28 @@ export interface FleetLogger {
   warn: (msg: string, meta?: Record<string, unknown>) => void;
 }
 
+export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
+
+export interface GatewayPodDiagnostic {
+  name: string;
+  phase: string;
+  readyContainers: number;
+  totalContainers: number;
+  restarts: number;
+  reason: string | null;
+  nodeName: string | null;
+  ageMs: number | null;
+}
+
+export interface GatewayPodDiagnostics {
+  status: GatewayPodDiagnosticsStatus;
+  totalPods: number;
+  readyPods: number;
+  totalRestarts: number;
+  pods: GatewayPodDiagnostic[];
+  error?: string;
+}
+
 export interface FleetRouterDeps {
   db: Firestore;
   logger: FleetLogger;
@@ -68,6 +90,7 @@ export interface FleetRouterDeps {
     service: string;
     limit: number;
   }) => Promise<unknown[]>;
+  readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
 }
@@ -1393,6 +1416,42 @@ function serializeCustomerLookup(doc: CustomerLookupDoc): {
   return { uid: doc.id, currentGatewayId };
 }
 
+async function projectGatewaySummaryWithDiagnostics(
+  deps: FleetRouterDeps,
+  doc: FirestoreDocLike,
+  glmDoc: GlmDoc | undefined,
+  now: number,
+): Promise<ReturnType<typeof projectGatewaySummary> & {
+  podDiagnostics: GatewayPodDiagnostics | null;
+}> {
+  const summary = projectGatewaySummary(doc, glmDoc, now);
+  if (!deps.readGatewayPodDiagnostics) {
+    return { ...summary, podDiagnostics: null };
+  }
+  try {
+    return {
+      ...summary,
+      podDiagnostics: await deps.readGatewayPodDiagnostics(summary.gatewayId),
+    };
+  } catch (e) {
+    deps.logger.warn("gateway pod diagnostics failed", {
+      gatewayId: summary.gatewayId,
+      error: (e as Error)?.message ?? String(e),
+    });
+    return {
+      ...summary,
+      podDiagnostics: {
+        status: "unknown",
+        totalPods: 0,
+        readyPods: 0,
+        totalRestarts: 0,
+        pods: [],
+        error: (e as Error)?.message ?? "pod diagnostics failed",
+      },
+    };
+  }
+}
+
 async function readMountedCustomers(db: Firestore, gatewayId: string): Promise<string[]> {
   const snap = await db.collection("gateways").doc(gatewayId).get();
   if (!snap.exists) return [];
@@ -1729,8 +1788,15 @@ router.get(
         ]);
         const glmByGatewayId = indexGlmDocs(glmSnap.docs);
         const now = Date.now();
-        const gateways = gwSnap.docs.map((doc) =>
-          projectGatewaySummary(doc, glmByGatewayId.get(doc.id), now),
+        const gateways = await Promise.all(
+          gwSnap.docs.map((doc) =>
+            projectGatewaySummaryWithDiagnostics(
+              deps,
+              doc,
+              glmByGatewayId.get(doc.id),
+              now,
+            ),
+          ),
         );
         res.json({
           gateways,
@@ -2085,6 +2151,7 @@ router.post(
         const operationId = opRef.id;
         const operationInput = {
           uid,
+          ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
           toGatewayId: reservation.ok.gatewayId,
           source: "operator-gateway-reservation",
           operatorReservationUid: uid,
@@ -2874,11 +2941,11 @@ router.get(
           return;
         }
         const userSnap = await db.collection("users").doc(uid).get();
-        const currentGatewayId = (
-          userSnap.data() as
-            | { provisioning?: { openclaw?: { gatewayId?: string } } }
-            | undefined
-        )?.provisioning?.openclaw?.gatewayId;
+        const userData = userSnap.data() as Record<string, unknown> | undefined;
+        const currentGatewayId = readUserGatewayId(userData);
+        const builderSlug = userData
+          ? resolveCustomerSlug(userData, deps.workspaceSlugsForUser)
+          : null;
         if (currentGatewayId === body.to) {
           res.status(409).json({
             error: "customer is already mounted on the target gateway",
@@ -2892,7 +2959,12 @@ router.get(
         const operationId = await createOperation(db, {
           kind: "migrate-customer",
           createdBy,
-          input: { uid, toGatewayId: body.to },
+          input: {
+            uid,
+            ...(builderSlug ? { builderSlug } : {}),
+            ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
+            toGatewayId: body.to,
+          },
         });
         res.status(202).json({ operationId });
       } catch (e) {

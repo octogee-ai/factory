@@ -294,6 +294,111 @@ describe("createKubeSubprocessRunner — readAvailableReplicas", () => {
   });
 });
 
+describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
+  it("summarizes kubectl get pods output for a gateway", async () => {
+    const { runKubectl, calls } = mockSubprocess([
+      {
+        stdout: JSON.stringify({
+          items: [
+            {
+              metadata: {
+                name: "octogee-gateway-bender-abc",
+                creationTimestamp: "2026-06-27T10:00:00.000Z",
+              },
+              spec: { nodeName: "gke-node-1" },
+              status: {
+                phase: "Running",
+                containerStatuses: [
+                  { name: "gateway", ready: true, restartCount: 1 },
+                  { name: "gateway-edge", ready: true, restartCount: 2 },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+    ]);
+    const kube = createKubeSubprocessRunner({
+      runKubectl,
+      log: vi.fn(),
+      now: () => new Date("2026-06-27T10:02:00.000Z").getTime(),
+    });
+
+    const diagnostics = await kube.readGatewayPodDiagnostics({
+      namespace: "octogee-test",
+      gatewayId: "bender",
+    });
+
+    expect(calls[0]).toEqual([
+      "-n",
+      "octogee-test",
+      "get",
+      "pods",
+      "-l",
+      "gateway-instance=bender",
+      "-o",
+      "json",
+    ]);
+    expect(diagnostics).toMatchObject({
+      status: "ready",
+      totalPods: 1,
+      readyPods: 1,
+      totalRestarts: 3,
+      pods: [
+        {
+          name: "octogee-gateway-bender-abc",
+          phase: "Running",
+          readyContainers: 2,
+          totalContainers: 2,
+          restarts: 3,
+          reason: null,
+          nodeName: "gke-node-1",
+          ageMs: 120_000,
+        },
+      ],
+    });
+  });
+
+  it("surfaces waiting reasons and reports not-ready pods", async () => {
+    const { runKubectl } = mockSubprocess([
+      {
+        stdout: JSON.stringify({
+          items: [
+            {
+              metadata: { name: "octogee-gateway-bender-def" },
+              status: {
+                phase: "Pending",
+                containerStatuses: [
+                  {
+                    name: "gateway",
+                    ready: false,
+                    restartCount: 4,
+                    state: { waiting: { reason: "CrashLoopBackOff" } },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await expect(
+      kube.readGatewayPodDiagnostics({
+        namespace: "octogee-test",
+        gatewayId: "bender",
+      }),
+    ).resolves.toMatchObject({
+      status: "not-ready",
+      totalPods: 1,
+      readyPods: 0,
+      totalRestarts: 4,
+      pods: [{ phase: "Pending", reason: "CrashLoopBackOff" }],
+    });
+  });
+});
+
 describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
   it("deletes the named PVC idempotently", async () => {
     const { runKubectl, calls } = mockSubprocess([
