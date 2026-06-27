@@ -83,8 +83,9 @@ COPY --chown=node:node templates/ /octogee/templates/
 
 # ── Plugin extensions ────────────────────────────────────────────────────────
 # Staged at /octogee/extensions/ — entrypoint copies to ~/.openclaw/extensions/
-# octogee-chat-tools, octogee-preview-tools, octogee-workspace-tools, octogee-publish-tools
-# are small, so we npm install them inline below; the entrypoint's
+# octogee-chat-tools, octogee-preview-tools, octogee-workspace-tools,
+# octogee-publish-tools, and octogee-connector-tools are small, so we npm
+# install them inline below; the entrypoint's
 # `elif [ -d "$ext_dir/node_modules" ]` fallback then symlinks to them.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
 
@@ -107,6 +108,11 @@ RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
 WORKDIR /octogee/extensions/octogee-publish-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-publish-tools/node_modules
+
+# octogee-connector-tools runtime deps
+WORKDIR /octogee/extensions/octogee-connector-tools
+RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
+    && chown -R node:node /octogee/extensions/octogee-connector-tools/node_modules
 
 # ── Config template (for ephemeral bootstrap) ──────────────────────────────
 # openclaw.template.json + envsubst replaces the old known-good config

@@ -22,6 +22,7 @@ import internalBillingRoutes from "./routes/internal/billing.js";
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
+import internalConnectorRoutes from "./routes/internal/connectors.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 
 import {
@@ -111,6 +112,9 @@ app.get("/api/health", healthHandler);
 app.use("/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal", internalByotSyncRoutes);
+if (surface === "sidecar") {
+  app.use("/internal/connectors", internalConnectorRoutes);
+}
 
 if (surface === "cluster") {
   mountClusterSurface(app);

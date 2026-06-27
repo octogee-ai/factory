@@ -30,6 +30,7 @@ vi.mock('../lib/internal-fetch', () => ({
 }));
 
 import {
+  ConnectorTokenBrokerError,
   readConnectorAccessToken,
   readConnectorClientCreds,
   getFreshAccessToken,
@@ -118,9 +119,16 @@ describe('readConnectorAccessToken', () => {
     };
     vi.mocked(internalFetch).mockResolvedValue(new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }));
 
-    await expect(readConnectorAccessToken('u-alice', 'github')).rejects.toThrow(
-      'connector token broker failed: forbidden',
+    const err = await readConnectorAccessToken('u-alice', 'github').then(
+      () => null,
+      (e: unknown) => e,
     );
+
+    expect(err).toBeInstanceOf(ConnectorTokenBrokerError);
+    expect(err).toMatchObject({
+      status: 403,
+      errorCode: 'forbidden',
+    });
     expect(decryptSecret).not.toHaveBeenCalled();
   });
 
@@ -163,6 +171,35 @@ describe('readConnectorAccessToken', () => {
     );
   });
 
+  it('forwards owner-runtime access context for agent-side materialization', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'bender';
+    vi.mocked(internalFetch).mockResolvedValue(
+      new Response(JSON.stringify({ accessToken: 'cf_brokered' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(
+      readConnectorAccessToken('uid-owner', 'cloudflare', { kind: 'owner-runtime' }),
+    ).resolves.toBe('cf_brokered');
+
+    expect(internalFetch).toHaveBeenCalledWith(
+      'http://octogee-api.octogee-test.svc.cluster.local:3001/internal/connectors/access-token',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          gatewayId: 'bender',
+          uid: 'uid-owner',
+          connectorId: 'cloudflare',
+          access: { kind: 'owner-runtime' },
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('reads directly from Firestore+KMS when it is the connector-token authority (broker host, no broker URL)', async () => {
     process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
     firestoreData['users/u-alice/secrets/github'] = {
@@ -173,6 +210,87 @@ describe('readConnectorAccessToken', () => {
     await expect(readConnectorAccessToken('u-alice', 'github')).resolves.toBe('gho_direct');
     expect(internalFetch).not.toHaveBeenCalled();
     expect(decryptSecret).toHaveBeenCalledWith('ENC:gho_direct');
+  });
+
+  it('authority direct owner-runtime reads refresh expired OAuth tokens', async () => {
+    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+    process.env.GOOGLE_CLIENT_ID = 'client-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'client-secret';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          access_token: 'fresh_google',
+          expires_in: 3600,
+          token_type: 'Bearer',
+        }),
+      })) as never,
+    );
+    firestoreData['users/uid-owner/secrets/google'] = {
+      provider: 'google',
+      tokens: {
+        encryptedAccessToken: 'ENC:expired_google',
+        encryptedRefreshToken: 'ENC:refresh_google',
+        expiresAt: Date.now() - 60_000,
+        tokenType: 'Bearer',
+        clientSource: 'platform',
+      },
+    };
+
+    await expect(
+      readConnectorAccessToken('uid-owner', 'google', { kind: 'owner-runtime' }),
+    ).resolves.toBe('fresh_google');
+
+    expect(docWrites[0]).toMatchObject({
+      path: 'users/uid-owner/secrets/google',
+      merge: true,
+      data: {
+        tokens: {
+          encryptedAccessToken: 'ENC:fresh_google',
+          encryptedRefreshToken: 'ENC:refresh_google',
+          tokenType: 'Bearer',
+        },
+      },
+    });
+  });
+
+  it('authority direct owner-runtime reads surface refresh failures distinctly', async () => {
+    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+    process.env.GOOGLE_CLIENT_ID = 'client-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'client-secret';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        json: async () => ({ error: 'invalid_grant' }),
+      })) as never,
+    );
+    firestoreData['users/uid-owner/secrets/google'] = {
+      provider: 'google',
+      tokens: {
+        encryptedAccessToken: 'ENC:expired_google',
+        encryptedRefreshToken: 'ENC:refresh_google',
+        expiresAt: Date.now() - 60_000,
+        tokenType: 'Bearer',
+        clientSource: 'platform',
+      },
+    };
+
+    const err = await readConnectorAccessToken(
+      'uid-owner',
+      'google',
+      { kind: 'owner-runtime' },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toMatchObject({
+      status: 409,
+      errorCode: 'reauth_required',
+    });
+    expect(decryptSecret).not.toHaveBeenCalledWith('ENC:expired_google');
   });
 
   it('authority direct-read returns null when the user has no stored token', async () => {

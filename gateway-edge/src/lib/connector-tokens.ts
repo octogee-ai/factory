@@ -2,7 +2,11 @@ import { FieldValue } from "firebase-admin/firestore";
 import { db } from "./db.js";
 import { internalFetch } from "./internal-fetch.js";
 import { decryptSecret, encryptSecret } from "./kms.js";
-import { isConnectorTokenBrokerable } from "./connectors/index.js";
+import {
+  getConnector,
+  isConnectorAgentRuntimeTokenMaterializable,
+  isConnectorTokenBrokerable,
+} from "./connectors/index.js";
 import type { ConnectorDef } from "./connectors/def.js";
 
 const FRESHNESS_MARGIN_MS = 60_000;
@@ -47,7 +51,31 @@ export interface ConnectorTokenProjectAccessContext {
   projectSlug: string;
 }
 
-export type ConnectorTokenAccessContext = ConnectorTokenProjectAccessContext;
+export interface ConnectorTokenOwnerRuntimeAccessContext {
+  kind: "owner-runtime";
+}
+
+export type ConnectorTokenAccessContext =
+  | ConnectorTokenProjectAccessContext
+  | ConnectorTokenOwnerRuntimeAccessContext;
+
+export class ConnectorTokenReadError extends Error {
+  constructor(
+    readonly status: number,
+    readonly errorCode: string,
+    message = `connector token read failed: ${errorCode}`,
+  ) {
+    super(message);
+    this.name = "ConnectorTokenReadError";
+  }
+}
+
+export class ConnectorTokenBrokerError extends ConnectorTokenReadError {
+  constructor(status: number, errorCode: string) {
+    super(status, errorCode, `connector token broker failed: ${errorCode}`);
+    this.name = "ConnectorTokenBrokerError";
+  }
+}
 
 async function readConnectorAccessTokenViaBroker(
   baseUrl: string,
@@ -78,7 +106,7 @@ async function readConnectorAccessTokenViaBroker(
   const body = await readJsonOrNull(res);
   if (!res.ok) {
     const error = typeof body?.error === "string" ? body.error : `broker HTTP ${res.status}`;
-    throw new Error(`connector token broker failed: ${error}`);
+    throw new ConnectorTokenBrokerError(res.status, error);
   }
   const accessToken = body?.accessToken;
   if (typeof accessToken !== "string" || accessToken.length === 0) {
@@ -90,9 +118,24 @@ async function readConnectorAccessTokenViaBroker(
 async function readConnectorAccessTokenDirect(
   uid: string,
   connectorId: string,
+  access?: ConnectorTokenAccessContext,
 ): Promise<string | null> {
-  if (!isConnectorTokenBrokerable(connectorId)) {
+  const allowed =
+    access?.kind === "owner-runtime"
+      ? isConnectorAgentRuntimeTokenMaterializable(connectorId)
+      : isConnectorTokenBrokerable(connectorId);
+  if (!allowed) {
     throw new Error(`connector not brokerable: ${connectorId}`);
+  }
+  if (access?.kind === "owner-runtime") {
+    const def = getConnector(connectorId);
+    if (!def) throw new Error(`connector not brokerable: ${connectorId}`);
+    const fresh = await getFreshAccessToken(uid, def);
+    if (!fresh.ok) {
+      if (fresh.reason === "not_connected") return null;
+      throw new ConnectorTokenReadError(409, fresh.reason);
+    }
+    return fresh.accessToken;
   }
   const snap = await db.doc(`users/${uid}/secrets/${connectorId}`).get();
   const enc = (snap.data() as { tokens?: { encryptedAccessToken?: unknown } } | undefined)
@@ -108,7 +151,7 @@ export async function readConnectorAccessToken(
 ): Promise<string | null> {
   const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
   if (baseUrl) return readConnectorAccessTokenViaBroker(baseUrl, uid, connectorId, access);
-  if (connectorTokenAuthorityFromEnv()) return readConnectorAccessTokenDirect(uid, connectorId);
+  if (connectorTokenAuthorityFromEnv()) return readConnectorAccessTokenDirect(uid, connectorId, access);
   throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
 }
 
@@ -118,11 +161,14 @@ export interface ConnectorClientCreds {
   source: "platform" | "per-user";
 }
 
+export type ConnectorTokenStore = Pick<FirebaseFirestore.Firestore, "doc">;
+
 async function readUserClientCreds(
+  store: ConnectorTokenStore,
   uid: string,
   def: ConnectorDef,
 ): Promise<ConnectorClientCreds | null> {
-  const snap = await db.doc(`users/${uid}/secrets/${def.meta.id}`).get();
+  const snap = await store.doc(`users/${uid}/secrets/${def.meta.id}`).get();
   const client = (
     snap.data() as
       | { client?: { encryptedClientId?: unknown; encryptedClientSecret?: unknown } }
@@ -149,18 +195,27 @@ function readPlatformClientCreds(def: ConnectorDef): ConnectorClientCreds | null
   return { clientId, clientSecret, source: "platform" };
 }
 
-export async function readConnectorClientCreds(
+export async function readConnectorClientCredsFromDb(
+  store: ConnectorTokenStore,
   uid: string,
   def: ConnectorDef,
   forSource?: "platform" | "per-user",
 ): Promise<ConnectorClientCreds | null> {
   if (!def.oauth) return null;
   if (forSource === "platform") return readPlatformClientCreds(def);
-  if (forSource === "per-user") return readUserClientCreds(uid, def);
+  if (forSource === "per-user") return readUserClientCreds(store, uid, def);
   if (def.meta.clientSource === "per-user") {
-    return (await readUserClientCreds(uid, def)) ?? readPlatformClientCreds(def);
+    return (await readUserClientCreds(store, uid, def)) ?? readPlatformClientCreds(def);
   }
   return readPlatformClientCreds(def);
+}
+
+export async function readConnectorClientCreds(
+  uid: string,
+  def: ConnectorDef,
+  forSource?: "platform" | "per-user",
+): Promise<ConnectorClientCreds | null> {
+  return readConnectorClientCredsFromDb(db, uid, def, forSource);
 }
 
 export type FreshTokenResult =
@@ -179,7 +234,15 @@ export async function getFreshAccessToken(
   uid: string,
   def: ConnectorDef,
 ): Promise<FreshTokenResult> {
-  const ref = db.doc(`users/${uid}/secrets/${def.meta.id}`);
+  return getFreshAccessTokenFromDb(db, uid, def);
+}
+
+export async function getFreshAccessTokenFromDb(
+  store: ConnectorTokenStore,
+  uid: string,
+  def: ConnectorDef,
+): Promise<FreshTokenResult> {
+  const ref = store.doc(`users/${uid}/secrets/${def.meta.id}`);
   const snap = await ref.get();
   const tokens = readStoredConnectorTokens(snap.data());
 
@@ -196,7 +259,12 @@ export async function getFreshAccessToken(
   if (!encRefresh || !def.oauth) {
     return { ok: false, reason: "reauth_required" };
   }
-  const creds = await readConnectorClientCreds(uid, def, readStoredClientSource(tokens));
+  const creds = await readConnectorClientCredsFromDb(
+    store,
+    uid,
+    def,
+    readStoredClientSource(tokens),
+  );
   if (!creds) {
     return { ok: false, reason: "reauth_required" };
   }

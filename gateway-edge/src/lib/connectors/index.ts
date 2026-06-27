@@ -44,6 +44,12 @@ export function isConnectorTokenBrokerable(id: string): boolean {
   return def?.meta.consumption === "platform-read" && def.meta.family === "code-hosting";
 }
 
+export function isConnectorAgentRuntimeTokenMaterializable(id: string): boolean {
+  const def = getConnector(id);
+  if (!def || def.meta.consumption !== "agent-runtime") return false;
+  return def.meta.captureMethods.some((method) => method === "pat" || method === "oauth-web" || method === "device");
+}
+
 export function connectorRedirectUri(def: ConnectorDef): string {
   if (!def.oauth) {
     throw new Error(`Connector ${def.meta.id} has no oauth-web config`);

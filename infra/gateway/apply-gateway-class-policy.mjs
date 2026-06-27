@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const EXEC_TOOLS = new Set(["exec", "process"]);
+const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 
 function removeExecDenies(value) {
   if (!Array.isArray(value)) return value;
@@ -24,6 +25,16 @@ function disableCodex(config) {
   config.plugins.entries ??= {};
   config.plugins.entries.codex ??= {};
   config.plugins.entries.codex.enabled = false;
+}
+
+function disableConnectorTools(config) {
+  config.plugins ??= {};
+  if (Array.isArray(config.plugins.allow)) {
+    config.plugins.allow = config.plugins.allow.filter((id) => id !== CONNECTOR_TOOLS_PLUGIN);
+  }
+  config.plugins.entries ??= {};
+  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN] ??= {};
+  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = false;
 }
 
 // A shared pod may run a BYOS subscription's codex harness, but it MUST stay
@@ -60,6 +71,7 @@ function applySharedPolicy(config) {
     "process",
   );
   sandboxCodex(config);
+  disableConnectorTools(config);
 }
 
 function applyBuilderPolicy(config) {
@@ -70,6 +82,7 @@ function applyBuilderPolicy(config) {
   config.tools.subagents.tools ??= {};
   config.tools.subagents.tools.deny = removeExecDenies(config.tools.subagents.tools.deny);
   disableCodex(config);
+  disableConnectorTools(config);
 }
 
 function resolveGatewayClass(env) {

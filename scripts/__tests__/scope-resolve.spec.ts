@@ -57,6 +57,13 @@ describe("resolveScope — ownership", () => {
     );
   });
 
+  it("octogee-connector-tools resolves to its own job", () => {
+    expectJobs(
+      ["infra/gateway/extensions/octogee-connector-tools/connector-client.ts"],
+      ["octogee-connector-tools"],
+    );
+  });
+
   it("app changes run the app gate", () => {
     expectJobs(["app/src/routes/appRoutes.ts"], ["app"]);
   });

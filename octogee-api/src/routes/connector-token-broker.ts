@@ -1,7 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 
-import { isConnectorTokenBrokerable } from "../../../gateway-edge/src/lib/connectors/index.js";
+import {
+  getConnector,
+  isConnectorAgentRuntimeTokenMaterializable,
+  isConnectorTokenBrokerable,
+} from "../../../gateway-edge/src/lib/connectors/index.js";
+import { getFreshAccessTokenFromDb } from "../../../gateway-edge/src/lib/connector-tokens.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
@@ -9,6 +14,7 @@ type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" 
 const FORBIDDEN = { error: "forbidden" } as const;
 const WORKSPACE_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const PROJECT_ID_RE = /^[a-z0-9]{1,16}$/;
+const OWNER_RUNTIME_ACCESS_KIND = "owner-runtime";
 
 interface ProjectAccessContext {
   kind: "project";
@@ -16,6 +22,16 @@ interface ProjectAccessContext {
   workspaceSlug: string;
   projectSlug: string;
 }
+
+interface OwnerRuntimeAccessContext {
+  kind: typeof OWNER_RUNTIME_ACCESS_KIND;
+}
+
+type ConnectorAccessContext = ProjectAccessContext | OwnerRuntimeAccessContext;
+type FreshTokenFailureReason = "not_connected" | "reauth_required";
+type OwnerRuntimeTokenRead =
+  | { status: "connected"; accessToken: string }
+  | { status: "disconnected"; reason: FreshTokenFailureReason };
 
 function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
@@ -36,10 +52,11 @@ function stringBody(req: Request, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function requestAccess(req: Request): ProjectAccessContext | null {
+function requestAccess(req: Request): ConnectorAccessContext | null {
   const access = (req.body as Record<string, unknown> | undefined)?.access;
   if (!access || typeof access !== "object") return null;
   const data = access as Record<string, unknown>;
+  if (data.kind === OWNER_RUNTIME_ACCESS_KIND) return { kind: OWNER_RUNTIME_ACCESS_KIND };
   if (data.kind !== "project") return null;
   const requestingUid = typeof data.requestingUid === "string" ? data.requestingUid : "";
   const workspaceSlug = typeof data.workspaceSlug === "string" ? data.workspaceSlug : "";
@@ -88,15 +105,33 @@ async function accessAuthorized(
   bound: GatewayBinding,
   uid: string,
   connectorId: string,
-  req: Request,
+  access: ConnectorAccessContext | null,
 ): Promise<boolean> {
   if (!safeDocId(uid) || !bound.ownerUid) return false;
+  if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
+    return uid === bound.ownerUid && (await gatewayHasOperatorClass(db, bound.gatewayId));
+  }
   if (uid === bound.ownerUid) return true;
 
-  const access = requestAccess(req);
   if (!access) return false;
   if (access.requestingUid !== bound.ownerUid) return false;
   return projectAccessAuthorized(db, uid, connectorId, access);
+}
+
+async function gatewayHasOperatorClass(db: Firestore, gatewayId: string): Promise<boolean> {
+  const snap = await db.doc(`glmGateways/${gatewayId}`).get();
+  const data = snap.data() as Record<string, unknown> | undefined;
+  return data?.gatewayClass === "operator";
+}
+
+function connectorAllowedForAccess(
+  connectorId: string,
+  access: ConnectorAccessContext | null,
+): boolean {
+  if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
+    return isConnectorAgentRuntimeTokenMaterializable(connectorId);
+  }
+  return isConnectorTokenBrokerable(connectorId);
 }
 
 async function readEncryptedAccessToken(
@@ -108,6 +143,18 @@ async function readEncryptedAccessToken(
   const enc = (snap.data() as { tokens?: { encryptedAccessToken?: unknown } } | undefined)
     ?.tokens?.encryptedAccessToken;
   return typeof enc === "string" && enc.length > 0 ? enc : null;
+}
+
+async function readOwnerRuntimeAccessToken(
+  db: Firestore,
+  uid: string,
+  connectorId: string,
+): Promise<OwnerRuntimeTokenRead> {
+  const def = getConnector(connectorId);
+  if (!def) return { status: "disconnected", reason: "not_connected" };
+  const fresh = await getFreshAccessTokenFromDb(db, uid, def);
+  if (!fresh.ok) return { status: "disconnected", reason: fresh.reason };
+  return { status: "connected", accessToken: fresh.accessToken };
 }
 
 export function createConnectorTokenBrokerRoutes(opts: { db: Firestore }): Router {
@@ -124,13 +171,24 @@ export function createConnectorTokenBrokerRoutes(opts: { db: Firestore }): Route
       res.status(400).json({ error: "uid and connectorId required" });
       return;
     }
-    if (!isConnectorTokenBrokerable(connectorId)) {
+    const access = requestAccess(req);
+    if (!connectorAllowedForAccess(connectorId, access)) {
       res.status(403).json(FORBIDDEN);
       return;
     }
 
-    if (!(await accessAuthorized(db, bound, uid, connectorId, req))) {
+    if (!(await accessAuthorized(db, bound, uid, connectorId, access))) {
       res.status(403).json(FORBIDDEN);
+      return;
+    }
+
+    if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
+      const token = await readOwnerRuntimeAccessToken(db, uid, connectorId);
+      if (token.status === "disconnected") {
+        res.status(token.reason === "reauth_required" ? 409 : 404).json({ error: token.reason });
+        return;
+      }
+      res.json({ accessToken: token.accessToken });
       return;
     }
 

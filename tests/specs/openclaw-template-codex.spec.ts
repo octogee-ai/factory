@@ -33,4 +33,11 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
     expect(template.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
     expect(template.auth.profiles["openai-codex:default"]).toBeUndefined();
   });
+
+  it("does not enable connector materialization in the shared-safe base template", () => {
+    const template = readTemplate();
+
+    expect(template.plugins.allow).not.toContain("octogee-connector-tools");
+    expect(template.plugins.entries["octogee-connector-tools"]).toBeUndefined();
+  });
 });

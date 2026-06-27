@@ -36,9 +36,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         subagents: { tools: { deny: ["write"] } },
       },
       plugins: {
-        allow: ["codex"],
+        allow: ["codex", "octogee-connector-tools"],
         entries: {
           codex: { enabled: true, config: { appServer: { sandbox: "danger-full-access" } } },
+          "octogee-connector-tools": { enabled: true },
         },
       },
     });
@@ -52,6 +53,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.allow).toEqual(["codex"]);
     expect(out.plugins.entries.codex.config.appServer.sandbox).toBe("workspace-write");
     expect(out.plugins.entries.codex.config.appServer.approvalPolicy).toBe("never");
+    expect(out.plugins.entries["octogee-connector-tools"].enabled).toBe(false);
   });
 
   it("builder class enables OpenClaw exec/process but keeps Codex disabled", () => {
@@ -62,8 +64,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         subagents: { tools: { deny: ["exec", "process", "write"] } },
       },
       plugins: {
-        allow: ["codex"],
-        entries: { codex: { enabled: true } },
+        allow: ["codex", "octogee-connector-tools"],
+        entries: {
+          codex: { enabled: true },
+          "octogee-connector-tools": { enabled: true },
+        },
       },
     });
 
@@ -72,6 +77,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.tools.subagents.tools.deny).toEqual(["write"]);
     expect(out.plugins.allow).toEqual([]);
     expect(out.plugins.entries.codex.enabled).toBe(false);
+    expect(out.plugins.entries["octogee-connector-tools"].enabled).toBe(false);
   });
 
   it("operator class leaves the config untouched for the operator-image patcher", () => {
