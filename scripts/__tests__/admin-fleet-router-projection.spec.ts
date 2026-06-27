@@ -35,6 +35,38 @@ describe("projectGatewaySummary — gatewayId", () => {
   });
 });
 
+describe("projectGatewaySummary — desired gateway metadata", () => {
+  const now = 1_750_000_000_000;
+
+  it("derives OpenClaw from the Cowboy image tag when the heartbeat has not learned it yet", () => {
+    const summary = projectGatewaySummary(
+      gatewayDoc("bender", {
+        version: "5b287cb",
+        openclawVersion: "unknown",
+      }),
+      { imageTag: "5b287cb-oc2026.6.10", desiredStatus: "running" },
+      now,
+    );
+
+    expect(summary.imageTag).toBe("5b287cb");
+    expect(summary.openclawVersion).toBe("2026.6.10");
+  });
+
+  it("projects a requested gateway before its heartbeat status doc exists", () => {
+    const summary = projectGatewaySummary(
+      { id: "canary", data: () => ({ gatewayId: "canary" }) },
+      { imageTag: "8507a63-oc2026.6.10", desiredStatus: "running" },
+      now,
+    );
+
+    expect(summary.status).toBe("booting");
+    expect(summary.desiredStatus).toBe("running");
+    expect(summary.imageTag).toBe("8507a63-oc2026.6.10");
+    expect(summary.openclawVersion).toBe("2026.6.10");
+    expect(summary.heartbeatAgeMs).toBeNull();
+  });
+});
+
 describe("projectGatewaySummary — lastError (restoreJobs retired: no jobId)", () => {
   const now = 1_750_000_000_000;
 

@@ -206,6 +206,12 @@ function indexGlmDocs(docs: ReadonlyArray<FirestoreDocLike>): Map<string, GlmDoc
   return out;
 }
 
+function indexFirestoreDocs(docs: ReadonlyArray<FirestoreDocLike>): Map<string, FirestoreDocLike> {
+  const out = new Map<string, FirestoreDocLike>();
+  for (const doc of docs) out.set(doc.id, doc);
+  return out;
+}
+
 function projectLastError(raw: unknown):
   | { slug?: string; message?: string; at: string | null }
   | null {
@@ -220,6 +226,42 @@ function projectDesiredStatus(glmDoc: GlmDoc | undefined):
   if (typeof v !== "string") return null;
   if (v === "running" || v === "paused" || v === "draining" || v === "retired") return v;
   return null;
+}
+
+function requestedGatewayStatus(
+  desiredStatus: ReturnType<typeof projectDesiredStatus>,
+): string {
+  if (desiredStatus === "running") return "booting";
+  if (desiredStatus === "paused") return "paused";
+  if (desiredStatus === "draining") return "draining";
+  return "unknown";
+}
+
+function openclawVersionFromImageTag(imageTag: unknown): string | null {
+  if (typeof imageTag !== "string") return null;
+  const match = imageTag.match(/^[0-9a-f]{7,40}-oc(.+)$/u);
+  return match?.[1] ?? null;
+}
+
+function projectOpenclawVersion(data: GlmDoc, glmDoc: GlmDoc | undefined): string | null {
+  if (typeof data.openclawVersion === "string" && data.openclawVersion !== "unknown") {
+    return data.openclawVersion;
+  }
+  return openclawVersionFromImageTag(glmDoc?.imageTag);
+}
+
+function projectImageTag(data: GlmDoc, glmDoc: GlmDoc | undefined): string | null {
+  if (typeof data.version === "string") return data.version;
+  return typeof glmDoc?.imageTag === "string" ? glmDoc.imageTag : null;
+}
+
+function syntheticGatewayDoc(id: string): FirestoreDocLike {
+  return { id, data: () => ({ gatewayId: id }) };
+}
+
+function shouldProjectDesiredOnlyGateway(glmDoc: GlmDoc | undefined): boolean {
+  const desiredStatus = projectDesiredStatus(glmDoc);
+  return desiredStatus !== null && desiredStatus !== "retired";
 }
 
 function isPlainRecord(v: unknown): v is Record<string, unknown> {
@@ -328,13 +370,14 @@ export function projectGatewaySummary(
 } {
   const data = doc.data();
   const gatewayId = typeof data.gatewayId === "string" ? data.gatewayId : doc.id;
+  const desiredStatus = projectDesiredStatus(glmDoc);
   const reservation = projectGatewayReservation(glmDoc);
   return {
     gatewayId,
-    status: typeof data.status === "string" ? data.status : "unknown",
-    desiredStatus: projectDesiredStatus(glmDoc),
-    imageTag: typeof data.version === "string" ? data.version : null,
-    openclawVersion: typeof data.openclawVersion === "string" ? data.openclawVersion : null,
+    status: typeof data.status === "string" ? data.status : requestedGatewayStatus(desiredStatus),
+    desiredStatus,
+    imageTag: projectImageTag(data, glmDoc),
+    openclawVersion: projectOpenclawVersion(data, glmDoc),
     mountedCustomers: Array.isArray(data.mountedCustomers) ? data.mountedCustomers : [],
     lastHeartbeatAt: toIso(data.lastHeartbeatAt),
     heartbeatAgeMs: ageMsOrNull(toMillis(data.lastHeartbeatAt), now),
@@ -1787,16 +1830,26 @@ router.get(
           db.collection(GLM_GATEWAYS_COLLECTION).get(),
         ]);
         const glmByGatewayId = indexGlmDocs(glmSnap.docs);
+        const heartbeatByGatewayId = indexFirestoreDocs(gwSnap.docs);
+        const gatewayIds = new Set([
+          ...heartbeatByGatewayId.keys(),
+          ...glmByGatewayId.keys(),
+        ]);
         const now = Date.now();
         const gateways = await Promise.all(
-          gwSnap.docs.map((doc) =>
-            projectGatewaySummaryWithDiagnostics(
-              deps,
-              doc,
-              glmByGatewayId.get(doc.id),
-              now,
-            ),
-          ),
+          [...gatewayIds].flatMap((gatewayId) => {
+            const doc = heartbeatByGatewayId.get(gatewayId);
+            const glmDoc = glmByGatewayId.get(gatewayId);
+            if (!doc && !shouldProjectDesiredOnlyGateway(glmDoc)) return [];
+            return [
+              projectGatewaySummaryWithDiagnostics(
+                deps,
+                doc ?? syntheticGatewayDoc(gatewayId),
+                glmDoc,
+                now,
+              ),
+            ];
+          }),
         );
         res.json({
           gateways,

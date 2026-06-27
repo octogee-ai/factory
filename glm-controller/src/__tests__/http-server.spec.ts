@@ -445,6 +445,89 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
+  it("serves gateways requested by Cowboy before their heartbeat docs exist", async () => {
+    store.glmGateways["canary"] = {
+      gatewayId: "canary",
+      desiredStatus: "running",
+      imageTag: "8507a63-oc2026.6.10",
+      sizingTier: "micro",
+    };
+    const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string) => ({
+      status: "not-ready" as const,
+      totalPods: 1,
+      readyPods: 0,
+      totalRestarts: 1,
+      pods: [
+        {
+          name: "octogee-gateway-canary-abc",
+          phase: "Pending",
+          readyContainers: 0,
+          totalContainers: 2,
+          restarts: 1,
+          reason: "ContainerCreating",
+          nodeName: "gke-node-1",
+          ageMs: 30_000,
+        },
+      ],
+    }));
+    const app = createHttpServer(buildDeps(store, { readGatewayPodDiagnostics }));
+
+    const res = await request(app)
+      .get("/api/admin/gateways")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(readGatewayPodDiagnostics).toHaveBeenCalledWith("canary");
+    expect(res.body.gateways).toHaveLength(1);
+    expect(res.body.gateways[0]).toMatchObject({
+      gatewayId: "canary",
+      status: "booting",
+      desiredStatus: "running",
+      imageTag: "8507a63-oc2026.6.10",
+      openclawVersion: "2026.6.10",
+      mountedCustomers: [],
+      heartbeatAgeMs: null,
+      podDiagnostics: {
+        status: "not-ready",
+        readyPods: 0,
+        totalRestarts: 1,
+      },
+    });
+    expect(res.body.stats.gateways).toEqual({
+      total: 1,
+      ready: 0,
+      unreachable: 0,
+    });
+  });
+
+  it("derives OpenClaw from Cowboy image tags when heartbeat reports unknown", async () => {
+    store.gateways["bender"] = {
+      gatewayId: "bender",
+      status: "ready",
+      version: "5b287cb",
+      openclawVersion: "unknown",
+      mountedCustomers: [],
+      lastHeartbeatAt: Date.now(),
+    };
+    store.glmGateways["bender"] = {
+      gatewayId: "bender",
+      desiredStatus: "running",
+      imageTag: "5b287cb-oc2026.6.10",
+    };
+    const app = createHttpServer(buildDeps(store));
+
+    const res = await request(app)
+      .get("/api/admin/gateways")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(res.body.gateways[0]).toMatchObject({
+      gatewayId: "bender",
+      imageTag: "5b287cb",
+      openclawVersion: "2026.6.10",
+    });
+  });
+
   it("serves /api/admin/operations as paginated list", async () => {
     store.glmOperations.push({
       id: "op-1",
