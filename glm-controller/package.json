@@ -6,10 +6,13 @@
   "type": "module",
   "main": "dist/glm-controller/src/index.js",
   "scripts": {
+    "prebuild": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "start": "node dist/glm-controller/src/index.js",
+    "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "vitest run",
+    "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

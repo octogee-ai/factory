@@ -462,10 +462,13 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "pack:tarball": "npm run build && npm pack && mv -f octogee-core-*.tgz octogee-core.tgz",
     "verify:tarball": "bash verify-tarball.sh",
+    "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "vitest run"
   },
   "dependencies": {

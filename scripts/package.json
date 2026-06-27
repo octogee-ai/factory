@@ -8,8 +8,12 @@
     "provision": "tsx entrypoints/fleet-controller.ts",
     "fleet": "tsx ops/fleet.ts",
     "bump-gateway-imagetag": "tsx ops/bump-gateway-imagetag.ts",
+    "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "npx vitest run __tests__",
-    "test:emulator": "firebase emulators:exec --only firestore --project=octogee-test 'npx vitest run --config vitest.emulator.config.ts'",
+    "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
+    "test:emulator": "node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --config vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
+    "pretest:emulator:one": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
+    "test:emulator:one": "node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --config vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
     "audit-coverage": "tsx ops/audit-coverage.ts",
     "scope": "tsx ops/scope.ts"
   },
