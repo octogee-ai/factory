@@ -16,6 +16,7 @@ COPY test-helpers/octogee-test-helpers.tgz /test-helpers/octogee-test-helpers.tg
 COPY gateway-edge/package.json gateway-edge/package-lock.json* ./
 RUN npm ci --ignore-scripts
 
+COPY scripts/ops/sync-local-file-deps.mjs /scripts/ops/sync-local-file-deps.mjs
 COPY gateway-edge/tsconfig.json ./
 COPY gateway-edge/src/ ./src/
 # `npm run build` = tsc → tsc-alias → verify:no-alias-leakage. The

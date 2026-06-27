@@ -31,6 +31,7 @@ RUN npm ci --ignore-scripts
 COPY gateway-edge/package.json gateway-edge/package-lock.json* /gateway-edge/
 RUN npm ci --prefix /gateway-edge --ignore-scripts
 
+COPY scripts/ops/sync-local-file-deps.mjs /scripts/ops/sync-local-file-deps.mjs
 COPY octogee-api/tsconfig.json ./
 COPY octogee-api/src/ ./src/
 COPY gateway-edge/src/ /gateway-edge/src/
