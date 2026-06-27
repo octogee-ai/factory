@@ -4,10 +4,11 @@ import { notesWelcomeSeed, projectPlaybookSeeds } from "../lib/projects/playbook
 describe("projectPlaybookSeeds", () => {
   const seeds = () => projectPlaybookSeeds("Wild Card", "2026-06-12");
 
-  it("seeds the four playbook files at repo-relative paths", () => {
+  it("seeds the project playbook files at repo-relative paths", () => {
     expect(seeds().map((s) => s.relPath).sort()).toEqual([
       "DECISIONS.md",
       "runbook/how-we-build.md",
+      "runbook/shipping-on-gcp.md",
       "runbook/what-done-means.md",
       "runbook/working-with-your-agent.md",
     ]);
@@ -33,6 +34,24 @@ describe("projectPlaybookSeeds", () => {
   it("done means shipped", () => {
     const done = seeds().find((s) => s.relPath === "runbook/what-done-means.md")!;
     expect(done.content).toMatch(/shipped/i);
+  });
+
+  it("seeds an Octogee and GCP shipping guide for the project", () => {
+    const shipping = seeds().find((s) => s.relPath === "runbook/shipping-on-gcp.md")!;
+    expect(shipping.content).toMatch(/Octogee/i);
+    expect(shipping.content).toMatch(/Google Cloud|GCP/i);
+    expect(shipping.content).toMatch(/Firebase Hosting/i);
+    expect(shipping.content).toContain("{workspaceSlug}-{projectSlug}.web.app");
+    expect(shipping.content).toMatch(/Every merge ships/i);
+    expect(shipping.content).toMatch(/preview/i);
+    expect(shipping.content).toMatch(/secrets/i);
+  });
+
+  it("keeps platform doctrine out of the project seeds and points back to the workspace Platform Playbook", () => {
+    const all = seeds().map((s) => s.content).join("\n");
+    expect(all).toMatch(/Platform Playbook/i);
+    expect(all).not.toMatch(/glm-controller/i);
+    expect(all).not.toMatch(/gateway pod lifecycle/i);
   });
 });
 
