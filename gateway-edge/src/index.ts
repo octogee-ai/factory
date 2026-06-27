@@ -14,6 +14,7 @@ import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
 import githubReposRoutes from "./routes/workspace/github-repos.js";
 import publishRoutes from "./routes/projects/publish.js";
+import { projectPreviewRoutes, workspacePreviewRoutes } from "./routes/previews.js";
 import byosubHealthRoutes from "./routes/byosub-health.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
@@ -143,8 +144,15 @@ function mountSidecarLocalitySurface(app: Express): void {
 
   const projectsLocality = Router();
   projectsLocality.use("/:wid/:pid/publish", requireAuth);
+  projectsLocality.use("/:wid/:pid/preview", requireAuth);
+  projectsLocality.use(projectPreviewRoutes);
   projectsLocality.use(publishRoutes);
   mountApi(app, "/projects", projectsLocality);
+
+  const workspacesLocality = Router();
+  workspacesLocality.use("/:wid/preview", requireAuth);
+  workspacesLocality.use(workspacePreviewRoutes);
+  mountApi(app, "/workspaces", workspacesLocality);
 
   // Deep byosub health runs on the customer's own pod (reached via the
   // /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
