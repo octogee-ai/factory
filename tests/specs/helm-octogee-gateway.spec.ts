@@ -1088,7 +1088,7 @@ describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolic
     expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
   });
 
-  it("renders only the bender pod metadata-server egress path when enabled", () => {
+  it("renders only the bender pod GKE metadata-server egress paths when enabled", () => {
     const np = findDoc(
       helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
@@ -1102,9 +1102,15 @@ describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolic
     expect(np).toMatch(/policyTypes:\s*\n\s*-\s*Egress/);
     expect(np).toMatch(/podSelector:[\s\S]*?app:\s*octogee-gateway/);
     expect(np).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*bender/);
+    expect(np).toMatch(/namespaceSelector:[\s\S]*?kubernetes\.io\/metadata\.name:\s*kube-system/);
+    expect(np).toMatch(/podSelector:[\s\S]*?k8s-app:\s*gke-metadata-server/);
+    expect(np).toMatch(/cidr:\s*169\.254\.169\.252\/32/);
     expect(np).toMatch(/cidr:\s*169\.254\.169\.254\/32/);
     expect(np).toMatch(/protocol:\s*TCP/);
+    expect(np).toMatch(/port:\s*987/);
+    expect(np).toMatch(/port:\s*988/);
     expect(np).toMatch(/port:\s*80/);
+    expect(np).toMatch(/port:\s*8080/);
     expect(np).not.toMatch(/0\.0\.0\.0\/0/);
     expect(np).not.toMatch(/port:\s*443/);
   });

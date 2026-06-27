@@ -18,6 +18,8 @@ export type ReconcileChange =
   | { kind: "update"; gatewayId: string; from: HelmInstanceValue; to: HelmInstanceValue }
   | { kind: "drift"; gatewayId: string; current: HelmInstanceValue };
 
+const WORKLOAD_IDENTITY_ANNOTATION = "iam.gke.io/gcp-service-account";
+
 export function buildInstancesMap(
   desired: GatewayDesiredState[],
   chartFingerprint?: string,
@@ -26,7 +28,11 @@ export function buildInstancesMap(
   const out: HelmInstancesMap = {};
   for (const d of desired) {
     if (d.desiredStatus === "retired") continue;
-    out[d.gatewayId] = buildHelmInstanceValue(d, chartFingerprint, apiServerEgressCidrs);
+    out[d.gatewayId] = buildHelmInstanceValue(
+      d,
+      chartFingerprint,
+      apiServerEgressCidrs,
+    );
   }
   return out;
 }
@@ -43,12 +49,16 @@ export function buildHelmTargetMap(
     if (d.desiredStatus === "retired") {
       const mounted = mountedByGatewayId.get(d.gatewayId);
 
-if (mounted === undefined || mounted.length === 0) {
+      if (mounted === undefined || mounted.length === 0) {
         delete out[d.gatewayId];
       }
       continue;
     }
-    out[d.gatewayId] = buildHelmInstanceValue(d, chartFingerprint, apiServerEgressCidrs);
+    out[d.gatewayId] = buildHelmInstanceValue(
+      d,
+      chartFingerprint,
+      apiServerEgressCidrs,
+    );
   }
   return out;
 }
@@ -101,6 +111,70 @@ function injectApiServerEgress(
   return { ...operatorAccess, kubeApiServerEgressCidrs: [...apiServerEgressCidrs] };
 }
 
+function generatedServiceAccountHasWorkloadIdentity(
+  d: GatewayDesiredState,
+  serviceAccountName: string | undefined,
+  serviceAccount: HelmInstanceValue["serviceAccount"],
+): boolean {
+  return (
+    serviceAccountName === operatorGatewayServiceAccountName(d.gatewayId) &&
+    serviceAccount?.create === true &&
+    typeof serviceAccount.annotations?.[WORKLOAD_IDENTITY_ANNOTATION] === "string" &&
+    serviceAccount.annotations[WORKLOAD_IDENTITY_ANNOTATION].length > 0
+  );
+}
+
+function injectPlatformMetadataEgress(
+  operatorAccess: HelmInstanceValue["operatorAccess"],
+  enabled: boolean,
+): HelmInstanceValue["operatorAccess"] {
+  if (!enabled || !operatorAccess || operatorAccess.platformMetadataEgress !== undefined) {
+    return operatorAccess;
+  }
+  return { ...operatorAccess, platformMetadataEgress: true };
+}
+
+interface OptionalHelmFields {
+  d: GatewayDesiredState;
+  chartFingerprint?: string;
+  serviceAccountName?: string;
+  serviceAccount?: HelmInstanceValue["serviceAccount"];
+  persistence?: HelmInstanceValue["persistence"];
+  operatorAccess?: HelmInstanceValue["operatorAccess"];
+  gatewayClass: ReturnType<typeof resolveGatewayClass>;
+  imageProfile: ReturnType<typeof resolveGatewayImageProfile>;
+}
+
+function desiredReplicas(d: GatewayDesiredState): number {
+  return d.desiredStatus === "paused" ? 0 : 1;
+}
+
+function withOptionalHelmFields(
+  instance: HelmInstanceValue,
+  fields: OptionalHelmFields,
+): HelmInstanceValue {
+  const out: HelmInstanceValue = { ...instance };
+  if (fields.d.builderSlug) out.builderSlug = fields.d.builderSlug;
+  if (fields.chartFingerprint) out.chartFingerprint = fields.chartFingerprint;
+  if (fields.serviceAccountName) out.serviceAccountName = fields.serviceAccountName;
+  if (fields.serviceAccount) out.serviceAccount = fields.serviceAccount;
+  if (fields.d.gatewayContainerSecurityContext) {
+    out.gatewayContainerSecurityContext = fields.d.gatewayContainerSecurityContext;
+  }
+  if (fields.persistence) out.persistence = fields.persistence;
+  if (fields.operatorAccess) out.operatorAccess = fields.operatorAccess;
+  if (fields.gatewayClass !== "shared") out.gatewayClass = fields.gatewayClass;
+  if (fields.imageProfile !== "standard") {
+    out.imageProfile = fields.imageProfile;
+    out.profile = fields.imageProfile;
+  }
+  if (isSizingTier(fields.d.sizingTier)) out.sizingTier = fields.d.sizingTier;
+  if (typeof fields.d.computeClass === "string" && fields.d.computeClass.length > 0) {
+    out.computeClassOverride = fields.d.computeClass;
+  }
+  return out;
+}
+
 function buildHelmInstanceValue(
   d: GatewayDesiredState,
   chartFingerprint?: string,
@@ -109,29 +183,34 @@ function buildHelmInstanceValue(
   const gatewayClass = resolveGatewayClass(d);
   const imageProfile = resolveGatewayImageProfile(d);
   const persistence = resolveGatewayPersistence(imageProfile, d.persistence);
-  const { serviceAccountName, serviceAccount, operatorAccess: baseAccess } = resolveGatewayHelmKnobs(d);
-  const operatorAccess = injectApiServerEgress(baseAccess, apiServerEgressCidrs);
-  return {
-    enabled: true,
-    image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
-    gatewayId: d.gatewayId,
-    ...(d.builderSlug ? { builderSlug: d.builderSlug } : {}),
-    replicas: d.desiredStatus === "paused" ? 0 : 1,
-    ...(chartFingerprint ? { chartFingerprint } : {}),
-    ...(serviceAccountName ? { serviceAccountName } : {}),
-    ...(serviceAccount ? { serviceAccount } : {}),
-    ...(d.gatewayContainerSecurityContext
-      ? { gatewayContainerSecurityContext: d.gatewayContainerSecurityContext }
-      : {}),
-    ...(persistence ? { persistence } : {}),
-    ...(operatorAccess ? { operatorAccess } : {}),
-    ...(gatewayClass !== "shared" ? { gatewayClass } : {}),
-    ...(imageProfile !== "standard" ? { imageProfile, profile: imageProfile } : {}),
-    ...(isSizingTier(d.sizingTier) ? { sizingTier: d.sizingTier } : {}),
-    ...(typeof d.computeClass === "string" && d.computeClass.length > 0
-      ? { computeClassOverride: d.computeClass }
-      : {}),
-  };
+  const {
+    serviceAccountName,
+    serviceAccount: resolvedServiceAccount,
+    operatorAccess: baseAccess,
+  } = resolveGatewayHelmKnobs(d);
+  const operatorAccess = injectPlatformMetadataEgress(
+    injectApiServerEgress(baseAccess, apiServerEgressCidrs),
+    gatewayClass === "operator" &&
+      generatedServiceAccountHasWorkloadIdentity(d, serviceAccountName, resolvedServiceAccount),
+  );
+  return withOptionalHelmFields(
+    {
+      enabled: true,
+      image: { repository: resolveGatewayImageRepository(d), tag: d.imageTag },
+      gatewayId: d.gatewayId,
+      replicas: desiredReplicas(d),
+    },
+    {
+      d,
+      chartFingerprint,
+      serviceAccountName,
+      serviceAccount: resolvedServiceAccount,
+      persistence,
+      operatorAccess,
+      gatewayClass,
+      imageProfile,
+    },
+  );
 }
 
 export interface DiffOptions {

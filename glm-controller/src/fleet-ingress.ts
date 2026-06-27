@@ -61,10 +61,20 @@ export interface MergeFleetRulesOpts {
   previewPort: number;
 }
 
-// Append the per-gateway locality paths to the base routes: /api/g/<id>/* onto
-// the api host, /g/<id>/* onto the preview host. Other hosts (git, mattermost)
-// pass through untouched. Output order matches today's live ingress exactly —
-// base paths first, dynamic paths appended in gatewayId order.
+function insertBeforePath(
+  basePaths: ReadonlyArray<IngressPath>,
+  inserted: ReadonlyArray<IngressPath>,
+  targetPath: string,
+): IngressPath[] {
+  const idx = basePaths.findIndex((p) => p.path === targetPath);
+  if (idx === -1) return [...basePaths, ...inserted];
+  return [
+    ...basePaths.slice(0, idx),
+    ...inserted,
+    ...basePaths.slice(idx),
+  ];
+}
+
 export function mergeFleetRules(
   baseRules: ReadonlyArray<IngressRule>,
   opts: MergeFleetRulesOpts,
@@ -73,10 +83,16 @@ export function mergeFleetRules(
   const previewPaths = previewFleetPaths(opts.gateways, opts.previewPort);
   return baseRules.map((rule) => {
     if (opts.apiHost && rule.host === opts.apiHost) {
-      return { host: rule.host, http: { paths: [...rule.http.paths, ...apiPaths] } };
+      return {
+        host: rule.host,
+        http: { paths: insertBeforePath(rule.http.paths, apiPaths, "/api/*") },
+      };
     }
     if (opts.previewHost && rule.host === opts.previewHost) {
-      return { host: rule.host, http: { paths: [...rule.http.paths, ...previewPaths] } };
+      return {
+        host: rule.host,
+        http: { paths: insertBeforePath(rule.http.paths, previewPaths, "/*") },
+      };
     }
     return rule;
   });

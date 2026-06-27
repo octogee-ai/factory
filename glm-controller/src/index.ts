@@ -85,6 +85,7 @@ import {
   runBlueGreenRollout,
   type BlueGreenRolloutDeps,
 } from "./handlers/rollout-bluegreen.js";
+import { waitForGatewayTrafficReady } from "./traffic-readiness.js";
 import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
 import { deleteAvatarObjects } from "./lib/customer-ops/avatars.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
@@ -187,6 +188,18 @@ const AUTO_ROLL_ON_CHART_DRIFT = NAMESPACE !== "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
 const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
+const GATEWAY_TRAFFIC_READY_TIMEOUT_MS = parseNonNegativeInt(
+  process.env.GATEWAY_TRAFFIC_READY_TIMEOUT_MS,
+  240_000,
+);
+const GATEWAY_TRAFFIC_READY_POLL_MS = parseNonNegativeInt(
+  process.env.GATEWAY_TRAFFIC_READY_POLL_MS,
+  5_000,
+);
+const GATEWAY_TRAFFIC_READY_REQUEST_TIMEOUT_MS = parseNonNegativeInt(
+  process.env.GATEWAY_TRAFFIC_READY_REQUEST_TIMEOUT_MS,
+  5_000,
+);
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 const ACTIVATION_LEASE_SWEEP_MS = parseNonNegativeInt(
   process.env.ACTIVATION_LEASE_SWEEP_MS,
@@ -617,19 +630,20 @@ async function restartGatewayDeploymentsForModelKeyChanges(
 
 async function syncFleetIngressIfConfigured(
   deps: ControllerDeps,
-  desired: GatewayDesiredState[],
+  targetMap: HelmInstancesMap,
 ): Promise<void> {
   const syncFleetIngress = deps.syncFleetIngress;
   if (!syncFleetIngress) return;
-  const fleetGateways = desired
-    .filter((g) => typeof g.gatewayId === "string")
-    .map((g) => ({ gatewayId: g.gatewayId }));
   try {
-    await syncFleetIngress(fleetGateways);
+    await syncFleetIngress(fleetGatewaysFromTargetMap(targetMap));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`(source=fleet-ingress) ${message}`);
   }
+}
+
+function fleetGatewaysFromTargetMap(targetMap: HelmInstancesMap): FleetGateway[] {
+  return Object.keys(targetMap).map((gatewayId) => ({ gatewayId }));
 }
 
 interface ReadyGateway {
@@ -768,7 +782,11 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   await syncGatewayModelKeySources(deps, desired);
   const modelKeyChangedGatewayIds = await syncGatewayModelKeySecrets(deps, desired);
   const apiServerEgressCidrs = (await deps.resolveApiServerEgressCidrs?.()) ?? [];
-  const desiredMap = buildInstancesMap(desired, deps.chartFingerprint, apiServerEgressCidrs);
+  const desiredMap = buildInstancesMap(
+    desired,
+    deps.chartFingerprint,
+    apiServerEgressCidrs,
+  );
   const changes = diffInstancesMap(actualMap, desiredMap, {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
   });
@@ -796,7 +814,7 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     targetVsActual,
   );
   const readyGateways = await refreshGatewayReadiness(deps, desired);
-  await syncFleetIngressIfConfigured(deps, desired);
+  await syncFleetIngressIfConfigured(deps, targetMap);
   await completeRecoveredOperatorAddGatewayOps(deps, readyGateways);
 }
 
@@ -1323,12 +1341,29 @@ async function main(): Promise<void> {
       log,
     }).then(() => undefined);
 
+  const chartFingerprint = computeChartFingerprint(GATEWAY_CHART);
+  const resolveApiServerEgressCidrs = createCachedApiServerEgressResolver(
+    (args) => spawnKubectl(args),
+    log,
+  );
+
   const handlerSyncFleetIngress = async () => {
-    const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
-    const gateways: FleetGateway[] = snap.docs
-      .map((d) => d.data() as { gatewayId?: unknown })
-      .filter((g): g is FleetGateway => typeof g.gatewayId === "string");
-    await syncEdgeIngressForGateways(gateways);
+    const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs({
+      db,
+      helm,
+      kubeOps,
+      handlers: {} as OperationHandlers,
+      log,
+    });
+    const apiServerEgressCidrs = await resolveApiServerEgressCidrs();
+    const targetMap = buildHelmTargetMap(
+      desired,
+      actualMap,
+      mountedByGatewayId,
+      chartFingerprint,
+      apiServerEgressCidrs,
+    );
+    await syncEdgeIngressForGateways(fleetGatewaysFromTargetMap(targetMap));
   };
 
   const fleetControllerPrivateKey = requireEnv(
@@ -1347,8 +1382,6 @@ async function main(): Promise<void> {
     },
   );
 
-  const chartFingerprint = computeChartFingerprint(GATEWAY_CHART);
-
   const deps: ControllerDeps = {
     db,
     helm,
@@ -1361,10 +1394,7 @@ async function main(): Promise<void> {
     syncFleetIngress: syncEdgeIngressForGateways,
     operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
     chartFingerprint,
-    resolveApiServerEgressCidrs: createCachedApiServerEgressResolver(
-      (args) => spawnKubectl(args),
-      log,
-    ),
+    resolveApiServerEgressCidrs,
   };
 
   log(
@@ -1874,6 +1904,19 @@ async function buildHandlers(
         ctx,
       );
       return { ok: result.success, error: result.error };
+    },
+    awaitTrafficReady: async ({ gatewayId }) => {
+      await fleetOps.syncFleetIngress();
+      return waitForGatewayTrafficReady({
+        gatewayId,
+        apiHost: GATEWAY_EDGE_INGRESS_HOST,
+        fetchImpl: (url, init) => fetch(url, init),
+        now: () => Date.now(),
+        wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+        timeoutMs: GATEWAY_TRAFFIC_READY_TIMEOUT_MS,
+        pollIntervalMs: GATEWAY_TRAFFIC_READY_POLL_MS,
+        requestTimeoutMs: GATEWAY_TRAFFIC_READY_REQUEST_TIMEOUT_MS,
+      });
     },
     readAssignedCustomers: async (gatewayId) => {
       const snap = await db

@@ -52,6 +52,14 @@ const BASE_RULES: IngressRule[] = [
 
 const GATEWAYS: FleetGateway[] = [{ gatewayId: "default" }, { gatewayId: "bender" }];
 
+function expectPathBefore(paths: string[], earlier: string, later: string): void {
+  const earlierIdx = paths.indexOf(earlier);
+  const laterIdx = paths.indexOf(later);
+  expect(earlierIdx).toBeGreaterThanOrEqual(0);
+  expect(laterIdx).toBeGreaterThanOrEqual(0);
+  expect(earlierIdx).toBeLessThan(laterIdx);
+}
+
 function ok(stdout: string): KubectlSubprocessResult {
   return { stdout, stderr: "", code: 0 };
 }
@@ -121,6 +129,12 @@ describe("apiFleetPaths", () => {
     const paths = apiFleetPaths([{ gatewayId: "zeta" }, { gatewayId: "alpha" }], GATEWAY_EDGE_PORT);
     expect(paths.map((p) => p.path)).toEqual(["/api/g/alpha/*", "/api/g/zeta/*"]);
   });
+
+  it("keeps arbitrary rollout instance ids routeable through the fleet seam", () => {
+    expect(apiFleetPaths([{ gatewayId: "bender-canary-2026" }], GATEWAY_EDGE_PORT)).toEqual([
+      { path: "/api/g/bender-canary-2026/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-edge-bender-canary-2026", port: { number: 3001 } } } },
+    ]);
+  });
 });
 
 describe("previewFleetPaths", () => {
@@ -133,7 +147,7 @@ describe("previewFleetPaths", () => {
 });
 
 describe("mergeFleetRules", () => {
-  it("appends /api/g/* to the api host after the base paths, in gatewayId order", () => {
+  it("inserts /api/g/* before the /api/* catch-all, in gatewayId order", () => {
     const merged = mergeFleetRules(BASE_RULES, {
       apiHost: API_HOST,
       previewHost: PREVIEW_HOST,
@@ -144,10 +158,10 @@ describe("mergeFleetRules", () => {
     const apiRule = merged.find((r) => r.host === API_HOST)!;
     expect(apiRule.http.paths.map((p) => p.path)).toEqual([
       "/api/admin/gateways/*",
-      "/api/*",
-      "/health",
       "/api/g/bender/*",
       "/api/g/default/*",
+      "/api/*",
+      "/health",
     ]);
   });
 
@@ -165,6 +179,32 @@ describe("mergeFleetRules", () => {
       "/g/default/*",
     ]);
     expect(merged.find((r) => r.host === "git-test.octogee.com")!.http.paths.map((p) => p.path)).toEqual(["/*"]);
+  });
+
+  it("inserts /g/* before the preview /* catch-all when the base preview host has one", () => {
+    const baseWithPreviewCatchAll: IngressRule[] = BASE_RULES.map((rule) =>
+      rule.host === PREVIEW_HOST
+        ? {
+            ...rule,
+            http: {
+              paths: [
+                ...rule.http.paths,
+                { path: "/*", pathType: "ImplementationSpecific", backend: { service: { name: "preview-catch-all", port: { number: 9080 } } } },
+              ],
+            },
+          }
+        : rule,
+    );
+    const merged = mergeFleetRules(baseWithPreviewCatchAll, {
+      apiHost: API_HOST,
+      previewHost: PREVIEW_HOST,
+      gateways: GATEWAYS,
+      gatewayEdgePort: GATEWAY_EDGE_PORT,
+      previewPort: PREVIEW_PORT,
+    });
+    const paths = merged.find((r) => r.host === PREVIEW_HOST)!.http.paths.map((p) => p.path);
+    expectPathBefore(paths, "/g/bender/*", "/*");
+    expectPathBefore(paths, "/g/default/*", "/*");
   });
 
   it("is a no-op on the rules when there are no gateways (base routes pass through)", () => {
@@ -219,8 +259,9 @@ describe("syncEdgeIngress", () => {
     ]);
     const manifest = JSON.parse(apply.stdin!) as { spec: { rules: IngressRule[] } };
     const apiRule = manifest.spec.rules.find((r) => r.host === API_HOST)!;
-    expect(apiRule.http.paths.map((p) => p.path)).toContain("/api/g/bender/*");
-    expect(apiRule.http.paths.map((p) => p.path)).toContain("/api/g/default/*");
+    const apiPaths = apiRule.http.paths.map((p) => p.path);
+    expectPathBefore(apiPaths, "/api/g/bender/*", "/api/*");
+    expectPathBefore(apiPaths, "/api/g/default/*", "/api/*");
     const previewRule = manifest.spec.rules.find((r) => r.host === PREVIEW_HOST)!;
     expect(previewRule.http.paths.map((p) => p.path)).toContain("/g/bender/*");
     expect(result.changed).toBe(true);

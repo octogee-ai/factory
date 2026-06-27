@@ -374,7 +374,7 @@ resolveUpgrade(undefined);
     expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
   });
 
-  it("calls syncFleetIngress after applyChanges with the gatewayId of every desired gateway", async () => {
+  it("calls syncFleetIngress after applyChanges with the gatewayId of every targeted gateway", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const helm = makeFakeHelm({
@@ -395,6 +395,13 @@ resolveUpgrade(undefined);
           imageRepository: "repo",
           imageTag: "abc",
           desiredStatus: "running",
+          createdBy: "ci",
+        },
+        {
+          gatewayId: "retired-stale",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "retired",
           createdBy: "ci",
         },
       ],

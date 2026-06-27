@@ -101,6 +101,7 @@ export interface GatewayServiceAccountSpec {
 
 export interface OperatorGatewayAccessSpec {
   shellsEnabled?: boolean;
+  platformMetadataEgress?: boolean;
   kubeApiServerEgressCidrs?: string[];
   reason?: string;
   verifiedAt?: number;

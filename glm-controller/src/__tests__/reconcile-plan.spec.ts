@@ -234,6 +234,58 @@ describe("buildInstancesMap", () => {
     expect(map.bender.serviceAccount).toEqual({ create: true });
   });
 
+  it("does not invent a Workload Identity annotation for a generated operator ServiceAccount", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        gatewayId: "bender-canary-2026",
+        profile: "operator",
+        serviceAccountName: "octogee-gw-bender-canary-2026",
+        serviceAccount: { create: true },
+      }),
+    ]);
+    expect(map["bender-canary-2026"].serviceAccount).toEqual({ create: true });
+  });
+
+  it("enables metadata egress for a Workload-Identity-backed generated operator ServiceAccount", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        gatewayId: "bender-canary-2026",
+        profile: "operator",
+        ownerUid: "uid-chris",
+        serviceAccountName: "octogee-gw-bender-canary-2026",
+        serviceAccount: {
+          create: true,
+          annotations: {
+            "iam.gke.io/gcp-service-account": "bender@octogee.iam.gserviceaccount.com",
+          },
+        },
+      }),
+    ]);
+    expect(map["bender-canary-2026"].operatorAccess).toMatchObject({
+      shellsEnabled: true,
+      platformMetadataEgress: true,
+    });
+  });
+
+  it("preserves an explicit generated ServiceAccount Workload Identity annotation", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        gatewayId: "bender",
+        profile: "operator",
+        serviceAccountName: "octogee-gw-bender",
+        serviceAccount: {
+          create: true,
+          annotations: {
+            "iam.gke.io/gcp-service-account": "custom@octogee.iam.gserviceaccount.com",
+          },
+        },
+      }),
+    ]);
+    expect(map.bender.serviceAccount?.annotations).toEqual({
+      "iam.gke.io/gcp-service-account": "custom@octogee.iam.gserviceaccount.com",
+    });
+  });
+
   it("preserves an explicit custom operator ServiceAccount name", () => {
     const map = buildInstancesMap([
       mkDesired({
@@ -255,6 +307,17 @@ describe("buildInstancesMap", () => {
       }),
     ]);
     expect(map.default.serviceAccountName).toBe("octogee-gw-default");
+    expect(map.default.serviceAccount).toEqual({ create: true });
+  });
+
+  it("does not annotate a standard generated ServiceAccount", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        gatewayId: "default",
+        profile: "standard",
+        serviceAccountName: "octogee-gateway",
+      }),
+    ]);
     expect(map.default.serviceAccount).toEqual({ create: true });
   });
 
