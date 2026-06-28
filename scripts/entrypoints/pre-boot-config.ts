@@ -16,6 +16,15 @@ function log(msg: string): void {
   console.log(`${ts} [pre-boot] ${msg}`);
 }
 
+function claudeCliNativeHomeDirForGateway(): string | undefined {
+  const gatewayClass = process.env.GATEWAY_CLASS ?? "";
+  const profile = process.env.GATEWAY_PROFILE ?? "";
+  if (gatewayClass === "builder" || gatewayClass === "operator" || profile === "operator") {
+    return process.env.HOME ?? "/home/node";
+  }
+  return undefined;
+}
+
 type OpenClawConfig = Record<string, unknown>;
 
 function objectProperty(
@@ -411,12 +420,14 @@ async function applyGlmDesiredState(
     }
     const { readSecret } = await import("../lib/secret-manager.js");
 
-const r = await restoreByosubForAgents({
+    const claudeCliNativeHomeDir = claudeCliNativeHomeDirForGateway();
+    const r = await restoreByosubForAgents({
       agentIds: agentIdsFromConfig(config),
       byosub: data?.byosub,
       openclawDir: OPENCLAW_DIR,
       fetchSecret: (name) => withTimeout(readSecret(name), 4000),
       logFn,
+      ...(claudeCliNativeHomeDir ? { claudeCliNativeHomeDir } : {}),
     });
     if (r.planned > 0) {
       logFn(

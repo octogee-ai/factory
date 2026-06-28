@@ -3,6 +3,7 @@ import * as path from "path";
 import {
   buildCodexAuthProfilesStore,
   buildClaudeCliAuthProfilesStore,
+  buildClaudeCliNativeCredentialsJson,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./model-credential-materializer.js";
 import {
@@ -23,8 +24,8 @@ export interface ByosubRestorePlanItem {
   agentId: string;
   provider: ByosubProvider;
   secretName: string;
-  // codex writes a codex-home auth.json here; claude-cli has no file (the
-  // credential lives only in the SQLite auth-profile store), so it's optional.
+  // codex writes a codex-home auth.json here. claude-cli uses a separate
+  // native Claude credential path when enabled for single-builder gateways.
   targetPath?: string;
   openclawDir: string;
 }
@@ -52,6 +53,10 @@ export function codexHomeDir(openclawDir: string, agentId: string): string {
 
 export function codexAuthJsonPath(openclawDir: string, agentId: string): string {
   return path.join(codexHomeDir(openclawDir, agentId), "auth.json");
+}
+
+export function claudeCliNativeCredentialsPath(homeDir: string): string {
+  return path.join(homeDir, ".claude", ".credentials.json");
 }
 
 export function codexStagingHomeDir(
@@ -128,6 +133,78 @@ export function shouldRestoreCodexCredential(opts: {
   return "skip";
 }
 
+function removeTempFile(tmp: string | undefined): void {
+  if (!tmp) return;
+  try {
+    fs.rmSync(tmp, { force: true });
+  } catch {
+    // best-effort temp cleanup
+  }
+}
+
+function restoreClaudeCliCredential(opts: {
+  agentDir: string;
+  payload: string;
+  nativeHomeDir?: string;
+}): { nativeRestored: boolean } {
+  const nativeTarget = opts.nativeHomeDir
+    ? claudeCliNativeCredentialsPath(opts.nativeHomeDir)
+    : undefined;
+  const nativeJson = nativeTarget
+    ? buildClaudeCliNativeCredentialsJson(opts.payload)
+    : null;
+  if (nativeTarget && nativeJson === null) {
+    throw new Error(
+      "claude-cli native restore requires Claude SSO .credentials.json payload",
+    );
+  }
+
+  let nativeTmp: string | undefined;
+  try {
+    if (nativeTarget && nativeJson !== null) {
+      fs.mkdirSync(path.dirname(nativeTarget), { recursive: true });
+      nativeTmp = `${nativeTarget}.tmp`;
+      fs.writeFileSync(nativeTmp, nativeJson, { mode: 0o600 });
+      fs.chmodSync(nativeTmp, 0o600);
+    }
+    writeAuthProfileStore(
+      opts.agentDir,
+      buildClaudeCliAuthProfilesStore(opts.payload, Date.now()),
+    );
+    if (nativeTarget && nativeTmp) {
+      fs.renameSync(nativeTmp, nativeTarget);
+      fs.chmodSync(nativeTarget, 0o600);
+      nativeTmp = undefined;
+    }
+    return { nativeRestored: Boolean(nativeTarget) };
+  } catch (err) {
+    removeTempFile(nativeTmp);
+    throw err;
+  }
+}
+
+function restoreCodexCredential(item: ByosubRestorePlanItem, payload: string, agentDir: string): void {
+  const targetPath = item.targetPath!;
+  let tmp: string | undefined;
+  try {
+    tmp = `${targetPath}.tmp`;
+    const codexStore = buildCodexAuthProfilesStore(payload);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(tmp, payload, { mode: 0o600 });
+    fs.chmodSync(tmp, 0o600);
+    // Write SQLite BEFORE promoting codex-home — preserves cross-pair
+    // atomicity (the Copilot #989 invariant): if the auth-profiles store
+    // can't be written, codex-home stays unpromoted, so we never half-flip
+    // routing.
+    writeAuthProfileStore(agentDir, codexStore);
+    fs.renameSync(tmp, targetPath);
+    tmp = undefined;
+  } catch (err) {
+    removeTempFile(tmp);
+    throw err;
+  }
+}
+
 export function planByosubRestores(opts: {
   agentIds: string[];
   byosub: Record<string, ByosubRef> | undefined;
@@ -185,6 +262,7 @@ export async function restoreByosubCredentials(opts: {
   plan: ByosubRestorePlanItem[];
   fetchSecret: (secretName: string) => Promise<string>;
   logFn?: (m: string) => void;
+  claudeCliNativeHomeDir?: string;
 }): Promise<{ restored: number; failed: number; skipped: number }> {
   const log = opts.logFn ?? (() => {});
   let restored = 0;
@@ -211,34 +289,27 @@ export async function restoreByosubCredentials(opts: {
         continue;
       }
     }
-    let tmp: string | undefined;
     try {
       const payload = await opts.fetchSecret(item.secretName);
 
       if (item.provider === "anthropic") {
-        // Claude SUBSCRIPTION: the credential is the SQLite oauth profile only —
-        // no auth.json file (openclaw's claude-cli runtime reads the store).
-        writeAuthProfileStore(
+        const { nativeRestored } = restoreClaudeCliCredential({
           agentDir,
-          buildClaudeCliAuthProfilesStore(payload, Date.now()),
-        );
+          payload,
+          ...(opts.claudeCliNativeHomeDir
+            ? { nativeHomeDir: opts.claudeCliNativeHomeDir }
+            : {}),
+        });
         restored++;
-        log(`byosub: restored claude-cli credential for ${item.agentId}`);
+        log(
+          `byosub: restored claude-cli credential for ${item.agentId}${
+            nativeRestored ? " (native Claude CLI credential restored)" : ""
+          }`,
+        );
         continue;
       }
 
-      const targetPath = item.targetPath!;
-      tmp = `${targetPath}.tmp`;
-      const codexStore = buildCodexAuthProfilesStore(payload);
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.writeFileSync(tmp, payload, { mode: 0o600 });
-      fs.chmodSync(tmp, 0o600);
-      // Write SQLite BEFORE promoting codex-home — preserves cross-pair
-      // atomicity (the Copilot #989 invariant): if the auth-profiles store
-      // can't be written, codex-home stays unpromoted, so we never half-flip
-      // routing.
-      writeAuthProfileStore(agentDir, codexStore);
-      fs.renameSync(tmp, targetPath);
+      restoreCodexCredential(item, payload, agentDir);
       restored++;
       log(`byosub: restored ${item.provider} credential for ${item.agentId}`);
     } catch (e) {
@@ -246,13 +317,6 @@ export async function restoreByosubCredentials(opts: {
       log(
         `byosub: WARN failed to restore ${item.agentId} (${item.secretName}) — ${(e as Error).message}`,
       );
-      if (tmp) {
-        try {
-          fs.rmSync(tmp, { force: true });
-        } catch {
-          // best-effort temp cleanup
-        }
-      }
     }
   }
   return { restored, failed, skipped };
@@ -264,6 +328,7 @@ export async function restoreByosubForAgents(opts: {
   openclawDir: string;
   fetchSecret: (secretName: string) => Promise<string>;
   logFn?: (m: string) => void;
+  claudeCliNativeHomeDir?: string;
 }): Promise<{
   restored: number;
   failed: number;
@@ -282,6 +347,7 @@ export async function restoreByosubForAgents(opts: {
     plan,
     fetchSecret: opts.fetchSecret,
     logFn: opts.logFn,
+    ...(opts.claudeCliNativeHomeDir ? { claudeCliNativeHomeDir: opts.claudeCliNativeHomeDir } : {}),
   });
   return { ...r, planned: plan.length };
 }

@@ -232,13 +232,7 @@ export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 export const CLAUDE_CLI_DEFAULT_PROFILE_ID = "anthropic:claude-cli";
 const CLAUDE_CLI_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
-function parseClaudeCliSsoCredential(raw: string): OAuthCredential | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("claude-cli SSO credential: not valid JSON");
-  }
+function parseClaudeCliSsoCredentialObject(parsed: unknown): OAuthCredential {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("claude-cli SSO credential: expected JSON object");
   }
@@ -271,6 +265,29 @@ function parseClaudeCliSsoCredential(raw: string): OAuthCredential | null {
     expires: Math.floor(expiresAt),
     copyToAgents: true,
   };
+}
+
+function parseClaudeCliSsoCredential(raw: string): OAuthCredential | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("claude-cli SSO credential: not valid JSON");
+  }
+  return parseClaudeCliSsoCredentialObject(parsed);
+}
+
+export function buildClaudeCliNativeCredentialsJson(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error("claude-cli SSO credential: not valid JSON");
+  }
+  parseClaudeCliSsoCredentialObject(parsed);
+  return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 
 // Claude SUBSCRIPTION (claude setup-token) → the per-agent claude-cli OAuth

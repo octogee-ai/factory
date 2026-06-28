@@ -883,19 +883,31 @@ describe("shared gateway — per-customer broker-token materialization", () => {
 });
 
 describe("operator gateway — runtime sync stays narrow", () => {
-  it("restoreOauthStoreForSlug: returns {restored:false, present:false} without fetching", async () => {
-    const fetchByosubCred = vi.fn(async () => null);
+  it("restoreOauthStoreForSlug: materializes owner BYOS credentials on operator gateways", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "operator-byos-"));
+    const fetchByosubCred = vi.fn(async () => ({
+      provider: "anthropic",
+      secretName: "byosub-uid-anthropic",
+      credential: "sk-ant-oat01-operator-token",
+    }));
     const r = await restoreOauthStoreForSlug("tester-70", {
       fetchByosubCred,
-      openclawDir: fs.mkdtempSync(path.join(os.tmpdir(), "operator-skip-")),
-      isOperatorGateway: () => true,
+      openclawDir,
       logFn: () => {},
     });
-    expect(r).toEqual({ restored: false, present: false });
-    expect(fetchByosubCred).not.toHaveBeenCalled();
+    expect(r).toEqual({ restored: true, present: true });
+    expect(fetchByosubCred).toHaveBeenCalledWith("octogee-tester-70-coach");
+
+    const store = readAuthProfileStore(codexAgentDir(openclawDir, "octogee-tester-70-coach")) as {
+      profiles: Record<string, { provider?: string; access?: string }>;
+    };
+    expect(store.profiles["anthropic:claude-cli"]).toMatchObject({
+      provider: "claude-cli",
+      access: "sk-ant-oat01-operator-token",
+    });
   });
 
-  it("syncByotForCustomer: no internal call fires — applyByotState, restore, patch, reload all skipped", async () => {
+  it("syncByotForCustomer: restores OAuth credentials but leaves operator-owned openclaw.json untouched", async () => {
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
@@ -918,9 +930,9 @@ describe("operator gateway — runtime sync stays narrow", () => {
     );
 
     expect(applyByotStateFn).not.toHaveBeenCalled();
-    expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
-    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
+    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
   it("anthropic BYOT cleanup still runs on operator broker-token gateways", async () => {

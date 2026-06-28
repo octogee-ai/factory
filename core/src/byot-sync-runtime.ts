@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as os from "os";
 import {
   applyByotState,
   byosCoachConfigPatch,
@@ -13,6 +14,7 @@ import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import {
   AGENTS_DIR,
+  GATEWAY_CLASS,
   OPENCLAW_DIR,
   isOperatorGateway,
   isSharedGateway,
@@ -124,6 +126,10 @@ export interface ByosubCred {
   credential: string;
 }
 
+function claudeCliNativeHomeDirForGateway(): string | undefined {
+  return GATEWAY_CLASS === "builder" || isOperatorGateway() ? os.homedir() : undefined;
+}
+
 // Cattle gateways are egress-blocked from the GCP metadata server, so they
 // cannot read Firestore (the byosub ref) or Secret Manager (the credential)
 // directly. octogee-api brokers both — KSA-tenant-bound to this gateway and
@@ -167,31 +173,35 @@ export async function restoreOauthStoreForSlug(
   deps?: {
     fetchByosubCred?: (agentId: string) => Promise<ByosubCred | null>;
     openclawDir?: string;
+    claudeCliNativeHomeDir?: string;
     logFn?: (m: string) => void;
-    isOperatorGateway?: () => boolean;
   },
 ): Promise<OauthStoreRestoreResult> {
   const agentId = `octogee-${slug}-coach`;
   const logFn = deps?.logFn ?? log;
-  const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
-  if (isOp()) return { restored: false, present: false };
   try {
     const fetchByosubCred = deps?.fetchByosubCred ?? brokerFetchByosubCred;
     const ocDir = deps?.openclawDir ?? OPENCLAW_DIR;
     const cred = await fetchByosubCred(agentId);
     if (!cred) return { restored: false, present: false };
     const byosub: Record<string, ByosubRef> = {
-      [agentId]: { provider: cred.provider as ByosubRef["provider"], secretName: cred.secretName },
+      [agentId]: {
+        provider: cred.provider as ByosubRef["provider"],
+        secretName: cred.secretName,
+      },
     };
+    const claudeCliNativeHomeDir =
+      deps?.claudeCliNativeHomeDir ?? claudeCliNativeHomeDirForGateway();
     const r = await restoreByosubForAgents({
       agentIds: [agentId],
       byosub,
       openclawDir: ocDir,
       fetchSecret: async () => cred.credential,
       logFn,
+      ...(claudeCliNativeHomeDir ? { claudeCliNativeHomeDir } : {}),
     });
 
-if (r.restored > 0) {
+    if (r.restored > 0) {
       // The byosub slot maps to the PROVIDERS-registry oauth provider so the
       // marker/log reflect the real subscription (marker-only for oauth, but the
       // label must be honest).
@@ -199,7 +209,7 @@ if (r.restored > 0) {
       applyByotState(slug, { slug, provider }, path.join(ocDir, "agents"));
     }
 
-return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0 };
+    return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0 };
   } catch (e) {
     logFn(`⚠ [byot-sync] oauth-store restore failed for ${slug}: ${(e as Error).message}`);
     return { restored: false, present: false };
@@ -287,6 +297,15 @@ async function syncStandardByotState(
   if (changed || restore.restored || patched) await actions.triggerSecretsReload();
 }
 
+async function syncOperatorByotState(
+  slug: string,
+  desired: DesiredByotState,
+  actions: SyncByotActions,
+): Promise<void> {
+  const restore = await restoreOauthIfNeeded(slug, desired, actions);
+  if (restore.restored) await actions.triggerSecretsReload();
+}
+
 // Shared (multi-tenant) pods route EACH customer-agent's anthropic through the
 // broker with its own per-customer token. Unlike builder/operator (one env gateway
 // token), the per-agent anthropic:default broker-token profile is the load-bearing
@@ -348,6 +367,9 @@ export async function syncByotForCustomer(
     return;
   }
 
-  if (isOp()) return;
+  if (isOp()) {
+    await syncOperatorByotState(slug, desired, actions);
+    return;
+  }
   await syncStandardByotState(slug, desired, actions);
 }

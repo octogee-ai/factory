@@ -324,7 +324,16 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
 describe("restoreByosubCredentials", () => {
   it("anthropic → materializes a claude-cli OAuth profile into the SQLite store, no auth.json file", async () => {
     const oc = mkTmp();
+    const home = mkTmp();
     const agentId = "octogee-a-coach";
+    const ssoCredential = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "claude-access-1",
+        refreshToken: "claude-refresh-1",
+        expiresAt: 1782648121333,
+        subscriptionType: "max",
+      },
+    });
     const item = {
       agentId,
       provider: "anthropic" as const,
@@ -333,13 +342,19 @@ describe("restoreByosubCredentials", () => {
     };
     const r = await restoreByosubCredentials({
       plan: [item],
-      fetchSecret: async () => "sk-ant-oat01-livetoken",
+      fetchSecret: async () => ssoCredential,
+      claudeCliNativeHomeDir: home,
     });
     expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
-    // No codex-home auth.json — the claude-cli credential lives only in the store.
+    // No codex-home auth.json — claude-cli uses the native Claude credential file.
     expect(
       fs.existsSync(path.join(oc, "agents", agentId, "agent", "codex-home", "auth.json")),
     ).toBe(false);
+    const nativeCredentialPath = path.join(home, ".claude", ".credentials.json");
+    expect(JSON.parse(fs.readFileSync(nativeCredentialPath, "utf-8"))).toEqual(
+      JSON.parse(ssoCredential),
+    );
+    expect(fs.statSync(nativeCredentialPath).mode & 0o777).toBe(0o600);
     const store = apReadFor(oc, agentId) as {
       version: number;
       profiles: Record<string, { type: string; provider: string; access: string }>;
@@ -348,8 +363,50 @@ describe("restoreByosubCredentials", () => {
     expect(store.profiles["anthropic:claude-cli"]).toMatchObject({
       type: "oauth",
       provider: "claude-cli",
-      access: "sk-ant-oat01-livetoken",
+      access: "claude-access-1",
     });
+  });
+
+  it("anthropic native restore fails loudly for legacy setup-token payloads", async () => {
+    const oc = mkTmp();
+    const home = mkTmp();
+    const agentId = "octogee-a-coach";
+    const r = await restoreByosubCredentials({
+      plan: [
+        {
+          agentId,
+          provider: "anthropic" as const,
+          secretName: "byosub-a-anthropic",
+          openclawDir: oc,
+        },
+      ],
+      fetchSecret: async () => "sk-ant-oat01-livetoken",
+      claudeCliNativeHomeDir: home,
+    });
+    expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
+    expect(fs.existsSync(path.join(home, ".claude", ".credentials.json"))).toBe(false);
+    expect(apReadFor(oc, agentId)).toBeNull();
+  });
+
+  it("anthropic without native restore keeps the store-only setup-token path", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const r = await restoreByosubCredentials({
+      plan: [
+        {
+          agentId,
+          provider: "anthropic" as const,
+          secretName: "byosub-a-anthropic",
+          openclawDir: oc,
+        },
+      ],
+      fetchSecret: async () => "sk-ant-oat01-livetoken",
+    });
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
+    const store = apReadFor(oc, agentId) as {
+      profiles: Record<string, { access: string }>;
+    };
+    expect(store.profiles["anthropic:claude-cli"].access).toBe("sk-ant-oat01-livetoken");
   });
 
   it("atomically writes auth.json (0600) into the agent codex-home, creating dirs", async () => {
