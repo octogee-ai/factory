@@ -416,12 +416,9 @@ else
     if [[ -n "$ING_IP" && "$ING_IP" != "None" ]]; then
       pass "$ING_NAME → $ING_HOST ($ING_IP)"
     else
-      # A `<none>` address is EXPECTED for a fleet sibling that shares one
-      # static IP with its main ingress (POST-BENDER-CLEANUP-SPEC §2.7:
-      # gateway-edge-fleet-ingress shares workspace-api-ip with
-      # gateway-edge-ingress; GCE merges them into one URL map, only the
-      # main ingress carries the LB address). Pass IFF a sibling ingress
-      # with the same static-ip-name DID get the address; fail otherwise.
+      # A `<none>` address can be healthy only for an intentionally secondary
+      # Ingress sharing a static IP with a sibling that already has the address.
+      # The steady-state edge should normally be octogee-edge-ingress.
       SIBLING_IP=$(echo "$INGRESSES" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i.get('status',{}).get('loadBalancer',{}).get('ingress',[{}])[0].get('ip','')) for i in d.get('items',[]) if i['metadata']['name']!='$ING_NAME' and i['metadata'].get('annotations',{}).get('kubernetes.io/ingress.global-static-ip-name','')=='$ING_STATICIP' and i.get('status',{}).get('loadBalancer',{}).get('ingress',[{}])[0].get('ip','')]" 2>/dev/null | head -1)
       if [[ -n "$ING_STATICIP" && -n "$SIBLING_IP" ]]; then
         pass "$ING_NAME → $ING_HOST (shared IP $SIBLING_IP via $ING_STATICIP — fleet sibling, expected)"
@@ -540,13 +537,12 @@ fi
 
 # ── 5d. Endpoint Health (HTTPS) ──────────────────────────────────────────────
 # Derive URLs from K8s Ingress resources — no hardcoded env-specific URLs.
-# One public host now (api.octogee.com / gateway-edge-ingress) fronts the
-# cluster API, the credential mint, and MM REST; WS pins to the home pod
-# via the fleet seam (POST-BENDER-CLEANUP-SPEC §2.7). The mattermost-ingress
-# is the IAP-gated admin path — a 302 to the Google login page is expected.
+# One consolidated public edge Ingress fronts the API, gateway-router, preview,
+# git, and MM REST surfaces. Gateway-local public traffic uses /g/<gatewayId>/*
+# and the router forwards to the selected gateway pod.
 set_section bootstrap
 header "5d. Endpoint Health"
-for INGRESS_NAME in gateway-edge-ingress mattermost-ingress; do
+for INGRESS_NAME in octogee-edge-ingress gateway-edge-ingress mattermost-ingress; do
   if ! kubectl get ingress "$INGRESS_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
     continue
   fi
@@ -572,6 +568,13 @@ for INGRESS_NAME in gateway-edge-ingress mattermost-ingress; do
   esac
   while IFS= read -r HOST; do
     [[ -z "$HOST" ]] && continue
+    if [[ "$INGRESS_NAME" == "octogee-edge-ingress" ]]; then
+      case "$HOST" in
+        git*) HEALTH_PATH="/" ;;
+        mattermost*) HEALTH_PATH="/api/v4/system/ping" ;;
+        *) HEALTH_PATH="/health" ;;
+      esac
+    fi
     URL="https://${HOST}${HEALTH_PATH}"
     PROBE=$(curl -sk -o /dev/null -w "%{http_code} %{redirect_url}" --max-time 5 "$URL" 2>/dev/null || echo "000 ")
     HTTP_CODE="${PROBE%% *}"
@@ -589,12 +592,15 @@ for INGRESS_NAME in gateway-edge-ingress mattermost-ingress; do
 done
 
 # ── 5d.b Mattermost credential mint ───────────────────────────────────────────
-# The mint (now on octogee-api, fronted by gateway-edge-ingress /
+# The mint (now on octogee-api, fronted by octogee-edge-ingress /
 # api[-test].octogee.com) is the only path that hands the user's PAT to the
 # browser. Unauthenticated POST must return 401 — proves the route is wired
 # through the Ingress allowlist to octogee-api. A 404 means the
 # /api/auth/* rule is missing or octogee-api isn't deployed.
-API_HOST=$(kubectl get ingress gateway-edge-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+API_HOST=$(kubectl get ingress octogee-edge-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+if [[ -z "$API_HOST" ]]; then
+  API_HOST=$(kubectl get ingress gateway-edge-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+fi
 if [[ -n "$API_HOST" ]]; then
   MINT_URL="https://${API_HOST}/api/auth/mattermost"
   MINT_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 -X POST "$MINT_URL" 2>/dev/null || echo "000")
@@ -644,8 +650,8 @@ fi
 # POST-BENDER-CLEANUP-SPEC §2.7: chat-proxy is gone as a separate container.
 # - MM REST (/api/v4/*) + credential mint (/api/auth/mattermost) → octogee-api
 #   (the mint route was preflighted in 5d.b above).
-# - MM WS bridge + OpenClaw WS + builder-shell → the gateway-edge sidecar of
-#   the gateway pod, reached via the fleet seam (/api/g/<gw>/*).
+# - MM WS bridge + OpenClaw WS + builder-shell → gateway-router /g/<gw>/*
+#   publicly, then the gateway-edge sidecar's internal /api/g/<gw>/* mount.
 set_section infra
 header "8. chat (gateway-edge sidecar + octogee-api)"
 # Iterate EVERY running gateway pod (cattle fleet: bender, default, …) and

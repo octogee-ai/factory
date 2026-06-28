@@ -154,6 +154,44 @@ describe("createMigrateCustomerHandler — happy path", () => {
     ]);
   });
 
+  it("cuts over directly after verify-target during blue/green migration because the public router is stable", async () => {
+    const calls: string[] = [];
+    const client = happyClient();
+    client.verifyTarget = vi.fn(async (input) => {
+      calls.push("verify-target");
+      return {
+        migrationId: input.migrationId,
+        slug: input.slug,
+        ready: true,
+        checks: {
+          customerDir: true,
+          coachWired: true,
+          mountMarked: true,
+          accountHealthy: true,
+        },
+      };
+    }) as MigrationClient["verifyTarget"];
+    const { deps } = makeDeps(
+      {
+        cutoverFirestore: vi.fn(async (_uid, toGatewayId) => {
+          calls.push(`cutover:${toGatewayId}`);
+        }),
+      },
+      client,
+    );
+    const handler = createMigrateCustomerHandler(deps);
+    const ctx = makeCtx();
+
+    const result = await handler(
+      mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green", source: "rollout-bluegreen" } }),
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls).toEqual(["verify-target", "cutover:gw-green"]);
+    expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).not.toContain("route-target:running");
+  });
+
   it("looks up the user's slug + current gatewayId from readUser, not from op.input", async () => {
     const readUser = vi.fn(async (_uid: string) => ({
       slug: "alice-from-firestore",

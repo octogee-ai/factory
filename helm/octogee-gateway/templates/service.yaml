@@ -5,9 +5,6 @@ metadata:
   name: octogee-gateway-{{ .Values.gatewayId }}
   labels:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
-  annotations:
-    cloud.google.com/backend-config: |
-      {"ports":{"9080":"preview-backend"}}
 spec:
   selector:
     app: octogee-gateway
@@ -32,13 +29,9 @@ spec:
     {{- end }}
   type: ClusterIP
 ---
-# Per-instance gateway-edge Service — the fleet seam. gateway-edge-fleet-
-# ingress (api.octogee.com) routes /api/g/<gatewayId>/* here so the
-# request lands on this gateway's pod. After the chat-proxy fold
-# (POST-BENDER-CLEANUP-SPEC §2.7) this single port (3001) carries the
-# HTTP locality routes AND the long-lived WS surfaces, so it references
-# the gateway-edge-backend BackendConfig (3600s timeout + draining) and
-# the NEG annotation the GCE Ingress needs.
+# Per-instance gateway-edge Service — internal target for the shared public
+# gateway-router and cluster-local gateway callers. Public GCLB/NEG wiring is
+# attached only to the stable gateway-router Service in the umbrella chart.
 apiVersion: v1
 kind: Service
 metadata:
@@ -46,9 +39,6 @@ metadata:
   labels:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/name: gateway-edge
-  annotations:
-    cloud.google.com/neg: '{"ingress":true}'
-    cloud.google.com/backend-config: '{"default":"gateway-edge-backend"}'
 spec:
   selector:
     app: octogee-gateway

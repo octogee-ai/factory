@@ -27,8 +27,9 @@ const BASE_RULES: IngressRule[] = [
     http: {
       paths: [
         { path: "/api/admin/gateways/*", pathType: "ImplementationSpecific", backend: { service: { name: "glm-controller", port: { name: "http" } } } },
+        { path: "/g/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-router", port: { name: "http" } } } },
         { path: "/api/*", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-api", port: { name: "http" } } } },
-        { path: "/health", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-edge", port: { name: "http" } } } },
+        { path: "/health", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-router", port: { name: "http" } } } },
       ],
     },
   },
@@ -44,7 +45,8 @@ const BASE_RULES: IngressRule[] = [
     host: PREVIEW_HOST,
     http: {
       paths: [
-        { path: "/health", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-gateway", port: { number: 9080 } } } },
+        { path: "/g/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-router", port: { name: "http" } } } },
+        { path: "/health", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-router", port: { name: "http" } } } },
       ],
     },
   },
@@ -114,40 +116,27 @@ function baseSyncOpts(k: FakeKubectl, gateways: FleetGateway[] = GATEWAYS) {
 }
 
 describe("apiFleetPaths", () => {
-  it("emits one /api/g/<id>/* path per gateway routed to the per-gateway gateway-edge Service", () => {
-    expect(apiFleetPaths(GATEWAYS, GATEWAY_EDGE_PORT)).toEqual([
-      { path: "/api/g/bender/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-edge-bender", port: { number: 3001 } } } },
-      { path: "/api/g/default/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-edge-default", port: { number: 3001 } } } },
-    ]);
+  it("emits no per-gateway public paths because /g/* is owned by the shared router", () => {
+    expect(apiFleetPaths(GATEWAYS, GATEWAY_EDGE_PORT)).toEqual([]);
   });
 
   it("is empty when there are no gateways", () => {
     expect(apiFleetPaths([], GATEWAY_EDGE_PORT)).toEqual([]);
   });
 
-  it("orders by gatewayId for deterministic output", () => {
-    const paths = apiFleetPaths([{ gatewayId: "zeta" }, { gatewayId: "alpha" }], GATEWAY_EDGE_PORT);
-    expect(paths.map((p) => p.path)).toEqual(["/api/g/alpha/*", "/api/g/zeta/*"]);
-  });
-
-  it("keeps arbitrary rollout instance ids routeable through the fleet seam", () => {
-    expect(apiFleetPaths([{ gatewayId: "bender-canary-2026" }], GATEWAY_EDGE_PORT)).toEqual([
-      { path: "/api/g/bender-canary-2026/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-edge-bender-canary-2026", port: { number: 3001 } } } },
-    ]);
+  it("does not mint new public paths for blue/green or canary instance ids", () => {
+    expect(apiFleetPaths([{ gatewayId: "bender-blue" }, { gatewayId: "bender-green" }, { gatewayId: "bender-canary-2026" }], GATEWAY_EDGE_PORT)).toEqual([]);
   });
 });
 
 describe("previewFleetPaths", () => {
-  it("emits one /g/<id>/* path per gateway routed to the per-gateway gateway Service", () => {
-    expect(previewFleetPaths(GATEWAYS, PREVIEW_PORT)).toEqual([
-      { path: "/g/bender/*", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-gateway-bender", port: { number: 9080 } } } },
-      { path: "/g/default/*", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-gateway-default", port: { number: 9080 } } } },
-    ]);
+  it("emits no per-gateway preview paths because /g/* is owned by the shared router", () => {
+    expect(previewFleetPaths(GATEWAYS, PREVIEW_PORT)).toEqual([]);
   });
 });
 
 describe("mergeFleetRules", () => {
-  it("inserts /api/g/* before the /api/* catch-all, in gatewayId order", () => {
+  it("preserves the static /g/* router path before the /api/* catch-all", () => {
     const merged = mergeFleetRules(BASE_RULES, {
       apiHost: API_HOST,
       previewHost: PREVIEW_HOST,
@@ -158,14 +147,13 @@ describe("mergeFleetRules", () => {
     const apiRule = merged.find((r) => r.host === API_HOST)!;
     expect(apiRule.http.paths.map((p) => p.path)).toEqual([
       "/api/admin/gateways/*",
-      "/api/g/bender/*",
-      "/api/g/default/*",
+      "/g/*",
       "/api/*",
       "/health",
     ]);
   });
 
-  it("appends /g/* to the preview host and leaves other hosts untouched", () => {
+  it("preserves the static /g/* preview router path and leaves other hosts untouched", () => {
     const merged = mergeFleetRules(BASE_RULES, {
       apiHost: API_HOST,
       previewHost: PREVIEW_HOST,
@@ -174,14 +162,13 @@ describe("mergeFleetRules", () => {
       previewPort: PREVIEW_PORT,
     });
     expect(merged.find((r) => r.host === PREVIEW_HOST)!.http.paths.map((p) => p.path)).toEqual([
+      "/g/*",
       "/health",
-      "/g/bender/*",
-      "/g/default/*",
     ]);
     expect(merged.find((r) => r.host === "git-test.octogee.com")!.http.paths.map((p) => p.path)).toEqual(["/*"]);
   });
 
-  it("inserts /g/* before the preview /* catch-all when the base preview host has one", () => {
+  it("keeps the static /g/* router path before the preview /* catch-all when the base preview host has one", () => {
     const baseWithPreviewCatchAll: IngressRule[] = BASE_RULES.map((rule) =>
       rule.host === PREVIEW_HOST
         ? {
@@ -203,8 +190,7 @@ describe("mergeFleetRules", () => {
       previewPort: PREVIEW_PORT,
     });
     const paths = merged.find((r) => r.host === PREVIEW_HOST)!.http.paths.map((p) => p.path);
-    expectPathBefore(paths, "/g/bender/*", "/*");
-    expectPathBefore(paths, "/g/default/*", "/*");
+    expectPathBefore(paths, "/g/*", "/*");
   });
 
   it("is a no-op on the rules when there are no gateways (base routes pass through)", () => {
@@ -249,8 +235,8 @@ describe("parseBaseRoutes", () => {
 });
 
 describe("syncEdgeIngress", () => {
-  it("server-side-applies the merged base+fleet rules under the cowboy field manager", async () => {
-    const k = fakeKubectl({});
+  it("server-side-applies the static base router rules under the cowboy field manager", async () => {
+    const k = fakeKubectl({ ingress: ok(ingressStdout([])) });
     const result = await syncEdgeIngress(baseSyncOpts(k));
 
     const apply = applyCall(k)!;
@@ -260,10 +246,9 @@ describe("syncEdgeIngress", () => {
     const manifest = JSON.parse(apply.stdin!) as { spec: { rules: IngressRule[] } };
     const apiRule = manifest.spec.rules.find((r) => r.host === API_HOST)!;
     const apiPaths = apiRule.http.paths.map((p) => p.path);
-    expectPathBefore(apiPaths, "/api/g/bender/*", "/api/*");
-    expectPathBefore(apiPaths, "/api/g/default/*", "/api/*");
+    expectPathBefore(apiPaths, "/g/*", "/api/*");
     const previewRule = manifest.spec.rules.find((r) => r.host === PREVIEW_HOST)!;
-    expect(previewRule.http.paths.map((p) => p.path)).toContain("/g/bender/*");
+    expect(previewRule.http.paths.map((p) => p.path)).toContain("/g/*");
     expect(result.changed).toBe(true);
   });
 

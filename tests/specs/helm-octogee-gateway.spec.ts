@@ -73,6 +73,10 @@ function containerBlock(dep: string, name: string): string {
   );
 }
 
+function selectorBlock(doc: string): string {
+  return doc.match(/^\s*selector:\s*\n([\s\S]*?)(?=^\s*(?:ports|type):)/m)?.[0] ?? "";
+}
+
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
   it("renders one Deployment named octogee-gateway-<gatewayId>", () => {
     const out = helmTemplate();
@@ -320,16 +324,16 @@ const out = helmTemplate();
 
   it("renders the per-instance Service octogee-gateway-<gatewayId>", () => {
     const out = helmTemplate();
-    const svc = findDoc(out, "Service", "octogee-gateway-default");
-    expect(svc).not.toBeNull();
-    expect(svc).toMatch(/gateway-instance:\s*default/);
+    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    expect(svc).not.toBe("");
+    expect(selectorBlock(svc)).toMatch(/gateway-instance:\s*default/);
   });
 
   it("renders the gateway-edge-<gatewayId> alias Service", () => {
     const out = helmTemplate();
-    const svc = findDoc(out, "Service", "gateway-edge-default");
-    expect(svc).not.toBeNull();
-    expect(svc).toMatch(/gateway-instance:\s*default/);
+    const svc = findDoc(out, "Service", "gateway-edge-default") ?? "";
+    expect(svc).not.toBe("");
+    expect(selectorBlock(svc)).toMatch(/gateway-instance:\s*default/);
   });
 
   it("exposes the runner-metrics port (9092) on the gateway container + Service (scraped by the octogee-gateway ClusterPodMonitoring)", () => {
@@ -880,17 +884,16 @@ const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default
 });
 
 describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
-  it("backend-config (the NEG seam) covers ONLY the ingress-facing preview port", () => {
+  it("does not attach public NEG or BackendConfig annotations to per-instance Services", () => {
     const out = helmTemplate();
-    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
-    expect(svc).toMatch(/cloud\.google\.com\/backend-config/);
-    expect(svc).toMatch(/9080":"preview-backend"/);
-    // Fleet-control (3003) is reached over internal ClusterIP DNS only (Cowboy +
-    // migrate-customer op). It must NOT be ingress-backed or GKE mints a wasted
-    // per-gateway NEG for it. This is the durable moat against internal ports
-    // silently re-acquiring NEGs (FLEET-CONTROL-NEG-SHED-SPEC).
-    expect(svc).not.toMatch(/octogee-gateway-fleet-control/);
-    expect(svc).not.toMatch(/"3003":/);
+    const gatewaySvc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    const edgeSvc = findDoc(out, "Service", "gateway-edge-default") ?? "";
+    for (const svc of [gatewaySvc, edgeSvc]) {
+      expect(svc).not.toMatch(/cloud\.google\.com\/neg/);
+      expect(svc).not.toMatch(/cloud\.google\.com\/backend-config/);
+      expect(svc).not.toMatch(/octogee-gateway-fleet-control/);
+      expect(svc).not.toMatch(/"3003":/);
+    }
   });
 
   it("still exposes the fleet-control port on the Service for in-cluster callers", () => {

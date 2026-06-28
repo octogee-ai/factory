@@ -24,6 +24,7 @@ import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
+import { createGatewayRouter } from "./public-router.js";
 
 import {
   chatProxyHandleRequest,
@@ -199,6 +200,25 @@ export function dispatchGatewayEdgeRequest(
 }
 
 if (process.env.NODE_ENV !== "test") {
+  if (process.env.GATEWAY_EDGE_MODE === "router") {
+    if (!process.env.GATEWAY_ROUTER_PREVIEW_HOST) {
+      logger.error("FATAL: GATEWAY_ROUTER_PREVIEW_HOST is required in gateway-router mode");
+      process.exit(1);
+    }
+    const server = createGatewayRouter({
+      namespace: process.env.K8S_NAMESPACE || "default",
+      previewHost: process.env.GATEWAY_ROUTER_PREVIEW_HOST,
+      log: (message, meta) => logger.error(message, meta),
+    });
+    server.listen(PORT, () => {
+      logger.info(`gateway-router boot — listening on port ${PORT}`, {
+        port: PORT,
+        namespace: process.env.K8S_NAMESPACE || "default",
+        previewHost: process.env.GATEWAY_ROUTER_PREVIEW_HOST || "",
+        sha: process.env.BUILD_SHA || "unknown",
+      });
+    });
+  } else {
   const env = process.env.K8S_NAMESPACE || process.env.NODE_ENV || "development";
   const isProd = env !== "development" && env !== "local" && env !== "test";
   const { missing } = validateRequiredEnv(process.env, {
@@ -243,6 +263,7 @@ const server = http.createServer((req, res) =>
       err: err instanceof Error ? err.message : String(err),
     });
   });
+  }
 }
 
 export default app;

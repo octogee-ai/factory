@@ -7,6 +7,13 @@ port: 3001
 
 serviceAccountName: octogee-gateway
 
+router:
+  enabled: true
+  serviceName: gateway-router
+  replicas: 2
+  port: 3001
+  previewHost: preview.octogee.com
+
 # No-shell platform CronJobs run under their own least-privilege KSA. Its
 # projected octogee-api-audience token tenant-binds the call (kind=platform),
 # so the crons no longer depend on the shared internal-service-key.
@@ -47,20 +54,13 @@ ingress:
   host: api.octogee.com
   staticIpName: workspace-api-ip
   certName: workspace-api-cert
-  # Service the api ingress backs onto. Defaults to the alias
-  # Service `gateway-edge` (rendered by this sub-chart, selects every
-  # gateway pod via app=octogee-gateway). The alias survives fresh
-  # clusters and any moment between per-instance releases. Override
-  # to a per-instance Service like `gateway-edge-canary` if an env
-  # wants to pin the data plane to a specific gateway pod.
-  targetService: gateway-edge
+  # Gateway-local public paths route to the stable gateway-router Service;
+  # /api/* remains the platform octogee-api catch-all.
+  gatewayRouterService: gateway-router
 
 # RETIRED. This was a sibling Ingress on the same host/IP as `ingress`,
-# betting GCE would merge two Ingresses into one URL map — it does not, so
-# the sibling never provisioned (no address) and all `/api/g/*` 404'd.
-# Cowboy now patches the per-gateway `/api/g/<gatewayId>/*` paths directly
-# onto the single `gateway-edge-ingress` (glm-controller/src/fleet-ingress.ts).
-# Keep disabled; revisit only if GKE ever supports Ingress merging.
+# betting GCE would merge two Ingresses into one URL map — it does not.
+# Gateway-local public traffic is now one static /g/* rule to gateway-router.
 gatewayEdgeFleetIngress:
   enabled: false
 

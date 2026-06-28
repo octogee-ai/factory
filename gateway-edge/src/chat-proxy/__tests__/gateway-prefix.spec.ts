@@ -34,7 +34,7 @@ describe("stripGatewayPrefix", () => {
     );
   });
 
-  it("only strips /api/g/<gw> as a leading segment — not /g/<gw>/ (legacy) or mid-path", () => {
+  it("only strips the internal /api/g/<gw> sidecar prefix — not public /g/<gw>/ or mid-path", () => {
     
     expect(stripGatewayPrefix("/g/gw-bender/api/x")).toBe("/g/gw-bender/api/x");
     expect(stripGatewayPrefix("/something/api/g/gw-x/api")).toBe("/something/api/g/gw-x/api");

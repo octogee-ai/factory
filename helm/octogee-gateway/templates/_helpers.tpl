@@ -1,9 +1,9 @@
 {{/*
 Common labels for the gateway pod's resources.
 
-`gateway-instance` is the per-release identity that selects this
-gateway's per-instance Services — the api (`/api/g/<id>/*`) and preview
-(`/g/<id>/*`) Ingress paths Cowboy patches route to them by name.
+`gateway-instance` is the per-release identity that selects this gateway's
+per-instance Services. The shared public gateway-router forwards `/g/<id>/*`
+traffic to these internal Services by name.
 */}}
 {{- define "octogee-gateway.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}

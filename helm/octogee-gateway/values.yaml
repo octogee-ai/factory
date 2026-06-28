@@ -8,9 +8,9 @@
 # `bender`, `canary`). Written to Firestore `gateways/{gatewayId}`
 # heartbeats and matched against customer `provisioning.openclaw.gatewayId`.
 # Also forms the per-instance K8s resource names
-# (`octogee-gateway-<gatewayId>`, `gateway-edge-<gatewayId>`) that the
-# umbrella's api (`/api/g/<id>/*`) and preview (`/g/<id>/*`) Ingress paths
-# route to. Must be a lowercase DNS-safe id that fits every rendered suffix.
+# (`octogee-gateway-<gatewayId>`, `gateway-edge-<gatewayId>`) that the shared
+# gateway-router forwards public `/g/<id>/*` requests to. Must be a lowercase
+# DNS-safe id that fits every rendered suffix.
 gatewayId: ""
 
 # Dedicated builder/operator owner slug. Shared gateways leave this empty.

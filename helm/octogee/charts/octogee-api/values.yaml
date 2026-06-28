@@ -34,7 +34,7 @@ env:
   # Single public host (POST-BENDER-CLEANUP-SPEC §2.7). API_PUBLIC_URL is
   # returned by the credential mint (mmUrl) + the openclaw/builder-shell
   # ticket endpoints as the WS base; the browser pins WS to the home pod
-  # via /api/g/<gw>/. MM_INTERNAL_URL is the in-cluster Mattermost the REST
+  # via /g/<gw>/. MM_INTERNAL_URL is the in-cluster Mattermost the REST
   # proxy (/api/v4/*) forwards to.
   API_PUBLIC_URL: "https://api.octogee.com"
   MM_INTERNAL_URL: "http://mattermost.octogee.svc.cluster.local:8065"

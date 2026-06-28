@@ -229,7 +229,7 @@ const HELM_RECOVERY_STALE_MS = parseNonNegativeInt(
   15 * 60 * 1000,
 );
 
-// One shared edge ingress carries both the api host (/api/g/<id>/* locality
+// One shared edge ingress carries the api host (/g/<id>/* gateway-local public
 // routes) and the preview host (/g/<id>/*). Cowboy owns its .spec.rules; the
 // umbrella chart publishes the static base routes via the EDGE_ROUTES_CONFIGMAP
 // ConfigMap and owns only the Ingress object + metadata.

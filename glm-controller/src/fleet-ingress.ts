@@ -7,10 +7,9 @@ export interface FleetGateway {
 // Ingress spec.rules[].http.paths[] shape. Cowboy is the sole writer of the
 // octogee-edge-ingress .spec.rules (an atomic server-side-apply field): it
 // reads the static base routes the umbrella chart publishes via the
-// octogee-edge-routes ConfigMap, appends the per-gateway locality paths, and
-// applies the merged rule set under its own field manager. Helm owns the
-// Ingress object + metadata but never .spec.rules, so the umbrella deploy and
-// Cowboy no longer fight over ownership.
+// octogee-edge-routes ConfigMap and applies them under its own field manager.
+// Helm owns the Ingress object + metadata but never .spec.rules, so the
+// umbrella deploy and Cowboy no longer fight over ownership.
 export interface IngressBackendPort {
   number?: number;
   name?: string;
@@ -28,29 +27,17 @@ export interface IngressRule {
 }
 
 export function apiFleetPaths(
-  gateways: ReadonlyArray<FleetGateway>,
-  gatewayEdgePort: number,
+  _gateways: ReadonlyArray<FleetGateway>,
+  _gatewayEdgePort: number,
 ): IngressPath[] {
-  return [...gateways]
-    .sort((a, b) => a.gatewayId.localeCompare(b.gatewayId))
-    .map((gw) => ({
-      path: `/api/g/${gw.gatewayId}/*`,
-      pathType: "ImplementationSpecific",
-      backend: { service: { name: `gateway-edge-${gw.gatewayId}`, port: { number: gatewayEdgePort } } },
-    }));
+  return [];
 }
 
 export function previewFleetPaths(
-  gateways: ReadonlyArray<FleetGateway>,
-  previewPort: number,
+  _gateways: ReadonlyArray<FleetGateway>,
+  _previewPort: number,
 ): IngressPath[] {
-  return [...gateways]
-    .sort((a, b) => a.gatewayId.localeCompare(b.gatewayId))
-    .map((gw) => ({
-      path: `/g/${gw.gatewayId}/*`,
-      pathType: "ImplementationSpecific",
-      backend: { service: { name: `octogee-gateway-${gw.gatewayId}`, port: { number: previewPort } } },
-    }));
+  return [];
 }
 
 export interface MergeFleetRulesOpts {
@@ -200,8 +187,8 @@ export interface SyncEdgeIngressOpts {
   log: (msg: string) => void;
 }
 
-// Reconcile the edge ingress's full rule set to base + per-gateway routes and
-// claim sole ownership of .spec.rules via server-side apply. Idempotent: SSA is
+// Reconcile the edge ingress's static gateway-router rule set and claim sole
+// ownership of .spec.rules via server-side apply. Idempotent: SSA is
 // a server-side no-op when nothing changed, so this is safe to run every tick.
 // Defers (does not apply) when the base-routes ConfigMap or the Ingress object
 // isn't present yet — Helm owns both, and applying a rules-only object before

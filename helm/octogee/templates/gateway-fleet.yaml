@@ -7,23 +7,22 @@
 #     callers like chat-proxy fallback resolver rely on it)
 #   - gateway-egress NetworkPolicy (one policy covers every gateway pod
 #     via the `app: octogee-gateway` selector)
-#   - preview Ingress + cert + BackendConfig (when not consolidated,
-#     points at alias Service; when consolidated, Cowboy writes
-#     /g/<gatewayId>/* paths to per-instance Services)
+#   - preview cert + BackendConfig resources; the consolidated edge Ingress
+#     sends /g/<gatewayId>/* to the shared gateway-router Service.
 #
 # Fleet-control (3003) is internal-only since FLEET-CONTROL-NEG-SHED:
 # the controller reaches gateways over ClusterIP DNS, so there is no
-# fleet-control Ingress here. Per-instance api/preview paths are
-# JSON-patch-owned by Cowboy; `Values.gatewayFleet.instances` is no
-# longer consumed by any template.
+# fleet-control Ingress here. Public gateway-local api/preview paths go through
+# the shared gateway-router; `Values.gatewayFleet.instances` is no longer
+# consumed by any template.
 
 {{- if .Values.gatewayFleet.aliasService.enabled }}
 ---
 # Legacy alias Service — selects every gateway pod, round-robins.
 # Remaining callers: chat-proxy gateway-resolver fallback, mattermost
-# allowedInternalConnections. The api[-test].octogee.com (gateway-edge
-# chart) and preview Ingress paths use per-instance Services and bypass
-# this alias; fleet-control reaches gateways over internal ClusterIP DNS.
+# allowedInternalConnections, and internal preview compatibility. Public
+# gateway-local traffic uses gateway-router; fleet-control reaches gateways over
+# internal ClusterIP DNS.
 apiVersion: v1
 kind: Service
 metadata:

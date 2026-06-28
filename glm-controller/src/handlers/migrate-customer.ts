@@ -157,7 +157,9 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         },
         {
           client,
-          cutoverFirestore: deps.cutoverFirestore,
+          cutoverFirestore: async (uid, toGatewayId, slug) => {
+            await deps.cutoverFirestore(uid, toGatewayId, slug);
+          },
           log: deps.log,
           reportStep: async (rep: ReportedStep) => {
             const step = reportedToOperationStep(rep, deps.now());

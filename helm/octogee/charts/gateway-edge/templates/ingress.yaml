@@ -18,11 +18,8 @@ spec:
     type: HTTP
     requestPath: {{ .Values.healthCheck.path }}
     port: {{ .Values.healthCheck.port }}
-  # 3600s + connectionDraining: gateway-edge now serves the long-lived
-  # WebSocket surfaces (MM WS bridge, OpenClaw WS, builder-shell) folded
-  # in from chat-proxy (POST-BENDER-CLEANUP-SPEC §2.7). The per-instance
-  # gateway-edge-<instance> Services (fleet seam) reference this backend,
-  # so the timeout governs WS connections routed via /api/g/<gw>/*. A long
+  # 3600s + connectionDraining: gateway-router carries long-lived WebSocket
+  # surfaces and forwards them to the selected gateway-edge sidecar. A long
   # timeout is harmless for the HTTP locality routes (they complete fast).
   timeoutSec: 3600
   connectionDraining:
@@ -48,23 +45,13 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
-          {{- /* Default to the alias Service `gateway-edge` (rendered
-              by this sub-chart, selects every gateway pod via
-              app=octogee-gateway). The alias survives fresh clusters
-              and any moment between per-instance releases — the
-              per-instance `gateway-edge-<instance>` Services from
-              helm/octogee-gateway/ aren't always present. Override to
-              a per-instance Service when an env wants to pin the
-              data plane to a specific pod. */}}
-          {{- $svc := .Values.ingress.targetService | default "gateway-edge" }}
+          {{- $routerSvc := .Values.ingress.gatewayRouterService | default "gateway-router" }}
           {{- $glm := .Values.ingress.glmService | default "glm-controller" }}
           {{- $api := .Values.ingress.octogeeApiService | default "octogee-api" }}
           {{- /* Cluster API default: every bare /api/* request lands on
               octogee-api, which mounts the full cluster route bundle via
-              mountClusterRoutes(). Gateway-local locality surfaces must use
-              the per-instance /api/g/<gatewayId>/* seam; the gateway-edge
-              alias Service round-robins across standard gateway pods and is
-              never a correct target for bare workspace/git or preview calls.
+              mountClusterRoutes(). Gateway-local public surfaces use /g/*
+              and are forwarded by the stable gateway-router Service.
 
               GCE evaluates path rules in document order. The more-specific
               glm-controller admin routes below must stay before the /api/*
@@ -185,10 +172,18 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
+          # ── /g/* gateway-local public router ───────────────────
+          - path: /g/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $routerSvc }}
+                port:
+                  name: http
           # ── /api/* cluster default → octogee-api ────────────────
           # octogee-api serves the full cluster API bundle. Gateway-local
-          # routes are intentionally not carved out here; callers must use
-          # /api/g/<gatewayId>/* so they reach the correct gateway pod.
+          # routes are intentionally not carved out here; callers use
+          # /g/<gatewayId>/* so they reach the correct gateway pod.
           - path: /api/*
             pathType: ImplementationSpecific
             backend:
@@ -200,7 +195,7 @@ spec:
             pathType: ImplementationSpecific
             backend:
               service:
-                name: {{ $svc }}
+                name: {{ $routerSvc }}
                 port:
                   name: http
 {{- end }}
