@@ -12,6 +12,7 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  OPERATOR_GATEWAY_RESERVATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
 import {
   addAdminCustomerRoutes,
@@ -150,9 +151,11 @@ function addAdminFleetEventRoute(router: Router, deps: HttpServerDeps): void {
     };
 
     writeSseEvent(res, "ready", { at: Date.now() });
+    watch("users");
     watch("gateways");
     watch(GLM_GATEWAYS_COLLECTION);
     watch(GLM_OPERATIONS_COLLECTION);
+    watch(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION);
 
     req.on("close", close);
   });

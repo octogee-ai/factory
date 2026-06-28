@@ -1,6 +1,7 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHttpServer, type HttpServerDeps } from "../http-server";
+import { OPERATOR_GATEWAY_RESERVATIONS_COLLECTION } from "@octogee/shared/types/glm";
 
 interface FakeStore {
   users: Record<string, Record<string, unknown>>;
@@ -370,7 +371,26 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain("event: ready");
     expect(res.text).toContain("event: changed");
-    expect(res.text).toContain('"collection":"gateways"');
+    expect(res.text).toMatch(/"collection":"(users|gateways|glmGateways|glmOperations|operatorGatewayReservations)"/);
+  });
+
+  it("subscribes fleet invalidation events to admin data dependencies", async () => {
+    const db = buildDb(store) as { collection: (name: string) => unknown };
+    const originalCollection = db.collection.bind(db);
+    const watchedCollections: string[] = [];
+    db.collection = (name: string) => {
+      watchedCollections.push(name);
+      return originalCollection(name);
+    };
+    const app = createHttpServer(buildDeps(store, { db: db as any }));
+
+    const res = await request(app)
+      .get("/api/admin/fleet-events?once=1")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(watchedCollections).toContain("users");
+    expect(watchedCollections).toContain(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION);
   });
 
   it("serves /api/admin/gateways with populated fleet stats", async () => {

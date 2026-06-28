@@ -68,6 +68,13 @@ resources:
 http:
   port: 8080
 
+backendConfig:
+  name: glm-controller-backend
+  timeoutSec: 3600
+  healthCheck:
+    path: /healthz
+    port: 8080
+
 activationLease:
   sweepMs: "30000"
 

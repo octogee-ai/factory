@@ -5,6 +5,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     app: glm-controller
+  annotations:
+    cloud.google.com/backend-config: '{"default":"{{ .Values.backendConfig.name | default "glm-controller-backend" }}"}'
+    cloud.google.com/neg: '{"ingress":true}'
 spec:
   selector:
     app: glm-controller
