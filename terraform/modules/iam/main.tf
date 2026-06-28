@@ -150,12 +150,10 @@ resource "google_project_iam_member" "glm_controller_secretmanager_admin" {
   member  = "serviceAccount:${google_service_account.glm_controller.email}"
 }
 
-# Narrow custom role for per-gateway GSA teardown. NOT serviceAccountAdmin:
-# Cowboy never creates SAs nor mutates their IAM beyond delete (deleting the SA
-# removes its own Workload-Identity binding). Project-level setIamPolicy is
-# deliberately withheld — too broad; per-gateway GSAs should carry resource-
-# scoped roles so a delete strands nothing. See
-# GATEWAY-DECOMMISSION-TEARDOWN-SPEC §10 OQ2.
+# Narrow project-level role for dynamic per-gateway GSA teardown. NOT
+# serviceAccountAdmin: Cowboy can delete service accounts such as
+# octogee-gw-<gatewayId>, but cannot mutate IAM policy on arbitrary service
+# accounts at project scope.
 resource "google_project_iam_custom_role" "gateway_sa_teardown" {
   role_id     = "octogeeGatewayServiceAccountTeardown"
   title       = "Octogee Gateway Service Account Teardown"
@@ -171,6 +169,27 @@ resource "google_project_iam_member" "glm_controller_gateway_sa_teardown" {
   project = var.project_id
   role    = google_project_iam_custom_role.gateway_sa_teardown.id
   member  = "serviceAccount:${google_service_account.glm_controller.email}"
+}
+
+# Resource-scoped policy mutation for the one shared gateway pod GSA. Cowboy
+# appends Workload Identity members for generated operator KSAs here before
+# Helm creates a pod, without getting setIamPolicy on octogee-api,
+# firebase-deployer, glm-controller, or any other project service account.
+resource "google_project_iam_custom_role" "gateway_sa_policy_binding" {
+  role_id     = "octogeeGatewayServiceAccountPolicyBinding"
+  title       = "Octogee Gateway Service Account Policy Binding"
+  description = "Manage Workload Identity bindings on the gateway pod GSA only (Cowboy)."
+  project     = var.project_id
+  permissions = [
+    "iam.serviceAccounts.getIamPolicy",
+    "iam.serviceAccounts.setIamPolicy",
+  ]
+}
+
+resource "google_service_account_iam_member" "glm_controller_gateway_sa_policy_binding" {
+  service_account_id = google_service_account.gateway.name
+  role               = google_project_iam_custom_role.gateway_sa_policy_binding.id
+  member             = "serviceAccount:${google_service_account.glm_controller.email}"
 }
 
 # ── Cloud Functions runtime SA: Firebase Auth read ──────────────────────────

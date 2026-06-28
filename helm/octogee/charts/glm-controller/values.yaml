@@ -14,6 +14,11 @@ gcpServiceAccount: ""
 # access to gateway token secrets. Per-env values.yaml sets the env-suffixed GSA.
 gatewayServiceAccount: ""
 
+# GKE Workload Identity pool project. Test and prod share the octogee GKE
+# cluster, so TEST must still emit serviceAccount:octogee.svc.id.goog[...] IAM
+# members even though its runtime Google project is octogee-test.
+workloadIdentityProject: ""
+
 # Path inside the controller image where the standalone per-instance
 # gateway chart is baked at build time (see glm-controller/Dockerfile,
 # which COPYs helm/octogee-gateway → /charts/octogee-gateway). The

@@ -2,8 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { startReconciler } from "../index";
 import type { HelmInstancesMap } from "@octogee/shared/types/glm";
 
+const TEST_GATEWAY_GSA = "octogee-gateway@octogee.iam.gserviceaccount.com";
+
 interface FakeSnapshot {
   docs: Array<{ id?: string; data: () => unknown }>;
+}
+
+function setGatewayServiceAccountEnv(): () => void {
+  const original = process.env.GATEWAY_SERVICE_ACCOUNT;
+  process.env.GATEWAY_SERVICE_ACCOUNT = TEST_GATEWAY_GSA;
+  return () => {
+    if (original === undefined) {
+      delete process.env.GATEWAY_SERVICE_ACCOUNT;
+    } else {
+      process.env.GATEWAY_SERVICE_ACCOUNT = original;
+    }
+  };
 }
 
 function makeFakeDb(args: {
@@ -221,6 +235,7 @@ await vi.advanceTimersByTimeAsync(20_000);
   });
 
   it("passes builderSlug from desired state through to helm upsert", async () => {
+    const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const helm = makeFakeHelm({
@@ -249,6 +264,7 @@ await vi.advanceTimersByTimeAsync(20_000);
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
       log,
       reconcileRetryMs: 5_000,
+      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
     });
 
     snapCbs[0]();
@@ -260,6 +276,7 @@ await vi.advanceTimersByTimeAsync(20_000);
       expect.objectContaining({ builderSlug: "eggman" }),
     );
     stop();
+    restoreGatewayServiceAccount();
   });
 
   it("runs a follow-up tick when desired state changes during an in-flight reconcile", async () => {
@@ -746,6 +763,56 @@ beforeEach(() => {
     stop();
   });
 
+  it("ensures generated operator KSA Workload Identity before helm upsert", async () => {
+    const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const ensureGatewayWorkloadIdentity = vi.fn(async () => undefined);
+    const helm = makeFakeHelm({
+      upsertInstance: async () => undefined,
+    });
+    const db = makeFakeDb({
+      glmGateways: [
+        {
+          gatewayId: "bender-green",
+          imageRepository: "repo",
+          imageTag: "abc",
+          desiredStatus: "running",
+          createdBy: "ci",
+          profile: "operator",
+          ownerUid: "uid-chris",
+          serviceAccountName: "octogee-gw-bender-green",
+          serviceAccount: { create: true },
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      reconcileRetryMs: 5_000,
+      ensureGatewayWorkloadIdentity,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(ensureGatewayWorkloadIdentity).toHaveBeenCalledWith({
+      serviceAccountName: "octogee-gw-bender-green",
+    });
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+    expect(ensureGatewayWorkloadIdentity.mock.invocationCallOrder[0]).toBeLessThan(
+      helm.upsertInstance.mock.invocationCallOrder[0],
+    );
+    stop();
+    restoreGatewayServiceAccount();
+  });
+
   it("STILL upserts when the operator changes the desired imageTag (operator-driven PROD rollout via promote-gateway.ts)", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
@@ -984,6 +1051,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
       log: vi.fn(),
       reconcileRetryMs: 5_000,
+      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
     });
 
     snapCbs[0]();
@@ -1036,6 +1104,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
       log: vi.fn(),
       reconcileRetryMs: 5_000,
+      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
     });
 
     snapCbs[0]();
@@ -1087,6 +1156,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
       log: vi.fn(),
       reconcileRetryMs: 5_000,
+      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
     });
 
     snapCbs[0]();
@@ -1151,6 +1221,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
   });
 
   it("refreshes a platform-owned ready record for available operator gateways", async () => {
+    const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
     const snapCbs: Array<() => void> = [];
     const gatewayDocs: Record<string, Record<string, unknown>> = {};
     const helm = makeFakeHelm({
@@ -1190,6 +1261,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
       log: vi.fn(),
       reconcileRetryMs: 5_000,
+      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
     });
 
     snapCbs[0]();
@@ -1210,6 +1282,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     });
     expect(gatewayDocs["op-canary"]).not.toHaveProperty("lastHeartbeatAt");
     stop();
+    restoreGatewayServiceAccount();
   });
 
   it("also refreshes the ready record (live SHA) for available STANDARD gateways", async () => {
@@ -1272,6 +1345,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
   });
 
   it("recovers a running operator add-gateway op once the reconciler sees the deployment ready", async () => {
+    const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
     const snapCbs: Array<() => void> = [];
     const gatewayDocs: Record<string, Record<string, unknown>> = {};
     const glmOperations: Record<string, Record<string, unknown>> = {
@@ -1332,6 +1406,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
       log,
       reconcileRetryMs: 5_000,
+      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
     });
 
     snapCbs[0]();
@@ -1358,6 +1433,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       expect.stringContaining("recovered operator add-gateway from ready deployment"),
     );
     stop();
+    restoreGatewayServiceAccount();
   });
 });
 

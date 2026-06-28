@@ -1,10 +1,23 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveGatewayImageRepository, PROFILE_IMAGE_NAME } from "../gateway-profiles";
 import { buildInstancesMap, buildHelmTargetMap, diffInstancesMap } from "../reconcile-plan";
 import type { GatewayDesiredState } from "@octogee/shared/types/glm";
 
 const STD_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 const OPERATOR_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
+const ORIGINAL_GATEWAY_SERVICE_ACCOUNT = process.env.GATEWAY_SERVICE_ACCOUNT;
+
+beforeEach(() => {
+  process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
+});
+
+afterEach(() => {
+  if (ORIGINAL_GATEWAY_SERVICE_ACCOUNT === undefined) {
+    delete process.env.GATEWAY_SERVICE_ACCOUNT;
+  } else {
+    process.env.GATEWAY_SERVICE_ACCOUNT = ORIGINAL_GATEWAY_SERVICE_ACCOUNT;
+  }
+});
 
 function mkDesired(o: Partial<GatewayDesiredState>): GatewayDesiredState {
   return {

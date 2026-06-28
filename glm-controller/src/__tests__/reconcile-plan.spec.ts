@@ -1,5 +1,5 @@
 /* eslint-disable sonarjs/no-hardcoded-ip -- apiserver egress CIDR fixtures */
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildHelmTargetMap,
   buildInstancesMap,
@@ -12,6 +12,21 @@ import type { GatewayDesiredState, HelmInstancesMap } from "@octogee/shared/type
 import type { SizingTier } from "@octogee/shared/types/sizing";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+const ORIGINAL_GATEWAY_SERVICE_ACCOUNT = process.env.GATEWAY_SERVICE_ACCOUNT;
+const GATEWAY_GSA = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
+const WORKLOAD_IDENTITY_ANNOTATION = "iam.gke.io/gcp-service-account";
+
+beforeEach(() => {
+  process.env.GATEWAY_SERVICE_ACCOUNT = GATEWAY_GSA;
+});
+
+afterEach(() => {
+  if (ORIGINAL_GATEWAY_SERVICE_ACCOUNT === undefined) {
+    delete process.env.GATEWAY_SERVICE_ACCOUNT;
+  } else {
+    process.env.GATEWAY_SERVICE_ACCOUNT = ORIGINAL_GATEWAY_SERVICE_ACCOUNT;
+  }
+});
 
 function mkDesired(overrides: Partial<GatewayDesiredState>): GatewayDesiredState {
   return {
@@ -231,19 +246,48 @@ describe("buildInstancesMap", () => {
       }),
     ]);
     expect(map.bender.serviceAccountName).toBe("octogee-gw-bender");
-    expect(map.bender.serviceAccount).toEqual({ create: true });
+    expect(map.bender.serviceAccount).toEqual({
+      create: true,
+      annotations: {
+        [WORKLOAD_IDENTITY_ANNOTATION]: GATEWAY_GSA,
+      },
+    });
   });
 
-  it("does not invent a Workload Identity annotation for a generated operator ServiceAccount", () => {
+  it("binds a generated operator ServiceAccount to the configured gateway Workload Identity GSA", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender-canary-2026",
         profile: "operator",
+        ownerUid: "uid-chris",
         serviceAccountName: "octogee-gw-bender-canary-2026",
         serviceAccount: { create: true },
       }),
     ]);
-    expect(map["bender-canary-2026"].serviceAccount).toEqual({ create: true });
+    expect(map["bender-canary-2026"].serviceAccount).toEqual({
+      create: true,
+      annotations: {
+        [WORKLOAD_IDENTITY_ANNOTATION]: GATEWAY_GSA,
+      },
+    });
+    expect(map["bender-canary-2026"].operatorAccess).toMatchObject({
+      shellsEnabled: true,
+      platformMetadataEgress: true,
+    });
+  });
+
+  it("fails loudly when a generated operator ServiceAccount has no configured gateway GSA", () => {
+    delete process.env.GATEWAY_SERVICE_ACCOUNT;
+    expect(() =>
+      buildInstancesMap([
+        mkDesired({
+          gatewayId: "bender-canary-2026",
+          profile: "operator",
+          serviceAccountName: "octogee-gw-bender-canary-2026",
+          serviceAccount: { create: true },
+        }),
+      ]),
+    ).toThrow(/GATEWAY_SERVICE_ACCOUNT/);
   });
 
   it("enables metadata egress for a Workload-Identity-backed generated operator ServiceAccount", () => {

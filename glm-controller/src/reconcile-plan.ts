@@ -94,7 +94,52 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
     gatewayClass === "operator"
       ? d.operatorAccess ?? defaultOperatorGatewayAccess(d.ownerUid)
       : d.operatorAccess;
-  return { serviceAccountName, serviceAccount, operatorAccess };
+  return {
+    serviceAccountName,
+    serviceAccount: withGeneratedOperatorWorkloadIdentity(
+      d,
+      gatewayClass,
+      serviceAccountName,
+      serviceAccount,
+    ),
+    operatorAccess,
+  };
+}
+
+function configuredGatewayServiceAccount(): string {
+  const serviceAccount = process.env.GATEWAY_SERVICE_ACCOUNT?.trim();
+  if (!serviceAccount) {
+    throw new Error(
+      "GATEWAY_SERVICE_ACCOUNT is required to render generated operator gateway Workload Identity",
+    );
+  }
+  return serviceAccount;
+}
+
+function withGeneratedOperatorWorkloadIdentity(
+  d: GatewayDesiredState,
+  gatewayClass: ReturnType<typeof resolveGatewayClass>,
+  serviceAccountName: string | undefined,
+  serviceAccount: HelmInstanceValue["serviceAccount"],
+): HelmInstanceValue["serviceAccount"] {
+  if (
+    gatewayClass !== "operator" ||
+    serviceAccountName !== operatorGatewayServiceAccountName(d.gatewayId) ||
+    serviceAccount?.create !== true
+  ) {
+    return serviceAccount;
+  }
+  const existing = serviceAccount.annotations?.[WORKLOAD_IDENTITY_ANNOTATION];
+  if (typeof existing === "string" && existing.length > 0) {
+    return serviceAccount;
+  }
+  return {
+    ...serviceAccount,
+    annotations: {
+      ...serviceAccount.annotations,
+      [WORKLOAD_IDENTITY_ANNOTATION]: configuredGatewayServiceAccount(),
+    },
+  };
 }
 
 // Cowboy injects the live apiserver egress CIDRs (resolved per reconcile) for

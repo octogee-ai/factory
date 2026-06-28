@@ -183,6 +183,8 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).toMatch(/name:\s*OPENCLAW_RUNTIME_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*CONNECTOR_TOKEN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*BUILDER_SHELL_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
+    expect(edge).toMatch(/name:\s*FLEET_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
+    expect(edge).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\s*\n\s*value:\s*"\/var\/run\/secrets\/octogee-api\/token"/);
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
     expect(dep).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*projected:\s*\n\s*sources:\s*\n\s*-\s*serviceAccountToken:\s*\n\s*path:\s*token\s*\n\s*audience:\s*octogee-api\s*\n\s*expirationSeconds:\s*3600/);
     expect(dep).toMatch(/name:\s*gateway-broker-sa-token\s*\n\s*projected:\s*\n\s*sources:\s*\n\s*-\s*serviceAccountToken:\s*\n\s*path:\s*token\s*\n\s*audience:\s*octogee-api\s*\n\s*expirationSeconds:\s*3600/);
@@ -207,6 +209,8 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).toMatch(/name:\s*OPENCLAW_RUNTIME_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*CONNECTOR_TOKEN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*BUILDER_SHELL_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
+    expect(edge).toMatch(/name:\s*FLEET_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
+    expect(edge).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\s*\n\s*value:\s*"\/var\/run\/secrets\/octogee-api\/token"/);
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
   });
 

@@ -14,6 +14,7 @@ import {
   resolveGatewayClass,
   resolveGatewayImageProfile,
   type GatewayDesiredState,
+  type HelmInstanceValue,
   type HelmInstancesMap,
   type Operation,
   type OperationStep,
@@ -77,6 +78,7 @@ import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
+import { createGatewayWorkloadIdentityEnsurer } from "./lib/gateway-workload-identity.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
@@ -167,6 +169,7 @@ const logger = createLogger({
   debug: process.env.DEBUG != null,
 });
 const log = (msg: string) => logger.legacy(msg);
+const WORKLOAD_IDENTITY_ANNOTATION = "iam.gke.io/gcp-service-account";
 
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
@@ -289,6 +292,8 @@ interface ControllerDeps {
     gateways: ReadonlyArray<{ gatewayId: string }>,
   ) => Promise<void>;
 
+  ensureGatewayWorkloadIdentity?: (opts: { serviceAccountName: string }) => Promise<void>;
+
   reconcileRetryMs?: number;
 
   operatorReadyRefreshMs?: number;
@@ -320,6 +325,23 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number): number 
 
 function isRunningGateway(gateway: GatewayDesiredState): boolean {
   return gateway.desiredStatus !== "paused" && gateway.desiredStatus !== "retired";
+}
+
+function configuredGatewayServiceAccount(): string | null {
+  const serviceAccount = process.env.GATEWAY_SERVICE_ACCOUNT?.trim();
+  return serviceAccount && serviceAccount.length > 0 ? serviceAccount : null;
+}
+
+function generatedWorkloadIdentityBindingTarget(
+  target: HelmInstanceValue,
+): { serviceAccountName: string } | null {
+  const configuredGatewayGsa = configuredGatewayServiceAccount();
+  if (!configuredGatewayGsa || !target.serviceAccountName || target.serviceAccount?.create !== true) {
+    return null;
+  }
+  const annotatedGsa = target.serviceAccount.annotations?.[WORKLOAD_IDENTITY_ANNOTATION];
+  if (annotatedGsa !== configuredGatewayGsa) return null;
+  return { serviceAccountName: target.serviceAccountName };
 }
 
 async function publishPlatformGatewayReady(
@@ -413,6 +435,14 @@ async function applyChanges(
           `Roll it via the blue/green rollout operation, not a direct imageTag write.`,
       );
       continue;
+    }
+
+    const workloadIdentityTarget = generatedWorkloadIdentityBindingTarget(change.to);
+    if (workloadIdentityTarget) {
+      if (!deps.ensureGatewayWorkloadIdentity) {
+        throw new Error("gateway Workload Identity ensurer is not configured");
+      }
+      await deps.ensureGatewayWorkloadIdentity(workloadIdentityTarget);
     }
 
     await deps.helm.upsertInstance({
@@ -1326,6 +1356,26 @@ async function main(): Promise<void> {
     process.env.KUBE_OPS_MODE === "stub"
       ? createLoggingKubeOps(log)
       : createKubeSubprocessRunner({ runKubectl, log });
+  const workloadIdentityAuth = new GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+  });
+  const gatewayWorkloadIdentityEnsurer = createGatewayWorkloadIdentityEnsurer({
+    gatewayServiceAccount: requireEnv(
+      "GATEWAY_SERVICE_ACCOUNT",
+      "generated operator gateway KSAs must bind to the gateway pod GSA",
+    ),
+    workloadIdentityProject: requireEnv(
+      "GKE_WORKLOAD_IDENTITY_PROJECT",
+      "generated operator gateway KSA IAM members must target the GKE Workload Identity pool project",
+    ),
+    namespace: NAMESPACE,
+    log,
+    request: async ({ url, method, data }) => {
+      const client = await workloadIdentityAuth.getClient();
+      const res = await client.request<unknown>({ url, method, data });
+      return { status: res.status, data: res.data };
+    },
+  });
   const syncEdgeIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
     syncEdgeIngress({
       runKubectl,
@@ -1392,6 +1442,7 @@ async function main(): Promise<void> {
     handlers,
     log,
     syncFleetIngress: syncEdgeIngressForGateways,
+    ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
     operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
     chartFingerprint,
     resolveApiServerEgressCidrs,
