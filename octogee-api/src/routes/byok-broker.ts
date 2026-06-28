@@ -73,8 +73,52 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
 }
 
 interface ByosubRef {
-  provider?: unknown;
-  secretName?: unknown;
+  providers?: unknown;
+}
+
+type ByosubProvider = "openai" | "anthropic";
+const BYOSUB_PROVIDERS: ByosubProvider[] = ["openai", "anthropic"];
+const BYOSUB_PROVIDER_SET = new Set<string>(BYOSUB_PROVIDERS);
+
+function providerRefs(ref: ByosubRef | undefined): {
+  malformed: boolean;
+  refs: { provider: ByosubProvider; secretName: string }[];
+  skipped: string[];
+} {
+  if (!ref) return { malformed: false, refs: [], skipped: [] };
+  if (!ref.providers || typeof ref.providers !== "object") {
+    return { malformed: true, refs: [], skipped: ["providers: malformed provider set"] };
+  }
+  const providers = ref.providers as Record<string, unknown>;
+  const skipped: string[] = [];
+  for (const provider of Object.keys(providers)) {
+    if (!BYOSUB_PROVIDER_SET.has(provider)) skipped.push(`${provider}: unknown provider`);
+  }
+  const refs = BYOSUB_PROVIDERS.flatMap((provider) => {
+    const raw = providers[provider];
+    if (raw === undefined) return [];
+    if (
+      !raw ||
+      typeof raw !== "object" ||
+      (raw as { provider?: unknown }).provider !== provider ||
+      typeof (raw as { secretName?: unknown }).secretName !== "string" ||
+      !(raw as { secretName?: string }).secretName
+    ) {
+      skipped.push(`${provider}: malformed provider leaf`);
+      return [];
+    }
+    return [{ provider, secretName: (raw as { secretName: string }).secretName }];
+  });
+  return { malformed: refs.length === 0 && skipped.length > 0, refs, skipped };
+}
+
+function warnSkippedByosubRefs(input: {
+  gatewayId: string;
+  agentId: string;
+  skipped: string[];
+}): void {
+  if (input.skipped.length === 0) return;
+  console.warn("[byok-broker] skipped malformed byosub provider ref", input);
 }
 
 export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
@@ -100,19 +144,34 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
     const snap = await db.collection("glmGateways").doc(bound.gatewayId).get();
     const byosub = (snap.data() as { byosub?: Record<string, ByosubRef> } | undefined)?.byosub;
     const ref = byosub?.[agentId];
-    const provider = typeof ref?.provider === "string" ? ref.provider : "";
-    const secretName = typeof ref?.secretName === "string" ? ref.secretName : "";
-    if (!provider || !secretName) {
+    const parsed = providerRefs(ref);
+    if (parsed.malformed) {
+      warnSkippedByosubRefs({ gatewayId: bound.gatewayId, agentId, skipped: parsed.skipped });
+      res.status(500).json({ error: "malformed byosub ref" });
+      return;
+    }
+    if (parsed.refs.length === 0) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    if (!BYOSUB_SECRET_RE.test(secretName) || !secretName.endsWith(`-${provider}`)) {
-      res.status(500).json({ error: "malformed secret ref" });
+
+    const credentials = [];
+    const skipped = [...parsed.skipped];
+    for (const { provider, secretName } of parsed.refs) {
+      if (!BYOSUB_SECRET_RE.test(secretName) || !secretName.endsWith(`-${provider}`)) {
+        skipped.push(`${provider}: malformed secret ref`);
+        continue;
+      }
+      credentials.push({ provider, secretName, credential: await readSecret(secretName) });
+    }
+    if (credentials.length === 0) {
+      warnSkippedByosubRefs({ gatewayId: bound.gatewayId, agentId, skipped });
+      res.status(500).json({ error: skipped.length > 0 ? "malformed secret ref" : "not_found" });
       return;
     }
+    warnSkippedByosubRefs({ gatewayId: bound.gatewayId, agentId, skipped });
 
-    const credential = await readSecret(secretName);
-    res.json({ provider, secretName, credential });
+    res.json({ credentials, ...(skipped.length > 0 ? { skipped } : {}) });
   });
 
   // Materialize a byok API-key credential (anthropic/openai key, Grok,
@@ -253,12 +312,19 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
         .collection("integrations")
         .doc("byosub")
         .set({
-          provider: entry.oauth.subscriptionProvider,
-          modelCredentialProvider: entry.id,
-          status: "pending",
           connected: false,
-          flowId: body.flowId,
           gatewayId: bound.gatewayId,
+          providers: {
+            [entry.oauth.subscriptionProvider]: {
+              provider: entry.oauth.subscriptionProvider,
+              modelCredentialProvider: entry.id,
+              status: "disconnected",
+              connected: false,
+              state: "pending",
+              flowId: body.flowId,
+              gatewayId: bound.gatewayId,
+            },
+          },
           updatedAt: now,
         }, { merge: true }),
     ]);

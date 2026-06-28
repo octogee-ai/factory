@@ -121,22 +121,62 @@ function validateClaudeSsoCredentialObject(parsed: unknown): CredentialValidatio
   return { ok: true };
 }
 
+export type ByosubProvider = "openai" | "anthropic";
 export type ByosubStatus = "connected" | "needs_reauth";
+export type ByosubModelCredentialProvider = "openai-codex" | "claude-cli";
+const BYOSUB_PROVIDERS: ByosubProvider[] = ["openai", "anthropic"];
+
+export function modelCredentialProviderForByosubProvider(
+  provider: ByosubProvider,
+): ByosubModelCredentialProvider {
+  return provider === "anthropic" ? "claude-cli" : "openai-codex";
+}
+
+export interface ByosubProviderConnectionView {
+  connected: boolean;
+  provider: ByosubProvider;
+  status: ByosubStatus;
+  modelCredentialProvider: ByosubModelCredentialProvider;
+}
+
 export interface ByosubConnectionView {
   connected: boolean;
-  provider?: string;
-  status?: ByosubStatus;
+  providers: Partial<Record<ByosubProvider, ByosubProviderConnectionView>>;
 }
 
 export function byosubConnectionView(
-  ref: { provider?: unknown; status?: unknown } | null | undefined,
+  ref: { providers?: unknown } | null | undefined,
 ): ByosubConnectionView {
-  if (!ref || typeof ref.provider !== "string" || !ref.provider) {
-    return { connected: false };
+  const providers =
+    ref?.providers && typeof ref.providers === "object"
+      ? (ref.providers as Record<string, unknown>)
+      : null;
+  if (!providers) {
+    return { connected: false, providers: {} };
   }
-  const status: ByosubStatus =
-    ref.status === "needs_reauth" ? "needs_reauth" : "connected";
-  return { connected: status === "connected", provider: ref.provider, status };
+  const view: Partial<Record<ByosubProvider, ByosubProviderConnectionView>> = {};
+  for (const provider of BYOSUB_PROVIDERS) {
+    const raw = providers[provider];
+    if (
+      !raw ||
+      typeof raw !== "object" ||
+      (raw as { provider?: unknown }).provider !== provider
+    ) {
+      continue;
+    }
+    const status: ByosubStatus =
+      (raw as { status?: unknown }).status === "needs_reauth" ? "needs_reauth" : "connected";
+    view[provider] = {
+      connected: status === "connected",
+      provider,
+      status,
+      modelCredentialProvider: modelCredentialProviderForByosubProvider(provider),
+    };
+  }
+  return {
+    connected: Object.values(view).some((provider) => provider.connected),
+    providers: view,
+  };
 }
 
 // The DEEP byosub health: byosubConnectionView reads only the Firestore ref

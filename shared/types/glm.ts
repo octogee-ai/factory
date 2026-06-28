@@ -280,9 +280,17 @@ export function resolveUserGatewayShellState(
 
 export type ByosubProvider = "openai" | "anthropic";
 
-export interface ByosubRef {
+export type ByosubStatus = "pending" | "connected" | "needs_reauth";
+
+export interface ByosubProviderRef {
   provider: ByosubProvider;
   secretName: string;
+  status?: ByosubStatus;
+  modelCredentialProvider?: "openai-codex" | "claude-cli";
+}
+
+export interface ByosubRef {
+  providers: Partial<Record<ByosubProvider, ByosubProviderRef>>;
 }
 
 export type OperationKind =

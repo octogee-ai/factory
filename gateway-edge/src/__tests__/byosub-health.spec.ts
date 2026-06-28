@@ -192,6 +192,23 @@ describe("GET /byosub/health route glue", () => {
     expect(res.body).toEqual({ connected: true, status: "healthy", provider: "openai" });
   });
 
+  it("checks for the OpenAI Codex profile specifically, not just any auth-profile store", async () => {
+    const seen: Array<{ agentId: string; profileId?: string }> = [];
+    const res = await request(
+      appWith(
+        fakeDeps({
+          readStorePresent: (agentId, profileId) => {
+            seen.push({ agentId, profileId });
+            return profileId === PROFILE;
+          },
+        }),
+      ),
+    ).get(healthPath());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ connected: true, status: "healthy", provider: "openai" });
+    expect(seen).toEqual([{ agentId: "octogee-smile-wring-011b-coach", profileId: PROFILE }]);
+  });
+
   it("422 + NO filesystem read when the resolved slug would build a path-unsafe agent id (traversal guard)", async () => {
     // primaryWorkspaceSlug can fall back to the client-writable `username`; this
     // route feeds the derived agent id into filesystem paths (codexAgentDir /

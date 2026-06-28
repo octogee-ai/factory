@@ -15,9 +15,17 @@ import { deriveCodexAuthHealth } from "./codex-auth-health.js";
 
 export type ByosubProvider = "openai" | "anthropic";
 
-export interface ByosubRef {
+const BYOSUB_PROVIDERS: ByosubProvider[] = ["openai", "anthropic"];
+
+export interface ByosubProviderRef {
   provider: ByosubProvider;
   secretName: string;
+  status?: string;
+  modelCredentialProvider?: string;
+}
+
+export interface ByosubRef {
+  providers?: Record<string, unknown>;
 }
 
 export interface ByosubRestorePlanItem {
@@ -122,7 +130,9 @@ export function shouldRestoreCodexCredential(opts: {
   authStateText: string | null;
   profileId: string;
   now: number;
+  targetPathPresent?: boolean;
 }): "write" | "skip" {
+  if (opts.targetPathPresent === false) return "write";
   if (!opts.authProfilesPresent) return "write";
   if (
     deriveCodexAuthHealth(opts.authStateText, opts.profileId, opts.now) ===
@@ -133,6 +143,76 @@ export function shouldRestoreCodexCredential(opts: {
   return "skip";
 }
 
+function byosubProviderFromString(provider: string): ByosubProvider | null {
+  if (provider === "openai" || provider === "anthropic") return provider;
+  return null;
+}
+
+function providerMapFromRef(ref: ByosubRef): Record<string, unknown> | null {
+  return ref &&
+    typeof ref === "object" &&
+    ref.providers &&
+    typeof ref.providers === "object"
+    ? (ref.providers as Record<string, unknown>)
+    : null;
+}
+
+function validProviderRef(
+  agentId: string,
+  provider: ByosubProvider,
+  raw: unknown,
+  log: (m: string) => void,
+): ByosubProviderRef | null {
+  if (
+    !raw ||
+    typeof raw !== "object" ||
+    (raw as { provider?: unknown }).provider !== provider ||
+    typeof (raw as { secretName?: unknown }).secretName !== "string" ||
+    !(raw as { secretName?: string }).secretName
+  ) {
+    log(`byosub: ${agentId} has a malformed ${provider} ref — skipping`);
+    return null;
+  }
+  return raw as ByosubProviderRef;
+}
+
+function providerRestoreRefs(
+  agentId: string,
+  providers: Record<string, unknown>,
+  log: (m: string) => void,
+): Partial<Record<ByosubProvider, ByosubProviderRef>> {
+  const refs: Partial<Record<ByosubProvider, ByosubProviderRef>> = {};
+  for (const [providerKey, raw] of Object.entries(providers)) {
+    const provider = byosubProviderFromString(providerKey);
+    if (!provider) {
+      log(
+        `byosub: ${agentId} unknown provider ${JSON.stringify(providerKey)} — skipping`,
+      );
+      continue;
+    }
+    const ref = validProviderRef(agentId, provider, raw, log);
+    if (ref) refs[provider] = ref;
+  }
+  return refs;
+}
+
+function planItemForProvider(
+  agentId: string,
+  provider: ByosubProvider,
+  ref: ByosubProviderRef,
+  openclawDir: string,
+): ByosubRestorePlanItem {
+  return {
+    agentId,
+    provider,
+    secretName: ref.secretName,
+    ...(provider === "openai"
+      ? { targetPath: codexAuthJsonPath(openclawDir, agentId) }
+      : {}),
+    openclawDir,
+  };
+}
+
 function removeTempFile(tmp: string | undefined): void {
   if (!tmp) return;
   try {
@@ -140,6 +220,31 @@ function removeTempFile(tmp: string | undefined): void {
   } catch {
     // best-effort temp cleanup
   }
+}
+
+function ensurePrivateDir(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+}
+
+function profileStoreProfiles(store: unknown): Record<string, unknown> | null {
+  const profiles = (store as { profiles?: unknown } | null | undefined)?.profiles;
+  return profiles && typeof profiles === "object" && !Array.isArray(profiles)
+    ? (profiles as Record<string, unknown>)
+    : null;
+}
+
+function writeMergedAuthProfileStore(agentDir: string, next: unknown): void {
+  const nextProfiles = profileStoreProfiles(next);
+  if (!nextProfiles) {
+    writeAuthProfileStore(agentDir, next);
+    return;
+  }
+  const existingProfiles = profileStoreProfiles(readAuthProfileStore(agentDir));
+  writeAuthProfileStore(agentDir, {
+    ...(next as Record<string, unknown>),
+    profiles: { ...(existingProfiles ?? {}), ...nextProfiles },
+  });
 }
 
 function restoreClaudeCliCredential(opts: {
@@ -153,21 +258,16 @@ function restoreClaudeCliCredential(opts: {
   const nativeJson = nativeTarget
     ? buildClaudeCliNativeCredentialsJson(opts.payload)
     : null;
-  if (nativeTarget && nativeJson === null) {
-    throw new Error(
-      "claude-cli native restore requires Claude SSO .credentials.json payload",
-    );
-  }
 
   let nativeTmp: string | undefined;
   try {
     if (nativeTarget && nativeJson !== null) {
-      fs.mkdirSync(path.dirname(nativeTarget), { recursive: true });
+      ensurePrivateDir(path.dirname(nativeTarget));
       nativeTmp = `${nativeTarget}.tmp`;
       fs.writeFileSync(nativeTmp, nativeJson, { mode: 0o600 });
       fs.chmodSync(nativeTmp, 0o600);
     }
-    writeAuthProfileStore(
+    writeMergedAuthProfileStore(
       opts.agentDir,
       buildClaudeCliAuthProfilesStore(opts.payload, Date.now()),
     );
@@ -176,7 +276,7 @@ function restoreClaudeCliCredential(opts: {
       fs.chmodSync(nativeTarget, 0o600);
       nativeTmp = undefined;
     }
-    return { nativeRestored: Boolean(nativeTarget) };
+    return { nativeRestored: Boolean(nativeTarget && nativeJson !== null) };
   } catch (err) {
     removeTempFile(nativeTmp);
     throw err;
@@ -189,14 +289,14 @@ function restoreCodexCredential(item: ByosubRestorePlanItem, payload: string, ag
   try {
     tmp = `${targetPath}.tmp`;
     const codexStore = buildCodexAuthProfilesStore(payload);
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    ensurePrivateDir(path.dirname(targetPath));
     fs.writeFileSync(tmp, payload, { mode: 0o600 });
     fs.chmodSync(tmp, 0o600);
     // Write SQLite BEFORE promoting codex-home — preserves cross-pair
     // atomicity (the Copilot #989 invariant): if the auth-profiles store
     // can't be written, codex-home stays unpromoted, so we never half-flip
     // routing.
-    writeAuthProfileStore(agentDir, codexStore);
+    writeMergedAuthProfileStore(agentDir, codexStore);
     fs.renameSync(tmp, targetPath);
     tmp = undefined;
   } catch (err) {
@@ -224,35 +324,19 @@ export function planByosubRestores(opts: {
       log(`byosub: ${agentId} not present on this gateway — skipping`);
       continue;
     }
-    if (
-      !ref ||
-      typeof ref !== "object" ||
-      typeof ref.secretName !== "string" ||
-      !ref.secretName
-    ) {
+    const providers = providerMapFromRef(ref);
+    if (!providers) {
       log(`byosub: ${agentId} has a malformed ref — skipping`);
       continue;
     }
-    if (ref.provider === "openai") {
-      plan.push({
-        agentId,
-        provider: "openai",
-        secretName: ref.secretName,
-        targetPath: codexAuthJsonPath(opts.openclawDir, agentId),
-        openclawDir: opts.openclawDir,
-      });
-    } else if (ref.provider === "anthropic") {
-      // Claude SUBSCRIPTION (claude-cli) — store-only, no auth.json targetPath.
-      plan.push({
-        agentId,
-        provider: "anthropic",
-        secretName: ref.secretName,
-        openclawDir: opts.openclawDir,
-      });
-    } else {
-      log(
-        `byosub: ${agentId} unknown provider ${JSON.stringify(ref.provider)} — skipping`,
-      );
+    const refs = providerRestoreRefs(agentId, providers, log);
+    for (const provider of BYOSUB_PROVIDERS) {
+      const providerRef = refs[provider];
+      if (providerRef) {
+        plan.push(
+          planItemForProvider(agentId, provider, providerRef, opts.openclawDir),
+        );
+      }
     }
   }
   return plan;
@@ -280,6 +364,7 @@ export async function restoreByosubCredentials(opts: {
           authStateText,
           profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
           now: Date.now(),
+          targetPathPresent: fs.existsSync(item.targetPath!),
         }) === "skip"
       ) {
         skipped++;

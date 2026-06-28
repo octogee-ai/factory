@@ -33,7 +33,7 @@ export interface ByosubHealthDeps {
   localGatewayId: () => string | null;
   isMounted: (slug: string) => boolean;
   readRefProvider: (gatewayId: string, agentId: string) => Promise<string | null>;
-  readStorePresent: (agentId: string) => boolean;
+  readStorePresent: (agentId: string, profileId: string) => boolean;
   readAuthStateText: (agentId: string) => string | null;
   now: () => number;
 }
@@ -85,7 +85,7 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
           deriveByosubHealth({
             mountedHere: deps.isMounted(resolved.slug),
             refProvider: await deps.readRefProvider(pathGatewayId, agentId),
-            storePresent: deps.readStorePresent(agentId),
+            storePresent: deps.readStorePresent(agentId, OPENAI_CODEX_DEFAULT_PROFILE_ID),
             authStateText: deps.readAuthStateText(agentId),
             profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
             now: deps.now(),
@@ -109,13 +109,10 @@ async function readRefProvider(
   const snap = await db.collection("glmGateways").doc(gatewayId).get();
   const ref = (
     (snap.data() || {}) as {
-      byosub?: Record<string, { provider?: unknown; status?: unknown } | undefined>;
+      byosub?: Record<string, { providers?: unknown } | undefined>;
     }
   ).byosub?.[agentId];
-  // Single-source the ref-shape parse via byosubConnectionView (the same reader
-  // /connection uses); we only need the provider here — the live status comes
-  // from the pod store, not this ref.
-  return byosubConnectionView(ref).provider ?? null;
+  return byosubConnectionView(ref).providers.openai ? "openai" : null;
 }
 
 const byosubHealthRouter = createByosubHealthRouter({
@@ -123,8 +120,15 @@ const byosubHealthRouter = createByosubHealthRouter({
   localGatewayId: () => process.env.GATEWAY_ID?.trim() || null,
   isMounted: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug)),
   readRefProvider,
-  readStorePresent: (agentId) =>
-    readAuthProfileStore(codexAgentDir(OPENCLAW_DIR, agentId)) !== null,
+  readStorePresent: (agentId, profileId) => {
+    const store = readAuthProfileStore(codexAgentDir(OPENCLAW_DIR, agentId));
+    const profiles = (store as { profiles?: unknown } | null)?.profiles;
+    return Boolean(
+      profiles &&
+        typeof profiles === "object" &&
+        Object.prototype.hasOwnProperty.call(profiles, profileId),
+    );
+  },
   // null (empty OR unreadable state) maps to healthy-by-design: this endpoint's
   // contract is store-PRESENCE, and deriveByosubHealth only reaches the auth-state
   // read once storePresent is true. A corrupt-but-present store reading healthy is

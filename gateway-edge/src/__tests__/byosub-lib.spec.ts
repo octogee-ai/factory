@@ -267,37 +267,39 @@ describe("gatewayClaudeSsoClient — addresses the gateway by gatewayId", () => 
   });
 });
 
-describe("byosubConnectionView — honest status (presence ≠ liveness; R8)", () => {
-  it("no ref / no provider → not connected, no status", () => {
-    expect(byosubConnectionView(undefined)).toEqual({ connected: false });
-    expect(byosubConnectionView(null)).toEqual({ connected: false });
-    expect(byosubConnectionView({})).toEqual({ connected: false });
-    expect(byosubConnectionView({ provider: "" })).toEqual({ connected: false });
-    expect(byosubConnectionView({ status: "connected" })).toEqual({ connected: false });
+describe("byosubConnectionView — provider-set connection status", () => {
+  it("no ref / no providers → not connected with an empty provider map", () => {
+    expect(byosubConnectionView(undefined)).toEqual({ connected: false, providers: {} });
+    expect(byosubConnectionView(null)).toEqual({ connected: false, providers: {} });
+    expect(byosubConnectionView({})).toEqual({ connected: false, providers: {} });
+    expect(byosubConnectionView({ providers: {} })).toEqual({ connected: false, providers: {} });
   });
 
-  it("ref present, no/unknown/connected status → connected", () => {
-    expect(byosubConnectionView({ provider: "openai" })).toEqual({
-      connected: true,
-      provider: "openai",
-      status: "connected",
-    });
-    expect(byosubConnectionView({ provider: "openai", status: "connected" })).toEqual({
-      connected: true,
-      provider: "openai",
-      status: "connected",
-    });
-    expect(byosubConnectionView({ provider: "openai", status: "weird" })).toEqual({
-      connected: true,
-      provider: "openai",
-      status: "connected",
-    });
-  });
-
-  it("needs_reauth → connected:false but distinguishable (UI shows Reconnect, not 'never connected')", () => {
+  it("reports every provider independently and aggregates connected=true when any provider is connected", () => {
     expect(
-      byosubConnectionView({ provider: "openai", secretName: "s", status: "needs_reauth" }),
-    ).toEqual({ connected: false, provider: "openai", status: "needs_reauth" });
+      byosubConnectionView({
+        providers: {
+          openai: { provider: "openai", secretName: "s-openai", status: "connected" },
+          anthropic: { provider: "anthropic", secretName: "s-anthropic", status: "needs_reauth" },
+        },
+      }),
+    ).toEqual({
+      connected: true,
+      providers: {
+        openai: {
+          connected: true,
+          provider: "openai",
+          status: "connected",
+          modelCredentialProvider: "openai-codex",
+        },
+        anthropic: {
+          connected: false,
+          provider: "anthropic",
+          status: "needs_reauth",
+          modelCredentialProvider: "claude-cli",
+        },
+      },
+    });
   });
 });
 

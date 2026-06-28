@@ -693,7 +693,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
   });
 
-  it("renders builder fallback as a broker token plus ANTHROPIC_BASE_URL", () => {
+  it("renders builder fallback through the broker URL without provider-standard API key env", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-jack", {
@@ -705,8 +705,8 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
         "octogee-gateway-jack",
       ) ?? "";
     const gw = containerBlock(dep, "gateway");
-    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
-    expect(gw).toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-jack\s*\n\s*key:\s*anthropic_api_key/);
+    expect(gw).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).not.toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-jack\s*\n\s*key:\s*anthropic_api_key/);
     expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010"/);
     expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
   });
@@ -718,7 +718,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
   });
 
-  it("renders operator model access as a broker token plus ANTHROPIC_BASE_URL", () => {
+  it("renders operator model access through the broker URL without provider-standard API key env", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", {
         profile: "operator",
@@ -729,8 +729,8 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     );
     expect(dep).not.toBeNull();
     const gw = containerBlock(dep ?? "", "gateway");
-    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
-    expect(gw).toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-default\s*\n\s*key:\s*anthropic_api_key/);
+    expect(gw).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).not.toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-default\s*\n\s*key:\s*anthropic_api_key/);
     expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010"/);
     expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
   });
@@ -754,10 +754,8 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
       "MM_ADMIN_USER_ID",
       "DISCORD_OPS_WEBHOOK_URL",
       "INTERNAL_SERVICE_KEY",
-      // Shared pods no longer carry ANTHROPIC_API_KEY either — each customer-agent's
-      // anthropic:default is a per-customer broker token in the auth-profile store, so
-      // the platform key never lands on the pod. (Builder/operator keep a per-gateway
-      // broker token; pinned by the ANTHROPIC tests above.)
+      // Gateway pods never carry provider-standard API key env names; the LLM broker
+      // owns provider keys, while gateways receive broker-scoped credentials only.
       "ANTHROPIC_API_KEY",
     ]) {
       expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
@@ -819,8 +817,8 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     ]) {
       expect(gw).not.toMatch(new RegExp(`name:\\s*${name}\\b`));
     }
-    expect(gw).toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
-    expect(gw).toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-default\s*\n\s*key:\s*anthropic_api_key/);
+    expect(gw).not.toMatch(/name:\s*ANTHROPIC_API_KEY\b/);
+    expect(gw).not.toMatch(/secretKeyRef:\s*\n\s*name:\s*gateway-model-key-default\s*\n\s*key:\s*anthropic_api_key/);
     expect(gw).toMatch(/name:\s*ANTHROPIC_BASE_URL\b/);
     expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
     expect(gw).toMatch(

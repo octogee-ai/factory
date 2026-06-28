@@ -224,17 +224,6 @@ spec:
             # models.providers.anthropic.baseUrl.
             - name: ANTHROPIC_BASE_URL
               value: {{ .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) | quote }}
-            {{- if or (eq $gatewayClass "builder") (eq $gatewayClass "operator") }}
-            # Builder/operator (exec-capable, single tenant) carry ONE per-gateway
-            # broker token; the broker resolves platform/BYOT provider keys off-pod.
-            # optional: the pod still boots if issuance is temporarily absent.
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: gateway-model-key-{{ .Values.gatewayId }}
-                  key: anthropic_api_key
-                  optional: true
-            {{- end }}
             {{- if eq $gatewayClass "shared" }}
             # Shared (multi-tenant) pods carry NO pod-level provider key. Each
             # customer-agent's anthropic:default is its OWN per-customer broker token

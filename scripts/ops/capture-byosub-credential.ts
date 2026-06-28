@@ -62,6 +62,27 @@ export function secretNameFor(uid: string, provider: string): string {
   return `byosub-${uid}-${provider}`;
 }
 
+export function gatewayByosubPatch(
+  agent: string,
+  provider: "openai",
+  secretName: string,
+): Record<string, unknown> {
+  return {
+    byosub: {
+      [agent]: {
+        providers: {
+          [provider]: {
+            provider,
+            secretName,
+            status: "connected",
+            modelCredentialProvider: "openai-codex",
+          },
+        },
+      },
+    },
+  };
+}
+
 export function validateCredentialPayload(
   provider: string,
   raw: string,
@@ -137,10 +158,7 @@ async function main(): Promise<void> {
   await db
     .collection("glmGateways")
     .doc(args.gateway)
-    .set(
-      { byosub: { [args.agent]: { provider: args.provider, secretName } } },
-      { merge: true },
-    );
+    .set(gatewayByosubPatch(args.agent, args.provider, secretName), { merge: true });
 
   console.log(
     `[capture-byosub] stored ${secretName} (${versionName}) + glmGateways/${args.gateway}.byosub[${args.agent}] → ${args.provider}`,

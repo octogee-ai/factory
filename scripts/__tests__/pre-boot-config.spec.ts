@@ -3,6 +3,8 @@ import {
   applyAnthropicBaseUrlPatch,
   applyPreBootPatches,
   applyGatewayOverrides,
+  applyByosubRuntimeAllowlist,
+  shouldMaterializeAnthropicBrokerProfiles,
   applyMattermostPreBootPatches,
   buildGitconfigContent,
   hydrateGitIdentity,
@@ -297,6 +299,23 @@ describe("preBootFirestoreEnabled", () => {
   });
 });
 
+describe("shouldMaterializeAnthropicBrokerProfiles", () => {
+  it.each(["shared", "builder", "operator"])(
+    "materializes per-agent broker-token profiles for %s gateways",
+    (gatewayClass) => {
+      expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_CLASS: gatewayClass })).toBe(true);
+    },
+  );
+
+  it("falls back to operator profile when GATEWAY_CLASS is absent", () => {
+    expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_PROFILE: "operator" })).toBe(true);
+  });
+
+  it("skips unknown classes", () => {
+    expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_CLASS: "preview" })).toBe(false);
+  });
+});
+
 describe("applyPreBootPatches — plugin config", () => {
   it("does not mutate plugin allowlists through retired router env switches", () => {
     const config: any = {
@@ -460,6 +479,106 @@ describe("applyGatewayOverrides + applyPreBootPatches — precedence (policy win
     applyPreBootPatches(config, {});
     expect(config.tools.profile).toBe("coding");
     expect(config.channels.mattermost.commands.native).toBe(false);
+  });
+});
+
+describe("applyByosubRuntimeAllowlist", () => {
+  it("allowlists every BYOSUB runtime model for mounted agents without selecting a primary", () => {
+    const logs: string[] = [];
+    const config: any = {
+      agents: {
+        list: [{ id: "octogee-tester5-coach", model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] } }],
+        defaults: { models: { "anthropic/claude-haiku-4-5": {} } },
+      },
+    };
+
+    const changed = applyByosubRuntimeAllowlist(
+      config,
+      {
+        "octogee-tester5-coach": {
+          providers: {
+            openai: { provider: "openai", secretName: "byosub-u-openai" },
+            anthropic: { provider: "anthropic", secretName: "byosub-u-anthropic", status: "needs_reauth" },
+          },
+        },
+      },
+      ["octogee-tester5-coach"],
+      (msg) => logs.push(msg),
+    );
+
+    expect(changed).toBe(true);
+    expect(config.agents.list[0].model.primary).toBe("anthropic/claude-sonnet-4-6");
+    expect(config.agents.defaults.models).toMatchObject({
+      "anthropic/claude-haiku-4-5": {},
+      "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+      "claude-cli/claude-opus-4-8": {},
+    });
+    expect(config.plugins.entries.codex).toEqual({
+      enabled: true,
+      config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
+    });
+    expect(logs.join("\n")).toMatch(/BYOSUB runtime models allowlisted/);
+  });
+
+  it("preserves an operator Codex sandbox while adding BYOSUB runtime models", () => {
+    const config: any = {
+      agents: {
+        list: [{ id: "octogee-tester5-coach" }],
+        defaults: { models: {} },
+      },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                sandbox: "danger-full-access",
+                approvalPolicy: "never",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const changed = applyByosubRuntimeAllowlist(
+      config,
+      {
+        "octogee-tester5-coach": {
+          providers: {
+            openai: { provider: "openai", secretName: "byosub-u-openai" },
+          },
+        },
+      },
+      ["octogee-tester5-coach"],
+    );
+
+    expect(changed).toBe(true);
+    expect(config.agents.defaults.models).toMatchObject({
+      "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+    });
+    expect(config.plugins.entries.codex.config.appServer).toEqual({
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    });
+  });
+
+  it("ignores byosub refs for agents that are not mounted in this gateway config", () => {
+    const config: any = { agents: { list: [{ id: "octogee-tester5-coach" }] } };
+    const changed = applyByosubRuntimeAllowlist(
+      config,
+      {
+        "octogee-other-coach": {
+          providers: {
+            anthropic: { provider: "anthropic", secretName: "byosub-other-anthropic" },
+          },
+        },
+      },
+      ["octogee-tester5-coach"],
+    );
+
+    expect(changed).toBe(false);
+    expect(config.agents.defaults).toBeUndefined();
   });
 });
 
@@ -750,7 +869,7 @@ const emailLines = content
       agentIds: ["octogee-ceckert-coach"],
       fetchUserBySlug: async () => ({
         displayName: "Chris",
-        email: "c@e\r.com\t ",
+        email: "c@e\r.com\t\0",
       }),
       writeFile,
     }));

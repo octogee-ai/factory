@@ -58,15 +58,12 @@ export interface CoachModelPatch {
     list: Array<{ id: string; model: { primary: string; fallbacks: string[] } }>;
     defaults?: { models: RuntimeModelsDef };
   };
-  plugins?: {
-    entries: { codex: { enabled: boolean; config: { appServer: CodexAppServerPatch } } };
-  };
 }
 
 // Standard (shared/builder) gateways run the codex app-server SANDBOXED —
 // workspace-write + never is autonomous-but-confined, NOT the operator-only
 // danger-full-access YOLO (infra/gateway/apply-operator-codex-sandbox.mjs).
-const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
+export const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
   sandbox: "workspace-write",
   approvalPolicy: "never",
 };
@@ -107,11 +104,6 @@ export function byosCoachConfigPatch(
   };
   if (input.provider === "openai-codex") {
     patch.agents.defaults = { models: codexRuntimeConfig().modelsDef };
-    patch.plugins = {
-      entries: {
-        codex: { enabled: true, config: { appServer: STANDARD_CODEX_APP_SERVER } },
-      },
-    };
   } else if (input.provider === "claude-cli") {
     patch.agents.defaults = { models: claudeCliRuntimeConfig().modelsDef };
   }

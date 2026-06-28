@@ -5,6 +5,10 @@ import {
   agentIdsFromConfig,
 } from "../lib/byosub-restore.js";
 import { materializeAnthropicBrokerForAgents } from "../lib/agent-model-token-materializer.js";
+import {
+  claudeCliRuntimeConfig,
+  codexRuntimeConfig,
+} from "../lib/model-credential-materializer.js";
 
 const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
@@ -25,7 +29,32 @@ function claudeCliNativeHomeDirForGateway(): string | undefined {
   return undefined;
 }
 
+export function shouldMaterializeAnthropicBrokerProfiles(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const gatewayClass = env.GATEWAY_CLASS ?? "";
+  const profile = env.GATEWAY_PROFILE ?? "";
+  return (
+    gatewayClass === "shared" ||
+    gatewayClass === "builder" ||
+    gatewayClass === "operator" ||
+    (!gatewayClass && profile === "operator")
+  );
+}
+
 type OpenClawConfig = Record<string, unknown>;
+type ByosubProvider = "openai" | "anthropic";
+
+interface ByosubProviderRef {
+  provider?: unknown;
+  secretName?: unknown;
+}
+
+interface ByosubAgentRef {
+  providers?: Partial<Record<ByosubProvider, ByosubProviderRef>>;
+}
+
+type GatewayByosubRefs = Record<string, ByosubAgentRef>;
 
 function objectProperty(
   parent: Record<string, unknown> | null,
@@ -246,6 +275,93 @@ export function applyGatewayOverrides(
   return deepMergeInto(config, sanitized);
 }
 
+const STANDARD_CODEX_APP_SERVER = {
+  sandbox: "workspace-write",
+  approvalPolicy: "never",
+};
+
+function configuredByosubProviders(
+  byosub: GatewayByosubRefs | undefined,
+  agentIds: readonly string[],
+): Set<ByosubProvider> {
+  const out = new Set<ByosubProvider>();
+  for (const agentId of agentIds) {
+    const providers = byosub?.[agentId]?.providers;
+    if (!providers) continue;
+    for (const provider of ["openai", "anthropic"] as const) {
+      const ref = providers[provider];
+      if (ref?.provider === provider && typeof ref.secretName === "string" && ref.secretName) {
+        out.add(provider);
+      }
+    }
+  }
+  return out;
+}
+
+function applyRuntimeModelDef(
+  config: Record<string, unknown>,
+  modelDef: Record<string, unknown>,
+): boolean {
+  const agents = ensureNullishObjectProperty(config, "agents");
+  const defaults = agents ? ensureNullishObjectProperty(agents, "defaults") : null;
+  const models = defaults ? ensureNullishObjectProperty(defaults, "models") : null;
+  if (!models) return false;
+  return deepMergeInto(models, modelDef);
+}
+
+function applyCodexRuntimePlugin(config: Record<string, unknown>): boolean {
+  const plugins = ensureNullishObjectProperty(config, "plugins");
+  const entries = plugins ? ensureNullishObjectProperty(plugins, "entries") : null;
+  const codex = entries ? ensureNullishObjectProperty(entries, "codex") : null;
+  const codexConfig = codex ? ensureNullishObjectProperty(codex, "config") : null;
+  const appServer = codexConfig ? ensureNullishObjectProperty(codexConfig, "appServer") : null;
+  if (!codex || !appServer) return false;
+  let changed = false;
+  if (codex.enabled !== true) {
+    codex.enabled = true;
+    changed = true;
+  }
+  if (
+    appServer.sandbox === undefined &&
+    !valueEqual(appServer.sandbox, STANDARD_CODEX_APP_SERVER.sandbox)
+  ) {
+    appServer.sandbox = STANDARD_CODEX_APP_SERVER.sandbox;
+    changed = true;
+  }
+  if (
+    appServer.approvalPolicy === undefined &&
+    !valueEqual(appServer.approvalPolicy, STANDARD_CODEX_APP_SERVER.approvalPolicy)
+  ) {
+    appServer.approvalPolicy = STANDARD_CODEX_APP_SERVER.approvalPolicy;
+    changed = true;
+  }
+  return changed;
+}
+
+export function applyByosubRuntimeAllowlist(
+  config: Record<string, unknown>,
+  byosub: GatewayByosubRefs | undefined,
+  agentIds: readonly string[],
+  logFn: (msg: string) => void = () => {},
+): boolean {
+  const providers = configuredByosubProviders(byosub, agentIds);
+  let changed = false;
+
+  if (providers.has("openai")) {
+    if (applyRuntimeModelDef(config, codexRuntimeConfig().modelsDef)) changed = true;
+    if (applyCodexRuntimePlugin(config)) changed = true;
+  }
+  if (providers.has("anthropic")) {
+    if (applyRuntimeModelDef(config, claudeCliRuntimeConfig().modelsDef)) changed = true;
+  }
+  if (changed) {
+    logFn(
+      `BYOSUB runtime models allowlisted for ${[...providers].sort().join(", ")}`,
+    );
+  }
+  return changed;
+}
+
 const FALLBACK_NAME = "Octogee Builder";
 const FALLBACK_EMAIL_DOMAIN = "users.noreply.octogee.com";
 const FALLBACK_GENERIC_LOCAL = "builder";
@@ -398,15 +514,7 @@ async function applyGlmDesiredState(
       4000,
     );
     const data = snap.exists
-      ? (snap.data() as
-          | {
-              openclawOverrides?: unknown;
-              byosub?: Record<
-                string,
-                { provider: "openai" | "anthropic"; secretName: string }
-              >;
-            }
-          | undefined)
+      ? (snap.data() as { openclawOverrides?: unknown; byosub?: GatewayByosubRefs } | undefined)
       : undefined;
     if (data?.openclawOverrides) {
       overridesChanged = applyGatewayOverrides(
@@ -420,9 +528,16 @@ async function applyGlmDesiredState(
     }
     const { readSecret } = await import("../lib/secret-manager.js");
 
+    const agentIds = agentIdsFromConfig(config);
+    const allowlistChanged = applyByosubRuntimeAllowlist(
+      config,
+      data?.byosub,
+      agentIds,
+      logFn,
+    );
     const claudeCliNativeHomeDir = claudeCliNativeHomeDirForGateway();
     const r = await restoreByosubForAgents({
-      agentIds: agentIdsFromConfig(config),
+      agentIds,
       byosub: data?.byosub,
       openclawDir: OPENCLAW_DIR,
       fetchSecret: (name) => withTimeout(readSecret(name), 4000),
@@ -434,6 +549,7 @@ async function applyGlmDesiredState(
         `byosub: restore complete for glmGateways/${gatewayId} — ${r.restored} restored, ${r.failed} failed`,
       );
     }
+    if (allowlistChanged) overridesChanged = true;
   } catch (e) {
     logFn(
       `WARN: could not fetch/apply glmGateways/${gatewayId} openclawOverrides/byosub — booting on template + policy only: ${(e as Error).message}`,
@@ -477,12 +593,12 @@ let configRaw: string;
   // broker with its OWN per-customer token — materialize each agent's
   // anthropic:default broker-token profile before openclaw boots. Local write
   // (db-less-safe); the secret-resolver fetches the token at runtime.
-  if (process.env.GATEWAY_CLASS === "shared") {
+  if (shouldMaterializeAnthropicBrokerProfiles(process.env)) {
     const materialized = materializeAnthropicBrokerForAgents(agentIdsFromConfig(config), {
       logFn: log,
     });
     if (materialized > 0) {
-      log(`anthropic broker-token profiles materialized for ${materialized} shared agent(s)`);
+      log(`anthropic broker-token profiles materialized for ${materialized} agent(s)`);
     }
   }
 

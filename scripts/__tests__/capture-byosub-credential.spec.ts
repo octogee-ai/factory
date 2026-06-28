@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  gatewayByosubPatch,
   parseCaptureArgs,
   secretNameFor,
   validateCredentialPayload,
@@ -63,6 +64,25 @@ describe("parseCaptureArgs", () => {
 describe("secretNameFor", () => {
   it("is owner-scoped and provider-suffixed", () => {
     expect(secretNameFor("Abc123Uid", "openai")).toBe("byosub-Abc123Uid-openai");
+  });
+});
+
+describe("gatewayByosubPatch", () => {
+  it("writes the provider-set ref for the captured provider", () => {
+    expect(gatewayByosubPatch("octogee-ceckert-coach", "openai", "byosub-Abc123Uid-openai")).toEqual({
+      byosub: {
+        "octogee-ceckert-coach": {
+          providers: {
+            openai: {
+              provider: "openai",
+              secretName: "byosub-Abc123Uid-openai",
+              status: "connected",
+              modelCredentialProvider: "openai-codex",
+            },
+          },
+        },
+      },
+    });
   });
 });
 

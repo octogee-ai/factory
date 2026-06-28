@@ -29,7 +29,19 @@ async function loadTargets(): Promise<SyncBackTarget[]> {
   }
   const gatewayId = process.env.GATEWAY_ID;
   if (!gatewayId) return [];
-  let byosub: Record<string, { provider: "openai" | "anthropic"; secretName: string }> | undefined;
+  let byosub:
+    | Record<
+        string,
+        {
+          providers: Partial<
+            Record<
+              "openai" | "anthropic",
+              { provider: "openai" | "anthropic"; secretName: string }
+            >
+          >;
+        }
+      >
+    | undefined;
   try {
     const { db } = await import("../lib/firebase.js");
     const snap = await db.collection("glmGateways").doc(gatewayId).get();

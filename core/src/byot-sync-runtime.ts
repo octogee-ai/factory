@@ -5,12 +5,21 @@ import {
   byosCoachConfigPatch,
   coachFullAgentList,
   deriveDesiredByotState,
+  STANDARD_CODEX_APP_SERVER,
   type CoachModelInput,
 } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { internalFetch } from "./internal-fetch.js";
-import { isModelCredentialOauthProvider } from "./model-credential-materializer.js";
-import { restoreByosubForAgents, type ByosubRef } from "./byosub-restore.js";
+import {
+  claudeCliRuntimeConfig,
+  codexRuntimeConfig,
+  isModelCredentialOauthProvider,
+} from "./model-credential-materializer.js";
+import {
+  restoreByosubForAgents,
+  type ByosubProvider,
+  type ByosubRef,
+} from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import {
   AGENTS_DIR,
@@ -30,6 +39,33 @@ import { upsertAnthropicBrokerProfile } from "./agent-model-token-materializer.j
 // fast inside applyConfigPatch.
 const BYOT_RUNTIME_BOOT_PATIENCE_MS = 120_000;
 
+function currentCodexAppServerConfig(current: unknown): typeof STANDARD_CODEX_APP_SERVER {
+  const appServer = (current as {
+    plugins?: {
+      entries?: {
+        codex?: {
+          config?: {
+            appServer?: {
+              sandbox?: unknown;
+              approvalPolicy?: unknown;
+            };
+          };
+        };
+      };
+    };
+  } | null | undefined)?.plugins?.entries?.codex?.config?.appServer;
+  return {
+    sandbox:
+      typeof appServer?.sandbox === "string"
+        ? appServer.sandbox
+        : STANDARD_CODEX_APP_SERVER.sandbox,
+    approvalPolicy:
+      typeof appServer?.approvalPolicy === "string"
+        ? appServer.approvalPolicy
+        : STANDARD_CODEX_APP_SERVER.approvalPolicy,
+  };
+}
+
 export async function applyCoachModelPatch(
   input: CoachModelInput | null,
   deps?: {
@@ -39,8 +75,6 @@ export async function applyCoachModelPatch(
   },
 ): Promise<boolean> {
   const logFn = deps?.logFn ?? log;
-  const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
-  if (isOp()) return false;
   if (!input) return false;
   const patch = byosCoachConfigPatch(input);
   if (!patch) return false;
@@ -79,6 +113,60 @@ export async function applyCoachModelPatch(
   }
 }
 
+export async function applyOauthRuntimeModelAllowlist(
+  providers: readonly ByosubProvider[],
+  deps?: {
+    applyConfigPatch?: typeof applyConfigPatch;
+    logFn?: (m: string) => void;
+  },
+): Promise<boolean> {
+  const uniqueProviders = Array.from(new Set(providers));
+  const models: Record<string, unknown> = {};
+  let enableCodex = false;
+  if (uniqueProviders.includes("openai")) {
+    Object.assign(models, codexRuntimeConfig().modelsDef);
+    enableCodex = true;
+  }
+  if (uniqueProviders.includes("anthropic")) {
+    Object.assign(models, claudeCliRuntimeConfig().modelsDef);
+  }
+  if (Object.keys(models).length === 0) return false;
+
+  const buildPatch = (current: unknown) => ({
+    agents: { defaults: { models } },
+    ...(enableCodex
+      ? {
+          plugins: {
+            entries: {
+              codex: {
+                enabled: true,
+                config: { appServer: currentCodexAppServerConfig(current) },
+              },
+            },
+          },
+        }
+      : {}),
+  });
+  const logFn = deps?.logFn ?? log;
+  const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
+  try {
+    await applyConfigPatchFn(
+      {
+        buildPatch,
+        logPrefix: "[byot-sync:oauth-runtime]",
+      },
+      { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
+    );
+    logFn(
+      `[byot-sync] OAuth runtime models allowlisted for ${uniqueProviders.sort().join(", ")}`,
+    );
+    return true;
+  } catch (e) {
+    logFn(`⚠ [byot-sync] OAuth runtime allowlist patch failed: ${(e as Error).message}`);
+    return false;
+  }
+}
+
 export async function triggerSecretsReload(): Promise<void> {
   const rpc = createGatewayRpc({
     allowLegacyGatewayTokenFallback: true,
@@ -111,17 +199,23 @@ export async function triggerSecretsReload(): Promise<void> {
 export interface OauthStoreRestoreResult {
   restored: boolean;
   present: boolean;
+  providers?: ByosubProvider[];
 }
 
-export function markerProviderForSlot(
+export function markerProvidersForSlot(
   byosub: Record<string, ByosubRef> | undefined,
   agentId: string,
-): "claude-cli" | "openai-codex" {
-  return byosub?.[agentId]?.provider === "anthropic" ? "claude-cli" : "openai-codex";
+): Array<"claude-cli" | "openai-codex"> {
+  const providers = byosub?.[agentId]?.providers;
+  if (!providers) return [];
+  return [
+    ...(providers.openai ? (["openai-codex"] as const) : []),
+    ...(providers.anthropic ? (["claude-cli"] as const) : []),
+  ];
 }
 
 export interface ByosubCred {
-  provider: string;
+  provider: ByosubProvider;
   secretName: string;
   credential: string;
 }
@@ -146,7 +240,7 @@ function byokBrokerBaseUrl(): string {
   return `http://octogee-api.${ns}.svc.cluster.local:3001`;
 }
 
-export async function brokerFetchByosubCred(agentId: string): Promise<ByosubCred | null> {
+export async function brokerFetchByosubCreds(agentId: string): Promise<ByosubCred[] | null> {
   const r = await internalFetch(`${byokBrokerBaseUrl()}/internal/byok/byosub-cred`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -157,21 +251,33 @@ export async function brokerFetchByosubCred(agentId: string): Promise<ByosubCred
     const body = (await r.text().catch(() => "")).slice(0, 200);
     throw new Error(`byosub-cred ${r.status} ${body}`);
   }
-  const data = (await r.json()) as Partial<ByosubCred>;
+  const data = (await r.json()) as { credentials?: unknown };
+  const credentials = data.credentials;
   if (
-    typeof data.provider !== "string" ||
-    typeof data.secretName !== "string" ||
-    typeof data.credential !== "string"
+    !Array.isArray(credentials) ||
+    credentials.some(
+      (cred) =>
+        !cred ||
+        typeof cred !== "object" ||
+        ((cred as { provider?: unknown }).provider !== "openai" &&
+          (cred as { provider?: unknown }).provider !== "anthropic") ||
+        typeof (cred as { secretName?: unknown }).secretName !== "string" ||
+        typeof (cred as { credential?: unknown }).credential !== "string",
+    )
   ) {
     throw new Error("byosub-cred: malformed broker response");
   }
-  return { provider: data.provider, secretName: data.secretName, credential: data.credential };
+  return credentials.map((cred) => ({
+    provider: (cred as { provider: ByosubProvider }).provider,
+    secretName: (cred as { secretName: string }).secretName,
+    credential: (cred as { credential: string }).credential,
+  }));
 }
 
 export async function restoreOauthStoreForSlug(
   slug: string,
   deps?: {
-    fetchByosubCred?: (agentId: string) => Promise<ByosubCred | null>;
+    fetchByosubCreds?: (agentId: string) => Promise<ByosubCred[] | null>;
     openclawDir?: string;
     claudeCliNativeHomeDir?: string;
     logFn?: (m: string) => void;
@@ -180,14 +286,21 @@ export async function restoreOauthStoreForSlug(
   const agentId = `octogee-${slug}-coach`;
   const logFn = deps?.logFn ?? log;
   try {
-    const fetchByosubCred = deps?.fetchByosubCred ?? brokerFetchByosubCred;
+    const fetchByosubCreds = deps?.fetchByosubCreds ?? brokerFetchByosubCreds;
     const ocDir = deps?.openclawDir ?? OPENCLAW_DIR;
-    const cred = await fetchByosubCred(agentId);
-    if (!cred) return { restored: false, present: false };
+    const creds = await fetchByosubCreds(agentId);
+    if (!creds || creds.length === 0) {
+      return { restored: false, present: false, providers: [] };
+    }
+    const providers = Array.from(new Set(creds.map((cred) => cred.provider)));
     const byosub: Record<string, ByosubRef> = {
       [agentId]: {
-        provider: cred.provider as ByosubRef["provider"],
-        secretName: cred.secretName,
+        providers: Object.fromEntries(
+          creds.map((cred) => [
+            cred.provider,
+            { provider: cred.provider, secretName: cred.secretName },
+          ]),
+        ),
       },
     };
     const claudeCliNativeHomeDir =
@@ -196,23 +309,19 @@ export async function restoreOauthStoreForSlug(
       agentIds: [agentId],
       byosub,
       openclawDir: ocDir,
-      fetchSecret: async () => cred.credential,
+      fetchSecret: async (secretName) => {
+        const cred = creds.find((candidate) => candidate.secretName === secretName);
+        if (!cred) throw new Error(`broker response omitted ${secretName}`);
+        return cred.credential;
+      },
       logFn,
       ...(claudeCliNativeHomeDir ? { claudeCliNativeHomeDir } : {}),
     });
 
-    if (r.restored > 0) {
-      // The byosub slot maps to the PROVIDERS-registry oauth provider so the
-      // marker/log reflect the real subscription (marker-only for oauth, but the
-      // label must be honest).
-      const provider = markerProviderForSlot(byosub, agentId);
-      applyByotState(slug, { slug, provider }, path.join(ocDir, "agents"));
-    }
-
-    return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0 };
+    return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0, providers };
   } catch (e) {
     logFn(`⚠ [byot-sync] oauth-store restore failed for ${slug}: ${(e as Error).message}`);
-    return { restored: false, present: false };
+    return { restored: false, present: false, providers: [] };
   }
 }
 
@@ -223,6 +332,7 @@ export interface SyncByotForCustomerDeps {
   applyByotState?: typeof applyByotState;
   restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch?: typeof applyCoachModelPatch;
+  applyOauthRuntimeModelAllowlist?: typeof applyOauthRuntimeModelAllowlist;
   triggerSecretsReload?: typeof triggerSecretsReload;
   materializeAnthropicBroker?: (slug: string) => boolean;
 }
@@ -234,6 +344,7 @@ interface SyncByotActions {
   applyByotState: typeof applyByotState;
   restoreOauthStoreForSlug: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch: typeof applyCoachModelPatch;
+  applyOauthRuntimeModelAllowlist: typeof applyOauthRuntimeModelAllowlist;
   triggerSecretsReload: typeof triggerSecretsReload;
   materializeAnthropicBroker: (slug: string) => boolean;
 }
@@ -248,9 +359,19 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     applyByotState: deps?.applyByotState ?? applyByotState,
     restoreOauthStoreForSlug: deps?.restoreOauthStoreForSlug ?? restoreOauthStoreForSlug,
     applyCoachModelPatch: deps?.applyCoachModelPatch ?? applyCoachModelPatch,
+    applyOauthRuntimeModelAllowlist:
+      deps?.applyOauthRuntimeModelAllowlist ?? applyOauthRuntimeModelAllowlist,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
     materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
   };
+}
+
+async function applyRestoredOauthRuntimeAllowlist(
+  restore: OauthStoreRestoreResult,
+  actions: SyncByotActions,
+): Promise<boolean> {
+  if (!restore.present) return false;
+  return actions.applyOauthRuntimeModelAllowlist(restore.providers ?? []);
 }
 
 function isBrokerResolvedAnthropic(
@@ -265,10 +386,11 @@ async function clearBrokerResolvedAnthropic(
   actions: SyncByotActions,
 ): Promise<void> {
   const changed = actions.applyByotState(slug, null);
+  const materialized = actions.materializeAnthropicBroker(slug);
   log(
     `[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`,
   );
-  if (changed) await actions.triggerSecretsReload();
+  if (changed || materialized) await actions.triggerSecretsReload();
 }
 
 async function restoreOauthIfNeeded(
@@ -290,11 +412,14 @@ async function syncStandardByotState(
 ): Promise<void> {
   const changed = actions.applyByotState(slug, desired.input);
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
+  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
 
-  if (changed || restore.restored || patched) await actions.triggerSecretsReload();
+  if (changed || restore.restored || runtimePatched || patched) {
+    await actions.triggerSecretsReload();
+  }
 }
 
 async function syncOperatorByotState(
@@ -303,7 +428,11 @@ async function syncOperatorByotState(
   actions: SyncByotActions,
 ): Promise<void> {
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
-  if (restore.restored) await actions.triggerSecretsReload();
+  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
+  const patched = restore.present && desired.coachModelInput
+    ? await actions.applyCoachModelPatch(desired.coachModelInput)
+    : false;
+  if (restore.restored || runtimePatched || patched) await actions.triggerSecretsReload();
 }
 
 // Shared (multi-tenant) pods route EACH customer-agent's anthropic through the
@@ -334,12 +463,13 @@ async function syncSharedBrokerByotState(
   );
 
   const materialized = actions.materializeAnthropicBroker(slug);
+  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
 
-  const patched = desired.coachModelInput
+  const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
 
-  if (changed || restore.restored || materialized || patched) {
+  if (changed || restore.restored || materialized || runtimePatched || patched) {
     await actions.triggerSecretsReload();
   }
 }

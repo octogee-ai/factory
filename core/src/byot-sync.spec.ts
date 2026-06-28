@@ -51,10 +51,11 @@ import { deriveDesiredByotState, byosCoachConfigPatch, coachFullAgentList } from
 import {
   triggerSecretsReload,
   restoreOauthStoreForSlug,
-  brokerFetchByosubCred,
+  brokerFetchByosubCreds,
   applyCoachModelPatch,
+  applyOauthRuntimeModelAllowlist,
   syncByotForCustomer,
-  markerProviderForSlot,
+  markerProvidersForSlot,
 } from "./byot-sync-runtime";
 import { internalFetch } from "./internal-fetch.js";
 import { codexAuthJsonPath, codexAgentDir } from "./byosub-restore.js";
@@ -212,17 +213,24 @@ describe("triggerSecretsReload — in-process RPC, no subprocess", () => {
   });
 });
 
-describe("markerProviderForSlot — byosub slot → PROVIDERS-registry oauth provider", () => {
+describe("markerProvidersForSlot — byosub provider set → PROVIDERS-registry oauth providers", () => {
   const agentId = "octogee-a-coach";
-  it("anthropic slot → claude-cli; openai slot → openai-codex; absent → openai-codex", () => {
-    expect(markerProviderForSlot({ [agentId]: { provider: "anthropic", secretName: "s" } }, agentId)).toBe(
-      "claude-cli",
-    );
-    expect(markerProviderForSlot({ [agentId]: { provider: "openai", secretName: "s" } }, agentId)).toBe(
-      "openai-codex",
-    );
-    expect(markerProviderForSlot(undefined, agentId)).toBe("openai-codex");
-    expect(markerProviderForSlot({}, agentId)).toBe("openai-codex");
+  it("maps connected subscription providers and returns [] when absent", () => {
+    expect(
+      markerProvidersForSlot(
+        {
+          [agentId]: {
+            providers: {
+              anthropic: { provider: "anthropic", secretName: "s-a" },
+              openai: { provider: "openai", secretName: "s-o" },
+            },
+          },
+        },
+        agentId,
+      ),
+    ).toEqual(["openai-codex", "claude-cli"]);
+    expect(markerProvidersForSlot(undefined, agentId)).toEqual([]);
+    expect(markerProvidersForSlot({}, agentId)).toEqual([]);
   });
 });
 
@@ -240,11 +248,13 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
   it("materializes the per-agent codex-home for a mounted oauth customer (restored + present)", async () => {
     const oc = mk();
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchByosubCred: async () => ({
-        provider: "openai",
-        secretName: "byosub-uid-openai",
-        credential: codexBlob(),
-      }),
+      fetchByosubCreds: async () => [
+        {
+          provider: "openai",
+          secretName: "byosub-uid-openai",
+          credential: codexBlob(),
+        },
+      ],
       openclawDir: oc,
     });
     expect(r.restored).toBe(true);
@@ -270,25 +280,69 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     });
   });
 
+  it("materializes Claude and Codex from one hosted-agent broker response", async () => {
+    const oc = mk();
+    const home = mk();
+    const r = await restoreOauthStoreForSlug("tester-70", {
+      fetchByosubCreds: async () => [
+        {
+          provider: "openai",
+          secretName: "byosub-uid-openai",
+          credential: codexBlob(),
+        },
+        {
+          provider: "anthropic",
+          secretName: "byosub-uid-anthropic",
+          credential: JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "claude-access-1",
+              refreshToken: "claude-refresh-1",
+              expiresAt: 1782648121333,
+            },
+          }),
+        },
+      ],
+      openclawDir: oc,
+      claudeCliNativeHomeDir: home,
+    });
+
+    expect(r).toEqual({ restored: true, present: true, providers: ["openai", "anthropic"] });
+    expect(
+      JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
+        .auth_mode,
+    ).toBe("chatgpt");
+    expect(fs.existsSync(path.join(home, ".claude", ".credentials.json"))).toBe(true);
+    const prof = readAuthProfileStore(codexAgentDir(oc, "octogee-tester-70-coach")) as {
+      profiles: Record<string, { provider?: string; access?: string }>;
+    };
+    expect(prof.profiles["openai-codex:default"]).toMatchObject({
+      provider: "openai-codex",
+      access: "acc-1",
+    });
+    expect(prof.profiles["anthropic:claude-cli"]).toMatchObject({
+      provider: "claude-cli",
+      access: "claude-access-1",
+    });
+  });
+
   it("Copilot #2: a FAILED restore does NOT activate (not restored, not present)", async () => {
     const oc = mk();
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchByosubCred: async () => {
+      fetchByosubCreds: async () => {
         throw new Error("transient broker failure");
       },
       openclawDir: oc,
       logFn: () => {},
     });
     expect(r.restored).toBe(false);
-
-expect(r.present).toBe(false);
+    expect(r.present).toBe(false);
     const ap = path.join(oc, "agents", "octogee-tester-70-coach", "agent", "auth-profiles.json");
     expect(fs.existsSync(ap)).toBe(false); 
   });
 
   it("not restored / not present when this customer has no byosub ref (nothing to restore)", async () => {
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchByosubCred: async () => null,
+      fetchByosubCreds: async () => null,
       openclawDir: mk(),
     });
     expect(r.restored).toBe(false);
@@ -297,7 +351,7 @@ expect(r.present).toBe(false);
 
   it("never throws — a fetch failure is neither restored nor present (mount continues)", async () => {
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchByosubCred: async () => {
+      fetchByosubCreds: async () => {
         throw new Error("glmGateways read failed");
       },
       openclawDir: mk(),
@@ -307,14 +361,16 @@ expect(r.present).toBe(false);
     expect(r.present).toBe(false);
   });
 
-it("re-mount over a healthy on-disk cred → conservative skip → NOT restored but present", async () => {
+  it("re-mount over a healthy on-disk cred → conservative skip → NOT restored but present", async () => {
     const oc = mk();
     const opts = {
-      fetchByosubCred: async () => ({
-        provider: "openai",
-        secretName: "byosub-uid-openai",
-        credential: codexBlob(),
-      }),
+      fetchByosubCreds: async () => [
+        {
+          provider: "openai" as const,
+          secretName: "byosub-uid-openai",
+          credential: codexBlob(),
+        },
+      ],
       openclawDir: oc,
       logFn: () => {},
     };
@@ -323,48 +379,55 @@ it("re-mount over a healthy on-disk cred → conservative skip → NOT restored 
     expect(first.restored).toBe(true);
     expect(first.present).toBe(true);
 
-const second = await restoreOauthStoreForSlug("tester-70", opts);
+    const second = await restoreOauthStoreForSlug("tester-70", opts);
     expect(second.restored).toBe(false);
     expect(second.present).toBe(true);
+    expect(second.providers).toEqual(["openai"]);
   });
 });
 
-describe("brokerFetchByosubCred — gateway-side broker client (no silent failures)", () => {
+describe("brokerFetchByosubCreds — gateway-side broker client (no silent failures)", () => {
   beforeEach(() => vi.mocked(internalFetch).mockReset());
 
-  it("returns the materialized cred on 200", async () => {
+  it("returns the materialized credentials on 200", async () => {
     vi.mocked(internalFetch).mockResolvedValue(
       new Response(
         JSON.stringify({
-          provider: "anthropic",
-          secretName: "byosub-uid-anthropic",
-          credential: "tok",
+          credentials: [
+            {
+              provider: "anthropic",
+              secretName: "byosub-uid-anthropic",
+              credential: "tok",
+            },
+          ],
         }),
         { status: 200 },
       ),
     );
-    expect(await brokerFetchByosubCred("octogee-tester5-coach")).toEqual({
-      provider: "anthropic",
-      secretName: "byosub-uid-anthropic",
-      credential: "tok",
-    });
+    expect(await brokerFetchByosubCreds("octogee-tester5-coach")).toEqual([
+      {
+        provider: "anthropic",
+        secretName: "byosub-uid-anthropic",
+        credential: "tok",
+      },
+    ]);
   });
 
   it("returns null on 404 (no byosub ref for this agent — nothing to restore)", async () => {
     vi.mocked(internalFetch).mockResolvedValue(new Response("{}", { status: 404 }));
-    expect(await brokerFetchByosubCred("octogee-tester5-coach")).toBeNull();
+    expect(await brokerFetchByosubCreds("octogee-tester5-coach")).toBeNull();
   });
 
   it("throws on a non-ok, non-404 status (fail loud, never a silent skip)", async () => {
     vi.mocked(internalFetch).mockResolvedValue(new Response("boom", { status: 500 }));
-    await expect(brokerFetchByosubCred("octogee-tester5-coach")).rejects.toThrow(/500/);
+    await expect(brokerFetchByosubCreds("octogee-tester5-coach")).rejects.toThrow(/500/);
   });
 
   it("throws on a malformed broker response (never a half-materialized cred)", async () => {
     vi.mocked(internalFetch).mockResolvedValue(
       new Response(JSON.stringify({ provider: "anthropic" }), { status: 200 }),
     );
-    await expect(brokerFetchByosubCred("octogee-tester5-coach")).rejects.toThrow(/malformed/);
+    await expect(brokerFetchByosubCreds("octogee-tester5-coach")).rejects.toThrow(/malformed/);
   });
 });
 
@@ -394,21 +457,11 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     });
   });
 
-  it("openai-codex → coach model + agentRuntime:codex + enables the codex plugin with a SAFE (non-YOLO) sandbox so it runs on a standard shared gateway", () => {
+  it("openai-codex → coach model + agentRuntime:codex; runtime allowlist owns codex plugin config", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       agents: {
         list: [{ id, model: withFallback("openai/gpt-5.5") }],
         defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
-      },
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            // workspace-write + never = autonomous but sandboxed. NOT the
-            // operator-only danger-full-access YOLO (apply-operator-codex-sandbox.mjs).
-            config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
-          },
-        },
       },
     });
   });
@@ -507,7 +560,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     ]);
   });
 
-  it("shell-runtime BYOS providers (codex / claude-cli) patch the full list + defaults/plugins", async () => {
+  it("shell-runtime BYOS providers (codex / claude-cli) patch the full list + model defaults", async () => {
     const codexCalls: object[] = [];
     const rc = await applyCoachModelPatch(
       { slug: "tester-70", provider: "openai-codex" },
@@ -527,14 +580,6 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
             { id: "octogee-zed-coach", model: "z/y" },
           ],
           defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
-        },
-        plugins: {
-          entries: {
-            codex: {
-              enabled: true,
-              config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
-            },
-          },
         },
       },
     ]);
@@ -593,7 +638,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(r).toBe(false);
   });
 
-  it("operator gateway: never applies the patch (operator owns openclaw.json on PVC)", async () => {
+  it("operator gateway: applies the same runtime model patch as builder gateways", async () => {
     let calls = 0;
     const r = await applyCoachModelPatch(
       { slug: "tester-70", provider: "openai-codex" },
@@ -602,8 +647,8 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
         isOperatorGateway: () => true,
       },
     );
-    expect(r).toBe(false);
-    expect(calls).toBe(0);
+    expect(r).toBe(true);
+    expect(calls).toBe(1);
   });
 
   it("waits for the booting runtime: deadline-bounded retries, not a 3-shot budget (byot fires at pod boot before openclaw listens on :18789)", async () => {
@@ -622,6 +667,97 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(opts).toHaveLength(1);
     expect(opts[0].maxRetries).toBe(Number.POSITIVE_INFINITY);
     expect(opts[0].totalDeadlineMs as number).toBeGreaterThanOrEqual(60_000);
+  });
+});
+
+describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", () => {
+  it("allowlists every restored BYOSUB runtime without changing the coach primary model", async () => {
+    const calls: object[] = [];
+    const r = await applyOauthRuntimeModelAllowlist(["openai", "anthropic"], {
+      applyConfigPatch: async (args) => {
+        calls.push(args.buildPatch({}));
+        return { mode: "rpc", attempts: 1 };
+      },
+    });
+
+    expect(r).toBe(true);
+    expect(calls).toEqual([
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              "claude-cli/claude-opus-4-8": {},
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("preserves an existing operator Codex sandbox while adding runtime defaults", async () => {
+    const calls: object[] = [];
+    const r = await applyOauthRuntimeModelAllowlist(["openai"], {
+      applyConfigPatch: async (args) => {
+        calls.push(args.buildPatch({
+          plugins: {
+            entries: {
+              codex: {
+                config: {
+                  appServer: {
+                    sandbox: "danger-full-access",
+                    approvalPolicy: "never",
+                  },
+                },
+              },
+            },
+          },
+        }));
+        return { mode: "rpc", attempts: 1 };
+      },
+    });
+
+    expect(r).toBe(true);
+    expect(calls).toEqual([
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                appServer: {
+                  sandbox: "danger-full-access",
+                  approvalPolicy: "never",
+                },
+              },
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("does nothing when no OAuth providers were restored", async () => {
+    const applyConfigPatchFn = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
+    await expect(
+      applyOauthRuntimeModelAllowlist([], { applyConfigPatch: applyConfigPatchFn }),
+    ).resolves.toBe(false);
+    expect(applyConfigPatchFn).not.toHaveBeenCalled();
   });
 });
 
@@ -692,6 +828,7 @@ describe("standard gateway — BYOS materialization", () => {
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
+    const materializeFn = vi.fn(() => false);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
     await syncByotForCustomer(
@@ -707,11 +844,13 @@ describe("standard gateway — BYOS materialization", () => {
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
+        materializeAnthropicBroker: materializeFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
+    expect(materializeFn).toHaveBeenCalledWith("tester-70");
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
@@ -748,6 +887,45 @@ describe("standard gateway — BYOS materialization", () => {
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", input);
     expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith(input);
+    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores a multi-provider BYOSUB set and allowlists every restored runtime before model switching", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const restoreOauthFn = vi.fn(async () => ({
+      restored: true,
+      present: true,
+      providers: ["openai", "anthropic"] as const,
+    }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "openai-codex" } },
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: applyByotStateFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
+    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai", "anthropic"]);
+    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+      slug: "tester-70",
+      provider: "openai-codex",
+      baseUrl: undefined,
+      model: undefined,
+    });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
@@ -858,6 +1036,36 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(reloadFn).toHaveBeenCalledTimes(1);
   });
 
+  it("oauth credential absent on shared gateway: preserves broker fallback without pinning coach to missing subscription", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const materializeFn = vi.fn(() => false);
+    const restoreOauthFn = vi.fn(async () => ({ restored: false, present: false }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const reloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "openai-codex" } },
+      },
+      baseDeps({
+        applyByotState: applyByotStateFn,
+        materializeAnthropicBroker: materializeFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: reloadFn,
+      }),
+    );
+
+    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
+    expect(materializeFn).toHaveBeenCalledWith("tester-70");
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(reloadFn).not.toHaveBeenCalled();
+  });
+
   it("grok (non-anthropic) BYOK: writes the custom-provider models.json (store preserved) + materializes the anthropic fallback", async () => {
     const applyByotStateFn = vi.fn(() => true);
     const materializeFn = vi.fn(() => false);
@@ -885,18 +1093,20 @@ describe("shared gateway — per-customer broker-token materialization", () => {
 describe("operator gateway — runtime sync stays narrow", () => {
   it("restoreOauthStoreForSlug: materializes owner BYOS credentials on operator gateways", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "operator-byos-"));
-    const fetchByosubCred = vi.fn(async () => ({
-      provider: "anthropic",
-      secretName: "byosub-uid-anthropic",
-      credential: "sk-ant-oat01-operator-token",
-    }));
+    const fetchByosubCreds = vi.fn(async () => [
+      {
+        provider: "anthropic" as const,
+        secretName: "byosub-uid-anthropic",
+        credential: "sk-ant-oat01-operator-token",
+      },
+    ]);
     const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchByosubCred,
+      fetchByosubCreds,
       openclawDir,
       logFn: () => {},
     });
-    expect(r).toEqual({ restored: true, present: true });
-    expect(fetchByosubCred).toHaveBeenCalledWith("octogee-tester-70-coach");
+    expect(r).toEqual({ restored: true, present: true, providers: ["anthropic"] });
+    expect(fetchByosubCreds).toHaveBeenCalledWith("octogee-tester-70-coach");
 
     const store = readAuthProfileStore(codexAgentDir(openclawDir, "octogee-tester-70-coach")) as {
       profiles: Record<string, { provider?: string; access?: string }>;
@@ -907,10 +1117,15 @@ describe("operator gateway — runtime sync stays narrow", () => {
     });
   });
 
-  it("syncByotForCustomer: restores OAuth credentials but leaves operator-owned openclaw.json untouched", async () => {
+  it("syncByotForCustomer: restores OAuth credentials and patches the operator runtime model after the credential is present", async () => {
     const applyByotStateFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const restoreOauthFn = vi.fn(async () => ({
+      restored: true,
+      present: true,
+      providers: ["openai", "anthropic"] as const,
+    }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
     await syncByotForCustomer(
@@ -925,14 +1140,118 @@ describe("operator gateway — runtime sync stays narrow", () => {
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
+        applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
 
     expect(applyByotStateFn).not.toHaveBeenCalled();
     expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai", "anthropic"]);
+    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+      slug: "tester-70",
+      provider: "openai-codex",
+      baseUrl: undefined,
+      model: undefined,
+    });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("syncByotForCustomer: preserves an operator Codex danger-full-access sandbox through the full restore and coach patch cycle", async () => {
+    const currentConfig = {
+      agents: {
+        list: [
+          { id: "octogee-tester-70-coach", model: "anthropic/claude-haiku-4-5" },
+        ],
+      },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                sandbox: "danger-full-access",
+                approvalPolicy: "never",
+              },
+            },
+          },
+        },
+      },
+    };
+    const patches: object[] = [];
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "openai-codex" } },
+      },
+      {
+        isOperatorGateway: () => true,
+        applyByotState: vi.fn(() => true),
+        restoreOauthStoreForSlug: vi.fn(async () => ({
+          restored: true,
+          present: true,
+          providers: ["openai"] as const,
+        })),
+        applyOauthRuntimeModelAllowlist: (providers) =>
+          applyOauthRuntimeModelAllowlist(providers, {
+            applyConfigPatch: async (args) => {
+              patches.push(args.buildPatch(currentConfig));
+              return { mode: "rpc", attempts: 1 };
+            },
+          }),
+        applyCoachModelPatch: (input) =>
+          applyCoachModelPatch(input, {
+            applyConfigPatch: async (args) => {
+              patches.push(args.buildPatch(currentConfig));
+              return { mode: "rpc", attempts: 1 };
+            },
+          }),
+        triggerSecretsReload: vi.fn(async () => {}),
+      },
+    );
+
+    expect(patches).toEqual([
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                appServer: {
+                  sandbox: "danger-full-access",
+                  approvalPolicy: "never",
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        agents: {
+          list: [
+            {
+              id: "octogee-tester-70-coach",
+              model: withFallback("openai/gpt-5.5"),
+            },
+          ],
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+    ]);
   });
 
   it("anthropic BYOT cleanup still runs on operator broker-token gateways", async () => {
