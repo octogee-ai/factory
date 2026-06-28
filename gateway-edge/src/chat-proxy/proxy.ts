@@ -48,6 +48,7 @@ import {
   OpenClawRuntimeBrokerError,
   type OpenClawRuntimeBroker,
 } from "./openclaw/runtime-broker.js";
+export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
   if (!process.env.MM_INTERNAL_URL) {
@@ -443,14 +444,6 @@ export function setCors(req: http.IncomingMessage, res: http.ServerResponse): vo
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Max-Age", "86400");
-}
-
-export function chatProxyOwnsHttpPath(strippedPath: string): boolean {
-  return (
-    strippedPath === "/healthz" ||
-    strippedPath === "/healthz/bridge" ||
-    strippedPath === "/api/openclaw/approval/callback"
-  );
 }
 
 export async function chatProxyHandleRequest(

@@ -26,18 +26,23 @@ import internalConnectorRoutes from "./routes/internal/connectors.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 import { createGatewayRouter } from "./public-router.js";
 
-import {
-  chatProxyHandleRequest,
-  chatProxyOwnsHttpPath,
-  attachChatProxyWsUpgrade,
-  attachBuilderShellRoute,
-  startChatProxyBackground,
-  chatProxyMetricsRegistry,
-} from "./chat-proxy/proxy.js";
+import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
 import { validateRequiredEnv } from "./lib/required-env.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
+type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
+
+let chatProxyModulePromise: Promise<ChatProxyModule> | null = null;
+let activeChatProxyMetricsRegistry: Registry | null = null;
+
+async function loadChatProxyModule(): Promise<ChatProxyModule> {
+  chatProxyModulePromise ??= import("./chat-proxy/proxy.js").then((mod) => {
+    activeChatProxyMetricsRegistry = mod.chatProxyMetricsRegistry;
+    return mod;
+  });
+  return chatProxyModulePromise;
+}
 
 export type GatewayEdgeSurface = "sidecar" | "cluster";
 
@@ -95,7 +100,9 @@ installBodyParsers(app);
 
 app.get('/metrics', async (_req, res) => {
 
-const merged = Registry.merge([metricsRegistry, chatProxyMetricsRegistry]);
+const merged = Registry.merge(
+  activeChatProxyMetricsRegistry ? [metricsRegistry, activeChatProxyMetricsRegistry] : [metricsRegistry],
+);
   res.set('Content-Type', merged.contentType);
   res.end(await merged.metrics());
 });
@@ -184,7 +191,7 @@ export function dispatchGatewayEdgeRequest(
 ): void {
   const rawPath = (req.url || "").split("?")[0];
   if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath))) {
-    chatProxyHandleRequest(req, res).catch((err) => {
+    loadChatProxyModule().then((chatProxy) => chatProxy.chatProxyHandleRequest(req, res)).catch((err) => {
       logger.error("[chat-proxy] request handler failed", {
         path: rawPath,
         err: err instanceof Error ? err.message : String(err),
@@ -237,31 +244,38 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
-const server = http.createServer((req, res) =>
+  const server = http.createServer((req, res) =>
     dispatchGatewayEdgeRequest(req, res, app),
   );
-  attachChatProxyWsUpgrade(server);
-  attachBuilderShellRoute(server).catch((err) => {
-    logger.error("[builder-shell] route attach failed — WS route disabled", {
+  loadChatProxyModule().then((chatProxy) => {
+    chatProxy.attachChatProxyWsUpgrade(server);
+    chatProxy.attachBuilderShellRoute(server).catch((err) => {
+      logger.error("[builder-shell] route attach failed — WS route disabled", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    server.listen(PORT, () => {
+      logger.info(`gateway-edge boot — listening on port ${PORT}`, {
+        port: PORT,
+        env: process.env.K8S_NAMESPACE || "local",
+        sha: process.env.BUILD_SHA || "unknown",
+        oc: process.env.OPENCLAW_VERSION || "n/a",
+        fork: process.env.OPENCLAW_FORK_SHA || "n/a",
+        node: process.version,
+      });
+    });
+
+    chatProxy.startChatProxyBackground().catch((err) => {
+      logger.error("[chat-proxy] background boot failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }).catch((err) => {
+    logger.error("[chat-proxy] module load failed", {
       err: err instanceof Error ? err.message : String(err),
     });
-  });
-
-  server.listen(PORT, () => {
-    logger.info(`gateway-edge boot — listening on port ${PORT}`, {
-      port: PORT,
-      env: process.env.K8S_NAMESPACE || "local",
-      sha: process.env.BUILD_SHA || "unknown",
-      oc: process.env.OPENCLAW_VERSION || "n/a",
-      fork: process.env.OPENCLAW_FORK_SHA || "n/a",
-      node: process.version,
-    });
-  });
-
-  startChatProxyBackground().catch((err) => {
-    logger.error("[chat-proxy] background boot failed", {
-      err: err instanceof Error ? err.message : String(err),
-    });
+    process.exit(1);
   });
   }
 }
