@@ -309,12 +309,15 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
   });
 });
 
-describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION coach model (native claude-cli/ id)", () => {
-  it("uses the openclaw-native claude-cli/<model> id, allowlisted with an empty entry — the provider prefix selects the runtime, so NO agentRuntime remap (proven live: openclaw exposes claude-cli/claude-opus-4-8, not anthropic/...)", () => {
+describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION coach model (native claude-cli/ provider)", () => {
+  it("uses Opus 4.8 as the default while allowlisting the current Claude CLI provider catalog", () => {
     expect(claudeCliRuntimeConfig()).toEqual({
       model: "claude-cli/claude-opus-4-8",
       modelsDef: {
         "claude-cli/claude-opus-4-8": {},
+        "claude-cli/claude-opus-4-7": {},
+        "claude-cli/claude-sonnet-4-6": {},
+        "claude-cli/claude-opus-4-6": {},
       },
     });
   });

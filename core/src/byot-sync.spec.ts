@@ -1,9 +1,11 @@
 import { describe, it, test, expect, beforeEach, afterEach, vi } from "vitest";
 
-const { secretsReloadSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
+const { gatewayRestartRequestSpy, secretsReloadSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
+  const gatewayRestartRequestSpy = vi.fn(async () => ({ status: "requested" }));
   const secretsReloadSpy = vi.fn(async () => ({ ok: true, warningCount: 0 }));
   const closeSpy = vi.fn(async () => {});
   const createGatewayRpcSpy = vi.fn(() => ({
+    gatewayRestartRequest: gatewayRestartRequestSpy,
     secretsReload: secretsReloadSpy,
     close: closeSpy,
     configGet: vi.fn(),
@@ -11,7 +13,7 @@ const { secretsReloadSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
     channelsStatus: vi.fn(),
     isGatewayUp: vi.fn(async () => true),
   }));
-  return { secretsReloadSpy, closeSpy, createGatewayRpcSpy };
+  return { gatewayRestartRequestSpy, secretsReloadSpy, closeSpy, createGatewayRpcSpy };
 });
 
 vi.mock("./gateway-rpc", () => ({
@@ -54,6 +56,7 @@ import {
   brokerFetchByosubCreds,
   applyCoachModelPatch,
   applyOauthRuntimeModelAllowlist,
+  requestGatewayRestartForRuntimeChange,
   syncByotForCustomer,
   markerProvidersForSlot,
 } from "./byot-sync-runtime";
@@ -178,6 +181,7 @@ describe("deriveDesiredByotState — recognizes every PROVIDERS-registry provide
 
 describe("triggerSecretsReload — in-process RPC, no subprocess", () => {
   beforeEach(() => {
+    gatewayRestartRequestSpy.mockClear();
     secretsReloadSpy.mockClear();
     closeSpy.mockClear();
     createGatewayRpcSpy.mockClear();
@@ -209,6 +213,37 @@ describe("triggerSecretsReload — in-process RPC, no subprocess", () => {
   test("still closes the client when the RPC throws (no resource leak)", async () => {
     secretsReloadSpy.mockRejectedValueOnce(new Error("auth-failed"));
     await triggerSecretsReload();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("requestGatewayRestartForRuntimeChange — in-process RPC, no subprocess", () => {
+  beforeEach(() => {
+    gatewayRestartRequestSpy.mockClear();
+    closeSpy.mockClear();
+    createGatewayRpcSpy.mockClear();
+  });
+
+  test("requests an OpenClaw-aware restart and closes the client", async () => {
+    gatewayRestartRequestSpy.mockResolvedValueOnce({ status: "requested" });
+    await expect(requestGatewayRestartForRuntimeChange()).resolves.toBe(true);
+    expect(createGatewayRpcSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowLegacyGatewayTokenFallback: true,
+        callTimeoutMs: 10_000,
+        connectTimeoutMs: 10_000,
+      }),
+    );
+    expect(gatewayRestartRequestSpy).toHaveBeenCalledWith({
+      reason: "byosub.oauth-runtime",
+      skipDeferral: true,
+    });
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("returns false on restart failure so sync can fall back to secrets.reload", async () => {
+    gatewayRestartRequestSpy.mockRejectedValueOnce(new Error("restart disabled"));
+    await expect(requestGatewayRestartForRuntimeChange()).resolves.toBe(false);
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 });
@@ -438,6 +473,13 @@ const withFallback = (primary: string) => ({
   fallbacks: ["anthropic/claude-haiku-4-5"],
 });
 
+const claudeCliDefaultModels = {
+  "claude-cli/claude-opus-4-8": {},
+  "claude-cli/claude-opus-4-7": {},
+  "claude-cli/claude-sonnet-4-6": {},
+  "claude-cli/claude-opus-4-6": {},
+};
+
 describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () => {
   const id = "octogee-tester-70-coach";
   it("null input / no-override providers → null (keep gateway default, no per-agent model)", () => {
@@ -466,12 +508,12 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     });
   });
 
-  it("claude-cli (Claude subscription) → native claude-cli/claude-opus-4-8 + empty allowlist entry (prefix selects the runtime; no agentRuntime remap)", () => {
+  it("claude-cli (Claude subscription) → default model plus the Claude CLI provider catalog", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "claude-cli" })).toEqual({
       agents: {
         list: [{ id, model: withFallback("claude-cli/claude-opus-4-8") }],
         defaults: {
-          models: { "claude-cli/claude-opus-4-8": {} },
+          models: claudeCliDefaultModels,
         },
       },
     });
@@ -603,7 +645,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
             { id: "octogee-tester-70-coach", name: "coach", model: withFallback("claude-cli/claude-opus-4-8"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
-          defaults: { models: { "claude-cli/claude-opus-4-8": {} } },
+          defaults: { models: claudeCliDefaultModels },
         },
       },
     ]);
@@ -680,14 +722,14 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
       },
     });
 
-    expect(r).toBe(true);
+    expect(r).toEqual({ patched: true, changed: true, restartRequired: true });
     expect(calls).toEqual([
       {
         agents: {
           defaults: {
             models: {
               "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-              "claude-cli/claude-opus-4-8": {},
+              ...claudeCliDefaultModels,
             },
           },
         },
@@ -725,7 +767,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
       },
     });
 
-    expect(r).toBe(true);
+    expect(r).toEqual({ patched: true, changed: true, restartRequired: false });
     expect(calls).toEqual([
       {
         agents: {
@@ -756,8 +798,15 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
     const applyConfigPatchFn = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
     await expect(
       applyOauthRuntimeModelAllowlist([], { applyConfigPatch: applyConfigPatchFn }),
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ patched: false, changed: false, restartRequired: false });
     expect(applyConfigPatchFn).not.toHaveBeenCalled();
+  });
+
+  it("does not require a restart when config.patch reports a no-op", async () => {
+    const r = await applyOauthRuntimeModelAllowlist(["anthropic"], {
+      applyConfigPatch: async () => ({ mode: "rpc", attempts: 1, noop: true }),
+    });
+    expect(r).toEqual({ patched: true, changed: false, restartRequired: false });
   });
 });
 
@@ -890,7 +939,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("restores a multi-provider BYOSUB set and allowlists every restored runtime before model switching", async () => {
+  it("restores a multi-provider BYOSUB set, allowlists every runtime, then requests the Claude runtime restart", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({
       restored: true,
@@ -898,7 +947,12 @@ describe("standard gateway — BYOS materialization", () => {
       providers: ["openai", "anthropic"] as const,
     }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
-    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => true);
+    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
+      patched: true,
+      changed: true,
+      restartRequired: true,
+    }));
+    const requestGatewayRestartFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
     await syncByotForCustomer(
@@ -914,6 +968,7 @@ describe("standard gateway — BYOS materialization", () => {
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
+        requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
@@ -926,7 +981,8 @@ describe("standard gateway — BYOS materialization", () => {
       baseUrl: undefined,
       model: undefined,
     });
-    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+    expect(requestGatewayRestartFn).toHaveBeenCalledTimes(1);
+    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 
   it("oauth credential absent (missing ref / transient SM failure) → does NOT pin the coach, preserving the platform-key fallback", async () => {
@@ -1125,7 +1181,12 @@ describe("operator gateway — runtime sync stays narrow", () => {
       providers: ["openai", "anthropic"] as const,
     }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
-    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => true);
+    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
+      patched: true,
+      changed: true,
+      restartRequired: true,
+    }));
+    const requestGatewayRestartFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
     await syncByotForCustomer(
@@ -1141,6 +1202,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
+        requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
@@ -1154,7 +1216,8 @@ describe("operator gateway — runtime sync stays narrow", () => {
       baseUrl: undefined,
       model: undefined,
     });
-    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+    expect(requestGatewayRestartFn).toHaveBeenCalledTimes(1);
+    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 
   it("syncByotForCustomer: preserves an operator Codex danger-full-access sandbox through the full restore and coach patch cycle", async () => {

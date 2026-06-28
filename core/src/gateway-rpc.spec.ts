@@ -239,6 +239,27 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("gatewayRestartRequest", () => {
+    it("requests a safe gateway restart through the OpenClaw RPC", async () => {
+      let captured: any;
+      server.setHandler("gateway.restart.request", (params) => {
+        captured = params;
+        return { ok: true, payload: { status: "requested" } };
+      });
+
+      const result = await client.gatewayRestartRequest({
+        reason: "byosub.oauth-runtime",
+        skipDeferral: true,
+      });
+
+      expect(captured).toEqual({
+        reason: "byosub.oauth-runtime",
+        skipDeferral: true,
+      });
+      expect(result).toEqual({ status: "requested" });
+    });
+  });
+
   describe("configGet", () => {
     it("returns the config snapshot and its hash", async () => {
       server.setHandler("config.get", () => ({

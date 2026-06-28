@@ -69,6 +69,10 @@ export interface SecretsReloadResult {
   ok?: boolean;
 }
 
+export interface GatewayRestartRequestResult {
+  [extra: string]: unknown;
+}
+
 export interface CronAddSpec {
   name: string;
   description?: string;
@@ -114,6 +118,7 @@ export interface GatewayRpcClient {
   ): Promise<ConfigPatchResult>;
   channelsStatus(): Promise<unknown>;
   secretsReload(): Promise<SecretsReloadResult>;
+  gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
   close(): Promise<void>;
@@ -262,6 +267,17 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
 
     async channelsStatus() {
       return await call("channels.status", {});
+    },
+
+    async gatewayRestartRequest(params) {
+      const payload = await call("gateway.restart.request", params);
+      if (!payload || typeof payload !== "object") {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "gateway.restart.request returned non-object payload",
+        );
+      }
+      return payload as GatewayRestartRequestResult;
     },
 
     async cronAdd(spec) {

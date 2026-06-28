@@ -200,14 +200,22 @@ export function codexRuntimeConfig(): {
   return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
 }
 
+export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
+  "claude-cli/claude-opus-4-8",
+  "claude-cli/claude-opus-4-7",
+  "claude-cli/claude-sonnet-4-6",
+  "claude-cli/claude-opus-4-6",
+] as const;
+
 export function claudeCliRuntimeConfig(): {
   model: string;
   modelsDef: Record<string, Record<string, never>>;
 } {
   const model = MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS["claude-cli"].defaultModel!;
-  // Empty entry = allowlist the native claude-cli/<model> id; the prefix selects
-  // the runtime, so no agentRuntime remap (unlike codex, a plugin).
-  return { model, modelsDef: { [model]: {} } };
+  return {
+    model,
+    modelsDef: Object.fromEntries(CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) => [ref, {}])),
+  };
 }
 
 export interface OAuthCredential {

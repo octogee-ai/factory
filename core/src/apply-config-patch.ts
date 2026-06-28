@@ -200,7 +200,11 @@ async function runConfigPatchAttempt(
   ctx.log(
     `${ctx.prefix}config.patch OK attempt=${ctx.attempts} configGet=${getMs}ms configPatch=${patchMs}ms totalMs=${ctx.now() - ctx.startedAt}`,
   );
-  return { mode: "rpc", attempts: ctx.attempts };
+  return {
+    mode: "rpc",
+    attempts: ctx.attempts,
+    ...(patchResult.noop === true ? { noop: true } : {}),
+  };
 }
 
 function isPermanentConfigPatchError(err: OpenclawWireError): boolean {
@@ -311,6 +315,7 @@ async function handleConfigPatchFailure(
 export interface ApplyConfigPatchResult {
   mode: "rpc";
   attempts: number;
+  noop?: boolean;
 }
 
 export async function applyConfigPatch(

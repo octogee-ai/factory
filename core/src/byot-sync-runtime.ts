@@ -119,18 +119,22 @@ export async function applyOauthRuntimeModelAllowlist(
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
   },
-): Promise<boolean> {
+): Promise<OauthRuntimeModelAllowlistResult> {
   const uniqueProviders = Array.from(new Set(providers));
   const models: Record<string, unknown> = {};
   let enableCodex = false;
+  let enableClaudeCli = false;
   if (uniqueProviders.includes("openai")) {
     Object.assign(models, codexRuntimeConfig().modelsDef);
     enableCodex = true;
   }
   if (uniqueProviders.includes("anthropic")) {
     Object.assign(models, claudeCliRuntimeConfig().modelsDef);
+    enableClaudeCli = true;
   }
-  if (Object.keys(models).length === 0) return false;
+  if (Object.keys(models).length === 0) {
+    return { patched: false, changed: false, restartRequired: false };
+  }
 
   const buildPatch = (current: unknown) => ({
     agents: { defaults: { models } },
@@ -150,7 +154,7 @@ export async function applyOauthRuntimeModelAllowlist(
   const logFn = deps?.logFn ?? log;
   const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
   try {
-    await applyConfigPatchFn(
+    const result = await applyConfigPatchFn(
       {
         buildPatch,
         logPrefix: "[byot-sync:oauth-runtime]",
@@ -160,10 +164,46 @@ export async function applyOauthRuntimeModelAllowlist(
     logFn(
       `[byot-sync] OAuth runtime models allowlisted for ${uniqueProviders.sort().join(", ")}`,
     );
-    return true;
+    const changed = result.noop !== true;
+    return { patched: true, changed, restartRequired: changed && enableClaudeCli };
   } catch (e) {
     logFn(`⚠ [byot-sync] OAuth runtime allowlist patch failed: ${(e as Error).message}`);
+    return { patched: false, changed: false, restartRequired: false };
+  }
+}
+
+export interface OauthRuntimeModelAllowlistResult {
+  patched: boolean;
+  changed: boolean;
+  restartRequired: boolean;
+}
+
+export async function requestGatewayRestartForRuntimeChange(): Promise<boolean> {
+  const rpc = createGatewayRpc({
+    allowLegacyGatewayTokenFallback: true,
+    connectTimeoutMs: 10_000,
+    callTimeoutMs: 10_000,
+  });
+  try {
+    await rpc.gatewayRestartRequest({
+      reason: "byosub.oauth-runtime",
+      skipDeferral: true,
+    });
+    log("[byot-sync] gateway restart requested after OAuth runtime change");
+    return true;
+  } catch (err) {
+    let detail: string;
+    if (err instanceof OpenclawWireError) {
+      detail = `${err.code}: ${err.message}`;
+    } else if (err instanceof Error) {
+      detail = err.message;
+    } else {
+      detail = String(err);
+    }
+    log(`⚠ [byot-sync] gateway restart request failed after OAuth runtime change: ${detail}`);
     return false;
+  } finally {
+    await rpc.close();
   }
 }
 
@@ -333,6 +373,7 @@ export interface SyncByotForCustomerDeps {
   restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch?: typeof applyCoachModelPatch;
   applyOauthRuntimeModelAllowlist?: typeof applyOauthRuntimeModelAllowlist;
+  requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload?: typeof triggerSecretsReload;
   materializeAnthropicBroker?: (slug: string) => boolean;
 }
@@ -345,6 +386,7 @@ interface SyncByotActions {
   restoreOauthStoreForSlug: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch: typeof applyCoachModelPatch;
   applyOauthRuntimeModelAllowlist: typeof applyOauthRuntimeModelAllowlist;
+  requestGatewayRestart: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload: typeof triggerSecretsReload;
   materializeAnthropicBroker: (slug: string) => boolean;
 }
@@ -361,6 +403,7 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     applyCoachModelPatch: deps?.applyCoachModelPatch ?? applyCoachModelPatch,
     applyOauthRuntimeModelAllowlist:
       deps?.applyOauthRuntimeModelAllowlist ?? applyOauthRuntimeModelAllowlist,
+    requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
     materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
   };
@@ -369,9 +412,17 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
 async function applyRestoredOauthRuntimeAllowlist(
   restore: OauthStoreRestoreResult,
   actions: SyncByotActions,
-): Promise<boolean> {
-  if (!restore.present) return false;
+): Promise<OauthRuntimeModelAllowlistResult> {
+  if (!restore.present) return { patched: false, changed: false, restartRequired: false };
   return actions.applyOauthRuntimeModelAllowlist(restore.providers ?? []);
+}
+
+async function requestRestartIfRequired(
+  runtimePatch: OauthRuntimeModelAllowlistResult,
+  actions: SyncByotActions,
+): Promise<boolean> {
+  if (!runtimePatch.restartRequired) return false;
+  return actions.requestGatewayRestart();
 }
 
 function isBrokerResolvedAnthropic(
@@ -416,8 +467,9 @@ async function syncStandardByotState(
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
+  const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
 
-  if (changed || restore.restored || runtimePatched || patched) {
+  if ((changed || restore.restored || runtimePatched.patched || patched) && !restartRequested) {
     await actions.triggerSecretsReload();
   }
 }
@@ -432,7 +484,10 @@ async function syncOperatorByotState(
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
-  if (restore.restored || runtimePatched || patched) await actions.triggerSecretsReload();
+  const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
+  if ((restore.restored || runtimePatched.patched || patched) && !restartRequested) {
+    await actions.triggerSecretsReload();
+  }
 }
 
 // Shared (multi-tenant) pods route EACH customer-agent's anthropic through the
@@ -468,8 +523,9 @@ async function syncSharedBrokerByotState(
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
+  const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
 
-  if (changed || restore.restored || materialized || runtimePatched || patched) {
+  if ((changed || restore.restored || materialized || runtimePatched.patched || patched) && !restartRequested) {
     await actions.triggerSecretsReload();
   }
 }
