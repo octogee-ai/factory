@@ -8,9 +8,9 @@
     }
   },
   {
-    "name": "keep-recent-3-per-image",
+    "name": "keep-recent-2-per-image",
     "action": { "type": "Keep" },
-    "mostRecentVersions": { "keepCount": 3 }
+    "mostRecentVersions": { "keepCount": 2 }
   },
   {
     "name": "delete-untagged",
@@ -20,6 +20,6 @@
   {
     "name": "delete-stale-tagged",
     "action": { "type": "Delete" },
-    "condition": { "tagState": "tagged", "olderThan": "432000s" }
+    "condition": { "tagState": "tagged", "olderThan": "86400s" }
   }
 ]
