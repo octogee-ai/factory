@@ -31,8 +31,9 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 
 interface FakeState {
   helmInstances: Set<string>;
+  helmImageTags?: Map<string, string>;
   availableReplicas: Map<string, number>;
-  heartbeats: Map<string, number>;
+  heartbeats: Map<string, number | { lastHeartbeatAt: number; version?: string | null }>;
   platformReady: Set<string>;
 }
 
@@ -48,7 +49,7 @@ function makeDeps(
         for (const name of state.helmInstances) {
           m[name] = {
             enabled: true,
-            image: { repository: "repo", tag: "abc" },
+            image: { repository: "repo", tag: state.helmImageTags?.get(name) ?? "abc1234" },
             gatewayId: name,
           };
         }
@@ -62,7 +63,7 @@ function makeDeps(
     },
     readGatewayHeartbeat: vi.fn(async (gatewayId: string) => {
       const ts = state.heartbeats.get(gatewayId);
-      return ts == null ? null : { lastHeartbeatAt: ts };
+      return typeof ts === "number" ? { lastHeartbeatAt: ts, version: "abc1234" } : ts ?? null;
     }),
     publishGatewayReady: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
       state.platformReady.add(gatewayId);
@@ -145,6 +146,33 @@ describe("createAddGatewayHandler — happy path", () => {
     expect(result.success).toBe(true);
   });
 
+  it("waits for the requested image tag when reusing an existing sibling release", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary"]),
+      helmImageTags: new Map([["canary", "old"]]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
+      heartbeats: new Map([["canary", { lastHeartbeatAt: 1, version: "new" }]]),
+      platformReady: new Set(),
+    };
+    let polls = 0;
+    const deps = makeDeps(state, {
+      wait: vi.fn(async () => {
+        polls++;
+        if (polls === 2) {
+          state.helmImageTags?.set("canary", "new");
+        }
+      }),
+    });
+
+    const result = await createAddGatewayHandler(deps)(
+      mkOp({ input: { gatewayId: "canary", imageTag: "new" } }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(deps.helm.readDeployedInstances).toHaveBeenCalledTimes(3);
+  });
+
   it("does not spend heartbeat budget before Kubernetes reports the deployment available", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
@@ -185,7 +213,7 @@ describe("createAddGatewayHandler — happy path", () => {
     const ctx = makeCtx();
 
     const result = await createAddGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "canary", imageTag: "abc", profile: "operator" } }),
+      mkOp({ input: { gatewayId: "canary", imageTag: "abc1234", profile: "operator" } }),
       ctx,
     );
 
@@ -215,7 +243,7 @@ describe("createAddGatewayHandler — happy path", () => {
     const ctx = makeCtx();
 
     const result = await createAddGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "canary", imageTag: "abc", gatewayClass: "builder" } }),
+      mkOp({ input: { gatewayId: "canary", imageTag: "abc1234", gatewayClass: "builder" } }),
       ctx,
     );
 
@@ -232,6 +260,33 @@ describe("createAddGatewayHandler — happy path", () => {
       "fleet-ingress:running",
       "fleet-ingress:done",
     ]);
+  });
+
+  it("waits for a heartbeat from the requested image instead of accepting a stale sibling heartbeat", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary"]),
+      helmImageTags: new Map([["canary", "new"]]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
+      heartbeats: new Map([["canary", { lastHeartbeatAt: 1, version: "old" }]]),
+      platformReady: new Set(),
+    };
+    let polls = 0;
+    const deps = makeDeps(state, {
+      wait: vi.fn(async () => {
+        polls++;
+        if (polls === 2) {
+          state.heartbeats.set("canary", { lastHeartbeatAt: 2, version: "new" });
+        }
+      }),
+    });
+
+    const result = await createAddGatewayHandler(deps)(
+      mkOp({ input: { gatewayId: "canary", imageTag: "new" } }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(deps.readGatewayHeartbeat).toHaveBeenCalledTimes(3);
   });
 });
 

@@ -381,11 +381,11 @@ async function publishPlatformGatewayReady(
 async function readGatewayHeartbeatFromFirestore(
   db: Firestore,
   gatewayId: string,
-): Promise<{ lastHeartbeatAt: number } | null> {
+): Promise<{ lastHeartbeatAt: number; version?: string | null } | null> {
   const doc = await db.collection("gateways").doc(gatewayId).get();
   if (!doc.exists) return null;
   const data = doc.data() as
-    | { lastHeartbeatAt?: { toMillis?: () => number } | number | Date }
+    | { version?: unknown; lastHeartbeatAt?: { toMillis?: () => number } | number | Date }
     | undefined;
   const raw = data?.lastHeartbeatAt;
   if (raw == null) return null;
@@ -395,7 +395,12 @@ async function readGatewayHeartbeatFromFirestore(
   else if (typeof (raw as { toMillis?: () => number }).toMillis === "function") {
     ms = (raw as { toMillis: () => number }).toMillis();
   }
-  return ms == null ? null : { lastHeartbeatAt: ms };
+  return ms == null
+    ? null
+    : {
+        lastHeartbeatAt: ms,
+        version: typeof data?.version === "string" ? data.version : null,
+      };
 }
 
 async function applyChanges(
