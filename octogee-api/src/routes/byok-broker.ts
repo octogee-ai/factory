@@ -234,18 +234,34 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
     }
 
     const now = Date.now();
-    await db
-      .collection("byosubFlows")
-      .doc(body.flowId)
-      .set({
-        uid: assigned.uid,
-        gatewayId: bound.gatewayId,
-        agentId: body.agentId,
-        provider: entry.oauth.subscriptionProvider,
-        modelCredentialProvider: entry.id,
-        createdAt: now,
-        expireAt: now + BYOSUB_FLOW_TTL_MS,
-      });
+    await Promise.all([
+      db
+        .collection("byosubFlows")
+        .doc(body.flowId)
+        .set({
+          uid: assigned.uid,
+          gatewayId: bound.gatewayId,
+          agentId: body.agentId,
+          provider: entry.oauth.subscriptionProvider,
+          modelCredentialProvider: entry.id,
+          createdAt: now,
+          expireAt: now + BYOSUB_FLOW_TTL_MS,
+        }),
+      db
+        .collection("users")
+        .doc(assigned.uid)
+        .collection("integrations")
+        .doc("byosub")
+        .set({
+          provider: entry.oauth.subscriptionProvider,
+          modelCredentialProvider: entry.id,
+          status: "pending",
+          connected: false,
+          flowId: body.flowId,
+          gatewayId: bound.gatewayId,
+          updatedAt: now,
+        }, { merge: true }),
+    ]);
     res.json({ ok: true });
   });
 

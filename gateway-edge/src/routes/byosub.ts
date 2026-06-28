@@ -198,6 +198,36 @@ function triggerUnifiedByosSyncForFlow(
   triggerUnifiedByosSync({ gatewayId: flow.gatewayId, slug, provider });
 }
 
+async function writeByosubIntegration(args: {
+  uid: string;
+  provider: string;
+  modelCredentialProvider: ModelCredentialOAuthProviderId;
+  status: string;
+  connected: boolean;
+  gatewayId?: string;
+  flowId?: string;
+  reason?: string;
+}): Promise<void> {
+  await db
+    .collection("users")
+    .doc(args.uid)
+    .collection("integrations")
+    .doc("byosub")
+    .set(
+      {
+        provider: args.provider,
+        modelCredentialProvider: args.modelCredentialProvider,
+        status: args.status,
+        connected: args.connected,
+        ...(args.gatewayId ? { gatewayId: args.gatewayId } : {}),
+        ...(args.flowId ? { flowId: args.flowId } : {}),
+        ...(args.reason ? { reason: args.reason } : {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+}
+
 // #1141 — let the Builder clear a connected BYOS credential. The inverse
 // of /capture's unified-signal flip + glmGateways.byosub ref-write. The
 // Secret Manager secret is intentionally NOT destroyed (disconnect-only,
@@ -213,6 +243,20 @@ router.post(
       const resolved = await resolveUserGateway(uid);
 
       await db.collection("users").doc(uid).set({ byotActive: false }, { merge: true });
+      await db
+        .collection("users")
+        .doc(uid)
+        .collection("integrations")
+        .doc("byosub")
+        .set(
+          {
+            connected: false,
+            status: "disconnected",
+            flowId: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
       await db
         .collection("users")
         .doc(uid)
@@ -310,6 +354,14 @@ router.post(
           { merge: true },
         );
       await flipUnifiedByosSignal(uid, entry.id, secretName);
+      await writeByosubIntegration({
+        uid,
+        provider: entry.oauth.subscriptionProvider,
+        modelCredentialProvider: entry.id,
+        status: "connected",
+        connected: true,
+        gatewayId: resolved.gatewayId,
+      });
       triggerUnifiedByosSync({
         gatewayId: resolved.gatewayId,
         slug: resolved.slug,
@@ -350,6 +402,15 @@ router.post(
 
       if (flow.consumedAt) {
         await flipUnifiedByosSignal(flow.uid, signalProvider, secretName);
+        await writeByosubIntegration({
+          uid: flow.uid,
+          provider: secretProvider,
+          modelCredentialProvider: signalProvider,
+          status: "connected",
+          connected: true,
+          gatewayId: flow.gatewayId,
+          flowId: b.flowId,
+        });
         triggerUnifiedByosSyncForFlow(flow, signalProvider);
         res.json({ ok: true, secretName, alreadyConsumed: true });
         return;
@@ -381,6 +442,15 @@ router.post(
         );
 
       await flipUnifiedByosSignal(flow.uid, signalProvider, secretName);
+      await writeByosubIntegration({
+        uid: flow.uid,
+        provider: secretProvider,
+        modelCredentialProvider: signalProvider,
+        status: "connected",
+        connected: true,
+        gatewayId: flow.gatewayId,
+        flowId: b.flowId,
+      });
       triggerUnifiedByosSyncForFlow(flow, signalProvider);
 
       await db
