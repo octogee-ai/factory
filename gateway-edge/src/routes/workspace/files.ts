@@ -30,6 +30,29 @@ export interface WorkspaceFilesResponse {
   readOnly?: boolean;
 }
 
+export type WorkspaceFileResponse =
+  | {
+      content: null;
+      downloadUrl: string;
+      mimeType: string;
+      size: number;
+      path: string;
+      source: "blob";
+    }
+  | {
+      content: string;
+      path: string;
+      sha?: string;
+      source: "git";
+      writable: boolean;
+    }
+  | {
+      error: "File too large to display inline";
+      code: "FILE_TOO_LARGE";
+      size: number | null;
+      path: string;
+    };
+
 type ListPathValidation = { ok: true } | { ok: false; status: 400 | 403; error: string };
 
 function errorMessage(e: unknown): string {
@@ -138,6 +161,68 @@ export async function workspaceFilesResponse(
   return { files, readOnly: target.provider !== "gitea" };
 }
 
+export async function workspaceFileResponse(
+  target: Parameters<typeof repoContentsApi>[0],
+  path: string,
+): Promise<WorkspaceFileResponse | null> {
+  if (target.provider !== "github") {
+    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
+    const blobEntry = manifest[path];
+
+    if (blobEntry) {
+      const bucket = storage.bucket();
+      const file = bucket.file(blobEntry.gcsPath);
+      const [signedUrl] = await file.getSignedUrl({
+        action: "read",
+        expires: Date.now() + 60 * 60 * 1000,
+      });
+      return {
+        content: null,
+        downloadUrl: signedUrl,
+        mimeType: blobEntry.mimeType,
+        size: blobEntry.size,
+        path,
+        source: "blob",
+      };
+    }
+  }
+
+  let file: {
+    content?: string;
+    sha?: string;
+    encoding?: string;
+    size?: number;
+  };
+  try {
+    file = (await repoContentsApi(target, path)) as {
+      content?: string;
+      sha?: string;
+      encoding?: string;
+      size?: number;
+    };
+  } catch (e) {
+    if (errorMessage(e).includes("404")) return null;
+    throw e;
+  }
+
+  if (isOversizeFile(file)) {
+    return {
+      error: "File too large to display inline",
+      code: "FILE_TOO_LARGE",
+      size: file.size ?? null,
+      path,
+    };
+  }
+  const content = Buffer.from(file.content ?? "", "base64").toString("utf-8");
+  return {
+    content,
+    path,
+    sha: file.sha,
+    source: "git",
+    writable: isTargetPathWritable(target, path),
+  };
+}
+
 router.get("/files", withFileTarget(async (req, res, _next, target) => {
   const path = (req.query.path as string) ?? "";
   const bustCache = req.query.nocache === "1";
@@ -162,52 +247,16 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
     return;
   }
 
-  if (target.provider !== "github") {
-    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
-    const blobEntry = manifest[path];
-
-    if (blobEntry) {
-      const bucket = storage.bucket();
-      const file = bucket.file(blobEntry.gcsPath);
-      const [signedUrl] = await file.getSignedUrl({
-        action: "read",
-        expires: Date.now() + 60 * 60 * 1000,
-      });
-      res.json({
-        content: null,
-        downloadUrl: signedUrl,
-        mimeType: blobEntry.mimeType,
-        size: blobEntry.size,
-        path,
-        source: "blob",
-      });
-      return;
-    }
-  }
-
-  const file = (await repoContentsApi(target, path)) as {
-    content?: string;
-    sha?: string;
-    encoding?: string;
-    size?: number;
-  };
-  if (isOversizeFile(file)) {
-    res.status(413).json({
-      error: "File too large to display inline",
-      code: "FILE_TOO_LARGE",
-      size: file.size ?? null,
-      path,
-    });
+  const response = await workspaceFileResponse(target, path);
+  if (!response) {
+    res.status(404).json({ error: "File not found" });
     return;
   }
-  const content = Buffer.from(file.content ?? "", "base64").toString("utf-8");
-  res.json({
-    content,
-    path,
-    sha: file.sha,
-    source: "git",
-    writable: isTargetPathWritable(target, path),
-  });
+  if ("code" in response && response.code === "FILE_TOO_LARGE") {
+    res.status(413).json(response);
+    return;
+  }
+  res.json(response);
 }, { allowWorkspaceMembers: true }));
 
 export default router;

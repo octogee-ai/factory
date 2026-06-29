@@ -145,6 +145,25 @@ describe("gateway-edge sidecar surface", () => {
     expect(res.body).toEqual({ error: "Missing ticket" });
   });
 
+  it("keeps agent-owned internal workspace and project actions mounted on the sidecar", async () => {
+    const app = createApp({ surface: "sidecar" });
+
+    const commit = await request(app)
+      .post("/internal/workspace/commit")
+      .send({ slug: "../alice" });
+    expect(commit.status).toBe(400);
+    expect(commit.body).toEqual({ error: "Invalid slug", code: "BAD_SLUG" });
+
+    const publish = await request(app)
+      .post("/internal/project/publish")
+      .send({ slug: "../alice", projectSlug: "demo" });
+    expect(publish.status).toBe(400);
+    expect(publish.body).toEqual({
+      error: "Invalid slug or projectSlug",
+      code: "BAD_INPUT",
+    });
+  });
+
   it("requires valid operator KSA auth on sidecar connector materialization", async () => {
     const reviewer = configureOperatorServiceAccountAuth();
     const app = createApp({ surface: "sidecar" });

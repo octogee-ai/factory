@@ -26,11 +26,13 @@ vi.mock("../routes/workspace/helpers", () => ({
 
 import {
   blobFileEntries,
+  workspaceFileResponse,
   repoFileEntries,
   sortWorkspaceFiles,
   workspaceFilesResponse,
 } from "../routes/workspace/files.js";
 import { repoContentsApi } from "../routes/workspace/helpers.js";
+import { getManifest } from "../lib/manifest.js";
 import type { Manifest } from "../lib/manifest.js";
 import type { FileTarget } from "../lib/fileTarget.js";
 
@@ -123,5 +125,12 @@ describe("workspace file list helpers", () => {
     vi.mocked(repoContentsApi).mockRejectedValueOnce(new Error("Gitea API 404"));
 
     await expect(workspaceFilesResponse(giteaTarget, "", false)).resolves.toEqual({ files: [] });
+  });
+
+  it("returns null for a missing git-backed file instead of throwing", async () => {
+    vi.mocked(getManifest).mockResolvedValueOnce({});
+    vi.mocked(repoContentsApi).mockRejectedValueOnce(new Error("Gitea API 404"));
+
+    await expect(workspaceFileResponse(giteaTarget, "README.md")).resolves.toBeNull();
   });
 });

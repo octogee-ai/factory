@@ -21,6 +21,8 @@ import { createByosubAuthRouter } from "./routes/byosub-auth.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
+import internalWorkspaceCommitRoutes from "./routes/internal/workspace-commit.js";
+import internalProjectPublishRoutes from "./routes/internal/project-publish.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
@@ -123,6 +125,8 @@ app.use("/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal", internalByotSyncRoutes);
 if (surface === "sidecar") {
+  app.use("/internal/workspace", internalWorkspaceCommitRoutes);
+  app.use("/internal/project", internalProjectPublishRoutes);
   app.use("/internal/connectors", internalConnectorRoutes);
 }
 
