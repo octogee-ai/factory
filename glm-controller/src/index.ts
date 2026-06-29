@@ -107,7 +107,6 @@ import {
 } from "@octogee/core/customer-snapshot-mapping";
 import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
-  MIGRATION_TRANSFER_TIMEOUT_MS,
   SIGNATURE_HEADER,
 } from "@octogee/shared/types/fleet-controller";
 import { getStorage } from "firebase-admin/storage";
@@ -1244,15 +1243,6 @@ function startControllerBackgroundTasks({
       db,
       idleMs: DEDICATED_GATEWAY_IDLE_MS,
       namespace: NAMESPACE,
-      flushGateway: ({ gatewayId, slug, reason }) =>
-        callFlushRpc(db, {
-          privateKey: fleetControllerPrivateKey,
-          gatewayId,
-          slug,
-          reason,
-          log,
-          tag: "idle-sleep",
-        }),
       now: () => Date.now(),
       log,
     },
@@ -2356,66 +2346,6 @@ export async function callUnmountRpc(
     throw new Error(`unmount failed: ${resp.status} ${text.slice(0, 200)}`);
   }
   log(`[${tag}] unmount RPC ok gatewayId=${gatewayId} slug=${slug}`);
-}
-
-export async function callFlushRpc(
-  db: Firestore,
-  opts: {
-    privateKey: string;
-    gatewayId: string;
-    slug: string;
-    reason: string;
-    log: (msg: string) => void;
-    tag?: string;
-    timeoutMs?: number;
-  },
-): Promise<void> {
-  const {
-    privateKey,
-    gatewayId,
-    slug,
-    reason,
-    log,
-    tag = "flush",
-    timeoutMs = MIGRATION_TRANSFER_TIMEOUT_MS,
-  } = opts;
-
-  const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
-  const migrationId = `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const body = JSON.stringify({ migrationId, slug, reason });
-  const signature = signFleetRequest(privateKey, migrationId, body);
-  const controller = new AbortController();
-  let didTimeout = false;
-  const timer = setTimeout(() => {
-    didTimeout = true;
-    controller.abort();
-  }, timeoutMs);
-  let resp: Response;
-  try {
-    resp = await fetch(`${url}/flush/${gatewayId}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        [SIGNATURE_HEADER]: signature,
-      },
-      body,
-      signal: controller.signal,
-    });
-  } catch (err) {
-    if (didTimeout) {
-      throw new Error(
-        `flush timed out after ${timeoutMs}ms gatewayId=${gatewayId} slug=${slug}`,
-      );
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "<no body>");
-    throw new Error(`flush failed: ${resp.status} ${text.slice(0, 200)}`);
-  }
-  log(`[${tag}] flush RPC ok gatewayId=${gatewayId} slug=${slug}`);
 }
 
 async function resolveGatewayUrlFromFirestore(
