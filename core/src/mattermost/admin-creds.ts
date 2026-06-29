@@ -7,6 +7,55 @@ import { SINGLE_REGION_REPLICATION } from "../secret-manager.js";
 
 const secretClient = new SecretManagerServiceClient();
 
+async function addTokenVersion(secretName: string, token: string): Promise<string | null> {
+  const [version] = await secretClient.addSecretVersion({
+    parent: secretName,
+    payload: { data: Buffer.from(token) },
+  });
+  return version.name ?? null;
+}
+
+async function destroySupersededTokenVersions(secretName: string, keepVersionName: string): Promise<void> {
+  try {
+    const [versions] = await secretClient.listSecretVersions({
+      parent: secretName,
+      filter: "state:ENABLED",
+    });
+    for (const version of versions) {
+      if (version.name && version.name !== keepVersionName) {
+        await secretClient.destroySecretVersion({ name: version.name });
+      }
+    }
+  } catch (err: unknown) {
+    log(`[admin-creds] ⚠ failed to prune old MM_ADMIN_TOKEN versions: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function persistAdminToken(project: string, token: string): Promise<void> {
+  const secretName = `projects/${project}/secrets/MM_ADMIN_TOKEN`;
+  let latestVersionName: string | null = null;
+  try {
+    latestVersionName = await addTokenVersion(secretName, token);
+    log(`[admin-creds] MM_ADMIN_TOKEN written to Secret Manager`);
+  } catch (err: unknown) {
+    if ((err as { code?: number })?.code === 5) {
+      await secretClient.createSecret({
+        parent: `projects/${project}`,
+        secretId: "MM_ADMIN_TOKEN",
+        secret: { replication: SINGLE_REGION_REPLICATION },
+      });
+      latestVersionName = await addTokenVersion(secretName, token);
+      log(`[admin-creds] MM_ADMIN_TOKEN created in Secret Manager`);
+    } else {
+      log(`[admin-creds] ⚠ failed to write MM_ADMIN_TOKEN to Secret Manager: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (latestVersionName) {
+    await destroySupersededTokenVersions(secretName, latestVersionName);
+  }
+}
+
 export async function ensureAdminCredentials(): Promise<void> {
   const MM_URL = process.env.MM_URL;
   if (!MM_URL) {
@@ -39,31 +88,8 @@ let adminUserId = process.env.MM_ADMIN_USER_ID;
 
   const proxyUrl = process.env.API_PUBLIC_URL || "";
 
-const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "octogee";
-  const secretName = `projects/${project}/secrets/MM_ADMIN_TOKEN`;
-  try {
-    await secretClient.addSecretVersion({
-      parent: secretName,
-      payload: { data: Buffer.from(token) },
-    });
-    log(`[admin-creds] MM_ADMIN_TOKEN written to Secret Manager`);
-  } catch (err: unknown) {
-    if ((err as { code?: number })?.code === 5) {
-      
-      await secretClient.createSecret({
-        parent: `projects/${project}`,
-        secretId: "MM_ADMIN_TOKEN",
-        secret: { replication: SINGLE_REGION_REPLICATION },
-      });
-      await secretClient.addSecretVersion({
-        parent: secretName,
-        payload: { data: Buffer.from(token) },
-      });
-      log(`[admin-creds] MM_ADMIN_TOKEN created in Secret Manager`);
-    } else {
-      log(`[admin-creds] ⚠ failed to write MM_ADMIN_TOKEN to Secret Manager: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "octogee";
+  await persistAdminToken(project, token);
 
 await db.doc("system/mattermostAdmin").set({
     userId: adminUserId,
