@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
   createActivateImportHandler,
@@ -46,6 +48,11 @@ import {
   type PushRsyncStateRequestBody,
 } from "../../shared/types/fleet-controller.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import {
+  hasMountedMarker,
+  writeMigratingInPin,
+  writeMountedMarker,
+} from "../lib/local-coach-wired.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const spawnMock = vi.fn();
@@ -542,7 +549,8 @@ describe("createRestoreHandler", () => {
     expect(getStatus()).toBe(401);
   });
 
-  it("restores runtime state from the controller-provided durable snapshot", async () => {
+  it("restores runtime state from the controller-provided durable snapshot and leaves the mount marker intact", async () => {
+    const customersDir = await fs.mkdtemp(path.join(os.tmpdir(), "restore-marker-"));
     const adapter = mkAdapter({
       loadUserSnapshot: vi.fn(async () => {
         throw new Error("restore should use the signed snapshot, not broker lookup");
@@ -558,8 +566,8 @@ describe("createRestoreHandler", () => {
       blobSyncForSlug: vi.fn(async () => undefined),
       restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
       applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
-      writeMountMarker: vi.fn(),
-      markCustomerMigratingIn: vi.fn(),
+      writeMountMarker: vi.fn((slug) => writeMountedMarker(customersDir, slug)),
+      markCustomerMigratingIn: vi.fn((slug) => writeMigratingInPin(customersDir, slug)),
     });
     const handler = createRestoreHandler(mkDeps({ adapter }));
     const body = {
@@ -572,26 +580,31 @@ describe("createRestoreHandler", () => {
     const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
+    try {
+      await handler(req, res, vi.fn());
 
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toMatchObject({
-      migrationId: "mig-1",
-      slug: "chris",
-      restored: true,
-    });
-    expect(adapter.cloneWorkspaceRepo).toHaveBeenCalledWith(
-      "chris",
-      "git@gitea:octogee/chris.git",
-    );
-    expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledWith(
-      expect.objectContaining({ uid: "uid-chris", slug: "chris" }),
-      null,
-      expect.objectContaining({ byosActive: false }),
-    );
-    expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
-    expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(2);
-    expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+      expect(getStatus()).toBe(200);
+      expect(getBody()).toMatchObject({
+        migrationId: "mig-1",
+        slug: "chris",
+        restored: true,
+      });
+      expect(adapter.cloneWorkspaceRepo).toHaveBeenCalledWith(
+        "chris",
+        "git@gitea:octogee/chris.git",
+      );
+      expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledWith(
+        expect.objectContaining({ uid: "uid-chris", slug: "chris" }),
+        null,
+        expect.objectContaining({ byosActive: false }),
+      );
+      expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
+      expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(1);
+      expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+      expect(hasMountedMarker(customersDir, "chris")).toBe(true);
+    } finally {
+      await fs.rm(customersDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects a snapshot whose uid/slug do not match the signed restore body", async () => {

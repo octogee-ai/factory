@@ -288,7 +288,6 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
           slug === snapshot.slug ? snapshot.uid : deps.adapter.uidForSlug(slug),
       };
       const result = await restoreCustomerRuntimeFromSnapshot(adapter, snapshot);
-      deps.adapter.markCustomerMigratingIn?.(body.slug);
       const response: RestoreMigrationResponse = {
         migrationId: body.migrationId,
         slug: body.slug,
