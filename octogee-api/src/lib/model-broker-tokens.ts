@@ -16,6 +16,14 @@ export interface ModelBrokerTokenPolicy {
   freeTier: boolean;
 }
 
+export type ModelBrokerTokenTraceSource = "gateway_model_key_issuer" | "shared_agent_model_token";
+
+export interface ModelBrokerTokenTrace {
+  source: ModelBrokerTokenTraceSource;
+  ownerSlug: string | null;
+  agentId: string | null;
+}
+
 export interface ModelBrokerTokenRecord {
   tokenHash: string;
   gatewayId: string;
@@ -27,6 +35,7 @@ export interface ModelBrokerTokenRecord {
   expiresAt: number | null;
   limits: ModelBrokerTokenLimits;
   policy: ModelBrokerTokenPolicy;
+  trace: ModelBrokerTokenTrace | null;
   revoked: boolean;
   revokedAt?: number;
 }
@@ -50,6 +59,7 @@ export interface IssueModelBrokerTokenInput {
   ttlSeconds?: number | null;
   limits?: Partial<ModelBrokerTokenLimits> | null;
   policy?: Partial<ModelBrokerTokenPolicy> | null;
+  trace?: Partial<ModelBrokerTokenTrace> | null;
   now?: number;
   randomBytes?: (size: number) => Buffer;
 }
@@ -119,6 +129,10 @@ function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerToke
     data.policy && typeof data.policy === "object" && !Array.isArray(data.policy)
       ? normalizeModelBrokerTokenPolicy(data.policy as Partial<ModelBrokerTokenPolicy>)
       : normalizeModelBrokerTokenPolicy(null);
+  const trace =
+    data.trace && typeof data.trace === "object" && !Array.isArray(data.trace)
+      ? normalizeModelBrokerTokenTrace(data.trace as Partial<ModelBrokerTokenTrace>)
+      : null;
   return {
     tokenHash: data.tokenHash,
     gatewayId: data.gatewayId,
@@ -130,8 +144,31 @@ function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerToke
     expiresAt,
     limits,
     policy,
+    trace,
     revoked: data.revoked === true,
     ...(revokedAt === undefined ? {} : { revokedAt }),
+  };
+}
+
+function traceSource(value: unknown): ModelBrokerTokenTraceSource | null {
+  return value === "gateway_model_key_issuer" || value === "shared_agent_model_token"
+    ? value
+    : null;
+}
+
+function optionalTraceString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function normalizeModelBrokerTokenTrace(
+  trace: Partial<ModelBrokerTokenTrace> | null | undefined,
+): ModelBrokerTokenTrace | null {
+  const source = traceSource(trace?.source);
+  if (!source) return null;
+  return {
+    source,
+    ownerSlug: optionalTraceString(trace?.ownerSlug),
+    agentId: optionalTraceString(trace?.agentId),
   };
 }
 
@@ -176,6 +213,7 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
       expiresAt: ttl ? now + ttl * 1000 : null,
       limits: normalizeModelBrokerTokenLimits(input.limits),
       policy: normalizeModelBrokerTokenPolicy(input.policy),
+      trace: normalizeModelBrokerTokenTrace(input.trace),
       revoked: false,
     };
     this.tokens.set(tokenHash, record);
@@ -240,6 +278,7 @@ export function createFirestoreModelBrokerTokenStore(
         expiresAt: ttl ? now + ttl * 1000 : null,
         limits: normalizeModelBrokerTokenLimits(input.limits),
         policy: normalizeModelBrokerTokenPolicy(input.policy),
+        trace: normalizeModelBrokerTokenTrace(input.trace),
         revoked: false,
       };
       await tokens.doc(tokenHash).set(record);

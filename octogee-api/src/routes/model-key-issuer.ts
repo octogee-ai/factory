@@ -155,6 +155,7 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): 
         ttlSeconds,
         limits: grant.limits,
         policy: grant.policy,
+        trace: { source: "gateway_model_key_issuer" },
         now: issuedAt,
         randomBytes: deps.randomBytes,
       });

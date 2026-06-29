@@ -4,7 +4,7 @@ import {
   calculateAvailableTokens,
   type TierName,
 } from "@octogee/shared/types/billing-tiers";
-import { spendDegradeState, windowBudgetUsdForTier } from "@octogee/shared/types/billing";
+import { resolveTier, spendDegradeState, windowBudgetUsdForTier } from "@octogee/shared/types/billing";
 
 export function toISODate(val: unknown): string | null {
   if (!val) return null;
@@ -41,9 +41,9 @@ function numberAt(src: CustomerDoc, key: string, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function tierAt(src: CustomerDoc): TierName {
-  const value = src.tier;
-  return typeof value === "string" && value in TIERS ? value as TierName : "trial";
+function resolvedTier(d: CustomerDoc, subscription: CustomerDoc): TierName {
+  const tier = resolveTier({ selectedTier: d.selectedTier, subscription });
+  return tier in TIERS ? tier as TierName : "trial";
 }
 
 function stringArrayAt(src: CustomerDoc, key: string): string[] {
@@ -66,6 +66,8 @@ export interface CustomerSummary {
   byotActive:          boolean;
   windowTokensUsed:    number;
   windowSize:          number;
+  windowCostUsd:       number;
+  windowBudgetUsd:     number;
   available:           number;
   nextRefillAt:        string | null;
   weeklyBudget:        number;
@@ -93,7 +95,7 @@ export function buildCustomerSummary(
   brokerWindowCostUsd = 0,
 ): CustomerSummary {
   const subscription = objectAt(d, "subscription");
-  const tier = tierAt(subscription);
+  const tier = resolvedTier(d, subscription);
   const tierConfig = getTierConfig(tier);
   const subscriptionStatus = stringAt(subscription, "status", "trial");
   const usage = objectAt(d, "usage");
@@ -101,13 +103,11 @@ export function buildCustomerSummary(
   const openclaw = objectAt(provisioning, "openclaw");
   const mattermost = objectAt(d, "mattermost");
   const costUsd = numberAt(usage, "costUsd");
-  // Degraded = the LLM broker is serving the house model because this builder is
-  // over their tier window budget (or on the free tier). BYOT spend is uncounted,
-  // so their broker window is ~$0 → not degraded; byotActive makes that explicit.
+  const windowBudgetUsd = windowBudgetUsdForTier(tier, toDateOrNull(subscription.trialStartedAt));
   const degraded = spendDegradeState({
     tier,
     windowCostUsd: brokerWindowCostUsd,
-    windowBudgetUsd: windowBudgetUsdForTier(tier, toDateOrNull(subscription.trialStartedAt)),
+    windowBudgetUsd,
     onOwnerCredential: d.byotActive === true,
   }).degraded;
   const agentIds = stringArrayAt(openclaw, "agentIds");
@@ -121,9 +121,12 @@ export function buildCustomerSummary(
     windowTokensUsed,
     windowStartedAt,
   );
-  const percentUsed = windowSize > 0
-    ? Math.min(100, Math.round((windowTokensUsed / windowSize) * 100))
-    : 0;
+  let percentUsed = 0;
+  if (windowBudgetUsd > 0) {
+    percentUsed = Math.min(100, Math.round((brokerWindowCostUsd / windowBudgetUsd) * 100));
+  } else if (windowSize > 0) {
+    percentUsed = Math.min(100, Math.round((windowTokensUsed / windowSize) * 100));
+  }
 
   return {
     uid,
@@ -135,6 +138,8 @@ export function buildCustomerSummary(
     byotActive: d.byotActive === true,
     windowTokensUsed,
     windowSize,
+    windowCostUsd: brokerWindowCostUsd,
+    windowBudgetUsd,
     available,
     nextRefillAt: nextRefillAt?.toISOString() ?? null,
     weeklyBudget: tierConfig.weeklyTokenBudget,

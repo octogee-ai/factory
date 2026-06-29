@@ -385,6 +385,8 @@ interface MeteringContext {
   requestModel: string | null;
   cacheWriteTtl: AnthropicCacheWriteTtl;
   usageStore?: ModelBrokerUsageStore;
+  providerKey: ModelBrokerProviderKey;
+  degraded: boolean;
   now: () => number;
   onMeteringError: (err: unknown) => void;
   countsTowardSpendWindow: boolean;
@@ -413,6 +415,11 @@ async function recordUsage(
       provider: "anthropic",
       gatewayId: ctx.record.gatewayId,
       ownerUid: ctx.record.ownerUid,
+      brokerTokenHash: ctx.record.tokenHash,
+      brokerTokenSecretName: ctx.record.secretName,
+      providerKeySource: ctx.providerKey.source,
+      providerKeySecretName: ctx.providerKey.secretName ?? null,
+      degraded: ctx.degraded,
       model,
       usage,
       cacheWriteTtl: ctx.cacheWriteTtl,
@@ -632,10 +639,10 @@ async function forwardAllowed(args: {
         requestModel: requestMetadata.model,
         cacheWriteTtl: requestMetadata.cacheWriteTtl,
         usageStore: args.usageStore,
+        providerKey,
+        degraded: gate.degrade,
         now: args.now,
         onMeteringError: args.onMeteringError,
-        // Degraded + free-tier traffic runs "on the house": metered for our
-        // books (rollup) but never debited against the builder's window.
         countsTowardSpendWindow:
           providerKey.source !== "owner_model_credential" && !gate.degrade,
       }

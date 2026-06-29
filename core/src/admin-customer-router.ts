@@ -1,5 +1,4 @@
 
-
 import {
   Router,
   type Request,
@@ -19,8 +18,6 @@ import {
   usageWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 
-// Per-owner spend in the current broker window, batched for the customers on a
-// page so the admin's `degraded` flag reflects what the LLM broker actually does.
 async function readBrokerWindowCosts(
   db: Firestore,
   uids: string[],
@@ -242,6 +239,11 @@ const statsSnap = await db.doc("system/stats").get();
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
         const usersSnap = await db.collection("users").orderBy("createdAt", "desc").get();
+        const windowCosts = await readBrokerWindowCosts(
+          db,
+          usersSnap.docs.map((doc) => doc.id),
+          Date.now(),
+        );
 
         let totalCustomers = 0;
         let incompleteProvisioning = 0;
@@ -253,6 +255,7 @@ const statsSnap = await db.doc("system/stats").get();
           const summary = buildCustomerSummary(
             doc.id,
             doc.data() as Record<string, unknown>,
+            windowCosts.get(doc.id) ?? 0,
           );
           totalCustomers++;
           if (summary.provisioningStatus !== "complete") incompleteProvisioning++;
@@ -357,8 +360,8 @@ router.get(
             degraded: summary.degraded,
             interactionCount: usage.interactionCount || 0,
             lastUpdated: toISODate(usage.lastUpdated),
-            windowCostUsd: typeof usage.windowCostUsd === "number" ? usage.windowCostUsd : 0,
-            windowBudgetUsd: typeof usage.windowBudgetUsd === "number" ? usage.windowBudgetUsd : 0,
+            windowCostUsd: summary.windowCostUsd,
+            windowBudgetUsd: summary.windowBudgetUsd,
           },
           modelCredential,
           byot: { active: customerCredentialActive },

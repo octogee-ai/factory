@@ -34,6 +34,8 @@ export interface ModelBrokerUsageCost {
   cacheWriteTtl: AnthropicCacheWriteTtl;
 }
 
+export type ModelBrokerUsageProviderKeySource = "platform" | "owner_model_credential";
+
 export interface ModelBrokerUsageRecordInput {
   eventId?: string;
   requestId: string;
@@ -41,6 +43,11 @@ export interface ModelBrokerUsageRecordInput {
   provider: ModelBrokerUsageProvider;
   gatewayId: string;
   ownerUid: string | null;
+  brokerTokenHash?: string | null;
+  brokerTokenSecretName?: string | null;
+  providerKeySource?: ModelBrokerUsageProviderKeySource | null;
+  providerKeySecretName?: string | null;
+  degraded?: boolean;
   model: string;
   usage: AnthropicTokenUsage;
   cacheWriteTtl?: AnthropicCacheWriteTtl;
@@ -312,6 +319,28 @@ function modelTotals(
   };
 }
 
+function traceFields(input: ModelBrokerUsageRecordInput): Record<string, unknown> {
+  return {
+    brokerTokenHash: input.brokerTokenHash ?? null,
+    brokerTokenSecretName: input.brokerTokenSecretName ?? null,
+    providerKeySource: input.providerKeySource ?? null,
+    providerKeySecretName: input.providerKeySecretName ?? null,
+    degraded: input.degraded === true,
+    countsTowardSpendWindow: input.countsTowardSpendWindow !== false,
+  };
+}
+
+function latestTraceFields(input: ModelBrokerUsageRecordInput): Record<string, unknown> {
+  return {
+    lastBrokerTokenHash: input.brokerTokenHash ?? null,
+    lastBrokerTokenSecretName: input.brokerTokenSecretName ?? null,
+    lastProviderKeySource: input.providerKeySource ?? null,
+    lastProviderKeySecretName: input.providerKeySecretName ?? null,
+    lastDegraded: input.degraded === true,
+    lastCountsTowardSpendWindow: input.countsTowardSpendWindow !== false,
+  };
+}
+
 function eventDocument(
   input: ModelBrokerUsageRecordInput & {
     eventId: string;
@@ -328,6 +357,7 @@ function eventDocument(
     provider: input.provider,
     gatewayId: input.gatewayId,
     ownerUid: input.ownerUid,
+    ...traceFields(input),
     model: input.model,
     modelKey: modelRollupKey(input.model),
     method: input.method,
@@ -354,8 +384,8 @@ function eventDocument(
 
 export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly events: Array<Record<string, unknown>> = [];
-  readonly rollups = new Map<string, { totalTokens: number; costUsd: number; requestCount: number }>();
-  readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot>();
+  readonly rollups = new Map<string, Record<string, unknown> & { totalTokens: number; costUsd: number; requestCount: number }>();
+  readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot & Record<string, unknown>>();
   readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
   private readonly eventIds = new Set<string>();
 
@@ -387,6 +417,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
       totalTokens: existing.totalTokens + totalTokens(input.usage),
       costUsd: existing.costUsd + cost.total,
       requestCount: existing.requestCount + 1,
+      ...latestTraceFields(input),
     });
     if (input.countsTowardSpendWindow !== false) {
       const windowKey = windowDocId(ownerKey, windowStartMs);
@@ -403,6 +434,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         totalTokens: existingWindow.totalTokens + totalTokens(input.usage),
         costUsd: existingWindow.costUsd + cost.total,
         requestCount: existingWindow.requestCount + 1,
+        ...latestTraceFields(input),
       });
     }
   }
@@ -485,6 +517,7 @@ export function createFirestoreModelBrokerUsageStore(
             ownerUid: input.ownerUid,
             provider: input.provider,
             updatedAt: now,
+            ...latestTraceFields(input),
             ...usageDocumentTotals(rollupData, input.usage, cost),
             models: modelTotals(rollupData, modelKey, input.model, input.usage, cost),
           },
@@ -502,6 +535,7 @@ export function createFirestoreModelBrokerUsageStore(
               windowLengthHours: WINDOW_LENGTH_HOURS,
               updatedAt: now,
               expiresAt: expiresAt(now),
+              ...latestTraceFields(input),
               ...usageDocumentTotals(windowData, input.usage, cost),
             },
             { merge: true },

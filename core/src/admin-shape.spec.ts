@@ -56,4 +56,21 @@ describe("buildCustomerSummary", () => {
     expect(buildCustomerSummary("u", paid, 0).degraded).toBe(false);
     expect(buildCustomerSummary("u", paid, 9999).degraded).toBe(true);
   });
+
+  it("uses broker spend, not token overflow, for the active window percentage", () => {
+    const summary = buildCustomerSummary(
+      "u",
+      {
+        subscription: { tier: "trial", trialStartedAt: new Date() },
+        usage: { windowTokensUsed: 676_435 },
+      },
+      0.008,
+    );
+
+    expect(summary.windowTokensUsed).toBe(676_435);
+    expect(summary.windowCostUsd).toBe(0.008);
+    expect(summary.windowBudgetUsd).toBeGreaterThan(0);
+    expect(summary.percentUsed).toBe(0);
+    expect(summary.degraded).toBe(false);
+  });
 });

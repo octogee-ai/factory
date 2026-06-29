@@ -121,6 +121,19 @@ function warnSkippedByosubRefs(input: {
   console.warn("[byok-broker] skipped malformed byosub provider ref", input);
 }
 
+function assignedOwnerSlug(data: Record<string, unknown>): string | null {
+  const provisioning =
+    data.provisioning && typeof data.provisioning === "object" && !Array.isArray(data.provisioning)
+      ? data.provisioning as Record<string, unknown>
+      : {};
+  const openclaw =
+    provisioning.openclaw && typeof provisioning.openclaw === "object" && !Array.isArray(provisioning.openclaw)
+      ? provisioning.openclaw as Record<string, unknown>
+      : {};
+  const slug = openclaw.slug ?? data.username;
+  return typeof slug === "string" && SLUG_RE.test(slug) ? slug : null;
+}
+
 export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
   const router = Router();
   const { db } = opts;
@@ -248,6 +261,11 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       ttlSeconds: AGENT_MODEL_TOKEN_TTL_SECONDS,
       limits: grant.limits,
       policy: grant.policy,
+      trace: {
+        source: "shared_agent_model_token",
+        ownerSlug: assignedOwnerSlug(assigned.data),
+        agentId,
+      },
     });
     res.json({ value: issued.token });
   });

@@ -128,6 +128,11 @@ describe("Firestore model broker token store", () => {
         skipPointer: true,
         ttlSeconds: 3600,
         limits: null,
+        trace: {
+          source: "shared_agent_model_token",
+          ownerSlug: "alice",
+          agentId: "octogee-alice-coach",
+        },
         now,
         randomBytes: randomBytes(fill),
       });
@@ -137,6 +142,13 @@ describe("Firestore model broker token store", () => {
 
     // the re-mint did NOT revoke the first (still-in-flight) token
     await expect(store.lookupToken(first.token, 2_001)).resolves.toMatchObject({ revoked: false });
+    await expect(store.lookupToken(first.token, 2_001)).resolves.toMatchObject({
+      trace: {
+        source: "shared_agent_model_token",
+        ownerSlug: "alice",
+        agentId: "octogee-alice-coach",
+      },
+    });
     await expect(store.lookupToken(second.token, 2_001)).resolves.toMatchObject({ revoked: false });
     expect(first.record.expiresAt).toBe(1_000 + 3_600 * 1000);
     // no pointer doc is written for standalone tokens
