@@ -93,6 +93,8 @@ export interface FleetRouterDeps {
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
+  dedicatedGatewayIdleDefaultMs?: number;
+  dedicatedGatewayIdleSweepMs?: number;
 }
 
 type ActorRequest = Request & {
@@ -199,6 +201,88 @@ export function resolveFleetNamespace(env: NodeJS.ProcessEnv = process.env): str
 
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike { id: string; data(): GlmDoc }
+
+const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
+export const DEDICATED_GATEWAY_IDLE_DEFAULT_MS = 30 * 60 * 1000;
+const DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT = 60_000;
+
+export interface DedicatedGatewayIdleSettings {
+  configuredMs: number | null;
+  defaultMs: number;
+  effectiveMs: number;
+  sweepMs: number;
+  disabled: boolean;
+}
+
+export interface FleetRuntimeSettings {
+  dedicatedGatewayIdle: DedicatedGatewayIdleSettings;
+}
+
+function normalizedNonNegativeInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function idleDefaultMs(value: number | undefined): number {
+  return normalizedNonNegativeInt(value) ?? DEDICATED_GATEWAY_IDLE_DEFAULT_MS;
+}
+
+export function projectDedicatedGatewayIdleSettings(
+  docData: Record<string, unknown> | undefined,
+  defaultMs: number | undefined,
+  sweepMs: number | undefined,
+): DedicatedGatewayIdleSettings {
+  const resolvedDefaultMs = idleDefaultMs(defaultMs);
+  const configuredMs = normalizedNonNegativeInt(docData?.dedicatedGatewayIdleMs);
+  const effectiveMs = configuredMs ?? resolvedDefaultMs;
+  return {
+    configuredMs,
+    defaultMs: resolvedDefaultMs,
+    effectiveMs,
+    sweepMs: normalizedNonNegativeInt(sweepMs) ?? DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
+    disabled: effectiveMs === 0,
+  };
+}
+
+export function parseDedicatedGatewayIdlePatch(
+  body: Record<string, unknown>,
+):
+  | { ok: number | null }
+  | { error: { status: number; body: { error: string; got?: unknown } } } {
+  if (!Object.prototype.hasOwnProperty.call(body, "dedicatedGatewayIdleMs")) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "dedicatedGatewayIdleMs is required" },
+      },
+    };
+  }
+  const value = body.dedicatedGatewayIdleMs;
+  if (value === null) return { ok: null };
+  if (normalizedNonNegativeInt(value) === null) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "dedicatedGatewayIdleMs must be a non-negative integer number, or null to reset",
+          got: value,
+        },
+      },
+    };
+  }
+  return { ok: value as number };
+}
+
+async function readFleetRuntimeSettings(deps: FleetRouterDeps): Promise<FleetRuntimeSettings> {
+  const snap = await deps.db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
+  const data = snap.exists ? (snap.data() as Record<string, unknown> | undefined) : undefined;
+  return {
+    dedicatedGatewayIdle: projectDedicatedGatewayIdleSettings(
+      data,
+      deps.dedicatedGatewayIdleDefaultMs,
+      deps.dedicatedGatewayIdleSweepMs,
+    ),
+  };
+}
 
 function indexGlmDocs(docs: ReadonlyArray<FirestoreDocLike>): Map<string, GlmDoc> {
   const out = new Map<string, GlmDoc>();
@@ -1825,9 +1909,10 @@ router.get(
     "/gateways",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const [gwSnap, glmSnap] = await Promise.all([
+        const [gwSnap, glmSnap, settings] = await Promise.all([
           db.collection("gateways").get(),
           db.collection(GLM_GATEWAYS_COLLECTION).get(),
+          readFleetRuntimeSettings(deps),
         ]);
         const glmByGatewayId = indexGlmDocs(glmSnap.docs);
         const heartbeatByGatewayId = indexFirestoreDocs(gwSnap.docs);
@@ -1854,9 +1939,35 @@ router.get(
         res.json({
           gateways,
           stats: rollupFleetStats(gateways),
+          settings,
           namespace: resolveFleetNamespace(),
           generatedAt: new Date().toISOString(),
         });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.patch(
+    "/fleet-settings",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = parseDedicatedGatewayIdlePatch(req.body as Record<string, unknown>);
+        if ("error" in parsed) {
+          res.status(parsed.error.status).json(parsed.error.body);
+          return;
+        }
+        const actor = req as ActorRequest;
+        await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(
+          {
+            dedicatedGatewayIdleMs: parsed.ok,
+            dedicatedGatewayIdleUpdatedAt: Date.now(),
+            dedicatedGatewayIdleUpdatedBy: actor.uid ?? "unknown",
+          },
+          { merge: true },
+        );
+        res.json({ settings: await readFleetRuntimeSettings(deps) });
       } catch (e) {
         next(e);
       }

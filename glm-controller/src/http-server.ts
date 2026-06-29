@@ -80,6 +80,8 @@ export interface HttpServerDeps {
   }) => Promise<unknown[]>;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
+  dedicatedGatewayIdleDefaultMs?: number;
+  dedicatedGatewayIdleSweepMs?: number;
 }
 
 function adaptLogger(log: (msg: string) => void): FleetLogger {
@@ -153,6 +155,7 @@ function addAdminFleetEventRoute(router: Router, deps: HttpServerDeps): void {
     writeSseEvent(res, "ready", { at: Date.now() });
     watch("users");
     watch("gateways");
+    watch("config");
     watch(GLM_GATEWAYS_COLLECTION);
     watch(GLM_OPERATIONS_COLLECTION);
     watch(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION);
@@ -203,6 +206,8 @@ addAdminCustomerRoutes(adminRouter, {
     listGatewayBuilds: deps.listGatewayBuilds,
     readGatewayPodDiagnostics: deps.readGatewayPodDiagnostics,
     deleteAuthUserTolerantOfMissing: deps.deleteAuthUserTolerantOfMissing,
+    dedicatedGatewayIdleDefaultMs: deps.dedicatedGatewayIdleDefaultMs,
+    dedicatedGatewayIdleSweepMs: deps.dedicatedGatewayIdleSweepMs,
   });
   app.use("/api/admin", adminRouter);
 

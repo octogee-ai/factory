@@ -150,6 +150,7 @@ export async function cutoverUserGatewayAndMarkMounted(
     );
     txn.update(userRef, {
       "provisioning.openclaw.gatewayId": params.toGatewayId,
+      "provisioning.openclaw.gatewayAssignedAt": deps.serverTimestamp(),
       "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
       "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
     });

@@ -5,7 +5,7 @@ import { OPERATOR_GATEWAY_RESERVATIONS_COLLECTION } from "@octogee/shared/types/
 
 interface FakeStore {
   users: Record<string, Record<string, unknown>>;
-  configs: Record<string, { role?: string }>;
+  configs: Record<string, Record<string, unknown>>;
   gateways: Record<string, Record<string, unknown>>;
   glmGateways: Record<string, Record<string, unknown>>;
   glmOperations: Array<{ id: string; data: Record<string, unknown> }>;
@@ -132,6 +132,17 @@ function buildDb(store: FakeStore) {
       for (const w of queued) await w();
       return result;
     },
+    doc: (path: string) => ({
+      get: async () => {
+        const data = store.configs[path];
+        return { exists: data !== undefined, data: () => data };
+      },
+      set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
+        store.configs[path] = opts?.merge
+          ? { ...(store.configs[path] ?? {}), ...data }
+          : data;
+      },
+    }),
     collection: (name: string): unknown => ({
       doc: (id?: string) => {
         const docId = id ?? `auto-${++docSeq}`;
@@ -371,7 +382,7 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain("event: ready");
     expect(res.text).toContain("event: changed");
-    expect(res.text).toMatch(/"collection":"(users|gateways|glmGateways|glmOperations|operatorGatewayReservations)"/);
+    expect(res.text).toMatch(/"collection":"(users|gateways|config|glmGateways|glmOperations|operatorGatewayReservations)"/);
   });
 
   it("subscribes fleet invalidation events to admin data dependencies", async () => {
@@ -390,6 +401,7 @@ describe("createHttpServer — admin gateway routes", () => {
 
     expect(res.status).toBe(200);
     expect(watchedCollections).toContain("users");
+    expect(watchedCollections).toContain("config");
     expect(watchedCollections).toContain(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION);
   });
 

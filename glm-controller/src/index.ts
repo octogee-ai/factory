@@ -175,6 +175,7 @@ const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
+const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 
 const GATEWAY_VALUES_FILE = (function () {
   const explicit = process.env.GATEWAY_VALUES_FILE;
@@ -207,9 +208,10 @@ const ACTIVATION_LEASE_SWEEP_MS = parseNonNegativeInt(
   process.env.ACTIVATION_LEASE_SWEEP_MS,
   ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
 );
+const DEDICATED_GATEWAY_IDLE_MS_DEFAULT = 30 * 60 * 1000;
 const DEDICATED_GATEWAY_IDLE_MS = parseNonNegativeInt(
   process.env.DEDICATED_GATEWAY_IDLE_MS,
-  0,
+  DEDICATED_GATEWAY_IDLE_MS_DEFAULT,
 );
 const DEDICATED_GATEWAY_IDLE_SWEEP_MS = parseNonNegativeInt(
   process.env.DEDICATED_GATEWAY_IDLE_SWEEP_MS,
@@ -320,6 +322,16 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number): number 
   if (raw == null || raw.trim() === "") return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+async function readDedicatedGatewayIdleMs(db: Firestore): Promise<number> {
+  const snap = await db.doc(ORCHESTRATOR_CONFIG_DOC_PATH).get();
+  const value = snap.exists
+    ? (snap.data() as { dedicatedGatewayIdleMs?: unknown } | undefined)?.dedicatedGatewayIdleMs
+    : undefined;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : DEDICATED_GATEWAY_IDLE_MS;
 }
 
 function isRunningGateway(gateway: GatewayDesiredState): boolean {
@@ -1242,6 +1254,7 @@ function startControllerBackgroundTasks({
     {
       db,
       idleMs: DEDICATED_GATEWAY_IDLE_MS,
+      readIdleMs: () => readDedicatedGatewayIdleMs(db),
       namespace: NAMESPACE,
       now: () => Date.now(),
       log,
@@ -1272,6 +1285,8 @@ function startControllerBackgroundTasks({
         }
       : {}),
     deleteAuthUserTolerantOfMissing: (uid) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
+    dedicatedGatewayIdleDefaultMs: DEDICATED_GATEWAY_IDLE_MS,
+    dedicatedGatewayIdleSweepMs: DEDICATED_GATEWAY_IDLE_SWEEP_MS,
   });
   return [
     stopReconciler,
@@ -1517,7 +1532,7 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
 }
 
 async function resolveDefaultGatewayId(deps: ControllerDeps): Promise<string | null> {
-  const orchSnap = await deps.db.doc("config/orchestrator").get();
+  const orchSnap = await deps.db.doc(ORCHESTRATOR_CONFIG_DOC_PATH).get();
   const existing = (orchSnap.data() as { defaultGatewayId?: unknown } | undefined)
     ?.defaultGatewayId;
   if (typeof existing === "string") return existing;
@@ -1527,7 +1542,7 @@ async function resolveDefaultGatewayId(deps: ControllerDeps): Promise<string | n
 
   try {
     await deps.db
-      .doc("config/orchestrator")
+      .doc(ORCHESTRATOR_CONFIG_DOC_PATH)
       .set({ defaultGatewayId: derived }, { merge: true });
     deps.log(
       `[glm-controller] default-gateway bootstrap: self-seeded config/orchestrator.defaultGatewayId=${derived} (derived from namespace=${NAMESPACE})`,
@@ -2007,13 +2022,13 @@ async function buildHandlers(
         },
       ),
     isSharedDefaultPool: async (gatewayId) => {
-      const configured = (await db.doc("config/orchestrator").get()).data()
+      const configured = (await db.doc(ORCHESTRATOR_CONFIG_DOC_PATH).get()).data()
         ?.defaultGatewayId;
       return typeof configured === "string" && configured === gatewayId;
     },
     repointSharedDefault: async (toGatewayId) => {
       await db
-        .doc("config/orchestrator")
+        .doc(ORCHESTRATOR_CONFIG_DOC_PATH)
         .set({ defaultGatewayId: toGatewayId }, { merge: true });
     },
     retireInstance: ({ gatewayId }, ctx) => retireInstanceLightly(gatewayId, ctx),
