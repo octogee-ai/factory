@@ -6,6 +6,15 @@ import { spawnSync } from "node:child_process";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
+const workflowTools = [
+  "preview_start",
+  "preview_stop",
+  "preview_list",
+  "octogee_publish",
+  "workspace_commit",
+  "octogee_chat_search",
+  "octogee_chat_history",
+];
 
 function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
   const dir = mkdtempSync(path.join(tmpdir(), "octogee-gateway-class-"));
@@ -29,8 +38,13 @@ function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
 }
 
 describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
-  it("shared class denies exec/process but KEEPS codex allowlisted and CLAMPS it to a sandboxed app-server (workspace-write, never YOLO)", () => {
+  it("shared class denies exec/process/subagents and keeps Octogee workflow tools model-visible", () => {
     const out = runPolicy("shared", {
+      agents: {
+        defaults: {
+          subagents: { maxConcurrent: 8, model: "anthropic/claude-sonnet-4-6" },
+        },
+      },
       tools: {
         deny: ["read"],
         subagents: { tools: { deny: ["write"] } },
@@ -44,22 +58,26 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
     });
 
-    expect(out.tools.deny).toEqual(["read", "exec", "process"]);
+    expect(out.tools.deny).toEqual(["read", "exec", "process", "subagents", "sessions_spawn"]);
+    expect(out.tools.alsoAllow).toEqual(workflowTools);
     expect(out.tools.exec).toEqual({ mode: "deny" });
     expect(out.tools.subagents.tools.deny).toEqual(["write", "exec", "process"]);
-    // BYOS codex may run on a shared pod, but only sandboxed: the policy clamps a
-    // danger-full-access request down to workspace-write and keeps codex
-    // allowlisted so byot-sync can enable it per-customer.
+    expect(out.agents.defaults.subagents).toBeUndefined();
     expect(out.plugins.allow).toEqual(["codex"]);
     expect(out.plugins.entries.codex.config.appServer.sandbox).toBe("workspace-write");
     expect(out.plugins.entries.codex.config.appServer.approvalPolicy).toBe("never");
     expect(out.plugins.entries["octogee-connector-tools"].enabled).toBe(false);
   });
 
-  it("builder class enables OpenClaw exec/process but keeps Codex disabled", () => {
+  it("builder class enables OpenClaw exec/process/subagents and keeps Codex disabled", () => {
     const out = runPolicy("builder", {
+      agents: {
+        defaults: {
+          subagents: { maxConcurrent: 8, model: "anthropic/claude-sonnet-4-6" },
+        },
+      },
       tools: {
-        deny: ["exec", "process", "read"],
+        deny: ["exec", "process", "subagents", "sessions_spawn", "read"],
         exec: { mode: "deny" },
         subagents: { tools: { deny: ["exec", "process", "write"] } },
       },
@@ -73,8 +91,13 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
 
     expect(out.tools.deny).toEqual(["read"]);
+    expect(out.tools.alsoAllow).toEqual(workflowTools);
     expect(out.tools.exec).toBeUndefined();
     expect(out.tools.subagents.tools.deny).toEqual(["write"]);
+    expect(out.agents.defaults.subagents).toEqual({
+      maxConcurrent: 8,
+      model: "anthropic/claude-sonnet-4-6",
+    });
     expect(out.plugins.allow).toEqual([]);
     expect(out.plugins.entries.codex.enabled).toBe(false);
     expect(out.plugins.entries["octogee-connector-tools"].enabled).toBe(false);

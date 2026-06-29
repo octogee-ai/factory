@@ -31,6 +31,7 @@ import {
 } from "./middleware/tenant-binding.js";
 import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
 import type { ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
+import { normalizeTenantPolicyPath } from "./lib/tenant-route-policy.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TENANT_BOUND_API_ROUTES = new Set([
@@ -52,12 +53,9 @@ export interface CreateAppOptions {
 }
 
 export function shouldAttemptTenantBinding(path: string): boolean {
-  if (path === "/internal" || path.startsWith("/internal/")) return true;
-  if (TENANT_BOUND_API_ROUTES.has(path)) return true;
-  if (path.endsWith("/") && TENANT_BOUND_API_ROUTES.has(path.slice(0, -1))) {
-    return true;
-  }
-  return false;
+  const normalized = normalizeTenantPolicyPath(path);
+  if (normalized === "/internal" || normalized.startsWith("/internal/")) return true;
+  return TENANT_BOUND_API_ROUTES.has(normalized);
 }
 
 export function shouldEnforceTenantBinding(req: Request): boolean {

@@ -3,6 +3,15 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const repoRoot = path.resolve(__dirname, "../..");
+const workflowTools = [
+  "preview_start",
+  "preview_stop",
+  "preview_list",
+  "octogee_publish",
+  "workspace_commit",
+  "octogee_chat_search",
+  "octogee_chat_history",
+];
 
 function readTemplate() {
   return JSON.parse(
@@ -23,6 +32,12 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
     const template = readTemplate();
 
     expect(template.tools.sessions).toEqual({ visibility: "agent" });
+  });
+
+  it("allows Octogee workflow tools outside the core coding profile", () => {
+    const template = readTemplate();
+
+    expect(template.tools.alsoAllow).toEqual(workflowTools);
   });
 
   it("disables the Codex plugin and removes the gpt-5.5 Codex runtime route", () => {

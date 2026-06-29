@@ -161,6 +161,19 @@ describe("tenant enforcement middleware", () => {
     expect(foreign.status).toBe(403);
   });
 
+  it("does not let a matching gatewayId bypass uid ownership checks on ordinary routes", async () => {
+    const owned = await request(app({ boundTenant: BENDER }))
+      .post("/internal/probe")
+      .send({ gatewayId: "bender", uid: "alice" });
+
+    const foreign = await request(app({ boundTenant: BENDER }))
+      .post("/internal/probe")
+      .send({ gatewayId: "bender", uid: "victim" });
+
+    expect(owned.status).toBe(200);
+    expect(foreign.status).toBe(403);
+  });
+
   it("lets the connector-token broker perform its own project-membership authorization", async () => {
     const ownedGateway = await request(app({ boundTenant: BENDER }))
       .post("/internal/connectors/access-token")
@@ -222,6 +235,19 @@ describe("tenant enforcement middleware", () => {
     const foreign = await request(app({ boundTenant: BENDER }))
       .post("/internal/probe")
       .send({ slug: "victim" });
+
+    expect(owned.status).toBe(200);
+    expect(foreign.status).toBe(403);
+  });
+
+  it("does not let a matching gatewayId bypass slug ownership checks on ordinary routes", async () => {
+    const owned = await request(app({ boundTenant: BENDER }))
+      .post("/internal/probe")
+      .send({ gatewayId: "bender", slug: "alice" });
+
+    const foreign = await request(app({ boundTenant: BENDER }))
+      .post("/internal/probe")
+      .send({ gatewayId: "bender", slug: "victim" });
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);

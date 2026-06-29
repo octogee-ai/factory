@@ -5,6 +5,7 @@ import {
   readAssignedSlugsForGateway,
 } from "@octogee/core/assigned-roster";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
+import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -114,6 +115,11 @@ function routeAllowsInboundMigrationSlug(req: Request): boolean {
   return req.path === "/internal/gitea" || req.path.startsWith("/internal/gitea/");
 }
 
+function routeRequiresTargetUserOwnership(req: Request): boolean {
+  const path = normalizeTenantPolicyPath(req.path);
+  return path === "/api/notifications/ingest" || path === "/internal/notifications/ingest";
+}
+
 async function slugAllowedForRequest(
   db: Pick<Firestore, "collection">,
   slug: string,
@@ -127,44 +133,78 @@ async function slugAllowedForRequest(
   );
 }
 
+async function allUidsBelongToGateway(
+  db: Pick<Firestore, "collection">,
+  uids: string[],
+  gatewayId: string,
+): Promise<boolean> {
+  for (const uid of uids) {
+    if (!(await uidBelongsToGateway(db, uid, gatewayId))) return false;
+  }
+  return true;
+}
+
+async function allSlugsAllowedForRequest(
+  db: Pick<Firestore, "collection">,
+  slugs: string[],
+  gatewayId: string,
+  req: Request,
+): Promise<boolean> {
+  for (const slug of slugs) {
+    if (!(await slugAllowedForRequest(db, slug, gatewayId, req))) return false;
+  }
+  return true;
+}
+
+async function targetUsersAuthorizedForRequest(
+  db: Pick<Firestore, "collection">,
+  gatewayId: string,
+  req: Request,
+): Promise<boolean> {
+  const uids = requestedUids(req);
+  return uids.length > 0 && allUidsBelongToGateway(db, uids, gatewayId);
+}
+
 async function gatewayBindingAuthorized(
   db: Pick<Firestore, "collection">,
   bound: GatewayBinding,
   req: Request,
 ): Promise<boolean> {
   const gatewayIds = requestedGatewayIds(req);
-  if (gatewayIds.length > 0 && gatewayIds.some((gatewayId) => gatewayId !== bound.gatewayId)) {
+  const requestTargetsDifferentGateway = gatewayIds.some((gatewayId) => gatewayId !== bound.gatewayId);
+  if (gatewayIds.length > 0 && requestTargetsDifferentGateway) {
     return false;
   }
-  // The byok brokers carry only { agentId } / { id } / { flowId, agentId }
-  // and do their own scoping
-  // (byosub-cred → glmGateways/{gatewayId}.byosub; api-key → the gateway's
-  // assigned roster; agent-model-token/byosub-flow → findAssignedUserByAgentId)
-  // — same shape as the connector broker.
+  if (routeRequiresTargetUserOwnership(req)) {
+    return targetUsersAuthorizedForRequest(db, bound.gatewayId, req);
+  }
+
+  // These brokers perform route-specific authorization from their own body
+  // shape. Keeping this as an explicit route allowlist avoids turning
+  // gatewayId into a generic skeleton key for future internal routes.
   if (SELF_SCOPED_INTERNAL_BROKER_ROUTES.has(req.path)) {
     return true;
   }
+
+  const uids = requestedUids(req);
+  if (uids.length > 0 && !(await allUidsBelongToGateway(db, uids, bound.gatewayId))) {
+    return false;
+  }
+
+  const slugs = requestedSlugs(req);
+  if (slugs.length > 0 && !(await allSlugsAllowedForRequest(db, slugs, bound.gatewayId, req))) {
+    return false;
+  }
+
+  if (uids.length > 0 || slugs.length > 0) {
+    return true;
+  }
+
   if (gatewayIds.length > 0) return true;
 
   const flowId = requestedFlowId(req);
   if (flowId) {
     return flowBelongsToGateway(db, flowId, bound.gatewayId);
-  }
-
-  const uids = requestedUids(req);
-  if (uids.length > 0) {
-    for (const uid of uids) {
-      if (!(await uidBelongsToGateway(db, uid, bound.gatewayId))) return false;
-    }
-    return true;
-  }
-
-  const slugs = requestedSlugs(req);
-  if (slugs.length > 0) {
-    for (const slug of slugs) {
-      if (!(await slugAllowedForRequest(db, slug, bound.gatewayId, req))) return false;
-    }
-    return true;
   }
 
   return false;

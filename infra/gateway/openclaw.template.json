@@ -101,6 +101,15 @@
       "enabled": false
     },
     "deny": ["exec", "process"],
+    "alsoAllow": [
+      "preview_start",
+      "preview_stop",
+      "preview_list",
+      "octogee_publish",
+      "workspace_commit",
+      "octogee_chat_search",
+      "octogee_chat_history"
+    ],
     "exec": {
       "mode": "deny"
     },

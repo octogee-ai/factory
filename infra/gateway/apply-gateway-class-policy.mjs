@@ -5,16 +5,44 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const EXEC_TOOLS = new Set(["exec", "process"]);
+const SHARED_DENIED_TOOLS = ["exec", "process", "subagents", "sessions_spawn"];
+const OCTOGEE_WORKFLOW_TOOLS = [
+  "preview_start",
+  "preview_stop",
+  "preview_list",
+  "octogee_publish",
+  "workspace_commit",
+  "octogee_chat_search",
+  "octogee_chat_history",
+];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 
-function removeExecDenies(value) {
+function removeDeniedTools(value, deniedTools) {
   if (!Array.isArray(value)) return value;
-  return value.filter((tool) => !EXEC_TOOLS.has(tool));
+  return value.filter((tool) => !deniedTools.has(tool));
 }
 
-function addDeny(list, tool) {
+function addUnique(list, tool) {
   if (!Array.isArray(list)) return [tool];
   return list.includes(tool) ? list : [...list, tool];
+}
+
+function addTools(list, tools) {
+  return tools.reduce((next, tool) => addUnique(next, tool), list);
+}
+
+function removeSharedSubagentDefaults(config) {
+  if (
+    config.agents?.defaults &&
+    Object.prototype.hasOwnProperty.call(config.agents.defaults, "subagents")
+  ) {
+    delete config.agents.defaults.subagents;
+  }
+}
+
+function allowOctogeeWorkflowTools(config) {
+  config.tools ??= {};
+  config.tools.alsoAllow = addTools(config.tools.alsoAllow, OCTOGEE_WORKFLOW_TOOLS);
 }
 
 function disableCodex(config) {
@@ -62,25 +90,28 @@ function sandboxCodex(config) {
 
 function applySharedPolicy(config) {
   config.tools ??= {};
-  config.tools.deny = addDeny(addDeny(config.tools.deny, "exec"), "process");
+  config.tools.deny = addTools(config.tools.deny, SHARED_DENIED_TOOLS);
   config.tools.exec = { mode: "deny" };
   config.tools.subagents ??= {};
   config.tools.subagents.tools ??= {};
-  config.tools.subagents.tools.deny = addDeny(
-    addDeny(config.tools.subagents.tools.deny, "exec"),
+  config.tools.subagents.tools.deny = addTools(config.tools.subagents.tools.deny, [
+    "exec",
     "process",
-  );
+  ]);
+  removeSharedSubagentDefaults(config);
+  allowOctogeeWorkflowTools(config);
   sandboxCodex(config);
   disableConnectorTools(config);
 }
 
 function applyBuilderPolicy(config) {
   config.tools ??= {};
-  config.tools.deny = removeExecDenies(config.tools.deny);
+  config.tools.deny = removeDeniedTools(config.tools.deny, new Set(SHARED_DENIED_TOOLS));
   delete config.tools.exec;
   config.tools.subagents ??= {};
   config.tools.subagents.tools ??= {};
-  config.tools.subagents.tools.deny = removeExecDenies(config.tools.subagents.tools.deny);
+  config.tools.subagents.tools.deny = removeDeniedTools(config.tools.subagents.tools.deny, EXEC_TOOLS);
+  allowOctogeeWorkflowTools(config);
   disableCodex(config);
   disableConnectorTools(config);
 }

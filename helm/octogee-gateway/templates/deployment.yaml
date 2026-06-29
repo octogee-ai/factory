@@ -273,6 +273,8 @@ spec:
               value: {{ .Values.env.gitSshHost | default (printf "octogee-gitea-ssh.%s.svc.cluster.local" .Release.Namespace) | quote }}
             - name: API_PUBLIC_URL
               value: {{ .Values.env.apiPublicUrl | quote }}
+            - name: APP_URL
+              value: {{ .Values.gatewayEdge.env.APP_URL | default .Values.env.appUrl | default "https://app.octogee.com" | quote }}
             - name: OPENCLAW_LOG_LEVEL
               value: {{ .Values.env.openclawLogLevel | default "info" | quote }}
             - name: FLEET_CONTROLLER_PORT

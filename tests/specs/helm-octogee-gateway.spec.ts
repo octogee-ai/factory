@@ -560,6 +560,15 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).toMatch(/- name:\s*PREVIEW_REQUIRE_GATEWAY_ID[\s\S]*?value:\s*"true"/);
   });
 
+  it("threads APP_URL into the gateway container so preview tools return environment-correct Canvas links", () => {
+    const out = helmTemplate("octogee-gw-default", {
+      "gatewayEdge.env.APP_URL": "https://app-octogee-test.web.app",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/- name:\s*APP_URL[\s\S]*?value:\s*"https:\/\/app-octogee-test\.web\.app"/);
+  });
+
   it("emits MM_INTERACTIONS_CALLBACK_BASE_URL pointing at the per-instance Service DNS", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";

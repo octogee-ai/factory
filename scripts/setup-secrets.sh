@@ -32,6 +32,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source=scripts/lib/shell-env.sh
+source "$SCRIPT_DIR/lib/shell-env.sh"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -125,14 +128,9 @@ sm_get() {
 }
 
 # Load env file
-if [[ -f "$ENV_FILE" ]]; then
-  set +u
-  while IFS='=' read -r key val; do
-    [[ -z "$key" || "$key" == \#* || -z "$val" ]] && continue
-    export "$key=$val"
-  done < <(grep -v '^#' "$ENV_FILE" | grep -v '^[[:space:]]*$')
-  set -u
-fi
+set +u
+load_env_file "$ENV_FILE"
+set -u
 
 [[ "$ENV" == "prod" && "$YES" == "true" ]] && fail "--yes cannot be used with prod."
 

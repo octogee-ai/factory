@@ -1025,7 +1025,14 @@ export async function startChatProxyBackground(): Promise<void> {
     const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
     const { handleReplyAsSteer } = await import('./openclaw/reply-handler.js');
     const { makeCoachDmHandler } = await import('../notifications/chat-notifier.js');
-    const { fanOutNotification } = await import('../notifications/pipeline.js');
+    const {
+      createBrokeredFanOutNotification,
+      notificationBrokerBaseUrlFromEnv,
+    } = await import('../notifications/broker.js');
+    const fanOutNotification = createBrokeredFanOutNotification({
+      baseUrl: notificationBrokerBaseUrlFromEnv(),
+      gatewayId,
+    });
     const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
       const wiredAny = wired as unknown as {
         __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;

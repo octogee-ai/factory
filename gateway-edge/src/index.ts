@@ -9,6 +9,7 @@ import { helmetMiddleware, globalRateLimit } from "./middleware/security.js";
 import { requireAuth } from "./middleware/auth.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
+import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
@@ -75,6 +76,7 @@ const httpRequestTotal = new Counter({
 });
 
 setEmailMetrics(createEmailMetrics(metricsRegistry));
+setNotificationMetrics(createNotificationMetrics(metricsRegistry));
 
 app.use(helmetMiddleware);
 app.use(corsMiddleware);

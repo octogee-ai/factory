@@ -21,6 +21,8 @@ function log(msg: string): void {
 }
 
 async function loadTargets(): Promise<SyncBackTarget[]> {
+  if ((process.env.GATEWAY_CLASS ?? "") === "shared") return [];
+
   let config: unknown;
   try {
     config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
