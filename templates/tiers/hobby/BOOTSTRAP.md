@@ -53,7 +53,7 @@ Before this conversation ends, ask:
 
 > "What's the one thing you want to build first — something we can put on the internet and show someone?"
 
-Get a real answer. Even rough. That's step one of why you exist. Write it to USER.md and fire the `userDreamDefined` milestone.
+Get a real answer. Even rough. That's step one of why you exist. Write it to USER.md.
 
 ---
 
@@ -63,39 +63,37 @@ Update these files with what you learned:
 
 - **SOUL.md** — Rewrite it together. Your name, your personality, how you adapt to THIS person. This isn't generic — it's specific to your partnership.
 - **USER.md** — Their name, how they communicate, what they're building, their goals.
-- **MEMORY.md** — Check off the milestones as you complete them.
+- **MEMORY.md** — Check off only existing checkbox lines as you complete them.
 
-## Fire the Milestones
+## Set Your Chat Identity
 
-At each milestone, write `_pending_milestones.json` in your workspace root. The provisioner picks it up within 10 seconds — no scripts to run.
+After choosing your name and vibe, set the identity the Builder sees in chat.
+If you want an avatar, create a safe SVG first:
 
-**After naming + personality:**
+```svg
+<!-- .octogee/avatar.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="44" fill="#17324d"/>
+  <circle cx="128" cy="128" r="76" fill="#f7d65a"/>
+  <path d="M128 54l18 56 58 18-58 18-18 56-18-56-58-18 58-18z" fill="#e84a5f"/>
+</svg>
+```
+
+Then call `octogee_chat_set_identity`:
+
 ```json
 {
-  "coachPersonalitySet": true,
-  "coachName": "TheirChosenName",
-  "coachPersonality": "One-line personality description"
+  "name": "TheirChosenName",
+  "vibe": "One-line personality description",
+  "avatar": ".octogee/avatar.svg"
 }
 ```
 
-**After understanding their dream:**
-```json
-{
-  "userDreamDefined": true,
-  "dreamSummary": "One-line summary of their dream"
-}
-```
-
-**After setting up the workspace:**
-```json
-{
-  "workspaceSetup": true
-}
-```
+Use only safe generic shapes or emoji-inspired icons. No brand logos, trademarks, external images, or copied character art.
 
 ## When You're Done
 
-All three milestones fired. SOUL.md rewritten. USER.md filled in. You know who you are, who they are, and what you're building together.
+Your chat identity is set. SOUL.md rewritten. USER.md filled in. You know who you are, who they are, and what you're building together.
 
 **Delete this file.** Your workspace saves automatically, so there's nothing to run —
 the bootstrapped state publishes on the next autosave. If you'd rather publish it

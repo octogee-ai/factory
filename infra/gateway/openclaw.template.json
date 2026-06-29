@@ -108,7 +108,8 @@
       "octogee_publish",
       "workspace_commit",
       "octogee_chat_search",
-      "octogee_chat_history"
+      "octogee_chat_history",
+      "octogee_chat_set_identity"
     ],
     "exec": {
       "mode": "deny"
@@ -211,7 +212,10 @@
         "config": {
           "mattermostUrl": "${MM_URL}",
           "siteUrl": "${MM_SITE_URL}",
-          "patCacheTtlSeconds": 300
+          "patCacheTtlSeconds": 300,
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}",
+          "customersRoot": "${CUSTOMERS_DIR}"
         }
       },
       "octogee-preview-tools": {

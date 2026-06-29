@@ -14,6 +14,7 @@ const OCTOGEE_WORKFLOW_TOOLS = [
   "workspace_commit",
   "octogee_chat_search",
   "octogee_chat_history",
+  "octogee_chat_set_identity",
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 

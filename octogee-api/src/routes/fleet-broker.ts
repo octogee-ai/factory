@@ -11,7 +11,6 @@ import type {
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerPreStopFlushStep,
-  FleetBrokerProjectCreateInput,
   FleetBrokerProjectRestore,
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
@@ -35,26 +34,6 @@ type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" 
 const FORBIDDEN = { error: "forbidden" } as const;
 const OPENCLAW_GATEWAY_ID_FIELD = "provisioning.openclaw.gatewayId";
 
-type AgentProjectActor = {
-  uid: string;
-  userData: Record<string, unknown>;
-  workspaceId: string;
-  isAdmin: false;
-  source: "agent";
-};
-
-type CreateProjectForActor = (
-  actor: AgentProjectActor,
-  input: FleetBrokerProjectCreateInput,
-) => Promise<{ status: number; body: Record<string, unknown> }>;
-
-type ApplyMilestoneSignal = (input: {
-  db: Firestore;
-  uid: string;
-  slug: string;
-  milestones: Record<string, unknown>;
-}) => Promise<void>;
-
 type RecordUsageEvent = (input: {
   db: Firestore;
   uid: string;
@@ -73,6 +52,16 @@ type MintMacOpsToken = (input: {
   gatewayId: string;
 }) => Promise<FleetBrokerMacOpsToken>;
 
+type RenderAvatar = (bytes: Buffer) => Promise<Buffer>;
+
+type ApplyCoachIdentity = (input: {
+  uid: string;
+  slug: string;
+  name?: string;
+  persona?: string;
+  avatarPng?: Buffer;
+}) => Promise<string[]>;
+
 interface FleetBrokerRouteDeps {
   provisionMattermost?: (input: {
     uid: string;
@@ -87,9 +76,9 @@ interface FleetBrokerRouteDeps {
     uid: string;
     userData: Record<string, unknown>;
   }) => Promise<void>;
-  createProjectForActor?: CreateProjectForActor;
-  applyMilestoneSignal?: ApplyMilestoneSignal;
   recordUsageEvent?: RecordUsageEvent;
+  renderAvatar?: RenderAvatar;
+  applyCoachIdentity?: ApplyCoachIdentity;
   createBlobSignedUrl?: CreateBlobSignedUrl;
   mintMacOpsToken?: MintMacOpsToken;
 }
@@ -130,96 +119,20 @@ async function defaultNotifyOpsOfSignup(input: {
   await notifyOpsOfSignup(buildProvisioningContext(input.uid, input.userData));
 }
 
-const defaultCreateProjectForActor: CreateProjectForActor = async (actor, input) => {
-  const { createProjectForActor } = await import(
-    "../../../gateway-edge/src/lib/project-create-service.js"
-  );
-  return createProjectForActor(actor, input);
+const defaultRenderAvatar: RenderAvatar = async (bytes) => {
+  const { renderAvatarPng } = await import("../lib/avatar-render.js");
+  return renderAvatarPng(bytes);
 };
 
-const AGENT_MILESTONE_KEYS = new Set(["coachName", "coachPersonality", "avatarEmoji"]);
-
-function userMilestoneUpdate(milestones: Record<string, unknown>): Record<string, unknown> {
-  const userUpdate: Record<string, unknown> = {
-    "onboarding.updatedAt": FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-  for (const [key, value] of Object.entries(milestones)) {
-    if (AGENT_MILESTONE_KEYS.has(key)) continue;
-    userUpdate[`onboarding.${key}`] = value;
-  }
-  if (milestones.complete === true) {
-    userUpdate["onboarding.complete"] = true;
-  }
-  return userUpdate;
-}
-
-function agentMilestoneUpdate(
-  uid: string,
-  milestones: Record<string, unknown>,
-): Record<string, unknown> | null {
-  const agentUpdate: Record<string, unknown> = {};
-  if (typeof milestones.coachName === "string" && milestones.coachName) {
-    agentUpdate.name = milestones.coachName;
-  }
-  if (typeof milestones.coachPersonality === "string") {
-    agentUpdate.persona = milestones.coachPersonality;
-  }
-  if (typeof milestones.avatarEmoji === "string" && milestones.avatarEmoji) {
-    agentUpdate.avatarEmoji = milestones.avatarEmoji;
-  }
-  if (Object.keys(agentUpdate).length === 0) return null;
-  return {
-    ...agentUpdate,
-    id: uid,
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-}
-
-async function patchCoachMattermostDisplay(input: {
-  db: Firestore;
-  uid: string;
-  slug: string;
-  coachName: string;
-}): Promise<void> {
-  try {
-    const [sysDoc, userDoc] = await Promise.all([
-      input.db.doc(`users/${input.uid}/system/config`).get(),
-      input.db.collection("users").doc(input.uid).get(),
-    ]);
-    const coachMmUserId =
-      stringAt(sysDoc.data() as Record<string, unknown> | undefined, "mattermost.coachUserId") ||
-      stringAt(userDoc.data() as Record<string, unknown> | undefined, "mattermost.coachUserId");
-    if (coachMmUserId) {
-      const { mmApi } = await import("../../../gateway-edge/src/lib/mattermost.js");
-      await mmApi("PUT", `/bots/${coachMmUserId}`, {
-        display_name: input.coachName,
-      });
-    }
-  } catch (err) {
-    logger.warn("[milestones] failed to patch coach Mattermost display", {
-      slug: input.slug,
-      err,
-    });
-  }
-}
-
-const defaultApplyMilestoneSignal: ApplyMilestoneSignal = async (input) => {
-  await input.db.collection("users").doc(input.uid).update(
-    userMilestoneUpdate(input.milestones),
+const defaultApplyCoachIdentity: ApplyCoachIdentity = async (input) => {
+  const { syncCoachIdentity } = await import(
+    "../../../gateway-edge/src/lib/coach-identity.js"
   );
-  const agentUpdate = agentMilestoneUpdate(input.uid, input.milestones);
-  if (agentUpdate) {
-    await input.db.doc(`agents/${input.uid}`).set(agentUpdate, { merge: true });
-  }
-  if (typeof input.milestones.coachName === "string" && input.milestones.coachName) {
-    await patchCoachMattermostDisplay({
-      db: input.db,
-      uid: input.uid,
-      slug: input.slug,
-      coachName: input.milestones.coachName,
-    });
-  }
+  return syncCoachIdentity(
+    input.uid,
+    { name: input.name, persona: input.persona, avatarPng: input.avatarPng },
+    { slug: input.slug },
+  );
 };
 
 const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
@@ -546,26 +459,6 @@ function validContentType(value: unknown): string {
   return p;
 }
 
-function validMilestoneValue(value: unknown): boolean {
-  return (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean" ||
-    (typeof value === "number" && Number.isFinite(value))
-  );
-}
-
-function validMilestones(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const out: Record<string, unknown> = {};
-  for (const [key, milestoneValue] of Object.entries(value as Record<string, unknown>)) {
-    if (!/^\w{1,64}$/.test(key)) return null;
-    if (!validMilestoneValue(milestoneValue)) return null;
-    out[key] = milestoneValue;
-  }
-  return Object.keys(out).length > 0 ? out : null;
-}
-
 function gcsPathForBlob(slug: string, relativePath: string): string {
   return `customers/${slug}/${relativePath}`;
 }
@@ -856,9 +749,9 @@ type ResolvedFleetBrokerRouteDeps = {
   provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
   markProvisioningComplete: NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]>;
   notifyOpsOfSignup: NonNullable<FleetBrokerRouteDeps["notifyOpsOfSignup"]>;
-  createProjectForActor: CreateProjectForActor;
-  applyMilestoneSignal: ApplyMilestoneSignal;
   recordUsageEvent: RecordUsageEvent;
+  renderAvatar: RenderAvatar;
+  applyCoachIdentity: ApplyCoachIdentity;
   createBlobSignedUrl: CreateBlobSignedUrl;
   mintMacOpsToken: MintMacOpsToken;
 };
@@ -872,9 +765,9 @@ function resolveFleetBrokerRouteDeps(
     markProvisioningComplete:
       opts.markProvisioningComplete ?? defaultMarkProvisioningComplete,
     notifyOpsOfSignup: opts.notifyOpsOfSignup ?? defaultNotifyOpsOfSignup,
-    createProjectForActor: opts.createProjectForActor ?? defaultCreateProjectForActor,
-    applyMilestoneSignal: opts.applyMilestoneSignal ?? defaultApplyMilestoneSignal,
     recordUsageEvent: opts.recordUsageEvent ?? defaultRecordUsageEvent,
+    renderAvatar: opts.renderAvatar ?? defaultRenderAvatar,
+    applyCoachIdentity: opts.applyCoachIdentity ?? defaultApplyCoachIdentity,
     createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,
     mintMacOpsToken: opts.mintMacOpsToken ?? defaultMintMacOpsToken,
   };
@@ -1271,54 +1164,60 @@ function installGatewayOpsRoutes(
   });
 }
 
-function installAgentRoutes(
-  router: Router,
-  deps: ResolvedFleetBrokerRouteDeps,
-): void {
-  const { db, createProjectForActor, applyMilestoneSignal } = deps;
+function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
+  const { db, renderAvatar, applyCoachIdentity } = deps;
 
-  router.post("/agent/create-project", async (req, res) => {
+  router.post("/agent/set-coach-identity", async (req, res) => {
     const assigned = await requireAssignedAgentWorkspace(db, req, res);
     if (!assigned) return;
-    const project = recordBodyValue(objectBody(req).project);
-    if (!project) {
-      res.status(400).json({ error: "invalid_project" });
-      return;
-    }
-    await runBrokered(res, async () => {
-      const result = await createProjectForActor(
-        {
-          uid: assigned.uid,
-          userData: assigned.data,
-          workspaceId: assigned.slug,
-          isAdmin: false,
-          source: "agent",
-        },
-        project as FleetBrokerProjectCreateInput,
-      );
-      res.status(result.status).json(result.body);
-    });
-  });
+    const body = objectBody(req);
 
-  router.post("/agent/apply-milestones", async (req, res) => {
-    const assigned = await requireAssignedAgentWorkspace(db, req, res);
-    if (!assigned) return;
-    const milestones = validMilestones(objectBody(req).milestones);
-    if (!milestones) {
-      res.status(400).json({ error: "invalid_milestones" });
+    const patch: { name?: string; persona?: string; avatarPng?: Buffer } = {};
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (name) {
+      if (name.length > 80) {
+        res.status(400).json({ error: "invalid_name" });
+        return;
+      }
+      patch.name = name;
+    }
+    const vibe = typeof body.vibe === "string" ? body.vibe : body.persona;
+    if (typeof vibe === "string") {
+      if (vibe.length > 2000) {
+        res.status(400).json({ error: "invalid_persona" });
+        return;
+      }
+      patch.persona = vibe;
+    }
+    if (typeof body.avatarBase64 === "string" && body.avatarBase64) {
+      const raw = Buffer.from(body.avatarBase64, "base64");
+      try {
+        patch.avatarPng = await renderAvatar(raw);
+      } catch {
+        res.status(400).json({ error: "invalid_avatar" });
+        return;
+      }
+    }
+    if (
+      patch.name === undefined &&
+      patch.persona === undefined &&
+      patch.avatarPng === undefined
+    ) {
+      res.status(400).json({ error: "empty_identity" });
       return;
     }
+
     await runBrokered(res, async () => {
-      await applyMilestoneSignal({
-        db,
+      const updated = await applyCoachIdentity({
         uid: assigned.uid,
         slug: assigned.slug,
-        milestones,
+        name: patch.name,
+        persona: patch.persona,
+        avatarPng: patch.avatarPng,
       });
-      res.status(204).end();
+      res.json({ updated });
     });
   });
-
 }
 
 export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRouteDeps): Router {

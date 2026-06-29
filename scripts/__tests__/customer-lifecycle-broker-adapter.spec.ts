@@ -69,13 +69,6 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
       mmUserId: "mm-user",
       token: "token",
     })),
-    createProjectFromAgent: vi.fn(async () => ({
-      success: true,
-      workspaceId: "workspace",
-      slug: "project",
-      channelId: "channel",
-    })),
-    applyMilestoneSignal: vi.fn(async () => undefined),
     recordUsageEvent: vi.fn(async () => undefined),
     blobDownloadUrl: vi.fn(async () => ({
       url: "https://example.com/download",

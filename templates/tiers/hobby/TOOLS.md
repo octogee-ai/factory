@@ -17,28 +17,22 @@ Your workspace root is the current directory. Everything lives here:
 ### Media/Images
 Save to `~/.openclaw/media/` before sending. Workspace paths are blocked for media.
 
-### Firebase Milestone Updates
+### Chat Identity
 
-Do NOT use `npx tsx` or `update-onboarding.ts` — you don't have exec permissions.
+Use `octogee_chat_set_identity` to set your visible Coach name, vibe, and avatar.
+Do this after the Builder has picked a name and vibe with you.
 
-Write `_pending_milestones.json` in your workspace root. The provisioner picks it up within 10 seconds and syncs to Firebase automatically.
+If you want an avatar, first write a safe image inside the workspace, usually
+`.octogee/avatar.svg`. Use simple generic shapes or emoji-inspired icons. No
+brand logos, trademarks, external images, scripts, fonts, or copied character art.
 
-```bash
-cat > _pending_milestones.json << 'EOF'
+```json
 {
-  "coachPersonalitySet": true,
-  "coachName": "TheirName",
-  "coachPersonality": "Their described personality"
+  "name": "Scout",
+  "vibe": "Calm, direct, and practical.",
+  "avatar": ".octogee/avatar.svg"
 }
-EOF
 ```
 
-Available milestones:
-| Milestone | Type | When to set |
-|-----------|------|-------------|
-| `coachPersonalitySet` | boolean | User has named you and described personality |
-| `coachName` | string | The name they chose for you |
-| `coachPersonality` | string | Description of personality they want |
-| `userDreamDefined` | boolean | You understand their dream/goal |
-| `dreamSummary` | string | One-line summary of their dream |
-| `workspaceSetup` | boolean | Workspace is configured with milestones |
+The platform renders the avatar safely, stores it as a durable workspace file,
+updates Mattermost, and updates the app.

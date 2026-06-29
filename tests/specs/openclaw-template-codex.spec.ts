@@ -11,6 +11,7 @@ const workflowTools = [
   "workspace_commit",
   "octogee_chat_search",
   "octogee_chat_history",
+  "octogee_chat_set_identity",
 ];
 
 function readTemplate() {

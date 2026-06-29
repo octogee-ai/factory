@@ -38,4 +38,29 @@ export async function mmApi(
   return resp.json();
 }
 
+export async function mmUploadAvatarBuffer(
+  userId: string,
+  png: Buffer,
+  token?: string,
+): Promise<boolean> {
+  const authToken = token || getAdminToken();
+  const bytes = new Uint8Array(png.length);
+  bytes.set(png);
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/png" }), "avatar.png");
+  const resp = await fetch(`${MM_URL}/api/v4/users/${userId}/image`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${authToken}` },
+    body: form,
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    logger.error(`MM avatar upload error: ${resp.status} ${userId}`, {
+      response: text.slice(0, 300),
+    });
+    return false;
+  }
+  return true;
+}
+
 export { MM_URL };

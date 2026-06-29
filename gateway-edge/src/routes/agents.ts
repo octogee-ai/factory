@@ -2,8 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth, requireAdmin } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue } from "../lib/db.js";
-import { readAgent } from "../lib/firestoreReads.js";
-import { mmApi } from "../lib/mattermost.js";
+import { syncCoachIdentity } from "../lib/coach-identity.js";
 
 const router = Router();
 
@@ -37,24 +36,6 @@ function coachPatchFromBody(body: unknown): Partial<Record<CoachPatchField, stri
   return patch;
 }
 
-async function syncCoachMattermostName(uid: string, patch: Partial<Record<CoachPatchField, string>>): Promise<void> {
-  if (typeof patch.name !== "string" || !patch.name) return;
-  try {
-    const agent = await readAgent(uid);
-    const coachMmUserId = agent?.mattermost.userId;
-    if (coachMmUserId) {
-      await mmApi(`/bots/${coachMmUserId}`, "PUT", {
-        display_name: patch.name,
-      });
-    }
-  } catch (err) {
-    logger.warn("coach MM patch failed (non-fatal)", {
-      uid,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
 router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid;
@@ -69,14 +50,9 @@ router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextF
       return;
     }
 
-    await db.doc(`agents/${uid}`).set(
-      { id: uid, ...patch, updatedAt: FieldValue.serverTimestamp() },
-      { merge: true },
-    );
+    const updated = await syncCoachIdentity(uid, patch);
 
-    await syncCoachMattermostName(uid, patch);
-
-    res.json({ ok: true, updated: Object.keys(patch) as CoachPatchField[] });
+    res.json({ ok: true, updated });
   } catch (e) { next(e); }
 });
 

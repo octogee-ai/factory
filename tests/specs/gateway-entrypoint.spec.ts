@@ -210,8 +210,4 @@ describe("scripts/entrypoints/fleet-controller.ts — db-less local persistence 
     expect(fleetController).toMatch(/blobSyncAllWithOptions/);
     expect(fleetController).toMatch(/createBrokeredBlobStore/);
   });
-
-  it("keeps brokered customer signal scanning wired into the live gateway controller", () => {
-    expect(fleetController).toMatch(/startCustomerSignalScanLoop/);
-  });
 });

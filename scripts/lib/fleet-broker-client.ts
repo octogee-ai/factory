@@ -4,8 +4,6 @@ import type {
   FleetBrokerMacOpsToken,
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
-  FleetBrokerProjectCreateInput,
-  FleetBrokerProjectCreateSuccess,
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
@@ -62,16 +60,6 @@ export interface FleetBrokerClient {
   clearReconcileError(slug: string): Promise<void>;
   notifySignup(uid: string): Promise<void>;
   macOpsToken(): Promise<FleetBrokerMacOpsToken>;
-  createProjectFromAgent(input: {
-    agentId: string;
-    workspaceSlug: string;
-    project: FleetBrokerProjectCreateInput;
-  }): Promise<FleetBrokerProjectCreateSuccess>;
-  applyMilestoneSignal(input: {
-    agentId: string;
-    workspaceSlug: string;
-    milestones: Record<string, unknown>;
-  }): Promise<void>;
   recordUsageEvent(input: {
     agentId: string;
     usage: FleetBrokerUsageData;
@@ -176,18 +164,6 @@ export function createFleetBrokerClient(gatewayId: string): FleetBrokerClient {
     macOpsToken() {
       return postJson<FleetBrokerMacOpsToken>("/internal/fleet/mac-ops-token", {
         gatewayId,
-      });
-    },
-    async createProjectFromAgent(input) {
-      return postJson<FleetBrokerProjectCreateSuccess>(
-        "/internal/fleet/agent/create-project",
-        { gatewayId, ...input },
-      );
-    },
-    applyMilestoneSignal(input) {
-      return postNoContent("/internal/fleet/agent/apply-milestones", {
-        gatewayId,
-        ...input,
       });
     },
     recordUsageEvent(input) {

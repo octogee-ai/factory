@@ -3,14 +3,12 @@ import Busboy from "busboy";
 import { storage } from "../../lib/db.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 import { resolveFileTarget, withGiteaTarget, type FileTarget } from "../../lib/fileTarget.js";
-import { updateManifest } from "../../lib/manifest.js";
+import { storeWorkspaceBlob } from "../../lib/workspace-blob.js";
 import { logger } from "../../middleware/logging.js";
 import {
   targetGiteaApi,
-  giteaSudoUser,
   getExtension,
   getMimeType,
-  IMAGE_EXTENSIONS,
   pathHasReservedOrHiddenSegment,
 } from "./helpers.js";
 
@@ -150,52 +148,14 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
     const pathError = validateFilePath(filePath);
     if (pathError) { res.status(400).json({ error: pathError }); return; }
 
-    const bucket = storage.bucket();
-    const gcsPath = `${target.gcsPrefix}/${filePath}`;
-    const ext = getExtension(filePath);
-
-    const file = bucket.file(gcsPath);
-    await file.save(fileBuffer, { metadata: { contentType: mimeType || getMimeType(ext) } });
-
-    let thumbnailUrl: string | undefined;
-    let thumbnailError: string | undefined;
-    if (IMAGE_EXTENSIONS.has(ext)) {
-      try {
-        const sharp = (await import("sharp")).default;
-        const thumbBuffer = await sharp(fileBuffer).resize(128, 128, { fit: "inside" }).png().toBuffer();
-        const thumbPath = `${target.gcsPrefix}/.thumbs/${filePath}.png`;
-        const thumbFile = bucket.file(thumbPath);
-        await thumbFile.save(thumbBuffer, { metadata: { contentType: "image/png" } });
-        const [signedUrl] = await thumbFile.getSignedUrl({
-          action: "read",
-          expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-        });
-        thumbnailUrl = signedUrl;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        logger.warn(`Thumbnail generation failed for ${filePath}: ${msg}`);
-        thumbnailError = msg;
-      }
-    }
-
-    const { org, repoName } = target;
-    await updateManifest(giteaSudoUser(target), org, repoName, {
-      [filePath]: {
-        type: "blob",
-        gcsPath,
-        size: fileBuffer.length,
-        mimeType: mimeType || getMimeType(ext),
-        ...(thumbnailUrl ? { thumbnailUrl } : {}),
-        uploadedAt: new Date().toISOString(),
-      },
-    });
+    const stored = await storeWorkspaceBlob(target, filePath, fileBuffer, mimeType);
 
     res.json({
       success: true,
       path: filePath,
-      gcsUrl: `gs://${bucket.name}/${gcsPath}`,
-      ...(thumbnailUrl ? { thumbnailUrl } : {}),
-      ...(thumbnailError ? { thumbnailError } : {}),
+      gcsUrl: `gs://${storage.bucket().name}/${stored.gcsPath}`,
+      ...(stored.thumbnailUrl ? { thumbnailUrl: stored.thumbnailUrl } : {}),
+      ...(stored.thumbnailError ? { thumbnailError: stored.thumbnailError } : {}),
       manifestUpdated: true,
     });
   } catch (e) {

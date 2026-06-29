@@ -15,7 +15,6 @@ import { syncAllWorkspaces } from "../lib/git.js";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
 import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
-import { startCustomerSignalScanLoop } from "../lib/customer-signal-broker-runner.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { startFleetController } from "../lib/fleet-provisioner.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
@@ -124,15 +123,10 @@ async function main(): Promise<void> {
         log,
         gatewayId: MY_GATEWAY_ID,
       });
-  const signalScanTimer = operator
-    ? null
-    : startCustomerSignalScanLoop({ client: brokerClient!, log });
-
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
     if (autosaveTimer) clearInterval(autosaveTimer);
     if (usageTimer) clearInterval(usageTimer);
-    if (signalScanTimer) clearInterval(signalScanTimer);
     try { await fleetHandle.stop(); } catch {}
     try { await rpc.close(); } catch {}
   };
