@@ -7,6 +7,11 @@ metadata:
     {{- include "cloud-sql-proxy.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: cloud-sql-proxy
@@ -29,6 +34,12 @@ spec:
             - {{ .Values.connectionName | quote }}
           ports:
             - containerPort: 5432
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
           # Catch the zombie-proxy failure mode: the process stays alive but stops
           # accepting connections (connection-pool hang / unrecovered Cloud SQL
           # blip), so K8s otherwise never restarts it. A TCP probe on 5432 forces

@@ -11,6 +11,7 @@ backendConfig:
     path: /health
     port: 3001
   timeoutSec: 30
+  drainingTimeoutSec: 300
 
 serviceAccountName: octogee-api
 serviceAccount:

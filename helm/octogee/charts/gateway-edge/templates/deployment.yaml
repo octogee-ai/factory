@@ -13,6 +13,12 @@ metadata:
     app: {{ $router.serviceName | default "gateway-router" }}
 spec:
   replicas: {{ $router.replicas | default 2 }}
+  minReadySeconds: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: {{ $router.serviceName | default "gateway-router" }}
@@ -22,11 +28,16 @@ spec:
         {{- include "gateway-edge.labels" . | nindent 8 }}
         app: {{ $router.serviceName | default "gateway-router" }}
     spec:
+      terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.serviceAccountName }}
       containers:
         - name: gateway-router
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 15"]
           ports:
             - name: http
               containerPort: {{ $router.port | default .Values.port }}

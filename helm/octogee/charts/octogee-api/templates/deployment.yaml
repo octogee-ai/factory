@@ -7,6 +7,7 @@ metadata:
     app: octogee-api
 spec:
   replicas: {{ .Values.replicas }}
+  minReadySeconds: 5
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -20,6 +21,7 @@ spec:
       labels:
         app: octogee-api
     spec:
+      terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.serviceAccountName }}
       securityContext:
         runAsNonRoot: true
@@ -34,6 +36,10 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 15"]
           ports:
             - name: http
               containerPort: {{ .Values.port }}

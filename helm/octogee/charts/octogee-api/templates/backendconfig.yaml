@@ -9,3 +9,5 @@ spec:
     requestPath: {{ .Values.backendConfig.healthCheck.path | default "/health" }}
     port: {{ .Values.backendConfig.healthCheck.port | default .Values.port }}
   timeoutSec: {{ .Values.backendConfig.timeoutSec | default 30 }}
+  connectionDraining:
+    drainingTimeoutSec: {{ .Values.backendConfig.drainingTimeoutSec | default 300 }}

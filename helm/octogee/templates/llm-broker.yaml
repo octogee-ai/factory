@@ -21,6 +21,7 @@ metadata:
     {{- include "octogee.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.llmBroker.replicas }}
+  minReadySeconds: 5
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -34,6 +35,7 @@ spec:
       labels:
         app: llm-broker
     spec:
+      terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.llmBroker.serviceAccountName }}
       automountServiceAccountToken: true
       securityContext:
@@ -52,6 +54,10 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 15"]
           ports:
             - name: http
               containerPort: {{ .Values.llmBroker.port }}
