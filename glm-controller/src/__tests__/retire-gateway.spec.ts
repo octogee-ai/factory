@@ -308,12 +308,52 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     expect(deps.deleteGatewayPersistentVolumeClaim).toHaveBeenCalledWith("canary");
   });
 
-  it("refuses when glmGateways doc is missing (cannot determine gatewayId)", async () => {
+  it("finishes cleanup when glmGateways doc is already gone and helm release is absent", async () => {
     const state = baseState({ glmGatewayIds: new Map() });
     const deps = makeDeps(state);
+    const ctx = makeCtx();
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), ctx);
+
+    expect(result.success).toBe(true);
+    expect(deps.deleteGatewayPersistentVolumeClaim).toHaveBeenCalledWith("canary");
+    expect(deps.deleteGatewayKubeSecret).toHaveBeenCalledWith("canary");
+    expect(deps.deleteAuthTokenSecret).toHaveBeenCalledWith("canary");
+    expect(deps.teardownGatewayServiceAccount).toHaveBeenCalledWith("canary");
+    expect(state.deletedHeartbeat.has("canary")).toBe(true);
+    expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
+      "helm-uninstall:running",
+      "helm-uninstall:done",
+      "delete-pvc:running",
+      "delete-pvc:done",
+      "delete-kube-secret:running",
+      "delete-kube-secret:done",
+      "delete-sm-secret:running",
+      "delete-sm-secret:done",
+      "teardown-gsa:running",
+      "teardown-gsa:done",
+      "cleanup:running",
+      "cleanup:done",
+      "heartbeat-quiesce:running",
+      "heartbeat-quiesce:done",
+      "fleet-ingress:running",
+      "fleet-ingress:done",
+    ]);
+  });
+
+  it("refuses when glmGateways doc is missing but helm release still exists", async () => {
+    const state = baseState({
+      helmInstances: new Set(["canary"]),
+      glmGatewayIds: new Map(),
+    });
+    const deps = makeDeps(state);
+
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/glmGateways.*not found|gatewayId/);
+    expect(result.error).toMatch(/glmGateways.*not found|helm release still exists/);
+    expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
+    expect(deps.deleteAuthTokenSecret).not.toHaveBeenCalled();
   });
 
   it("refuses teardown when the resolved gatewayId mismatches the input id (no destructive work)", async () => {

@@ -88,11 +88,17 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const liveFailure = await assertGatewayRetirable(deps, gatewayId);
     if (liveFailure) return liveFailure;
 
-    const resolvedGatewayId = await deps.readGlmGatewayId(gatewayId);
+    let resolvedGatewayId = await deps.readGlmGatewayId(gatewayId);
     if (!resolvedGatewayId) {
-      return failure(
-        `glmGateways/${gatewayId} not found — cannot determine gatewayId for helm uninstall`,
+      if (await helmHasInstance(deps, gatewayId)) {
+        return failure(
+          `glmGateways/${gatewayId} not found and helm release still exists — cannot retire safely`,
+        );
+      }
+      deps.log(
+        `[retire-gateway] glmGateways/${gatewayId} already deleted and helm release is absent — finishing cleanup from operation input`,
       );
+      resolvedGatewayId = gatewayId;
     }
     // Teardown targets resources named from resolvedGatewayId but removes
     // records by the input gatewayId — they must be the same gateway, or a
@@ -150,6 +156,11 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
 
     return { steps: [], success: true };
   };
+}
+
+async function helmHasInstance(deps: RetireGatewayDeps, gatewayId: string): Promise<boolean> {
+  const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
+  return Object.prototype.hasOwnProperty.call(map, gatewayId);
 }
 
 async function teardownResources(
