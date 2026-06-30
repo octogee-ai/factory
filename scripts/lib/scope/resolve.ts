@@ -118,6 +118,7 @@ export interface GhaOutputs {
   run_customer_lifecycle_emulator: boolean;
   run_functions_emulator: boolean;
   run_gateway_edge_emulator: boolean;
+  run_octogee_api_emulator: boolean;
 }
 
 export function toGhaOutputs(result: ScopeResult): GhaOutputs {
@@ -130,6 +131,7 @@ export function toGhaOutputs(result: ScopeResult): GhaOutputs {
     run_customer_lifecycle_emulator: has("customer-lifecycle-emulator"),
     run_functions_emulator: has("functions-emulator"),
     run_gateway_edge_emulator: has("gateway-edge-emulator"),
+    run_octogee_api_emulator: has("octogee-api-emulator"),
   };
 }
 
@@ -143,5 +145,6 @@ export function serializeGhaOutputs(out: GhaOutputs): string {
     `run_customer_lifecycle_emulator=${out.run_customer_lifecycle_emulator}`,
     `run_functions_emulator=${out.run_functions_emulator}`,
     `run_gateway_edge_emulator=${out.run_gateway_edge_emulator}`,
+    `run_octogee_api_emulator=${out.run_octogee_api_emulator}`,
   ].join("\n");
 }

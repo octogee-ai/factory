@@ -22,6 +22,7 @@ export const JOBS = {
   customerLifecycleEmulator: "customer-lifecycle-emulator",
   functionsEmulator: "functions-emulator",
   gatewayEdgeEmulator: "gateway-edge-emulator",
+  octogeeApiEmulator: "octogee-api-emulator",
 } as const;
 
 export type JobKey = (typeof JOBS)[keyof typeof JOBS];
@@ -90,6 +91,7 @@ export const STANDALONE_JOBS: readonly JobKey[] = [
   JOBS.customerLifecycleEmulator,
   JOBS.functionsEmulator,
   JOBS.gatewayEdgeEmulator,
+  JOBS.octogeeApiEmulator,
 ] as const;
 
 export const ALL_JOBS: readonly JobKey[] = [
@@ -107,7 +109,7 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "core/", jobs: [JOBS.core] },
   { dir: "test-helpers/", jobs: [JOBS.testHelpers] },
   { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
-  { dir: "octogee-api/", jobs: [JOBS.octogeeApi] },
+  { dir: "octogee-api/", jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator] },
   { dir: "glm-controller/", jobs: [JOBS.glmController] },
   { dir: "tests/", jobs: [JOBS.tests] },
   { dir: "acceptance/", jobs: [JOBS.acceptance] },
@@ -145,6 +147,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.scripts,
       JOBS.customerLifecycleEmulator,
       JOBS.octogeeApi,
+      JOBS.octogeeApiEmulator,
       JOBS.gatewayEdge,
       JOBS.gatewayEdgeEmulator,
       JOBS.glmController,
@@ -158,6 +161,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.gatewayEdge,
       JOBS.gatewayEdgeEmulator,
       JOBS.octogeeApi,
+      JOBS.octogeeApiEmulator,
       JOBS.functions,
       JOBS.functionsEmulator,
     ],
@@ -166,8 +170,9 @@ export const EDGES: readonly ScopeEdge[] = [
   },
   {
     when: "gateway-edge/src/",
-    jobs: [JOBS.octogeeApi],
-    reason: "octogee-api compiles gateway-edge route Routers (cross-package imports)",
+    jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator],
+    reason:
+      "octogee-api compiles gateway-edge route Routers (cross-package imports) and its emulator specs mount them via createApp()",
   },
   {
     when: "site/firestore.rules",

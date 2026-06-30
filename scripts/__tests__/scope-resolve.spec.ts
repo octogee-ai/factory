@@ -20,15 +20,20 @@ describe("resolveScope — ownership", () => {
     expect(r.everything).toBe(false);
   });
 
-  it("a single package change runs only that package's jobs", () => {
-    expectJobs(["octogee-api/src/routes/projects.ts"], ["octogee-api"]);
+  it("octogee-api owns its emulator suite too", () => {
+    expectJobs(
+      ["octogee-api/src/routes/projects.ts"],
+      ["octogee-api", "octogee-api-emulator"],
+    );
   });
 
   it("gateway-edge owns its emulator suite too", () => {
     expectJobs(
       ["gateway-edge/src/routes/shells.ts"],
-      // + the gateway-edge/src edge pulls octogee-api (route imports)
-      ["gateway-edge", "gateway-edge-emulator", "octogee-api"],
+      // + the gateway-edge/src edge pulls octogee-api + its emulator suite
+      // (octogee-api compiles AND mounts gateway-edge route Routers; the
+      // octogee-api emulator specs drive createApp() which mounts them).
+      ["gateway-edge", "gateway-edge-emulator", "octogee-api", "octogee-api-emulator"],
     );
   });
 
@@ -81,6 +86,7 @@ describe("resolveScope — cross-package hazard edges", () => {
         "scripts",
         "customer-lifecycle-emulator",
         "octogee-api",
+        "octogee-api-emulator",
         "gateway-edge",
         "gateway-edge-emulator",
         "glm-controller",
@@ -98,6 +104,7 @@ describe("resolveScope — cross-package hazard edges", () => {
         "gateway-edge",
         "gateway-edge-emulator",
         "octogee-api",
+        "octogee-api-emulator",
         "functions",
         "functions-emulator",
       ],
@@ -130,10 +137,10 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
-  it("gateway-edge/src change ALSO runs octogee-api (route imports)", () => {
+  it("gateway-edge/src change ALSO runs octogee-api + its emulator suite (route imports + mounts)", () => {
     expectJobs(
       ["gateway-edge/src/routes/git.ts"],
-      ["gateway-edge", "gateway-edge-emulator", "octogee-api"],
+      ["gateway-edge", "gateway-edge-emulator", "octogee-api", "octogee-api-emulator"],
     );
   });
 
@@ -189,6 +196,9 @@ describe("toGhaOutputs", () => {
     ]);
     expect(out.run_app).toBe(false);
     expect(out.run_functions_emulator).toBe(false);
+    // octogee-api-emulator is a standalone job (JDK), not a unit-matrix entry —
+    // so it's a flag, not a test_matrix row, but an octogee-api change runs it.
+    expect(out.run_octogee_api_emulator).toBe(true);
   });
 
   it("maps standalone-job flags independently of the unit matrix", () => {
@@ -205,6 +215,7 @@ describe("toGhaOutputs", () => {
     expect(out.run_customer_lifecycle_emulator).toBe(true);
     expect(out.run_functions_emulator).toBe(true);
     expect(out.run_gateway_edge_emulator).toBe(true);
+    expect(out.run_octogee_api_emulator).toBe(true);
   });
 
   it("nothing → empty matrix, all flags false, any=false", () => {
@@ -222,6 +233,7 @@ describe("serializeGhaOutputs", () => {
     expect(lines).toContain("any=true");
     expect(lines).toContain("run_functions_emulator=true");
     expect(lines).toContain("run_app=false");
+    expect(lines).toContain("run_octogee_api_emulator=false");
     // test_matrix must be single-line valid JSON (fromJSON() reads it in the workflow)
     const matrixLine = lines.find((l) => l.startsWith("test_matrix="))!;
     const parsed = JSON.parse(matrixLine.slice("test_matrix=".length));
