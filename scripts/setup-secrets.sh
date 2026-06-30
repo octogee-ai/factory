@@ -312,6 +312,21 @@ set +u; ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"; set -u
 [[ -n "$ANTHROPIC_API_KEY" ]] || fail "ANTHROPIC_API_KEY not found in .env or Secret Manager"
 ksecret octogee-anthropic --from-literal=api_key="$ANTHROPIC_API_KEY"
 
+# ── 6b. OpenRouter API key ─────────────────────────────────────────────────
+info "octogee-openrouter"
+set +u
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
+OPENROUTER_PLATFORM_API_KEY="${OPENROUTER_PLATFORM_API_KEY:-}"
+set -u
+[[ -z "$OPENROUTER_API_KEY" && -n "$OPENROUTER_PLATFORM_API_KEY" ]] && OPENROUTER_API_KEY="$OPENROUTER_PLATFORM_API_KEY"
+[[ -z "$OPENROUTER_API_KEY" ]] && OPENROUTER_API_KEY=$(sm_get OPENROUTER_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$OPENROUTER_API_KEY" ]] && OPENROUTER_API_KEY=$(sm_get OPENROUTER_PLATFORM_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+if [[ -n "$OPENROUTER_API_KEY" ]]; then
+  ksecret octogee-openrouter --from-literal=api_key="$OPENROUTER_API_KEY"
+else
+  warn "OPENROUTER_API_KEY not found in .env or Secret Manager — skipping optional octogee-openrouter"
+fi
+
 # ── 7. Brave API key ──────────────────────────────────────────────────────
 info "octogee-brave"
 set +u; BRAVE_API_KEY="${BRAVE_API_KEY:-}"; set -u
@@ -730,6 +745,7 @@ status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
 status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
 status "social-notification-bearer" "${SOCIAL_NOTIFICATION_BEARER:-}"
 status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
+status "octogee-openrouter" "${OPENROUTER_API_KEY:-}"
 status "resend-secrets / api_key" "${RESEND_API_KEY:-}"
 status "resend-secrets / from_email" "${RESEND_FROM_EMAIL:-}"
 status "github-oauth / client_id" "${GITHUB_CLIENT_ID:-}"

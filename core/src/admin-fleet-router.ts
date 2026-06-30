@@ -57,6 +57,7 @@ import {
   findPendingActivationOperation,
   requestBuilderActivationLease,
 } from "./builder-activation-lease.js";
+import { resolveUidForSlug } from "./assigned-roster.js";
 
 export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 
@@ -3191,6 +3192,46 @@ router.patch(
           update.cohortOverrides = parsed.ok.cohortOverrides;
         }
         await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(update, { merge: true });
+        res.json(await readAdminOnboardingCohortResponse(deps));
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.put(
+    "/onboarding-cohorts/:cohortId/overrides/by-slug/:slug",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const cohortId = req.params.cohortId as string;
+        const slug = req.params.slug as string;
+        const config = await readOnboardingRuntimeConfig(deps);
+        const cohort = config.onboardingCohorts?.[cohortId];
+        if (!cohort) {
+          res.status(404).json({ error: "onboarding cohort not found", cohortId });
+          return;
+        }
+        if (!isOnboardingCohortEnabled(cohort)) {
+          res.status(409).json({ error: "onboarding cohort is disabled", cohortId });
+          return;
+        }
+        const uid = await resolveUidForSlug(db, slug);
+        if (!uid) {
+          res.status(404).json({ error: "builder slug not found", slug });
+          return;
+        }
+        const actor = req as ActorRequest;
+        await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(
+          {
+            cohortOverrides: {
+              ...(config.cohortOverrides ?? {}),
+              [uid]: cohortId,
+            },
+            onboardingCohortsUpdatedAt: Date.now(),
+            onboardingCohortsUpdatedBy: actor.uid ?? "unknown",
+          },
+          { merge: true },
+        );
         res.json(await readAdminOnboardingCohortResponse(deps));
       } catch (e) {
         next(e);
