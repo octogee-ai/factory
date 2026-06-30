@@ -123,7 +123,6 @@ describe("mountClusterRoutes", () => {
       "/api/invites",
       "/api/integrations",
       "/api/connect",
-      "/api/discord",
       "/api/notifications",
       "/api/profile",
       "/api/onboarding",

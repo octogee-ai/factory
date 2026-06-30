@@ -9,7 +9,6 @@ import adminRoutes from "./admin.js";
 import inviteRoutes from "./invites.js";
 import integrationRoutes from "./integrations.js";
 import connectRoutes from "./connect.js";
-import discordRoutes from "./discord.js";
 import notificationRoutes from "./notifications.js";
 import sharingRoutes from "./sharing.js";
 import emailWebhookRoutes from "./email-webhook.js";
@@ -93,7 +92,6 @@ const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/api/invites", inviteRoutes],
   ["/api/integrations", integrationRoutes],
   ["/api/connect", connectRoutes],
-  ["/api/discord", discordRoutes],
   ["/api/notifications", notificationRoutes],
   ["/api/profile", profileRoutes],
   ["/api/onboarding", onboardingRoutes],

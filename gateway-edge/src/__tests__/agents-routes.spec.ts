@@ -206,13 +206,6 @@ describe("agent routes", () => {
   it("queues a cleanup job for all workspace agents from a slug prefix", async () => {
     h.auth.isAdmin = true;
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    h.userBySlug.set("acme", {
-      id: "owner-1",
-      data: {
-        discord: { channelId: "octogee-channel" },
-        provisioning: { discord: { channels: { octogee: "provisioned-channel", admin: "admin-channel" } } },
-      },
-    });
 
     const res = await request(app())
       .post("/api/agents/deprovision")
@@ -230,8 +223,6 @@ describe("agent routes", () => {
         "octogee-acme-riley",
         "octogee-acme-robert",
       ],
-      discordChannelId: "octogee-channel",
-      discordAdminChannelId: "admin-channel",
     });
     expect(h.writes).toContainEqual({
       method: "set",
@@ -248,9 +239,6 @@ describe("agent routes", () => {
           "octogee-acme-robert",
         ],
         deleteWorkspace: true,
-        discordChannelId: "octogee-channel",
-        discordAdminChannelId: "admin-channel",
-        uid: "owner-1",
         status: "pending",
         requestedAt: { __serverTimestamp: true },
         requestedBy: "admin",

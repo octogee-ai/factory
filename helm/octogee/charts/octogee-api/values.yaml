@@ -103,22 +103,6 @@ secrets:
     secretName: connect-state-secret
     secretKey: secret
     optional: true
-  - envName: DISCORD_CLIENT_SECRET
-    secretName: discord-secrets
-    secretKey: client_secret
-    optional: true
-  - envName: DISCORD_COACH_TOKEN
-    secretName: discord-secrets
-    secretKey: coach_token
-    optional: true
-  - envName: DISCORD_MAC_TOKEN
-    secretName: discord-secrets
-    secretKey: mac_token
-    optional: true
-  - envName: OCTOGEE_GUILD_ID
-    secretName: discord-secrets
-    secretKey: guild_id
-    optional: true
   # Dedicated bearer for the out-of-cluster Cloud Functions social producer
   # (the only auth on the public /api/notifications/social route).
   - envName: SOCIAL_NOTIFICATION_BEARER_TOKEN

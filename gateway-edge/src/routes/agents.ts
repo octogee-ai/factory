@@ -1,6 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth, requireAdmin } from "../middleware/auth.js";
-import { logger } from "../middleware/logging.js";
 import { db, FieldValue } from "../lib/db.js";
 import { syncCoachIdentity } from "../lib/coach-identity.js";
 
@@ -169,12 +168,6 @@ interface DeprovisionTarget {
   targetAgentIds: string[];
 }
 
-interface DiscordCleanupContext {
-  discordChannelId: string | null;
-  discordAdminChannelId: string | null;
-  uid: string | null;
-}
-
 function parseSlugPrefixTarget(slugPrefix: string): DeprovisionTarget | RouteError {
   const match = SLUG_PREFIX_RE.exec(slugPrefix);
   if (!match) {
@@ -210,30 +203,10 @@ function parseDeprovisionTarget(body: DeprovisionBody): DeprovisionTarget | Rout
     : parseAgentIdTarget(body.agentId!);
 }
 
-async function readDiscordCleanupContext(slug: string): Promise<DiscordCleanupContext> {
-  try {
-    const bySlug = await db.collection("users").where("workspaceSlug", "==", slug).limit(1).get();
-    if (bySlug.empty) {
-      return { discordChannelId: null, discordAdminChannelId: null, uid: null };
-    }
-    const userData = bySlug.docs[0].data();
-    return {
-      uid: bySlug.docs[0].id,
-      discordChannelId: userData.discord?.channelId ?? userData.provisioning?.discord?.channels?.octogee ?? null,
-      discordAdminChannelId: userData.provisioning?.discord?.channels?.admin ?? null,
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`deprovisionAgents: Firestore lookup failed (non-fatal): ${msg}`);
-    return { discordChannelId: null, discordAdminChannelId: null, uid: null };
-  }
-}
-
 function cleanupJobData(
   jobId: string,
   target: DeprovisionTarget,
-  deleteWorkspace: boolean,
-  context: DiscordCleanupContext
+  deleteWorkspace: boolean
 ): Record<string, unknown> {
   return {
     jobId,
@@ -241,9 +214,6 @@ function cleanupJobData(
     slugPrefix: `octogee-${target.slug}`,
     targetAgentIds: target.targetAgentIds,
     deleteWorkspace,
-    discordChannelId: context.discordChannelId,
-    discordAdminChannelId: context.discordAdminChannelId,
-    uid: context.uid,
     status: "pending",
     requestedAt: FieldValue.serverTimestamp(),
     requestedBy: "admin",
@@ -261,10 +231,9 @@ router.post("/deprovision", requireAdmin, async (req: Request, res: Response, ne
       return;
     }
 
-    const context = await readDiscordCleanupContext(target.slug);
     const jobId = `${target.slug}-${Date.now()}`;
     await db.collection("cleanupJobs").doc(jobId).set(
-      cleanupJobData(jobId, target, !!body.deleteWorkspace, context)
+      cleanupJobData(jobId, target, !!body.deleteWorkspace)
     );
 
     res.json({
@@ -272,8 +241,6 @@ router.post("/deprovision", requireAdmin, async (req: Request, res: Response, ne
       jobId,
       slug: target.slug,
       targetAgentIds: target.targetAgentIds,
-      discordChannelId: context.discordChannelId,
-      discordAdminChannelId: context.discordAdminChannelId,
       message: "Cleanup job queued. The gateway provisioner will process it within seconds.",
     });
   } catch (e) { next(e); }
