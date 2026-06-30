@@ -4,35 +4,47 @@ import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { mmApiCall, revokeAndMintBuilderPat } from "../lib/mattermost.js";
+import { pathToFileURL } from "node:url";
 
-const args = process.argv.slice(2);
-const projectArg = args.find((a) => a.startsWith("--project="));
-const project = projectArg?.split("=")[1] || process.env.GOOGLE_CLOUD_PROJECT || "octogee-test";
-const target = args.find((a) => !a.startsWith("--"));
-
-if (!target) {
-  console.error(
-    "Usage: npx tsx scripts/rotate-builder-mm-pat.ts <email-or-uid> --project=<project>",
-  );
-  process.exit(1);
+export interface RotateBuilderMmPatArgs {
+  project: string;
+  target: string;
 }
 
-if (!getApps().length) {
-  initializeApp({ credential: applicationDefault(), projectId: project });
+export const ROTATE_BUILDER_MM_PAT_USAGE =
+  "Usage: npx tsx scripts/rotate-builder-mm-pat.ts <email-or-uid> --project=<project>";
+
+export function parseRotateBuilderMmPatArgs(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): RotateBuilderMmPatArgs | null {
+  const projectArg = argv.find((a) => a.startsWith("--project="));
+  const project = projectArg?.split("=")[1] || env.GOOGLE_CLOUD_PROJECT || "octogee-test";
+  const target = argv.find((a) => !a.startsWith("--"));
+  if (!target) return null;
+  return { project, target };
 }
 
-const auth = getAuth();
-const db = getFirestore();
-
-async function main(): Promise<void> {
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const parsed = parseRotateBuilderMmPatArgs(argv);
+  if (!parsed) {
+    console.error(ROTATE_BUILDER_MM_PAT_USAGE);
+    process.exit(1);
+  }
+  const { project, target } = parsed;
+  if (!getApps().length) {
+    initializeApp({ credential: applicationDefault(), projectId: project });
+  }
+  const auth = getAuth();
+  const db = getFirestore();
   let uid: string;
   let email: string;
-  if (target!.includes("@")) {
-    const user = await auth.getUserByEmail(target!);
+  if (target.includes("@")) {
+    const user = await auth.getUserByEmail(target);
     uid = user.uid;
     email = user.email ?? "(no email)";
   } else {
-    const user = await auth.getUser(target!);
+    const user = await auth.getUser(target);
     uid = user.uid;
     email = user.email ?? "(no email)";
   }
@@ -86,7 +98,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => {
-  console.error(e instanceof Error ? e.message : String(e));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  });
+}

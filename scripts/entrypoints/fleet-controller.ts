@@ -23,11 +23,32 @@ import { startWorkspaceAutosaveLoop } from "../lib/workspace-autosave-runner.js"
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import { pushDirtySystemConfigForSlug } from "../lib/system-config.js";
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
-const MY_GATEWAY_ID = GATEWAY_ID === "local" ? "default" : GATEWAY_ID;
-const BUILDER_SLUG = process.env.GATEWAY_BUILDER_SLUG?.trim() ?? "";
+export interface FleetControllerEntrypointConfig {
+  builderSlug: string;
+  gatewayId: string;
+  port: number;
+  publicKey: string;
+  version: string;
+}
+
+export function resolveFleetControllerEntrypointConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  runtime: { gatewayId?: string } = { gatewayId: GATEWAY_ID },
+): FleetControllerEntrypointConfig {
+  const rawGatewayId = runtime.gatewayId ?? "local";
+  return {
+    gatewayId: rawGatewayId === "local" ? "default" : rawGatewayId,
+    builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() ?? "",
+    port: parseInt(env.FLEET_CONTROLLER_PORT ?? "3003", 10),
+    publicKey: env.FLEET_CONTROLLER_PUBLIC_KEY || "",
+    version: env.BUILD_SHA ?? "unknown",
+  };
+}
 
 async function main(): Promise<void> {
+  const entrypointConfig = resolveFleetControllerEntrypointConfig();
   log(bootBanner("fleet-controller"));
   const rpc = createGatewayRpc({
     allowLegacyGatewayTokenFallback: true,
@@ -36,12 +57,11 @@ async function main(): Promise<void> {
     execFile: execFileSync,
     binaryPath: "/usr/local/bin/openclaw",
   });
-  const publicKey = process.env.FLEET_CONTROLLER_PUBLIC_KEY || "";
-  if (!publicKey) {
+  if (!entrypointConfig.publicKey) {
     throw new Error("fleet controller public key unavailable: expected FLEET_CONTROLLER_PUBLIC_KEY");
   }
   const operator = isOperatorGateway();
-  const brokerClient = createFleetBrokerClient(MY_GATEWAY_ID);
+  const brokerClient = createFleetBrokerClient(entrypointConfig.gatewayId);
   const adapter = buildBrokeredLifecycleAdapter({
     client: brokerClient,
     rpc,
@@ -52,11 +72,11 @@ async function main(): Promise<void> {
   const fleetHandle = await startFleetController({
     rpc,
     adapter,
-    gatewayId: MY_GATEWAY_ID,
+    gatewayId: entrypointConfig.gatewayId,
     log,
-    port: parseInt(process.env.FLEET_CONTROLLER_PORT ?? "3003", 10),
-    publicKey,
-    version: process.env.BUILD_SHA ?? "unknown",
+    port: entrypointConfig.port,
+    publicKey: entrypointConfig.publicKey,
+    version: entrypointConfig.version,
     openclawVersion,
     openclawDir: OPENCLAW_DIR,
     platformState: !operator,
@@ -71,7 +91,7 @@ async function main(): Promise<void> {
     flushLocalState: async ({ reason }) => {
       log(`[fleet] controller-requested flush reason=${reason}`);
       return runGatewayPreStopFlush({
-        gatewayId: MY_GATEWAY_ID,
+        gatewayId: entrypointConfig.gatewayId,
         gatewayClass: GATEWAY_CLASS,
         syncWorkspaces: syncAllWorkspaces,
         syncBlobs: operator
@@ -79,9 +99,9 @@ async function main(): Promise<void> {
           : () => blobSyncAllWithOptions({
               storeForSlug: () => createBrokeredBlobStore(brokerClient),
             }),
-        syncSystemConfig: BUILDER_SLUG
+        syncSystemConfig: entrypointConfig.builderSlug
           ? async () => {
-              pushDirtySystemConfigForSlug(BUILDER_SLUG, { log });
+              pushDirtySystemConfigForSlug(entrypointConfig.builderSlug, { log });
             }
           : undefined,
         log,
@@ -121,7 +141,7 @@ async function main(): Promise<void> {
           });
         },
         log,
-        gatewayId: MY_GATEWAY_ID,
+        gatewayId: entrypointConfig.gatewayId,
       });
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
@@ -134,4 +154,6 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => { cleanup().finally(() => process.exit(0)).catch(() => process.exit(0)); });
 }
 
-main().catch((err) => { console.error("Fatal:", err); process.exit(1); });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => { console.error("Fatal:", err); process.exit(1); });
+}

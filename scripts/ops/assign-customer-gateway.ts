@@ -4,6 +4,7 @@ import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
+import { pathToFileURL } from "node:url";
 import {
   GLM_GATEWAYS_COLLECTION,
   isValidGatewayId,
@@ -93,68 +94,93 @@ if (data.approved !== true) {
   return { kind: "assigned", uid, slug, gatewayId: target, gatewayProfile: targetProfile, previous: current };
 }
 
-const argv = process.argv.slice(2);
-const opts = {
-  env: "",
-  uid: "",
-  slug: "",
-  all: false,
-  dryRun: false,
-};
-for (const arg of argv) {
-  if (arg.startsWith("--env=")) opts.env = arg.slice("--env=".length);
-  else if (arg.startsWith("--uid=")) opts.uid = arg.slice("--uid=".length);
-  else if (arg.startsWith("--slug=")) opts.slug = arg.slice("--slug=".length);
-  else if (arg === "--all") opts.all = true;
-  else if (arg === "--dry-run") opts.dryRun = true;
-  else if (arg === "--help" || arg === "-h") {
-     
-    console.log(
-      `Usage: tsx scripts/ops/assign-customer-gateway.ts --env=test|prod (--uid=UID | --slug=SLUG | --all) [--dry-run]`,
-    );
-    process.exit(0);
-  } else {
-     
-    console.error(`Unknown arg: ${arg}`);
-    process.exit(1);
-  }
-}
-const USAGE =
+export const ASSIGN_CUSTOMER_GATEWAY_USAGE =
   `Usage: tsx scripts/ops/assign-customer-gateway.ts --env=test|prod (--uid=UID | --slug=SLUG | --all) [--dry-run]`;
 
-if (!opts.env) {
-   
-  console.error(`--env is required (test or prod)\n${USAGE}`);
-  process.exit(1);
-}
-if (opts.env !== "test" && opts.env !== "prod") {
-   
-  console.error(`--env must be 'test' or 'prod' (got: '${opts.env}')\n${USAGE}`);
-  process.exit(1);
-}
-if (!opts.uid && !opts.slug && !opts.all) {
-   
-  console.error(`one of --uid=UID, --slug=SLUG, or --all is required\n${USAGE}`);
-  process.exit(1);
+export interface AssignCustomerGatewayArgs {
+  all: boolean;
+  dryRun: boolean;
+  env: "test" | "prod";
+  slug: string;
+  uid: string;
 }
 
-const envSuffix = opts.env === "prod" ? "" : `-${opts.env}`;
-const saPath = path.join(
-  process.env.HOME ?? "",
-  `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
-);
-if (!fs.existsSync(saPath)) {
-   
-  console.error(`SA key not found at ${saPath}`);
-  process.exit(1);
-}
-initializeApp({
-  credential: cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
-  projectId: opts.env === "prod" ? "octogee" : `octogee-${opts.env}`,
-});
-const db = getFirestore();
+export type ParseAssignCustomerGatewayArgsResult =
+  | { kind: "ok"; args: AssignCustomerGatewayArgs }
+  | { kind: "help" }
+  | { kind: "error"; message: string };
 
-async function main(): Promise<void> {
+export function parseAssignCustomerGatewayArgs(
+  argv: string[],
+): ParseAssignCustomerGatewayArgsResult {
+  const opts = {
+    env: "",
+    uid: "",
+    slug: "",
+    all: false,
+    dryRun: false,
+  };
+  for (const arg of argv) {
+    if (arg.startsWith("--env=")) opts.env = arg.slice("--env=".length);
+    else if (arg.startsWith("--uid=")) opts.uid = arg.slice("--uid=".length);
+    else if (arg.startsWith("--slug=")) opts.slug = arg.slice("--slug=".length);
+    else if (arg === "--all") opts.all = true;
+    else if (arg === "--dry-run") opts.dryRun = true;
+    else if (arg === "--help" || arg === "-h") return { kind: "help" };
+    else return { kind: "error", message: `Unknown arg: ${arg}` };
+  }
+  if (!opts.env) {
+    return { kind: "error", message: `--env is required (test or prod)\n${ASSIGN_CUSTOMER_GATEWAY_USAGE}` };
+  }
+  if (opts.env !== "test" && opts.env !== "prod") {
+    return {
+      kind: "error",
+      message: `--env must be 'test' or 'prod' (got: '${opts.env}')\n${ASSIGN_CUSTOMER_GATEWAY_USAGE}`,
+    };
+  }
+  if (!opts.uid && !opts.slug && !opts.all) {
+    return {
+      kind: "error",
+      message: `one of --uid=UID, --slug=SLUG, or --all is required\n${ASSIGN_CUSTOMER_GATEWAY_USAGE}`,
+    };
+  }
+  return {
+    kind: "ok",
+    args: {
+      env: opts.env,
+      uid: opts.uid,
+      slug: opts.slug,
+      all: opts.all,
+      dryRun: opts.dryRun,
+    },
+  };
+}
+
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const parsed = parseAssignCustomerGatewayArgs(argv);
+  if (parsed.kind === "help") {
+    console.log(ASSIGN_CUSTOMER_GATEWAY_USAGE);
+    process.exit(0);
+  }
+  if (parsed.kind === "error") {
+    console.error(parsed.message);
+    process.exit(1);
+  }
+  const opts = parsed.args;
+  const envSuffix = opts.env === "prod" ? "" : `-${opts.env}`;
+  const saPath = path.join(
+    process.env.HOME ?? "",
+    `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
+  );
+  if (!fs.existsSync(saPath)) {
+    console.error(`SA key not found at ${saPath}`);
+    process.exit(1);
+  }
+  initializeApp({
+    credential: cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
+    projectId: opts.env === "prod" ? "octogee" : `octogee-${opts.env}`,
+  });
+  const db = getFirestore();
   const uids: string[] = [];
   if (opts.uid) {
     uids.push(opts.uid);
@@ -203,10 +229,11 @@ const q = await db
   }
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
-     
-    console.error(err);
-    process.exit(1);
-  });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+}

@@ -18,10 +18,32 @@
 
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { pathToFileURL } from "node:url";
 
-function arg(flag: string): string | undefined {
-  const i = process.argv.indexOf(`--${flag}`);
-  return i >= 0 ? process.argv[i + 1] : undefined;
+export interface SeedGithubProjectArgs {
+  name: string;
+  owner: string;
+  repo: string;
+  slug: string;
+  tagline: string;
+}
+
+export const SEED_GITHUB_PROJECTS_USAGE =
+  "usage: npx tsx ops/seed-github-projects.ts --slug <slug> --name <name> --owner <gh-owner> --repo <gh-repo> [--tagline <text>]";
+
+function arg(argv: string[], flag: string): string | undefined {
+  const i = argv.indexOf(`--${flag}`);
+  return i >= 0 ? argv[i + 1] : undefined;
+}
+
+export function parseSeedGithubProjectArgs(argv: string[]): SeedGithubProjectArgs | null {
+  const slug = arg(argv, "slug");
+  const name = arg(argv, "name");
+  const owner = arg(argv, "owner");
+  const repo = arg(argv, "repo");
+  const tagline = arg(argv, "tagline") ?? "";
+  if (!slug || !name || !owner || !repo) return null;
+  return { slug, name, owner, repo, tagline };
 }
 
 function requireEnv(name: string): string {
@@ -33,18 +55,13 @@ function requireEnv(name: string): string {
   return v;
 }
 
-async function main(): Promise<void> {
-  const slug = arg("slug");
-  const name = arg("name");
-  const owner = arg("owner");
-  const repo = arg("repo");
-  const tagline = arg("tagline") ?? "";
-  if (!slug || !name || !owner || !repo) {
-    console.error(
-      "usage: npx tsx ops/seed-github-projects.ts --slug <slug> --name <name> --owner <gh-owner> --repo <gh-repo> [--tagline <text>]",
-    );
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const parsed = parseSeedGithubProjectArgs(argv);
+  if (!parsed) {
+    console.error(SEED_GITHUB_PROJECTS_USAGE);
     process.exit(64);
   }
+  const { name, owner, repo, slug, tagline } = parsed;
 
   const operatorUid = requireEnv("OPERATOR_UID");
   const webApiKey = requireEnv("FIREBASE_WEB_API_KEY");
@@ -91,4 +108,6 @@ async function main(): Promise<void> {
   console.log(body);
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

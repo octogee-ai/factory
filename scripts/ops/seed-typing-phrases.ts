@@ -8,11 +8,20 @@ import {
   TYPING_PHRASES_BY_VIBE,
   WORKSPACE_VIBE_PRESETS,
 } from '../../shared/types/display-names';
+import { pathToFileURL } from 'node:url';
 
 const DEFAULT_SA_KEY_PATH = resolve(
   process.env.HOME || '~',
   '.openclaw/secrets/octogee-test-sa-key.json',
 );
+
+export interface SeedTypingPhrasesArgs {
+  force: boolean;
+}
+
+export function parseSeedTypingPhrasesArgs(argv: string[]): SeedTypingPhrasesArgs {
+  return { force: argv.includes('--force') };
+}
 
 function loadSa(): Record<string, unknown> {
 
@@ -28,7 +37,7 @@ const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || DEFAULT_SA_KEY_PAT
 }
 
 async function main() {
-  const force = process.argv.includes('--force');
+  const { force } = parseSeedTypingPhrasesArgs(process.argv.slice(2));
   const sa = loadSa();
   const app = initializeApp({ credential: cert(sa) }, 'seed-typing-phrases');
   const db = getFirestore(app);
@@ -61,7 +70,9 @@ async function main() {
   console.log('Done.');
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

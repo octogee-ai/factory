@@ -5,7 +5,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   type GatewayState,
   type GatewayStatus,
@@ -199,7 +199,7 @@ function renderVerbHelp(verb: VerbHelp): string {
   ].join("\n");
 }
 
-interface ParsedArgs {
+export interface ParsedFleetArgs {
   env: "test" | "prod" | "";
   positional: string[];
   flags: Record<string, string | true>;
@@ -207,8 +207,8 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(["env", "to", "gateway"]);
 
-function parseArgs(argv: readonly string[]): ParsedArgs {
-  const out: ParsedArgs = { env: "", positional: [], flags: {} };
+export function parseFleetArgs(argv: readonly string[]): ParsedFleetArgs {
+  const out: ParsedFleetArgs = { env: "", positional: [], flags: {} };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith("--")) {
@@ -236,64 +236,69 @@ if (VALUE_FLAGS.has(k) && i + 1 < argv.length && !argv[i + 1].startsWith("--")) 
   return out;
 }
 
-const args = parseArgs(process.argv.slice(2));
+let args: ParsedFleetArgs = parseFleetArgs([]);
+let db: ReturnType<typeof getFirestore>;
 
-if (args.flags.version === true) {
-  console.log(VERSION);
-  process.exit(0);
-}
+function initializeFleetCli(argv: string[]): void {
+  args = parseFleetArgs(argv);
 
-if (args.positional.length === 0 || args.flags.help === true) {
-  console.log(renderTopHelp());
-  process.exit(args.positional.length === 0 ? 1 : 0);
-}
-
-if (args.positional[0] === "help") {
-
-const target = args.positional.slice(1).join(" ").trim();
-  if (!target) {
-    console.log(renderTopHelp());
+  if (args.flags.version === true) {
+    console.log(VERSION);
     process.exit(0);
   }
-  const verb = verbsByName.get(target);
-  if (!verb) {
-    console.error(red(`Unknown verb: '${target}'`));
+
+  if (args.positional.length === 0 || args.flags.help === true) {
+    console.log(renderTopHelp());
+    process.exit(args.positional.length === 0 ? 1 : 0);
+  }
+
+  if (args.positional[0] === "help") {
+    const target = args.positional.slice(1).join(" ").trim();
+    if (!target) {
+      console.log(renderTopHelp());
+      process.exit(0);
+    }
+    const verb = verbsByName.get(target);
+    if (!verb) {
+      console.error(red(`Unknown verb: '${target}'`));
+      console.error(dim(`Run \`fleet --help\` for the verb list.`));
+      process.exit(1);
+    }
+    console.log(renderVerbHelp(verb));
+    process.exit(0);
+  }
+
+  if (!args.env) {
+    console.error(red(`--env is required (test or prod).`));
+    console.error(dim(`Example: fleet --env=prod ls gateways`));
     console.error(dim(`Run \`fleet --help\` for the verb list.`));
     process.exit(1);
   }
-  console.log(renderVerbHelp(verb));
-  process.exit(0);
-}
+  if (args.env !== "test" && args.env !== "prod") {
+    console.error(red(`--env must be 'test' or 'prod' (got: '${args.env}').`));
+    process.exit(1);
+  }
 
-if (!args.env) {
-  console.error(red(`--env is required (test or prod).`));
-  console.error(dim(`Example: fleet --env=prod ls gateways`));
-  console.error(dim(`Run \`fleet --help\` for the verb list.`));
-  process.exit(1);
+  const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
+  const saPath = path.join(
+    process.env.HOME ?? "",
+    `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
+  );
+  if (!fs.existsSync(saPath)) {
+    console.error(red(`${CROSS} SA key not found at ${saPath}`));
+    console.error(dim(`  Expected file used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
+    process.exit(1);
+  }
+  initializeApp({
+    credential: cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
+    projectId: args.env === "prod" ? "octogee" : `octogee-${args.env}`,
+  });
+  db = getFirestore();
+  KUBE_NS = args.env === "prod" ? "octogee" : "octogee-test";
 }
-if (args.env !== "test" && args.env !== "prod") {
-  console.error(red(`--env must be 'test' or 'prod' (got: '${args.env}').`));
-  process.exit(1);
-}
-
-const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
-const saPath = path.join(
-  process.env.HOME ?? "",
-  `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
-);
-if (!fs.existsSync(saPath)) {
-  console.error(red(`${CROSS} SA key not found at ${saPath}`));
-  console.error(dim(`  Expected file used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
-  process.exit(1);
-}
-initializeApp({
-  credential: cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
-  projectId: args.env === "prod" ? "octogee" : `octogee-${args.env}`,
-});
-const db = getFirestore();
 
 const KUBE_CONTEXT = "gke_octogee_us-central1_octogee-gateway";
-const KUBE_NS = args.env === "prod" ? "octogee" : "octogee-test";
+let KUBE_NS = "octogee-test";
 
 type FirestoreTs = { toMillis(): number };
 
@@ -823,6 +828,7 @@ async function executeMigration(
 }
 
 async function main(): Promise<void> {
+  initializeFleetCli(process.argv.slice(2));
   const verb = args.positional[0] ?? "";
   const sub = args.positional[1] ?? "";
   const apply = args.flags.apply === true;
@@ -883,7 +889,9 @@ function missingArg(verbName: string): never {
   process.exit(1);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

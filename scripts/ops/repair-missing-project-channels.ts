@@ -5,24 +5,32 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { projectGeneralChannelName } from "../../shared/types/identity.js";
+import { pathToFileURL } from "node:url";
 
-const APPLY = process.argv.includes("--apply");
-const SA_KEY = process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-  path.join(os.homedir(), ".openclaw", "secrets", "octogee-test-sa-key.json");
-const MM_URL = process.env.MM_URL;
-const MM_ADMIN_TOKEN = process.env.MM_ADMIN_TOKEN;
-
-if (!MM_URL || !MM_ADMIN_TOKEN) {
-  console.error("ERROR: Both MM_URL and MM_ADMIN_TOKEN must be set.");
-  process.exit(1);
+export interface RepairMissingProjectChannelsConfig {
+  apply: boolean;
+  mmAdminToken: string | undefined;
+  mmUrl: string | undefined;
+  saKey: string;
 }
 
-const saKey = JSON.parse(fs.readFileSync(SA_KEY, "utf-8"));
-admin.initializeApp({
-  credential: admin.credential.cert(saKey),
-  projectId: saKey.project_id,
-});
-const db = admin.firestore();
+export function resolveRepairMissingProjectChannelsConfig(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): RepairMissingProjectChannelsConfig {
+  return {
+    apply: argv.includes("--apply"),
+    saKey: env.GOOGLE_APPLICATION_CREDENTIALS ||
+      path.join(os.homedir(), ".openclaw", "secrets", "octogee-test-sa-key.json"),
+    mmUrl: env.MM_URL,
+    mmAdminToken: env.MM_ADMIN_TOKEN,
+  };
+}
+
+let APPLY = false;
+let MM_URL = "";
+let MM_ADMIN_TOKEN = "";
+let db: FirebaseFirestore.Firestore;
 
 async function mm(method: string, endpoint: string, body?: unknown): Promise<{ id: string; type: string }> {
   const resp = await fetch(`${MM_URL}/api/v4${endpoint}`, {
@@ -197,6 +205,21 @@ for (const m of [
 }
 
 async function main() {
+  const config = resolveRepairMissingProjectChannelsConfig(process.argv.slice(2));
+  if (!config.mmUrl || !config.mmAdminToken) {
+    console.error("ERROR: Both MM_URL and MM_ADMIN_TOKEN must be set.");
+    process.exit(1);
+  }
+  APPLY = config.apply;
+  MM_URL = config.mmUrl;
+  MM_ADMIN_TOKEN = config.mmAdminToken;
+
+  const saKey = JSON.parse(fs.readFileSync(config.saKey, "utf-8"));
+  admin.initializeApp({
+    credential: admin.credential.cert(saKey),
+    projectId: saKey.project_id,
+  });
+  db = admin.firestore();
   console.log(`Project: ${saKey.project_id}${APPLY ? "" : " [DRY RUN — pass --apply to write]"}`);
 
   const needs = await findProjectsNeedingRepair();
@@ -216,7 +239,9 @@ async function main() {
   console.log("Done.");
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

@@ -9,15 +9,35 @@ import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import { syncAllWorkspaces } from "../lib/git.js";
 import { pushDirtySystemConfigForSlug } from "../lib/system-config.js";
+import { pathToFileURL } from "node:url";
 
-const gatewayId = GATEWAY_ID === "local" ? "default" : GATEWAY_ID;
-const builderSlug = process.env.GATEWAY_BUILDER_SLUG?.trim() ?? "";
+export interface PreStopFlushConfig {
+  builderSlug: string;
+  gatewayClass: string;
+  gatewayId: string;
+}
+
+export function resolvePreStopFlushConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  runtime: { gatewayClass?: string; gatewayId?: string } = {
+    gatewayClass: GATEWAY_CLASS,
+    gatewayId: GATEWAY_ID,
+  },
+): PreStopFlushConfig {
+  const rawGatewayId = runtime.gatewayId ?? "local";
+  return {
+    gatewayId: rawGatewayId === "local" ? "default" : rawGatewayId,
+    gatewayClass: runtime.gatewayClass ?? "",
+    builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() ?? "",
+  };
+}
 
 async function main(): Promise<void> {
+  const { builderSlug, gatewayClass, gatewayId } = resolvePreStopFlushConfig();
   const brokerClient = createFleetBrokerClient(gatewayId);
   await brokerClient
     .recordPreStopFlush({
-      gatewayClass: GATEWAY_CLASS,
+      gatewayClass,
       phase: "started",
       reason: "prestop",
     })
@@ -28,7 +48,7 @@ async function main(): Promise<void> {
     });
   const result = await runGatewayPreStopFlush({
     gatewayId,
-    gatewayClass: GATEWAY_CLASS,
+    gatewayClass,
     syncWorkspaces: syncAllWorkspaces,
     syncBlobs: () => blobSyncAllWithOptions({
       storeForSlug: () => createBrokeredBlobStore(brokerClient),
@@ -42,7 +62,7 @@ async function main(): Promise<void> {
   });
   await brokerClient
     .recordPreStopFlush({
-      gatewayClass: GATEWAY_CLASS,
+      gatewayClass,
       phase: "completed",
       reason: "prestop",
       result,
@@ -58,7 +78,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error("prestop-flush fatal:", err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error("prestop-flush fatal:", err);
+    process.exit(1);
+  });
+}

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
   computeTestedModules,
   rankCoverageRisk,
@@ -24,7 +25,7 @@ const TEST_RE = /\.(spec|test)\.(ts|tsx)$/;
 const SRC_RE = /\.(ts|tsx)$/;
 const isDecl = (f: string) => f.endsWith(".d.ts");
 
-function walk(root: string, repoRoot: string): string[] {
+export function walk(root: string, repoRoot: string): string[] {
   const out: string[] = [];
   const stack = [root];
   while (stack.length) {
@@ -47,7 +48,7 @@ function walk(root: string, repoRoot: string): string[] {
   return out;
 }
 
-function churnByFile(sinceArg: string, repoRoot: string): Map<string, number> {
+export function churnByFile(sinceArg: string, repoRoot: string): Map<string, number> {
   const since = /^\d+d$/.test(sinceArg)
     ? `${sinceArg.slice(0, -1)} days ago`
     : sinceArg;
@@ -152,4 +153,6 @@ function main(): void {
   );
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

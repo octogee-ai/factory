@@ -1,38 +1,43 @@
 import * as fs from "fs";
 import { applicationDefault, cert, initializeApp } from "firebase-admin/app";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { pathToFileURL } from "node:url";
 
-const APPLY = process.argv.includes("--apply");
-const LIST = process.argv.includes("--list");
-const CLEAR_ONBOARDING = process.argv.includes("--clear-onboarding-name");
-const FILTERS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-
-const MM_URL = process.env.MM_URL;
-const MM_ADMIN_TOKEN = process.env.MM_ADMIN_TOKEN;
-const SA_KEY = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
-
-if (!MM_URL || !MM_ADMIN_TOKEN) {
-  console.error("ERROR: Both MM_URL and MM_ADMIN_TOKEN must be set.");
-  process.exit(1);
+export interface ReconcileCoachNamesArgs {
+  apply: boolean;
+  clearOnboarding: boolean;
+  filters: string[];
+  list: boolean;
+  mmAdminToken: string | undefined;
+  mmUrl: string | undefined;
+  projectId: string | undefined;
+  saKey: string | undefined;
 }
 
-let projectId: string;
-if (SA_KEY && fs.existsSync(SA_KEY)) {
-  const saKey = JSON.parse(fs.readFileSync(SA_KEY, "utf-8"));
-  projectId = saKey.project_id;
-  initializeApp({ credential: cert(saKey), projectId });
-} else if (PROJECT_ID) {
-  projectId = PROJECT_ID;
-  initializeApp({ credential: applicationDefault(), projectId });
-} else {
-  console.error(
-    "ERROR: set GOOGLE_APPLICATION_CREDENTIALS to a service-account key, or GOOGLE_CLOUD_PROJECT to use application-default credentials.",
-  );
-  process.exit(1);
+export function parseReconcileCoachNamesArgs(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): ReconcileCoachNamesArgs {
+  return {
+    apply: argv.includes("--apply"),
+    list: argv.includes("--list"),
+    clearOnboarding: argv.includes("--clear-onboarding-name"),
+    filters: argv.filter((a) => !a.startsWith("--")),
+    mmUrl: env.MM_URL,
+    mmAdminToken: env.MM_ADMIN_TOKEN,
+    saKey: env.GOOGLE_APPLICATION_CREDENTIALS,
+    projectId: env.GOOGLE_CLOUD_PROJECT || env.GCLOUD_PROJECT,
+  };
 }
 
-const db = getFirestore();
+let APPLY = false;
+let LIST = false;
+let CLEAR_ONBOARDING = false;
+let FILTERS: string[] = [];
+let MM_URL = "";
+let MM_ADMIN_TOKEN = "";
+let projectId = "";
+let db: FirebaseFirestore.Firestore;
 
 // The canonical Mattermost display name for a coach is the bot account's
 // display_name — exactly the field syncCoachIdentity writes (PUT /bots/{id}).
@@ -136,6 +141,32 @@ async function clearOnboardingNames(inventory: AgentRow[]): Promise<void> {
 }
 
 async function main() {
+  const args = parseReconcileCoachNamesArgs(process.argv.slice(2));
+  if (!args.mmUrl || !args.mmAdminToken) {
+    console.error("ERROR: Both MM_URL and MM_ADMIN_TOKEN must be set.");
+    process.exit(1);
+  }
+  APPLY = args.apply;
+  LIST = args.list;
+  CLEAR_ONBOARDING = args.clearOnboarding;
+  FILTERS = args.filters;
+  MM_URL = args.mmUrl;
+  MM_ADMIN_TOKEN = args.mmAdminToken;
+
+  if (args.saKey && fs.existsSync(args.saKey)) {
+    const saKey = JSON.parse(fs.readFileSync(args.saKey, "utf-8"));
+    projectId = saKey.project_id;
+    initializeApp({ credential: cert(saKey), projectId });
+  } else if (args.projectId) {
+    projectId = args.projectId;
+    initializeApp({ credential: applicationDefault(), projectId });
+  } else {
+    console.error(
+      "ERROR: set GOOGLE_APPLICATION_CREDENTIALS to a service-account key, or GOOGLE_CLOUD_PROJECT to use application-default credentials.",
+    );
+    process.exit(1);
+  }
+  db = getFirestore();
   console.log(`Project: ${projectId}${APPLY ? "" : LIST ? " [LIST]" : " [DRY RUN — pass --apply to write]"}`);
   if (FILTERS.length > 0) console.log(`Filter: ${FILTERS.join(", ")}`);
 
@@ -160,7 +191,9 @@ async function main() {
   await reconcileNames(inventory);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

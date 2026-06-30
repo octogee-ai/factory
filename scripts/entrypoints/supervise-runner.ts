@@ -1,67 +1,103 @@
 #!/usr/bin/env tsx
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
-import { superviseRunner } from "../lib/runner-supervisor.js";
+import { superviseRunner, type SupervisedChild } from "../lib/runner-supervisor.js";
 
 // Usage: supervise-runner <name> [--restart-delay-ms=N] <command> [args...]
 // Replaces the bare `while true; <cmd> || true; sleep N` loops in
 // entrypoint.sh — same respawn behavior, plus a heartbeat the metrics
 // exporter reads. The runner's stdout/stderr pass through (stdio: inherit).
-const [, , name, maybeOption, ...rest] = process.argv;
-let command = maybeOption;
-let args = rest;
-let restartDelayMs: number | undefined;
+export const SUPERVISE_RUNNER_USAGE =
+  "usage: supervise-runner <name> [--restart-delay-ms=N] <command> [args...]";
 
-if (maybeOption?.startsWith("--restart-delay-ms=")) {
-  restartDelayMs = Number(maybeOption.slice("--restart-delay-ms=".length));
-  [command, ...args] = rest;
+export interface SuperviseRunnerCliArgs {
+  name: string;
+  command: string;
+  args: string[];
+  restartDelayMs?: number;
 }
 
-if (
-  restartDelayMs !== undefined &&
-  (!Number.isFinite(restartDelayMs) || restartDelayMs < 0)
-) {
-  console.error("usage: supervise-runner <name> [--restart-delay-ms=N] <command> [args...]");
-  process.exit(2);
+export function parseSuperviseRunnerArgs(argv: string[]): SuperviseRunnerCliArgs | null {
+  const [name, maybeOption, ...rest] = argv;
+  let command = maybeOption;
+  let args = rest;
+  let restartDelayMs: number | undefined;
+
+  if (maybeOption?.startsWith("--restart-delay-ms=")) {
+    restartDelayMs = Number(maybeOption.slice("--restart-delay-ms=".length));
+    [command, ...args] = rest;
+  }
+
+  if (
+    restartDelayMs !== undefined &&
+    (!Number.isFinite(restartDelayMs) || restartDelayMs < 0)
+  ) {
+    return null;
+  }
+
+  if (!name || !command) return null;
+  return { name, command, args, restartDelayMs };
 }
 
-if (!name || !command) {
-  console.error("usage: supervise-runner <name> [--restart-delay-ms=N] <command> [args...]");
-  process.exit(2);
+interface ActiveChildRef {
+  current: ChildProcess | null;
 }
 
-let stopping = false;
-let activeChild: ChildProcess | null = null;
-const stop = (): void => {
-  stopping = true;
-  activeChild?.kill("SIGTERM");
-};
-process.on("SIGTERM", stop);
-process.on("SIGINT", stop);
-process.on("exit", () => activeChild?.kill("SIGTERM"));
+function finishChild(
+  activeChild: ActiveChildRef,
+  child: ChildProcess,
+  resolve: (code: number) => void,
+  code: number,
+): void {
+  if (activeChild.current === child) activeChild.current = null;
+  resolve(code);
+}
 
-await superviseRunner({
-  name,
-  restartDelayMs,
-  shouldStop: () => stopping,
-  spawn: () => {
-    const child = spawn(command, args, { stdio: "inherit" });
-    activeChild = child;
-    const finish = (resolve: (code: number) => void, code: number): void => {
-      if (activeChild === child) activeChild = null;
-      resolve(code);
-    };
-    return {
-      waitForExit: () =>
-        new Promise<number>((resolve) => {
-          child.once("exit", (code, signal) =>
-            finish(resolve, code ?? (signal ? 1 : 0)),
-          );
-          // posix_spawnp / ENOENT etc — treat as a non-zero exit so the
-          // supervisor records the failure and retries.
-          child.once("error", () => finish(resolve, 1));
-        }),
-    };
-  },
-});
+function waitForChildExit(activeChild: ActiveChildRef, child: ChildProcess): Promise<number> {
+  return new Promise<number>((resolve) => {
+    child.once("exit", (code, signal) =>
+      finishChild(activeChild, child, resolve, code ?? (signal ? 1 : 0)),
+    );
+    // posix_spawnp / ENOENT etc: record failure and retry.
+    child.once("error", () => finishChild(activeChild, child, resolve, 1));
+  });
+}
+
+function spawnSupervisedChild(parsed: SuperviseRunnerCliArgs, activeChild: ActiveChildRef): SupervisedChild {
+  const child = spawn(parsed.command, parsed.args, { stdio: "inherit" });
+  activeChild.current = child;
+  return {
+    waitForExit: () => waitForChildExit(activeChild, child),
+  };
+}
+
+export async function runSuperviseRunner(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const parsed = parseSuperviseRunnerArgs(argv);
+  if (!parsed) {
+    console.error(SUPERVISE_RUNNER_USAGE);
+    process.exit(2);
+  }
+
+  let stopping = false;
+  const activeChild: ActiveChildRef = { current: null };
+  const stop = (): void => {
+    stopping = true;
+    activeChild.current?.kill("SIGTERM");
+  };
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
+  process.on("exit", () => activeChild.current?.kill("SIGTERM"));
+
+  await superviseRunner({
+    name: parsed.name,
+    restartDelayMs: parsed.restartDelayMs,
+    shouldStop: () => stopping,
+    spawn: () => spawnSupervisedChild(parsed, activeChild),
+  });
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runSuperviseRunner();
+}
