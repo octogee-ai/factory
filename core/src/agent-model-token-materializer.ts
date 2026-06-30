@@ -32,6 +32,18 @@ export type AgentModelBrokerProvider = "anthropic" | "openrouter";
 export interface OpenRouterBrokerModelInput {
   baseUrl: string;
   model: string;
+  contextTokens?: number;
+}
+
+export interface OpenRouterBrokerProviderConfigInput extends OpenRouterBrokerModelInput {
+  apiKey: string;
+}
+
+export interface OpenRouterBrokerProviderConfig {
+  api: "openai-completions";
+  baseUrl: string;
+  apiKey: string;
+  models: Array<{ id: string; name: string; contextTokens?: number }>;
 }
 
 export interface OpenRouterBrokerModelsJson {
@@ -39,7 +51,7 @@ export interface OpenRouterBrokerModelsJson {
     api: "openai-completions";
     baseUrl: string;
     apiKey: { source: "exec"; provider: string; id: string };
-    models: Array<{ id: string; name: string }>;
+    models: Array<{ id: string; name: string; contextTokens?: number }>;
   }>;
 }
 
@@ -49,6 +61,25 @@ export function agentModelTokenSecretId(
 ): string {
   if (provider === "openrouter") return `agent-model-token-openrouter-${agentId}`;
   return `agent-model-token-${agentId}`;
+}
+
+export function openRouterBrokerProviderConfig(
+  input: OpenRouterBrokerProviderConfigInput,
+): OpenRouterBrokerProviderConfig {
+  return {
+    api: "openai-completions",
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    models: [
+      {
+        id: input.model,
+        name: input.model,
+        ...(typeof input.contextTokens === "number"
+          ? { contextTokens: input.contextTokens }
+          : {}),
+      },
+    ],
+  };
 }
 
 export function agentModelTokenProfileEntry(agentId: string): AnthropicBrokerProfileEntry {
@@ -77,7 +108,15 @@ export function openRouterBrokerModelsJson(
           provider: SECRET_RESOLVER_PROVIDER,
           id: agentModelTokenSecretId(agentId, "openrouter"),
         },
-        models: [{ id: input.model, name: input.model }],
+        models: [
+          {
+            id: input.model,
+            name: input.model,
+            ...(typeof input.contextTokens === "number"
+              ? { contextTokens: input.contextTokens }
+              : {}),
+          },
+        ],
       },
     },
   };

@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { onboardingModelCatalogEntryFor } from "@octogee/shared/types/onboarding-cohorts";
 import {
   buildModelCredentialConfigForProvider,
   claudeCliRuntimeConfig,
@@ -44,6 +45,7 @@ export interface PlatformCohortCoachModelInput {
   slug: string;
   provider: "anthropic" | "openrouter";
   model: string;
+  contextTokens?: number;
   reasoningEffort?: "high" | "xhigh";
   source: "platform-cohort";
 }
@@ -55,6 +57,7 @@ export type CoachModelInput = ByotInput | FreeTierCoachModelInput | PlatformCoho
 // runtime) uses the native claude-cli/<model> id with an empty allowlist entry
 // (the prefix selects the runtime) — so agentRuntime is optional.
 type RuntimeModelsDef = Record<string, { agentRuntime?: { id: string } }>;
+type CoachModelRef = string | { primary: string; fallbacks: string[] };
 interface CodexAppServerPatch {
   sandbox: string;
   approvalPolicy: string;
@@ -64,7 +67,7 @@ export interface CoachModelPatch {
     // Primary+fallback chain: the Builder's BYOK model, with the platform model
     // as the fallback so an unavailable/exhausted BYOK provider degrades to the
     // platform key instead of leaving a credential-less coach (B6).
-    list: Array<{ id: string; model: { primary: string; fallbacks: string[] } }>;
+    list: Array<{ id: string; model: CoachModelRef }>;
     defaults?: { models: RuntimeModelsDef };
   };
 }
@@ -93,6 +96,19 @@ export function byosCoachConfigPatch(
         input.provider === "openrouter"
           ? `${OPENROUTER_BROKER_PROVIDER_ID}/${input.model}`
           : modelWithProviderPrefix("anthropic", input.model);
+      if (input.provider === "openrouter") {
+        return {
+          agents: {
+            defaults: { models: { [primary]: {} } },
+            list: [
+              {
+                id: agentIdForSlug(input.slug),
+                model: primary,
+              },
+            ],
+          },
+        };
+      }
       return {
         agents: {
           list: [
@@ -223,11 +239,15 @@ function platformCohortCoachModelInput(
     openclaw.initialModelReasoningEffort === "xhigh"
       ? openclaw.initialModelReasoningEffort
       : undefined;
+  const catalogEntry = onboardingModelCatalogEntryFor(openclaw.initialModelProvider, openclaw.initialModel);
   return {
     slug,
     source: "platform-cohort",
     provider: openclaw.initialModelProvider,
     model: openclaw.initialModel,
+    ...(typeof catalogEntry?.contextTokens === "number"
+      ? { contextTokens: catalogEntry.contextTokens }
+      : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
   };
 }

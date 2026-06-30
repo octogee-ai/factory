@@ -574,7 +574,12 @@ describe("createRestoreHandler", () => {
       migrationId: "mig-1",
       slug: "chris",
       uid: "uid-chris",
-      snapshot: RESTORE_SNAPSHOT,
+      snapshot: {
+        ...RESTORE_SNAPSHOT,
+        initialModelProvider: "openrouter",
+        initialModel: "z-ai/glm-5.2",
+        initialModelReasoningEffort: "xhigh",
+      },
     };
     const rawBody = JSON.stringify(body);
     const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
@@ -597,6 +602,17 @@ describe("createRestoreHandler", () => {
         expect.objectContaining({ uid: "uid-chris", slug: "chris" }),
         null,
         expect.objectContaining({ byosActive: false }),
+      );
+      expect(adapter.reassertByotForCustomer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provisioning: {
+            openclaw: expect.objectContaining({
+              initialModelProvider: "openrouter",
+              initialModel: "z-ai/glm-5.2",
+              initialModelReasoningEffort: "xhigh",
+            }),
+          },
+        }),
       );
       expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(1);

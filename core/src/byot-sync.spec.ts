@@ -55,6 +55,7 @@ import {
   restoreOauthStoreForSlug,
   brokerFetchByosubCreds,
   applyCoachModelPatch,
+  applyOpenRouterPlatformCohortPatch,
   applyOauthRuntimeModelAllowlist,
   requestGatewayRestartForRuntimeChange,
   syncByotForCustomer,
@@ -146,6 +147,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
       source: "platform-cohort",
       provider: "openrouter",
       model: "z-ai/glm-5.2",
+      contextTokens: 1_048_576,
       reasoningEffort: "high",
     });
   });
@@ -534,10 +536,11 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
       }),
     ).toEqual({
       agents: {
+        defaults: { models: { "platform-openrouter/z-ai/glm-5.2": {} } },
         list: [
           {
             id,
-            model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] },
+            model: "platform-openrouter/z-ai/glm-5.2",
           },
         ],
       },
@@ -691,6 +694,52 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
             { id: "octogee-zed-coach", model: "z/y" },
           ],
           defaults: { models: claudeCliDefaultModels },
+        },
+      },
+    ]);
+  });
+
+  it("OpenRouter platform cohort patches provider registry, allowlist, and coach model with the live OpenClaw shape", async () => {
+    const calls: object[] = [];
+    let replacePaths: string[] | undefined;
+    const r = await applyOpenRouterPlatformCohortPatch(
+      { slug: "tester-70", model: "z-ai/glm-5.2", contextTokens: 1_048_576 },
+      {
+        openRouterBaseUrl: () => "http://llm-broker.octogee-test.svc.cluster.local:3010/v1",
+        fetchAgentModelBrokerToken: vi.fn(async () => "octogee-model-token-live"),
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(CURRENT));
+          replacePaths = args.buildReplacePaths?.(CURRENT);
+          return { mode: "rpc", attempts: 1 };
+        },
+      },
+    );
+
+    expect(r).toEqual({ patched: true, changed: true, restartRequired: true });
+    expect(replacePaths).toEqual(["agents.list"]);
+    expect(calls).toEqual([
+      {
+        models: {
+          providers: {
+            "platform-openrouter": {
+              api: "openai-completions",
+              baseUrl: "http://llm-broker.octogee-test.svc.cluster.local:3010/v1",
+              apiKey: "octogee-model-token-live",
+              models: [{ id: "z-ai/glm-5.2", name: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+            },
+          },
+        },
+        agents: {
+          defaults: { models: { "platform-openrouter/z-ai/glm-5.2": {} } },
+          list: [
+            {
+              id: "octogee-tester-70-coach",
+              name: "coach",
+              model: "platform-openrouter/z-ai/glm-5.2",
+              mmAccount: "a",
+            },
+            { id: "octogee-zed-coach", model: "z/y" },
+          ],
         },
       },
     ]);
@@ -1092,11 +1141,16 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(reloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("OpenRouter platform cohort: materializes the OpenRouter broker model and patches the coach", async () => {
+  it("OpenRouter platform cohort: applies the OpenRouter runtime template and restarts the gateway", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeAnthropicFn = vi.fn(() => false);
-    const materializeOpenRouterFn = vi.fn(() => true);
+    const applyOpenRouterRuntimeFn = vi.fn(async () => ({
+      patched: true,
+      changed: true,
+      restartRequired: true,
+    }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
+    const requestRestartFn = vi.fn(async () => true);
     const reloadFn = vi.fn(async () => {});
 
     await syncByotForCustomer(
@@ -1115,23 +1169,23 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       baseDeps({
         applyByotState: applyByotStateFn,
         materializeAnthropicBroker: materializeAnthropicFn,
-        materializeOpenRouterBroker: materializeOpenRouterFn,
+        applyOpenRouterPlatformCohortPatch: applyOpenRouterRuntimeFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
+        requestGatewayRestart: requestRestartFn,
         triggerSecretsReload: reloadFn,
       }),
     );
 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
     expect(materializeAnthropicFn).toHaveBeenCalledWith("tester-70");
-    expect(materializeOpenRouterFn).toHaveBeenCalledWith("tester-70", "z-ai/glm-5.2");
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+    expect(applyOpenRouterRuntimeFn).toHaveBeenCalledWith({
       slug: "tester-70",
-      source: "platform-cohort",
-      provider: "openrouter",
       model: "z-ai/glm-5.2",
-      reasoningEffort: "high",
+      contextTokens: 1_048_576,
     });
-    expect(reloadFn).toHaveBeenCalledTimes(1);
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(requestRestartFn).toHaveBeenCalledTimes(1);
+    expect(reloadFn).not.toHaveBeenCalled();
   });
 
   it("anthropic BYOK: no local key (broker resolves per-owner), but the broker profile is still materialized", async () => {

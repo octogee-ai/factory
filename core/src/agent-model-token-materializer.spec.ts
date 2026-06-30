@@ -12,6 +12,7 @@ import {
   OPENROUTER_BROKER_PROVIDER_ID,
   agentModelTokenProfileEntry,
   materializeAnthropicBrokerForAgents,
+  openRouterBrokerProviderConfig,
   openRouterBrokerModelsJson,
   upsertOpenRouterBrokerModel,
   upsertAnthropicBrokerProfile,
@@ -121,6 +122,22 @@ describe("agent-model-token materializer", () => {
         OPENROUTER_BROKER_PROVIDER_ID
       ],
     ).toMatchObject({ api: "openai-completions" });
+  });
+
+  it("builds the top-level OpenRouter provider config with the live broker token string OpenClaw validates", () => {
+    expect(
+      openRouterBrokerProviderConfig({
+        baseUrl: "http://llm-broker.octogee-test.svc.cluster.local:3010/v1",
+        model: "z-ai/glm-5.2",
+        apiKey: "octogee-model-token-live",
+        contextTokens: 1_048_576,
+      }),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "http://llm-broker.octogee-test.svc.cluster.local:3010/v1",
+      apiKey: "octogee-model-token-live",
+      models: [{ id: "z-ai/glm-5.2", name: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+    });
   });
 });
 
