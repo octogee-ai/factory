@@ -103,6 +103,24 @@ export {
 } from './fleet-controller.js';
 
 export type {
+  OnboardingModelProvider,
+  OnboardingReasoningEffort,
+  OnboardingCohortConfig,
+  OnboardingOrchestratorConfig,
+  OnboardingPlacementDecision,
+  PlacementPointerRewriteResult,
+} from './onboarding-cohorts.js';
+export {
+  ONBOARDING_MODEL_PROVIDERS,
+  ONBOARDING_REASONING_EFFORTS,
+  isOnboardingModelProvider,
+  isOnboardingReasoningEffort,
+  isOnboardingCohortEnabled,
+  resolveOnboardingPlacementForUid,
+  rewritePlacementGatewayPointers,
+} from './onboarding-cohorts.js';
+
+export type {
   ModelCredentialActiveStaticProviderId,
   ModelCredentialConnectorOnlyProviderId,
   ModelCredentialStaticProviderId,

@@ -31,6 +31,7 @@ const BYOT_FILES = ["models.json"] as const;
 type ByotFile = (typeof BYOT_FILES)[number];
 
 const BYOT_MARKER = ".byot-managed";
+const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
 
 export type ByotInput = ModelCredentialConfigInput;
 export interface FreeTierCoachModelInput {
@@ -39,7 +40,15 @@ export interface FreeTierCoachModelInput {
   source: "free-tier";
 }
 
-export type CoachModelInput = ByotInput | FreeTierCoachModelInput;
+export interface PlatformCohortCoachModelInput {
+  slug: string;
+  provider: "anthropic" | "openrouter";
+  model: string;
+  reasoningEffort?: "high" | "xhigh";
+  source: "platform-cohort";
+}
+
+export type CoachModelInput = ByotInput | FreeTierCoachModelInput | PlatformCohortCoachModelInput;
 
 // A per-agent BYOS model override. codex (a plugin) pins agentRuntime:{id:codex}
 // to route a gpt-5.5 override through the codex harness; claude-cli (a core
@@ -79,6 +88,22 @@ export function byosCoachConfigPatch(
 ): CoachModelPatch | null {
   if (!input) return null;
   if ("source" in input) {
+    if (input.source === "platform-cohort") {
+      const primary =
+        input.provider === "openrouter"
+          ? `${OPENROUTER_BROKER_PROVIDER_ID}/${input.model}`
+          : modelWithProviderPrefix("anthropic", input.model);
+      return {
+        agents: {
+          list: [
+            {
+              id: agentIdForSlug(input.slug),
+              model: { primary, fallbacks: [] },
+            },
+          ],
+        },
+      };
+    }
     return {
       agents: {
         list: [
@@ -110,6 +135,10 @@ export function byosCoachConfigPatch(
   return patch;
 }
 
+function modelWithProviderPrefix(provider: "anthropic", model: string): string {
+  return model.includes("/") ? model : `${provider}/${model}`;
+}
+
 function isAgentRecord(a: unknown): a is { id?: unknown } {
   return a !== null && typeof a === "object" && !Array.isArray(a);
 }
@@ -138,7 +167,14 @@ export function deriveDesiredByotState(userData: {
   tier?: string;
   selectedTier?: string;
   trialExpired?: boolean;
-  provisioning?: { openclaw?: { status?: string } };
+  provisioning?: {
+    openclaw?: {
+      status?: string;
+      initialModelProvider?: string;
+      initialModel?: string;
+      initialModelReasoningEffort?: string;
+    };
+  };
   systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
 }): { enabled: boolean; input: ByotInput | null; coachModelInput: CoachModelInput | null } {
   const status = userData.provisioning?.openclaw?.status;
@@ -147,13 +183,52 @@ export function deriveDesiredByotState(userData: {
     return { enabled: false, input: null, coachModelInput: null };
   }
   if (!userData.byotActive) {
-    return { enabled: false, input: null, coachModelInput: freeTierCoachModelInput(slug, userData) };
+    return {
+      enabled: false,
+      input: null,
+      coachModelInput:
+        freeTierCoachModelInput(slug, userData) ??
+        platformCohortCoachModelInput(slug, userData.provisioning?.openclaw),
+    };
   }
   const input = byotInputForSlug(slug, userData.systemConfig?.byot);
   return {
     enabled: true,
     input,
     coachModelInput: input,
+  };
+}
+
+function platformCohortCoachModelInput(
+  slug: string,
+  openclaw:
+    | {
+        initialModelProvider?: string;
+        initialModel?: string;
+        initialModelReasoningEffort?: string;
+      }
+    | undefined,
+): PlatformCohortCoachModelInput | null {
+  if (
+    openclaw?.initialModelProvider !== "anthropic" &&
+    openclaw?.initialModelProvider !== "openrouter"
+  ) {
+    return null;
+  }
+  if (typeof openclaw.initialModel !== "string" || openclaw.initialModel.length === 0) {
+    return null;
+  }
+  const reasoningEffort =
+    openclaw.initialModelReasoningEffort === "high" ||
+    openclaw.initialModelReasoningEffort === "xhigh"
+      ? openclaw.initialModelReasoningEffort
+      : undefined;
+  return {
+    slug,
+    source: "platform-cohort",
+    provider: openclaw.initialModelProvider,
+    model: openclaw.initialModel,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   };
 }
 

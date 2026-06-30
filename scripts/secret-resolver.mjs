@@ -108,7 +108,7 @@ function parseByokApiKeyId(id) {
 // exec protocol passes no requesting-agent context (see the header note), so the
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
 const AGENT_MODEL_TOKEN_ID_RE =
-  /^agent-model-token-(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+  /^agent-model-token-(?:(?<provider>openrouter)-)?(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
 
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
@@ -159,7 +159,7 @@ function validateId(id) {
   const byok = parseByokApiKeyId(id);
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
   if (!byok && !agentToken?.groups) {
-    return `id does not match byok-{slug}-{provider}[/version] or agent-model-token-octogee-{slug}-coach`;
+    return `id does not match byok-{slug}-{provider}[/version], agent-model-token-octogee-{slug}-coach, or agent-model-token-openrouter-octogee-{slug}-coach`;
   }
   const slug = byok?.slug ?? agentToken?.groups?.slug;
   if (!KNOWN_SLUGS.has(slug)) {
@@ -197,7 +197,13 @@ export async function resolveOne(id, deps = {}) {
   // server-side (the resolver holds no GCP creds and no agent identity).
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
   const { route, payload } = agentToken
-    ? { route: "/internal/byok/agent-model-token", payload: { agentId: agentToken.groups.agentId } }
+    ? {
+        route: "/internal/byok/agent-model-token",
+        payload: {
+          agentId: agentToken.groups.agentId,
+          ...(agentToken.groups.provider ? { provider: agentToken.groups.provider } : {}),
+        },
+      }
     : { route: "/internal/byok/api-key", payload: { id } };
   const res = await fetchImpl(`${BROKER_BASE_URL}${route}`, {
     method: "POST",

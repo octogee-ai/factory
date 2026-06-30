@@ -86,12 +86,20 @@ spec:
                   fieldPath: metadata.namespace
             - name: ANTHROPIC_UPSTREAM_BASE_URL
               value: {{ .Values.llmBroker.upstream.anthropicBaseUrl | quote }}
+            - name: OPENROUTER_UPSTREAM_BASE_URL
+              value: {{ .Values.llmBroker.upstream.openrouterBaseUrl | quote }}
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.llmBroker.providerSecret.name }}
                   key: {{ .Values.llmBroker.providerSecret.key }}
                   optional: false
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llmBroker.openrouterProviderSecret.name }}
+                  key: {{ .Values.llmBroker.openrouterProviderSecret.key }}
+                  optional: {{ .Values.llmBroker.openrouterProviderSecret.optional | default true }}
           readinessProbe:
             httpGet:
               path: /healthz

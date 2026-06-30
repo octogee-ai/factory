@@ -13,8 +13,9 @@ import type {
   ModelBrokerTokenStore,
 } from "./lib/model-broker-tokens.js";
 import {
-  estimateAnthropicCost,
+  estimateModelBrokerCost,
   isUnknownAnthropicPricingModel,
+  isUnknownOpenRouterPricingModel,
   mergeAnthropicUsage,
   normalizeAnthropicUsage,
   totalTokens,
@@ -29,17 +30,21 @@ export interface LlmBrokerAppDeps {
   providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
   providerKeyResolver?: ModelBrokerProviderKeyResolver;
   upstreamBaseUrl?: string;
+  providerUpstreamBaseUrls?: Partial<Record<ModelBrokerProvider, string | undefined>>;
   // Model a builder is degraded to when over budget (or always, on the free tier),
   // served on the platform "house" key and not billed to the builder's window.
   houseModel?: string;
+  providerHouseModels?: Partial<Record<ModelBrokerProvider, string | undefined>>;
   fetchImpl?: typeof fetch;
   now?: () => number;
   bodyLimit?: string;
   onMeteringError?: (err: unknown) => void;
 }
 
-const DEFAULT_UPSTREAM_BASE_URL = "https://api.anthropic.com";
+const DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL = "https://api.anthropic.com";
+const DEFAULT_OPENROUTER_UPSTREAM_BASE_URL = "https://openrouter.ai/api";
 const DEFAULT_HOUSE_MODEL = "claude-haiku-4-5";
+const DEFAULT_OPENROUTER_HOUSE_MODEL = "z-ai/glm-5.2";
 const DEFAULT_BODY_LIMIT = "32mb";
 const MAX_SSE_METERING_BUFFER_CHARS = 1_000_000;
 
@@ -47,6 +52,16 @@ const ALLOWED_ANTHROPIC_ENDPOINTS = new Set([
   "GET /v1/models",
   "POST /v1/messages",
   "POST /v1/messages/count_tokens",
+]);
+
+const ALLOWED_OPENROUTER_ENDPOINTS = new Set([
+  "GET /v1/models",
+  "POST /v1/chat/completions",
+]);
+
+const ALLOWED_LLM_ENDPOINTS = new Set([
+  ...ALLOWED_ANTHROPIC_ENDPOINTS,
+  ...ALLOWED_OPENROUTER_ENDPOINTS,
 ]);
 
 const FORBIDDEN_RESPONSE_HEADERS = new Set([
@@ -76,6 +91,14 @@ function trimTrailingSlash(value: string): string {
   return out;
 }
 
+function configuredString(...values: (string | undefined)[]): string {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
 function authToken(req: Request): string {
   const xApiKey = req.get("x-api-key");
   if (xApiKey?.trim()) return xApiKey.trim();
@@ -90,12 +113,21 @@ function requestUrl(req: Request): URL {
 }
 
 function allowedEndpoint(req: Request, url: URL): boolean {
-  return ALLOWED_ANTHROPIC_ENDPOINTS.has(
-    `${req.method.toUpperCase()} ${url.pathname}`,
-  );
+  return ALLOWED_LLM_ENDPOINTS.has(`${req.method.toUpperCase()} ${url.pathname}`);
 }
 
-function upstreamHeaders(req: Request, apiKey: string): Headers {
+function providerAllowedEndpoint(
+  provider: ModelBrokerProvider,
+  req: Request,
+  url: URL,
+): boolean {
+  const key = `${req.method.toUpperCase()} ${url.pathname}`;
+  return provider === "anthropic"
+    ? ALLOWED_ANTHROPIC_ENDPOINTS.has(key)
+    : ALLOWED_OPENROUTER_ENDPOINTS.has(key);
+}
+
+function upstreamHeaders(req: Request, apiKey: string, provider: ModelBrokerProvider): Headers {
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase();
@@ -106,7 +138,11 @@ function upstreamHeaders(req: Request, apiKey: string): Headers {
       headers.set(name, value);
     }
   }
-  headers.set("x-api-key", apiKey);
+  if (provider === "anthropic") {
+    headers.set("x-api-key", apiKey);
+  } else {
+    headers.set("authorization", `Bearer ${apiKey}`);
+  }
   return headers;
 }
 
@@ -151,8 +187,16 @@ function isJson(upstream: globalThis.Response): boolean {
   return (upstream.headers.get("content-type") ?? "").toLowerCase().includes("application/json");
 }
 
-function shouldMeter(req: Request, url: URL, upstream: globalThis.Response): boolean {
-  return req.method.toUpperCase() === "POST" && url.pathname === "/v1/messages" && upstream.ok;
+function shouldMeter(
+  provider: ModelBrokerProvider,
+  req: Request,
+  url: URL,
+  upstream: globalThis.Response,
+): boolean {
+  if (req.method.toUpperCase() !== "POST" || !upstream.ok) return false;
+  return provider === "anthropic"
+    ? url.pathname === "/v1/messages"
+    : url.pathname === "/v1/chat/completions";
 }
 
 function readRequestMetadata(body: unknown): {
@@ -255,6 +299,8 @@ interface AnthropicPayloadExtraction {
   invalidUsageFields: string[];
 }
 
+type PayloadUsageExtractor = (payload: unknown) => AnthropicPayloadExtraction;
+
 function objectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -282,7 +328,63 @@ function extractAnthropicPayloadUsage(payload: unknown): AnthropicPayloadExtract
   };
 }
 
-class AnthropicSseUsageCollector {
+const OPENAI_USAGE_FIELDS = [
+  "prompt_tokens",
+  "completion_tokens",
+  "total_tokens",
+] as const;
+
+function invalidOpenAiUsageFields(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const data = value as Record<string, unknown>;
+  return OPENAI_USAGE_FIELDS.filter((field) => {
+    if (!(field in data)) return false;
+    const raw = data[field];
+    return typeof raw !== "number" || !Number.isFinite(raw) || raw < 0;
+  });
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function normalizeOpenAiUsage(value: unknown): AnthropicTokenUsage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const usage = {
+    inputTokens: numberOrZero(data.prompt_tokens),
+    outputTokens: numberOrZero(data.completion_tokens),
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+  };
+  return totalTokens(usage) > 0 ? usage : null;
+}
+
+function extractOpenRouterPayloadUsage(payload: unknown): AnthropicPayloadExtraction {
+  const data = objectRecord(payload);
+  if (!data) {
+    return { usage: null, model: null, messageId: null, invalidUsageFields: [] };
+  }
+  const rawUsage = data.usage;
+  return {
+    usage: normalizeOpenAiUsage(rawUsage),
+    model: nonEmptyString(data.model),
+    messageId: nonEmptyString(data.id),
+    invalidUsageFields: invalidOpenAiUsageFields(rawUsage),
+  };
+}
+
+function usageExtractor(provider: ModelBrokerProvider): PayloadUsageExtractor {
+  return provider === "anthropic"
+    ? extractAnthropicPayloadUsage
+    : extractOpenRouterPayloadUsage;
+}
+
+function providerLabel(provider: ModelBrokerProvider): string {
+  return provider === "anthropic" ? "Anthropic" : "OpenRouter";
+}
+
+class SseUsageCollector {
   private readonly decoder = new TextDecoder();
   private buffered = "";
   usage: AnthropicTokenUsage | null = null;
@@ -290,10 +392,12 @@ class AnthropicSseUsageCollector {
   messageId: string | null = null;
   invalidUsageFields: string[] = [];
 
+  constructor(private readonly extractPayloadUsage: PayloadUsageExtractor) {}
+
   push(chunk: Uint8Array): void {
     this.buffered += this.decoder.decode(chunk, { stream: true });
     if (this.buffered.length > MAX_SSE_METERING_BUFFER_CHARS) {
-      throw new Error("Anthropic SSE metering buffer exceeded cap");
+      throw new Error("LLM broker SSE metering buffer exceeded cap");
     }
     this.processCompleteEvents();
   }
@@ -320,7 +424,7 @@ class AnthropicSseUsageCollector {
       .trim();
     if (!data || data === "[DONE]") return;
     try {
-      const extracted = extractAnthropicPayloadUsage(JSON.parse(data) as unknown);
+      const extracted = this.extractPayloadUsage(JSON.parse(data) as unknown);
       this.usage = mergeAnthropicUsage(this.usage, extracted.usage);
       if (extracted.model) this.model = extracted.model;
       if (extracted.messageId) this.messageId = extracted.messageId;
@@ -332,10 +436,10 @@ class AnthropicSseUsageCollector {
 }
 
 function collectSseUsageChunk(
-  collector: AnthropicSseUsageCollector | null,
+  collector: SseUsageCollector | null,
   chunk: Uint8Array,
   onError: (err: unknown) => void,
-): AnthropicSseUsageCollector | null {
+): SseUsageCollector | null {
   if (!collector) return null;
   try {
     collector.push(chunk);
@@ -347,9 +451,9 @@ function collectSseUsageChunk(
 }
 
 function finishSseUsageCollection(
-  collector: AnthropicSseUsageCollector | null,
+  collector: SseUsageCollector | null,
   onError: (err: unknown) => void,
-): AnthropicSseUsageCollector | null {
+): SseUsageCollector | null {
   if (!collector) return null;
   try {
     collector.finish();
@@ -401,10 +505,14 @@ async function recordUsage(
 ): Promise<void> {
   if (!ctx.usageStore || !usage || totalTokens(usage) <= 0) return;
   const model = responseModel ?? ctx.requestModel ?? "unknown";
-  const cost = estimateAnthropicCost(model, usage, ctx.cacheWriteTtl);
-  if (isUnknownAnthropicPricingModel(cost.pricingModel)) {
+  const cost = estimateModelBrokerCost(ctx.record.provider, model, usage, ctx.cacheWriteTtl);
+  const unknownPricing =
+    ctx.record.provider === "anthropic"
+      ? isUnknownAnthropicPricingModel(cost.pricingModel)
+      : isUnknownOpenRouterPricingModel(cost.pricingModel);
+  if (unknownPricing) {
     ctx.onMeteringError(
-      new Error(`llm-broker used fallback pricing for unknown Anthropic model: ${model}`),
+      new Error(`llm-broker used fallback pricing for unknown ${providerLabel(ctx.record.provider)} model: ${model}`),
     );
   }
   try {
@@ -412,7 +520,7 @@ async function recordUsage(
       eventId: usageEventId(ctx.record, upstreamId, ctx.requestId),
       requestId: ctx.requestId,
       upstreamId,
-      provider: "anthropic",
+      provider: ctx.record.provider,
       gatewayId: ctx.record.gatewayId,
       ownerUid: ctx.record.ownerUid,
       brokerTokenHash: ctx.record.tokenHash,
@@ -529,10 +637,10 @@ async function writeBufferedUpstreamResponse(
   res.end(text);
   if (metering && isJson(upstream)) {
     try {
-      const extracted = extractAnthropicPayloadUsage(JSON.parse(text) as unknown);
+      const extracted = usageExtractor(metering.record.provider)(JSON.parse(text) as unknown);
       if (extracted.invalidUsageFields.length) {
         metering.onMeteringError(
-          new Error(`Anthropic usage contained invalid fields: ${extracted.invalidUsageFields.join(",")}`),
+          new Error(`${providerLabel(metering.record.provider)} usage contained invalid fields: ${extracted.invalidUsageFields.join(",")}`),
         );
       }
       await recordUsage(metering, upstream, extracted.usage, extracted.model, extracted.messageId);
@@ -553,7 +661,7 @@ async function writeStreamingUpstreamResponse(
     res.end();
     return;
   }
-  let collector = metering ? new AnthropicSseUsageCollector() : null;
+  let collector = metering ? new SseUsageCollector(usageExtractor(metering.record.provider)) : null;
   const reader = upstream.body.getReader();
   try {
     while (true) {
@@ -576,7 +684,7 @@ async function writeStreamingUpstreamResponse(
     if (metering && collector) {
       if (collector.invalidUsageFields.length) {
         metering.onMeteringError(
-          new Error(`Anthropic usage contained invalid fields: ${collector.invalidUsageFields.join(",")}`),
+          new Error(`${providerLabel(metering.record.provider)} usage contained invalid fields: ${collector.invalidUsageFields.join(",")}`),
         );
       }
       await recordUsage(metering, upstream, collector.usage, collector.model, collector.messageId);
@@ -598,9 +706,6 @@ async function writeUpstreamResponse(
   }
 }
 
-// Gate has passed → degrade the model if needed, forward to Anthropic on the
-// resolved key, and meter the response. Split out of the route handler to keep
-// its cyclomatic complexity in check.
 async function forwardAllowed(args: {
   req: Request;
   res: ExpressResponse;
@@ -626,11 +731,11 @@ async function forwardAllowed(args: {
   const requestId = crypto.randomUUID();
   const upstream = await args.fetchImpl(`${args.upstreamBaseUrl}${url.pathname}${url.search}`, {
     method: req.method,
-    headers: Object.fromEntries(upstreamHeaders(req, providerKey.apiKey).entries()),
+    headers: Object.fromEntries(upstreamHeaders(req, providerKey.apiKey, record.provider).entries()),
     body,
     redirect: "manual",
   });
-  const metering: MeteringContext | undefined = shouldMeter(req, url, upstream)
+  const metering: MeteringContext | undefined = shouldMeter(record.provider, req, url, upstream)
     ? {
         req,
         url,
@@ -653,8 +758,32 @@ async function forwardAllowed(args: {
 export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
   const app = express();
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const upstreamBaseUrl = trimTrailingSlash(deps.upstreamBaseUrl ?? DEFAULT_UPSTREAM_BASE_URL);
-  const houseModel = deps.houseModel ?? DEFAULT_HOUSE_MODEL;
+  const upstreamBaseUrls: Record<ModelBrokerProvider, string> = {
+    anthropic: trimTrailingSlash(
+      configuredString(
+        deps.providerUpstreamBaseUrls?.anthropic,
+        deps.upstreamBaseUrl,
+        DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL,
+      ),
+    ),
+    openrouter: trimTrailingSlash(
+      configuredString(
+        deps.providerUpstreamBaseUrls?.openrouter,
+        DEFAULT_OPENROUTER_UPSTREAM_BASE_URL,
+      ),
+    ),
+  };
+  const houseModels: Record<ModelBrokerProvider, string> = {
+    anthropic: configuredString(
+      deps.providerHouseModels?.anthropic,
+      deps.houseModel,
+      DEFAULT_HOUSE_MODEL,
+    ),
+    openrouter: configuredString(
+      deps.providerHouseModels?.openrouter,
+      DEFAULT_OPENROUTER_HOUSE_MODEL,
+    ),
+  };
   const now = deps.now ?? Date.now;
 
   app.disable("x-powered-by");
@@ -665,6 +794,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
       service: "llm-broker",
       providers: {
         anthropic: Boolean(deps.providerKeys.anthropic),
+        openrouter: Boolean(deps.providerKeys.openrouter),
       },
     });
   });
@@ -680,8 +810,12 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           return;
         }
         const record = await deps.store.lookupToken(authToken(req), now());
-        if (!record || record.provider !== "anthropic" || record.capped !== true) {
+        if (!record || record.capped !== true) {
           res.status(401).json({ error: "invalid broker token" });
+          return;
+        }
+        if (!providerAllowedEndpoint(record.provider, req, url)) {
+          res.status(404).json({ error: "unsupported LLM broker endpoint" });
           return;
         }
         const providerKey = await resolveProviderKeyForRequest({
@@ -691,7 +825,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           onError: deps.onMeteringError ?? (() => undefined),
         });
         if (!providerKey) {
-          res.status(503).json({ error: "anthropic upstream is not configured" });
+          res.status(503).json({ error: `${record.provider} upstream is not configured` });
           return;
         }
         const gate = await preflightGate({
@@ -718,8 +852,8 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           providerKey,
           gate,
           fetchImpl,
-          upstreamBaseUrl,
-          houseModel,
+          upstreamBaseUrl: upstreamBaseUrls[record.provider],
+          houseModel: houseModels[record.provider],
           usageStore: deps.usageStore,
           now,
           onMeteringError: deps.onMeteringError ?? (() => undefined),

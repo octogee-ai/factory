@@ -9,6 +9,7 @@ import { readSecret } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { createFirestoreModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
+import type { ModelBrokerProvider } from "../lib/model-broker-tokens.js";
 import {
   envDefaultModelBrokerLimits,
   resolveOwnerModelBrokerGrant,
@@ -137,6 +138,37 @@ function assignedOwnerSlug(data: Record<string, unknown>): string | null {
   return typeof slug === "string" && SLUG_RE.test(slug) ? slug : null;
 }
 
+function assignedInitialModelProvider(data: Record<string, unknown>): ModelBrokerProvider | null {
+  const provisioning =
+    data.provisioning && typeof data.provisioning === "object" && !Array.isArray(data.provisioning)
+      ? data.provisioning as Record<string, unknown>
+      : {};
+  const openclaw =
+    provisioning.openclaw && typeof provisioning.openclaw === "object" && !Array.isArray(provisioning.openclaw)
+      ? provisioning.openclaw as Record<string, unknown>
+      : {};
+  return openclaw.initialModelProvider === "openrouter" ||
+    openclaw.initialModelProvider === "anthropic"
+    ? openclaw.initialModelProvider
+    : null;
+}
+
+function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
+  if (value === undefined || value === null || value === "") return "anthropic";
+  return value === "anthropic" || value === "openrouter" ? value : null;
+}
+
+function agentModelTokenSecretName(input: {
+  gatewayId: string;
+  ownerUid: string;
+  provider: ModelBrokerProvider;
+}): string {
+  const prefix = input.provider === "openrouter"
+    ? "agent-model-token-openrouter"
+    : "agent-model-token";
+  return `${prefix}-${input.gatewayId}-${input.ownerUid}`;
+}
+
 export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
   const router = Router();
   const { db } = opts;
@@ -237,6 +269,13 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       res.status(400).json({ error: "valid agentId required" });
       return;
     }
+    const provider = requestedModelProvider(
+      (req.body as { provider?: unknown } | undefined)?.provider,
+    );
+    if (!provider) {
+      res.status(400).json({ error: "unsupported provider" });
+      return;
+    }
 
     const assigned = await findAssignedOrInboundMigratingUserByAgentId(
       db,
@@ -244,6 +283,10 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       agentId,
     );
     if (!assigned) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    if (provider === "openrouter" && assignedInitialModelProvider(assigned.data) !== "openrouter") {
       res.status(403).json(FORBIDDEN);
       return;
     }
@@ -258,10 +301,14 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
     const issued = await createFirestoreModelBrokerTokenStore(db).issueToken({
       gatewayId: bound.gatewayId,
       ownerUid: assigned.uid,
-      provider: "anthropic",
+      provider,
       // a descriptive label, NOT a readable Secret Manager secret — the broker
       // resolves the provider key per ownerUid, never via this name.
-      secretName: `agent-model-token-${bound.gatewayId}-${assigned.uid}`,
+      secretName: agentModelTokenSecretName({
+        gatewayId: bound.gatewayId,
+        ownerUid: assigned.uid,
+        provider,
+      }),
       // standalone + TTL-bounded: no revoke-on-reissue, so a re-mint can't yank a
       // still-in-flight token (the prior one expires by TTL instead).
       skipPointer: true,
@@ -274,7 +321,7 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
         agentId,
       },
     });
-    res.json({ value: issued.token });
+    res.json({ value: issued.token, provider });
   });
 
   // Record a byosub OAuth flow's owner mapping for a customer-agent assigned to

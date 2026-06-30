@@ -8,8 +8,12 @@ import {
   writeAuthProfileStore,
 } from "./auth-profile-sqlite.js";
 import {
+  agentModelTokenSecretId,
+  OPENROUTER_BROKER_PROVIDER_ID,
   agentModelTokenProfileEntry,
   materializeAnthropicBrokerForAgents,
+  openRouterBrokerModelsJson,
+  upsertOpenRouterBrokerModel,
   upsertAnthropicBrokerProfile,
 } from "./agent-model-token-materializer.js";
 
@@ -83,6 +87,40 @@ describe("agent-model-token materializer", () => {
   it("is idempotent — a second upsert is a no-op write", () => {
     expect(upsertAnthropicBrokerProfile(agentDir, "octogee-alice-coach")).toBe(true);
     expect(upsertAnthropicBrokerProfile(agentDir, "octogee-alice-coach")).toBe(false);
+  });
+
+  it("creates an OpenRouter custom-provider model file backed by the provider-specific broker token", () => {
+    expect(agentModelTokenSecretId("octogee-alice-coach", "anthropic")).toBe(
+      "agent-model-token-octogee-alice-coach",
+    );
+    expect(agentModelTokenSecretId("octogee-alice-coach", "openrouter")).toBe(
+      "agent-model-token-openrouter-octogee-alice-coach",
+    );
+
+    const baseUrl = "http://llm-broker.octogee-test.svc.cluster.local:3010/v1";
+    expect(
+      upsertOpenRouterBrokerModel(agentDir, "octogee-alice-coach", {
+        baseUrl,
+        model: "z-ai/glm-5.2",
+      }),
+    ).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))).toEqual(
+      openRouterBrokerModelsJson("octogee-alice-coach", {
+        baseUrl,
+        model: "z-ai/glm-5.2",
+      }),
+    );
+    expect(
+      JSON.stringify(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))),
+    ).toContain(`"id":"agent-model-token-openrouter-octogee-alice-coach"`);
+    expect(
+      JSON.stringify(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))),
+    ).not.toContain("byok-alice-openrouter");
+    expect(
+      JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8")).providers[
+        OPENROUTER_BROKER_PROVIDER_ID
+      ],
+    ).toMatchObject({ api: "openai-completions" });
   });
 });
 

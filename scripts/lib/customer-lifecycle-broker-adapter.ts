@@ -173,6 +173,13 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     repoUrl: snapshot.repoUrl,
     mattermostUserId: snapshot.mattermostUserId,
     greetingPosted: snapshot.greetingPosted,
+    ...(snapshot.initialModelProvider
+      ? { initialModelProvider: snapshot.initialModelProvider }
+      : {}),
+    ...(snapshot.initialModel ? { initialModel: snapshot.initialModel } : {}),
+    ...(snapshot.initialModelReasoningEffort
+      ? { initialModelReasoningEffort: snapshot.initialModelReasoningEffort }
+      : {}),
     channels: snapshot.channels,
     ownerName: snapshot.ownerName,
     projects: snapshot.projects,

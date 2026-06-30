@@ -29,6 +29,12 @@ export interface AnthropicProviderKeyResolverDeps {
   readSecret?: (name: string) => Promise<string>;
 }
 
+export interface ModelBrokerProviderKeyResolverDeps {
+  db: Pick<Firestore, "collection">;
+  platformKeys?: Partial<Record<ModelBrokerProvider, string | undefined>>;
+  readSecret?: (name: string) => Promise<string>;
+}
+
 type AnthropicConfiguredCredentialResolution =
   | { kind: "platform" }
   | { kind: "deny" }
@@ -138,5 +144,22 @@ export function createAnthropicProviderKeyResolver(
     return apiKey
       ? { apiKey, source: "owner_model_credential", secretName: resolution.secretName }
       : null;
+  };
+}
+
+export function createModelBrokerProviderKeyResolver(
+  deps: ModelBrokerProviderKeyResolverDeps,
+): ModelBrokerProviderKeyResolver {
+  const anthropic = createAnthropicProviderKeyResolver({
+    db: deps.db,
+    platformKey: deps.platformKeys?.anthropic,
+    readSecret: deps.readSecret,
+  });
+  return async (input) => {
+    if (input.provider === "anthropic") return anthropic(input);
+    if (input.provider === "openrouter") {
+      return platformKeyResolution(deps.platformKeys?.openrouter);
+    }
+    return null;
   };
 }

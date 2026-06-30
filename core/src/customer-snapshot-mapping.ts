@@ -1,5 +1,3 @@
-
-
 import type { UserSnapshot } from "./customer-lifecycle.js";
 
 type ChannelBinding = UserSnapshot["channels"][number];
@@ -41,9 +39,38 @@ export function deriveSlug(uid: string, data: Record<string, unknown>): string {
   return slug;
 }
 
+function optionalInitialModelFields(
+  openclaw: Record<string, unknown> | undefined,
+): Pick<
+  UserSnapshot,
+  "initialModelProvider" | "initialModel" | "initialModelReasoningEffort"
+> {
+  const out: Pick<
+    UserSnapshot,
+    "initialModelProvider" | "initialModel" | "initialModelReasoningEffort"
+  > = {};
+  if (typeof openclaw?.initialModelProvider === "string") {
+    out.initialModelProvider = openclaw.initialModelProvider;
+  }
+  if (typeof openclaw?.initialModel === "string") {
+    out.initialModel = openclaw.initialModel;
+  }
+  if (typeof openclaw?.initialModelReasoningEffort === "string") {
+    out.initialModelReasoningEffort = openclaw.initialModelReasoningEffort;
+  }
+  return out;
+}
+
 function snapshotProvisioning(data: Record<string, unknown>): Pick<
   UserSnapshot,
-  "gatewayId" | "status" | "agentIds" | "repoUrl" | "greetingPosted"
+  | "gatewayId"
+  | "status"
+  | "agentIds"
+  | "repoUrl"
+  | "greetingPosted"
+  | "initialModelProvider"
+  | "initialModel"
+  | "initialModelReasoningEffort"
 > {
   const oc = (data.provisioning as { openclaw?: Record<string, unknown> } | undefined)?.openclaw;
   const git = (data.provisioning as { git?: Record<string, unknown> } | undefined)?.git;
@@ -53,6 +80,7 @@ function snapshotProvisioning(data: Record<string, unknown>): Pick<
     agentIds: (oc?.agentIds as string[] | undefined) ?? [],
     repoUrl: (git?.repoUrl as string | undefined) ?? "",
     greetingPosted: Boolean((oc?.greeting as { ok?: boolean } | undefined)?.ok),
+    ...optionalInitialModelFields(oc),
   };
 }
 

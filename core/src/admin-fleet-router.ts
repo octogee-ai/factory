@@ -32,6 +32,15 @@ import {
   type OperatorGatewayReservationRequest,
 } from "@octogee/shared/types/glm";
 import {
+  isOnboardingCohortEnabled,
+  isOnboardingModelProvider,
+  isOnboardingReasoningEffort,
+  resolveOnboardingPlacementForUid,
+  type OnboardingCohortConfig,
+  type OnboardingOrchestratorConfig,
+  type OnboardingPlacementDecision,
+} from "@octogee/shared/types/onboarding-cohorts";
+import {
   SIZING_TIERS,
   isSizingTier,
   resolveSizingTier,
@@ -218,6 +227,164 @@ export interface FleetRuntimeSettings {
   dedicatedGatewayIdle: DedicatedGatewayIdleSettings;
 }
 
+type AdminOnboardingDriftState =
+  | "healthy"
+  | "pointer-drift"
+  | "assigned-not-mounted"
+  | "mounted-orphan"
+  | "missing-gateway"
+  | "disabled-default"
+  | "in-flight";
+
+const WARNING_CODE_COHORT_DISABLED = "cohort-disabled";
+
+type AdminOnboardingPlacementWarningCode =
+  | "raw-gateway-override"
+  | typeof WARNING_CODE_COHORT_DISABLED
+  | "cohort-gateway-missing"
+  | "cohort-gateway-retired"
+  | "cohort-gateway-not-shared"
+  | "default-cohort-disabled"
+  | "default-cohort-missing"
+  | "preview-cohort-missing"
+  | "pointer-drift"
+  | "assigned-not-mounted"
+  | "mounted-orphan"
+  | "migration-in-flight";
+
+interface AdminOnboardingPlacementWarning {
+  code: AdminOnboardingPlacementWarningCode;
+  message: string;
+  severity: "info" | "warning" | "error";
+  cohortId?: string;
+  gatewayId?: string;
+  uid?: string;
+  slug?: string;
+  operationId?: string;
+}
+
+interface AdminOnboardingLatestOperation {
+  id: string;
+  kind: string;
+  status: string;
+  gatewayId: string | null;
+  inputUid: string | null;
+  createdAt: number | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  error?: string;
+  input: Record<string, unknown>;
+}
+
+type AdminGatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
+
+interface AdminOnboardingCohortSummary extends OnboardingCohortConfig {
+  id: string;
+  role: "current" | "preview" | "available";
+  enabled: boolean;
+  assignmentCount: number;
+  mountedCount: number;
+  missingCount: number;
+  orphanCount: number;
+  overrideCount: number;
+  gateway: {
+    gatewayId: string;
+    gatewayClass: GatewayClass;
+    desiredStatus: AdminGatewayDesiredStatus | null;
+    status: string | null;
+    imageTag: string | null;
+    openclawVersion: string | null;
+  } | null;
+  warnings: AdminOnboardingPlacementWarning[];
+  lastOperation: AdminOnboardingLatestOperation | null;
+}
+
+interface AdminOnboardingOverrideSummary {
+  uid: string;
+  cohortId: string;
+  username: string;
+  email: string;
+  slug: string | null;
+  currentGatewayId: string | null;
+  rawGatewayOverride: string | null;
+}
+
+interface AdminOnboardingGatewaySummary {
+  gatewayId: string;
+  gatewayClass: GatewayClass;
+  desiredStatus: AdminGatewayDesiredStatus | null;
+  status: string | null;
+  imageTag: string | null;
+  openclawVersion: string | null;
+  assignableToOnboardingCohort: boolean;
+  hostedCohortIds: string[];
+  hostedCohortLabels: string[];
+  defaultTarget: boolean;
+  currentTarget: boolean;
+  previewTarget: boolean;
+  assignedCount: number;
+  mountedCount: number;
+  driftCount: number;
+  warnings: AdminOnboardingPlacementWarning[];
+  lastOperation: AdminOnboardingLatestOperation | null;
+}
+
+interface AdminOnboardingCustomerProjection {
+  uid: string;
+  username: string;
+  email: string;
+  slug: string | null;
+  cohortId: string | null;
+  cohortLabel: string | null;
+  rawGatewayOverride: string | null;
+  policyTargetGatewayId: string | null;
+  assignedGatewayId: string | null;
+  mountedGatewayId: string | null;
+  provisioningStatus: string | null;
+  initialModelProvider: string | null;
+  initialModel: string | null;
+  initialModelReasoningEffort: string | null;
+  driftState: AdminOnboardingDriftState;
+  warnings: AdminOnboardingPlacementWarning[];
+  latestOperation: AdminOnboardingLatestOperation | null;
+}
+
+interface AdminOnboardingCohortResponse {
+  policy: {
+    defaultGatewayId: string | null;
+    currentOnboardingCohortId: string | null;
+    previewOnboardingCohortId: string | null;
+    onboardingCohorts: Record<string, OnboardingCohortConfig>;
+    cohortOverrides: Record<string, string>;
+    rawGatewayOverrides: Record<string, string>;
+  };
+  config: {
+    defaultGatewayId: string | null;
+    currentOnboardingCohortId: string | null;
+    previewOnboardingCohortId: string | null;
+    onboardingCohorts: Record<string, OnboardingCohortConfig>;
+    cohortOverrides: Record<string, string>;
+  };
+  cohorts: AdminOnboardingCohortSummary[];
+  overrides: AdminOnboardingOverrideSummary[];
+  gateways: AdminOnboardingGatewaySummary[];
+  customers: AdminOnboardingCustomerProjection[];
+  driftSummary: Record<AdminOnboardingDriftState, number>;
+  assignmentCounts: {
+    byCohort: Record<string, number>;
+    uncohorted: number;
+  };
+  warnings: AdminOnboardingPlacementWarning[];
+  generatedAt: string;
+}
+
+interface OnboardingCohortPatchOk {
+  currentOnboardingCohortId: string;
+  previewOnboardingCohortId: string | null;
+  onboardingCohorts: Record<string, OnboardingCohortConfig>;
+  cohortOverrides?: Record<string, string>;
+}
+
 function normalizedNonNegativeInt(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
@@ -270,6 +437,1012 @@ export function parseDedicatedGatewayIdlePatch(
     };
   }
   return { ok: value as number };
+}
+
+function normalizeStringMap(value: unknown): Record<string, string> {
+  if (!isPlainRecord(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (key.length > 0 && typeof raw === "string" && raw.length > 0) {
+      out[key] = raw;
+    }
+  }
+  return out;
+}
+
+function normalizeOnboardingCohorts(value: unknown): Record<string, OnboardingCohortConfig> {
+  if (!isPlainRecord(value)) return {};
+  const out: Record<string, OnboardingCohortConfig> = {};
+  for (const [cohortId, raw] of Object.entries(value)) {
+    if (cohortId.length === 0 || !isPlainRecord(raw)) continue;
+    if (
+      !isNonEmptyString(raw.gatewayId) ||
+      !isOnboardingModelProvider(raw.provider) ||
+      !isNonEmptyString(raw.model) ||
+      !isNonEmptyString(raw.label)
+    ) {
+      continue;
+    }
+    if (
+      raw.reasoningEffort !== undefined &&
+      !isOnboardingReasoningEffort(raw.reasoningEffort)
+    ) {
+      continue;
+    }
+    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") continue;
+    out[cohortId] = {
+      gatewayId: raw.gatewayId,
+      provider: raw.provider,
+      model: raw.model,
+      label: raw.label,
+      ...(raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
+      ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+    };
+  }
+  return out;
+}
+
+function normalizeOnboardingRuntimeConfig(
+  data: Record<string, unknown> | undefined,
+): OnboardingOrchestratorConfig {
+  return {
+    defaultGatewayId: asStringOrNull(data?.defaultGatewayId) ?? "",
+    overrides: normalizeStringMap(data?.overrides),
+    currentOnboardingCohortId:
+      asStringOrNull(data?.currentOnboardingCohortId) ?? undefined,
+    previewOnboardingCohortId:
+      asStringOrNull(data?.previewOnboardingCohortId) ?? undefined,
+    onboardingCohorts: normalizeOnboardingCohorts(data?.onboardingCohorts),
+    cohortOverrides: normalizeStringMap(data?.cohortOverrides),
+  };
+}
+
+async function readOnboardingRuntimeConfig(
+  deps: FleetRouterDeps,
+): Promise<OnboardingOrchestratorConfig> {
+  const snap = await deps.db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
+  const data = snap.exists ? (snap.data() as Record<string, unknown> | undefined) : undefined;
+  return normalizeOnboardingRuntimeConfig(data);
+}
+
+function containsPlatformApiKeyMaterial(value: unknown): boolean {
+  if (typeof value === "string") {
+    return /^sk-(or|ant)[-_]/iu.test(value) || /^sk-or-v1-/iu.test(value);
+  }
+  if (Array.isArray(value)) return value.some(containsPlatformApiKeyMaterial);
+  if (!isPlainRecord(value)) return false;
+  for (const [key, nested] of Object.entries(value)) {
+    if (/api[_-]?key|platform[_-]?key|secret|token/iu.test(key)) return true;
+    if (containsPlatformApiKeyMaterial(nested)) return true;
+  }
+  return false;
+}
+
+function validateCohortGateway(
+  gatewayId: string,
+  glmByGatewayId: Map<string, GlmDoc>,
+): RolloutBodyError | null {
+  const glmDoc = glmByGatewayId.get(gatewayId);
+  if (!glmDoc) {
+    return {
+      status: 400,
+      body: {
+        error: "cohort gateway desired state not found",
+        gatewayId,
+      },
+    };
+  }
+  if (projectDesiredStatus(glmDoc) === "retired") {
+    return {
+      status: 400,
+      body: {
+        error: "cohort gateway must not be retired",
+        gatewayId,
+      },
+    };
+  }
+  const gatewayClass = normalizeGatewayClass(glmDoc);
+  if (gatewayClass !== "shared") {
+    return {
+      status: 400,
+      body: {
+        error: "cohort gateway must be a shared gateway",
+        gatewayId,
+        gatewayClass,
+      },
+    };
+  }
+  return null;
+}
+
+// eslint-disable-next-line max-lines-per-function, complexity, sonarjs/cognitive-complexity -- Linear request validation keeps each field's operator-facing error local.
+function parseOnboardingCohortPatch(
+  body: Record<string, unknown>,
+  glmByGatewayId: Map<string, GlmDoc>,
+):
+  | { ok: OnboardingCohortPatchOk }
+  | { error: RolloutBodyError } {
+  if (containsPlatformApiKeyMaterial(body)) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error:
+            "platform API key material must not be stored in onboarding cohort config; materialize platform keys as Broker environment variables",
+        },
+      },
+    };
+  }
+  if (!isNonEmptyString(body.currentOnboardingCohortId)) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "currentOnboardingCohortId is required" },
+      },
+    };
+  }
+  if (!isPlainRecord(body.onboardingCohorts)) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "onboardingCohorts is required" },
+      },
+    };
+  }
+
+  const onboardingCohorts: Record<string, OnboardingCohortConfig> = {};
+  for (const [cohortId, raw] of Object.entries(body.onboardingCohorts)) {
+    if (cohortId.length === 0) {
+      return {
+        error: {
+          status: 400,
+          body: { error: "cohort ids must be non-empty strings" },
+        },
+      };
+    }
+    if (!isPlainRecord(raw)) {
+      return {
+        error: {
+          status: 400,
+          body: { error: "cohort config must be an object", cohortId },
+        },
+      };
+    }
+    if (!isNonEmptyString(raw.gatewayId)) {
+      return {
+        error: {
+          status: 400,
+          body: { error: "cohort gatewayId is required", cohortId },
+        },
+      };
+    }
+    const gatewayError = validateCohortGateway(raw.gatewayId, glmByGatewayId);
+    if (gatewayError) return { error: gatewayError };
+    if (!isOnboardingModelProvider(raw.provider)) {
+      return {
+        error: {
+          status: 400,
+          body: {
+            error: "cohort provider must be anthropic or openrouter",
+            cohortId,
+            got: raw.provider,
+          },
+        },
+      };
+    }
+    if (!isNonEmptyString(raw.model)) {
+      return {
+        error: {
+          status: 400,
+          body: { error: "cohort model is required", cohortId },
+        },
+      };
+    }
+    if (!isNonEmptyString(raw.label)) {
+      return {
+        error: {
+          status: 400,
+          body: { error: "cohort label is required", cohortId },
+        },
+      };
+    }
+    if (
+      raw.reasoningEffort !== undefined &&
+      !isOnboardingReasoningEffort(raw.reasoningEffort)
+    ) {
+      return {
+        error: {
+          status: 400,
+          body: {
+            error: "cohort reasoningEffort must be high or xhigh",
+            cohortId,
+            got: raw.reasoningEffort,
+          },
+        },
+      };
+    }
+    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+      return {
+        error: {
+          status: 400,
+          body: { error: "cohort enabled must be a boolean", cohortId },
+        },
+      };
+    }
+    onboardingCohorts[cohortId] = {
+      gatewayId: raw.gatewayId,
+      provider: raw.provider,
+      model: raw.model,
+      label: raw.label,
+      ...(raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
+      ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+    };
+  }
+
+  const current = onboardingCohorts[body.currentOnboardingCohortId];
+  if (!current) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "currentOnboardingCohortId must reference an onboarding cohort",
+          currentOnboardingCohortId: body.currentOnboardingCohortId,
+        },
+      },
+    };
+  }
+  if (!isOnboardingCohortEnabled(current)) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "currentOnboardingCohortId must reference an enabled cohort",
+          currentOnboardingCohortId: body.currentOnboardingCohortId,
+        },
+      },
+    };
+  }
+
+  const preview =
+    body.previewOnboardingCohortId === null
+      ? null
+      : asStringOrNull(body.previewOnboardingCohortId);
+  if (preview !== null) {
+    const cohort = onboardingCohorts[preview];
+    if (!cohort) {
+      return {
+        error: {
+          status: 400,
+          body: {
+            error: "previewOnboardingCohortId must reference an onboarding cohort",
+            previewOnboardingCohortId: preview,
+          },
+        },
+      };
+    }
+    if (!isOnboardingCohortEnabled(cohort)) {
+      return {
+        error: {
+          status: 400,
+          body: {
+            error: "previewOnboardingCohortId must reference an enabled cohort",
+            previewOnboardingCohortId: preview,
+          },
+        },
+      };
+    }
+  }
+
+  const cohortOverrides =
+    body.cohortOverrides === undefined
+      ? undefined
+      : normalizeStringMap(body.cohortOverrides);
+  if (cohortOverrides) {
+    for (const [uid, cohortId] of Object.entries(cohortOverrides)) {
+      if (!onboardingCohorts[cohortId]) {
+        return {
+          error: {
+            status: 400,
+            body: {
+              error: "cohortOverrides must reference configured cohorts",
+              uid,
+              cohortId,
+            },
+          },
+        };
+      }
+    }
+  }
+
+  return {
+    ok: {
+      currentOnboardingCohortId: body.currentOnboardingCohortId,
+      previewOnboardingCohortId: preview,
+      onboardingCohorts,
+      ...(cohortOverrides ? { cohortOverrides } : {}),
+    },
+  };
+}
+
+function readUserOnboardingCohortId(data: Record<string, unknown>): string | null {
+  const provisioning =
+    (data.provisioning as Record<string, unknown> | undefined) ?? {};
+  const openclaw =
+    (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
+  return asStringOrNull(openclaw.onboardingCohortId);
+}
+
+function readUserOpenclaw(data: Record<string, unknown>): Record<string, unknown> {
+  const provisioning =
+    (data.provisioning as Record<string, unknown> | undefined) ?? {};
+  return (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
+}
+
+function readProvisioningStatus(data: Record<string, unknown>): string | null {
+  const provisioning =
+    (data.provisioning as Record<string, unknown> | undefined) ?? {};
+  return asStringOrNull(provisioning.status) ?? asStringOrNull(readUserOpenclaw(data).status);
+}
+
+function cohortRole(
+  cohortId: string,
+  config: OnboardingOrchestratorConfig,
+): AdminOnboardingCohortSummary["role"] {
+  if (cohortId === config.currentOnboardingCohortId) return "current";
+  if (cohortId === config.previewOnboardingCohortId) return "preview";
+  return "available";
+}
+
+function cohortWarnings(
+  cohortId: string,
+  cohort: OnboardingCohortConfig,
+  glmByGatewayId: Map<string, GlmDoc>,
+): AdminOnboardingPlacementWarning[] {
+  const warnings: AdminOnboardingPlacementWarning[] = [];
+  if (!isOnboardingCohortEnabled(cohort)) {
+    warnings.push({
+      code: WARNING_CODE_COHORT_DISABLED,
+      severity: "warning",
+      cohortId,
+      gatewayId: cohort.gatewayId,
+      message: `${cohortId} is disabled`,
+    });
+  }
+  const glmDoc = glmByGatewayId.get(cohort.gatewayId);
+  if (!glmDoc) {
+    warnings.push({
+      code: "cohort-gateway-missing",
+      severity: "error",
+      cohortId,
+      gatewayId: cohort.gatewayId,
+      message: `${cohortId} points at missing gateway ${cohort.gatewayId}`,
+    });
+    return warnings;
+  }
+  const desiredStatus = projectDesiredStatus(glmDoc);
+  if (desiredStatus === "retired") {
+    warnings.push({
+      code: "cohort-gateway-retired",
+      severity: "error",
+      cohortId,
+      gatewayId: cohort.gatewayId,
+      message: `${cohortId} points at retired gateway ${cohort.gatewayId}`,
+    });
+  }
+  const gatewayClass = normalizeGatewayClass(glmDoc);
+  if (gatewayClass !== "shared") {
+    warnings.push({
+      code: "cohort-gateway-not-shared",
+      severity: "error",
+      cohortId,
+      gatewayId: cohort.gatewayId,
+      message: `${cohortId} points at ${gatewayClass} gateway ${cohort.gatewayId}`,
+    });
+  }
+  return warnings;
+}
+
+function sortedCohortEntries(
+  config: OnboardingOrchestratorConfig,
+): Array<[string, OnboardingCohortConfig]> {
+  const entries = Object.entries(config.onboardingCohorts ?? {});
+  return entries.sort(([a], [b]) => {
+    const rank = (id: string): number => {
+      if (id === config.currentOnboardingCohortId) return 0;
+      if (id === config.previewOnboardingCohortId) return 1;
+      return 2;
+    };
+    return rank(a) - rank(b) || a.localeCompare(b);
+  });
+}
+
+function shapeOnboardingOperation(
+  id: string,
+  data: Record<string, unknown>,
+): AdminOnboardingLatestOperation {
+  return {
+    id,
+    kind: asStringOrNull(data.kind) ?? "unknown",
+    status: asStringOrNull(data.status) ?? "unknown",
+    gatewayId: asStringOrNull(data.gatewayId),
+    inputUid: asStringOrNull(data.inputUid),
+    createdAt: coerceNumberOrNull(data.createdAt),
+    startedAt: coerceNumberOrNull(data.startedAt),
+    completedAt: coerceNumberOrNull(data.completedAt),
+    ...(typeof data.error === "string" ? { error: data.error } : {}),
+    input: isPlainRecord(data.input) ? data.input : {},
+  };
+}
+
+function latestOperation(
+  operations: ReadonlyArray<AdminOnboardingLatestOperation>,
+  predicate: (operation: AdminOnboardingLatestOperation) => boolean,
+): AdminOnboardingLatestOperation | null {
+  return operations
+    .filter(predicate)
+    .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0] ?? null;
+}
+
+function operationUid(operation: AdminOnboardingLatestOperation): string | null {
+  return asStringOrNull(operation.input.uid) ?? asStringOrNull(operation.inputUid);
+}
+
+function operationTouchesGateway(
+  operation: AdminOnboardingLatestOperation,
+  gatewayId: string,
+): boolean {
+  return (
+    operation.gatewayId === gatewayId ||
+    operation.input.gatewayId === gatewayId ||
+    operation.input.fromGatewayId === gatewayId ||
+    operation.input.toGatewayId === gatewayId
+  );
+}
+
+function isInFlightOperation(operation: AdminOnboardingLatestOperation | null): boolean {
+  return operation?.status === "pending" || operation?.status === "running";
+}
+
+function mountedGatewayBySlug(
+  gatewayDocs: ReadonlyArray<FirestoreDocLike>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const doc of gatewayDocs) {
+    const data = doc.data();
+    const gatewayId = asStringOrNull(data.gatewayId) ?? doc.id;
+    for (const slug of readMountedSlugs(data)) {
+      out.set(slug, gatewayId);
+    }
+  }
+  return out;
+}
+
+function policyTarget(decision: OnboardingPlacementDecision): {
+  cohortId: string | null;
+  gatewayId: string | null;
+  warning: AdminOnboardingPlacementWarning | null;
+} {
+  if (decision.kind === "cohort") {
+    return { cohortId: decision.cohortId, gatewayId: decision.cohort.gatewayId, warning: null };
+  }
+  if (decision.kind === "legacy-gateway-override") {
+    return { cohortId: null, gatewayId: decision.gatewayId, warning: null };
+  }
+  if (decision.kind === "legacy-default") {
+    return { cohortId: null, gatewayId: decision.gatewayId, warning: null };
+  }
+  return {
+    cohortId: decision.cohortId,
+    gatewayId: null,
+    warning: {
+      code:
+        decision.reason === WARNING_CODE_COHORT_DISABLED
+          ? WARNING_CODE_COHORT_DISABLED
+          : "default-cohort-missing",
+      severity: "error",
+      cohortId: decision.cohortId,
+      message: `placement cohort ${decision.cohortId} is ${placementDecisionLabel(decision.reason)}`,
+    },
+  };
+}
+
+function placementDecisionLabel(reason: "cohort-not-found" | typeof WARNING_CODE_COHORT_DISABLED): string {
+  return reason === WARNING_CODE_COHORT_DISABLED ? "disabled" : "missing";
+}
+
+function shouldIncludeOnboardingCustomer(input: {
+  uid: string;
+  data: Record<string, unknown>;
+  config: OnboardingOrchestratorConfig;
+}): boolean {
+  return (
+    input.data.approved === true ||
+    readUserGatewayId(input.data) !== null ||
+    readUserOnboardingCohortId(input.data) !== null ||
+    Boolean(input.config.cohortOverrides?.[input.uid]) ||
+    Boolean(input.config.overrides?.[input.uid])
+  );
+}
+
+// eslint-disable-next-line complexity -- Warning projection intentionally enumerates each drift state with its distinct operator message.
+function userPlacementWarnings(input: {
+  uid: string;
+  slug: string | null;
+  cohortId: string | null;
+  assignedGatewayId: string | null;
+  mountedGatewayId: string | null;
+  policyTargetGatewayId: string | null;
+  driftState: AdminOnboardingDriftState;
+  latestOperation: AdminOnboardingLatestOperation | null;
+  policyWarning: AdminOnboardingPlacementWarning | null;
+}): AdminOnboardingPlacementWarning[] {
+  const warnings: AdminOnboardingPlacementWarning[] = [];
+  if (input.policyWarning) warnings.push({ ...input.policyWarning, uid: input.uid, slug: input.slug ?? undefined });
+  if (input.driftState === "pointer-drift") {
+    warnings.push({
+      code: "pointer-drift",
+      severity: "warning",
+      uid: input.uid,
+      slug: input.slug ?? undefined,
+      cohortId: input.cohortId ?? undefined,
+      gatewayId: input.assignedGatewayId ?? undefined,
+      message: `${input.slug ?? input.uid} is assigned to ${input.assignedGatewayId ?? "none"} but policy targets ${input.policyTargetGatewayId ?? "none"}`,
+    });
+  }
+  if (input.driftState === "assigned-not-mounted") {
+    warnings.push({
+      code: "assigned-not-mounted",
+      severity: "warning",
+      uid: input.uid,
+      slug: input.slug ?? undefined,
+      cohortId: input.cohortId ?? undefined,
+      gatewayId: input.assignedGatewayId ?? undefined,
+      message: `${input.slug ?? input.uid} is assigned to ${input.assignedGatewayId ?? "none"} but is not mounted there`,
+    });
+  }
+  if (input.driftState === "mounted-orphan") {
+    warnings.push({
+      code: "mounted-orphan",
+      severity: "warning",
+      uid: input.uid,
+      slug: input.slug ?? undefined,
+      cohortId: input.cohortId ?? undefined,
+      gatewayId: input.mountedGatewayId ?? undefined,
+      message: `${input.slug ?? input.uid} is mounted on ${input.mountedGatewayId ?? "none"} but assigned to ${input.assignedGatewayId ?? "none"}`,
+    });
+  }
+  if (input.driftState === "in-flight" && input.latestOperation) {
+    warnings.push({
+      code: "migration-in-flight",
+      severity: "info",
+      uid: input.uid,
+      slug: input.slug ?? undefined,
+      operationId: input.latestOperation.id,
+      message: `${input.latestOperation.kind} ${input.latestOperation.id} is ${input.latestOperation.status}`,
+    });
+  }
+  return warnings;
+}
+
+// eslint-disable-next-line complexity -- Drift classification is a prioritized decision table.
+function driftStateForCustomer(input: {
+  assignedGatewayId: string | null;
+  mountedGatewayId: string | null;
+  policyTargetGatewayId: string | null;
+  policyWarning: AdminOnboardingPlacementWarning | null;
+  latestOperation: AdminOnboardingLatestOperation | null;
+  glmByGatewayId: Map<string, GlmDoc>;
+}): AdminOnboardingDriftState {
+  if (isInFlightOperation(input.latestOperation)) return "in-flight";
+  if (input.policyWarning?.code === WARNING_CODE_COHORT_DISABLED) return "disabled-default";
+  if (
+    input.policyTargetGatewayId &&
+    (!input.glmByGatewayId.has(input.policyTargetGatewayId) ||
+      projectDesiredStatus(input.glmByGatewayId.get(input.policyTargetGatewayId)) === "retired")
+  ) {
+    return "missing-gateway";
+  }
+  if (
+    input.assignedGatewayId &&
+    input.policyTargetGatewayId &&
+    input.assignedGatewayId !== input.policyTargetGatewayId
+  ) {
+    return "pointer-drift";
+  }
+  if (
+    input.mountedGatewayId &&
+    input.assignedGatewayId &&
+    input.mountedGatewayId !== input.assignedGatewayId
+  ) {
+    return "mounted-orphan";
+  }
+  if (input.mountedGatewayId && !input.assignedGatewayId) return "mounted-orphan";
+  if (
+    input.assignedGatewayId &&
+    input.mountedGatewayId !== input.assignedGatewayId
+  ) {
+    return "assigned-not-mounted";
+  }
+  return "healthy";
+}
+
+function buildCustomerPlacementProjection(input: {
+  uid: string;
+  data: Record<string, unknown>;
+  config: OnboardingOrchestratorConfig;
+  mountedBySlug: Map<string, string>;
+  operations: ReadonlyArray<AdminOnboardingLatestOperation>;
+  glmByGatewayId: Map<string, GlmDoc>;
+}): AdminOnboardingCustomerProjection {
+  const openclaw = readUserOpenclaw(input.data);
+  const slug = resolveCustomerSlug(input.data, (userData) =>
+    asStringOrNull(userData.username) ? [asStringOrNull(userData.username)!] : [],
+  );
+  const assignedGatewayId = readUserGatewayId(input.data);
+  const assignedCohortId = readUserOnboardingCohortId(input.data);
+  const decision = resolveOnboardingPlacementForUid(input.uid, input.config);
+  const target = policyTarget(decision);
+  const mountedGatewayId = slug ? input.mountedBySlug.get(slug) ?? null : null;
+  const latestOp = latestOperation(
+    input.operations,
+    (operation: AdminOnboardingLatestOperation) => operationUid(operation) === input.uid,
+  );
+  const driftState = driftStateForCustomer({
+    assignedGatewayId,
+    mountedGatewayId,
+    policyTargetGatewayId: target.gatewayId,
+    policyWarning: target.warning,
+    latestOperation: latestOp,
+    glmByGatewayId: input.glmByGatewayId,
+  });
+  const cohort = assignedCohortId ? input.config.onboardingCohorts?.[assignedCohortId] : null;
+  const warnings = userPlacementWarnings({
+    uid: input.uid,
+    slug,
+    cohortId: assignedCohortId,
+    assignedGatewayId,
+    mountedGatewayId,
+    policyTargetGatewayId: target.gatewayId,
+    driftState,
+    latestOperation: latestOp,
+    policyWarning: target.warning,
+  });
+  return {
+    uid: input.uid,
+    username: asStringOrNull(input.data.username) ?? "",
+    email: asStringOrNull(input.data.email) ?? "",
+    slug,
+    cohortId: assignedCohortId,
+    cohortLabel: cohort?.label ?? null,
+    rawGatewayOverride: input.config.overrides?.[input.uid] ?? null,
+    policyTargetGatewayId: target.gatewayId,
+    assignedGatewayId,
+    mountedGatewayId,
+    provisioningStatus: readProvisioningStatus(input.data),
+    initialModelProvider: asStringOrNull(openclaw.initialModelProvider),
+    initialModel: asStringOrNull(openclaw.initialModel),
+    initialModelReasoningEffort: asStringOrNull(openclaw.initialModelReasoningEffort),
+    driftState,
+    warnings,
+    latestOperation: latestOp,
+  };
+}
+
+function countBy<T extends string | null>(
+  items: ReadonlyArray<AdminOnboardingCustomerProjection>,
+  key: (item: AdminOnboardingCustomerProjection) => T,
+): Record<Exclude<T, null>, number> {
+  const out = {} as Record<Exclude<T, null>, number>;
+  for (const item of items) {
+    const value = key(item);
+    if (value === null) continue;
+    out[value as Exclude<T, null>] = (out[value as Exclude<T, null>] ?? 0) + 1;
+  }
+  return out;
+}
+
+// eslint-disable-next-line max-lines-per-function, complexity -- Builds one Admin Ops projection from Firestore snapshots so callers get a consistent response shape.
+function buildOnboardingCohortResponse(opts: {
+  config: OnboardingOrchestratorConfig;
+  glmDocs: ReadonlyArray<FirestoreDocLike>;
+  gatewayDocs: ReadonlyArray<FirestoreDocLike>;
+  userDocs: ReadonlyArray<FirestoreDocLike>;
+  operationDocs: ReadonlyArray<FirestoreDocLike>;
+}): AdminOnboardingCohortResponse {
+  const glmByGatewayId = indexGlmDocs(opts.glmDocs);
+  const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
+  const usersById = indexFirestoreDocs(opts.userDocs);
+  const cohortOverrides = opts.config.cohortOverrides ?? {};
+  const rawGatewayOverrides = opts.config.overrides ?? {};
+  const operations = opts.operationDocs.map((doc) =>
+    shapeOnboardingOperation(doc.id, doc.data()),
+  );
+  const mountedBySlug = mountedGatewayBySlug(opts.gatewayDocs);
+  const customers = opts.userDocs
+    .filter((doc) =>
+      shouldIncludeOnboardingCustomer({
+        uid: doc.id,
+        data: doc.data(),
+        config: opts.config,
+      }),
+    )
+    .map((doc) =>
+      buildCustomerPlacementProjection({
+        uid: doc.id,
+        data: doc.data(),
+        config: opts.config,
+        mountedBySlug,
+        operations,
+        glmByGatewayId,
+      }),
+    )
+    .sort((a, b) =>
+      (a.slug ?? a.username ?? a.email ?? a.uid).localeCompare(
+        b.slug ?? b.username ?? b.email ?? b.uid,
+        undefined,
+        { sensitivity: "base" },
+      ),
+    );
+
+  const assignmentCountsByCohort = countBy(customers, (customer) => customer.cohortId);
+  const mountedCountsByCohort = countBy(
+    customers,
+    (customer) =>
+      customer.cohortId &&
+      customer.mountedGatewayId === opts.config.onboardingCohorts?.[customer.cohortId]?.gatewayId
+        ? customer.cohortId
+        : null,
+  );
+  const overrideCountsByCohort: Record<string, number> = {};
+  for (const cohortId of Object.values(cohortOverrides)) {
+    overrideCountsByCohort[cohortId] =
+      (overrideCountsByCohort[cohortId] ?? 0) + 1;
+  }
+  const mountedCountsByGateway = countBy(customers, (customer) => customer.mountedGatewayId);
+  const assignedCountsByGateway = countBy(customers, (customer) => customer.assignedGatewayId);
+  const driftCountsByGateway: Record<string, number> = {};
+  for (const customer of customers) {
+    if (customer.driftState === "healthy") continue;
+    const touchedGatewayIds = new Set(
+      [
+        customer.policyTargetGatewayId,
+        customer.assignedGatewayId,
+        customer.mountedGatewayId,
+      ].filter((gatewayId): gatewayId is string => typeof gatewayId === "string"),
+    );
+    for (const gatewayId of touchedGatewayIds) {
+      driftCountsByGateway[gatewayId] = (driftCountsByGateway[gatewayId] ?? 0) + 1;
+    }
+  }
+  const driftSummary: Record<AdminOnboardingDriftState, number> = {
+    healthy: 0,
+    "pointer-drift": 0,
+    "assigned-not-mounted": 0,
+    "mounted-orphan": 0,
+    "missing-gateway": 0,
+    "disabled-default": 0,
+    "in-flight": 0,
+  };
+  for (const customer of customers) driftSummary[customer.driftState] += 1;
+
+  const cohorts = sortedCohortEntries(opts.config).map(([cohortId, cohort]) => {
+    const glmDoc = glmByGatewayId.get(cohort.gatewayId);
+    const heartbeat = heartbeatByGatewayId.get(cohort.gatewayId)?.data();
+    const desiredStatus = projectDesiredStatus(glmDoc);
+    const assigned = assignmentCountsByCohort[cohortId] ?? 0;
+    const mounted = mountedCountsByCohort[cohortId] ?? 0;
+    return {
+      id: cohortId,
+      role: cohortRole(cohortId, opts.config),
+      enabled: isOnboardingCohortEnabled(cohort),
+      assignmentCount: assigned,
+      mountedCount: mounted,
+      missingCount: Math.max(0, assigned - mounted),
+      orphanCount: customers.filter(
+        (customer) =>
+          customer.mountedGatewayId === cohort.gatewayId &&
+          customer.cohortId !== cohortId,
+      ).length,
+      overrideCount: overrideCountsByCohort[cohortId] ?? 0,
+      gateway: glmDoc
+        ? {
+            gatewayId: cohort.gatewayId,
+            gatewayClass: normalizeGatewayClass(glmDoc),
+            desiredStatus,
+            status: asStringOrNull(heartbeat?.status),
+            imageTag: projectImageTag(heartbeat ?? {}, glmDoc),
+            openclawVersion: projectOpenclawVersion(heartbeat ?? {}, glmDoc),
+          }
+        : null,
+      warnings: cohortWarnings(cohortId, cohort, glmByGatewayId),
+      lastOperation: latestOperation(operations, (operation) =>
+        operationTouchesGateway(operation, cohort.gatewayId),
+      ),
+      ...cohort,
+    };
+  });
+
+  const gatewayIds = new Set([
+    ...glmByGatewayId.keys(),
+    ...heartbeatByGatewayId.keys(),
+    ...Object.values(opts.config.onboardingCohorts ?? {}).map((cohort) => cohort.gatewayId),
+    ...Object.values(rawGatewayOverrides),
+    ...customers.flatMap((customer) =>
+      [
+        customer.policyTargetGatewayId,
+        customer.assignedGatewayId,
+        customer.mountedGatewayId,
+      ].filter((gatewayId): gatewayId is string => typeof gatewayId === "string"),
+    ),
+  ]);
+  // eslint-disable-next-line complexity -- Gateway row projection joins desired state, heartbeat, cohort, and customer drift signals.
+  const gateways = [...gatewayIds].sort().map((gatewayId) => {
+    const glmDoc = glmByGatewayId.get(gatewayId);
+    const heartbeat = heartbeatByGatewayId.get(gatewayId)?.data();
+    const desiredStatus = projectDesiredStatus(glmDoc);
+    const gatewayClass = normalizeGatewayClass(glmDoc);
+    const hostedCohorts = Object.entries(opts.config.onboardingCohorts ?? {})
+      .filter(([, cohort]) => cohort.gatewayId === gatewayId)
+      .map(([cohortId, cohort]) => ({ cohortId, label: cohort.label }));
+    const warnings = [
+      ...cohorts
+        .filter((cohort) => cohort.gatewayId === gatewayId)
+        .flatMap((cohort) => cohort.warnings),
+      ...customers
+        .filter((customer) =>
+          [
+            customer.policyTargetGatewayId,
+            customer.assignedGatewayId,
+            customer.mountedGatewayId,
+          ].includes(gatewayId),
+        )
+        .flatMap((customer) => customer.warnings),
+    ];
+    const currentGatewayId = opts.config.currentOnboardingCohortId
+      ? opts.config.onboardingCohorts?.[opts.config.currentOnboardingCohortId]?.gatewayId
+      : null;
+    const previewGatewayId = opts.config.previewOnboardingCohortId
+      ? opts.config.onboardingCohorts?.[opts.config.previewOnboardingCohortId]?.gatewayId
+      : null;
+    return {
+      gatewayId,
+      gatewayClass,
+      desiredStatus,
+      status: asStringOrNull(heartbeat?.status),
+      imageTag: projectImageTag(heartbeat ?? {}, glmDoc),
+      openclawVersion: projectOpenclawVersion(heartbeat ?? {}, glmDoc),
+      assignableToOnboardingCohort:
+        Boolean(glmDoc) && gatewayClass === "shared" && desiredStatus !== "retired",
+      hostedCohortIds: hostedCohorts.map((cohort) => cohort.cohortId),
+      hostedCohortLabels: hostedCohorts.map((cohort) => cohort.label),
+      defaultTarget: opts.config.defaultGatewayId === gatewayId || currentGatewayId === gatewayId,
+      currentTarget: currentGatewayId === gatewayId,
+      previewTarget: previewGatewayId === gatewayId,
+      assignedCount: assignedCountsByGateway[gatewayId] ?? 0,
+      mountedCount: mountedCountsByGateway[gatewayId] ?? 0,
+      driftCount: driftCountsByGateway[gatewayId] ?? 0,
+      warnings,
+      lastOperation: latestOperation(operations, (operation) =>
+        operationTouchesGateway(operation, gatewayId),
+      ),
+    };
+  });
+
+  const overrides = Object.entries(cohortOverrides)
+    .map(([uid, cohortId]) => {
+      const userData = usersById.get(uid)?.data() ?? {};
+      return {
+        uid,
+        cohortId,
+        username: asStringOrNull(userData.username) ?? "",
+        email: asStringOrNull(userData.email) ?? "",
+        slug: resolveCustomerSlug(userData, (data) =>
+          asStringOrNull(data.username) ? [asStringOrNull(data.username)!] : [],
+        ),
+        currentGatewayId: readUserGatewayId(userData),
+        rawGatewayOverride: rawGatewayOverrides[uid] ?? null,
+      };
+    })
+    .sort((a, b) =>
+      (a.username || a.email || a.uid).localeCompare(
+        b.username || b.email || b.uid,
+        undefined,
+        { sensitivity: "base" },
+      ),
+    );
+
+  const warnings: AdminOnboardingPlacementWarning[] = [];
+  for (const [uid, gatewayId] of Object.entries(rawGatewayOverrides)) {
+    const userData = usersById.get(uid)?.data() ?? {};
+    warnings.push({
+      code: "raw-gateway-override",
+      severity: "warning",
+      uid,
+      gatewayId,
+      slug: resolveCustomerSlug(userData, (data) =>
+        asStringOrNull(data.username) ? [asStringOrNull(data.username)!] : [],
+      ) ?? undefined,
+      message: `${uid} has a raw gateway override to ${gatewayId}; this bypasses cohort placement`,
+    });
+  }
+  if (
+    opts.config.currentOnboardingCohortId &&
+    !opts.config.onboardingCohorts?.[opts.config.currentOnboardingCohortId]
+  ) {
+    warnings.push({
+      code: "default-cohort-missing",
+      severity: "error",
+      cohortId: opts.config.currentOnboardingCohortId,
+      message: `Current cohort ${opts.config.currentOnboardingCohortId} is missing`,
+    });
+  }
+  if (
+    opts.config.previewOnboardingCohortId &&
+    !opts.config.onboardingCohorts?.[opts.config.previewOnboardingCohortId]
+  ) {
+    warnings.push({
+      code: "preview-cohort-missing",
+      severity: "warning",
+      cohortId: opts.config.previewOnboardingCohortId,
+      message: `Preview cohort ${opts.config.previewOnboardingCohortId} is missing`,
+    });
+  }
+  for (const cohort of cohorts) {
+    warnings.push(...cohort.warnings);
+  }
+  for (const customer of customers) warnings.push(...customer.warnings);
+
+  return {
+    policy: {
+      defaultGatewayId: opts.config.defaultGatewayId || null,
+      currentOnboardingCohortId: opts.config.currentOnboardingCohortId ?? null,
+      previewOnboardingCohortId: opts.config.previewOnboardingCohortId ?? null,
+      onboardingCohorts: opts.config.onboardingCohorts ?? {},
+      cohortOverrides,
+      rawGatewayOverrides,
+    },
+    config: {
+      defaultGatewayId: opts.config.defaultGatewayId || null,
+      currentOnboardingCohortId: opts.config.currentOnboardingCohortId ?? null,
+      previewOnboardingCohortId: opts.config.previewOnboardingCohortId ?? null,
+      onboardingCohorts: opts.config.onboardingCohorts ?? {},
+      cohortOverrides,
+    },
+    cohorts,
+    overrides,
+    gateways,
+    customers,
+    driftSummary,
+    assignmentCounts: {
+      byCohort: assignmentCountsByCohort,
+      uncohorted: customers.filter((customer) => customer.cohortId === null).length,
+    },
+    warnings,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function readAdminOnboardingCohortResponse(
+  deps: FleetRouterDeps,
+): Promise<AdminOnboardingCohortResponse> {
+  const [config, glmSnap, gatewaySnap, usersSnap, operationsSnap] = await Promise.all([
+    readOnboardingRuntimeConfig(deps),
+    deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
+    deps.db.collection("gateways").get(),
+    deps.db.collection("users").get(),
+    deps.db
+      .collection(GLM_OPERATIONS_COLLECTION)
+      .orderBy("createdAt", "desc")
+      .limit(200)
+      .get(),
+  ]);
+  return buildOnboardingCohortResponse({
+    config,
+    glmDocs: glmSnap.docs,
+    gatewayDocs: gatewaySnap.docs,
+    userDocs: usersSnap.docs,
+    operationDocs: operationsSnap.docs,
+  });
 }
 
 async function readFleetRuntimeSettings(deps: FleetRouterDeps): Promise<FleetRuntimeSettings> {
@@ -439,7 +1612,7 @@ export function projectGatewaySummary(
   now: number,
 ): {
   gatewayId: string; status: string;
-  desiredStatus: "running" | "paused" | "draining" | "retired" | null;
+  desiredStatus: AdminGatewayDesiredStatus | null;
   imageTag: string | null; openclawVersion: string | null;
   mountedCustomers: unknown[];
   lastHeartbeatAt: string | null; heartbeatAgeMs: number | null;
@@ -540,6 +1713,7 @@ function rollupFleetStats(
 }
 
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
+const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIX =
   "us-central1-docker.pkg.dev/octogee/octogee/";
 const BUILDS_SERVICE_ALLOWLIST = new Set([
@@ -549,7 +1723,7 @@ const BUILDS_SERVICE_ALLOWLIST = new Set([
 
 const OP_KINDS = new Set([
   "add-gateway",
-  "migrate-customer",
+  OP_KIND_MIGRATE_CUSTOMER,
   "retire-gateway",
   "restart-gateway",
   "rollout",
@@ -594,7 +1768,7 @@ interface DrawerOperation {
 interface NewOperationInput {
   kind:
     | "add-gateway"
-    | "migrate-customer"
+    | typeof OP_KIND_MIGRATE_CUSTOMER
     | "retire-gateway"
     | "restart-gateway"
     | "rollout"
@@ -1588,12 +2762,19 @@ async function readMountedCustomers(db: Firestore, gatewayId: string): Promise<s
     : [];
 }
 
+function operationGatewayId(input: Record<string, unknown>): string | null {
+  for (const field of ["gatewayId", "toGatewayId", "fromGatewayId"]) {
+    const value = input[field];
+    if (typeof value === "string") return value;
+  }
+  return null;
+}
+
 async function createOperation(
   db: Firestore,
   opts: NewOperationInput,
 ): Promise<string> {
-  const gatewayId =
-    typeof opts.input.gatewayId === "string" ? opts.input.gatewayId : null;
+  const gatewayId = operationGatewayId(opts.input);
   const inputUid =
     typeof opts.input.uid === "string" ? opts.input.uid : null;
   const ref = await db.collection(GLM_OPERATIONS_COLLECTION).add({
@@ -1975,6 +3156,225 @@ router.patch(
   );
 
 router.get(
+    "/onboarding-cohorts",
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.json(await readAdminOnboardingCohortResponse(deps));
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.patch(
+    "/onboarding-cohorts",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const glmSnap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
+        const parsed = parseOnboardingCohortPatch(
+          req.body as Record<string, unknown>,
+          indexGlmDocs(glmSnap.docs),
+        );
+        if ("error" in parsed) {
+          res.status(parsed.error.status).json(parsed.error.body);
+          return;
+        }
+        const actor = req as ActorRequest;
+        const update: Record<string, unknown> = {
+          currentOnboardingCohortId: parsed.ok.currentOnboardingCohortId,
+          previewOnboardingCohortId: parsed.ok.previewOnboardingCohortId,
+          onboardingCohorts: parsed.ok.onboardingCohorts,
+          onboardingCohortsUpdatedAt: Date.now(),
+          onboardingCohortsUpdatedBy: actor.uid ?? "unknown",
+        };
+        if (parsed.ok.cohortOverrides) {
+          update.cohortOverrides = parsed.ok.cohortOverrides;
+        }
+        await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(update, { merge: true });
+        res.json(await readAdminOnboardingCohortResponse(deps));
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.put(
+    "/onboarding-cohorts/:cohortId/overrides/:uid",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const cohortId = req.params.cohortId as string;
+        const uid = req.params.uid as string;
+        const [config, userSnap] = await Promise.all([
+          readOnboardingRuntimeConfig(deps),
+          db.collection("users").doc(uid).get(),
+        ]);
+        const cohort = config.onboardingCohorts?.[cohortId];
+        if (!cohort) {
+          res.status(404).json({ error: "onboarding cohort not found", cohortId });
+          return;
+        }
+        if (!isOnboardingCohortEnabled(cohort)) {
+          res.status(409).json({ error: "onboarding cohort is disabled", cohortId });
+          return;
+        }
+        if (!userSnap.exists) {
+          res.status(404).json({ error: "user not found", uid });
+          return;
+        }
+        const actor = req as ActorRequest;
+        await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(
+          {
+            cohortOverrides: {
+              ...(config.cohortOverrides ?? {}),
+              [uid]: cohortId,
+            },
+            onboardingCohortsUpdatedAt: Date.now(),
+            onboardingCohortsUpdatedBy: actor.uid ?? "unknown",
+          },
+          { merge: true },
+        );
+        res.json(await readAdminOnboardingCohortResponse(deps));
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.delete(
+    "/onboarding-cohorts/:cohortId/overrides/:uid",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const uid = req.params.uid as string;
+        const config = await readOnboardingRuntimeConfig(deps);
+        const nextOverrides = { ...(config.cohortOverrides ?? {}) };
+        delete nextOverrides[uid];
+        const actor = req as ActorRequest;
+        await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(
+          {
+            cohortOverrides: nextOverrides,
+            onboardingCohortsUpdatedAt: Date.now(),
+            onboardingCohortsUpdatedBy: actor.uid ?? "unknown",
+          },
+          { merge: true },
+        );
+        res.json(await readAdminOnboardingCohortResponse(deps));
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  router.post(
+    "/gateway-migrations/bulk",
+    // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- Linear admin repair route validates input, adopts existing ops, or enqueues one result per uid.
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const body = req.body as Partial<{
+          uids: unknown;
+          toGatewayId: unknown;
+          targetGatewayId: unknown;
+          sourceGatewayId: unknown;
+        }>;
+        const uids = Array.isArray(body.uids)
+          ? body.uids.filter((uid): uid is string => typeof uid === "string" && uid.length > 0)
+          : [];
+        const toGatewayId = asStringOrNull(body.toGatewayId) ?? asStringOrNull(body.targetGatewayId);
+        const sourceGatewayId = asStringOrNull(body.sourceGatewayId);
+        if (!toGatewayId) {
+          res.status(400).json({ error: "toGatewayId is required" });
+          return;
+        }
+        if (uids.length === 0) {
+          res.status(400).json({ error: "uids must contain at least one uid" });
+          return;
+        }
+
+        const targetSnap = await db.collection("gateways").doc(toGatewayId).get();
+        if (!targetSnap.exists) {
+          res.status(404).json({ error: "target gateway not registered", gatewayId: toGatewayId });
+          return;
+        }
+        const targetStatus = asStringOrNull(targetSnap.data()?.status);
+        if (targetStatus !== "ready") {
+          res.status(409).json({
+            error: "target gateway not ready",
+            gatewayId: toGatewayId,
+            status: targetStatus ?? "unknown",
+          });
+          return;
+        }
+
+        const pendingOps = await db
+          .collection(GLM_OPERATIONS_COLLECTION)
+          .where("status", "in", ["pending", "running"])
+          .get();
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const enqueued: Array<{ uid: string; operationId: string }> = [];
+        const adopted: Array<{ uid: string; operationId: string }> = [];
+        const rejected: Array<{ uid: string; reason: string; currentGatewayId?: string | null }> = [];
+
+        for (const uid of [...new Set(uids)]) {
+          const userSnap = await db.collection("users").doc(uid).get();
+          if (!userSnap.exists) {
+            rejected.push({ uid, reason: "user-not-found" });
+            continue;
+          }
+          const userData = userSnap.data() as Record<string, unknown> | undefined;
+          const currentGatewayId = readUserGatewayId(userData);
+          const builderSlug = userData
+            ? resolveCustomerSlug(userData, deps.workspaceSlugsForUser)
+            : null;
+          if (currentGatewayId === toGatewayId) {
+            rejected.push({ uid, reason: "already-on-target", currentGatewayId });
+            continue;
+          }
+          if (sourceGatewayId && currentGatewayId !== sourceGatewayId) {
+            rejected.push({ uid, reason: "source-gateway-mismatch", currentGatewayId });
+            continue;
+          }
+          const existing = pendingOps.docs.find((doc) => {
+            const data = doc.data() as Record<string, unknown>;
+            const input = isPlainRecord(data.input) ? data.input : {};
+            return (
+              data.kind === OP_KIND_MIGRATE_CUSTOMER &&
+              (data.inputUid === uid || input.uid === uid) &&
+              input.toGatewayId === toGatewayId
+            );
+          });
+          if (existing) {
+            adopted.push({ uid, operationId: existing.id });
+            continue;
+          }
+          const operationId = await createOperation(db, {
+            kind: OP_KIND_MIGRATE_CUSTOMER,
+            createdBy,
+            input: {
+              uid,
+              ...(builderSlug ? { builderSlug } : {}),
+              ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
+              toGatewayId,
+              source: "admin-bulk-repair",
+            },
+          });
+          enqueued.push({ uid, operationId });
+        }
+
+        res.status(202).json({
+          targetGatewayId: toGatewayId,
+          sourceGatewayId: sourceGatewayId ?? null,
+          enqueued,
+          adopted,
+          rejected,
+          generatedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.get(
     "/customer-distribution",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
@@ -2330,7 +3730,7 @@ router.post(
 
         const batch = db.batch();
         batch.set(opRef, {
-          kind: "migrate-customer",
+          kind: OP_KIND_MIGRATE_CUSTOMER,
           status: "pending",
           createdBy,
           createdAt: now,
@@ -2750,7 +4150,7 @@ router.post(
         const id = req.params.id as string;
         const body = req.body as Partial<{
           imageTag: string;
-          desiredStatus: "running" | "paused" | "draining" | "retired";
+          desiredStatus: AdminGatewayDesiredStatus;
           sizingTier: string;
         }>;
         const update: Record<string, unknown> = {};
@@ -3121,7 +4521,7 @@ router.get(
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
         const operationId = await createOperation(db, {
-          kind: "migrate-customer",
+          kind: OP_KIND_MIGRATE_CUSTOMER,
           createdBy,
           input: {
             uid,

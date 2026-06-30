@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   configuredAnthropicModelCredentialResolution,
   createAnthropicProviderKeyResolver,
+  createModelBrokerProviderKeyResolver,
 } from "../lib/model-broker-provider-keys.js";
 import type { ModelBrokerTokenRecord } from "../lib/model-broker-tokens.js";
 
@@ -37,6 +38,27 @@ function fakeDb(docs: Record<string, Record<string, unknown> | undefined>) {
 }
 
 describe("createAnthropicProviderKeyResolver", () => {
+  it("serves platform OpenRouter keys from broker environment config", async () => {
+    const resolver = createModelBrokerProviderKeyResolver({
+      db: fakeDb({}) as never,
+      platformKeys: {
+        anthropic: "sk-ant-platform",
+        openrouter: " sk-or-v1-platform ",
+      },
+      readSecret: vi.fn(),
+    });
+
+    await expect(
+      resolver({
+        provider: "openrouter",
+        record: { ...record, provider: "openrouter" },
+      }),
+    ).resolves.toEqual({
+      apiKey: "sk-or-v1-platform",
+      source: "platform",
+    });
+  });
+
   it("represents modelCredential source decisions as named outcomes", () => {
     expect(configuredAnthropicModelCredentialResolution(undefined, undefined)).toEqual({
       kind: "fallback",

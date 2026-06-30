@@ -263,9 +263,14 @@ llmBroker:
   gcpServiceAccount: octogee-llm-broker@octogee.iam.gserviceaccount.com
   upstream:
     anthropicBaseUrl: "https://api.anthropic.com"
+    openrouterBaseUrl: "https://openrouter.ai/api"
   providerSecret:
     name: octogee-anthropic
     key: api_key
+  openrouterProviderSecret:
+    name: octogee-openrouter
+    key: api_key
+    optional: true
   resources:
     requests:
       cpu: 100m

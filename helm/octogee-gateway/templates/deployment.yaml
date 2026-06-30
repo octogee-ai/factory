@@ -218,12 +218,15 @@ spec:
             {{- end }}
             - name: OPERATOR_SHELLS_ENABLED
               value: {{ ternary "true" "false" $operatorShellsEnabled | quote }}
+            {{- $llmBrokerUrl := .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) }}
             # Every class routes anthropic through the LLM broker — no provider key
             # is served from a pod to api.anthropic.com directly. The base URL is
             # pod-level for all; pre-boot-config.ts syncs it into
             # models.providers.anthropic.baseUrl.
             - name: ANTHROPIC_BASE_URL
-              value: {{ .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) | quote }}
+              value: {{ $llmBrokerUrl | quote }}
+            - name: OPENROUTER_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
             {{- if eq $gatewayClass "shared" }}
             # Shared (multi-tenant) pods carry NO pod-level provider key. Each
             # customer-agent's anthropic:default is its OWN per-customer broker token

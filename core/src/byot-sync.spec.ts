@@ -126,6 +126,30 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     expect(desired.coachModelInput).toBeNull();
   });
 
+  it("non-BYOK OpenRouter onboarding mirror derives the platform GLM coach model", () => {
+    const desired = deriveDesiredByotState({
+      ...ON,
+      byotActive: false,
+      provisioning: {
+        openclaw: {
+          status: "complete",
+          initialModelProvider: "openrouter",
+          initialModel: "z-ai/glm-5.2",
+          initialModelReasoningEffort: "high",
+        },
+      },
+    });
+    expect(desired.enabled).toBe(false);
+    expect(desired.input).toBeNull();
+    expect(desired.coachModelInput).toEqual({
+      slug: "tester-70",
+      source: "platform-cohort",
+      provider: "openrouter",
+      model: "z-ai/glm-5.2",
+      reasoningEffort: "high",
+    });
+  });
+
   it("unknown/absent provider falls back to anthropic (api_key default)", () => {
     expect(deriveDesiredByotState({ ...ON }).input).toEqual({
       slug: "tester-70",
@@ -496,6 +520,27 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
       }),
     ).toEqual({
       agents: { list: [{ id, model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] } }] },
+    });
+  });
+
+  it("OpenRouter platform cohort → GLM primary through the platform-openrouter provider", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        source: "platform-cohort",
+        provider: "openrouter",
+        model: "z-ai/glm-5.2",
+        reasoningEffort: "high",
+      }),
+    ).toEqual({
+      agents: {
+        list: [
+          {
+            id,
+            model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] },
+          },
+        ],
+      },
     });
   });
 
@@ -1044,6 +1089,48 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
     expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(reloadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("OpenRouter platform cohort: materializes the OpenRouter broker model and patches the coach", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const materializeAnthropicFn = vi.fn(() => false);
+    const materializeOpenRouterFn = vi.fn(() => true);
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const reloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: {
+          openclaw: {
+            status: "complete",
+            initialModelProvider: "openrouter",
+            initialModel: "z-ai/glm-5.2",
+            initialModelReasoningEffort: "high",
+          },
+        },
+      },
+      baseDeps({
+        applyByotState: applyByotStateFn,
+        materializeAnthropicBroker: materializeAnthropicFn,
+        materializeOpenRouterBroker: materializeOpenRouterFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        triggerSecretsReload: reloadFn,
+      }),
+    );
+
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
+    expect(materializeAnthropicFn).toHaveBeenCalledWith("tester-70");
+    expect(materializeOpenRouterFn).toHaveBeenCalledWith("tester-70", "z-ai/glm-5.2");
+    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+      slug: "tester-70",
+      source: "platform-cohort",
+      provider: "openrouter",
+      model: "z-ai/glm-5.2",
+      reasoningEffort: "high",
+    });
     expect(reloadFn).toHaveBeenCalledTimes(1);
   });
 

@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs";
 
 import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
 import { AGENTS_DIR } from "./config.js";
@@ -10,6 +11,8 @@ import { AGENTS_DIR } from "./config.js";
 // `agent-model-token-<agentId>` the resolver grammar pins (AGENT_MODEL_TOKEN_ID_RE).
 const SECRET_RESOLVER_PROVIDER = "gcp-secret-manager";
 const ANTHROPIC_DEFAULT_PROFILE_ID = "anthropic:default";
+export const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
+const OPENROUTER_PLATFORM_MARKER = ".platform-openrouter-managed";
 
 // Only octogee-<slug>-coach agents have a broker-token resolver grammar
 // (AGENT_MODEL_TOKEN_ID_RE in secret-resolver.mjs). The boot sweep must skip any
@@ -24,7 +27,27 @@ export interface AnthropicBrokerProfileEntry {
   keyRef: { source: "exec"; provider: string; id: string };
 }
 
-export function agentModelTokenSecretId(agentId: string): string {
+export type AgentModelBrokerProvider = "anthropic" | "openrouter";
+
+export interface OpenRouterBrokerModelInput {
+  baseUrl: string;
+  model: string;
+}
+
+export interface OpenRouterBrokerModelsJson {
+  providers: Record<string, {
+    api: "openai-completions";
+    baseUrl: string;
+    apiKey: { source: "exec"; provider: string; id: string };
+    models: Array<{ id: string; name: string }>;
+  }>;
+}
+
+export function agentModelTokenSecretId(
+  agentId: string,
+  provider: AgentModelBrokerProvider = "anthropic",
+): string {
+  if (provider === "openrouter") return `agent-model-token-openrouter-${agentId}`;
   return `agent-model-token-${agentId}`;
 }
 
@@ -35,7 +58,27 @@ export function agentModelTokenProfileEntry(agentId: string): AnthropicBrokerPro
     keyRef: {
       source: "exec",
       provider: SECRET_RESOLVER_PROVIDER,
-      id: agentModelTokenSecretId(agentId),
+      id: agentModelTokenSecretId(agentId, "anthropic"),
+    },
+  };
+}
+
+export function openRouterBrokerModelsJson(
+  agentId: string,
+  input: OpenRouterBrokerModelInput,
+): OpenRouterBrokerModelsJson {
+  return {
+    providers: {
+      [OPENROUTER_BROKER_PROVIDER_ID]: {
+        api: "openai-completions",
+        baseUrl: input.baseUrl,
+        apiKey: {
+          source: "exec",
+          provider: SECRET_RESOLVER_PROVIDER,
+          id: agentModelTokenSecretId(agentId, "openrouter"),
+        },
+        models: [{ id: input.model, name: input.model }],
+      },
     },
   };
 }
@@ -70,6 +113,70 @@ export function upsertAnthropicBrokerProfile(agentDir: string, agentId: string):
     ...store,
     profiles: { ...profiles, [ANTHROPIC_DEFAULT_PROFILE_ID]: desired },
   });
+  return true;
+}
+
+function readJsonFile(pathname: string): Record<string, unknown> {
+  if (!fs.existsSync(pathname)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pathname, "utf8")) as unknown;
+    return asRecord(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function writeJsonFile(pathname: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+}
+
+export function upsertOpenRouterBrokerModel(
+  agentDir: string,
+  agentId: string,
+  input: OpenRouterBrokerModelInput,
+): boolean {
+  const modelsPath = path.join(agentDir, "models.json");
+  const markerPath = path.join(agentDir, OPENROUTER_PLATFORM_MARKER);
+  const current = readJsonFile(modelsPath);
+  const currentProviders = asRecord(current.providers);
+  const desired = openRouterBrokerModelsJson(agentId, input).providers[OPENROUTER_BROKER_PROVIDER_ID];
+  const next = {
+    ...current,
+    providers: {
+      ...currentProviders,
+      [OPENROUTER_BROKER_PROVIDER_ID]: desired,
+    },
+  };
+  const changed =
+    JSON.stringify(current) !== JSON.stringify(next) || !fs.existsSync(markerPath);
+  if (!changed) return false;
+  writeJsonFile(modelsPath, next);
+  fs.writeFileSync(markerPath, `${new Date().toISOString()}\n`, { mode: 0o600 });
+  return true;
+}
+
+export function removeOpenRouterBrokerModel(agentDir: string): boolean {
+  const markerPath = path.join(agentDir, OPENROUTER_PLATFORM_MARKER);
+  if (!fs.existsSync(markerPath)) return false;
+  const modelsPath = path.join(agentDir, "models.json");
+  if (fs.existsSync(modelsPath)) {
+    const current = readJsonFile(modelsPath);
+    const providers = asRecord(current.providers);
+    if (Object.prototype.hasOwnProperty.call(providers, OPENROUTER_BROKER_PROVIDER_ID)) {
+      Reflect.deleteProperty(providers, OPENROUTER_BROKER_PROVIDER_ID);
+      const next =
+        Object.keys(providers).length === 0
+          ? Object.fromEntries(Object.entries(current).filter(([key]) => key !== "providers"))
+          : { ...current, providers };
+      if (Object.keys(next).length === 0) {
+        fs.rmSync(modelsPath);
+      } else {
+        writeJsonFile(modelsPath, next);
+      }
+    }
+  }
+  fs.rmSync(markerPath);
   return true;
 }
 

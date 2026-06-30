@@ -713,6 +713,20 @@ function snapshotBaseFields(
     mattermostUserId,
     customerMmUserId: mattermostUserId,
     greetingPosted: snapshotGreetingPosted(data),
+    ...(stringAt(data, "provisioning.openclaw.initialModelProvider")
+      ? { initialModelProvider: stringAt(data, "provisioning.openclaw.initialModelProvider") }
+      : {}),
+    ...(stringAt(data, "provisioning.openclaw.initialModel")
+      ? { initialModel: stringAt(data, "provisioning.openclaw.initialModel") }
+      : {}),
+    ...(stringAt(data, "provisioning.openclaw.initialModelReasoningEffort")
+      ? {
+          initialModelReasoningEffort: stringAt(
+            data,
+            "provisioning.openclaw.initialModelReasoningEffort",
+          ),
+        }
+      : {}),
     ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
     email: stringAt(data, "email"),
     displayName: stringAt(data, "displayName"),

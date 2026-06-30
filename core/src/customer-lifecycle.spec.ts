@@ -332,6 +332,9 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
       tier: "pro",
       byotActive: true,
       systemConfig: { byot: { provider: "openai", model: "gpt-4o" } },
+      initialModelProvider: "openrouter",
+      initialModel: "z-ai/glm-5.2",
+      initialModelReasoningEffort: "high",
     });
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
     expect(state.calls).toContain("reassertByotForCustomer");
@@ -342,9 +345,14 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(ud.byotActive).toBe(true);
     expect(ud.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
     expect(ud.tier).toBe("pro");
-    expect((ud.provisioning as { openclaw?: { status?: string } })?.openclaw?.status).toBe(
-      "complete",
-    );
+    expect(ud.provisioning).toEqual({
+      openclaw: {
+        status: "complete",
+        initialModelProvider: "openrouter",
+        initialModel: "z-ai/glm-5.2",
+        initialModelReasoningEffort: "high",
+      },
+    });
   });
 
   it("a byot re-assert failure is non-fatal — the mount still completes", async () => {

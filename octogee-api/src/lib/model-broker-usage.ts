@@ -14,7 +14,7 @@ import {
   windowOwnerKey,
 } from "@octogee/shared/types/model-broker-usage";
 
-export type ModelBrokerUsageProvider = "anthropic";
+export type ModelBrokerUsageProvider = "anthropic" | "openrouter";
 export type AnthropicCacheWriteTtl = "5m" | "1h";
 
 export interface AnthropicTokenUsage {
@@ -126,6 +126,10 @@ const ANTHROPIC_PRICING: Record<string, AnthropicPricing> = {
   "haiku-3.5": pricing(0.8, 4, "haiku-3.5"),
 };
 const UNKNOWN_MODEL_FALLBACK_PRICING = pricing(10, 50, "unknown-fable-fallback");
+const OPENROUTER_PRICING: Record<string, AnthropicPricing> = {
+  "z-ai/glm-5.2": pricing(0.94, 3, "openrouter:z-ai/glm-5.2"),
+};
+const UNKNOWN_OPENROUTER_FALLBACK_PRICING = pricing(1, 5, "openrouter:unknown-fallback");
 
 function pricing(inputPerMTok: number, outputPerMTok: number, pricingModel: string): AnthropicPricing {
   return {
@@ -231,6 +235,37 @@ export function estimateAnthropicCost(
     pricingModel: prices.pricingModel,
     cacheWriteTtl,
   };
+}
+
+function openRouterModelPricing(model: string): AnthropicPricing {
+  const normalized = model.toLowerCase();
+  return OPENROUTER_PRICING[normalized] ?? UNKNOWN_OPENROUTER_FALLBACK_PRICING;
+}
+
+export function estimateModelBrokerCost(
+  provider: ModelBrokerUsageProvider,
+  model: string,
+  usage: AnthropicTokenUsage,
+  cacheWriteTtl: AnthropicCacheWriteTtl = "5m",
+): ModelBrokerUsageCost {
+  if (provider === "anthropic") return estimateAnthropicCost(model, usage, cacheWriteTtl);
+  const prices = openRouterModelPricing(model);
+  return {
+    input: usd(usage.inputTokens + usage.cacheCreationInputTokens, prices.inputPerMTok),
+    output: usd(usage.outputTokens, prices.outputPerMTok),
+    cacheRead: usd(usage.cacheReadInputTokens, prices.inputPerMTok),
+    cacheWrite: 0,
+    total:
+      usd(usage.inputTokens + usage.cacheCreationInputTokens, prices.inputPerMTok) +
+      usd(usage.outputTokens, prices.outputPerMTok) +
+      usd(usage.cacheReadInputTokens, prices.inputPerMTok),
+    pricingModel: prices.pricingModel,
+    cacheWriteTtl,
+  };
+}
+
+export function isUnknownOpenRouterPricingModel(pricingModel: string): boolean {
+  return pricingModel === UNKNOWN_OPENROUTER_FALLBACK_PRICING.pricingModel;
 }
 
 export function modelRollupKey(model: string): string {
@@ -392,7 +427,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
     const now = input.now ?? Date.now();
     const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
-    const cost = estimateAnthropicCost(input.model, input.usage, cacheWriteTtl);
+    const cost = estimateModelBrokerCost(input.provider, input.model, input.usage, cacheWriteTtl);
     const eventId = input.eventId ?? crypto.randomUUID();
     if (this.eventIds.has(eventId)) return;
     this.eventIds.add(eventId);
@@ -478,7 +513,7 @@ export function createFirestoreModelBrokerUsageStore(
       const now = input.now ?? Date.now();
       const eventId = input.eventId ?? crypto.randomUUID();
       const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
-      const cost = estimateAnthropicCost(input.model, input.usage, cacheWriteTtl);
+      const cost = estimateModelBrokerCost(input.provider, input.model, input.usage, cacheWriteTtl);
       const windowStartMs = usageWindowStartMs(now);
       const ownerKey = windowOwnerKey(input);
       const eventRef = db.collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION).doc(eventId);

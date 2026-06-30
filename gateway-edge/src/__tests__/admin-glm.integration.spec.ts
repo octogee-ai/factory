@@ -16,6 +16,7 @@ let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = []
 let glmGatewaysDocs: Record<string, Record<string, unknown>> = {};
 let gatewaysDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
+let configDocs: Record<string, Record<string, unknown>> = {};
 let operatorGatewayReservationsDocs: Record<string, Record<string, unknown>> = {};
 
 function readNestedField(data: Record<string, unknown>, path: string): unknown {
@@ -102,6 +103,10 @@ vi.mock("../lib/db", () => {
           const data = operatorGatewayReservationsDocs[docId];
           return { exists: data !== undefined, data: () => data };
         }
+        if (name === "config") {
+          const data = configDocs[docId];
+          return { exists: data !== undefined, data: () => data };
+        }
         return { exists: true, data: () => ({}) };
       },
       set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
@@ -109,6 +114,7 @@ vi.mock("../lib/db", () => {
         if (name === "glmGateways") glmGatewaysDocs[docId] = data;
         if (name === "glmOperations") glmOperationsDocs.unshift({ id: docId, data });
         if (name === "users") usersDocs[docId] = data;
+        if (name === "config") configDocs[docId] = options?.merge ? { ...(configDocs[docId] ?? {}), ...data } : data;
         if (name === "operatorGatewayReservations") operatorGatewayReservationsDocs[docId] = data;
       },
       update: async (data: Record<string, unknown>) => {
@@ -118,6 +124,9 @@ vi.mock("../lib/db", () => {
         }
         if (name === "users" && usersDocs[docId]) {
           usersDocs[docId] = { ...usersDocs[docId], ...data };
+        }
+        if (name === "config" && configDocs[docId]) {
+          configDocs[docId] = { ...configDocs[docId], ...data };
         }
         if (name === "operatorGatewayReservations" && operatorGatewayReservationsDocs[docId]) {
           operatorGatewayReservationsDocs[docId] = { ...operatorGatewayReservationsDocs[docId], ...data };
@@ -209,16 +218,7 @@ function makeBatch() {
       batch: () => makeBatch(),
       doc: (path: string) => {
         const [coll, id] = path.split("/");
-        return {
-          id,
-          get: async () => ({ exists: true, data: () => ({}) }),
-          set: async (data: Record<string, unknown>) => {
-            calls.push({ collection: coll, op: "doc.set", docId: id, data });
-          },
-          update: async (data: Record<string, unknown>) => {
-            calls.push({ collection: coll, op: "doc.update", docId: id, data });
-          },
-        };
+        return makeDocRef(coll, id);
       },
       getAll: async () => [],
     },
@@ -301,6 +301,7 @@ beforeEach(() => {
   glmGatewaysDocs = {};
   gatewaysDocs = { "canary": { gatewayId: "canary", status: "ready" } };
   usersDocs = {};
+  configDocs = {};
   operatorGatewayReservationsDocs = {};
   provisionerCalls.length = 0;
   provisionerNextError = null;
@@ -309,6 +310,439 @@ beforeEach(() => {
   nextBuildsError = null;
   batchCommitFailures = 0;
   process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
+});
+
+describe("Admin onboarding cohorts", () => {
+  it("projects Current and Preview gateway cohorts with counts and overrides", async () => {
+    configDocs.orchestrator = {
+      currentOnboardingCohortId: "anthropic",
+      previewOnboardingCohortId: "glm",
+      onboardingCohorts: {
+        anthropic: {
+          gatewayId: "gw-anthropic",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          label: "Current: Sonnet 4.6",
+        },
+        glm: {
+          gatewayId: "gw-glm",
+          provider: "openrouter",
+          model: "z-ai/glm-5.2",
+          reasoningEffort: "high",
+          label: "Preview: GLM 5.2 High",
+        },
+      },
+      cohortOverrides: { "uid-preview": "glm" },
+    };
+    glmGatewaysDocs = {
+      "gw-anthropic": {
+        gatewayId: "gw-anthropic",
+        gatewayClass: "shared",
+        desiredStatus: "running",
+      },
+      "gw-glm": {
+        gatewayId: "gw-glm",
+        gatewayClass: "shared",
+        desiredStatus: "running",
+      },
+    };
+    gatewaysDocs = {
+      "gw-anthropic": { gatewayId: "gw-anthropic", status: "ready" },
+      "gw-glm": { gatewayId: "gw-glm", status: "ready" },
+    };
+    usersDocs = {
+      "uid-current": {
+        approved: true,
+        username: "current",
+        provisioning: {
+          openclaw: {
+            gatewayId: "gw-anthropic",
+            onboardingCohortId: "anthropic",
+          },
+        },
+      },
+      "uid-preview": {
+        approved: true,
+        username: "preview",
+        provisioning: {
+          openclaw: {
+            gatewayId: "gw-glm",
+            onboardingCohortId: "glm",
+          },
+        },
+      },
+    };
+
+    const res = await request(buildApp()).get("/api/admin/onboarding-cohorts");
+
+    expect(res.status).toBe(200);
+    expect(res.body.config).toMatchObject({
+      currentOnboardingCohortId: "anthropic",
+      previewOnboardingCohortId: "glm",
+      cohortOverrides: { "uid-preview": "glm" },
+    });
+    expect(res.body.cohorts).toEqual([
+      expect.objectContaining({
+        id: "anthropic",
+        role: "current",
+        gatewayId: "gw-anthropic",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        assignmentCount: 1,
+        overrideCount: 0,
+        warnings: [],
+      }),
+      expect.objectContaining({
+        id: "glm",
+        role: "preview",
+        gatewayId: "gw-glm",
+        provider: "openrouter",
+        model: "z-ai/glm-5.2",
+        reasoningEffort: "high",
+        assignmentCount: 1,
+        overrideCount: 1,
+        warnings: [],
+      }),
+    ]);
+    expect(res.body.overrides).toEqual([
+      expect.objectContaining({
+        uid: "uid-preview",
+        cohortId: "glm",
+        username: "preview",
+        currentGatewayId: "gw-glm",
+      }),
+    ]);
+  });
+
+  it("projects policy target, assigned gateway, mounted gateway, and pointer drift separately", async () => {
+    configDocs.orchestrator = {
+      defaultGatewayId: "gw-green",
+      currentOnboardingCohortId: "anthropic",
+      onboardingCohorts: {
+        anthropic: {
+          gatewayId: "gw-blue",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          label: "Current: Sonnet 4.6",
+        },
+      },
+    };
+    glmGatewaysDocs = {
+      "gw-green": {
+        gatewayId: "gw-green",
+        gatewayClass: "shared",
+        desiredStatus: "running",
+        imageTag: "oldsha1",
+      },
+      "gw-blue": {
+        gatewayId: "gw-blue",
+        gatewayClass: "shared",
+        desiredStatus: "running",
+        imageTag: "newsha1",
+      },
+    };
+    gatewaysDocs = {
+      "gw-green": {
+        gatewayId: "gw-green",
+        status: "ready",
+        mountedCustomers: ["alice"],
+      },
+      "gw-blue": {
+        gatewayId: "gw-blue",
+        status: "ready",
+        mountedCustomers: [],
+      },
+    };
+    usersDocs = {
+      "uid-alice": {
+        approved: true,
+        username: "alice",
+        provisioning: {
+          openclaw: {
+            slug: "alice",
+            gatewayId: "gw-green",
+            onboardingCohortId: "anthropic",
+            initialModelProvider: "anthropic",
+            initialModel: "claude-sonnet-4-6",
+          },
+        },
+      },
+    };
+
+    const res = await request(buildApp()).get("/api/admin/onboarding-cohorts");
+
+    expect(res.status).toBe(200);
+    expect(res.body.policy).toMatchObject({
+      defaultGatewayId: "gw-green",
+      currentOnboardingCohortId: "anthropic",
+    });
+    expect(res.body.driftSummary["pointer-drift"]).toBe(1);
+    expect(res.body.customers).toEqual([
+      expect.objectContaining({
+        uid: "uid-alice",
+        slug: "alice",
+        cohortId: "anthropic",
+        policyTargetGatewayId: "gw-blue",
+        assignedGatewayId: "gw-green",
+        mountedGatewayId: "gw-green",
+        initialModelProvider: "anthropic",
+        initialModel: "claude-sonnet-4-6",
+        driftState: "pointer-drift",
+      }),
+    ]);
+    expect(res.body.cohorts[0]).toMatchObject({
+      id: "anthropic",
+      assignmentCount: 1,
+      mountedCount: 0,
+      missingCount: 1,
+    });
+    expect(res.body.gateways).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          gatewayId: "gw-blue",
+          currentTarget: true,
+          assignedCount: 0,
+          mountedCount: 0,
+          driftCount: 1,
+        }),
+        expect.objectContaining({
+          gatewayId: "gw-green",
+          defaultTarget: true,
+          assignedCount: 1,
+          mountedCount: 1,
+          driftCount: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("persists a validated Current and Preview cohort config without platform key material", async () => {
+    glmGatewaysDocs = {
+      "gw-anthropic": {
+        gatewayId: "gw-anthropic",
+        gatewayClass: "shared",
+        desiredStatus: "running",
+      },
+      "gw-glm": {
+        gatewayId: "gw-glm",
+        gatewayClass: "shared",
+        desiredStatus: "running",
+      },
+    };
+
+    const res = await request(buildApp())
+      .patch("/api/admin/onboarding-cohorts")
+      .send({
+        currentOnboardingCohortId: "anthropic",
+        previewOnboardingCohortId: "glm",
+        onboardingCohorts: {
+          anthropic: {
+            gatewayId: "gw-anthropic",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            label: "Current: Sonnet 4.6",
+          },
+          glm: {
+            gatewayId: "gw-glm",
+            provider: "openrouter",
+            model: "z-ai/glm-5.2",
+            reasoningEffort: "high",
+            label: "Preview: GLM 5.2 High",
+          },
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(configDocs.orchestrator).toMatchObject({
+      currentOnboardingCohortId: "anthropic",
+      previewOnboardingCohortId: "glm",
+      onboardingCohorts: {
+        anthropic: {
+          gatewayId: "gw-anthropic",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+        glm: {
+          gatewayId: "gw-glm",
+          provider: "openrouter",
+          model: "z-ai/glm-5.2",
+          reasoningEffort: "high",
+        },
+      },
+      onboardingCohortsUpdatedBy: "admin-user",
+    });
+    expect(res.body.config.currentOnboardingCohortId).toBe("anthropic");
+  });
+
+  it("rejects cohort configs that include platform API key material", async () => {
+    glmGatewaysDocs = {
+      "gw-glm": {
+        gatewayId: "gw-glm",
+        gatewayClass: "shared",
+        desiredStatus: "running",
+      },
+    };
+
+    const res = await request(buildApp())
+      .patch("/api/admin/onboarding-cohorts")
+      .send({
+        currentOnboardingCohortId: "glm",
+        onboardingCohorts: {
+          glm: {
+            gatewayId: "gw-glm",
+            provider: "openrouter",
+            model: "z-ai/glm-5.2",
+            label: "Preview: GLM 5.2 High",
+            platformApiKey: "sk-or-v1-secret",
+          },
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/platform api key/i);
+    expect(configDocs.orchestrator).toBeUndefined();
+  });
+
+  it("rejects cohorts pointed at dedicated gateways", async () => {
+    glmGatewaysDocs = {
+      "gw-dedicated": {
+        gatewayId: "gw-dedicated",
+        gatewayClass: "builder",
+        desiredStatus: "running",
+      },
+    };
+
+    const res = await request(buildApp())
+      .patch("/api/admin/onboarding-cohorts")
+      .send({
+        currentOnboardingCohortId: "glm",
+        onboardingCohorts: {
+          glm: {
+            gatewayId: "gw-dedicated",
+            provider: "openrouter",
+            model: "z-ai/glm-5.2",
+            label: "Preview: GLM 5.2 High",
+          },
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/shared gateway/i);
+    expect(configDocs.orchestrator).toBeUndefined();
+  });
+
+  it("sets and clears a per-user Preview override", async () => {
+    configDocs.orchestrator = {
+      currentOnboardingCohortId: "anthropic",
+      previewOnboardingCohortId: "glm",
+      onboardingCohorts: {
+        anthropic: {
+          gatewayId: "gw-anthropic",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          label: "Current: Sonnet 4.6",
+        },
+        glm: {
+          gatewayId: "gw-glm",
+          provider: "openrouter",
+          model: "z-ai/glm-5.2",
+          label: "Preview: GLM 5.2 High",
+        },
+      },
+      cohortOverrides: {},
+    };
+    usersDocs["uid-preview"] = { approved: true, username: "preview" };
+
+    const put = await request(buildApp()).put(
+      "/api/admin/onboarding-cohorts/glm/overrides/uid-preview",
+    );
+
+    expect(put.status).toBe(200);
+    expect(configDocs.orchestrator.cohortOverrides).toEqual({
+      "uid-preview": "glm",
+    });
+    expect(put.body.config.cohortOverrides).toEqual({ "uid-preview": "glm" });
+
+    const del = await request(buildApp()).delete(
+      "/api/admin/onboarding-cohorts/glm/overrides/uid-preview",
+    );
+
+    expect(del.status).toBe(200);
+    expect(configDocs.orchestrator.cohortOverrides).toEqual({});
+    expect(del.body.config.cohortOverrides).toEqual({});
+  });
+
+  it("bulk-enqueues repair migrations and adopts duplicate in-flight uid/target operations", async () => {
+    gatewaysDocs = {
+      default: { gatewayId: "default", status: "ready", mountedCustomers: ["alice", "bob"] },
+      canary: { gatewayId: "canary", status: "ready", mountedCustomers: [] },
+    };
+    usersDocs = {
+      "uid-alice": {
+        approved: true,
+        username: "alice",
+        provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+      },
+      "uid-bob": {
+        approved: true,
+        username: "bob",
+        provisioning: { openclaw: { slug: "bob", gatewayId: "default" } },
+      },
+      "uid-cara": {
+        approved: true,
+        username: "cara",
+        provisioning: { openclaw: { slug: "cara", gatewayId: "canary" } },
+      },
+    };
+    glmOperationsDocs = [
+      {
+        id: "op-existing",
+        data: {
+          kind: "migrate-customer",
+          status: "running",
+          inputUid: "uid-bob",
+          input: { uid: "uid-bob", fromGatewayId: "default", toGatewayId: "canary" },
+        },
+      },
+    ];
+
+    const res = await request(buildApp())
+      .post("/api/admin/gateway-migrations/bulk")
+      .send({
+        uids: ["uid-alice", "uid-bob", "uid-cara", "uid-missing"],
+        toGatewayId: "canary",
+      });
+
+    expect(res.status).toBe(202);
+    expect(res.body.adopted).toEqual([{ uid: "uid-bob", operationId: "op-existing" }]);
+    expect(res.body.enqueued).toEqual([
+      expect.objectContaining({ uid: "uid-alice" }),
+    ]);
+    expect(res.body.rejected).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ uid: "uid-cara", reason: "already-on-target" }),
+        expect.objectContaining({ uid: "uid-missing", reason: "user-not-found" }),
+      ]),
+    );
+    const createdMigrateOps = calls.filter(
+      (call) =>
+        call.collection === "glmOperations" &&
+        call.data?.kind === "migrate-customer" &&
+        (call.data?.input as { uid?: string } | undefined)?.uid === "uid-alice",
+    );
+    expect(createdMigrateOps).toHaveLength(1);
+    expect(createdMigrateOps[0].data).toMatchObject({
+      gatewayId: "canary",
+      inputUid: "uid-alice",
+      input: {
+        uid: "uid-alice",
+        builderSlug: "alice",
+        fromGatewayId: "default",
+        toGatewayId: "canary",
+        source: "admin-bulk-repair",
+      },
+    });
+  });
 });
 
 describe("POST /api/admin/gateways — create desired state + op", () => {

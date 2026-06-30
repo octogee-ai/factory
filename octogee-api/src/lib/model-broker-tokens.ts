@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
 
-export type ModelBrokerProvider = "anthropic";
+export type ModelBrokerProvider = "anthropic" | "openrouter";
 
 export interface ModelBrokerTokenLimits {
   spendWindowUsd: number | null;
@@ -137,7 +137,7 @@ function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerToke
     tokenHash: data.tokenHash,
     gatewayId: data.gatewayId,
     ownerUid,
-    provider: "anthropic",
+    provider: data.provider,
     capped: true,
     secretName: data.secretName,
     createdAt: data.createdAt,
@@ -175,12 +175,13 @@ function normalizeModelBrokerTokenTrace(
 function recordHasRequiredShape(data: Record<string, unknown> | undefined): data is Record<string, unknown> & {
   tokenHash: string;
   gatewayId: string;
+  provider: ModelBrokerProvider;
   secretName: string;
   createdAt: number;
 } {
   if (!data) return false;
   return [
-    data.provider === "anthropic",
+    data.provider === "anthropic" || data.provider === "openrouter",
     data.capped === true,
     typeof data.tokenHash === "string",
     typeof data.gatewayId === "string" && data.gatewayId.length > 0,

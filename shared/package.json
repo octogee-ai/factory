@@ -89,6 +89,10 @@
       "types": "./dist/types/model-broker-usage.d.ts",
       "default": "./dist/types/model-broker-usage.js"
     },
+    "./types/onboarding-cohorts": {
+      "types": "./dist/types/onboarding-cohorts.d.ts",
+      "default": "./dist/types/onboarding-cohorts.js"
+    },
     "./types/model-credentials": {
       "types": "./dist/types/model-credentials.d.ts",
       "default": "./dist/types/model-credentials.js"
@@ -188,6 +192,9 @@
       ],
       "types/model-broker-usage": [
         "dist/types/model-broker-usage.d.ts"
+      ],
+      "types/onboarding-cohorts": [
+        "dist/types/onboarding-cohorts.d.ts"
       ],
       "types/model-credentials": [
         "dist/types/model-credentials.d.ts"

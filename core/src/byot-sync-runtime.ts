@@ -31,6 +31,10 @@ import {
   usesLlmBrokerToken,
 } from "./config.js";
 import { upsertAnthropicBrokerProfile } from "./agent-model-token-materializer.js";
+import {
+  removeOpenRouterBrokerModel,
+  upsertOpenRouterBrokerModel,
+} from "./agent-model-token-materializer.js";
 
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -376,6 +380,7 @@ export interface SyncByotForCustomerDeps {
   requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload?: typeof triggerSecretsReload;
   materializeAnthropicBroker?: (slug: string) => boolean;
+  materializeOpenRouterBroker?: (slug: string, model: string) => boolean;
 }
 
 type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
@@ -389,6 +394,7 @@ interface SyncByotActions {
   requestGatewayRestart: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload: typeof triggerSecretsReload;
   materializeAnthropicBroker: (slug: string) => boolean;
+  materializeOpenRouterBroker: (slug: string, model: string) => boolean;
 }
 
 function materializeAnthropicBroker(slug: string): boolean {
@@ -396,6 +402,20 @@ function materializeAnthropicBroker(slug: string): boolean {
   return upsertAnthropicBrokerProfile(path.join(AGENTS_DIR, agentId, "agent"), agentId);
 }
 
+function configuredOpenRouterBaseUrl(): string | null {
+  const raw = process.env.OPENROUTER_BASE_URL?.trim();
+  return raw || null;
+}
+
+function materializeOpenRouterBroker(slug: string, model: string): boolean {
+  const agentId = `octogee-${slug}-coach`;
+  const agentDir = path.join(AGENTS_DIR, agentId, "agent");
+  const baseUrl = configuredOpenRouterBaseUrl();
+  if (!baseUrl) return removeOpenRouterBrokerModel(agentDir);
+  return upsertOpenRouterBrokerModel(agentDir, agentId, { baseUrl, model });
+}
+
+// eslint-disable-next-line complexity -- Dependency injection defaults are intentionally centralized for runtime and tests.
 function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
   return {
     applyByotState: deps?.applyByotState ?? applyByotState,
@@ -406,6 +426,8 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
     materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
+    materializeOpenRouterBroker:
+      deps?.materializeOpenRouterBroker ?? materializeOpenRouterBroker,
   };
 }
 
@@ -497,6 +519,7 @@ async function syncOperatorByotState(
 // fallback for BYOS / non-anthropic-BYOK ones — so it is always (re)asserted, the
 // auth-profile store is never torn down, and byosub OAuth + custom-provider
 // models.json coexist alongside it.
+// eslint-disable-next-line complexity -- Shared gateways reconcile BYOT, broker profiles, OAuth allowlists, and cohort models in one ordered pass.
 async function syncSharedBrokerByotState(
   slug: string,
   desired: DesiredByotState,
@@ -518,6 +541,16 @@ async function syncSharedBrokerByotState(
   );
 
   const materialized = actions.materializeAnthropicBroker(slug);
+  const platformOpenRouterModel =
+    desired.coachModelInput &&
+    "source" in desired.coachModelInput &&
+    desired.coachModelInput.source === "platform-cohort" &&
+    desired.coachModelInput.provider === "openrouter"
+      ? desired.coachModelInput.model
+      : null;
+  const materializedOpenRouter = platformOpenRouterModel
+    ? actions.materializeOpenRouterBroker(slug, platformOpenRouterModel)
+    : false;
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
 
   const patched = restore.present && desired.coachModelInput
@@ -525,7 +558,15 @@ async function syncSharedBrokerByotState(
     : false;
   const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
 
-  if ((changed || restore.restored || materialized || runtimePatched.patched || patched) && !restartRequested) {
+  if (
+    (changed ||
+      restore.restored ||
+      materialized ||
+      materializedOpenRouter ||
+      runtimePatched.patched ||
+      patched) &&
+    !restartRequested
+  ) {
     await actions.triggerSecretsReload();
   }
 }
