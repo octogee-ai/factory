@@ -691,7 +691,6 @@ SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octo
 # Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy
 for sm_secret in \
   SOCIAL_NOTIFICATION_BEARER_TOKEN \
-  MM_ADMIN_TOKEN \
   GITEA_TOKEN \
   STRIPE_SECRET_KEY \
   STRIPE_WEBHOOK_SECRET \

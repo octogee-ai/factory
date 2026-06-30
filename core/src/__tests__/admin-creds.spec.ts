@@ -1,23 +1,19 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const SECRET = "projects/octogee/secrets/MM_ADMIN_TOKEN";
-
 const h = vi.hoisted(() => ({
-  addSecretVersion: vi.fn(),
-  listSecretVersions: vi.fn(),
-  destroySecretVersion: vi.fn(async () => [{}]),
-  createSecret: vi.fn(async () => [{}]),
   setSpy: vi.fn(async () => {}),
   getMmAdminToken: vi.fn(),
   mmApiCall: vi.fn(),
+  addSecretVersion: vi.fn(async () => [{ name: "v1" }]),
 }));
 
+// Secret Manager must NOT be touched anymore — mocked purely as a regression guard.
 vi.mock("@google-cloud/secret-manager", () => ({
   SecretManagerServiceClient: class {
     addSecretVersion = h.addSecretVersion;
-    listSecretVersions = h.listSecretVersions;
-    destroySecretVersion = h.destroySecretVersion;
-    createSecret = h.createSecret;
+    listSecretVersions = vi.fn(async () => [[]]);
+    destroySecretVersion = vi.fn(async () => [{}]);
+    createSecret = vi.fn(async () => [{}]);
   },
 }));
 vi.mock("../firebase.js", () => ({ db: { doc: () => ({ set: h.setSpy }) } }));
@@ -26,65 +22,42 @@ vi.mock("../mattermost/client.js", () => ({
   mmApiCall: h.mmApiCall,
 }));
 vi.mock("../config.js", () => ({ log: vi.fn() }));
-vi.mock("../secret-manager.js", () => ({
-  SINGLE_REGION_REPLICATION: { userManaged: { replicas: [{ location: "us-central1" }] } },
-}));
-vi.mock("firebase-admin/firestore", () => ({
-  FieldValue: { serverTimestamp: () => "ts" },
-}));
+vi.mock("firebase-admin/firestore", () => ({ FieldValue: { serverTimestamp: () => "ts" } }));
 
 import { ensureAdminCredentials } from "../mattermost/admin-creds.js";
 
-const enabled = (n: number) => ({ name: `${SECRET}/versions/${n}`, state: "ENABLED" });
-
-describe("ensureAdminCredentials — secret version hygiene", () => {
+describe("ensureAdminCredentials", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.MM_URL = "http://mm";
     process.env.MM_ADMIN_USER_ID = "admin-id";
-    process.env.GCLOUD_PROJECT = "octogee";
-    h.getMmAdminToken.mockResolvedValue("fresh-token");
+    delete process.env.API_PUBLIC_URL;
+    h.getMmAdminToken.mockResolvedValue("tok");
   });
 
-  it("destroys superseded enabled versions, keeping the one just written", async () => {
-    h.addSecretVersion.mockResolvedValue([{ name: `${SECRET}/versions/21` }]);
-    h.listSecretVersions.mockResolvedValue([[enabled(21), enabled(20), enabled(19)]]);
-
+  it("records the admin user id + proxy url in Firestore", async () => {
+    process.env.API_PUBLIC_URL = "https://api.test";
     await ensureAdminCredentials();
-
-    expect(h.addSecretVersion).toHaveBeenCalledOnce();
-    const destroyed = h.destroySecretVersion.mock.calls.map((c) => c[0].name);
-    expect(destroyed).toEqual([`${SECRET}/versions/20`, `${SECRET}/versions/19`]);
-    expect(destroyed).not.toContain(`${SECRET}/versions/21`);
+    expect(h.setSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "admin-id", proxyUrl: "https://api.test" }),
+      { merge: true },
+    );
   });
 
-  it("destroys nothing when the new version is the only enabled one", async () => {
-    h.addSecretVersion.mockResolvedValue([{ name: `${SECRET}/versions/1` }]);
-    h.listSecretVersions.mockResolvedValue([[enabled(1)]]);
-
+  it("does NOT write the admin token to Secret Manager (deprecated cruft removed)", async () => {
     await ensureAdminCredentials();
-
-    expect(h.destroySecretVersion).not.toHaveBeenCalled();
+    expect(h.addSecretVersion).not.toHaveBeenCalled();
   });
 
-  it("prunes after creating the secret on first run (NOT_FOUND path)", async () => {
-    h.addSecretVersion
-      .mockRejectedValueOnce({ code: 5 })
-      .mockResolvedValueOnce([{ name: `${SECRET}/versions/1` }]);
-    h.listSecretVersions.mockResolvedValue([[enabled(1)]]);
-
+  it("skips when MM_URL is unset", async () => {
+    delete process.env.MM_URL;
     await ensureAdminCredentials();
-
-    expect(h.createSecret).toHaveBeenCalledOnce();
-    expect(h.destroySecretVersion).not.toHaveBeenCalled();
+    expect(h.setSpy).not.toHaveBeenCalled();
   });
 
-  it("does not prune when the token write fails (no version added)", async () => {
-    h.addSecretVersion.mockRejectedValue({ code: 7, message: "permission denied" });
-
+  it("skips when no admin token is available", async () => {
+    h.getMmAdminToken.mockResolvedValue("");
     await ensureAdminCredentials();
-
-    expect(h.listSecretVersions).not.toHaveBeenCalled();
-    expect(h.destroySecretVersion).not.toHaveBeenCalled();
+    expect(h.setSpy).not.toHaveBeenCalled();
   });
 });
