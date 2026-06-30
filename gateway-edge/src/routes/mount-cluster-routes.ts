@@ -52,66 +52,93 @@ export interface MountClusterRoutesOpts {
   mattermostMintRoutes?: Router;
 }
 
+type RouteHandler = RequestHandler | Router;
+
+const WORKSPACE_ROUTES: readonly RouteHandler[] = [
+  requireAuth,
+  workspaceDisplayNameRoutes,
+  workspaceFilesRoutes,
+  workspaceIssuesRoutes,
+  workspacePulseRoutes,
+  workspaceSaveRoutes,
+  workspaceUploadRoutes,
+  workspaceDeleteBlobRoutes,
+  workspaceExtractZipRoutes,
+  workspaceImportRepoRoutes,
+];
+
+const PROJECT_ROUTES: readonly RouteHandler[] = [
+  projectsReadmeRoutes,
+  projectsDeleteRoutes,
+  requireAuth,
+  projectsCreateRoutes,
+  projectsRetryRoutes,
+  projectsJoinLeaveRoutes,
+  projectsStarRoutes,
+  projectsMembersRoutes,
+];
+
+const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
+  ["/api/auth/email", authEmailRoutes],
+  ["/api/sharing", sharingRoutes],
+  ["/api/email/unsubscribe", emailUnsubscribeRoutes],
+  ["/api/email", emailWebhookRoutes],
+  ["/api/entities", entitiesRoutes],
+  ["/api/mattermost", mattermostRoutes],
+  ["/api/openclaw", openclawRoutes],
+  ["/api/billing", billingRoutes],
+  ["/api/model-credentials", modelCredentialRoutes],
+  ["/api/legal", legalAcceptRoutes],
+  ["/api/admin", adminRoutes],
+  ["/api/invites", inviteRoutes],
+  ["/api/integrations", integrationRoutes],
+  ["/api/connect", connectRoutes],
+  ["/api/discord", discordRoutes],
+  ["/api/notifications", notificationRoutes],
+  ["/api/profile", profileRoutes],
+  ["/api/onboarding", onboardingRoutes],
+  ["/api/posts", postsRoutes],
+  ["/api/agents", agentRoutes],
+  ["/api/builder", builderGatewaysRoutes],
+  ["/api/shells", shellsRoutes],
+];
+
+const INTERNAL_ROUTES: readonly (readonly [string, RouteHandler])[] = [
+  ["/internal/agents", agentRoutes],
+  ["/internal/notifications", notificationRoutes],
+  ["/internal/notifications", internalNotificationRoutes],
+  ["/internal/workspace", internalWorkspaceCommitRoutes],
+  ["/internal/project", internalProjectPublishRoutes],
+];
+
 export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = {}): void {
   if (opts.mmRestProxyHandler) {
     app.all("/api/v4/*splat", opts.mmRestProxyHandler);
   }
 
-  const WORKSPACE = "/api/workspace";
-  app.use(WORKSPACE, requireAuth);
-  app.use(WORKSPACE, workspaceDisplayNameRoutes);
-  app.use(WORKSPACE, workspaceFilesRoutes);
-  app.use(WORKSPACE, workspaceIssuesRoutes);
-  app.use(WORKSPACE, workspacePulseRoutes);
-  app.use(WORKSPACE, workspaceSaveRoutes);
-  app.use(WORKSPACE, workspaceUploadRoutes);
-  app.use(WORKSPACE, workspaceDeleteBlobRoutes);
-  app.use(WORKSPACE, workspaceExtractZipRoutes);
-  app.use(WORKSPACE, workspaceImportRepoRoutes);
-
-  const PROJECTS = "/api/projects";
-  app.use(PROJECTS, projectsReadmeRoutes);
-  app.use(PROJECTS, projectsDeleteRoutes);
-  app.use(PROJECTS, requireAuth);
-  app.use(PROJECTS, projectsCreateRoutes);
-  app.use(PROJECTS, projectsRetryRoutes);
-  app.use(PROJECTS, projectsJoinLeaveRoutes);
-  app.use(PROJECTS, projectsStarRoutes);
-  app.use(PROJECTS, projectsMembersRoutes);
+  mountGroup(app, "/api/workspace", WORKSPACE_ROUTES);
+  mountGroup(app, "/api/projects", PROJECT_ROUTES);
 
   if (opts.mattermostMintRoutes) {
     app.use("/api/auth/mattermost", opts.mattermostMintRoutes);
   }
-  app.use("/api/auth/email", authEmailRoutes);
-  app.use("/api/sharing", sharingRoutes);
+
   // Raw-body endpoints under /api/email/* (the Resend webhook) MUST be listed
   // in RAW_BODY_WEBHOOK_PATHS (see body-parsers.ts) or signature verification
   // breaks. Non-raw-body sub-routes (e.g. urlencoded one-click unsubscribe)
   // fall through to normal parsing and are fine alongside.
-  app.use("/api/email/unsubscribe", emailUnsubscribeRoutes);
-  app.use("/api/email", emailWebhookRoutes);
-  app.use("/api/entities", entitiesRoutes);
-  app.use("/api/mattermost", mattermostRoutes);
-  app.use("/api/openclaw", openclawRoutes);
-  app.use("/api/billing", billingRoutes);
-  app.use("/api/model-credentials", modelCredentialRoutes);
-  app.use("/api/legal", legalAcceptRoutes);
-  app.use("/api/admin", adminRoutes);
-  app.use("/api/invites", inviteRoutes);
-  app.use("/api/integrations", integrationRoutes);
-  app.use("/api/connect", connectRoutes);
-  app.use("/api/discord", discordRoutes);
-  app.use("/api/notifications", notificationRoutes);
-  app.use("/api/profile", profileRoutes);
-  app.use("/api/onboarding", onboardingRoutes);
-  app.use("/api/posts", postsRoutes);
-  app.use("/api/agents", agentRoutes);
-  app.use("/api/builder", builderGatewaysRoutes);
-  app.use("/api/shells", shellsRoutes);
+  mountRouteTable(app, PUBLIC_API_ROUTES);
+  mountRouteTable(app, INTERNAL_ROUTES);
+}
 
-  app.use("/internal/agents", agentRoutes);
-  app.use("/internal/notifications", notificationRoutes);
-  app.use("/internal/notifications", internalNotificationRoutes);
-  app.use("/internal/workspace", internalWorkspaceCommitRoutes);
-  app.use("/internal/project", internalProjectPublishRoutes);
+function mountGroup(app: Express, path: string, routes: readonly RouteHandler[]): void {
+  for (const route of routes) {
+    app.use(path, route);
+  }
+}
+
+function mountRouteTable(app: Express, routes: readonly (readonly [string, RouteHandler])[]): void {
+  for (const [path, route] of routes) {
+    app.use(path, route);
+  }
 }

@@ -84,4 +84,58 @@ describe("mountClusterRoutes", () => {
       "/internal/project",
     ]);
   });
+
+  it("mounts the public API table in the intended order", () => {
+    const app = recordingApp();
+
+    mountClusterRoutes(app);
+
+    expect(app.calls.map((c) => c.path)).toEqual([
+      "/api/workspace",
+      "/api/workspace",
+      "/api/workspace",
+      "/api/workspace",
+      "/api/workspace",
+      "/api/workspace",
+      "/api/workspace",
+      "/api/workspace",
+      "/api/workspace",
+      "/api/workspace",
+      "/api/projects",
+      "/api/projects",
+      "/api/projects",
+      "/api/projects",
+      "/api/projects",
+      "/api/projects",
+      "/api/projects",
+      "/api/projects",
+      "/api/auth/email",
+      "/api/sharing",
+      "/api/email/unsubscribe",
+      "/api/email",
+      "/api/entities",
+      "/api/mattermost",
+      "/api/openclaw",
+      "/api/billing",
+      "/api/model-credentials",
+      "/api/legal",
+      "/api/admin",
+      "/api/invites",
+      "/api/integrations",
+      "/api/connect",
+      "/api/discord",
+      "/api/notifications",
+      "/api/profile",
+      "/api/onboarding",
+      "/api/posts",
+      "/api/agents",
+      "/api/builder",
+      "/api/shells",
+      "/internal/agents",
+      "/internal/notifications",
+      "/internal/notifications",
+      "/internal/workspace",
+      "/internal/project",
+    ]);
+  });
 });
