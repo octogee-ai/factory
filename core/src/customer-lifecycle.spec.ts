@@ -6,6 +6,7 @@ import {
   _inFlightUidsHasForTests,
   pubKeysMatch,
   removeCustomerFromGateway,
+  restoreCustomerRuntimeFromSnapshot,
   type CustomerLifecycleAdapter,
   type UserSnapshot,
   type MmUpdate,
@@ -1156,6 +1157,33 @@ releaseFirst();
     ]);
     expect(resA.steps).toContain("verify-channel-ready");
     expect(resB.steps).toContain("verify-channel-ready");
+  });
+});
+
+describe("restoreCustomerRuntimeFromSnapshot — same-uid in-flight dedup", () => {
+  beforeEach(() => {
+    _resetInFlightUidsForTests();
+  });
+
+  it("throws a deadline error and releases the in-flight uid when a restore step hangs past mountDeadlineMs", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    const realAdapter = makeAdapter(state);
+    const hangingAdapter: CustomerLifecycleAdapter = {
+      ...realAdapter,
+      hasCustomerSshKey: () => true,
+      readLocalCustomerPubKey: () => "ssh-pubkey",
+      readGiteaCustomerPubKey: async () => new Promise(() => {}),
+    };
+
+    await expect(
+      restoreCustomerRuntimeFromSnapshot(hangingAdapter, state.user!, { mountDeadlineMs: 25 }),
+    ).rejects.toThrow(/mountDeadlineMs.*25ms.*exceeded/i);
+
+    expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
+
+    const state2 = makeState(snap({ status: "complete" }), emptyDisk());
+    const retry = await restoreCustomerRuntimeFromSnapshot(makeAdapter(state2), state2.user!);
+    expect(retry.steps).toContain("verify-channel-ready");
   });
 });
 

@@ -269,6 +269,26 @@ export async function addCustomerToGateway(
   uid: string,
   opts: AddCustomerOptions = {},
 ): Promise<AddCustomerResult> {
+  return runUidMountExclusive(uid, opts, (signal) =>
+    addCustomerToGatewayInner(adapter, uid, { ...opts, signal }),
+  );
+}
+
+export async function restoreCustomerRuntimeFromSnapshot(
+  adapter: CustomerLifecycleAdapter,
+  snapshot: UserSnapshot,
+  opts: AddCustomerOptions = {},
+): Promise<RestoreCustomerRuntimeResult> {
+  return runUidMountExclusive(snapshot.uid, opts, (signal) =>
+    restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, { ...opts, signal }),
+  );
+}
+
+async function runUidMountExclusive<T>(
+  uid: string,
+  opts: AddCustomerOptions,
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   if (inFlightUids.has(uid)) {
     throw new ConcurrentMountError(uid);
   }
@@ -279,7 +299,7 @@ export async function addCustomerToGateway(
     `[add:${uid}] mountDeadlineMs=${deadlineMs}ms exceeded — a step is hung; releasing in-flight lock so the next retry can run`,
   );
 
-const externalAbortListener = () => controller.abort(opts.signal?.reason);
+  const externalAbortListener = () => controller.abort(opts.signal?.reason);
   if (opts.signal?.aborted) {
     controller.abort(opts.signal.reason);
   } else if (opts.signal) {
@@ -291,30 +311,11 @@ const externalAbortListener = () => controller.abort(opts.signal?.reason);
   }
   opts.onSignalCreated?.(controller.signal);
   try {
-    return await raceWithSignal(
-      addCustomerToGatewayInner(adapter, uid, { ...opts, signal: controller.signal }),
-      controller.signal,
-    );
+    return await raceWithSignal(work(controller.signal), controller.signal);
   } finally {
     if (timer) clearTimeout(timer);
     opts.signal?.removeEventListener("abort", externalAbortListener);
     inFlightUids.delete(uid);
-  }
-}
-
-export async function restoreCustomerRuntimeFromSnapshot(
-  adapter: CustomerLifecycleAdapter,
-  snapshot: UserSnapshot,
-  opts: AddCustomerOptions = {},
-): Promise<RestoreCustomerRuntimeResult> {
-  if (inFlightUids.has(snapshot.uid)) {
-    throw new ConcurrentMountError(snapshot.uid);
-  }
-  inFlightUids.add(snapshot.uid);
-  try {
-    return await restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts);
-  } finally {
-    inFlightUids.delete(snapshot.uid);
   }
 }
 

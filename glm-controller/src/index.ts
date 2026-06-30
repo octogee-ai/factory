@@ -84,8 +84,11 @@ import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
 import {
   buildSiblingDoc,
+  moveSharedPlacementPointersInConfig,
+  restoreSharedPlacementPointersInConfig,
   runBlueGreenRollout,
   type BlueGreenRolloutDeps,
+  type SharedPlacementPointerSnapshot,
 } from "./handlers/rollout-bluegreen.js";
 import { waitForGatewayTrafficReady } from "./traffic-readiness.js";
 import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
@@ -1996,6 +1999,27 @@ async function buildHandlers(
       runBlueGreenMigrateOp(
         { uid, fromGatewayId, toGatewayId },
         {
+          findExistingMigrateOp: async ({ uid: u, fromGatewayId: from, toGatewayId: to }) => {
+            const snap = await db
+              .collection(GLM_OPERATIONS_COLLECTION)
+              .where("kind", "==", "migrate-customer")
+              .where("inputUid", "==", u)
+              .where("status", "in", ["pending", "running"])
+              .get();
+            for (const doc of snap.docs) {
+              const data = doc.data() as { input?: Record<string, unknown> };
+              const input = data.input;
+              if (
+                input?.uid === u &&
+                input.fromGatewayId === from &&
+                input.toGatewayId === to &&
+                input.source === "rollout-bluegreen"
+              ) {
+                return doc.id;
+              }
+            }
+            return null;
+          },
           enqueueMigrateOp: async ({ uid: u, fromGatewayId: from, toGatewayId: to }) => {
             const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
             await opRef.set(
@@ -2021,15 +2045,36 @@ async function buildHandlers(
           log: logFn,
         },
       ),
-    isSharedDefaultPool: async (gatewayId) => {
-      const configured = (await db.doc(ORCHESTRATOR_CONFIG_DOC_PATH).get()).data()
-        ?.defaultGatewayId;
-      return typeof configured === "string" && configured === gatewayId;
+    hasSharedPlacementPointer: async (gatewayId) => {
+      const data = (await db.doc(ORCHESTRATOR_CONFIG_DOC_PATH).get()).data() ?? {};
+      return moveSharedPlacementPointersInConfig(data, gatewayId, gatewayId).changed;
     },
-    repointSharedDefault: async (toGatewayId) => {
-      await db
-        .doc(ORCHESTRATOR_CONFIG_DOC_PATH)
-        .set({ defaultGatewayId: toGatewayId }, { merge: true });
+    moveSharedPlacementPointers: async ({ sourceGatewayId, toGatewayId }) => {
+      const ref = db.doc(ORCHESTRATOR_CONFIG_DOC_PATH);
+      let result: { moved: boolean; snapshot: SharedPlacementPointerSnapshot | null } = {
+        moved: false,
+        snapshot: null,
+      };
+      await db.runTransaction(async (txn) => {
+        const snap = await txn.get(ref);
+        const current = snap.exists ? (snap.data() as Record<string, unknown>) : {};
+        const moved = moveSharedPlacementPointersInConfig(
+          current,
+          sourceGatewayId,
+          toGatewayId,
+        );
+        result = { moved: moved.changed, snapshot: moved.changed ? moved.snapshot : null };
+        if (moved.changed) txn.set(ref, moved.next);
+      });
+      return result;
+    },
+    restoreSharedPlacementPointers: async (snapshot) => {
+      const ref = db.doc(ORCHESTRATOR_CONFIG_DOC_PATH);
+      await db.runTransaction(async (txn) => {
+        const snap = await txn.get(ref);
+        const current = snap.exists ? (snap.data() as Record<string, unknown>) : {};
+        txn.set(ref, restoreSharedPlacementPointersInConfig(current, snapshot));
+      });
     },
     retireInstance: ({ gatewayId }, ctx) => retireInstanceLightly(gatewayId, ctx),
     cleanupFailedSibling: async (gatewayId) => {
