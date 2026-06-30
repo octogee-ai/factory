@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-hardcoded-ip -- apiserver egress CIDR fixtures */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildHelmTargetMap,

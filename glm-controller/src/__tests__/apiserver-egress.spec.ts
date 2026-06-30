@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-hardcoded-ip -- apiserver endpoint/ClusterIP fixtures */
 import { describe, expect, it, vi } from "vitest";
 
 import {

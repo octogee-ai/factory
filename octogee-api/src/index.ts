@@ -19,6 +19,7 @@ import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
+import { createLinkPreviewRoutes } from "./routes/link-preview.js";
 import { db } from "../../gateway-edge/src/lib/db.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
@@ -154,6 +155,9 @@ export function createApp(opts: CreateAppOptions = {}) {
     mmRestProxyHandler,
     mattermostMintRoutes,
   });
+  // App-facing, Firebase-authed: Codex-style link unfurl (SSRF-guarded). Lives
+  // here rather than the cluster bundle so it can reuse octogee-api's undici dep.
+  app.use("/api/link-preview", createLinkPreviewRoutes());
   // octogee-api-only: trusted singleton billing maintenance. CronJobs call this
   // with their projected octogee-cron KSA token (tenant-bound as kind=platform).
   app.use("/internal/billing", internalBillingRoutes);
