@@ -68,6 +68,30 @@ vi.mock("../lib/stripe", () => ({
 }));
 
 import { createApp } from "../index.js";
+import workspaceGitRoutes from "../routes/workspace/git.js";
+
+type RouteLayer = {
+  route?: {
+    path: string;
+    methods: Record<string, boolean>;
+  };
+};
+
+function routeSignatures(router: unknown): string[] {
+  const stack = (router as { stack: RouteLayer[] }).stack;
+  return stack
+    .filter((layer) => layer.route)
+    .map((layer) => {
+      const route = layer.route;
+      if (!route) throw new Error("expected route layer");
+      const methods = Object.entries(route.methods)
+        .filter(([, enabled]) => enabled)
+        .map(([method]) => method.toUpperCase())
+        .sort()
+        .join(",");
+      return `${methods} ${route.path}`;
+    });
+}
 
 function gitInit(dir: string): void {
   spawnSync("git", ["init", "--initial-branch=main"], { cwd: dir });
@@ -102,6 +126,21 @@ beforeEach(() => {
   firestoreData[`users/caller-uid`] = { uid: "caller-uid", username: SLUG, workspaceId: SLUG };
   firestoreData[`users/caller-uid/system/config`] = { role: "user" };
   firestoreData[`workspaces/${SLUG}`] = { id: SLUG, ownerUid: "caller-uid", slug: SLUG };
+});
+
+describe("workspace git route module", () => {
+  it("exports the git endpoints covered by this integration suite", () => {
+    expect(routeSignatures(workspaceGitRoutes)).toEqual([
+      "GET /git/status",
+      "GET /git/diff",
+      "GET /git/commit-diff",
+      "GET /git/log",
+      "GET /git/branches",
+      "POST /git/commit",
+      "POST /git/push",
+      "POST /git/branch/checkout",
+    ]);
+  });
 });
 
 describe("GET /api/workspace/git/status", () => {

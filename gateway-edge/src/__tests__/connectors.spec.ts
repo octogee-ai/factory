@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { CONNECTOR_CATALOG } from "@octogee/shared/types/connectors";
 import { getConnector, connectorRedirectUri } from '../lib/connectors/index.js';
+import { catalogMeta } from '../lib/connectors/def.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -59,6 +60,13 @@ describe('connector catalog (shared)', () => {
 });
 
 describe('connector registry (gateway-edge)', () => {
+  it('resolves catalog metadata through the shared connector helper', () => {
+    expect(catalogMeta('github')).toMatchObject({ id: 'github', implemented: true });
+    expect(() => catalogMeta('not-a-connector' as never)).toThrow(
+      'Connector not-a-connector is missing from CONNECTOR_CATALOG',
+    );
+  });
+
   it('returns undefined for catalog stubs and unknown ids', () => {
     expect(getConnector('yahoo')).toBeUndefined();
     expect(getConnector('not-a-connector')).toBeUndefined();

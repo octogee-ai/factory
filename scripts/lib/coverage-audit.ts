@@ -4,7 +4,7 @@ import path from "node:path";
 
 const SPEC_PATTERNS: RegExp[] = [
   /\bfrom\s*['"]([^'"\n]+)['"]/g,
-  /\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
+  /\bimport\s*\(\s*['"]([^'"\n]+)['"]/g,
   /\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
   /^[ \t]*import\s+['"]([^'"\n]+)['"]/gm,
 ];
@@ -38,24 +38,31 @@ export function resolveSpecifier(
   specifier: string,
   fromFile: string,
 ): string | null {
+  const queryIndex = specifier.indexOf("?");
+  const hashIndex = specifier.indexOf("#");
+  const cutIndex = Math.min(
+    queryIndex === -1 ? specifier.length : queryIndex,
+    hashIndex === -1 ? specifier.length : hashIndex,
+  );
+  const normalizedSpecifier = specifier.slice(0, cutIndex);
   const from = fromFile.split(path.sep).join("/");
 
-  if (specifier === "@shared" || specifier.startsWith("@shared/")) {
-    const rest = specifier === "@shared" ? "" : specifier.slice("@shared/".length);
+  if (normalizedSpecifier === "@shared" || normalizedSpecifier.startsWith("@shared/")) {
+    const rest = normalizedSpecifier === "@shared" ? "" : normalizedSpecifier.slice("@shared/".length);
     return moduleKey(path.posix.join("shared", rest));
   }
 
-  if (specifier.startsWith("@/")) {
+  if (normalizedSpecifier.startsWith("@/")) {
     const parts = from.split("/");
     const srcIdx = parts.indexOf("src");
     if (srcIdx === -1) return null;
     const pkgSrc = parts.slice(0, srcIdx + 1).join("/"); 
-    return moduleKey(path.posix.join(pkgSrc, specifier.slice(2)));
+    return moduleKey(path.posix.join(pkgSrc, normalizedSpecifier.slice(2)));
   }
 
-  if (specifier.startsWith(".")) {
+  if (normalizedSpecifier.startsWith(".")) {
     return moduleKey(
-      path.posix.join(path.posix.dirname(from), specifier),
+      path.posix.join(path.posix.dirname(from), normalizedSpecifier),
     );
   }
 

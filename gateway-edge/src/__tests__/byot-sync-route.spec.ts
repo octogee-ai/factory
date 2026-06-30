@@ -10,6 +10,7 @@ vi.mock("@octogee/core/model-credential-sync-runtime", () => ({
 }));
 
 const { createApp } = await import("../index.js");
+const { default: byotSyncRoutes } = await import("../routes/internal/byot-sync.js");
 
 const userData = {
   byotActive: true,
@@ -20,6 +21,29 @@ const userData = {
 
 const PRIMARY_SYNC_PATH = "/api/g/bender/internal/model-credential-sync";
 const LEGACY_SYNC_PATH = "/api/g/bender/internal/byot-sync";
+
+type RouteLayer = {
+  route?: {
+    path: string | string[];
+    methods: Record<string, boolean>;
+  };
+};
+
+function routeSignatures(router: unknown): string[] {
+  const stack = (router as { stack: RouteLayer[] }).stack;
+  return stack
+    .filter((layer) => layer.route)
+    .map((layer) => {
+      const route = layer.route;
+      if (!route) throw new Error("expected route layer");
+      const methods = Object.entries(route.methods)
+        .filter(([, enabled]) => enabled)
+        .map(([method]) => method.toUpperCase())
+        .sort()
+        .join(",");
+      return `${methods} ${JSON.stringify(route.path)}`;
+    });
+}
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -64,6 +88,12 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .send(userData);
     expect(res.status).toBe(401);
     expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
+  });
+
+  it("mounts both canonical and legacy sync route aliases", () => {
+    expect(routeSignatures(byotSyncRoutes)).toEqual([
+      'POST ["/model-credential-sync","/byot-sync"]',
+    ]);
   });
 
   it("validates the sync payload", async () => {

@@ -33,6 +33,30 @@ function encOf(plaintext: string): string {
 }
 
 const { createApp } = await import("../index.js");
+const { default: connectRoutes } = await import("../routes/connect.js");
+
+type RouteLayer = {
+  route?: {
+    path: string;
+    methods: Record<string, boolean>;
+  };
+};
+
+function routeSignatures(router: unknown): string[] {
+  const stack = (router as { stack: RouteLayer[] }).stack;
+  return stack
+    .filter((layer) => layer.route)
+    .map((layer) => {
+      const route = layer.route;
+      if (!route) throw new Error("expected route layer");
+      const methods = Object.entries(route.methods)
+        .filter(([, enabled]) => enabled)
+        .map(([method]) => method.toUpperCase())
+        .sort()
+        .join(",");
+      return `${methods} ${route.path}`;
+    });
+}
 
 setupEmulatorTest({
   env: {
@@ -130,6 +154,22 @@ async function configureGoogleClient(): Promise<void> {
     .send({ clientId: DAN_CLIENT_ID, clientSecret: DAN_CLIENT_SECRET });
   expect(res.status, res.text).toBe(200);
 }
+
+describe("connect route module", () => {
+  it("exports the connector endpoints covered by this emulator suite", () => {
+    expect(routeSignatures(connectRoutes)).toEqual([
+      "POST /disconnect",
+      "POST /:connector/client",
+      "POST /:connector/verify",
+      "GET /:connector/auth-url",
+      "GET /:connector/callback",
+      "POST /:connector/pat",
+      "POST /:connector/fields",
+      "POST /:connector/device/start",
+      "POST /:connector/device/poll",
+    ]);
+  });
+});
 
 describe("connect — auth-url", () => {
   it("requires auth (uid comes from the verified token, never a query param)", async () => {

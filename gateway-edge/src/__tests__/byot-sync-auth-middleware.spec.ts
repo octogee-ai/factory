@@ -1,0 +1,109 @@
+import express from "express";
+import request from "supertest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { createModelCredentialSyncAuthHeaders } from "../lib/byot-sync-internal-auth.js";
+
+const h = vi.hoisted(() => ({
+  logger: {
+    error: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+  },
+}));
+
+vi.mock("../middleware/logging.js", () => ({ logger: h.logger }));
+
+const { requireByotSyncInternalAuth } = await import("../middleware/byot-sync-auth.js");
+
+const ENV_KEYS = ["INTERNAL_SERVICE_KEY", "BYOT_SYNC_INTERNAL_SIGNING_SECRET"] as const;
+const originalEnv = Object.fromEntries(
+  ENV_KEYS.map((key) => [key, process.env[key]]),
+) as Record<(typeof ENV_KEYS)[number], string | undefined>;
+
+function restoreEnv(): void {
+  for (const key of ENV_KEYS) {
+    const value = originalEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+function app(): express.Express {
+  const instance = express();
+  instance.use(express.json());
+  instance.post("/sync", requireByotSyncInternalAuth, (_req, res) => res.json({ ok: true }));
+  return instance;
+}
+
+describe("requireByotSyncInternalAuth", () => {
+  beforeEach(() => {
+    restoreEnv();
+    h.logger.error.mockClear();
+    h.logger.warn.mockClear();
+    h.logger.info.mockClear();
+  });
+
+  afterEach(() => {
+    restoreEnv();
+  });
+
+  it("accepts the platform internal service key without a signing secret", async () => {
+    process.env.INTERNAL_SERVICE_KEY = "platform-secret";
+    delete process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET;
+
+    const res = await request(app())
+      .post("/sync")
+      .set("X-Internal-Service-Key", "platform-secret")
+      .send({ username: "mira" })
+      .expect(200, { ok: true });
+
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("returns 503 when no model credential sync signing secret is configured", async () => {
+    delete process.env.INTERNAL_SERVICE_KEY;
+    delete process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET;
+
+    await request(app()).post("/sync").send({ username: "mira" }).expect(503, {
+      error: "Internal auth unavailable",
+    });
+    expect(h.logger.error).toHaveBeenCalledWith(
+      "model credential sync internal signing secret is not configured",
+    );
+  });
+
+  it("accepts a valid model credential sync signature", async () => {
+    process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "sync-secret";
+    const body = {
+      username: "mira",
+      provisioning: { openclaw: { status: "complete" } },
+    };
+
+    const res = await request(app())
+      .post("/sync")
+      .set(createModelCredentialSyncAuthHeaders({ body, secret: "sync-secret", nowMs: Date.now() }))
+      .send(body)
+      .expect(200, { ok: true });
+
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("rejects invalid signatures and logs the caller", async () => {
+    process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "sync-secret";
+
+    await request(app())
+      .post("/sync")
+      .set("X-Byot-Sync-Timestamp", `${Date.now()}`)
+      .set("X-Byot-Sync-Signature", "bad")
+      .send({ username: "mira" })
+      .expect(401, { error: "Invalid internal auth" });
+
+    expect(h.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("model credential sync internal auth rejected from"),
+    );
+  });
+});

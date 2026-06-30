@@ -26,8 +26,33 @@ vi.mock("../lib/gitea", () => ({
 }));
 
 import { createApp } from "../index.js";
+import projectJoinLeaveRoutes from "../routes/projects/join-leave.js";
+import projectMembersRoutes from "../routes/projects/members.js";
 
 const CALLER_UID = "caller-uid";
+
+type RouteLayer = {
+  route?: {
+    path: string;
+    methods: Record<string, boolean>;
+  };
+};
+
+function routeSignatures(router: unknown): string[] {
+  const stack = (router as { stack: RouteLayer[] }).stack;
+  return stack
+    .filter((layer) => layer.route)
+    .map((layer) => {
+      const route = layer.route;
+      if (!route) throw new Error("expected route layer");
+      const methods = Object.entries(route.methods)
+        .filter(([, enabled]) => enabled)
+        .map(([method]) => method.toUpperCase())
+        .sort()
+        .join(",");
+      return `${methods} ${route.path}`;
+    });
+}
 
 async function authHeader(uid: string = CALLER_UID): Promise<{ Authorization: string }> {
   const token = await getIdTokenForUid(uid);
@@ -136,6 +161,18 @@ beforeEach(async () => {
   mockGetWorkspaceMmContext.mockReset();
   mockGetWorkspaceMmContext.mockResolvedValue({ teamId: "team-alice" });
   await seedCaller(CALLER_UID);
+});
+
+describe("project membership route modules", () => {
+  it("exports the join, leave, and guest-removal endpoints covered by this suite", () => {
+    expect(routeSignatures(projectJoinLeaveRoutes)).toEqual([
+      "POST /:wid/:pid/join",
+      "POST /:wid/:pid/leave",
+    ]);
+    expect(routeSignatures(projectMembersRoutes)).toEqual([
+      "DELETE /:wid/:pid/members/:guestUid",
+    ]);
+  });
 });
 
 describe("POST /api/projects/:wid/:pid/join", () => {
