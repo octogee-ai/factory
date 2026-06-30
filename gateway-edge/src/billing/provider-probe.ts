@@ -154,9 +154,11 @@ export async function probeProviderKey(req: ProbeRequest): Promise<ProbeResult> 
         classification: "user",
       };
     }
-    const validationError = await validateCompatibleBaseUrl(baseUrl);
-    if (validationError) {
-      return { ok: false, error: validationError, classification: "user" };
+    if (req.provider === "openai-compatible") {
+      const validationError = await validateCompatibleBaseUrl(baseUrl);
+      if (validationError) {
+        return { ok: false, error: validationError, classification: "user" };
+      }
     }
     return probeFetch(`${trimSlash(baseUrl)}/models`, {
       method: "GET",

@@ -27,7 +27,10 @@ import {
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
 } from "@octogee/core/customer-snapshot-mapping";
-import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
+import {
+  hasRunningInboundMigrationForUid,
+  slugFromAssignedUser,
+} from "@octogee/core/assigned-roster";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -487,6 +490,50 @@ export async function findAssignedUserByAgentId(
     if (!data || data.approved !== true) continue;
     if (agentBelongsToAssignedWorkspace(data, agentId)) {
       return { uid: doc.id, data };
+    }
+  }
+  return null;
+}
+
+async function findApprovedUsersByAgentId(
+  db: Firestore,
+  agentId: string,
+): Promise<Array<{ uid: string; data: Record<string, unknown> }>> {
+  const matches: Array<{ uid: string; data: Record<string, unknown> }> = [];
+  const seen = new Set<string>();
+  for (const query of [
+    db.collection("users").where("provisioning.openclaw.agentId", "==", agentId).limit(10),
+    db
+      .collection("users")
+      .where("provisioning.openclaw.agentIds", "array-contains", agentId)
+      .limit(10),
+  ]) {
+    const snap = await query.get();
+    for (const doc of snap.docs) {
+      if (seen.has(doc.id)) continue;
+      const data = doc.data() as Record<string, unknown> | undefined;
+      if (!data || data.approved !== true || !agentBelongsToAssignedWorkspace(data, agentId)) {
+        continue;
+      }
+      seen.add(doc.id);
+      matches.push({ uid: doc.id, data });
+    }
+  }
+  return matches;
+}
+
+export async function findAssignedOrInboundMigratingUserByAgentId(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+): Promise<{ uid: string; data: Record<string, unknown> } | null> {
+  const assigned = await findAssignedUserByAgentId(db, gatewayId, agentId);
+  if (assigned) return assigned;
+
+  const candidates = await findApprovedUsersByAgentId(db, agentId);
+  for (const candidate of candidates) {
+    if (await hasRunningInboundMigrationForUid(db, gatewayId, candidate.uid)) {
+      return candidate;
     }
   }
   return null;

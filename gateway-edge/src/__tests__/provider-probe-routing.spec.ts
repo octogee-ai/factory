@@ -2,8 +2,13 @@ import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { MODEL_CREDENTIAL_CATALOG } from "@octogee/shared/types/model-credentials";
 
 const fetchSpy = vi.fn();
+const lookupSpy = vi.hoisted(() => vi.fn());
+vi.mock("node:dns/promises", () => ({ lookup: lookupSpy }));
+
 beforeEach(() => {
   fetchSpy.mockReset();
+  lookupSpy.mockReset();
+  lookupSpy.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
   vi.stubGlobal("fetch", fetchSpy);
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -75,6 +80,22 @@ describe("probeProviderKey routing", () => {
     expect(r.ok).toBe(true);
     const [url] = fetchSpy.mock.calls[0];
     expect(url).toBe(`${baseUrl}/models`);
+  });
+
+  test("catalog canonical providers skip DNS validation for fixed baseUrl", async () => {
+    lookupSpy.mockRejectedValue(new Error("dns should not be reached for catalog providers"));
+    fetchSpy.mockResolvedValue(jsonResponse(200, { data: [] }));
+
+    const r = await probeProviderKey({
+      provider: "minimax",
+      apiKey: "provider-key",
+      baseUrl: "https://ignored.example.com/v1",
+    });
+
+    expect(r.ok).toBe(true);
+    expect(lookupSpy).not.toHaveBeenCalled();
+    const [url] = fetchSpy.mock.calls[0];
+    expect(url).toBe("https://api.minimax.io/v1/models");
   });
 
   test("openai-compatible without baseUrl returns user-fault probe failure", async () => {

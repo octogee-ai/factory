@@ -13,7 +13,10 @@ import {
   envDefaultModelBrokerLimits,
   resolveOwnerModelBrokerGrant,
 } from "../lib/model-broker-limits.js";
-import { findAssignedUserByAgentId } from "./fleet-broker.js";
+import {
+  findAssignedOrInboundMigratingUserByAgentId,
+  findAssignedUserByAgentId,
+} from "./fleet-broker.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -224,7 +227,7 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
   // its OWN token, so the broker resolves per-owner (platform key, or the owner's
   // byok-<slug>-anthropic), meters per ownerUid, and enforces the owner's tier
   // spend cap (degrade to the house model when exhausted). Roster-scoped via
-  // findAssignedUserByAgentId — a gateway can only mint for a customer assigned to it.
+  // assigned roster, or a running inbound migration targeting this gateway.
   router.post("/agent-model-token", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -235,7 +238,11 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       return;
     }
 
-    const assigned = await findAssignedUserByAgentId(db, bound.gatewayId, agentId);
+    const assigned = await findAssignedOrInboundMigratingUserByAgentId(
+      db,
+      bound.gatewayId,
+      agentId,
+    );
     if (!assigned) {
       res.status(403).json(FORBIDDEN);
       return;
