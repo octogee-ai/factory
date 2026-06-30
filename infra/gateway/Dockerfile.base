@@ -91,47 +91,66 @@ RUN groupadd -r node 2>/dev/null || true && \
 
 ENV HOME=/home/node
 
-# ── OpenClaw Mattermost plugin ───────────────────────────────────────────────
-# No build-time install. `@openclaw/mattermost` ships as a *bundled*
-# extension in the OpenClaw dist tree (dist/extensions/mattermost/index.js)
-# — that compiled bundle is what serves the channel at runtime. The only
-# registry-published package (@openclaw/mattermost@2026.2.21) is
-# TypeScript-source-only, which the OC 5.x plugin loader rejects
-# ("requires compiled runtime output"). The old `openclaw plugins install
-# @openclaw/mattermost | tail` line had been failing silently for months
-# (sh has no pipefail → tail greened the layer) with zero runtime impact,
-# proving the bundled extension is sufficient. Removed once #979 hardened
-# plugin installs to exit 1 and surfaced the long-dead failure. Upstream
-# #82425 ("repair source-only official plugin installs") is the broader
-# fix landing in 5.16+.
+# ── OpenClaw Mattermost plugin (EXTERNALIZED in 6.11 — install required) ──────
+# Through 6.10, `@openclaw/mattermost` shipped as a *bundled* dist extension
+# (dist/extensions/mattermost/index.js) — no build-time install needed. OpenClaw
+# 6.11 EXTERNALIZED it (#95683 "externalize additional official plugins";
+# package.json `openclaw.build.bundledDist: false`): the bundled dist is GONE and
+# the channel is served only by the now-properly-published @openclaw/mattermost
+# npm package (compat `pluginApi >=2026.6.11`; #82425 repaired the old source-only
+# install rejection in 5.16+). Without a build-time install the gateway boots
+# `plugins.entries.mattermost: plugin not installed` and the coach MM account
+# never connects (restore then waits 120s and fails). So we install + stage it
+# alongside codex below — see the combined block.
 
-# ── OpenClaw Codex plugin ────────────────────────────────────────────────────
-# Registers the `codex` agent harness for BYO-subscription (ChatGPT OAuth)
-# coaches running openai/gpt-5.5 via codex. `openclaw plugins install`
-# writes under $HOME/.openclaw/npm — but /home/node/.openclaw is an emptyDir
-# at runtime (no PVC) that shadows the image copy on every boot. So install
-# at build, then STAGE the tree to /opt/openclaw-codex-deps (non-shadowed);
-# entrypoint.sh restores it into the emptyDir at boot. Fail-loud on both the
-# install and the staging (no `| tail`: sh has no pipefail).
+# ── OpenClaw externalized plugins: codex + mattermost ────────────────────────
+# codex registers the BYO-subscription (ChatGPT OAuth) agent harness for coaches
+# running openai/gpt-5.5; mattermost is the channel plugin upstream externalized
+# in 6.11 (see the block above). `openclaw plugins install` writes under
+# $HOME/.openclaw/npm — but /home/node/.openclaw is an emptyDir at runtime (no
+# PVC) that shadows the image copy on every boot. So install at build, then STAGE
+# the whole npm tree to /opt/openclaw-codex-deps (non-shadowed); entrypoint.sh
+# symlinks it back into the emptyDir at boot. Fail-loud on every install + staging
+# assertion (no `| tail`: sh has no pipefail).
 #
-# The package's location WITHIN ~/.openclaw/npm is an upstream impl detail
-# that moves between releases: ≤5.27 placed it flat at
-# `npm/node_modules/@openclaw/codex`; the 5.28 plugin-subsystem refactor
-# moved it to a per-plugin project dir
-# `npm/projects/openclaw-codex-<hash>/node_modules/@openclaw/codex`. We stage
-# the WHOLE `npm` tree (so whatever layout comes along) and assert presence
-# with a layout-agnostic find — robust to the next reshuffle. Loading at
-# runtime is driven by openclaw.json (plugins.entries.codex.enabled) resolving
-# the package from the managed npm root, NOT by the plugins/installs.json
-# cache, so only the npm tree needs to survive to the emptyDir.
-RUN openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
+# A package's location WITHIN ~/.openclaw/npm is an upstream impl detail that
+# moves between releases (flat `npm/node_modules/@openclaw/<x>` vs the 5.28
+# per-plugin `npm/projects/openclaw-<x>-<hash>/node_modules/@openclaw/<x>`), so we
+# stage the WHOLE `npm` tree and assert presence with a layout-agnostic find —
+# robust to the next reshuffle. Loading at runtime is driven by openclaw.json
+# (plugins.entries.<x>.enabled) resolving each package from the managed npm root,
+# NOT the plugins/installs.json cache, so only that tree must survive the emptyDir.
+#
+# This Dockerfile.base is SHARED by every matrix base (current + previous), which
+# span the externalization boundary: 6.11+ dropped the bundled mattermost dist
+# (install required), <=6.10 still ships it bundled (no external @openclaw/mattermost
+# at that version exists on npm). So mattermost install is version-ADAPTIVE — keyed
+# on whether the bundled `dist/extensions/mattermost` survived in the installed
+# openclaw. Pinned to ${OPENCLAW_VERSION} (the package publishes in lockstep) so a
+# mattermost-only npm bump can't drift past the host pluginApi.
+RUN set -e; \
+    openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-    tail -n 3 /tmp/oc-plugin.log; rm -f /tmp/oc-plugin.log; \
-    mkdir -p /opt/openclaw-codex-deps \
-      && cp -a /home/node/.openclaw/npm /opt/openclaw-codex-deps/npm \
-      && chown -R node:node /opt/openclaw-codex-deps \
-      && find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/codex' 2>/dev/null | grep -q . \
-      || { echo "FATAL: @openclaw/codex missing from staged /opt tree"; exit 1; }
+    tail -n 3 /tmp/oc-plugin.log; \
+    MM_STAGED=0; \
+    if [ -d "$(npm root -g)/openclaw/dist/extensions/mattermost" ]; then \
+      echo "mattermost: bundled dist extension present (<=6.10) — no external install"; \
+    else \
+      echo "mattermost: bundled dist absent (externalized, 6.11+) — installing @openclaw/mattermost@${OPENCLAW_VERSION}"; \
+      openclaw plugins install "@openclaw/mattermost@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
+        || { echo "FATAL: @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+      tail -n 3 /tmp/oc-plugin.log; MM_STAGED=1; \
+    fi; \
+    rm -f /tmp/oc-plugin.log; \
+    mkdir -p /opt/openclaw-codex-deps; \
+    cp -a /home/node/.openclaw/npm /opt/openclaw-codex-deps/npm; \
+    chown -R node:node /opt/openclaw-codex-deps; \
+    find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/codex' 2>/dev/null | grep -q . \
+      || { echo "FATAL: @openclaw/codex missing from staged /opt tree"; exit 1; }; \
+    if [ "$MM_STAGED" = "1" ]; then \
+      find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' 2>/dev/null | grep -q . \
+        || { echo "FATAL: @openclaw/mattermost missing from staged /opt tree"; exit 1; }; \
+    fi
 
 # ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────
 RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm
