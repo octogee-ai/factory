@@ -122,6 +122,7 @@ function mkCollection(records: Record<string, Record<string, unknown>>) {
 function mkAdminFleetRouteApp(opts: {
   config: Record<string, unknown>;
   users: Record<string, Record<string, unknown>>;
+  glmGateways?: Record<string, Record<string, unknown>>;
 }) {
   const state = {
     config: { ...opts.config },
@@ -142,7 +143,7 @@ function mkAdminFleetRouteApp(opts: {
     }),
     collection: vi.fn((name: string) => {
       if (name === "users") return mkCollection(state.users);
-      if (name === GLM_GATEWAYS_COLLECTION) return mkCollection({});
+      if (name === GLM_GATEWAYS_COLLECTION) return mkCollection(opts.glmGateways ?? {});
       if (name === "gateways") return mkCollection({});
       if (name === GLM_OPERATIONS_COLLECTION) return mkCollection({});
       return mkCollection({});
@@ -163,6 +164,115 @@ function mkAdminFleetRouteApp(opts: {
 }
 
 describe("onboarding cohort overrides by builder slug", () => {
+  it("returns the operator model catalog with onboarding cohorts", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: {
+        defaultGatewayId: "gw-anthropic",
+        currentOnboardingCohortId: "anthropic",
+        onboardingCohorts: {
+          anthropic: {
+            gatewayId: "gw-anthropic",
+            provider: "anthropic",
+            model: "anthropic/claude-sonnet-4-6",
+            label: "Current: Sonnet 4.6",
+          },
+        },
+      },
+      users: {},
+    });
+
+    const res = await request(app).get("/onboarding-cohorts").expect(200);
+
+    expect(res.body.modelCatalog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "anthropic",
+          id: "anthropic/claude-sonnet-4-6",
+          label: "Claude Sonnet 4.6",
+          reasoningEfforts: [],
+        }),
+        expect.objectContaining({
+          provider: "openrouter",
+          id: "z-ai/glm-5.2",
+          label: "GLM 5.2",
+          reasoningEfforts: ["high", "xhigh"],
+          defaultReasoningEffort: "xhigh",
+        }),
+        expect.objectContaining({
+          provider: "openrouter",
+          id: "minimax/minimax-m3",
+          label: "MiniMax M3",
+          reasoningEfforts: [],
+        }),
+      ]),
+    );
+  });
+
+  it("canonicalizes catalog aliases and rejects unsupported model reasoning", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: {},
+      users: {},
+      glmGateways: {
+        "gw-anthropic": { gatewayClass: "shared", desiredStatus: "running" },
+        "gw-glm": { gatewayClass: "shared", desiredStatus: "running" },
+        "gw-minimax": { gatewayClass: "shared", desiredStatus: "running" },
+      },
+    });
+
+    await request(app)
+      .patch("/onboarding-cohorts")
+      .send({
+        currentOnboardingCohortId: "anthropic",
+        previewOnboardingCohortId: "glm",
+        onboardingCohorts: {
+          anthropic: {
+            gatewayId: "gw-anthropic",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            label: "Current: Sonnet 4.6",
+          },
+          glm: {
+            gatewayId: "gw-glm",
+            provider: "openrouter",
+            model: "z-ai/glm-5.2",
+            reasoningEffort: "xhigh",
+            label: "Preview: GLM 5.2 XHigh",
+          },
+        },
+      })
+      .expect(200);
+
+    expect(state.config.onboardingCohorts).toMatchObject({
+      anthropic: { model: "anthropic/claude-sonnet-4-6" },
+      glm: { model: "z-ai/glm-5.2", reasoningEffort: "xhigh" },
+    });
+
+    const rejected = await request(app)
+      .patch("/onboarding-cohorts")
+      .send({
+        currentOnboardingCohortId: "minimax",
+        previewOnboardingCohortId: null,
+        onboardingCohorts: {
+          minimax: {
+            gatewayId: "gw-minimax",
+            provider: "openrouter",
+            model: "minimax/minimax-m3",
+            reasoningEffort: "xhigh",
+            label: "MiniMax M3",
+          },
+        },
+      })
+      .expect(400);
+
+    expect(rejected.body).toMatchObject({
+      error: "cohort reasoningEffort is not available for selected model",
+      cohortId: "minimax",
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      got: "xhigh",
+    });
+  });
+
   it("stores a UID override after resolving the builder slug server-side", async () => {
     const { app, state } = mkAdminFleetRouteApp({
       config: {

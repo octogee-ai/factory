@@ -32,10 +32,15 @@ import {
   type OperatorGatewayReservationRequest,
 } from "@octogee/shared/types/glm";
 import {
+  ONBOARDING_MODEL_CATALOG,
+  canonicalOnboardingModelId,
+  isOnboardingReasoningEffortAllowed,
   isOnboardingCohortEnabled,
   isOnboardingModelProvider,
   isOnboardingReasoningEffort,
+  onboardingModelCatalogEntryFor,
   resolveOnboardingPlacementForUid,
+  type OnboardingModelCatalogEntry,
   type OnboardingCohortConfig,
   type OnboardingOrchestratorConfig,
   type OnboardingPlacementDecision,
@@ -245,6 +250,8 @@ type AdminOnboardingPlacementWarningCode =
   | "cohort-gateway-missing"
   | "cohort-gateway-retired"
   | "cohort-gateway-not-shared"
+  | "cohort-model-uncataloged"
+  | "cohort-reasoning-unsupported"
   | "default-cohort-disabled"
   | "default-cohort-missing"
   | "preview-cohort-missing"
@@ -370,6 +377,7 @@ interface AdminOnboardingCohortResponse {
   overrides: AdminOnboardingOverrideSummary[];
   gateways: AdminOnboardingGatewaySummary[];
   customers: AdminOnboardingCustomerProjection[];
+  modelCatalog: readonly OnboardingModelCatalogEntry[];
   driftSummary: Record<AdminOnboardingDriftState, number>;
   assignmentCounts: {
     byCohort: Record<string, number>;
@@ -451,34 +459,41 @@ function normalizeStringMap(value: unknown): Record<string, string> {
   return out;
 }
 
+function normalizeOnboardingCohortConfig(
+  raw: Record<string, unknown>,
+): OnboardingCohortConfig | null {
+  if (
+    !isNonEmptyString(raw.gatewayId) ||
+    !isOnboardingModelProvider(raw.provider) ||
+    !isNonEmptyString(raw.model) ||
+    !isNonEmptyString(raw.label)
+  ) {
+    return null;
+  }
+  if (
+    raw.reasoningEffort !== undefined &&
+    !isOnboardingReasoningEffort(raw.reasoningEffort)
+  ) {
+    return null;
+  }
+  if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") return null;
+  return {
+    gatewayId: raw.gatewayId,
+    provider: raw.provider,
+    model: canonicalOnboardingModelId(raw.provider, raw.model) ?? raw.model,
+    label: raw.label,
+    ...(raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
+    ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+  };
+}
+
 function normalizeOnboardingCohorts(value: unknown): Record<string, OnboardingCohortConfig> {
   if (!isPlainRecord(value)) return {};
   const out: Record<string, OnboardingCohortConfig> = {};
   for (const [cohortId, raw] of Object.entries(value)) {
     if (cohortId.length === 0 || !isPlainRecord(raw)) continue;
-    if (
-      !isNonEmptyString(raw.gatewayId) ||
-      !isOnboardingModelProvider(raw.provider) ||
-      !isNonEmptyString(raw.model) ||
-      !isNonEmptyString(raw.label)
-    ) {
-      continue;
-    }
-    if (
-      raw.reasoningEffort !== undefined &&
-      !isOnboardingReasoningEffort(raw.reasoningEffort)
-    ) {
-      continue;
-    }
-    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") continue;
-    out[cohortId] = {
-      gatewayId: raw.gatewayId,
-      provider: raw.provider,
-      model: raw.model,
-      label: raw.label,
-      ...(raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
-      ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
-    };
+    const cohort = normalizeOnboardingCohortConfig(raw);
+    if (cohort) out[cohortId] = cohort;
   }
   return out;
 }
@@ -639,6 +654,20 @@ function parseOnboardingCohortPatch(
         },
       };
     }
+    const model = canonicalOnboardingModelId(raw.provider, raw.model);
+    if (!model) {
+      return {
+        error: {
+          status: 400,
+          body: {
+            error: "cohort model must come from the onboarding model catalog",
+            cohortId,
+            provider: raw.provider,
+            got: raw.model,
+          },
+        },
+      };
+    }
     if (!isNonEmptyString(raw.label)) {
       return {
         error: {
@@ -662,6 +691,23 @@ function parseOnboardingCohortPatch(
         },
       };
     }
+    if (
+      raw.reasoningEffort !== undefined &&
+      !isOnboardingReasoningEffortAllowed(raw.provider, model, raw.reasoningEffort)
+    ) {
+      return {
+        error: {
+          status: 400,
+          body: {
+            error: "cohort reasoningEffort is not available for selected model",
+            cohortId,
+            provider: raw.provider,
+            model,
+            got: raw.reasoningEffort,
+          },
+        },
+      };
+    }
     if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
       return {
         error: {
@@ -673,7 +719,7 @@ function parseOnboardingCohortPatch(
     onboardingCohorts[cohortId] = {
       gatewayId: raw.gatewayId,
       provider: raw.provider,
-      model: raw.model,
+      model,
       label: raw.label,
       ...(raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
       ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
@@ -838,6 +884,26 @@ function cohortWarnings(
       cohortId,
       gatewayId: cohort.gatewayId,
       message: `${cohortId} points at ${gatewayClass} gateway ${cohort.gatewayId}`,
+    });
+  }
+  if (!onboardingModelCatalogEntryFor(cohort.provider, cohort.model)) {
+    warnings.push({
+      code: "cohort-model-uncataloged",
+      severity: "warning",
+      cohortId,
+      gatewayId: cohort.gatewayId,
+      message: `${cohortId} uses uncataloged ${cohort.provider} model ${cohort.model}`,
+    });
+  } else if (
+    cohort.reasoningEffort &&
+    !isOnboardingReasoningEffortAllowed(cohort.provider, cohort.model, cohort.reasoningEffort)
+  ) {
+    warnings.push({
+      code: "cohort-reasoning-unsupported",
+      severity: "warning",
+      cohortId,
+      gatewayId: cohort.gatewayId,
+      message: `${cohortId} uses ${cohort.reasoningEffort} reasoning on ${cohort.model}, but that model catalog row does not allow it`,
     });
   }
   return warnings;
@@ -1413,6 +1479,7 @@ function buildOnboardingCohortResponse(opts: {
     overrides,
     gateways,
     customers,
+    modelCatalog: ONBOARDING_MODEL_CATALOG,
     driftSummary,
     assignmentCounts: {
       byCohort: assignmentCountsByCohort,

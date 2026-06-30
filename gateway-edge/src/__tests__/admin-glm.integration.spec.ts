@@ -387,7 +387,7 @@ describe("Admin onboarding cohorts", () => {
         role: "current",
         gatewayId: "gw-anthropic",
         provider: "anthropic",
-        model: "claude-sonnet-4-6",
+        model: "anthropic/claude-sonnet-4-6",
         assignmentCount: 1,
         overrideCount: 0,
         warnings: [],
@@ -560,7 +560,7 @@ describe("Admin onboarding cohorts", () => {
         anthropic: {
           gatewayId: "gw-anthropic",
           provider: "anthropic",
-          model: "claude-sonnet-4-6",
+          model: "anthropic/claude-sonnet-4-6",
         },
         glm: {
           gatewayId: "gw-glm",
