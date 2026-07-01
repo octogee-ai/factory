@@ -75,18 +75,21 @@ so a repacked tarball (new bytes → new integrity) misses the cache and is re-r
 
 **Rebasing a repacking PR** is the merge-tax path: the binary `.tgz` and the
 consumer locks conflict against any other PR that also repacked, even with zero
-overlapping source. Resolve the *generated artifacts* by taking either side (regen
-rewrites them from the merged source), then regenerate:
+overlapping source. One command resolves it — after the rebase halts, it regenerates
+the conflicted tarballs + locks from the now-merged worktree source and continues:
 
 ```bash
-git rebase origin/main                                    # halts on the .tgz + locks
-git checkout --theirs -- '*.tgz' '*/package-lock.json'    # any valid side; regen overwrites
-npm run regen:file-deps                                    # rebuild from the MERGED source
-git add -A && git rebase --continue
+git rebase origin/main    # halts on the .tgz + consumer locks
+npm run rebase:resolve    # regenerate the artifacts from merged source + continue
 ```
 
-(A git merge driver, added in a follow-up, automates this so the rebase resolves
-without the manual steps.)
+`rebase:resolve` only touches the generated artifacts (`octogee-*.tgz` + the consumer
+`package-lock.json`s) — a genuine *source* conflict is reported for you to resolve by
+hand, never auto-clobbered. A git merge driver can't do this: it runs mid-merge,
+before git has finished writing the merged source to the worktree, so it would
+rebuild the tarball from stale source and complete the rebase silently wrong — the
+*halt* is what guarantees a fully-merged worktree. Re-run the command if a later
+commit halts in a multi-commit rebase.
 
 There is no safety net at install time: `npm ci` does NOT verify a file: tarball's
 content against its lock, so a stale consumer silently installs old code with no
