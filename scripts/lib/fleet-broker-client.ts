@@ -13,7 +13,6 @@ import { internalFetch } from "./internal-fetch.js";
 function baseUrl(): string {
   if (process.env.FLEET_BROKER_URL) return process.env.FLEET_BROKER_URL;
   // In-cluster service URL; the projected gateway KSA token is the auth boundary.
-  // eslint-disable-next-line sonarjs/no-clear-text-protocols
   return process.env.OCTOGEE_API_URL || "http://octogee-api.octogee.svc.cluster.local:3001";
 }
 

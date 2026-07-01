@@ -140,7 +140,6 @@ async function loadZipArchive(context: ExtractZipContext, res: Response): Promis
     return null;
   }
 
-  // eslint-disable-next-line sonarjs/no-unsafe-unzip -- size capped above; per-entry cap enforced before writes
   return JSZip.loadAsync(zipBuffer);
 }
 

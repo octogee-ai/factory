@@ -66,7 +66,6 @@ export function generateCustomerSshKey(slug: string): string {
   }
 
   fs.mkdirSync(keyDir, { recursive: true });
-  // eslint-disable-next-line sonarjs/os-command -- PATH controlled, args validated
   execSync(`ssh-keygen -t ed25519 -N "" -f "${keyPath}" -C "octogee-${slug}@gateway" -q`, {
     stdio: "pipe",
   });
@@ -121,7 +120,6 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
     if (sshKeyPath) {
       env.GIT_SSH_COMMAND = `ssh -i "${sshKeyPath}" -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
     }
-    // eslint-disable-next-line sonarjs/os-command -- args constructed by trusted callers; each input validated upstream
     return execSync(`git ${args}`, {
       cwd,
       encoding: "utf8",
