@@ -623,6 +623,57 @@ describe("createRestoreHandler", () => {
     }
   });
 
+  it("refreshes same-uid broker snapshot before cohort model reassertion", async () => {
+    const currentSnapshot = {
+      ...RESTORE_SNAPSHOT,
+      initialModelProvider: "openrouter",
+      initialModel: "z-ai/glm-5.2",
+      initialModelReasoningEffort: "xhigh",
+    };
+    const adapter = mkAdapter({
+      loadUserSnapshot: vi.fn(async () => currentSnapshot),
+      hasCustomerSshKey: vi.fn(() => true),
+      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 local"),
+      readGiteaCustomerPubKey: vi.fn(async () => "ssh-ed25519 local"),
+      ensureGiteaOrg: vi.fn(async () => undefined),
+      hasWorkspaceGitDir: vi.fn(() => false),
+      cloneWorkspaceRepo: vi.fn(async () => true),
+      ensureCustomerDirectories: vi.fn(),
+      writeCustomerTemplateFiles: vi.fn(async () => undefined),
+      blobSyncForSlug: vi.fn(async () => undefined),
+      restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
+      applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+    });
+    const handler = createRestoreHandler(mkDeps({ adapter }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      uid: "uid-chris",
+      snapshot: RESTORE_SNAPSHOT,
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(adapter.loadUserSnapshot).toHaveBeenCalledWith("uid-chris");
+    expect(adapter.reassertByotForCustomer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provisioning: {
+          openclaw: {
+            status: "complete",
+            initialModelProvider: "openrouter",
+            initialModel: "z-ai/glm-5.2",
+            initialModelReasoningEffort: "xhigh",
+          },
+        },
+      }),
+    );
+  });
+
   it("rejects a snapshot whose uid/slug do not match the signed restore body", async () => {
     const handler = createRestoreHandler(mkDeps());
     const body = {

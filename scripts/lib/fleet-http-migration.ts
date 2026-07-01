@@ -291,8 +291,10 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
       deps.adapter.seedUserSnapshotForMigration?.(body.snapshot);
       const adapter: CustomerLifecycleAdapter = {
         ...deps.adapter,
-        loadUserSnapshot: async (uid) =>
-          uid === snapshot.uid ? snapshot : deps.adapter.loadUserSnapshot(uid),
+        loadUserSnapshot: async (uid) => {
+          const fresh = await deps.adapter.loadUserSnapshot(uid);
+          return uid === snapshot.uid ? fresh ?? snapshot : fresh;
+        },
         uidForSlug: async (slug) =>
           slug === snapshot.slug ? snapshot.uid : deps.adapter.uidForSlug(slug),
       };
