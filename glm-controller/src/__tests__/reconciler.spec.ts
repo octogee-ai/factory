@@ -193,6 +193,67 @@ await vi.advanceTimersByTimeAsync(5_000);
     stop();
   });
 
+  it("invokes reconcileImagePins with the desired instances each tick", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({ upsertInstance: async () => undefined });
+    const pinSpy = vi.fn(async () => {});
+    const db = makeFakeDb({
+      glmGateways: [
+        { gatewayId: "default", imageRepository: "repo", imageTag: "abc", desiredStatus: "running", createdBy: "ci" },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      reconcileImagePins: pinSpy,
+      reconcileRetryMs: 5_000,
+    });
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+    expect(pinSpy).toHaveBeenCalled();
+    expect(pinSpy.mock.calls[0][1]).toContainEqual(
+      expect.objectContaining({ imageRepository: "repo", imageTag: "abc" }),
+    );
+    stop();
+  });
+
+  it("a throwing reconcileImagePins does not break the fleet reconcile", async () => {
+    const snapCbs: Array<() => void> = [];
+    const log = vi.fn();
+    const helm = makeFakeHelm({ upsertInstance: async () => undefined });
+    const db = makeFakeDb({
+      glmGateways: [
+        { gatewayId: "default", imageRepository: "repo", imageTag: "abc", desiredStatus: "running", createdBy: "ci" },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log,
+      reconcileImagePins: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+      reconcileRetryMs: 5_000,
+    });
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+    expect(helm.upsertInstance).toHaveBeenCalled();
+    expect(
+      log.mock.calls.some(([m]: [string]) => typeof m === "string" && m.includes("image-pins")),
+    ).toBe(true);
+    stop();
+  });
+
   it("does NOT schedule a retry when a tick succeeds", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();

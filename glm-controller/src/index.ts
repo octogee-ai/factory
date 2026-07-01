@@ -127,6 +127,7 @@ import {
   writeSecret,
 } from "@octogee/core/secret-manager";
 import { listGatewayBuilds } from "@octogee/core/artifact-registry";
+import { reconcileImagePins } from "./reconcile-image-pins.js";
 import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
 import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-helpers";
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
@@ -289,6 +290,11 @@ interface ControllerDeps {
   modelKeySourceIssuer?: GatewayModelKeySourceIssuer;
   modelKeySecretEnsurer?: GatewayModelKeySecretEnsurer;
   restartGatewayDeployment?: (gatewayId: string) => Promise<void>;
+  reconcileImagePins?: (
+    env: string,
+    instances: ReadonlyArray<{ imageRepository: string; imageTag: string }>,
+    log: (msg: string) => void,
+  ) => Promise<void>;
   handlers: OperationHandlers;
   log: (msg: string) => void;
 
@@ -847,6 +853,13 @@ async function completeRecoveredOperatorAddGatewayOps(
 
 async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
+  if (deps.reconcileImagePins) {
+    try {
+      await deps.reconcileImagePins(NAMESPACE, desired, deps.log);
+    } catch (err) {
+      deps.log(`[image-pins] ⚠ reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   await syncGatewayModelKeySources(deps, desired);
   const modelKeyChangedGatewayIds = await syncGatewayModelKeySecrets(deps, desired);
   const apiServerEgressCidrs = (await deps.resolveApiServerEgressCidrs?.()) ?? [];
@@ -1471,6 +1484,7 @@ async function main(): Promise<void> {
     modelKeySourceIssuer,
     modelKeySecretEnsurer,
     restartGatewayDeployment: createGatewayDeploymentRestarter(runKubectl, log),
+    reconcileImagePins,
     handlers,
     log,
     syncFleetIngress: syncEdgeIngressForGateways,
