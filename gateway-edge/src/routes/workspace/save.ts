@@ -9,6 +9,7 @@ import {
   validateWorkspacePath,
 } from "./helpers.js";
 import { logger } from "../../middleware/logging.js";
+import { invalidateWorkspaceFileResponseCache } from "./file-response-cache.js";
 
 const router = Router();
 
@@ -165,7 +166,9 @@ router.post("/save", withFileTarget(async (req, res, _next, target) => {
     return;
   }
 
-  res.json(await saveTarget(target, request, savePayload(req, target, request)));
+  const result = await saveTarget(target, request, savePayload(req, target, request));
+  invalidateWorkspaceFileResponseCache(target);
+  res.json(result);
 }, { allowWorkspaceMembers: true }));
 
 export default router;

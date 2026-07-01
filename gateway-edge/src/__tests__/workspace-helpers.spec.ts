@@ -31,7 +31,7 @@ describe('repoContentsApi — identity source per provider', () => {
 
   it("github targets use the target's owner-brokered token, never a gitea sudo", async () => {
     await repoContentsApi(githubTarget, 'docs/INDEX.md');
-    expect(githubContentsApi).toHaveBeenCalledWith('octogee-ai', 'octogee', 'docs/INDEX.md', 'gho_owner_token');
+    expect(githubContentsApi).toHaveBeenCalledWith('octogee-ai', 'octogee', 'docs/INDEX.md', 'gho_owner_token', undefined);
     expect(giteaApiAsUser).not.toHaveBeenCalled();
   });
 

@@ -3,6 +3,7 @@ import { storage } from "../../lib/db.js";
 import { withGiteaTarget } from "../../lib/fileTarget.js";
 import { removeFromManifest } from "../../lib/manifest.js";
 import { giteaSudoUser, validateWorkspacePath } from "./helpers.js";
+import { invalidateWorkspaceFileResponseCache } from "./file-response-cache.js";
 
 const router = Router();
 
@@ -30,6 +31,7 @@ router.post("/delete-blob", withGiteaTarget(async (req, res, _next, target) => {
     filePath,
     `blob: removed ${filePath}`,
   );
+  invalidateWorkspaceFileResponseCache(target);
 
   res.json({ success: true, deleted: filePath });
 }));

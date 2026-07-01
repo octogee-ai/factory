@@ -1,8 +1,102 @@
+import { createHash } from "node:crypto";
+
 import { logger } from "../middleware/logging.js";
 
 const GITHUB_API = "https://api.github.com";
 const OWNER_RE = /^[A-Za-z0-9-]{1,39}$/;
 const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
+const GITHUB_CONDITIONAL_CACHE_MAX = 500;
+
+interface GithubConditionalCacheEntry {
+  etag: string;
+  value: unknown;
+}
+
+const githubConditionalCache = new Map<string, GithubConditionalCacheEntry>();
+
+export function clearGithubConditionalCache(): void {
+  githubConditionalCache.clear();
+}
+
+function repoScope(url: string): string {
+  const m = url.match(/\/repos\/([^/]+)\/([^/?]+)/);
+  return m ? `${m[1]}/${m[2]}` : "global";
+}
+
+function githubConditionalCacheKey(url: string, token: string | undefined): string {
+  return `${repoScope(url)}||${createHash("sha256").update(token ?? "").digest("hex")}:${url}`;
+}
+
+// Drop only the validators for the mutated repo — a write to one customer's repo
+// must not flush every other tenant's ETags in the shared octogee-api process.
+export function invalidateGithubConditionalCacheForUrl(url: string): void {
+  const prefix = `${repoScope(url)}||`;
+  for (const key of githubConditionalCache.keys()) {
+    if (key.startsWith(prefix)) githubConditionalCache.delete(key);
+  }
+}
+
+function addGithubConditionalEntry(key: string, entry: GithubConditionalCacheEntry): void {
+  if (githubConditionalCache.has(key)) githubConditionalCache.delete(key);
+  githubConditionalCache.set(key, entry);
+  while (githubConditionalCache.size > GITHUB_CONDITIONAL_CACHE_MAX) {
+    const oldest = githubConditionalCache.keys().next().value;
+    if (!oldest) return;
+    githubConditionalCache.delete(oldest);
+  }
+}
+
+function parseGithubJson(resp: Response): Promise<unknown> {
+  if (resp.status === 204) return Promise.resolve(null);
+  return resp.text().then((text) => (text ? JSON.parse(text) : null));
+}
+
+async function fetchGithubJson(
+  method: string,
+  url: string,
+  token: string | undefined,
+  body?: unknown,
+  notFoundMessage?: string,
+): Promise<unknown> {
+  const upperMethod = method.toUpperCase();
+  const cacheable = upperMethod === "GET" && body === undefined;
+  const cacheKey = cacheable ? githubConditionalCacheKey(url, token) : null;
+  const cached = cacheKey ? githubConditionalCache.get(cacheKey) : undefined;
+
+  const send = (useValidator: boolean) =>
+    fetch(url, {
+      method: upperMethod,
+      headers: {
+        ...githubHeaders(token),
+        ...(useValidator && cached ? { "If-None-Match": cached.etag } : {}),
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+
+  let resp = await send(true);
+  if (resp.status === 304) {
+    if (cached && cacheKey) {
+      addGithubConditionalEntry(cacheKey, cached); // refresh LRU recency on a hit
+      return cached.value;
+    }
+    // Validator was evicted between building headers and the response — re-fetch
+    // once unconditionally rather than failing a request that would otherwise succeed.
+    logger.warn(`GitHub API 304 without cached validator, retrying: ${upperMethod} ${url}`);
+    resp = await send(false);
+  }
+  if (!resp.ok) {
+    if (resp.status === 404 && notFoundMessage) throw new Error(notFoundMessage);
+    const text = await resp.text().catch(() => "");
+    logger.error(`GitHub API error: ${resp.status} ${upperMethod} ${url}`, { response: text.slice(0, 500) });
+    throw new Error(`GitHub API ${resp.status}`);
+  }
+  if (upperMethod !== "GET") invalidateGithubConditionalCacheForUrl(url);
+  const value = await parseGithubJson(resp);
+  const etag = resp.headers.get("etag");
+  if (cacheKey && etag) addGithubConditionalEntry(cacheKey, { etag, value });
+  return value;
+}
 
 export function githubContentsUrl(owner: string, repo: string, path: string): string {
   if (!OWNER_RE.test(owner)) throw new Error(`Invalid GitHub owner: ${owner}`);
@@ -28,18 +122,47 @@ export async function githubContentsApi(
   repo: string,
   path: string,
   token: string | undefined,
+  ref?: string,
 ): Promise<unknown> {
-  const url = githubContentsUrl(owner, repo, path);
-  const resp = await fetch(url, { headers: githubHeaders(token) });
-  if (!resp.ok) {
-    if (resp.status === 404) throw new Error("GitHub API 404");
-    const text = await resp.text().catch(() => "");
-    logger.error(`GitHub API error: ${resp.status} GET ${url}`, {
-      response: text.slice(0, 500),
-    });
-    throw new Error(`GitHub API ${resp.status}`);
-  }
-  return resp.json();
+  const url = githubContentsUrl(owner, repo, path) + (ref ? `?ref=${encodeURIComponent(ref)}` : "");
+  return fetchGithubJson("GET", url, token, undefined, "GitHub API 404");
+}
+
+export async function githubCommitsApi(
+  owner: string,
+  repo: string,
+  path: string,
+  token: string | undefined,
+  ref?: string,
+): Promise<unknown> {
+  const sha = ref ? `&sha=${encodeURIComponent(ref)}` : "";
+  const suffix = `/commits?path=${encodeURIComponent(path)}&per_page=1${sha}`;
+  return githubJson("GET", githubRepoUrl(owner, repo, suffix), token);
+}
+
+export async function githubRepoApi(
+  owner: string,
+  repo: string,
+  token: string | undefined,
+): Promise<unknown> {
+  return githubJson("GET", githubRepoUrl(owner, repo, ""), token);
+}
+
+export async function githubBranchesApi(
+  owner: string,
+  repo: string,
+  token: string | undefined,
+): Promise<unknown> {
+  return githubJson("GET", githubRepoUrl(owner, repo, "/branches?per_page=100"), token);
+}
+
+export async function githubTreeApi(
+  owner: string,
+  repo: string,
+  ref: string,
+  token: string | undefined,
+): Promise<unknown> {
+  return githubJson("GET", githubRepoUrl(owner, repo, `/git/trees/${encodeURIComponent(ref)}?recursive=1`), token);
 }
 
 export function githubRepoUrl(owner: string, repo: string, suffix: string): string {
@@ -54,19 +177,7 @@ export async function githubJson(
   token: string | undefined,
   body?: unknown,
 ): Promise<unknown> {
-  const resp = await fetch(url, {
-    method,
-    headers: { ...githubHeaders(token), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    logger.error(`GitHub API error: ${resp.status} ${method} ${url}`, { response: text.slice(0, 500) });
-    throw new Error(`GitHub API ${resp.status}`);
-  }
-  if (resp.status === 204) return null;
-  const text = await resp.text();
-  return text ? JSON.parse(text) : null;
+  return fetchGithubJson(method, url, token, body);
 }
 
 export const GITHUB_ISSUES_PER_PAGE = 100;
@@ -119,6 +230,7 @@ export async function githubContentsPut(
     });
     throw new Error(`GitHub API ${resp.status}`);
   }
+  invalidateGithubConditionalCacheForUrl(url);
   return resp.json();
 }
 
@@ -164,13 +276,7 @@ export async function githubListRepos(
   const repos: GithubRepoSummary[] = [];
   let page = 1;
   for (; page <= GITHUB_REPOS_MAX_PAGES; page++) {
-    const resp = await fetch(githubReposUrl(page), { headers: githubHeaders(token) });
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      logger.error(`GitHub repos-list error: ${resp.status}`, { response: text.slice(0, 500) });
-      throw new Error(`GitHub API ${resp.status}`);
-    }
-    const raw = (await resp.json()) as GithubRepoRaw[];
+    const raw = (await githubJson("GET", githubReposUrl(page), token)) as GithubRepoRaw[];
     repos.push(...raw.map(toRepoSummary));
     if (raw.length < GITHUB_REPOS_PAGE) break;
   }

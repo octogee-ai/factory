@@ -11,6 +11,7 @@ import {
   getMimeType,
   pathHasReservedOrHiddenSegment,
 } from "./helpers.js";
+import { invalidateWorkspaceFileResponseCache } from "./file-response-cache.js";
 
 const router = Router();
 
@@ -23,6 +24,7 @@ router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {
   const { repoName } = target;
   const results: Array<{ name: string; status: string }> = [];
 
+  let uploaded = false;
   for (const file of files) {
     const filePath = file.path || file.name;
     const pathError = validateFilePath(filePath);
@@ -46,6 +48,7 @@ router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {
         ...(sha ? { sha } : {}),
       });
       results.push({ name: filePath, status: "ok" });
+      uploaded = true;
     } catch (error) {
       logger.warn("Gitea upload failed", {
         filePath,
@@ -56,6 +59,7 @@ router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {
     }
   }
 
+  if (uploaded) invalidateWorkspaceFileResponseCache(target);
   res.json({ results });
 }));
 
@@ -149,6 +153,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
     if (pathError) { res.status(400).json({ error: pathError }); return; }
 
     const stored = await storeWorkspaceBlob(target, filePath, fileBuffer, mimeType);
+    invalidateWorkspaceFileResponseCache(target);
 
     res.json({
       success: true,

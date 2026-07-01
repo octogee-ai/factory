@@ -5,7 +5,28 @@ import { withFileTarget } from "../../lib/fileTarget.js";
 import { getManifest } from "../../lib/manifest.js";
 import type { Manifest } from "../../lib/manifest.js";
 import { isOversizeFile } from "../../lib/github.js";
-import { giteaSudoUser, HIDDEN, isTargetPathWritable, pathHasReservedOrHiddenSegment, repoContentsApi } from "./helpers.js";
+import { logger } from "../../middleware/logging.js";
+import {
+  giteaSudoUser,
+  HIDDEN,
+  isTargetPathWritable,
+  pathHasReservedOrHiddenSegment,
+  repoBranchesApi,
+  repoCommitsApi,
+  repoContentsApi,
+  repoDefaultBranch,
+  repoTreeApi,
+  type LastCommit,
+} from "./helpers.js";
+import {
+  cachedWorkspaceFileResponse,
+  clearWorkspaceFileResponseCache,
+  FILE_COMMIT_CACHE_TTL_MS,
+  FILE_CONTENT_CACHE_TTL_MS,
+  FILE_INDEX_CACHE_TTL_MS,
+  FILE_LIST_CACHE_TTL_MS,
+  workspaceFileCacheKey,
+} from "./file-response-cache.js";
 
 const router = Router();
 
@@ -28,6 +49,27 @@ export interface WorkspaceFileEntry {
 export interface WorkspaceFilesResponse {
   files: WorkspaceFileEntry[];
   readOnly?: boolean;
+}
+
+export interface WorkspaceFileCommitsResponse {
+  commits: Record<string, LastCommit>;
+  truncated?: boolean;
+}
+
+export interface WorkspaceFileIndexEntry {
+  path: string;
+  source: "git" | "blob";
+}
+
+export interface WorkspaceFileIndexResponse {
+  files: WorkspaceFileIndexEntry[];
+  paths: string[];
+  truncated: boolean;
+}
+
+export interface WorkspaceFileCommitEntry {
+  path: string;
+  source?: "git" | "blob";
 }
 
 export type WorkspaceFileResponse =
@@ -72,12 +114,22 @@ function validateListPath(path: string): ListPathValidation {
   return { ok: true };
 }
 
+const REF_RE = /^[A-Za-z0-9._/-]{1,255}$/;
+
+// A git ref (branch name) from the client. Reject anything outside safe branch-name
+// characters — the value flows into a provider API URL.
+function refFromReq(req: { query: Record<string, unknown> }): string | undefined {
+  const ref = req.query.ref;
+  return typeof ref === "string" && REF_RE.test(ref) ? ref : undefined;
+}
+
 async function repoContentEntries(
   target: Parameters<typeof repoContentsApi>[0],
   path: string,
+  ref?: string,
 ): Promise<RepoContentEntry[] | null> {
   try {
-    const raw = await repoContentsApi(target, path);
+    const raw = await repoContentsApi(target, path, ref);
     return (Array.isArray(raw) ? raw : [raw]) as RepoContentEntry[];
   } catch (e) {
     if (errorMessage(e).includes("404")) return null;
@@ -131,12 +183,13 @@ export function sortWorkspaceFiles(files: WorkspaceFileEntry[]): WorkspaceFileEn
   });
 }
 
-async function workspaceFileEntries(
+async function loadWorkspaceFileEntries(
   target: Parameters<typeof repoContentsApi>[0],
   path: string,
-  bustCache: boolean,
+  bustCache = false,
+  ref?: string,
 ): Promise<WorkspaceFileEntry[] | null> {
-  const contents = await repoContentEntries(target, path);
+  const contents = await repoContentEntries(target, path, ref);
   if (!contents) return null;
 
   const gitFiles = repoFileEntries(contents);
@@ -150,20 +203,160 @@ async function workspaceFileEntries(
   ]);
 }
 
+async function workspaceFileEntries(
+  target: Parameters<typeof repoContentsApi>[0],
+  path: string,
+  bustCache: boolean,
+  ref?: string,
+): Promise<WorkspaceFileEntry[] | null> {
+  return cachedWorkspaceFileResponse(
+    workspaceFileCacheKey("list", target, path, ref),
+    FILE_LIST_CACHE_TTL_MS,
+    () => loadWorkspaceFileEntries(target, path, bustCache, ref),
+    bustCache,
+  );
+}
+
 export async function workspaceFilesResponse(
   target: Parameters<typeof repoContentsApi>[0],
   path: string,
   bustCache: boolean,
+  ref?: string,
 ): Promise<WorkspaceFilesResponse> {
-  const files = await workspaceFileEntries(target, path, bustCache);
+  const files = await workspaceFileEntries(target, path, bustCache, ref);
   if (!files) return { files: [] };
 
   return { files, readOnly: target.provider !== "gitea" };
 }
 
-export async function workspaceFileResponse(
+function validIndexPath(path: string): boolean {
+  return !validateFilePath(path) && !pathHasReservedOrHiddenSegment(path);
+}
+
+function sortFileIndexEntries(entries: WorkspaceFileIndexEntry[]): WorkspaceFileIndexEntry[] {
+  return [...entries].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+async function loadWorkspaceFileIndex(
+  target: Parameters<typeof repoContentsApi>[0],
+  ref: string,
+): Promise<WorkspaceFileIndexResponse> {
+  const tree = await repoTreeApi(target, ref);
+  const gitPaths = new Set(tree.paths);
+  const entries: WorkspaceFileIndexEntry[] = tree.paths.map((path) => ({ path, source: "git" }));
+
+  if (target.provider !== "github") {
+    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
+    for (const path of Object.keys(manifest)) {
+      if (gitPaths.has(path) || !validIndexPath(path)) continue;
+      entries.push({ path, source: "blob" });
+    }
+  }
+
+  const files = sortFileIndexEntries(entries);
+  return {
+    files,
+    paths: files.map((file) => file.path),
+    // Reflects only the git tree's truncation (provider-capped for huge repos);
+    // blob (GCS-manifest) entries are always fully enumerated.
+    truncated: tree.truncated,
+  };
+}
+
+export async function workspaceFileIndexResponse(
+  target: Parameters<typeof repoContentsApi>[0],
+  ref: string,
+  bustCache: boolean,
+): Promise<WorkspaceFileIndexResponse> {
+  return cachedWorkspaceFileResponse(
+    workspaceFileCacheKey("index", target, "", ref),
+    FILE_INDEX_CACHE_TTL_MS,
+    () => loadWorkspaceFileIndex(target, ref),
+    bustCache,
+  );
+}
+
+const COMMIT_FETCH_CONCURRENCY = 8;
+export const COMMIT_LOOKUP_ENTRY_LIMIT = 40;
+
+function parentDir(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
+}
+
+function commitEntriesFromFiles(files: WorkspaceFileEntry[]): WorkspaceFileCommitEntry[] {
+  return files.map((file) => ({ path: file.path, source: file.source }));
+}
+
+function capCommitEntries(entries: WorkspaceFileCommitEntry[]): {
+  entries: WorkspaceFileCommitEntry[];
+  truncated: boolean;
+} {
+  const gitEntries = entries.filter((entry) => entry.source !== "blob");
+  return {
+    entries: gitEntries.slice(0, COMMIT_LOOKUP_ENTRY_LIMIT),
+    truncated: gitEntries.length > COMMIT_LOOKUP_ENTRY_LIMIT,
+  };
+}
+
+async function cachedCommitForEntry(
+  target: Parameters<typeof repoContentsApi>[0],
+  entryPath: string,
+  ref?: string,
+): Promise<LastCommit | null> {
+  return cachedWorkspaceFileResponse(
+    workspaceFileCacheKey("commit", target, entryPath, ref),
+    FILE_COMMIT_CACHE_TTL_MS,
+    () => repoCommitsApi(target, entryPath, ref),
+  );
+}
+
+export async function workspaceFileCommitsResponse(
   target: Parameters<typeof repoContentsApi>[0],
   path: string,
+  requestedEntries?: WorkspaceFileCommitEntry[],
+  ref?: string,
+): Promise<WorkspaceFileCommitsResponse> {
+  const files = requestedEntries ? null : await workspaceFileEntries(target, path, false, ref);
+  if (!requestedEntries && !files) return { commits: {} };
+
+  const capped = capCommitEntries(requestedEntries ?? commitEntriesFromFiles(files ?? []));
+  const gitEntries = capped.entries;
+  const commits: Record<string, LastCommit> = {};
+  const failures: string[] = [];
+  let lastError = "";
+
+  for (let i = 0; i < gitEntries.length; i += COMMIT_FETCH_CONCURRENCY) {
+    const batch = gitEntries.slice(i, i + COMMIT_FETCH_CONCURRENCY);
+    const resolved = await Promise.all(
+      batch.map(async (entry) => {
+        try {
+          return [entry.path, await cachedCommitForEntry(target, entry.path, ref)] as const;
+        } catch (e) {
+          failures.push(entry.path);
+          lastError = errorMessage(e);
+          return [entry.path, null] as const;
+        }
+      }),
+    );
+    for (const [entryPath, commit] of resolved) {
+      if (commit) commits[entryPath] = commit;
+    }
+  }
+
+  // Degrade gracefully but don't spam: one line per request summarizing the drop.
+  if (failures.length > 0) {
+    logger.warn(`workspace file commit lookup failed for ${failures.length}/${gitEntries.length} entries under "${path}": ${lastError}`);
+  }
+
+  return { commits, ...(capped.truncated ? { truncated: true } : {}) };
+}
+
+async function loadWorkspaceFileResponse(
+  target: Parameters<typeof repoContentsApi>[0],
+  path: string,
+  ref?: string,
 ): Promise<WorkspaceFileResponse | null> {
   if (target.provider !== "github") {
     const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
@@ -194,7 +387,7 @@ export async function workspaceFileResponse(
     size?: number;
   };
   try {
-    file = (await repoContentsApi(target, path)) as {
+    file = (await repoContentsApi(target, path, ref)) as {
       content?: string;
       sha?: string;
       encoding?: string;
@@ -223,21 +416,103 @@ export async function workspaceFileResponse(
   };
 }
 
+export async function workspaceFileResponse(
+  target: Parameters<typeof repoContentsApi>[0],
+  path: string,
+  ref?: string,
+): Promise<WorkspaceFileResponse | null> {
+  return cachedWorkspaceFileResponse(
+    workspaceFileCacheKey("file", target, path, ref),
+    FILE_CONTENT_CACHE_TTL_MS,
+    () => loadWorkspaceFileResponse(target, path, ref),
+  );
+}
+
+function commitEntryValidationError(entryPath: string, dirPath: string): string | null {
+  const pathError = validateFilePath(entryPath);
+  if (pathError) return pathError;
+  if (pathHasReservedOrHiddenSegment(entryPath)) return "Access denied";
+  if (parentDir(entryPath) !== dirPath) return "Commit entry is outside the requested directory";
+  return null;
+}
+
+function parseCommitEntries(body: unknown, dirPath: string): WorkspaceFileCommitEntry[] | null {
+  const entries = body && typeof body === "object"
+    ? (body as { entries?: unknown }).entries
+    : undefined;
+  if (!Array.isArray(entries)) return null;
+
+  const parsed: WorkspaceFileCommitEntry[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") return null;
+    const { path, source } = entry as { path?: unknown; source?: unknown };
+    if (typeof path !== "string") return null;
+    if (source !== undefined && source !== "git" && source !== "blob") return null;
+    if (commitEntryValidationError(path, dirPath)) return null;
+    parsed.push({ path, ...(source ? { source } : {}) });
+  }
+  return parsed;
+}
+
+export { clearWorkspaceFileResponseCache };
+
+router.get("/branches", withFileTarget(async (_req, res, _next, target) => {
+  res.json(await repoBranchesApi(target));
+}, { allowWorkspaceMembers: true }));
+
+router.get("/tree", withFileTarget(async (req, res, _next, target) => {
+  const ref = refFromReq(req) ?? (await repoDefaultBranch(target));
+  const bustCache = req.query.nocache === "1";
+  res.json(await workspaceFileIndexResponse(target, ref, bustCache));
+}, { allowWorkspaceMembers: true }));
+
 router.get("/files", withFileTarget(async (req, res, _next, target) => {
   const path = (req.query.path as string) ?? "";
   const bustCache = req.query.nocache === "1";
+  const ref = refFromReq(req);
   const pathValidation = validateListPath(path);
   if (!pathValidation.ok) {
     res.status(pathValidation.status).json({ error: pathValidation.error });
     return;
   }
 
-  res.json(await workspaceFilesResponse(target, path, bustCache));
+  res.json(await workspaceFilesResponse(target, path, bustCache, ref));
+}, { allowWorkspaceMembers: true }));
+
+router.get("/files/commits", withFileTarget(async (req, res, _next, target) => {
+  const path = (req.query.path as string) ?? "";
+  const ref = refFromReq(req);
+  const pathValidation = validateListPath(path);
+  if (!pathValidation.ok) {
+    res.status(pathValidation.status).json({ error: pathValidation.error });
+    return;
+  }
+
+  res.json(await workspaceFileCommitsResponse(target, path, undefined, ref));
+}, { allowWorkspaceMembers: true }));
+
+router.post("/files/commits", withFileTarget(async (req, res, _next, target) => {
+  const path = ((req.query.path as string | undefined) ?? (req.body as { path?: string } | undefined)?.path) ?? "";
+  const ref = refFromReq(req);
+  const pathValidation = validateListPath(path);
+  if (!pathValidation.ok) {
+    res.status(pathValidation.status).json({ error: pathValidation.error });
+    return;
+  }
+
+  const entries = parseCommitEntries(req.body, path);
+  if (!entries) {
+    res.status(400).json({ error: "Invalid commit entries" });
+    return;
+  }
+
+  res.json(await workspaceFileCommitsResponse(target, path, entries, ref));
 }, { allowWorkspaceMembers: true }));
 
 router.get("/file", withFileTarget(async (req, res, _next, target) => {
   const path = req.query.path as string;
   if (!path) { res.status(400).json({ error: "Missing path" }); return; }
+  const ref = refFromReq(req);
 
   const pathError = validateFilePath(path);
   if (pathError) { res.status(400).json({ error: pathError }); return; }
@@ -247,7 +522,7 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
     return;
   }
 
-  const response = await workspaceFileResponse(target, path);
+  const response = await workspaceFileResponse(target, path, ref);
   if (!response) {
     res.status(404).json({ error: "File not found" });
     return;

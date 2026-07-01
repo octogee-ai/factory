@@ -8,6 +8,7 @@ import {
   IMAGE_EXTENSIONS,
   giteaSudoUser,
 } from "../routes/workspace/helpers.js";
+import { invalidateWorkspaceFileResponseCache } from "../routes/workspace/file-response-cache.js";
 
 export interface StoredWorkspaceBlob {
   gcsPath: string;
@@ -67,6 +68,7 @@ export async function storeWorkspaceBlob(
       uploadedAt: new Date().toISOString(),
     },
   });
+  invalidateWorkspaceFileResponseCache(target);
 
   return {
     gcsPath,
@@ -85,4 +87,5 @@ export async function removeWorkspaceBlob(target: FileTarget, filePath: string):
     await bucket.file(`${target.gcsPrefix}/.thumbs/${filePath}.png`).delete({ ignoreNotFound: true });
   }
   await removeFromManifest(giteaSudoUser(target), target.org, target.repoName, filePath);
+  invalidateWorkspaceFileResponseCache(target);
 }

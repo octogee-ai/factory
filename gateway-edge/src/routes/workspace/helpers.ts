@@ -1,6 +1,12 @@
 import type { Request, Response } from "express";
 import { giteaApiAsUser } from "../../lib/gitea.js";
-import { githubContentsApi } from "../../lib/github.js";
+import {
+  githubBranchesApi,
+  githubCommitsApi,
+  githubContentsApi,
+  githubRepoApi,
+  githubTreeApi,
+} from "../../lib/github.js";
 import type { FileTarget } from "../../lib/fileTarget.js";
 import type { CommitAuthor } from "../../lib/workspace-git.js";
 import { validateFilePath } from "../../lib/path-validation.js";
@@ -48,14 +54,119 @@ export async function targetGiteaApi(
 export async function repoContentsApi(
   target: FileTarget,
   filePath: string,
+  ref?: string,
 ): Promise<unknown> {
   if (target.provider === "github") {
-    return githubContentsApi(target.org, target.repoName, filePath, target.githubToken);
+    return githubContentsApi(target.org, target.repoName, filePath, target.githubToken, ref);
   }
-  const apiPath = filePath
+  const base = filePath
     ? `${target.repoName}/contents/${filePath}`
     : `${target.repoName}/contents`;
+  const apiPath = ref ? `${base}?ref=${encodeURIComponent(ref)}` : base;
   return targetGiteaApi(target, apiPath);
+}
+
+export interface BranchInfo {
+  name: string;
+  isDefault: boolean;
+}
+
+interface RawTreeEntry {
+  path?: string;
+  type?: string;
+}
+
+export async function repoDefaultBranch(target: FileTarget): Promise<string> {
+  const raw = (target.provider === "github"
+    ? await githubRepoApi(target.org, target.repoName, target.githubToken)
+    : await targetGiteaApi(target, target.repoName)) as { default_branch?: string } | null;
+  return raw?.default_branch || "main";
+}
+
+export async function repoBranchesApi(
+  target: FileTarget,
+): Promise<{ branches: BranchInfo[]; default: string }> {
+  const def = await repoDefaultBranch(target);
+  const raw = (target.provider === "github"
+    ? await githubBranchesApi(target.org, target.repoName, target.githubToken)
+    : await targetGiteaApi(target, `${target.repoName}/branches`)) as Array<{ name?: string }>;
+  const branches = (Array.isArray(raw) ? raw : [])
+    .map((b) => b.name || "")
+    .filter(Boolean)
+    .map((name) => ({ name, isDefault: name === def }));
+  return { branches, default: def };
+}
+
+export async function repoTreeApi(
+  target: FileTarget,
+  ref: string,
+): Promise<{ paths: string[]; truncated: boolean }> {
+  const raw = (target.provider === "github"
+    ? await githubTreeApi(target.org, target.repoName, ref, target.githubToken)
+    : await targetGiteaApi(target, `${target.repoName}/git/trees/${encodeURIComponent(ref)}?recursive=true`)) as {
+    tree?: RawTreeEntry[];
+    truncated?: boolean;
+  } | null;
+  const entries = Array.isArray(raw?.tree) ? raw.tree : [];
+  const paths = entries
+    .filter((e) => e.type === "blob" && typeof e.path === "string")
+    .map((e) => e.path as string)
+    .filter((p) => !pathHasReservedOrHiddenSegment(p));
+  return { paths, truncated: raw?.truncated === true };
+}
+
+// Provider-neutral "last commit touching this path". Both Gitea and GitHub return
+// a commit-list whose element shares this shape; only the request URL differs. This
+// is the same provider seam as repoContentsApi — future first-class integrations
+// (CI/CD, builds) grow it the same way.
+export interface LastCommit {
+  message: string;
+  date: string;
+  authorName: string;
+  sha: string;
+}
+
+interface RawCommit {
+  sha?: string;
+  commit?: {
+    message?: string;
+    author?: { name?: string; date?: string };
+    committer?: { date?: string };
+  };
+  author?: { login?: string } | null;
+}
+
+function firstLine(text: string | undefined): string {
+  return (text ?? "").split(/\r?\n/)[0];
+}
+
+function normalizeCommit(raw: RawCommit | undefined): LastCommit | null {
+  if (!raw) return null;
+  const commit = raw.commit;
+  const author = commit?.author;
+  return {
+    message: firstLine(commit?.message),
+    date: author?.date ?? commit?.committer?.date ?? "",
+    authorName: author?.name ?? raw.author?.login ?? "",
+    sha: raw.sha ?? "",
+  };
+}
+
+export async function repoCommitsApi(
+  target: FileTarget,
+  filePath: string,
+  ref?: string,
+): Promise<LastCommit | null> {
+  const giteaSha = ref ? `&sha=${encodeURIComponent(ref)}` : "";
+  const raw =
+    target.provider === "github"
+      ? await githubCommitsApi(target.org, target.repoName, filePath, target.githubToken, ref)
+      : await targetGiteaApi(
+          target,
+          `${target.repoName}/commits?path=${encodeURIComponent(filePath)}&limit=1&stat=false${giteaSha}`,
+        );
+  const list = Array.isArray(raw) ? (raw as RawCommit[]) : [];
+  return normalizeCommit(list[0]);
 }
 
 export const HIDDEN = new Set([
