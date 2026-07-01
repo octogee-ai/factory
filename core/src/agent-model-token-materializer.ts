@@ -43,7 +43,7 @@ export interface OpenRouterBrokerProviderConfig {
   api: "openai-completions";
   baseUrl: string;
   apiKey: string;
-  models: Array<{ id: string; name: string; contextTokens?: number }>;
+  models: Array<{ id: string; name: string; contextTokens?: number; contextWindow?: number }>;
 }
 
 export interface OpenRouterBrokerModelsJson {
@@ -51,7 +51,7 @@ export interface OpenRouterBrokerModelsJson {
     api: "openai-completions";
     baseUrl: string;
     apiKey: { source: "exec"; provider: string; id: string };
-    models: Array<{ id: string; name: string; contextTokens?: number }>;
+    models: Array<{ id: string; name: string; contextTokens?: number; contextWindow?: number }>;
   }>;
 }
 
@@ -71,14 +71,20 @@ export function openRouterBrokerProviderConfig(
     baseUrl: input.baseUrl,
     apiKey: input.apiKey,
     models: [
-      {
-        id: input.model,
-        name: input.model,
-        ...(typeof input.contextTokens === "number"
-          ? { contextTokens: input.contextTokens }
-          : {}),
-      },
+      openRouterBrokerModelConfig(input),
     ],
+  };
+}
+
+function openRouterBrokerModelConfig(
+  input: OpenRouterBrokerModelInput,
+): { id: string; name: string; contextTokens?: number; contextWindow?: number } {
+  return {
+    id: input.model,
+    name: input.model,
+    ...(typeof input.contextTokens === "number"
+      ? { contextTokens: input.contextTokens, contextWindow: input.contextTokens }
+      : {}),
   };
 }
 
@@ -108,15 +114,7 @@ export function openRouterBrokerModelsJson(
           provider: SECRET_RESOLVER_PROVIDER,
           id: agentModelTokenSecretId(agentId, "openrouter"),
         },
-        models: [
-          {
-            id: input.model,
-            name: input.model,
-            ...(typeof input.contextTokens === "number"
-              ? { contextTokens: input.contextTokens }
-              : {}),
-          },
-        ],
+        models: [openRouterBrokerModelConfig(input)],
       },
     },
   };

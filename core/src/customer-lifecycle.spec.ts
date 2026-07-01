@@ -518,6 +518,36 @@ if (ensureIdx !== -1) {
     expect(state.calls).toContain("waitForAccountHealthy");
     expect(result.steps).toContain("verify-channel-ready");
   });
+
+  it("refreshes the customer snapshot before reasserting cohort model state", async () => {
+    const adapter = makeAdapter(state);
+    const applyAddCustomerConfigPatch = adapter.applyAddCustomerConfigPatch;
+    adapter.applyAddCustomerConfigPatch = async (...args) => {
+      const result = await applyAddCustomerConfigPatch(...args);
+      state.user = snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+        initialModelProvider: "openrouter",
+        initialModel: "z-ai/glm-5.2",
+        initialModelReasoningEffort: "xhigh",
+      });
+      return result;
+    };
+
+    await addCustomerToGateway(adapter, "uid-test");
+
+    expect(state.reassertByotUserData?.provisioning).toEqual({
+      openclaw: {
+        status: "complete",
+        initialModelProvider: "openrouter",
+        initialModel: "z-ai/glm-5.2",
+        initialModelReasoningEffort: "xhigh",
+      },
+    });
+  });
 });
 
 describe("addCustomerToGateway — recovery from orphan dir (the bug class)", () => {

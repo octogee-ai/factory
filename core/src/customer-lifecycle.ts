@@ -388,7 +388,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push("config-patch");
   throwIfAborted(signal, uid);
 
-  steps.push(...(await reassertByot(adapter, slug, byotUserDataFromSnapshot(snapshot))));
+  steps.push(...(await reassertByot(adapter, snapshot)));
   throwIfAborted(signal, uid);
 
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
@@ -502,7 +502,7 @@ async function addCustomerToGatewayInner(
   steps.push("config-patch");
   throwIfAborted(signal, uid);
 
-  steps.push(...(await reassertByot(adapter, slug, byotUserDataFromSnapshot(snapshot))));
+  steps.push(...(await reassertByot(adapter, snapshot)));
   throwIfAborted(signal, uid);
 
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
@@ -727,17 +727,31 @@ function byotUserDataFromSnapshot(snapshot: UserSnapshot): Record<string, unknow
 // restoreByos (BYOS oauth) alone does not restore it. Runs here so it's re-applied on
 // every provision AND re-mount. Idempotent; non-fatal so a transient broker hiccup
 // doesn't strand the whole mount — the change-trigger and next re-mount re-run it.
+async function refreshSnapshotForReassert(
+  adapter: CustomerLifecycleAdapter,
+  snapshot: UserSnapshot,
+): Promise<UserSnapshot> {
+  try {
+    return (await adapter.loadUserSnapshot(snapshot.uid)) ?? snapshot;
+  } catch (err) {
+    adapter.log(
+      `[add:${snapshot.slug}] ⚠ refresh before byot re-assert failed; using mount snapshot: ${String(err)}`,
+    );
+    return snapshot;
+  }
+}
+
 async function reassertByot(
   adapter: CustomerLifecycleAdapter,
-  slug: string,
-  userData: Record<string, unknown>,
+  snapshot: UserSnapshot,
 ): Promise<AddCustomerStep[]> {
+  const refreshed = await refreshSnapshotForReassert(adapter, snapshot);
   try {
-    await adapter.reassertByotForCustomer(userData);
+    await adapter.reassertByotForCustomer(byotUserDataFromSnapshot(refreshed));
     return ["byot-reassert"];
   } catch (err) {
     adapter.log(
-      `[add:${slug}] ⚠ byot re-assert failed (non-fatal; retry on next sync/re-mount): ${String(err)}`,
+      `[add:${snapshot.slug}] ⚠ byot re-assert failed (non-fatal; retry on next sync/re-mount): ${String(err)}`,
     );
     return [];
   }

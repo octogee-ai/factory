@@ -136,7 +136,14 @@ describe("agent-model-token materializer", () => {
       api: "openai-completions",
       baseUrl: "http://llm-broker.octogee-test.svc.cluster.local:3010/v1",
       apiKey: "octogee-model-token-live",
-      models: [{ id: "z-ai/glm-5.2", name: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+      models: [
+        {
+          id: "z-ai/glm-5.2",
+          name: "z-ai/glm-5.2",
+          contextTokens: 1_048_576,
+          contextWindow: 1_048_576,
+        },
+      ],
     });
   });
 });
