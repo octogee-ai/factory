@@ -316,6 +316,9 @@ export function buildClaudeCliAuthProfilesStore(
     trimmed.startsWith("{")
       ? parseClaudeCliSsoCredential(trimmed)
       : null;
+  if (profile && profile.expires <= nowMs) {
+    throw new Error("claude-cli SSO credential: expired");
+  }
   return {
     version: 1,
     profiles: {

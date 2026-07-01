@@ -358,7 +358,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
             claudeAiOauth: {
               accessToken: "claude-access-1",
               refreshToken: "claude-refresh-1",
-              expiresAt: 1782648121333,
+              expiresAt: Date.now() + 24 * 60 * 60 * 1000,
             },
           }),
         },

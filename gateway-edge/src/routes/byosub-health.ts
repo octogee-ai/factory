@@ -15,7 +15,10 @@ import {
   readCodexAuthStateText,
 } from "@octogee/core/byosub-restore";
 import { readAuthProfileStore } from "@octogee/core/auth-profile-sqlite";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "@octogee/core/model-credential-materializer";
+import {
+  CLAUDE_CLI_DEFAULT_PROFILE_ID,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
+} from "@octogee/core/model-credential-materializer";
 
 // GET /api/g/<gatewayId>/byosub/health — the DEEP byosub durability check.
 //
@@ -34,6 +37,7 @@ export interface ByosubHealthDeps {
   isMounted: (slug: string) => boolean;
   readRefProvider: (gatewayId: string, agentId: string) => Promise<string | null>;
   readStorePresent: (agentId: string, profileId: string) => boolean;
+  readProfileExpiresAt: (agentId: string, profileId: string) => number | null;
   readAuthStateText: (agentId: string) => string | null;
   now: () => number;
 }
@@ -81,13 +85,37 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
           res.status(422).json({ connected: false, status: "not_provisioned" });
           return;
         }
+        const mountedHere = deps.isMounted(resolved.slug);
+        const refProvider = await deps.readRefProvider(pathGatewayId, agentId);
+        const profileId =
+          refProvider === "anthropic"
+            ? CLAUDE_CLI_DEFAULT_PROFILE_ID
+            : OPENAI_CODEX_DEFAULT_PROFILE_ID;
+        if (!refProvider) {
+          res.json(
+            deriveByosubHealth({
+              mountedHere,
+              refProvider,
+              storePresent: false,
+              profileExpiresAt: null,
+              authStateText: null,
+              profileId,
+              now: deps.now(),
+            }),
+          );
+          return;
+        }
         res.json(
           deriveByosubHealth({
-            mountedHere: deps.isMounted(resolved.slug),
-            refProvider: await deps.readRefProvider(pathGatewayId, agentId),
-            storePresent: deps.readStorePresent(agentId, OPENAI_CODEX_DEFAULT_PROFILE_ID),
+            mountedHere,
+            refProvider,
+            storePresent: deps.readStorePresent(agentId, profileId),
+            profileExpiresAt:
+              profileId === CLAUDE_CLI_DEFAULT_PROFILE_ID
+                ? deps.readProfileExpiresAt(agentId, profileId)
+                : null,
             authStateText: deps.readAuthStateText(agentId),
-            profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+            profileId,
             now: deps.now(),
           }),
         );
@@ -112,7 +140,20 @@ async function readRefProvider(
       byosub?: Record<string, { providers?: unknown } | undefined>;
     }
   ).byosub?.[agentId];
-  return byosubConnectionView(ref).providers.openai ? "openai" : null;
+  const view = byosubConnectionView(ref).providers;
+  if (view.openai) return "openai";
+  if (view.anthropic) return "anthropic";
+  return null;
+}
+
+function profileRecord(agentId: string, profileId: string): Record<string, unknown> | null {
+  const store = readAuthProfileStore(codexAgentDir(OPENCLAW_DIR, agentId));
+  const profiles = (store as { profiles?: unknown } | null)?.profiles;
+  if (!profiles || typeof profiles !== "object") return null;
+  const profile = (profiles as Record<string, unknown>)[profileId];
+  return profile && typeof profile === "object" && !Array.isArray(profile)
+    ? (profile as Record<string, unknown>)
+    : null;
 }
 
 const byosubHealthRouter = createByosubHealthRouter({
@@ -121,13 +162,11 @@ const byosubHealthRouter = createByosubHealthRouter({
   isMounted: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug)),
   readRefProvider,
   readStorePresent: (agentId, profileId) => {
-    const store = readAuthProfileStore(codexAgentDir(OPENCLAW_DIR, agentId));
-    const profiles = (store as { profiles?: unknown } | null)?.profiles;
-    return Boolean(
-      profiles &&
-        typeof profiles === "object" &&
-        Object.prototype.hasOwnProperty.call(profiles, profileId),
-    );
+    return profileRecord(agentId, profileId) !== null;
+  },
+  readProfileExpiresAt: (agentId, profileId) => {
+    const expires = profileRecord(agentId, profileId)?.expires;
+    return typeof expires === "number" && Number.isFinite(expires) ? expires : null;
   },
   // null (empty OR unreadable state) maps to healthy-by-design: this endpoint's
   // contract is store-PRESENCE, and deriveByosubHealth only reaches the auth-state

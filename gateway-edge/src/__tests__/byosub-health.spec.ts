@@ -6,9 +6,13 @@ import {
   createByosubHealthRouter,
   type ByosubHealthDeps,
 } from "../routes/byosub-health.js";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "@octogee/core/model-credential-materializer";
+import {
+  CLAUDE_CLI_DEFAULT_PROFILE_ID,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
+} from "@octogee/core/model-credential-materializer";
 
 const PROFILE = OPENAI_CODEX_DEFAULT_PROFILE_ID;
+const CLAUDE_PROFILE = CLAUDE_CLI_DEFAULT_PROFILE_ID;
 const NOW = 1_700_000_000_000;
 
 // A codex auth-state that deriveCodexAuthHealth reads as permanently dead.
@@ -17,7 +21,13 @@ const DEAD_STATE = JSON.stringify({
 });
 
 function base() {
-  return { storePresent: true, authStateText: "", profileId: PROFILE, now: NOW };
+  return {
+    storePresent: true,
+    profileExpiresAt: null,
+    authStateText: "",
+    profileId: PROFILE,
+    now: NOW,
+  };
 }
 
 describe("deriveByosubHealth — ref (expectation) ✕ store (reality)", () => {
@@ -68,6 +78,18 @@ describe("deriveByosubHealth — ref (expectation) ✕ store (reality)", () => {
     ).toEqual({ connected: false, status: "needs_reauth", provider: "openai" });
   });
 
+  it("mounted + ref + store present but profile expired → needs_reauth", () => {
+    expect(
+      deriveByosubHealth({
+        ...base(),
+        mountedHere: true,
+        refProvider: "anthropic",
+        profileId: CLAUDE_PROFILE,
+        profileExpiresAt: NOW - 1,
+      }),
+    ).toEqual({ connected: false, status: "needs_reauth", provider: "anthropic" });
+  });
+
   it("missing ranks below not_on_this_pod: a wrong-pod probe never masquerades as a durability failure", () => {
     // mountedHere=false dominates regardless of store state — the client asked
     // the wrong pod (mid-migration / stale gatewayId), not a real materialization gap.
@@ -104,6 +126,7 @@ function fakeDeps(over: Partial<ByosubHealthDeps> = {}): ByosubHealthDeps {
     isMounted: () => true,
     readRefProvider: async () => "openai",
     readStorePresent: () => true,
+    readProfileExpiresAt: () => null,
     readAuthStateText: () => "",
     now: () => NOW,
     ...over,
@@ -207,6 +230,52 @@ describe("GET /byosub/health route glue", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ connected: true, status: "healthy", provider: "openai" });
     expect(seen).toEqual([{ agentId: "octogee-smile-wring-011b-coach", profileId: PROFILE }]);
+  });
+
+  it("checks for the Claude CLI profile when the byosub ref is Anthropic", async () => {
+    const seen: Array<{ agentId: string; profileId?: string }> = [];
+    const res = await request(
+      appWith(
+        fakeDeps({
+          readRefProvider: async () => "anthropic",
+          readStorePresent: (agentId, profileId) => {
+            seen.push({ agentId, profileId });
+            return profileId === CLAUDE_PROFILE;
+          },
+        }),
+      ),
+    ).get(healthPath());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ connected: true, status: "healthy", provider: "anthropic" });
+    expect(seen).toEqual([{ agentId: "octogee-smile-wring-011b-coach", profileId: CLAUDE_PROFILE }]);
+  });
+
+  it("200 needs_reauth — Anthropic profile exists but its stored expiry is in the past", async () => {
+    const res = await request(
+      appWith(
+        fakeDeps({
+          readRefProvider: async () => "anthropic",
+          readProfileExpiresAt: () => NOW - 1,
+        }),
+      ),
+    ).get(healthPath());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ connected: false, status: "needs_reauth", provider: "anthropic" });
+  });
+
+  it("does not use profile expiry as a Codex reauth signal", async () => {
+    const expiryRead = vi.fn(() => NOW - 1);
+    const res = await request(
+      appWith(
+        fakeDeps({
+          readRefProvider: async () => "openai",
+          readProfileExpiresAt: expiryRead,
+        }),
+      ),
+    ).get(healthPath());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ connected: true, status: "healthy", provider: "openai" });
+    expect(expiryRead).not.toHaveBeenCalled();
   });
 
   it("422 + NO filesystem read when the resolved slug would build a path-unsafe agent id (traversal guard)", async () => {

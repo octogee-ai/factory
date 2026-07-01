@@ -205,6 +205,7 @@ export function deriveByosubHealth(input: {
   mountedHere: boolean;
   refProvider: string | null;
   storePresent: boolean;
+  profileExpiresAt?: number | null;
   authStateText: string | null;
   profileId: string;
   now: number;
@@ -213,6 +214,13 @@ export function deriveByosubHealth(input: {
   if (!input.refProvider) return { connected: false, status: "not_connected" };
   if (!input.storePresent) {
     return { connected: false, status: "missing", provider: input.refProvider };
+  }
+  if (
+    typeof input.profileExpiresAt === "number" &&
+    Number.isFinite(input.profileExpiresAt) &&
+    input.profileExpiresAt <= input.now
+  ) {
+    return { connected: false, status: "needs_reauth", provider: input.refProvider };
   }
   const health = deriveCodexAuthHealth(input.authStateText, input.profileId, input.now);
   if (health === "needs_reauth") {

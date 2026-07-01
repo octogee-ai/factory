@@ -66,7 +66,7 @@ const claudeSsoBlob = () =>
     claudeAiOauth: {
       accessToken: "claude-access-1",
       refreshToken: "claude-refresh-1",
-      expiresAt: 1782648121333,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       subscriptionType: "max",
     },
   });
@@ -347,7 +347,7 @@ describe("restoreByosubCredentials", () => {
       claudeAiOauth: {
         accessToken: "claude-access-1",
         refreshToken: "claude-refresh-1",
-        expiresAt: 1782648121333,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
         subscriptionType: "max",
       },
     });
@@ -383,6 +383,33 @@ describe("restoreByosubCredentials", () => {
       provider: "claude-cli",
       access: "claude-access-1",
     });
+  });
+
+  it("anthropic SSO payload already expired → fails restore instead of promoting a dead profile", async () => {
+    const oc = mkTmp();
+    const home = mkTmp();
+    const agentId = "octogee-a-coach";
+    const item = {
+      agentId,
+      provider: "anthropic" as const,
+      secretName: "byosub-a-anthropic",
+      openclawDir: oc,
+    };
+    const r = await restoreByosubCredentials({
+      plan: [item],
+      fetchSecret: async () =>
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "claude-access-1",
+            refreshToken: "claude-refresh-1",
+            expiresAt: Date.now() - 60_000,
+          },
+        }),
+      claudeCliNativeHomeDir: home,
+    });
+    expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
+    expect(apReadFor(oc, agentId)).toBeNull();
+    expect(fs.existsSync(path.join(home, ".claude", ".credentials.json"))).toBe(false);
   });
 
   it("anthropic setup-token restores the agent profile without claiming native Claude CLI continuity", async () => {
