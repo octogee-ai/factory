@@ -13,7 +13,7 @@ import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker
 
 export interface ReportedStep {
   name: string;
-  status: "running" | "done" | "failed";
+  status: "running" | "done" | "failed" | "skipped";
   error?: string;
 }
 
@@ -178,19 +178,20 @@ export async function runMigration(
       state = { ...state, phase: advancePhase(state.phase) };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      await report(deps, { name, status: "failed", error: errMsg });
-      deps.log(
-        `[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${errMsg}`,
-      );
       if (input.sourceDisposable && isBestEffortSourceStep(step)) {
+        await report(deps, { name, status: "skipped", error: errMsg });
         deps.log(
           `[migration-runner] ⚠ ${name} is best-effort on a disposable source (blue/green roll) — ` +
             `degrading to the target's substrate baseline + continuing, NOT rolling back ` +
-            `(migrationId=${input.migrationId} slug=${input.slug})`,
+            `(migrationId=${input.migrationId} slug=${input.slug}; reason=${errMsg})`,
         );
         state = { ...state, phase: advancePhase(state.phase) };
         continue;
       }
+      await report(deps, { name, status: "failed", error: errMsg });
+      deps.log(
+        `[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${errMsg}`,
+      );
       const rolledBack = await tryRollback(state, deps, input.migrationId);
       return {
         success: false,

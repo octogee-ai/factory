@@ -7,7 +7,7 @@ import {
   parseAssignCustomerGatewayArgs,
   resolveOpsAssignmentTarget,
 } from "../ops/assign-customer-gateway.js";
-import { parseFleetArgs } from "../ops/fleet.js";
+import { parseFleetArgs, resolveFleetCredentialMode } from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
   it("normalizes local gateways and trims dedicated builder slugs", () => {
@@ -124,5 +124,25 @@ describe("fleet CLI args", () => {
       positional: ["ls", "customers"],
       flags: { gateway: "default" },
     });
+  });
+
+  it("uses application-default credentials for committed fleet write verbs", () => {
+    expect(
+      resolveFleetCredentialMode(
+        parseFleetArgs([
+          "--env=prod",
+          "migrate-customer",
+          "alice",
+          "--to=canary",
+          "--apply",
+        ]),
+      ),
+    ).toBe("application-default");
+
+    expect(
+      resolveFleetCredentialMode(
+        parseFleetArgs(["--env=prod", "migrate-customer", "alice", "--to=canary"]),
+      ),
+    ).toBe("service-account-key");
   });
 });

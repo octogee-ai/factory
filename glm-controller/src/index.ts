@@ -132,7 +132,7 @@ import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-hel
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer } from "./http-server.js";
-import { recordReconcile } from "./metrics.js";
+import { recordGatewayHealth, recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
@@ -714,26 +714,45 @@ async function refreshGatewayReadiness(
           namespace: NAMESPACE,
           name: deploymentNameForInstance(gateway.gatewayId),
         });
-        if (available == null || available < 1) return null;
+        const availableReplicas = available ?? 0;
+        if (availableReplicas < 1) {
+          return {
+            ready: null,
+            health: { gatewayId: gateway.gatewayId, availableReplicas },
+          };
+        }
         await publishPlatformGatewayReady(deps.db, {
           gatewayId: gateway.gatewayId,
           imageTag: gateway.imageTag,
           now: Date.now(),
         });
         return {
-          gatewayId: gateway.gatewayId,
-          imageTag: gateway.imageTag,
+          ready: {
+            gatewayId: gateway.gatewayId,
+            imageTag: gateway.imageTag,
+          },
+          health: { gatewayId: gateway.gatewayId, availableReplicas },
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         deps.log(
           `[glm-controller] ⚠ readiness refresh failed for ${gateway.gatewayId}: ${msg}`,
         );
-        return null;
+        return {
+          ready: null,
+          health: { gatewayId: gateway.gatewayId, availableReplicas: 0 },
+        };
       }
     }),
   );
-  return results.filter((gateway): gateway is ReadyGateway => gateway != null);
+  recordGatewayHealth(
+    results
+      .map((result) => result?.health ?? null)
+      .filter((sample): sample is { gatewayId: string; availableReplicas: number } => sample != null),
+  );
+  return results
+    .map((result) => result?.ready ?? null)
+    .filter((gateway): gateway is ReadyGateway => gateway != null);
 }
 
 function markStepDone(
@@ -1968,6 +1987,33 @@ async function buildHandlers(
         ctx,
       );
       return { ok: result.success, error: result.error };
+    },
+    verifyTargetStillRunnable: async ({ gatewayId }) => {
+      const gatewaySnap = await db
+        .collection(GLM_GATEWAYS_COLLECTION)
+        .doc(gatewayId)
+        .get();
+      if (!gatewaySnap.exists) {
+        return { ok: false, error: `target ${gatewayId} missing from glmGateways` };
+      }
+      const desired = gatewaySnap.data() as GatewayDesiredState | undefined;
+      if (desired?.desiredStatus !== "running") {
+        return {
+          ok: false,
+          error: `target ${gatewayId} desiredStatus=${desired?.desiredStatus ?? "missing"}; expected running`,
+        };
+      }
+      const available = await kubeOps.readAvailableReplicas({
+        namespace: NAMESPACE,
+        name: deploymentNameForInstance(gatewayId),
+      });
+      if (available == null || available < 1) {
+        return {
+          ok: false,
+          error: `target ${gatewayId} has ${available ?? 0} available pod(s); expected at least 1`,
+        };
+      }
+      return { ok: true };
     },
     awaitTrafficReady: async ({ gatewayId }) => {
       await fleetOps.syncFleetIngress();

@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 
-import { initializeApp, cert } from "firebase-admin/app";
+import { applicationDefault, cert, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -145,6 +145,20 @@ const VERBS: readonly VerbHelp[] = [
 
 const verbsByName = new Map<string, VerbHelp>(VERBS.map((v) => [v.verb, v]));
 
+export type FleetCredentialMode = "service-account-key" | "application-default";
+
+function parsedVerb(args: ParsedFleetArgs): VerbHelp | null {
+  const [verb, sub] = args.positional;
+  return verbsByName.get(`${verb ?? ""} ${sub ?? ""}`.trim()) ?? verbsByName.get(verb ?? "") ?? null;
+}
+
+export function resolveFleetCredentialMode(args: ParsedFleetArgs): FleetCredentialMode {
+  const verb = parsedVerb(args);
+  return verb?.writes === true && args.flags.apply === true
+    ? "application-default"
+    : "service-account-key";
+}
+
 function renderTopHelp(): string {
   const readVerbs = VERBS.filter((v) => !v.writes);
   const writeVerbs = VERBS.filter((v) => v.writes);
@@ -279,20 +293,28 @@ function initializeFleetCli(argv: string[]): void {
     process.exit(1);
   }
 
+  const credentialMode = resolveFleetCredentialMode(args);
+  const projectId = args.env === "prod" ? "octogee" : `octogee-${args.env}`;
   const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
   const saPath = path.join(
     process.env.HOME ?? "",
     `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
   );
-  if (!fs.existsSync(saPath)) {
+  if (credentialMode === "service-account-key" && !fs.existsSync(saPath)) {
     console.error(red(`${CROSS} SA key not found at ${saPath}`));
     console.error(dim(`  Expected file used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
     process.exit(1);
   }
   initializeApp({
-    credential: cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
-    projectId: args.env === "prod" ? "octogee" : `octogee-${args.env}`,
+    credential:
+      credentialMode === "application-default"
+        ? applicationDefault()
+        : cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
+    projectId,
   });
+  if (credentialMode === "application-default") {
+    console.error(dim(`  fleet writes use Application Default Credentials for ${projectId}.`));
+  }
   db = getFirestore();
   KUBE_NS = args.env === "prod" ? "octogee" : "octogee-test";
 }

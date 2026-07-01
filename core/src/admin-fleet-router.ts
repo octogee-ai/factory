@@ -1101,6 +1101,17 @@ function driftStateForCustomer(input: {
   glmByGatewayId: Map<string, GlmDoc>;
 }): AdminOnboardingDriftState {
   if (isInFlightOperation(input.latestOperation)) return "in-flight";
+  const assignedGateway = input.assignedGatewayId
+    ? input.glmByGatewayId.get(input.assignedGatewayId)
+    : undefined;
+  const assignedGatewayClass = assignedGateway ? normalizeGatewayClass(assignedGateway) : "shared";
+  if (
+    input.assignedGatewayId &&
+    input.mountedGatewayId === input.assignedGatewayId &&
+    assignedGatewayClass !== "shared"
+  ) {
+    return "healthy";
+  }
   if (input.policyWarning?.code === WARNING_CODE_COHORT_DISABLED) return "disabled-default";
   if (
     input.policyTargetGatewayId &&

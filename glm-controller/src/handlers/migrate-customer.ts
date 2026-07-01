@@ -68,6 +68,7 @@ const ROLLOUT_BLUEGREEN_SOURCE = "rollout-bluegreen";
 function reportedStatusToStepStatus(reported: ReportedStep["status"]): StepStatus {
   if (reported === "running") return "running";
   if (reported === "done") return "done";
+  if (reported === "skipped") return "skipped";
   return "failed";
 }
 

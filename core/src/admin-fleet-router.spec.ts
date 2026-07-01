@@ -123,6 +123,7 @@ function mkAdminFleetRouteApp(opts: {
   config: Record<string, unknown>;
   users: Record<string, Record<string, unknown>>;
   glmGateways?: Record<string, Record<string, unknown>>;
+  gateways?: Record<string, Record<string, unknown>>;
 }) {
   const state = {
     config: { ...opts.config },
@@ -144,7 +145,7 @@ function mkAdminFleetRouteApp(opts: {
     collection: vi.fn((name: string) => {
       if (name === "users") return mkCollection(state.users);
       if (name === GLM_GATEWAYS_COLLECTION) return mkCollection(opts.glmGateways ?? {});
-      if (name === "gateways") return mkCollection({});
+      if (name === "gateways") return mkCollection(opts.gateways ?? {});
       if (name === GLM_OPERATIONS_COLLECTION) return mkCollection({});
       return mkCollection({});
     }),
@@ -310,5 +311,68 @@ describe("onboarding cohort overrides by builder slug", () => {
 
     expect(state.config.cohortOverrides).toEqual({ "uid-alice": "glm" });
     expect(res.body.config.cohortOverrides).toEqual({ "uid-alice": "glm" });
+  });
+
+  it("does not report pointer drift for an operator-owned dedicated gateway outside onboarding placement", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: {
+        defaultGatewayId: "default-blue",
+        currentOnboardingCohortId: null,
+        previewOnboardingCohortId: null,
+        onboardingCohorts: {},
+        cohortOverrides: {},
+      },
+      users: {
+        "uid-ceckert": {
+          approved: true,
+          username: "ceckert",
+          email: "ceckert@example.com",
+          provisioning: {
+            openclaw: {
+              slug: "ceckert",
+              gatewayId: "bender-blue",
+              activationLease: {
+                gatewayId: "bender-blue",
+                requestedAt: 1_000,
+                activeAt: 2_000,
+              },
+            },
+          },
+        },
+      },
+      glmGateways: {
+        "default-blue": { gatewayId: "default-blue", gatewayClass: "shared", desiredStatus: "running" },
+        "bender-blue": {
+          gatewayId: "bender-blue",
+          gatewayClass: "operator",
+          desiredStatus: "running",
+          ownerUid: "uid-ceckert",
+          builderSlug: "ceckert",
+        },
+      },
+      gateways: {
+        "bender-blue": {
+          gatewayId: "bender-blue",
+          status: "ready",
+          mountedCustomers: ["ceckert"],
+        },
+      },
+    });
+
+    const res = await request(app).get("/onboarding-cohorts").expect(200);
+
+    const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-ceckert");
+    expect(customer).toMatchObject({
+      uid: "uid-ceckert",
+      assignedGatewayId: "bender-blue",
+      mountedGatewayId: "bender-blue",
+      policyTargetGatewayId: "default-blue",
+      driftState: "healthy",
+    });
+    expect(customer.warnings).toEqual([]);
+    expect(res.body.driftSummary).toMatchObject({
+      healthy: 1,
+      "pointer-drift": 0,
+    });
   });
 });

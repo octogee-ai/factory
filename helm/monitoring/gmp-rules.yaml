@@ -36,6 +36,22 @@ spec:
           annotations:
             summary: "Gateway pod not ready for 3m"
             description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not-ready for 3 minutes."
+        - alert: GatewayDesiredRunningUnavailable
+          expr: glm_gateway_desired_running_unavailable == 1
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Desired-running gateway {{ $labels.gateway_id }} has no available pod"
+            description: "Cowboy expects gateway {{ $labels.gateway_id }} to be running, but Kubernetes has reported zero available replicas for 3 minutes. Check the gateway card, rollout operation, and pod events."
+        - alert: GlmControllerReconcileStalled
+          expr: (time() - glm_reconcile_last_success_timestamp_seconds) > 600
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Cowboy has not completed a successful reconcile in >10m"
+            description: "glm-controller reconcile success is stale. Gateway desired state may not be reaching Kubernetes; check glm-controller logs and /metrics."
     - name: octogee.mattermost
       rules:
         - alert: MattermostDown

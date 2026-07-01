@@ -65,7 +65,7 @@ function happyClient(): MigrationClient & { calls: string[] } {
 
 interface ReportedStep {
   name: string;
-  status: "running" | "done" | "failed";
+  status: "running" | "done" | "failed" | "skipped";
   error?: string;
 }
 
@@ -271,7 +271,11 @@ describe("runMigration — disposable source (blue/green roll): source-side step
     // cutover committed and NOT undone
     expect(client.calls).toContain("cutover:uid-alice->gw-green");
     expect(deps.reportedSteps).toContainEqual(
-      expect.objectContaining({ name: "unmount-source", status: "failed" }),
+      expect.objectContaining({
+        name: "unmount-source",
+        status: "skipped",
+        error: expect.stringContaining("rate limit exceeded"),
+      }),
     );
     expect(
       deps.logCalls.some((l) => l.includes("best-effort") && l.includes("disposable source")),
@@ -291,6 +295,13 @@ describe("runMigration — disposable source (blue/green roll): source-side step
     expect(res.rolledBack).toBe(false);
     expect(client.calls).toContain("verify:alice"); // strict target steps still ran
     expect(client.calls).toContain("cutover:uid-alice->gw-green");
+    expect(deps.reportedSteps).toContainEqual(
+      expect.objectContaining({
+        name: "quiesce-source",
+        status: "skipped",
+        error: expect.stringContaining("source pod already gone"),
+      }),
+    );
   });
 
   it("a TARGET step (restore-target) still fails strictly — never cut over to a target we couldn't set up", async () => {
