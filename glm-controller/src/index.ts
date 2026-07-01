@@ -190,6 +190,7 @@ const GATEWAY_VALUES_FILE = (function () {
     : `${GATEWAY_CHART}/values.test.yaml`;
 })();
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
+const PIN_ENV = NAMESPACE === "octogee" ? "prod" : "test";
 
 const AUTO_ROLL_ON_CHART_DRIFT = NAMESPACE !== "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
@@ -855,7 +856,7 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
   if (deps.reconcileImagePins) {
     try {
-      await deps.reconcileImagePins(NAMESPACE, desired, deps.log);
+      await deps.reconcileImagePins(PIN_ENV, desired, deps.log);
     } catch (err) {
       deps.log(`[image-pins] ⚠ reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
     }

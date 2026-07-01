@@ -193,7 +193,7 @@ await vi.advanceTimersByTimeAsync(5_000);
     stop();
   });
 
-  it("invokes reconcileImagePins with the desired instances each tick", async () => {
+  it("invokes reconcileImagePins with the prod/test env label (not the raw namespace) and the desired instances each tick", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();
     const helm = makeFakeHelm({ upsertInstance: async () => undefined });
@@ -217,6 +217,7 @@ await vi.advanceTimersByTimeAsync(5_000);
     await flush();
     await flush();
     expect(pinSpy).toHaveBeenCalled();
+    expect(pinSpy.mock.calls[0][0]).toBe("prod");
     expect(pinSpy.mock.calls[0][1]).toContainEqual(
       expect.objectContaining({ imageRepository: "repo", imageTag: "abc" }),
     );
