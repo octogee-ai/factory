@@ -257,7 +257,7 @@ function topLevelPackageDirs(rootDir) {
 
 function inspectSourceTarballs(deps, inspectFn, verifySourcePackages) {
   const packageFilter = new Set(verifySourcePackages);
-  return uniqueSourceTarballs(deps)
+  return orderSourceTarballsLeafFirst(uniqueSourceTarballs(deps))
     .filter((source) => packageFilter.size === 0 || packageFilter.has(source.packageName))
     .map((source) => ({ source, state: inspectFn(source) }))
     .filter(({ state }) => state.staleReasons.length > 0);
@@ -275,6 +275,59 @@ function uniqueSourceTarballs(deps) {
     }
   }
   return Array.from(byTarballPath.values());
+}
+
+// Order source tarballs so a package is rebuilt only after every source tarball
+// it depends on. @octogee/core declares a file: dep on @octogee/shared, and
+// core's build resolves @octogee/shared from its own node_modules (refreshed by
+// core's prebuild hook from shared's committed tarball) — so shared must repack
+// first. Discovery order (readdir / package.json key order) is not dependable;
+// this topological sort is. Deterministic tie-break by package name.
+function orderSourceTarballsLeafFirst(sources) {
+  const bySourceTarball = new Map(sources.map((source) => [source.tarballPath, source]));
+  const dependencyTarballs = new Map(
+    sources.map((source) => [source.tarballPath, sourceTarballDependencies(source, bySourceTarball)]),
+  );
+
+  const ordered = [];
+  const placed = new Set();
+  const inProgress = new Set();
+  const byName = (a, b) => a.packageName.localeCompare(b.packageName);
+
+  const visit = (source) => {
+    if (placed.has(source.tarballPath) || inProgress.has(source.tarballPath)) return;
+    inProgress.add(source.tarballPath);
+    for (const depTarball of Array.from(dependencyTarballs.get(source.tarballPath)).sort()) {
+      visit(bySourceTarball.get(depTarball));
+    }
+    inProgress.delete(source.tarballPath);
+    placed.add(source.tarballPath);
+    ordered.push(source);
+  };
+
+  for (const source of sources.slice().sort(byName)) {
+    visit(source);
+  }
+  return ordered;
+}
+
+function sourceTarballDependencies(source, bySourceTarball) {
+  const deps = new Set();
+  const packageJsonPath = path.join(source.packageDir, "package.json");
+  if (!fs.existsSync(packageJsonPath)) return deps;
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  for (const section of DEP_SECTIONS) {
+    const values = packageJson[section];
+    if (!values || typeof values !== "object") continue;
+    for (const spec of Object.values(values)) {
+      if (typeof spec !== "string" || !isLocalTarballSpec(spec)) continue;
+      const depTarball = path.resolve(source.packageDir, spec.slice("file:".length));
+      if (depTarball !== source.tarballPath && bySourceTarball.has(depTarball)) {
+        deps.add(depTarball);
+      }
+    }
+  }
+  return deps;
 }
 
 function refreshSourceTarball({ packageDir }, stdio) {

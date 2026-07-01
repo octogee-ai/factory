@@ -46,33 +46,56 @@ content, so the tarball is safe to commit and guard.
 
 No registry on purpose: this is one private monorepo — one commit, one release
 cycle — so a registry's versioning + auth overhead would buy nothing a solo
-operator uses, while costing a standing auth/publish/version-bump pipeline.
+operator uses, while costing a standing auth/publish/version-bump pipeline. The
+cost it *does* impose — committed binaries conflict across concurrent PRs — is paid
+down by `npm run regen:file-deps` + the git merge driver (below), not by a registry:
+re-evaluated 2026-07-01 and deferred, because 93% of shared-code PRs change a
+consumer in the *same* commit, which a registry can't install into CI without a
+canary-publish pipeline that churns more lockfile lines than the tax it removes
+(see [DECISIONS.md](../docs/decisions/DECISIONS.md)).
 
 ## Changing core
 
+Editing `src/` means the committed `octogee-core.tgz` **and** every consumer's
+lockfile must be regenerated. One command from the repo root does the whole
+ceremony — all three source tarballs (leaf-first: `shared` → `core` →
+`test-helpers`) and every drifted consumer lock:
+
 ```bash
-cd core
-# …edit src/…
-npm run pack:tarball          # rebuild dist + repack → octogee-core.tgz
-# Refresh every consumer's lock to the new tarball. npm keys a file: tarball by the
-# lock's integrity and will NOT re-read a changed tarball at the same path — so
-# clear the cache first. Install WITHOUT --no-save: that flag skips the lock write
-# entirely (it only suppresses the package.json edit), which silently strands the
-# lock on the OLD integrity. We revert the package.json afterward instead.
-npm cache clean --force
-for c in scripts octogee-api gateway-edge glm-controller; do
-  ( cd "../$c" && rm -rf node_modules/@octogee \
-      && npm install "@octogee/core@file:../core/octogee-core.tgz" )
-  git checkout "../$c/package.json"   # drop any unicode-escape churn; keeps the lock
-done
+# …edit core/src/…
+npm run regen:file-deps
 ```
+
+It requires an installed tree (`npm ci` in the packages it touches). It repacks each
+stale source tarball, then removes `node_modules/@octogee/*` in each drifted consumer
+and reinstalls the dep — so both the lock integrity **and** `node_modules` are
+refreshed (no `--package-lock-only` half-refresh that silently strands `node_modules`
+on old code). No `npm cache clean` is needed: npm keys its cache by content integrity,
+so a repacked tarball (new bytes → new integrity) misses the cache and is re-read.
+
+**Rebasing a repacking PR** is the merge-tax path: the binary `.tgz` and the
+consumer locks conflict against any other PR that also repacked, even with zero
+overlapping source. Resolve the *generated artifacts* by taking either side (regen
+rewrites them from the merged source), then regenerate:
+
+```bash
+git rebase origin/main                                    # halts on the .tgz + locks
+git checkout --theirs -- '*.tgz' '*/package-lock.json'    # any valid side; regen overwrites
+npm run regen:file-deps                                    # rebuild from the MERGED source
+git add -A && git rebase --continue
+```
+
+(A git merge driver, added in a follow-up, automates this so the rebase resolves
+without the manual steps.)
 
 There is no safety net at install time: `npm ci` does NOT verify a file: tarball's
 content against its lock, so a stale consumer silently installs old code with no
-`EINTEGRITY`. The net is `npm run verify:tarball` (run by the `core` CI job): it
-fails if the committed tarball drifts from `src` (compares extracted *contents*,
-not bytes — robust across npm versions) OR if any consumer lock's integrity ≠ the
-committed tarball. So a forgotten refresh is loud in CI, just not at `npm ci`.
+`EINTEGRITY`. The net is `npm run verify:tarball`, run in CI for core/shared/
+test-helpers (the scope manifest folds it into their typecheck step and fans a
+`core/` change out to every consumer job): it fails if the committed tarball drifts
+from `src` (compares extracted *contents*, not bytes — robust across npm versions)
+OR if any consumer lock's integrity ≠ the committed tarball. So a forgotten refresh
+is loud in CI, just not at `npm ci`.
 
 ## Layout
 
