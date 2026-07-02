@@ -9,34 +9,130 @@ import { type Firestore } from "firebase-admin/firestore";
 import {
   buildCustomerSummary,
   toISODate,
+  type BrokerCustomerUsage,
   type CustomerSummary,
 } from "./admin-shape.js";
 import { getTierConfig, type TierName } from "@octogee/shared/types/billing-tiers";
 import {
+  MODEL_BROKER_USAGE_EVENTS_COLLECTION,
+  MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
   modelBrokerWindowDocId,
   usageWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 
-async function readBrokerWindowCosts(
+function financeNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+// Admin USD figures come exclusively from the broker ledger; one getAll pulls
+// the current 4h window + the all-time rollup per customer.
+async function readBrokerCustomerUsage(
   db: Firestore,
   uids: string[],
   now: number,
-): Promise<Map<string, number>> {
-  const costs = new Map<string, number>();
-  if (uids.length === 0) return costs;
+): Promise<Map<string, BrokerCustomerUsage>> {
+  const usage = new Map<string, BrokerCustomerUsage>();
+  if (uids.length === 0) return usage;
   const windowStartMs = usageWindowStartMs(now);
-  const refs = uids.map((uid) =>
+  const refs = uids.flatMap((uid) => [
     db
       .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
       .doc(modelBrokerWindowDocId(uid, windowStartMs)),
-  );
+    db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid),
+  ]);
   const snaps = await db.getAll(...refs);
-  snaps.forEach((snap, i) => {
-    const cost = snap.data()?.costUsd;
-    costs.set(uids[i]!, typeof cost === "number" && Number.isFinite(cost) ? cost : 0);
+  uids.forEach((uid, i) => {
+    const windowData = snaps[i * 2]?.data() ?? {};
+    const rollupData = snaps[i * 2 + 1]?.data() ?? {};
+    usage.set(uid, {
+      windowCostUsd: financeNumber(windowData.costUsd),
+      totalCostUsd: financeNumber(rollupData.costUsd),
+      totalTokens: financeNumber(rollupData.totalTokens),
+      now,
+    });
   });
-  return costs;
+  return usage;
+}
+
+export interface BrokerDailyUsage {
+  date: string;
+  costUsd: number;
+  totalTokens: number;
+  requestCount: number;
+}
+
+// One admin detail view reads at most this many event docs (30d of history).
+// ~20K calls/month/customer is far past current scale; when a customer crosses
+// it the history truncates loudly (warn log) instead of reading unbounded —
+// the fix at that scale is day-rollup docs, not a bigger limit.
+const BROKER_DAILY_USAGE_EVENT_LIMIT = 20_000;
+
+// Per-UTC-day broker cost series for the admin usage history — replaces the
+// legacy usage_logs costUsd (openclaw-reported $0).
+async function readBrokerDailyUsage(
+  db: Firestore,
+  uid: string,
+  sinceMs: number,
+  logger?: CustomerRouterLogger,
+): Promise<Map<string, BrokerDailyUsage>> {
+  const snap = await db
+    .collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION)
+    .where("ownerUid", "==", uid)
+    .where("createdAt", ">=", sinceMs)
+    .limit(BROKER_DAILY_USAGE_EVENT_LIMIT)
+    .get();
+  if (snap.docs.length >= BROKER_DAILY_USAGE_EVENT_LIMIT) {
+    logger?.warn("admin daily usage truncated at the broker event limit", {
+      uid,
+      limit: BROKER_DAILY_USAGE_EVENT_LIMIT,
+    });
+  }
+  const days = new Map<string, BrokerDailyUsage>();
+  for (const doc of snap.docs) {
+    const data = doc.data() as Record<string, unknown>;
+    const createdAt = financeNumber(data.createdAt);
+    if (!createdAt) continue;
+    const date = new Date(createdAt).toISOString().slice(0, 10);
+    const day = days.get(date) ?? { date, costUsd: 0, totalTokens: 0, requestCount: 0 };
+    day.costUsd += financeNumber(data.costUsd);
+    day.totalTokens += financeNumber(data.totalTokens);
+    day.requestCount += 1;
+    days.set(date, day);
+  }
+  return days;
+}
+
+// Tokens/interactions come from the legacy tailer docs (they see byosub
+// traffic the broker never does); costUsd comes only from the broker series.
+// Broker-only days (e.g. logs write failed) still surface with their real cost.
+export function mergeDailyUsage(
+  legacyLogs: Array<Record<string, unknown>>,
+  brokerDaily: Map<string, BrokerDailyUsage>,
+): Array<Record<string, unknown>> {
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const log of legacyLogs) {
+    const date = typeof log.date === "string" ? log.date : null;
+    if (!date) continue;
+    merged.set(date, {
+      ...log,
+      costUsd: brokerDaily.get(date)?.costUsd ?? 0,
+      brokerTokens: brokerDaily.get(date)?.totalTokens ?? 0,
+    });
+  }
+  for (const [date, day] of brokerDaily) {
+    if (merged.has(date)) continue;
+    merged.set(date, {
+      date,
+      tokensUsed: day.totalTokens,
+      interactions: day.requestCount,
+      costUsd: day.costUsd,
+      brokerTokens: day.totalTokens,
+    });
+  }
+  return Array.from(merged.values()).sort((a, b) =>
+    String(b.date).localeCompare(String(a.date)),
+  );
 }
 
 export interface CustomerRouterLogger {
@@ -210,13 +306,13 @@ router.get(
         const hasMore = docs.length > pageSize;
         const pageDocs = hasMore ? docs.slice(0, pageSize) : docs;
 
-        const windowCosts = await readBrokerWindowCosts(
+        const brokerUsage = await readBrokerCustomerUsage(
           db,
           pageDocs.map((d) => d.id),
           Date.now(),
         );
         const items: CustomerSummary[] = applyCustomerFilters(
-          pageDocs.map((d) => buildCustomerSummary(d.id, d.data(), windowCosts.get(d.id) ?? 0)),
+          pageDocs.map((d) => buildCustomerSummary(d.id, d.data(), brokerUsage.get(d.id) ?? {})),
           filters,
         );
 
@@ -239,7 +335,7 @@ const statsSnap = await db.doc("system/stats").get();
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
         const usersSnap = await db.collection("users").orderBy("createdAt", "desc").get();
-        const windowCosts = await readBrokerWindowCosts(
+        const brokerUsage = await readBrokerCustomerUsage(
           db,
           usersSnap.docs.map((doc) => doc.id),
           Date.now(),
@@ -255,7 +351,7 @@ const statsSnap = await db.doc("system/stats").get();
           const summary = buildCustomerSummary(
             doc.id,
             doc.data() as Record<string, unknown>,
-            windowCosts.get(doc.id) ?? 0,
+            brokerUsage.get(doc.id) ?? {},
           );
           totalCustomers++;
           if (summary.provisioningStatus !== "complete") incompleteProvisioning++;
@@ -308,12 +404,21 @@ router.get(
         const tier: TierName = subscription.tier || "trial";
         const tierConfig = getTierConfig(tier);
 
-        const windowCosts = await readBrokerWindowCosts(db, [uid], Date.now());
-        const summary = buildCustomerSummary(uid, d, windowCosts.get(uid) ?? 0);
+        const now = Date.now();
+        const [brokerUsage, brokerDaily, brokerRollupSnap] = await Promise.all([
+          readBrokerCustomerUsage(db, [uid], now),
+          readBrokerDailyUsage(db, uid, thirtyDaysAgo.getTime(), logger),
+          db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid).get(),
+        ]);
+        const summary = buildCustomerSummary(uid, d, brokerUsage.get(uid) ?? { now });
 
         const mmContext = await deps.getWorkspaceMmContext(uid, d);
 
         const slugs = warnIfNoSlug(logger, deps.workspaceSlugsForUser(d as { username?: string | null }), uid);
+        // Workspace usage_models carry token telemetry for ALL traffic (byosub
+        // included) but openclaw-$0 costs; the broker rollup carries the real USD
+        // per platform model. Broker figures win per model; workspace-only models
+        // (byosub) keep their token counts at $0 platform cost.
         const modelCosts: Record<
           string,
           { tokens: number; costUsd: number; lastUsedAt: string | null }
@@ -325,7 +430,7 @@ router.get(
             const model = md.model || modelDoc.id.split("_")[0];
             if (!modelCosts[model]) modelCosts[model] = { tokens: 0, costUsd: 0, lastUsedAt: null };
             modelCosts[model]!.tokens += md.tokens || 0;
-            modelCosts[model]!.costUsd += md.cost_usd || 0;
+            modelCosts[model]!.costUsd = 0;
             const lastUsed = toISODate(md.lastUsedAt);
             if (
               lastUsed &&
@@ -334,6 +439,18 @@ router.get(
               modelCosts[model]!.lastUsedAt = lastUsed;
             }
           }
+        }
+        const rollupModels = (brokerRollupSnap.data()?.models ?? {}) as Record<
+          string,
+          Record<string, unknown>
+        >;
+        for (const value of Object.values(rollupModels)) {
+          const model = typeof value.model === "string" ? value.model.replace(/-\d{8}$/, "") : null;
+          if (!model) continue;
+          const existing = modelCosts[model] ?? { tokens: 0, costUsd: 0, lastUsedAt: null };
+          existing.tokens = Math.max(existing.tokens, financeNumber(value.totalTokens));
+          existing.costUsd = financeNumber(value.costUsd);
+          modelCosts[model] = existing;
         }
 
         res.json({
@@ -348,16 +465,14 @@ router.get(
           },
           tierConfig: {
             monthlyPrice: tierConfig.monthlyPrice,
-            weeklyTokenBudget: tierConfig.weeklyTokenBudget,
           },
           usage: {
             totalTokensUsed: usage.totalTokensUsed || 0,
-            costUsd: usage.costUsd || 0,
-            windowTokensUsed: usage.windowTokensUsed || 0,
-            windowSize: summary.windowSize,
-            available: summary.available,
+            brokerTotalTokens: summary.brokerTotalTokens,
+            costUsd: summary.costUsd,
             nextRefillAt: summary.nextRefillAt,
             degraded: summary.degraded,
+            percentUsed: summary.percentUsed,
             interactionCount: usage.interactionCount || 0,
             lastUpdated: toISODate(usage.lastUpdated),
             windowCostUsd: summary.windowCostUsd,
@@ -384,7 +499,12 @@ router.get(
           },
           selectedTier: d.selectedTier || tier,
           workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-          usageLogs: logsSnap.docs.map((doc) => doc.data()),
+          // Daily history: token/interaction telemetry from the legacy tailer
+          // (covers byosub traffic), USD strictly from the broker ledger.
+          usageLogs: mergeDailyUsage(
+            logsSnap.docs.map((doc) => doc.data() as Record<string, unknown>),
+            brokerDaily,
+          ),
           modelCosts,
           createdAt: toISODate(d.createdAt),
           approved: d.approved || false,

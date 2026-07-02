@@ -1,10 +1,18 @@
 import {
   TIERS,
   getTierConfig,
-  calculateAvailableTokens,
   type TierName,
 } from "@octogee/shared/types/billing-tiers";
-import { resolveTier, spendDegradeState, windowBudgetUsdForTier } from "@octogee/shared/types/billing";
+import {
+  resolveTier,
+  spendDegradeState,
+  spendWindowPercentUsed,
+  windowBudgetUsdForTier,
+} from "@octogee/shared/types/billing";
+import {
+  MODEL_BROKER_USAGE_WINDOW_MS,
+  usageWindowStartMs,
+} from "@octogee/shared/types/model-broker-usage";
 
 export function toISODate(val: unknown): string | null {
   if (!val) return null;
@@ -56,6 +64,17 @@ function displayNameFor(d: CustomerDoc): string {
   return stringAt(d, "displayName") || stringAt(d, "username") || email.split("@")[0] || "(unknown)";
 }
 
+// Per-owner figures from the broker ledger (modelBrokerUsage*) — the only
+// source that may render a USD amount on the admin surface. Legacy
+// users/{uid}.usage carries openclaw-reported $0 costs and survives as token
+// telemetry only.
+export interface BrokerCustomerUsage {
+  windowCostUsd?: number;
+  totalCostUsd?: number;
+  totalTokens?: number;
+  now?: number;
+}
+
 export interface CustomerSummary {
   uid:                 string;
   displayName:         string;
@@ -64,14 +83,11 @@ export interface CustomerSummary {
   tier:                string;
   subscriptionStatus:  string;
   byotActive:          boolean;
-  windowTokensUsed:    number;
-  windowSize:          number;
   windowCostUsd:       number;
   windowBudgetUsd:     number;
-  available:           number;
   nextRefillAt:        string | null;
-  weeklyBudget:        number;
   totalTokensUsed:     number;
+  brokerTotalTokens:   number;
   costUsd:             number;
   degraded:            boolean;
   lastActive:          string | null;
@@ -83,16 +99,13 @@ export interface CustomerSummary {
   revenueUsd:          number;
   marginUsd:           number;
 
-  tokensUsed:          number;
-  tokensLimit:         number;
-
   provisioningStatus:  string | null;
 }
 
 export function buildCustomerSummary(
   uid: string,
   d: CustomerDoc,
-  brokerWindowCostUsd = 0,
+  broker: BrokerCustomerUsage = {},
 ): CustomerSummary {
   const subscription = objectAt(d, "subscription");
   const tier = resolvedTier(d, subscription);
@@ -102,11 +115,17 @@ export function buildCustomerSummary(
   const provisioning = objectAt(d, "provisioning");
   const openclaw = objectAt(provisioning, "openclaw");
   const mattermost = objectAt(d, "mattermost");
-  const costUsd = numberAt(usage, "costUsd");
-  const windowBudgetUsd = windowBudgetUsdForTier(tier, toDateOrNull(subscription.trialStartedAt));
+  const now = broker.now ?? Date.now();
+  const windowCostUsd = broker.windowCostUsd ?? 0;
+  const costUsd = broker.totalCostUsd ?? 0;
+  const windowBudgetUsd = windowBudgetUsdForTier(
+    tier,
+    toDateOrNull(subscription.trialStartedAt),
+    new Date(now),
+  );
   const degraded = spendDegradeState({
     tier,
-    windowCostUsd: brokerWindowCostUsd,
+    windowCostUsd,
     windowBudgetUsd,
     onOwnerCredential: d.byotActive === true,
   }).degraded;
@@ -114,19 +133,6 @@ export function buildCustomerSummary(
   const revenueUsd: number = isActiveStatus(subscriptionStatus)
     ? tierConfig.monthlyPrice
     : 0;
-  const windowTokensUsed = numberAt(usage, "windowTokensUsed");
-  const windowStartedAt = toDateOrNull(usage.windowStartedAt);
-  const { available, windowSize, nextRefillAt } = calculateAvailableTokens(
-    tier,
-    windowTokensUsed,
-    windowStartedAt,
-  );
-  let percentUsed = 0;
-  if (windowBudgetUsd > 0) {
-    percentUsed = Math.min(100, Math.round((brokerWindowCostUsd / windowBudgetUsd) * 100));
-  } else if (windowSize > 0) {
-    percentUsed = Math.min(100, Math.round((windowTokensUsed / windowSize) * 100));
-  }
 
   return {
     uid,
@@ -136,14 +142,11 @@ export function buildCustomerSummary(
     tier,
     subscriptionStatus,
     byotActive: d.byotActive === true,
-    windowTokensUsed,
-    windowSize,
-    windowCostUsd: brokerWindowCostUsd,
+    windowCostUsd,
     windowBudgetUsd,
-    available,
-    nextRefillAt: nextRefillAt?.toISOString() ?? null,
-    weeklyBudget: tierConfig.weeklyTokenBudget,
+    nextRefillAt: new Date(usageWindowStartMs(now) + MODEL_BROKER_USAGE_WINDOW_MS).toISOString(),
     totalTokensUsed: numberAt(usage, "totalTokensUsed", numberAt(usage, "tokensUsed")),
+    brokerTotalTokens: broker.totalTokens ?? 0,
     costUsd,
     degraded,
     lastActive: toISODate(usage.lastUpdated),
@@ -151,11 +154,9 @@ export function buildCustomerSummary(
     mattermostUsername: nullableStringAt(mattermost, "username"),
     agentCount: agentIds.length,
     createdAt: toISODate(d.createdAt),
-    percentUsed,
+    percentUsed: spendWindowPercentUsed(windowCostUsd, windowBudgetUsd),
     revenueUsd,
     marginUsd: revenueUsd - costUsd,
-    tokensUsed: windowTokensUsed,
-    tokensLimit: windowSize,
 
     provisioningStatus:
       nullableStringAt(openclaw, "status") ??

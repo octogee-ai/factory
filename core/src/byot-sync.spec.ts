@@ -1213,11 +1213,13 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
   });
 
-  it("claude-cli BYOS: restores the OAuth profile AND materializes the anthropic fallback (both coexist)", async () => {
+  it("claude-cli BYOS on shared: suppressed — no OAuth restore, store purged, platform profile only", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyCoachModelPatchFn = vi.fn(async () => false);
     const reloadFn = vi.fn(async () => {});
+    const logLines: string[] = [];
 
     await syncByotForCustomer(
       {
@@ -1230,20 +1232,29 @@ describe("shared gateway — per-customer broker-token materialization", () => {
         applyByotState: applyByotStateFn,
         materializeAnthropicBroker: materializeFn,
         restoreOauthStoreForSlug: restoreOauthFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
         triggerSecretsReload: reloadFn,
+        logFn: (m: string) => logLines.push(m),
       }),
     );
 
-    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
+    // BYOSUB is single-trust-boundary-only: no OAuth credential may land on a
+    // shared pod, and any lingering profile from the pre-gate era is purged.
+    expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, {
+      preserveAuthProfileStore: false,
+    });
+    // no cohort model configured → coach stays on the pod default; never the byos model
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(reloadFn).toHaveBeenCalledTimes(1);
+    expect(logLines.join("\n")).toContain("byosub (claude-cli) suppressed on shared gateway");
   });
 
-  it("oauth credential absent on shared gateway: preserves broker fallback without pinning coach to missing subscription", async () => {
+  it("codex BYOS on shared with a platform cohort: runs the owner's normal tier model, not the subscription", async () => {
     const applyByotStateFn = vi.fn(() => false);
-    const materializeFn = vi.fn(() => false);
-    const restoreOauthFn = vi.fn(async () => ({ restored: false, present: false }));
+    const materializeFn = vi.fn(() => true);
+    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
     const reloadFn = vi.fn(async () => {});
 
@@ -1251,7 +1262,13 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
+        provisioning: {
+          openclaw: {
+            status: "complete",
+            initialModelProvider: "anthropic",
+            initialModel: "claude-sonnet-4-6",
+          },
+        },
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       baseDeps({
@@ -1263,11 +1280,18 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       }),
     );
 
-    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
+    expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
-    expect(reloadFn).not.toHaveBeenCalled();
+    // same models + budgets as any trial/paying platform customer on shared
+    expect(applyCoachModelPatchFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "tester-70",
+        source: "platform-cohort",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      }),
+    );
+    expect(reloadFn).toHaveBeenCalledTimes(1);
   });
 
   it("grok (non-anthropic) BYOK: writes the custom-provider models.json (store preserved) + materializes the anthropic fallback", async () => {

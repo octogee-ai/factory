@@ -143,3 +143,59 @@ describe("InMemoryModelBrokerUsageStore owner isolation", () => {
     expect(w.requestCount).toBe(0);
   });
 });
+
+describe("house daily allowance metering", () => {
+  it("meters degraded house traffic against the owner's UTC-day allowance", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "h1",
+      ownerUid: "uid-free",
+      degraded: true,
+      countsTowardSpendWindow: false,
+    });
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "h2",
+      ownerUid: "uid-free",
+      degraded: true,
+      countsTowardSpendWindow: false,
+    });
+    const day = await store.readHouseDayUsage({
+      gatewayId: "shared-blue",
+      ownerUid: "uid-free",
+      now: 10_000,
+    });
+    expect(day.totalTokens).toBe(300); // 2 × (100 in + 50 out)
+    expect(day.requestCount).toBe(2);
+  });
+
+  it("does not meter paid (non-degraded) traffic against the house allowance", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    await store.recordUsage({ ...baseRecord, eventId: "paid", ownerUid: "uid-a" });
+    const day = await store.readHouseDayUsage({
+      gatewayId: "shared-blue",
+      ownerUid: "uid-a",
+      now: 10_000,
+    });
+    expect(day.totalTokens).toBe(0);
+    expect(day.requestCount).toBe(0);
+  });
+
+  it("keeps house-day counters isolated per owner", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "fa",
+      ownerUid: "uid-a",
+      degraded: true,
+      countsTowardSpendWindow: false,
+    });
+    const other = await store.readHouseDayUsage({
+      gatewayId: "shared-blue",
+      ownerUid: "uid-b",
+      now: 10_000,
+    });
+    expect(other.totalTokens).toBe(0);
+  });
+});

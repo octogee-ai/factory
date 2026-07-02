@@ -5,6 +5,7 @@ import {
   byosCoachConfigPatch,
   coachFullAgentList,
   deriveDesiredByotState,
+  platformCoachModelInputForUser,
   STANDARD_CODEX_APP_SERVER,
   type CoachModelInput,
 } from "./byot-sync.js";
@@ -466,6 +467,7 @@ export interface SyncByotForCustomerDeps {
   isOperatorGateway?: () => boolean;
   isSharedGateway?: () => boolean;
   usesLlmBrokerToken?: () => boolean;
+  logFn?: (m: string) => void;
   applyByotState?: typeof applyByotState;
   restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch?: typeof applyCoachModelPatch;
@@ -604,11 +606,43 @@ async function syncOperatorByotState(
 // fallback for BYOS / non-anthropic-BYOK ones — so it is always (re)asserted, the
 // auth-profile store is never torn down, and byosub OAuth + custom-provider
 // models.json coexist alongside it.
+// BYOSUB is single-trust-boundary-only: an OAuth model credential (claude-cli,
+// codex) never materializes on a multi-tenant pod. The owner runs the platform
+// broker profile with their OWN tier grant — same models and budgets as any
+// platform customer on shared — and the subscription resumes automatically
+// when the migrate plane moves them to a builder/operator gateway (class-gated
+// materialization at pod boot, no user action).
+export function gateSharedByosub(
+  desired: DesiredByotState,
+  userData: SyncByotUserData,
+  logFn: (m: string) => void,
+): { desired: DesiredByotState; suppressed: boolean } {
+  const provider = desired.input?.provider;
+  if (!provider || !isModelCredentialOauthProvider(provider)) {
+    return { desired, suppressed: false };
+  }
+  const slug = userData.username ?? "";
+  logFn(
+    `[byot-sync] ${slug}: byosub (${provider}) suppressed on shared gateway — ` +
+      `OAuth model credentials are single-trust-boundary only; serving the platform ` +
+      `broker profile with the owner's tier grant`,
+  );
+  return {
+    desired: {
+      enabled: false,
+      input: null,
+      coachModelInput: platformCoachModelInputForUser(slug, userData),
+    },
+    suppressed: true,
+  };
+}
+
 // eslint-disable-next-line complexity -- Shared gateways reconcile BYOT, broker profiles, OAuth allowlists, and cohort models in one ordered pass.
 async function syncSharedBrokerByotState(
   slug: string,
   desired: DesiredByotState,
   actions: SyncByotActions,
+  opts?: { purgeAuthProfileStore?: boolean },
 ): Promise<void> {
   const provider = desired.input?.provider;
   const isOauth = Boolean(provider && isModelCredentialOauthProvider(provider));
@@ -622,7 +656,9 @@ async function syncSharedBrokerByotState(
     slug,
     isNonAnthropicKey ? desired.input : null,
     undefined,
-    { preserveAuthProfileStore: true },
+    // A suppressed byosub owner may carry a pre-gate OAuth profile in the
+    // store — purge it; every other shared path preserves the store.
+    { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true },
   );
 
   const materialized = actions.materializeAnthropicBroker(slug);
@@ -680,7 +716,10 @@ export async function syncByotForCustomer(
   if (!slug) return;
 
   if (isShared()) {
-    await syncSharedBrokerByotState(slug, desired, actions);
+    const gate = gateSharedByosub(desired, userData, deps?.logFn ?? log);
+    await syncSharedBrokerByotState(slug, gate.desired, actions, {
+      purgeAuthProfileStore: gate.suppressed,
+    });
     return;
   }
 

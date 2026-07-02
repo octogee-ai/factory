@@ -3,11 +3,14 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/billing";
 import {
+  MODEL_BROKER_HOUSE_DAY_WINDOW_MS,
+  MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION,
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
   MODEL_BROKER_RATE_WINDOWS_COLLECTION,
   MODEL_BROKER_RATE_WINDOW_MS,
+  houseDayStartMs,
   modelBrokerWindowDocId as windowDocId,
   rateWindowStartMs,
   usageWindowStartMs,
@@ -62,6 +65,14 @@ export interface ModelBrokerUsageStore {
   recordUsage(input: ModelBrokerUsageRecordInput): Promise<void>;
   readWindowUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot>;
   reserveRateWindow?(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot>;
+  readHouseDayUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerHouseDaySnapshot>;
+}
+
+export interface ModelBrokerHouseDaySnapshot {
+  ownerKey: string;
+  dayStartMs: number;
+  requestCount: number;
+  totalTokens: number;
 }
 
 export interface ModelBrokerUsageWindowReadInput {
@@ -422,6 +433,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly rollups = new Map<string, Record<string, unknown> & { totalTokens: number; costUsd: number; requestCount: number }>();
   readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot & Record<string, unknown>>();
   readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
+  readonly houseDayWindows = new Map<string, ModelBrokerHouseDaySnapshot>();
   private readonly eventIds = new Set<string>();
 
   async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
@@ -472,6 +484,36 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         ...latestTraceFields(input),
       });
     }
+    if (input.degraded === true) {
+      const dayStartMs = houseDayStartMs(now);
+      const dayKey = windowDocId(ownerKey, dayStartMs);
+      const existingDay = this.houseDayWindows.get(dayKey) ?? {
+        ownerKey,
+        dayStartMs,
+        totalTokens: 0,
+        requestCount: 0,
+      };
+      this.houseDayWindows.set(dayKey, {
+        ownerKey,
+        dayStartMs,
+        totalTokens: existingDay.totalTokens + totalTokens(input.usage),
+        requestCount: existingDay.requestCount + 1,
+      });
+    }
+  }
+
+  async readHouseDayUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerHouseDaySnapshot> {
+    const now = input.now ?? Date.now();
+    const dayStartMs = houseDayStartMs(now);
+    const ownerKey = windowOwnerKey(input);
+    return (
+      this.houseDayWindows.get(windowDocId(ownerKey, dayStartMs)) ?? {
+        ownerKey,
+        dayStartMs,
+        requestCount: 0,
+        totalTokens: 0,
+      }
+    );
   }
 
   async readWindowUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot> {
@@ -516,22 +558,28 @@ export function createFirestoreModelBrokerUsageStore(
       const cost = estimateModelBrokerCost(input.provider, input.model, input.usage, cacheWriteTtl);
       const windowStartMs = usageWindowStartMs(now);
       const ownerKey = windowOwnerKey(input);
+      const dayStartMs = houseDayStartMs(now);
       const eventRef = db.collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION).doc(eventId);
       const rollupRef = db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(ownerKey);
       const windowRef = db
         .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
         .doc(windowDocId(ownerKey, windowStartMs));
+      const houseDayRef = db
+        .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
+        .doc(windowDocId(ownerKey, dayStartMs));
       const modelKey = modelRollupKey(input.model);
 
       await db.runTransaction(async (t) => {
         const existingEvent = await t.get(eventRef);
         if (existingEvent.exists) return;
-        const [rollupSnap, windowSnap] = await Promise.all([
+        const [rollupSnap, windowSnap, houseDaySnap] = await Promise.all([
           t.get(rollupRef),
           t.get(windowRef),
+          input.degraded === true ? t.get(houseDayRef) : Promise.resolve(null),
         ]);
         const rollupData = rollupSnap.data() ?? {};
         const windowData = windowSnap.data() ?? {};
+        const houseDayData = houseDaySnap?.data() ?? {};
 
         t.set(
           eventRef,
@@ -576,7 +624,41 @@ export function createFirestoreModelBrokerUsageStore(
             { merge: true },
           );
         }
+        if (input.degraded === true) {
+          t.set(
+            houseDayRef,
+            {
+              ownerKey,
+              gatewayId: input.gatewayId,
+              ownerUid: input.ownerUid,
+              dayStartMs,
+              windowLengthMs: MODEL_BROKER_HOUSE_DAY_WINDOW_MS,
+              updatedAt: now,
+              expiresAt: expiresAt(now),
+              requestCount: numberField(houseDayData, "requestCount") + 1,
+              totalTokens: numberField(houseDayData, "totalTokens") + totalTokens(input.usage),
+            },
+            { merge: true },
+          );
+        }
       });
+    },
+
+    async readHouseDayUsage(input) {
+      const now = input.now ?? Date.now();
+      const dayStartMs = houseDayStartMs(now);
+      const ownerKey = windowOwnerKey(input);
+      const snap = await db
+        .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
+        .doc(windowDocId(ownerKey, dayStartMs))
+        .get();
+      const data = snap.data() ?? {};
+      return {
+        ownerKey,
+        dayStartMs,
+        requestCount: numberField(data, "requestCount"),
+        totalTokens: numberField(data, "totalTokens"),
+      };
     },
 
     async readWindowUsage(input) {

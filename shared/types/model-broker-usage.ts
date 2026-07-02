@@ -9,8 +9,11 @@ export const MODEL_BROKER_USAGE_ROLLUPS_COLLECTION = "modelBrokerUsageRollups";
 export const MODEL_BROKER_USAGE_WINDOWS_COLLECTION = "modelBrokerUsageWindows";
 export const MODEL_BROKER_RATE_WINDOWS_COLLECTION = "modelBrokerRateWindows";
 
+export const MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION = "modelBrokerHouseDayWindows";
+
 export const MODEL_BROKER_USAGE_WINDOW_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
 export const MODEL_BROKER_RATE_WINDOW_MS = 60 * 1000;
+export const MODEL_BROKER_HOUSE_DAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // Counters key on the billing owner, not the gateway: a shared pool hosts N
 // builders behind one gatewayId, and ownerUid is null only for single-tenant
@@ -25,6 +28,10 @@ export function usageWindowStartMs(now: number): number {
 
 export function rateWindowStartMs(now: number): number {
   return Math.floor(now / MODEL_BROKER_RATE_WINDOW_MS) * MODEL_BROKER_RATE_WINDOW_MS;
+}
+
+export function houseDayStartMs(now: number): number {
+  return Math.floor(now / MODEL_BROKER_HOUSE_DAY_WINDOW_MS) * MODEL_BROKER_HOUSE_DAY_WINDOW_MS;
 }
 
 export function modelBrokerWindowDocId(ownerKey: string, windowStartMs: number): string {

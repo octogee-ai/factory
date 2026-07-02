@@ -20,11 +20,10 @@ export interface OwnerModelBrokerGrant {
 
 function timestampDate(value: unknown): Date | null {
   if (value instanceof Date) return value;
-  if (value && typeof value === "object" && "toDate" in value) {
-    const date = (value as { toDate?: () => unknown }).toDate?.();
-    return date instanceof Date ? date : null;
-  }
-  return null;
+  const toDate = (value as { toDate?: unknown } | null | undefined)?.toDate;
+  if (typeof toDate !== "function") return null;
+  const date = toDate.call(value);
+  return date instanceof Date ? date : null;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -107,4 +106,78 @@ export async function resolveOwnerModelBrokerGrant(input: {
   });
   const policy = normalizeModelBrokerTokenPolicy({ freeTier: tier?.freeTier === true });
   return { limits, policy };
+}
+
+export interface LiveOwnerGrantInput {
+  gatewayId: string;
+  ownerUid: string | null;
+  now: number;
+}
+
+export type LiveOwnerGrantResolver = (
+  input: LiveOwnerGrantInput,
+) => Promise<OwnerModelBrokerGrant>;
+
+const DEFAULT_GRANT_CACHE_TTL_MS = 60_000;
+const DEFAULT_GRANT_CACHE_MAX_ENTRIES = 10_000;
+
+// The gate resolves the owner grant live on every call so tier changes and the
+// trial daily decay take effect within one TTL — broker tokens carry identity,
+// not limits. The cache bounds Firestore reads on the hot path; the cap +
+// expired-entry sweep bounds memory under owner churn on a long-lived broker.
+export function createCachedOwnerModelBrokerGrantResolver(opts: {
+  db: Pick<Firestore, "collection">;
+  defaults?: Partial<ModelBrokerTokenLimits> | null;
+  ttlMs?: number;
+  maxEntries?: number;
+  log?: (msg: string, fields?: Record<string, unknown>) => void;
+}): LiveOwnerGrantResolver {
+  const ttlMs = opts.ttlMs ?? DEFAULT_GRANT_CACHE_TTL_MS;
+  const maxEntries = opts.maxEntries ?? DEFAULT_GRANT_CACHE_MAX_ENTRIES;
+  const cache = new Map<string, { grant: OwnerModelBrokerGrant; resolvedAt: number }>();
+
+  const sweepExpired = (now: number): void => {
+    if (cache.size < maxEntries) return;
+    let evicted = 0;
+    for (const [key, entry] of cache) {
+      if (now - entry.resolvedAt >= ttlMs) {
+        cache.delete(key);
+        evicted += 1;
+      }
+    }
+    // Everything still live at the cap: drop the oldest insertions rather
+    // than grow unbounded — they re-resolve on their next call.
+    while (cache.size >= maxEntries) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+      evicted += 1;
+    }
+    opts.log?.("llm-broker grant cache swept", { evicted, remaining: cache.size });
+  };
+
+  return async ({ gatewayId, ownerUid, now }) => {
+    const key = `${gatewayId}:${ownerUid ?? ""}`;
+    const cached = cache.get(key);
+    if (cached && now - cached.resolvedAt < ttlMs) return cached.grant;
+    if (cached) cache.delete(key);
+    sweepExpired(now);
+
+    const grant = await resolveOwnerModelBrokerGrant({
+      db: opts.db,
+      gatewayId,
+      ownerUid: ownerUid ?? undefined,
+      now,
+      defaults: opts.defaults,
+    });
+    cache.set(key, { grant, resolvedAt: now });
+    opts.log?.("llm-broker grant resolved", {
+      gatewayId,
+      ownerUid,
+      spendWindowUsd: grant.limits.spendWindowUsd,
+      requestsPerMinute: grant.limits.requestsPerMinute,
+      freeTier: grant.policy.freeTier,
+    });
+    return grant;
+  };
 }

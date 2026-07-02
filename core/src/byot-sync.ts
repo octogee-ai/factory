@@ -215,6 +215,20 @@ export function deriveDesiredByotState(userData: {
   };
 }
 
+// The model a non-byot customer would run: free-tier fallback first, else the
+// onboarding cohort's platform model. Used directly by deriveDesiredByotState
+// and by the shared-gateway byosub gate (an OAuth-subscription owner parked on
+// a shared pod runs exactly this — their normal tier experience).
+export function platformCoachModelInputForUser(
+  slug: string,
+  userData: Parameters<typeof deriveDesiredByotState>[0],
+): CoachModelInput | null {
+  return (
+    freeTierCoachModelInput(slug, userData) ??
+    platformCohortCoachModelInput(slug, userData.provisioning?.openclaw)
+  );
+}
+
 function platformCohortCoachModelInput(
   slug: string,
   openclaw:

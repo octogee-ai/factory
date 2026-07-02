@@ -12,6 +12,10 @@ import type {
   ModelBrokerTokenRecord,
   ModelBrokerTokenStore,
 } from "./lib/model-broker-tokens.js";
+import type {
+  LiveOwnerGrantResolver,
+  OwnerModelBrokerGrant,
+} from "./lib/model-broker-limits.js";
 import {
   estimateModelBrokerCost,
   isUnknownAnthropicPricingModel,
@@ -39,6 +43,13 @@ export interface LlmBrokerAppDeps {
   now?: () => number;
   bodyLimit?: string;
   onMeteringError?: (err: unknown) => void;
+  // Live per-owner grant resolution (tier limits + policy). When present it is
+  // authoritative on every call — mint-time token limits stop being load-bearing,
+  // so plan changes and the trial daily decay reach the gate within one cache TTL.
+  resolveGrant?: LiveOwnerGrantResolver;
+  // Structured gate-decision log: one line per proxied model call with the
+  // owner, budget, and model routing needed to verify billing in TEST.
+  log?: (msg: string, fields?: Record<string, unknown>) => void;
 }
 
 const DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL = "https://api.anthropic.com";
@@ -470,6 +481,8 @@ interface GateDecisionAllowed {
   // over their spend window or on the free tier. Spend exhaustion degrades — it
   // never rejects — so the builder keeps working on cheap Haiku.
   degrade: boolean;
+  degradeReason: "free" | "budget" | null;
+  windowCostUsd: number | null;
 }
 
 interface GateDecisionDenied {
@@ -558,6 +571,7 @@ interface PreflightGateInput {
   req: Request;
   url: URL;
   record: ModelBrokerTokenRecord;
+  grant: OwnerModelBrokerGrant;
   source: ModelBrokerProviderKeySource;
   usageStore?: ModelBrokerUsageStore;
   now: () => number;
@@ -567,7 +581,7 @@ interface PreflightGateInput {
 async function spendWindowGate(
   input: PreflightGateInput,
   spendWindowUsd: number,
-): Promise<{ degrade: boolean } | GateDecisionDenied> {
+): Promise<{ degrade: boolean; windowCostUsd: number } | GateDecisionDenied> {
   if (!input.usageStore?.readWindowUsage) {
     return { allowed: false, status: 503, error: "model broker spend gate unavailable" };
   }
@@ -576,7 +590,7 @@ async function spendWindowGate(
     ownerUid: input.record.ownerUid,
     now: input.now(),
   });
-  return { degrade: usage.costUsd >= spendWindowUsd };
+  return { degrade: usage.costUsd >= spendWindowUsd, windowCostUsd: usage.costUsd };
 }
 
 async function rateWindowDenial(
@@ -596,30 +610,76 @@ async function rateWindowDenial(
     : null;
 }
 
-async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
-  const { record } = input;
-  if (input.source === "owner_model_credential") return { allowed: true, degrade: false };
-  if (input.req.method.toUpperCase() === "GET" && input.url.pathname === "/v1/models") {
-    return { allowed: true, degrade: false };
+function gateDecisionName(gate: GateDecisionAllowed): string {
+  if (!gate.degrade) return "forward";
+  return gate.degradeReason === "free" ? "degrade_free" : "degrade_budget";
+}
+
+type GateLogger = (decision: string, extra?: Record<string, unknown>) => void;
+
+function sendGateDenied(
+  res: ExpressResponse,
+  gate: GateDecisionDenied,
+  logGate: GateLogger,
+): void {
+  if (gate.retryAfterSeconds) {
+    res.setHeader("retry-after", String(gate.retryAfterSeconds));
   }
-  const spendWindowUsd = record.limits.spendWindowUsd;
-  const requestsPerMinute = record.limits.requestsPerMinute;
-  if (!record.policy.freeTier && spendWindowUsd === null && requestsPerMinute === null) {
-    return { allowed: true, degrade: false };
+  logGate(gate.status === 429 ? "rate_limited" : "gate_unavailable", {
+    status: gate.status,
+    error: gate.error,
+  });
+  res.status(gate.status).json({ error: gate.error });
+}
+
+async function grantForRecord(
+  deps: LlmBrokerAppDeps,
+  record: ModelBrokerTokenRecord,
+  nowMs: number,
+): Promise<OwnerModelBrokerGrant> {
+  if (!deps.resolveGrant) return { limits: record.limits, policy: record.policy };
+  return deps.resolveGrant({
+    gatewayId: record.gatewayId,
+    ownerUid: record.ownerUid,
+    now: nowMs,
+  });
+}
+
+const GATE_PASS: GateDecisionAllowed = {
+  allowed: true,
+  degrade: false,
+  degradeReason: null,
+  windowCostUsd: null,
+};
+
+async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
+  const { grant } = input;
+  if (input.source === "owner_model_credential") return GATE_PASS;
+  if (input.req.method.toUpperCase() === "GET" && input.url.pathname === "/v1/models") {
+    return GATE_PASS;
+  }
+  const spendWindowUsd = grant.limits.spendWindowUsd;
+  const requestsPerMinute = grant.limits.requestsPerMinute;
+  if (!grant.policy.freeTier && spendWindowUsd === null && requestsPerMinute === null) {
+    return GATE_PASS;
   }
   try {
     // Free tier always degrades; a paid builder degrades once their window is spent.
-    let degrade = record.policy.freeTier;
+    let degrade = grant.policy.freeTier;
+    let degradeReason: GateDecisionAllowed["degradeReason"] = degrade ? "free" : null;
+    let windowCostUsd: number | null = null;
     if (!degrade && spendWindowUsd !== null) {
       const spend = await spendWindowGate(input, spendWindowUsd);
       if ("allowed" in spend) return spend;
       degrade = spend.degrade;
+      degradeReason = spend.degrade ? "budget" : null;
+      windowCostUsd = spend.windowCostUsd;
     }
     if (requestsPerMinute !== null) {
       const denial = await rateWindowDenial(input, requestsPerMinute);
       if (denial) return denial;
     }
-    return { allowed: true, degrade };
+    return { allowed: true, degrade, degradeReason, windowCostUsd };
   } catch (err) {
     input.onMeteringError(err);
     return { allowed: false, status: 503, error: "model broker limit check failed" };
@@ -828,21 +888,49 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           res.status(503).json({ error: `${record.provider} upstream is not configured` });
           return;
         }
+        let grant: OwnerModelBrokerGrant;
+        try {
+          grant = await grantForRecord(deps, record, now());
+        } catch (err) {
+          (deps.onMeteringError ?? (() => undefined))(err);
+          res.status(503).json({ error: "model broker grant resolution failed" });
+          return;
+        }
+        const requestModel = readRequestMetadata(req.body).model;
+        const logGate: GateLogger = (decision, extra = {}) => {
+          deps.log?.("llm-broker gate", {
+            decision,
+            gatewayId: record.gatewayId,
+            ownerUid: record.ownerUid,
+            provider: record.provider,
+            path: url.pathname,
+            keySource: providerKey.source,
+            spendWindowUsd: grant.limits.spendWindowUsd,
+            requestsPerMinute: grant.limits.requestsPerMinute,
+            freeTier: grant.policy.freeTier,
+            requestModel,
+            ...extra,
+          });
+        };
         const gate = await preflightGate({
           req,
           url,
           record,
+          grant,
           source: providerKey.source,
           usageStore: deps.usageStore,
           now,
           onMeteringError: deps.onMeteringError ?? (() => undefined),
         });
         if (!gate.allowed) {
-          if (gate.retryAfterSeconds) {
-            res.setHeader("retry-after", String(gate.retryAfterSeconds));
-          }
-          res.status(gate.status).json({ error: gate.error });
+          sendGateDenied(res, gate, logGate);
           return;
+        }
+        if (req.method.toUpperCase() === "POST") {
+          logGate(gateDecisionName(gate), {
+            effectiveModel: gate.degrade ? houseModels[record.provider] : requestModel,
+            windowCostUsd: gate.windowCostUsd,
+          });
         }
         await forwardAllowed({
           req,

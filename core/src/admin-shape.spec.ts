@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildCustomerSummary } from "./admin-shape.js";
 
+const NOW = Date.UTC(2026, 6, 2, 13, 30);
+
 describe("buildCustomerSummary", () => {
   it("normalizes malformed nested customer fields instead of leaking them", () => {
     const summary = buildCustomerSummary("uid-1", {
@@ -12,7 +14,7 @@ describe("buildCustomerSummary", () => {
       usage: {
         costUsd: "not-a-number",
         throttleLevel: "blocked",
-        windowTokensUsed: "a lot",
+        totalTokensUsed: "a lot",
       },
       provisioning: {
         openclaw: {
@@ -34,7 +36,8 @@ describe("buildCustomerSummary", () => {
       tier: "trial",
       subscriptionStatus: "trial",
       costUsd: 0,
-      windowTokensUsed: 0,
+      totalTokensUsed: 0,
+      brokerTotalTokens: 0,
       agentCount: 0,
       mattermostConnected: false,
       mattermostUsername: null,
@@ -51,26 +54,71 @@ describe("buildCustomerSummary", () => {
       buildCustomerSummary("u", { subscription: { tier: "free" }, byotActive: true }).degraded,
     ).toBe(false);
 
-    // paid tier: under window budget (3rd arg = broker window spend) vs over it
+    // paid tier: under window budget (broker window spend) vs over it
     const paid = { selectedTier: "pro", subscription: { tier: "pro" } };
-    expect(buildCustomerSummary("u", paid, 0).degraded).toBe(false);
-    expect(buildCustomerSummary("u", paid, 9999).degraded).toBe(true);
+    expect(buildCustomerSummary("u", paid, { windowCostUsd: 0, now: NOW }).degraded).toBe(false);
+    expect(buildCustomerSummary("u", paid, { windowCostUsd: 9999, now: NOW }).degraded).toBe(true);
   });
 
-  it("uses broker spend, not token overflow, for the active window percentage", () => {
+  it("uses broker spend for the window percentage and never renders legacy token windows", () => {
     const summary = buildCustomerSummary(
       "u",
       {
-        subscription: { tier: "trial", trialStartedAt: new Date() },
-        usage: { windowTokensUsed: 676_435 },
+        subscription: { tier: "trial", trialStartedAt: new Date(NOW) },
+        usage: { windowTokensUsed: 676_435, totalTokensUsed: 1_145_873 },
       },
-      0.008,
+      { windowCostUsd: 0.008, now: NOW },
     );
 
-    expect(summary.windowTokensUsed).toBe(676_435);
     expect(summary.windowCostUsd).toBe(0.008);
     expect(summary.windowBudgetUsd).toBeGreaterThan(0);
     expect(summary.percentUsed).toBe(0);
     expect(summary.degraded).toBe(false);
+    // legacy token-window fields are gone from the admin contract
+    expect(summary).not.toHaveProperty("windowTokensUsed");
+    expect(summary).not.toHaveProperty("windowSize");
+    expect(summary).not.toHaveProperty("available");
+    expect(summary).not.toHaveProperty("weeklyBudget");
+    expect(summary).not.toHaveProperty("tokensLimit");
+    // token counts survive as telemetry only
+    expect(summary.totalTokensUsed).toBe(1_145_873);
+  });
+
+  it("sources cost + metered tokens from the broker rollup, and margin from broker cost", () => {
+    const summary = buildCustomerSummary(
+      "u",
+      {
+        selectedTier: "pro",
+        subscription: { tier: "pro", status: "active" },
+        usage: { costUsd: 0 }, // legacy $0 must not leak into the admin figure
+      },
+      { windowCostUsd: 0.5, totalCostUsd: 12.34, totalTokens: 2_000_000, now: NOW },
+    );
+
+    expect(summary.costUsd).toBe(12.34);
+    expect(summary.brokerTotalTokens).toBe(2_000_000);
+    expect(summary.revenueUsd).toBeGreaterThan(0);
+    expect(summary.marginUsd).toBeCloseTo(summary.revenueUsd - 12.34, 5);
+  });
+
+  it("reports the epoch-aligned 4h window refill time", () => {
+    const summary = buildCustomerSummary(
+      "u",
+      { subscription: { tier: "trial", trialStartedAt: new Date(NOW) } },
+      { windowCostUsd: 0, now: NOW },
+    );
+    // 13:30Z sits in the 12:00–16:00Z window → refill at 16:00Z
+    expect(summary.nextRefillAt).toBe(new Date(Date.UTC(2026, 6, 2, 16)).toISOString());
+  });
+
+  it("caps the window percentage at 100 and treats a zero budget as fully used", () => {
+    const paid = { selectedTier: "pro", subscription: { tier: "pro" } };
+    expect(
+      buildCustomerSummary("u", paid, { windowCostUsd: 9_999, now: NOW }).percentUsed,
+    ).toBe(100);
+    // post-trial (no trialStartedAt) → zero budget → fully used
+    expect(
+      buildCustomerSummary("u", { subscription: { tier: "trial" } }, { now: NOW }).percentUsed,
+    ).toBe(100);
   });
 });

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  MODEL_BROKER_HOUSE_DAY_WINDOW_MS,
+  MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION,
   MODEL_BROKER_RATE_WINDOW_MS,
   MODEL_BROKER_RATE_WINDOWS_COLLECTION,
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOW_MS,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
+  houseDayStartMs,
   modelBrokerWindowDocId,
   rateWindowStartMs,
   usageWindowStartMs,
@@ -31,5 +34,16 @@ describe("model broker usage storage contract", () => {
   it("rounds timestamps down to usage and rate windows", () => {
     expect(usageWindowStartMs(14_400_000 + 123)).toBe(14_400_000);
     expect(rateWindowStartMs(125_999)).toBe(120_000);
+  });
+
+  it("keys the free house allowance by UTC day", () => {
+    expect(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION).toBe("modelBrokerHouseDayWindows");
+    expect(MODEL_BROKER_HOUSE_DAY_WINDOW_MS).toBe(24 * 60 * 60 * 1000);
+    // 2026-07-02T13:45:00Z floors to 2026-07-02T00:00:00Z
+    expect(houseDayStartMs(Date.UTC(2026, 6, 2, 13, 45))).toBe(Date.UTC(2026, 6, 2));
+    expect(houseDayStartMs(Date.UTC(2026, 6, 2))).toBe(Date.UTC(2026, 6, 2));
+    expect(modelBrokerWindowDocId("owner-1", Date.UTC(2026, 6, 2))).toBe(
+      `owner-1_${Date.UTC(2026, 6, 2)}`,
+    );
   });
 });

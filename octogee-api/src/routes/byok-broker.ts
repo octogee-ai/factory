@@ -8,6 +8,23 @@ import {
 import { readSecret } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
+import {
+  FREE_DAILY_HOUSE_TOKENS,
+  houseAllowanceState,
+  resolveTier,
+  spendDegradeState,
+  spendWindowPercentUsed,
+  trialDaysRemaining,
+  windowBudgetUsdForTier,
+} from "@octogee/shared/types/billing";
+import {
+  MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION,
+  MODEL_BROKER_USAGE_WINDOW_MS,
+  MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
+  houseDayStartMs,
+  modelBrokerWindowDocId,
+  usageWindowStartMs,
+} from "@octogee/shared/types/model-broker-usage";
 import { createFirestoreModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
 import type { ModelBrokerProvider } from "../lib/model-broker-tokens.js";
 import {
@@ -158,6 +175,121 @@ function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
   return value === "anthropic" || value === "openrouter" ? value : null;
 }
 
+function financeNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function toDateOrNull(value: unknown): Date | null {
+  if (value instanceof Date) return value;
+  const toDate = (value as { toDate?: unknown } | null | undefined)?.toDate;
+  if (typeof toDate !== "function") return null;
+  const date = toDate.call(value);
+  return date instanceof Date ? date : null;
+}
+
+export type AgentCredentialPath =
+  | "platform_broker"
+  | "byok_api_key"
+  | "byosub"
+  | "byosub_suppressed_shared";
+
+// Mirrors the Phase D gate (core byot-sync gateSharedByosub): an OAuth model
+// credential is honored on builder/operator pods and suppressed on shared.
+function credentialPathFor(
+  userData: Record<string, unknown>,
+  configData: Record<string, unknown>,
+  gatewayClass: string,
+): { path: AgentCredentialPath; provider: string | null } {
+  const credential =
+    configData.modelCredential && typeof configData.modelCredential === "object"
+      ? (configData.modelCredential as Record<string, unknown>)
+      : null;
+  const legacyByot =
+    userData.byotActive === true && configData.byot && typeof configData.byot === "object"
+      ? (configData.byot as Record<string, unknown>)
+      : null;
+  const active = credential?.active === true ? credential : legacyByot;
+  if (!active) return { path: "platform_broker", provider: null };
+  const provider = stringOrNull(active.provider);
+  // legacy byot records predate the mode field and were always API keys
+  const isOauth = active !== legacyByot && active.mode === "oauth";
+  if (!isOauth) return { path: "byok_api_key", provider };
+  return gatewayClass === "shared"
+    ? { path: "byosub_suppressed_shared", provider }
+    : { path: "byosub", provider };
+}
+
+async function agentUsageStatusPayload(
+  db: Firestore,
+  gatewayId: string,
+  assigned: { uid: string; data: Record<string, unknown> },
+  nowMs: number,
+): Promise<Record<string, unknown>> {
+  const windowStartMs = usageWindowStartMs(nowMs);
+  const [gatewaySnap, configSnap, windowSnap, houseDaySnap] = await Promise.all([
+    db.collection("glmGateways").doc(gatewayId).get(),
+    db.collection("users").doc(assigned.uid).collection("system").doc("config").get(),
+    db
+      .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
+      .doc(modelBrokerWindowDocId(assigned.uid, windowStartMs))
+      .get(),
+    db
+      .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
+      .doc(modelBrokerWindowDocId(assigned.uid, houseDayStartMs(nowMs)))
+      .get(),
+  ]);
+
+  const userData = assigned.data;
+  const subscription =
+    userData.subscription && typeof userData.subscription === "object"
+      ? (userData.subscription as Record<string, unknown>)
+      : {};
+  const trialStartedAt = toDateOrNull(subscription.trialStartedAt);
+  const tier = resolveTier(userData);
+  const gatewayClass = stringOrNull(gatewaySnap.data()?.gatewayClass) ?? "unknown";
+  const credential = credentialPathFor(
+    userData,
+    (configSnap.data() ?? {}) as Record<string, unknown>,
+    gatewayClass,
+  );
+  const windowBudgetUsd = windowBudgetUsdForTier(tier, trialStartedAt, new Date(nowMs));
+  const windowCostUsd = financeNumber(windowSnap.data()?.costUsd);
+  const houseDayTokens = financeNumber(houseDaySnap.data()?.totalTokens);
+  const onOwnerCredential = credential.path === "byosub" || credential.path === "byok_api_key";
+  const throttle = spendDegradeState({
+    tier,
+    windowCostUsd,
+    windowBudgetUsd,
+    onOwnerCredential,
+  });
+
+  return {
+    gatewayClass,
+    tier,
+    trialDaysRemaining:
+      tier === "trial" ? trialDaysRemaining(trialStartedAt, new Date(nowMs)) : null,
+    window: {
+      percentUsed: onOwnerCredential
+        ? 0
+        : spendWindowPercentUsed(windowCostUsd, windowBudgetUsd),
+      nextRefillAt: new Date(windowStartMs + MODEL_BROKER_USAGE_WINDOW_MS).toISOString(),
+      degraded: throttle.degraded,
+      reason: throttle.reason,
+    },
+    houseAllowance: onOwnerCredential
+      ? null
+      : houseAllowanceState({
+          usedTokens: houseDayTokens,
+          limitTokens: FREE_DAILY_HOUSE_TOKENS,
+        }),
+    credential,
+  };
+}
+
 function agentModelTokenSecretName(input: {
   gatewayId: string;
   ownerUid: string;
@@ -169,9 +301,49 @@ function agentModelTokenSecretName(input: {
   return `${prefix}-${input.gatewayId}-${input.ownerUid}`;
 }
 
-export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
+async function handleByosubCred(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+  res: Response,
+): Promise<void> {
+  const snap = await db.collection("glmGateways").doc(gatewayId).get();
+  const byosub = (snap.data() as { byosub?: Record<string, ByosubRef> } | undefined)?.byosub;
+  const ref = byosub?.[agentId];
+  const parsed = providerRefs(ref);
+  if (parsed.malformed) {
+    warnSkippedByosubRefs({ gatewayId, agentId, skipped: parsed.skipped });
+    res.status(500).json({ error: "malformed byosub ref" });
+    return;
+  }
+  if (parsed.refs.length === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const credentials = [];
+  const skipped = [...parsed.skipped];
+  for (const { provider, secretName } of parsed.refs) {
+    if (!BYOSUB_SECRET_RE.test(secretName) || !secretName.endsWith(`-${provider}`)) {
+      skipped.push(`${provider}: malformed secret ref`);
+      continue;
+    }
+    credentials.push({ provider, secretName, credential: await readSecret(secretName) });
+  }
+  if (credentials.length === 0) {
+    warnSkippedByosubRefs({ gatewayId, agentId, skipped });
+    res.status(500).json({ error: skipped.length > 0 ? "malformed secret ref" : "not_found" });
+    return;
+  }
+  warnSkippedByosubRefs({ gatewayId, agentId, skipped });
+
+  res.json({ credentials, ...(skipped.length > 0 ? { skipped } : {}) });
+}
+
+export function createByokBrokerRoutes(opts: { db: Firestore; now?: () => number }): Router {
   const router = Router();
   const { db } = opts;
+  const now = opts.now ?? Date.now;
 
   // Materialize a byosub OAuth credential (ChatGPT/codex or Claude/claude-cli)
   // for a gateway that cannot reach Secret Manager directly (cattle pods are
@@ -189,37 +361,7 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       return;
     }
 
-    const snap = await db.collection("glmGateways").doc(bound.gatewayId).get();
-    const byosub = (snap.data() as { byosub?: Record<string, ByosubRef> } | undefined)?.byosub;
-    const ref = byosub?.[agentId];
-    const parsed = providerRefs(ref);
-    if (parsed.malformed) {
-      warnSkippedByosubRefs({ gatewayId: bound.gatewayId, agentId, skipped: parsed.skipped });
-      res.status(500).json({ error: "malformed byosub ref" });
-      return;
-    }
-    if (parsed.refs.length === 0) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-
-    const credentials = [];
-    const skipped = [...parsed.skipped];
-    for (const { provider, secretName } of parsed.refs) {
-      if (!BYOSUB_SECRET_RE.test(secretName) || !secretName.endsWith(`-${provider}`)) {
-        skipped.push(`${provider}: malformed secret ref`);
-        continue;
-      }
-      credentials.push({ provider, secretName, credential: await readSecret(secretName) });
-    }
-    if (credentials.length === 0) {
-      warnSkippedByosubRefs({ gatewayId: bound.gatewayId, agentId, skipped });
-      res.status(500).json({ error: skipped.length > 0 ? "malformed secret ref" : "not_found" });
-      return;
-    }
-    warnSkippedByosubRefs({ gatewayId: bound.gatewayId, agentId, skipped });
-
-    res.json({ credentials, ...(skipped.length > 0 ? { skipped } : {}) });
+    await handleByosubCred(db, bound.gatewayId, agentId, res);
   });
 
   // Materialize a byok API-key credential (anthropic/openai key, Grok,
@@ -322,6 +464,39 @@ export function createByokBrokerRoutes(opts: { db: Firestore }): Router {
       },
     });
     res.json({ value: issued.token, provider });
+  });
+
+  // The `/status` capability's data source: an agent asks (via its projected
+  // KSA token) for its OWNER's live billing/budget state. Roster-scoped like
+  // /agent-model-token — a gateway can only ask about its own customers. This
+  // is the operator's proof that class-gated credentials and budgets behave.
+  router.post("/agent-usage-status", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+
+    const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
+    if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
+      res.status(400).json({ error: "valid agentId required" });
+      return;
+    }
+    const assigned = await findAssignedOrInboundMigratingUserByAgentId(
+      db,
+      bound.gatewayId,
+      agentId,
+    );
+    if (!assigned) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+
+    res.json(
+      await agentUsageStatusPayload(
+        db,
+        bound.gatewayId,
+        { uid: assigned.uid, data: assigned.data as Record<string, unknown> },
+        now(),
+      ),
+    );
   });
 
   // Record a byosub OAuth flow's owner mapping for a customer-agent assigned to

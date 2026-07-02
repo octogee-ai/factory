@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import {
   addAdminCustomerRoutes,
+  mergeDailyUsage,
   type AdminCustomerRouterDeps,
 } from "./admin-customer-router.js";
 
@@ -144,6 +145,79 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
     expect(res.body.byot).toEqual({ active: true });
   });
 
+});
+
+describe("mergeDailyUsage", () => {
+  it("keeps legacy token/interaction telemetry but takes USD only from the broker series", () => {
+    const merged = mergeDailyUsage(
+      [
+        { date: "2026-06-30", tokensUsed: 469_438, interactions: 19, costUsd: 0 },
+        { date: "2026-06-29", tokensUsed: 676_435, interactions: 23, costUsd: 0.0001 },
+      ],
+      new Map([
+        ["2026-06-30", { date: "2026-06-30", costUsd: 0.72, totalTokens: 420_000, requestCount: 15 }],
+      ]),
+    );
+
+    expect(merged[0]).toMatchObject({
+      date: "2026-06-30",
+      tokensUsed: 469_438, // legacy telemetry survives (covers byosub traffic)
+      interactions: 19,
+      costUsd: 0.72, // broker is the only USD source
+      brokerTokens: 420_000,
+    });
+    // no broker events that day → $0, never the legacy openclaw figure
+    expect(merged[1]).toMatchObject({ date: "2026-06-29", costUsd: 0 });
+  });
+
+  it("surfaces broker-only days that have no legacy log doc", () => {
+    const merged = mergeDailyUsage(
+      [],
+      new Map([
+        ["2026-07-01", { date: "2026-07-01", costUsd: 0.29, totalTokens: 90_000, requestCount: 4 }],
+      ]),
+    );
+    expect(merged).toEqual([
+      {
+        date: "2026-07-01",
+        tokensUsed: 90_000,
+        interactions: 4,
+        costUsd: 0.29,
+        brokerTokens: 90_000,
+      },
+    ]);
+  });
+});
+
+describe("GET /api/admin/customer/:uid — broker-sourced usage", () => {
+  it("serves USD from the broker ledger and never the legacy $0 fields", async () => {
+    const app = makeApp({
+      "users/uid-1": customerDoc({
+        usage: { costUsd: 0.0001, totalTokensUsed: 1_145_873, windowTokensUsed: 469_438 },
+      }),
+      "modelBrokerUsageRollups/uid-1": {
+        costUsd: 1.73,
+        totalTokens: 1_323_462,
+        models: {
+          "claude-sonnet-4-6": { model: "claude-sonnet-4-6", totalTokens: 738_246, costUsd: 1.0462 },
+        },
+      },
+    });
+
+    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    expect(res.body.usage).toMatchObject({
+      costUsd: 1.73,
+      brokerTotalTokens: 1_323_462,
+      totalTokensUsed: 1_145_873,
+    });
+    expect(res.body.usage).not.toHaveProperty("windowTokensUsed");
+    expect(res.body.usage).not.toHaveProperty("windowSize");
+    expect(res.body.summary.costUsd).toBe(1.73);
+    expect(res.body.modelCosts["claude-sonnet-4-6"]).toMatchObject({
+      tokens: 738_246,
+      costUsd: 1.0462,
+    });
+  });
 });
 
 describe("POST /api/admin/customer/:uid/ops", () => {

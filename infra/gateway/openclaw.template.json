@@ -193,6 +193,7 @@
       "memory-core",
       "octogee-chat-tools",
       "octogee-preview-tools",
+      "octogee-status-tools",
       "octogee-workspace-tools",
       "octogee-publish-tools",
       "openai"
@@ -221,6 +222,14 @@
       "octogee-preview-tools": {
         "enabled": true,
         "config": {}
+      },
+      "octogee-status-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}",
+          "gatewayClass": "${GATEWAY_CLASS}"
+        }
       },
       "octogee-workspace-tools": {
         "enabled": true,
