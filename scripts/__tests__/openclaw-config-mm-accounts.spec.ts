@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  activeAgentProjectIds,
   buildMattermostAccounts,
   buildCustomerBindings,
+  buildProjectAgentAccounts,
+  buildProjectAgents,
   fetchCoachTokens,
   mergeAccountsPreservingDefault,
   type CoachTokenDeps,
@@ -326,5 +329,131 @@ describe("mergeAccountsPreservingDefault", () => {
       groupPolicy: "allowlist",
       groupAllowFrom: ["mm-chris", "mm-admin"],
     });
+  });
+});
+
+describe("activeAgentProjectIds", () => {
+  it("selects only enabled agents that hold a minted token", () => {
+    expect(
+      activeAgentProjectIds([
+        { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
+        { projectId: "unminted", enabled: true, token: null, mmUserId: null },
+        { projectId: "retired", enabled: false, token: "pat-2", mmUserId: "bot-2" },
+      ]),
+    ).toEqual(new Set(["orbit"]));
+  });
+});
+
+describe("buildProjectAgents", () => {
+  const projectAgents = [
+    { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
+    { projectId: "unminted", enabled: true, token: null, mmUserId: null },
+    { projectId: "retired", enabled: false, token: "pat-2", mmUserId: "bot-2" },
+  ];
+
+  it("emits one agent entry per ACTIVE project agent, workspace pinned to the project clone", () => {
+    const agents = buildProjectAgents({
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentsDir: "/agents",
+      coach: { name: "BenderEcho", emoji: "🤖", model: "anthropic/claude-sonnet-4-6" },
+      projectAgents,
+    });
+
+    expect(agents).toEqual([
+      {
+        id: "octogee-chris-proj-orbit-coach",
+        name: "BenderEcho (chris/orbit)",
+        workspace: "/customers/chris/projects/orbit",
+        agentDir: "/agents/octogee-chris-proj-orbit-coach/agent",
+        model: "anthropic/claude-sonnet-4-6",
+        identity: { name: "BenderEcho", emoji: "🤖" },
+        tools: { fs: { workspaceOnly: true } },
+      },
+    ]);
+  });
+});
+
+describe("buildProjectAgentAccounts", () => {
+  it("emits accounts only for active agents, keyed {slug}-proj-{pid}", () => {
+    const accounts = buildProjectAgentAccounts("chris", [
+      { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
+      { projectId: "unminted", enabled: true, token: null, mmUserId: null },
+      { projectId: "retired", enabled: false, token: "pat-2", mmUserId: "bot-2" },
+    ]);
+
+    expect(accounts).toEqual({
+      "chris-proj-orbit": {
+        botToken: "pat-1",
+        groupPolicy: "open",
+        commands: { native: false },
+      },
+    });
+  });
+});
+
+describe("buildCustomerBindings — Vegas partition", () => {
+  const channels = [
+    { channelId: "ws-general", scope: "workspace" as const },
+    { channelId: "proj-orbit-gen", scope: "project" as const, projectId: "orbit" },
+    { channelId: "proj-nova-gen", scope: "project" as const, projectId: "nova" },
+  ];
+
+  it("routes agent-enabled project channels to the project agent, everything else to the coach", () => {
+    const bindings = buildCustomerBindings([
+      { slug: "chris", channels, agentProjects: new Set(["orbit"]) },
+    ]);
+
+    expect(bindings).toEqual([
+      {
+        agentId: "octogee-chris-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "chris-coach",
+          peer: { kind: "group", id: "ws-general" },
+        },
+      },
+      {
+        agentId: "octogee-chris-proj-orbit-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "chris-proj-orbit",
+          peer: { kind: "group", id: "proj-orbit-gen" },
+        },
+      },
+      {
+        agentId: "octogee-chris-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "chris-coach",
+          peer: { kind: "group", id: "proj-nova-gen" },
+        },
+      },
+    ]);
+  });
+
+  it("partition invariant: exactly one binding per channel; workspace channels never bind to a project agent", () => {
+    const bindings = buildCustomerBindings([
+      { slug: "chris", channels, agentProjects: new Set(["orbit", "nova"]) },
+    ]);
+
+    const byChannel = new Map<string, string[]>();
+    for (const b of bindings) {
+      const list = byChannel.get(b.match.peer.id) ?? [];
+      list.push(b.agentId);
+      byChannel.set(b.match.peer.id, list);
+    }
+    for (const agents of byChannel.values()) {
+      expect(agents).toHaveLength(1);
+    }
+    expect(byChannel.get("ws-general")).toEqual(["octogee-chris-coach"]);
+  });
+
+  it("without agentProjects everything binds to the coach (pre-Vegas behavior)", () => {
+    const bindings = buildCustomerBindings([{ slug: "chris", channels }]);
+    for (const b of bindings) {
+      expect(b.agentId).toBe("octogee-chris-coach");
+      expect(b.match.accountId).toBe("chris-coach");
+    }
   });
 });

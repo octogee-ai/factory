@@ -1,3 +1,5 @@
+import { projectAgentId } from "../../shared/types/identity.js";
+
 export interface ProjectRestoreInput {
   customerSlug: string;
   projectSlug: string;
@@ -230,19 +232,100 @@ export interface OpenClawBinding {
   };
 }
 
+export interface ProjectAgentState {
+  projectId: string;
+  enabled: boolean;
+  mmUserId: string | null;
+  token: string | null;
+}
+
+// A project agent is ACTIVE (routable, gets an agent entry + account +
+// bindings) only once it is enabled AND its MM bot PAT is minted. Everything
+// keys off this one predicate so the config can never half-include an agent.
+export function activeAgentProjectIds(
+  projectAgents: ReadonlyArray<ProjectAgentState>,
+): Set<string> {
+  return new Set(
+    projectAgents
+      .filter((p) => p.enabled && typeof p.token === "string" && p.token.length > 0)
+      .map((p) => p.projectId),
+  );
+}
+
+export interface ProjectAgentsBuildInput {
+  slug: string;
+  customerDir: string;
+  agentsDir: string;
+  coach: { name: string; emoji: string; model: string };
+  projectAgents: ReadonlyArray<ProjectAgentState>;
+}
+
+export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record<string, unknown>> {
+  const active = activeAgentProjectIds(input.projectAgents);
+  return input.projectAgents
+    .filter((p) => active.has(p.projectId))
+    .map((p) => {
+      const agentId = projectAgentId(input.slug, p.projectId);
+      return {
+        id: agentId,
+        name: `${input.coach.name} (${input.slug}/${p.projectId})`,
+        workspace: `${input.customerDir}/projects/${p.projectId}`,
+        agentDir: `${input.agentsDir}/${agentId}/agent`,
+        model: input.coach.model,
+        identity: { name: input.coach.name, emoji: input.coach.emoji },
+        tools: { fs: { workspaceOnly: true } },
+      };
+    });
+}
+
+export function buildProjectAgentAccounts(
+  slug: string,
+  projectAgents: ReadonlyArray<ProjectAgentState>,
+): Record<string, MattermostAccountEntry> {
+  const active = activeAgentProjectIds(projectAgents);
+  const accounts: Record<string, MattermostAccountEntry> = {};
+  for (const p of projectAgents) {
+    if (!active.has(p.projectId) || !p.token) continue;
+    accounts[`${slug}-proj-${p.projectId}`] = {
+      botToken: p.token,
+      groupPolicy: "open",
+      commands: { native: false },
+    };
+  }
+  return accounts;
+}
+
+export interface BindingChannelInput {
+  channelId: string;
+  scope?: "workspace" | "project";
+  projectId?: string;
+}
+
 export function buildCustomerBindings(
-  customers: ReadonlyArray<{ slug: string; channels: ReadonlyArray<{ channelId: string }> }>,
+  customers: ReadonlyArray<{
+    slug: string;
+    channels: ReadonlyArray<BindingChannelInput>;
+    agentProjects?: ReadonlySet<string>;
+  }>,
 ): OpenClawBinding[] {
   return customers.flatMap((c) => {
-    const agentId = `octogee-${c.slug}-coach`;
-    const accountId = `${c.slug}-coach`;
-    return c.channels.map((binding) => ({
-      agentId,
-      match: {
-        channel: "mattermost" as const,
-        accountId,
-        peer: { kind: "group" as const, id: binding.channelId },
-      },
-    }));
+    const coachAgentId = `octogee-${c.slug}-coach`;
+    const coachAccountId = `${c.slug}-coach`;
+    return c.channels.map((binding) => {
+      const projectAgent =
+        binding.scope === "project" &&
+        binding.projectId !== undefined &&
+        c.agentProjects?.has(binding.projectId) === true;
+      return {
+        agentId: projectAgent
+          ? projectAgentId(c.slug, binding.projectId!)
+          : coachAgentId,
+        match: {
+          channel: "mattermost" as const,
+          accountId: projectAgent ? `${c.slug}-proj-${binding.projectId}` : coachAccountId,
+          peer: { kind: "group" as const, id: binding.channelId },
+        },
+      };
+    });
   });
 }

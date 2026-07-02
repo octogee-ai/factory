@@ -7,6 +7,9 @@ import {
   configPatchRetryPlan,
   customerConfigFullAgentListReplacePaths,
   customerConfigReplacePaths,
+  filterOutCustomerBindings,
+  replaceCustomerAgentsInFullAgentList,
+  staleProjectAgentAccountNulls,
 } from "./apply-config-patch.js";
 import { OpenclawWireError, type GatewayRpcClient } from "./gateway-rpc.js";
 
@@ -777,5 +780,90 @@ describe("customerConfigReplacePaths — the customer-scoped guard confirmation 
         "alice",
       ),
     ).toEqual(["bindings"]);
+  });
+});
+
+describe("replaceCustomerAgentsInFullAgentList", () => {
+  const current = {
+    agents: {
+      list: [
+        { id: "octogee-mac-default" },
+        { id: "octogee-alice-coach", stale: true },
+        { id: "octogee-alice-proj-old-coach", stale: true },
+        { id: "octogee-bob-coach" },
+        { id: "octogee-bob-proj-app-coach" },
+      ],
+    },
+  };
+
+  it("drops ALL of the customer's agents (coach + project) and appends the new set, leaving other tenants alone", () => {
+    const list = replaceCustomerAgentsInFullAgentList(current, "alice", [
+      { id: "octogee-alice-coach" },
+      { id: "octogee-alice-proj-orbit-coach" },
+    ]);
+
+    expect(list.map((a) => (a as { id: string }).id)).toEqual([
+      "octogee-mac-default",
+      "octogee-bob-coach",
+      "octogee-bob-proj-app-coach",
+      "octogee-alice-coach",
+      "octogee-alice-proj-orbit-coach",
+    ]);
+  });
+
+  it("does not confuse hyphenated sibling slugs (alice vs alice-b)", () => {
+    const list = replaceCustomerAgentsInFullAgentList(
+      { agents: { list: [{ id: "octogee-alice-b-coach" }] } },
+      "alice",
+      [{ id: "octogee-alice-coach" }],
+    );
+    expect(list.map((a) => (a as { id: string }).id)).toEqual([
+      "octogee-alice-b-coach",
+      "octogee-alice-coach",
+    ]);
+  });
+});
+
+describe("filterOutCustomerBindings", () => {
+  it("removes coach AND project-agent bindings for the slug only", () => {
+    const bindings = [
+      { agentId: "octogee-alice-coach" },
+      { agentId: "octogee-alice-proj-old-coach" },
+      { agentId: "octogee-bob-coach" },
+      { agentId: "octogee-mac-default" },
+    ];
+    expect(filterOutCustomerBindings(bindings, "alice").map((b) => b.agentId)).toEqual([
+      "octogee-bob-coach",
+      "octogee-mac-default",
+    ]);
+  });
+});
+
+describe("staleProjectAgentAccountNulls", () => {
+  const current = {
+    channels: {
+      mattermost: {
+        accounts: {
+          "alice-coach": { botToken: "a" },
+          "alice-proj-old": { botToken: "dead" },
+          "alice-proj-orbit": { botToken: "live" },
+          "alice-b-proj-x": { botToken: "sibling" },
+          default: { botToken: "d" },
+        },
+      },
+    },
+  };
+
+  it("nulls the customer's project accounts that are no longer active (omission is not deletion in config.patch)", () => {
+    expect(staleProjectAgentAccountNulls(current, "alice", ["alice-proj-orbit"])).toEqual({
+      "alice-proj-old": null,
+    });
+  });
+
+  it("nulls all project accounts when none are kept, ignoring hyphenated siblings", () => {
+    expect(staleProjectAgentAccountNulls(current, "alice", [])).toEqual({
+      "alice-proj-old": null,
+      "alice-proj-orbit": null,
+    });
   });
 });

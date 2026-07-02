@@ -41,6 +41,7 @@ import projectsJoinLeaveRoutes from "./projects/join-leave.js";
 import projectsStarRoutes from "./projects/star.js";
 import projectsMembersRoutes from "./projects/members.js";
 import projectsDeleteRoutes from "./projects/delete.js";
+import projectsAgentRoutes from "./projects/agent.js";
 
 import internalNotificationRoutes from "./internal/notifications.js";
 import internalWorkspaceCommitRoutes from "./internal/workspace-commit.js";
@@ -79,6 +80,7 @@ const PROJECT_ROUTES: readonly RouteHandler[] = [
   projectsJoinLeaveRoutes,
   projectsStarRoutes,
   projectsMembersRoutes,
+  projectsAgentRoutes,
 ];
 
 const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [

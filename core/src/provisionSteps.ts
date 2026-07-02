@@ -5,6 +5,7 @@
 // here touches the filesystem, the path component is constrained to
 // /^[a-z0-9]+(-[a-z0-9]+)*$/ minus a reserved set. That validator is the
 // path-traversal defense.
+import { filterOutCustomerBindings } from "./apply-config-patch.js";
 import { FieldValue } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
@@ -255,9 +256,21 @@ export function buildRemoveCustomerPatch(
   const currentBindings: AgentBinding[] = Array.isArray(existing)
     ? (existing as AgentBinding[])
     : [];
+  // Vegas: the customer's project agents ({slug}-proj-{pid} accounts and
+  // octogee-{slug}-proj-{pid}-coach bindings) leave with the customer.
+  const currentAccounts =
+    (current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } })
+      ?.channels?.mattermost?.accounts ?? {};
+  const accounts: Record<string, null> = { [`${slug}-coach`]: null };
+  for (const key of Object.keys(currentAccounts)) {
+    if (key.startsWith(`${slug}-proj-`)) accounts[key] = null;
+  }
   return {
-    bindings: currentBindings.filter((b) => b?.agentId !== agentId),
-    channels: { mattermost: { accounts: { [`${slug}-coach`]: null } } },
+    bindings: filterOutCustomerBindings(
+      currentBindings.filter((b) => b?.agentId !== agentId),
+      slug,
+    ),
+    channels: { mattermost: { accounts } },
   };
 }
 

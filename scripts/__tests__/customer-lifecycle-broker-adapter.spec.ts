@@ -417,3 +417,75 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(modelCredentialMocks.syncModelCredentialsForCustomer).toHaveBeenCalledWith(userData);
   });
 });
+
+describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
+  beforeEach(() => {
+    patchMocks.applyConfigPatch.mockClear();
+  });
+
+  it("partitions bindings, includes active project agents, and nulls stale project accounts", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [
+        { scope: "workspace", kind: "general", channelId: "ws-1" },
+        { scope: "project", projectId: "orbit", kind: "general", channelId: "po-1" },
+        { scope: "project", projectId: "nova", kind: "general", channelId: "pn-1" },
+      ],
+      projects: [],
+      projectAgents: [
+        { projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "proj-pat-1" },
+        { projectId: "nova", enabled: true, mmUserId: null, token: null },
+      ],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const call = vi.mocked(applyConfigPatch).mock.calls.at(-1)!;
+    const args = call[0] as {
+      buildPatch: (current: unknown) => {
+        agents: { list: Array<{ id?: string; workspace?: string }> };
+        bindings: Array<{ agentId: string; match: { accountId: string; peer: { id: string } } }>;
+        channels: { mattermost: { accounts: Record<string, { botToken?: string } | null> } };
+      };
+    };
+    const patch = args.buildPatch({
+      agents: { list: [{ id: "octogee-alice-proj-old-coach" }, { id: "octogee-bob-coach" }] },
+      bindings: [{ agentId: "octogee-alice-proj-old-coach", match: { accountId: "alice-proj-old", peer: { id: "dead-1" } } }],
+      channels: { mattermost: { accounts: { "alice-proj-old": { botToken: "revoked" } } } },
+    });
+
+    expect(patch.agents.list.map((a) => a.id)).toEqual([
+      "octogee-bob-coach",
+      "octogee-alice-coach",
+      "octogee-alice-proj-orbit-coach",
+    ]);
+    expect(
+      Object.fromEntries(
+        patch.bindings.map((b) => [b.match.peer.id, `${b.agentId}|${b.match.accountId}`]),
+      ),
+    ).toEqual({
+      "ws-1": "octogee-alice-coach|alice-coach",
+      "po-1": "octogee-alice-proj-orbit-coach|alice-proj-orbit",
+      "pn-1": "octogee-alice-coach|alice-coach",
+    });
+    expect(patch.channels.mattermost.accounts["alice-proj-orbit"]?.botToken).toBe("proj-pat-1");
+    expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
+  });
+});

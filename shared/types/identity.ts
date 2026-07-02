@@ -106,6 +106,51 @@ export function isMmSystemChannel(name: string): boolean {
   return MM_SYSTEM_CHANNELS.has(name);
 }
 
+export const AGENT_ID_PREFIX = 'octogee-' as const;
+export const AGENT_ID_SUFFIX = '-coach' as const;
+
+export function workspaceCoachAgentId(username: string): string {
+  return `${AGENT_ID_PREFIX}${username}${AGENT_ID_SUFFIX}`;
+}
+
+export function projectAgentId(username: string, project: string): string {
+  return `${AGENT_ID_PREFIX}${username}-${PROJECT_DISCRIMINATOR}-${project}${AGENT_ID_SUFFIX}`;
+}
+
+export function workspaceCoachMmUsername(username: string): string {
+  return `${username}${AGENT_ID_SUFFIX}`;
+}
+
+export function projectAgentMmUsername(username: string, project: string): string {
+  return `${username}-${PROJECT_DISCRIMINATOR}-${project}${AGENT_ID_SUFFIX}`;
+}
+
+export type ParsedAgentId =
+  | { kind: 'coach'; username: string }
+  | { kind: 'project'; username: string; project: string }
+  | { kind: 'unknown'; id: string };
+
+export function parseAgentId(id: string): ParsedAgentId {
+  const unknown: ParsedAgentId = { kind: 'unknown', id };
+  if (typeof id !== 'string') return { kind: 'unknown', id: '' };
+  if (!id.startsWith(AGENT_ID_PREFIX) || !id.endsWith(AGENT_ID_SUFFIX)) return unknown;
+  const body = id.slice(AGENT_ID_PREFIX.length, -AGENT_ID_SUFFIX.length);
+  if (body === '') return unknown;
+
+  // `proj` is a reserved username segment, so `-proj-` appears at most once
+  // and only as the project discriminator — hyphenated usernames stay
+  // unambiguous.
+  const marker = `-${PROJECT_DISCRIMINATOR}-`;
+  const markerIdx = body.indexOf(marker);
+  if (markerIdx === -1) {
+    return isValidUsername(body) ? { kind: 'coach', username: body } : unknown;
+  }
+  const username = body.slice(0, markerIdx);
+  const project = body.slice(markerIdx + marker.length);
+  if (!isValidUsername(username) || !isValidProjectId(project)) return unknown;
+  return { kind: 'project', username, project };
+}
+
 export function isCommunityChannel(name: string): boolean {
   return typeof name === 'string' && name.startsWith(`${COMMUNITY_PREFIX}-`);
 }

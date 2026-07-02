@@ -17,6 +17,16 @@ export interface FleetBrokerProjectRestore {
   provisioningState?: string;
 }
 
+// Vegas: per-project agent state as served to gateways. `token`/`mmUserId`
+// come from users/{uid}/secrets/projectAgentMattermost-{pid} (null until the
+// bot is minted); `enabled` mirrors the server-managed project-doc agent flag.
+export interface FleetBrokerProjectAgent {
+  projectId: string;
+  enabled: boolean;
+  mmUserId: string | null;
+  token: string | null;
+}
+
 export interface FleetBrokerCoachIdentity {
   name: string;
   emoji: string;
@@ -111,6 +121,7 @@ export interface FleetBrokerUserSnapshot {
   initialModelReasoningEffort?: string;
   channels: FleetBrokerChannelBinding[];
   projects: FleetBrokerProjectRestore[];
+  projectAgents?: FleetBrokerProjectAgent[];
   ownerName: string;
   email: string;
   displayName: string;

@@ -1,7 +1,8 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 
-import { isValidUsername } from "@octogee/shared/types/identity";
+import { isValidUsername, parseAgentId } from "@octogee/shared/types/identity";
+import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
@@ -96,12 +97,11 @@ function workspaceSlugFromChannelPath(path: string | null): string | null {
   return isValidUsername(parts[1]) ? parts[1] : null;
 }
 
+// Workspace username for ANY of the customer's agents — coach or project
+// agent (approvals and run-live writes authorize by assigned slug).
 function usernameFromAgentId(agentId: string): string | null {
-  const prefix = "octogee-";
-  const suffix = "-coach";
-  if (!agentId.startsWith(prefix) || !agentId.endsWith(suffix)) return null;
-  const slug = agentId.slice(prefix.length, agentId.length - suffix.length);
-  return isValidUsername(slug) ? slug : null;
+  const parsed = parseAgentId(agentId);
+  return parsed.kind === "unknown" ? null : parsed.username;
 }
 
 async function assignedHere(db: Firestore, gatewayId: string, slug: string): Promise<boolean> {
@@ -158,24 +158,47 @@ function readCoachChannelPair(data: Record<string, unknown>): CoachChannelPair |
     : null;
 }
 
+// Project-agent secrets carry {personalToken, mmUserId}; adapt to the coach
+// shape the bridge consumes.
+function readProjectAgentSecret(data: Record<string, unknown>): CoachSecret | null {
+  const coachToken = typeof data.personalToken === "string" ? data.personalToken : "";
+  const coachMmUserId = typeof data.mmUserId === "string" ? data.mmUserId : "";
+  return coachToken && coachMmUserId ? { coachToken, coachMmUserId } : null;
+}
+
 async function resolveAgentIdentity(
   db: Firestore,
   gatewayId: string,
   agentId: string,
 ): Promise<AgentIdentity | null | "forbidden"> {
-  const slug = usernameFromAgentId(agentId);
-  if (!slug) return null;
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind === "unknown") return null;
+  const slug = parsed.username;
   if (!(await assignedHere(db, gatewayId, slug))) return "forbidden";
 
   const uid = await resolveUidBySlug(db, slug);
   if (!uid) return null;
 
+  // Vegas: a project agent authenticates as ITS OWN bot (never the coach
+  // PAT) and its runs anchor to the project's general channel pair.
+  const secretPath =
+    parsed.kind === "project"
+      ? `users/${uid}/secrets/${projectAgentSecretDocId(parsed.project)}`
+      : `users/${uid}/secrets/coachMattermost`;
+  const channelDocPath =
+    parsed.kind === "project"
+      ? `workspaces/${slug}/projects/${parsed.project}/channels/general`
+      : `workspaces/${slug}/channels/coach-dm`;
+
   const [tokenSnap, channelSnap] = await Promise.all([
-    db.doc(`users/${uid}/secrets/coachMattermost`).get(),
-    db.doc(`workspaces/${slug}/channels/coach-dm`).get(),
+    db.doc(secretPath).get(),
+    db.doc(channelDocPath).get(),
   ]);
   if (!tokenSnap.exists || !channelSnap.exists) return null;
-  const secret = readCoachSecret(tokenSnap.data() ?? {});
+  const secret =
+    parsed.kind === "project"
+      ? readProjectAgentSecret(tokenSnap.data() ?? {})
+      : readCoachSecret(tokenSnap.data() ?? {});
   const channel = readCoachChannelPair(channelSnap.data() ?? {});
   if (!secret || !channel) return null;
   return {
@@ -185,9 +208,9 @@ async function resolveAgentIdentity(
     coachToken: secret.coachToken,
     primaryChannelId: channel.primaryChannelId,
     activityChannelId: channel.activityChannelId,
-    channelDocPath: `workspaces/${slug}/channels/coach-dm`,
+    channelDocPath,
     workspaceSlug: slug,
-    projectSlug: "workspace",
+    projectSlug: parsed.kind === "project" ? parsed.project : "workspace",
   };
 }
 

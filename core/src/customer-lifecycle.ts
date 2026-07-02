@@ -1,5 +1,6 @@
 import type { CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type {
+  FleetBrokerProjectAgent,
   FleetBrokerProjectRestore,
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
@@ -25,6 +26,7 @@ export interface UserSnapshot {
   channels: CustomerSnapshot["channels"];
   ownerName: string;
   projects?: FleetBrokerProjectRestore[];
+  projectAgents?: FleetBrokerProjectAgent[];
   byotActive?: boolean;
   systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
 }

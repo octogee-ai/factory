@@ -11,7 +11,9 @@ import {
 import {
   applyConfigPatch,
   customerConfigFullAgentListReplacePaths,
-  upsertAgentInFullAgentList,
+  filterOutCustomerBindings,
+  replaceCustomerAgentsInFullAgentList,
+  staleProjectAgentAccountNulls,
   type ConfigCache,
 } from "./apply-config-patch.js";
 import {
@@ -58,9 +60,12 @@ import {
   writeMountedMarker,
 } from "./local-coach-wired.js";
 import {
+  activeAgentProjectIds,
   buildCustomerAgent,
   buildCustomerBindings,
   buildMattermostAccounts,
+  buildProjectAgentAccounts,
+  buildProjectAgents,
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
@@ -265,21 +270,52 @@ async function applyAddCustomerConfigPatch(
       model: DEFAULT_COACH.model,
     },
   });
+  const projectAgents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
+  const projectAgentEntries = buildProjectAgents({
+    slug: snapshot.slug,
+    customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
+    agentsDir: path.join(OPENCLAW_DIR, "agents"),
+    coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
+    projectAgents,
+  });
+  const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents);
   const bindings = buildCustomerBindings([
-    { slug: snapshot.slug, channels: snapshot.channels },
+    {
+      slug: snapshot.slug,
+      channels: snapshot.channels,
+      agentProjects: activeAgentProjectIds(projectAgents),
+    },
   ]);
   const startedAt = Date.now();
   await applyConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
-        const existingBindings = Array.isArray(currentCfg.bindings)
-          ? currentCfg.bindings.filter((b) => b.agentId !== agentId)
-          : [];
+        const existingBindings = filterOutCustomerBindings(
+          Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [],
+          snapshot.slug,
+        );
         return {
-          agents: { list: upsertAgentInFullAgentList(current, agentId, agentEntry) },
+          agents: {
+            list: replaceCustomerAgentsInFullAgentList(current, snapshot.slug, [
+              agentEntry,
+              ...projectAgentEntries,
+            ]),
+          },
           bindings: [...existingBindings, ...bindings],
-          channels: { mattermost: { accounts: { [accountId]: accountEntry } } },
+          channels: {
+            mattermost: {
+              accounts: {
+                [accountId]: accountEntry,
+                ...projectAccounts,
+                ...staleProjectAgentAccountNulls(
+                  current,
+                  snapshot.slug,
+                  Object.keys(projectAccounts),
+                ),
+              },
+            },
+          },
         };
       },
       buildReplacePaths: (current) => customerConfigFullAgentListReplacePaths(current, snapshot.slug),

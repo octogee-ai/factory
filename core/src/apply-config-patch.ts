@@ -1,3 +1,4 @@
+import { parseAgentId } from "@octogee/shared/types/identity";
 import { log as defaultLog } from "./config.js";
 import {
   OpenclawWireError,
@@ -407,6 +408,57 @@ export function upsertAgentInFullAgentList(
     ),
     agentEntry,
   ];
+}
+
+function isCustomerAgentId(value: unknown, slug: string): boolean {
+  if (typeof value !== "string") return false;
+  const parsed = parseAgentId(value);
+  return parsed.kind !== "unknown" && parsed.username === slug;
+}
+
+// Vegas: a customer owns a SET of agents (coach + project agents). Rebuilding
+// the customer's slice of the agent list must drop stale project agents too —
+// a per-id upsert would leave a retired project agent behind forever.
+export function replaceCustomerAgentsInFullAgentList(
+  current: unknown,
+  slug: string,
+  agentEntries: readonly unknown[],
+): unknown[] {
+  const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
+  const currentAgents = Array.isArray(list) ? list : [];
+  return [
+    ...currentAgents.filter(
+      (agent) => !(isPlainObject(agent) && isCustomerAgentId(agent.id, slug)),
+    ),
+    ...agentEntries,
+  ];
+}
+
+export function filterOutCustomerBindings<T extends { agentId?: unknown }>(
+  bindings: readonly T[],
+  slug: string,
+): T[] {
+  return bindings.filter((b) => !isCustomerAgentId(b?.agentId, slug));
+}
+
+// config.patch merges: omitting a retired project-agent account keeps it
+// alive on a revoked token. Every account rebuild must null the customer's
+// `{slug}-proj-*` keys that are no longer active. The prefix is cross-tenant
+// safe because `proj` is a reserved username segment.
+export function staleProjectAgentAccountNulls(
+  current: unknown,
+  slug: string,
+  keepAccountIds: readonly string[],
+): Record<string, null> {
+  const accounts =
+    (current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } })
+      ?.channels?.mattermost?.accounts ?? {};
+  const keep = new Set(keepAccountIds);
+  const out: Record<string, null> = {};
+  for (const key of Object.keys(accounts)) {
+    if (key.startsWith(`${slug}-proj-`) && !keep.has(key)) out[key] = null;
+  }
+  return out;
 }
 
 // Mirrors the gateway's collectBaseArrayPaths (openclaw src/gateway/server-methods/config.ts):

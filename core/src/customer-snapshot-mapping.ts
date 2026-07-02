@@ -1,4 +1,5 @@
 import type { UserSnapshot } from "./customer-lifecycle.js";
+import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 
 type ChannelBinding = UserSnapshot["channels"][number];
 
@@ -26,6 +27,82 @@ export function mapProjectChannelDoc(
     kind: (data.kind as string | undefined) ?? "default",
     channelId,
   };
+}
+
+// Vegas: project-agent state for the snapshot. Null when the project has no
+// agent state at all (never enabled, nothing minted) so snapshots stay lean;
+// a disabled-with-secret entry survives so the reconcile can retire it.
+export function mapProjectAgentState(
+  projectId: string,
+  projectData: Record<string, unknown>,
+  secretData: Record<string, unknown> | undefined,
+): { projectId: string; enabled: boolean; mmUserId: string | null; token: string | null } | null {
+  const agent = projectData.agent;
+  const enabled =
+    !!agent && typeof agent === "object" && (agent as { enabled?: unknown }).enabled === true;
+  const mmUserId =
+    typeof secretData?.mmUserId === "string" && secretData.mmUserId ? secretData.mmUserId : null;
+  const token =
+    typeof secretData?.personalToken === "string" && secretData.personalToken
+      ? secretData.personalToken
+      : null;
+  if (!enabled && mmUserId === null && token === null) return null;
+  return { projectId, enabled, mmUserId, token };
+}
+
+interface SnapshotDocSnap {
+  id: string;
+  data(): Record<string, unknown> | undefined;
+}
+interface SnapshotDocRef {
+  get(): Promise<{ data(): Record<string, unknown> | undefined }>;
+  collection(name: string): SnapshotCollectionRef;
+}
+interface SnapshotCollectionRef {
+  doc(id: string): SnapshotDocRef;
+  get(): Promise<{ docs: SnapshotDocSnap[] }>;
+}
+export interface ProjectAgentSnapshotDb {
+  collection(name: string): SnapshotCollectionRef;
+}
+
+// Vegas: collect per-project agent states for a snapshot. The secret is read
+// only for projects whose doc carries an agent field — untouched projects
+// cost no extra reads and can have no lingering secret to retire.
+const PROJECT_AGENT_SECRET_PREFIX = projectAgentSecretDocId("");
+
+export async function collectProjectAgentStates(
+  db: ProjectAgentSnapshotDb,
+  uid: string,
+  slug: string,
+): Promise<Array<NonNullable<ReturnType<typeof mapProjectAgentState>>>> {
+  const snap = await db.collection("workspaces").doc(slug).collection("projects").get();
+  const out: Array<NonNullable<ReturnType<typeof mapProjectAgentState>>> = [];
+  const seenProjects = new Set<string>();
+  for (const doc of snap.docs) {
+    const data = doc.data() ?? {};
+    if (data.agent === undefined) continue;
+    seenProjects.add(doc.id);
+    const secretSnap = await db
+      .collection("users").doc(uid)
+      .collection("secrets").doc(projectAgentSecretDocId(doc.id))
+      .get();
+    const state = mapProjectAgentState(doc.id, data, secretSnap.data());
+    if (state) out.push(state);
+  }
+
+  // Deleting a project removes the doc that carries the agent flag — the
+  // lingering secret is then the only retire trigger left. Surface each
+  // orphaned projectAgentMattermost-* secret as a retire-pending state.
+  const secretsSnap = await db.collection("users").doc(uid).collection("secrets").get();
+  for (const doc of secretsSnap.docs) {
+    if (!doc.id.startsWith(PROJECT_AGENT_SECRET_PREFIX)) continue;
+    const projectId = doc.id.slice(PROJECT_AGENT_SECRET_PREFIX.length);
+    if (!projectId || seenProjects.has(projectId)) continue;
+    const state = mapProjectAgentState(projectId, {}, doc.data());
+    if (state) out.push(state);
+  }
+  return out;
 }
 
 export function deriveSlug(uid: string, data: Record<string, unknown>): string {

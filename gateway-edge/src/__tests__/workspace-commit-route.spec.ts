@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   resolveCustomerDir: vi.fn(),
+  resolveProjectDir: vi.fn(),
   commitAndPushWorkspace: vi.fn(),
   isSafeSlug: vi.fn(),
   resolveCommitAuthor: vi.fn(),
@@ -13,6 +14,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("../lib/workspace-git.js", () => ({
   resolveCustomerDir: h.resolveCustomerDir,
+  resolveProjectDir: h.resolveProjectDir,
   commitAndPushWorkspace: h.commitAndPushWorkspace,
   isSafeSlug: h.isSafeSlug,
 }));
@@ -133,5 +135,42 @@ describe("internal workspace commit route", () => {
       nothingToCommit: false,
     });
     expect(h.warn).toHaveBeenCalledWith(expect.stringContaining("committed but push failed slug=acme: rejected"));
+  });
+});
+
+describe("internal workspace commit route — Vegas project lane", () => {
+  it("commits the project clone when a project is given", async () => {
+    h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ slug: "acme", project: "orbit", message: "checkpoint" })
+      .expect(200);
+
+    expect(h.resolveProjectDir).toHaveBeenCalledWith(process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers", "acme", "orbit");
+    expect(h.commitAndPushWorkspace).toHaveBeenCalledWith(
+      "/customers/acme/projects/orbit",
+      expect.objectContaining({ message: "checkpoint" }),
+    );
+  });
+
+  it("rejects malformed project ids before touching the tree", async () => {
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ slug: "acme", project: "Not-Valid!" })
+      .expect(400, { error: "Invalid project", code: "BAD_PROJECT" });
+
+    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("503s when the project clone is missing, without committing the workspace instead", async () => {
+    h.resolveProjectDir.mockResolvedValue(null);
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ slug: "acme", project: "orbit" })
+      .expect(503);
+
+    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
   });
 });

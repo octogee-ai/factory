@@ -24,6 +24,7 @@ import {
 } from "@octogee/shared/types/glm";
 import {
   byotSnapshotProjectionFromSystemConfig,
+  collectProjectAgentStates,
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
 } from "@octogee/core/customer-snapshot-mapping";
@@ -762,9 +763,10 @@ async function loadSnapshot(
 ): Promise<FleetBrokerUserSnapshot | null> {
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
-  const [channels, projects, coachSecret, agentSnap, sysConfig] = await Promise.all([
+  const [channels, projects, projectAgents, coachSecret, agentSnap, sysConfig] = await Promise.all([
     collectChannelBindings(db, slug),
     collectProjects(db, slug),
+    collectProjectAgentStates(db, uid, slug),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
     db.collection("agents").doc(uid).get(),
     db.collection("users").doc(uid).collection("system").doc("config").get(),
@@ -782,6 +784,7 @@ async function loadSnapshot(
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
     channels,
     projects,
+    ...(projectAgents.length > 0 ? { projectAgents } : {}),
     ...snapshotCoachFields(coachData),
     ...snapshotCoachIdentity(agentData),
     ...(credentialProjection.systemConfig ? { systemConfig: credentialProjection.systemConfig } : {}),

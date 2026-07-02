@@ -27,6 +27,11 @@ import {
   attributeChannelToUsername,
   deriveJoinedUsernames,
   deriveContactedUsernames,
+  workspaceCoachAgentId,
+  projectAgentId,
+  workspaceCoachMmUsername,
+  projectAgentMmUsername,
+  parseAgentId,
 } from './identity.js';
 
 const MM_TEAM_NAME_RE = /^[a-z0-9]+([a-z\-0-9]+|(__)?)[a-z0-9]+$/;
@@ -513,5 +518,73 @@ describe('identity: MM compatibility', () => {
       expect(isValidUsername(name)).toBe(true);
       expect(MM_TEAM_NAME_RE.test(name)).toBe(true);
     }
+  });
+});
+
+describe('agent ids', () => {
+  it('builds coach and project agent ids and MM usernames', () => {
+    expect(workspaceCoachAgentId('alice')).toBe('octogee-alice-coach');
+    expect(projectAgentId('alice', 'orbit')).toBe('octogee-alice-proj-orbit-coach');
+    expect(workspaceCoachMmUsername('alice')).toBe('alice-coach');
+    expect(projectAgentMmUsername('alice', 'orbit')).toBe('alice-proj-orbit-coach');
+  });
+
+  it('parses coach agent ids', () => {
+    expect(parseAgentId('octogee-alice-coach')).toEqual({ kind: 'coach', username: 'alice' });
+    expect(parseAgentId('octogee-christopher-eckert-coach')).toEqual({
+      kind: 'coach',
+      username: 'christopher-eckert',
+    });
+  });
+
+  it('parses project agent ids, including hyphenated workspace slugs', () => {
+    expect(parseAgentId('octogee-alice-proj-orbit-coach')).toEqual({
+      kind: 'project',
+      username: 'alice',
+      project: 'orbit',
+    });
+    expect(parseAgentId('octogee-christopher-eckert-proj-x1-coach')).toEqual({
+      kind: 'project',
+      username: 'christopher-eckert',
+      project: 'x1',
+    });
+  });
+
+  it('rejects ids outside the octogee agent namespace', () => {
+    expect(parseAgentId('alice-coach')).toEqual({ kind: 'unknown', id: 'alice-coach' });
+    expect(parseAgentId('octogee-alice')).toEqual({ kind: 'unknown', id: 'octogee-alice' });
+    expect(parseAgentId('octogee-coach')).toEqual({ kind: 'unknown', id: 'octogee-coach' });
+    expect(parseAgentId('octogee--coach')).toEqual({ kind: 'unknown', id: 'octogee--coach' });
+    expect(parseAgentId('octogee-alice-proj--coach')).toEqual({
+      kind: 'unknown',
+      id: 'octogee-alice-proj--coach',
+    });
+    expect(parseAgentId('octogee-alice-proj-My_App-coach')).toEqual({
+      kind: 'unknown',
+      id: 'octogee-alice-proj-My_App-coach',
+    });
+  });
+
+  it('round-trips: parse(build) is identity for valid inputs', () => {
+    expect(parseAgentId(workspaceCoachAgentId('ai-2026'))).toEqual({
+      kind: 'coach',
+      username: 'ai-2026',
+    });
+    expect(parseAgentId(projectAgentId('ai-2026', 'orbit9'))).toEqual({
+      kind: 'project',
+      username: 'ai-2026',
+      project: 'orbit9',
+    });
+  });
+});
+
+describe('agent ids: MM username envelope', () => {
+  it('worst-case project agent MM username fits Mattermost UserNameMaxLength (64, verified against MM 11.8.1 model/user.go)', () => {
+    const worst = projectAgentMmUsername(
+      'a'.repeat(USERNAME_MAX_LENGTH),
+      'b'.repeat(PROJECT_ID_MAX_LENGTH),
+    );
+    expect(worst.length).toBe(52);
+    expect(worst.length).toBeLessThanOrEqual(64);
   });
 });

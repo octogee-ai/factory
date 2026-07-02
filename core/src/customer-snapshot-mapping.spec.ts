@@ -6,6 +6,8 @@ import {
   mapUserDocToSnapshot,
   mapWorkspaceChannelDoc,
   mapProjectChannelDoc,
+  mapProjectAgentState,
+  collectProjectAgentStates,
 } from "./customer-snapshot-mapping.js";
 
 describe("deriveSlug", () => {
@@ -201,5 +203,144 @@ describe("byotSystemConfigFromDoc — users/{uid}/system/config → snapshot.sys
     expect(byotSystemConfigFromDoc({})).toBeUndefined();
     expect(byotSystemConfigFromDoc({ byot: {} })).toBeUndefined();
     expect(byotSystemConfigFromDoc({ byot: null as unknown as Record<string, unknown> })).toBeUndefined();
+  });
+});
+
+describe("mapProjectAgentState", () => {
+  it("maps an enabled project agent with its minted secret", () => {
+    expect(
+      mapProjectAgentState(
+        "orbit",
+        { agent: { enabled: true } },
+        { mmUserId: "bot-1", personalToken: "pat-1" },
+      ),
+    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1" });
+  });
+
+  it("maps an enabled-but-unminted agent with null credentials", () => {
+    expect(mapProjectAgentState("orbit", { agent: { enabled: true } }, undefined)).toEqual({
+      projectId: "orbit",
+      enabled: true,
+      mmUserId: null,
+      token: null,
+    });
+  });
+
+  it("keeps a disabled entry while a secret lingers (retire pending)", () => {
+    expect(
+      mapProjectAgentState("orbit", { agent: { enabled: false } }, { mmUserId: "bot-1", personalToken: "pat-1" }),
+    ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1" });
+  });
+
+  it("returns null when the project has no agent state at all (snapshot stays lean)", () => {
+    expect(mapProjectAgentState("orbit", {}, undefined)).toBeNull();
+    expect(mapProjectAgentState("orbit", { agent: { enabled: false } }, undefined)).toBeNull();
+  });
+
+  it("treats malformed agent/secret shapes as absent", () => {
+    expect(mapProjectAgentState("orbit", { agent: "yes" }, undefined)).toBeNull();
+    expect(
+      mapProjectAgentState("orbit", { agent: { enabled: true } }, { mmUserId: 7, personalToken: null }),
+    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null });
+  });
+});
+
+describe("collectProjectAgentStates", () => {
+  function fakeDb(
+    projects: Array<{ id: string; data: Record<string, unknown> }>,
+    secrets: Record<string, Record<string, unknown>>,
+  ) {
+    const secretReads: string[] = [];
+    const db = {
+      collection: (_name: string) => ({
+        doc: (id: string) => ({
+          get: async () => ({ data: () => secrets[id] }),
+          collection: (sub: string) =>
+            sub === "projects"
+              ? { doc: () => { throw new Error("unused"); }, get: async () => ({ docs: projects.map((p) => ({ id: p.id, data: () => p.data })) }) }
+              : {
+                  doc: (secretId: string) => {
+                    secretReads.push(secretId);
+                    return {
+                      get: async () => ({ data: () => secrets[secretId] }),
+                      collection: () => { throw new Error("unused"); },
+                    };
+                  },
+                  get: async () => ({
+                    docs: Object.entries(secrets).map(([id, data]) => ({ id, data: () => data })),
+                  }),
+                },
+        }),
+        get: async () => { throw new Error("unused"); },
+      }),
+    };
+    return { db, secretReads };
+  }
+
+  it("collects enabled and retire-pending agents, skipping untouched projects without secret reads", async () => {
+    const { db, secretReads } = fakeDb(
+      [
+        { id: "orbit", data: { agent: { enabled: true } } },
+        { id: "plain", data: {} },
+        { id: "old", data: { agent: { enabled: false } } },
+      ],
+      {
+        "projectAgentMattermost-orbit": { mmUserId: "bot-1", personalToken: "pat-1" },
+        "projectAgentMattermost-old": { mmUserId: "bot-2", personalToken: "pat-2" },
+      },
+    );
+
+    const states = await collectProjectAgentStates(db, "uid-1", "alice");
+
+    expect(states).toEqual([
+      { projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1" },
+      { projectId: "old", enabled: false, mmUserId: "bot-2", token: "pat-2" },
+    ]);
+    expect(secretReads).toEqual(["projectAgentMattermost-orbit", "projectAgentMattermost-old"]);
+  });
+
+  it("drops fully-settled disabled agents (no secret left)", async () => {
+    const { db } = fakeDb([{ id: "old", data: { agent: { enabled: false } } }], {});
+
+    expect(await collectProjectAgentStates(db, "uid-1", "alice")).toEqual([]);
+  });
+});
+
+describe("collectProjectAgentStates — orphaned secrets (deleted projects)", () => {
+  it("emits a retire-pending state for a projectAgentMattermost-* secret whose project doc is gone", async () => {
+    const projects: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const secrets: Record<string, Record<string, unknown>> = {
+      "projectAgentMattermost-ghost": { mmUserId: "bot-ghost", personalToken: "pat-ghost" },
+      coachMattermost: { personalToken: "coach-pat" },
+    };
+    const db = {
+      collection: (_name: string) => ({
+        doc: (_id: string) => ({
+          get: async () => ({ data: () => undefined }),
+          collection: (sub: string) =>
+            sub === "projects"
+              ? {
+                  doc: () => { throw new Error("unused"); },
+                  get: async () => ({ docs: projects.map((p) => ({ id: p.id, data: () => p.data })) }),
+                }
+              : {
+                  doc: (secretId: string) => ({
+                    get: async () => ({ data: () => secrets[secretId] }),
+                    collection: () => { throw new Error("unused"); },
+                  }),
+                  get: async () => ({
+                    docs: Object.entries(secrets).map(([id, data]) => ({ id, data: () => data })),
+                  }),
+                },
+        }),
+        get: async () => { throw new Error("unused"); },
+      }),
+    };
+
+    const states = await collectProjectAgentStates(db, "uid-1", "alice");
+
+    expect(states).toEqual([
+      { projectId: "ghost", enabled: false, mmUserId: "bot-ghost", token: "pat-ghost" },
+    ]);
   });
 });

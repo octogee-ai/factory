@@ -248,6 +248,10 @@
       "types": "./dist/mattermost/nuke.d.ts",
       "default": "./dist/mattermost/nuke.js"
     },
+    "./mattermost/project-agent": {
+      "types": "./dist/mattermost/project-agent.d.ts",
+      "default": "./dist/mattermost/project-agent.js"
+    },
     "./mattermost/profile-sync": {
       "types": "./dist/mattermost/profile-sync.d.ts",
       "default": "./dist/mattermost/profile-sync.js"
@@ -443,6 +447,9 @@
       ],
       "mattermost/community": [
         "dist/mattermost/community.d.ts"
+      ],
+      "mattermost/project-agent": [
+        "dist/mattermost/project-agent.d.ts"
       ],
       "mattermost/nuke": [
         "dist/mattermost/nuke.d.ts"
