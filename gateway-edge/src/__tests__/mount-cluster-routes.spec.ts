@@ -51,6 +51,16 @@ describe("mountClusterRoutes", () => {
     expect((workspace[0].handlers[0] as { name?: string }).name).toBe("requireAuth");
   });
 
+  it("keeps channel auth in front of every channel route", () => {
+    const app = recordingApp();
+
+    mountClusterRoutes(app);
+
+    const channels = useCalls(app, "/api/channels");
+    expect(channels).toHaveLength(2);
+    expect((channels[0].handlers[0] as { name?: string }).name).toBe("requireAuth");
+  });
+
   it("keeps public project read/delete mounted before project auth", () => {
     const app = recordingApp();
 
@@ -101,6 +111,8 @@ describe("mountClusterRoutes", () => {
       "/api/workspace",
       "/api/workspace",
       "/api/workspace",
+      "/api/channels",
+      "/api/channels",
       "/api/projects",
       "/api/projects",
       "/api/projects",

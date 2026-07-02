@@ -32,6 +32,8 @@ import workspaceDeleteBlobRoutes from "./workspace/delete-blob.js";
 import workspaceExtractZipRoutes from "./workspace/extract-zip.js";
 import workspaceImportRepoRoutes from "./workspace/import-repo.js";
 
+import channelsRoutes from "./channels/index.js";
+
 import projectsReadmeRoutes from "./projects/readme.js";
 import projectsCreateRoutes from "./projects/create.js";
 import projectsRetryRoutes from "./projects/retry.js";
@@ -65,6 +67,8 @@ const WORKSPACE_ROUTES: readonly RouteHandler[] = [
   workspaceExtractZipRoutes,
   workspaceImportRepoRoutes,
 ];
+
+const CHANNEL_ROUTES: readonly RouteHandler[] = [requireAuth, channelsRoutes];
 
 const PROJECT_ROUTES: readonly RouteHandler[] = [
   projectsReadmeRoutes,
@@ -115,6 +119,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   }
 
   mountGroup(app, "/api/workspace", WORKSPACE_ROUTES);
+  mountGroup(app, "/api/channels", CHANNEL_ROUTES);
   mountGroup(app, "/api/projects", PROJECT_ROUTES);
 
   if (opts.mattermostMintRoutes) {
