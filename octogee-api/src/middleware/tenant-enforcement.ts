@@ -19,6 +19,7 @@ const FORBIDDEN = { error: "forbidden" } as const;
 // Must stay in lockstep with the routes guarded by requireInternalPlatformAuth.
 const PLATFORM_INTERNAL_ROUTES = new Set([
   "/internal/billing/check-trial-expiry",
+  "/internal/billing/run-auto-top-ups",
   "/internal/notifications/digest",
 ]);
 

@@ -67,3 +67,48 @@ describe("model credential sync projection", () => {
     });
   });
 });
+
+describe("agentModels passthrough — per-agent picks survive normalization", () => {
+  const AGENT_MODELS = {
+    "octogee-acme-coach": { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] as string[] },
+  };
+  const completeAcme = {
+    username: "acme",
+    provisioning: { openclaw: { status: "complete" } },
+  };
+
+  it("keeps agentModels beside an active canonical credential", () => {
+    const normalized = legacyByotSyncUserDataFromModelCredentialState({
+      ...completeAcme,
+      systemConfig: {
+        modelCredential: { active: true, provider: "anthropic" },
+        agentModels: AGENT_MODELS,
+      },
+    });
+    expect(normalized.systemConfig).toEqual({
+      byot: { provider: "anthropic" },
+      agentModels: AGENT_MODELS,
+    });
+  });
+
+  it("keeps agentModels for a plain platform customer (no credential at all)", () => {
+    const normalized = legacyByotSyncUserDataFromModelCredentialState({
+      ...completeAcme,
+      systemConfig: { agentModels: AGENT_MODELS },
+    });
+    expect(normalized.systemConfig).toEqual({ agentModels: AGENT_MODELS });
+  });
+
+  it("keeps agentModels when an inactive credential clears the byot half", () => {
+    const normalized = legacyByotSyncUserDataFromModelCredentialState({
+      ...completeAcme,
+      byotActive: true,
+      systemConfig: {
+        modelCredential: { active: false, provider: "openai" },
+        agentModels: AGENT_MODELS,
+      },
+    });
+    expect(normalized.byotActive).toBe(false);
+    expect(normalized.systemConfig).toEqual({ agentModels: AGENT_MODELS });
+  });
+});

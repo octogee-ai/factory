@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import { onboardingModelCatalogEntryFor } from "@octogee/shared/types/onboarding-cohorts";
+import { resolveEffectivePlan } from "@octogee/shared/types/billing";
+import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import {
   buildModelCredentialConfigForProvider,
   claudeCliRuntimeConfig,
@@ -32,7 +33,6 @@ const BYOT_FILES = ["models.json"] as const;
 type ByotFile = (typeof BYOT_FILES)[number];
 
 const BYOT_MARKER = ".byot-managed";
-const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
 
 export type ByotInput = ModelCredentialConfigInput;
 export interface FreeTierCoachModelInput {
@@ -41,16 +41,7 @@ export interface FreeTierCoachModelInput {
   source: "free-tier";
 }
 
-export interface PlatformCohortCoachModelInput {
-  slug: string;
-  provider: "anthropic" | "openrouter";
-  model: string;
-  contextTokens?: number;
-  reasoningEffort?: "high" | "xhigh";
-  source: "platform-cohort";
-}
-
-export type CoachModelInput = ByotInput | FreeTierCoachModelInput | PlatformCohortCoachModelInput;
+export type CoachModelInput = ByotInput | FreeTierCoachModelInput;
 
 // A per-agent BYOS model override. codex (a plugin) pins agentRuntime:{id:codex}
 // to route a gpt-5.5 override through the codex harness; claude-cli (a core
@@ -91,35 +82,6 @@ export function byosCoachConfigPatch(
 ): CoachModelPatch | null {
   if (!input) return null;
   if ("source" in input) {
-    if (input.source === "platform-cohort") {
-      const primary =
-        input.provider === "openrouter"
-          ? `${OPENROUTER_BROKER_PROVIDER_ID}/${input.model}`
-          : modelWithProviderPrefix("anthropic", input.model);
-      if (input.provider === "openrouter") {
-        return {
-          agents: {
-            defaults: { models: { [primary]: {} } },
-            list: [
-              {
-                id: agentIdForSlug(input.slug),
-                model: primary,
-              },
-            ],
-          },
-        };
-      }
-      return {
-        agents: {
-          list: [
-            {
-              id: agentIdForSlug(input.slug),
-              model: { primary, fallbacks: [] },
-            },
-          ],
-        },
-      };
-    }
     return {
       agents: {
         list: [
@@ -151,10 +113,6 @@ export function byosCoachConfigPatch(
   return patch;
 }
 
-function modelWithProviderPrefix(provider: "anthropic", model: string): string {
-  return model.includes("/") ? model : `${provider}/${model}`;
-}
-
 function isAgentRecord(a: unknown): a is { id?: unknown } {
   return a !== null && typeof a === "object" && !Array.isArray(a);
 }
@@ -182,16 +140,12 @@ export function deriveDesiredByotState(userData: {
   username?: string;
   tier?: string;
   selectedTier?: string;
-  trialExpired?: boolean;
-  provisioning?: {
-    openclaw?: {
-      status?: string;
-      initialModelProvider?: string;
-      initialModel?: string;
-      initialModelReasoningEffort?: string;
-    };
+  subscription?: unknown;
+  provisioning?: { openclaw?: { status?: string } };
+  systemConfig?: {
+    byot?: { provider?: string; baseUrl?: string; model?: string };
+    agentModels?: AgentModelSelections;
   };
-  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
 }): { enabled: boolean; input: ByotInput | null; coachModelInput: CoachModelInput | null } {
   const status = userData.provisioning?.openclaw?.status;
   const slug = userData.username;
@@ -202,9 +156,7 @@ export function deriveDesiredByotState(userData: {
     return {
       enabled: false,
       input: null,
-      coachModelInput:
-        freeTierCoachModelInput(slug, userData) ??
-        platformCohortCoachModelInput(slug, userData.provisioning?.openclaw),
+      coachModelInput: freeTierCoachModelInput(slug, userData),
     };
   }
   const input = byotInputForSlug(slug, userData.systemConfig?.byot);
@@ -215,66 +167,29 @@ export function deriveDesiredByotState(userData: {
   };
 }
 
-// The model a non-byot customer would run: free-tier fallback first, else the
-// onboarding cohort's platform model. Used directly by deriveDesiredByotState
-// and by the shared-gateway byosub gate (an OAuth-subscription owner parked on
-// a shared pod runs exactly this — their normal tier experience).
+// The model a non-byot customer would run: the house pin for house-only
+// plans, else null — the config default stands and the PWA picker's per-agent
+// overrides land afterwards. Used by deriveDesiredByotState and the
+// shared-gateway byosub gate.
 export function platformCoachModelInputForUser(
   slug: string,
   userData: Parameters<typeof deriveDesiredByotState>[0],
 ): CoachModelInput | null {
-  return (
-    freeTierCoachModelInput(slug, userData) ??
-    platformCohortCoachModelInput(slug, userData.provisioning?.openclaw)
-  );
+  return freeTierCoachModelInput(slug, userData);
 }
 
-function platformCohortCoachModelInput(
-  slug: string,
-  openclaw:
-    | {
-        initialModelProvider?: string;
-        initialModel?: string;
-        initialModelReasoningEffort?: string;
-      }
-    | undefined,
-): PlatformCohortCoachModelInput | null {
-  if (
-    openclaw?.initialModelProvider !== "anthropic" &&
-    openclaw?.initialModelProvider !== "openrouter"
-  ) {
-    return null;
-  }
-  if (typeof openclaw.initialModel !== "string" || openclaw.initialModel.length === 0) {
-    return null;
-  }
-  const reasoningEffort =
-    openclaw.initialModelReasoningEffort === "high" ||
-    openclaw.initialModelReasoningEffort === "xhigh"
-      ? openclaw.initialModelReasoningEffort
-      : undefined;
-  const catalogEntry = onboardingModelCatalogEntryFor(openclaw.initialModelProvider, openclaw.initialModel);
-  return {
-    slug,
-    source: "platform-cohort",
-    provider: openclaw.initialModelProvider,
-    model: openclaw.initialModel,
-    ...(typeof catalogEntry?.contextTokens === "number"
-      ? { contextTokens: catalogEntry.contextTokens }
-      : {}),
-    ...(reasoningEffort ? { reasoningEffort } : {}),
-  };
-}
 
+// House-only (Personal Free with no live trial boost) pins the coach to the
+// house model. The broker would degrade anyway; pinning keeps the config
+// honest so /status and the agent's self-report agree with the wire.
 function freeTierCoachModelInput(
   slug: string,
-  userData: { tier?: string; selectedTier?: string; trialExpired?: boolean },
+  userData: Parameters<typeof deriveDesiredByotState>[0],
 ): FreeTierCoachModelInput | null {
-  const freeTier =
-    userData.trialExpired === true ||
-    userData.tier === "free" ||
-    userData.selectedTier === "free";
-  return freeTier ? { slug, model: PLATFORM_FALLBACK_MODEL, source: "free-tier" } : null;
+  const plan = resolveEffectivePlan(userData);
+  return plan.modelAccess === "house_only"
+    ? { slug, model: PLATFORM_FALLBACK_MODEL, source: "free-tier" }
+    : null;
 }
 
 function byotInputForSlug(

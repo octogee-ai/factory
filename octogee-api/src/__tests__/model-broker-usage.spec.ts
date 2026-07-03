@@ -144,6 +144,45 @@ describe("InMemoryModelBrokerUsageStore owner isolation", () => {
   });
 });
 
+describe("prepaid credit debits", () => {
+  it("debits the owner's credit balance atomically with the metering write", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    store.creditBalances.set("uid-builder", 10);
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "c1",
+      ownerUid: "uid-builder",
+      debitsCreditBalance: true,
+      countsTowardSpendWindow: false,
+    });
+    const cost = estimateAnthropicCost("claude-sonnet-4-6", baseRecord.usage).total;
+    expect(await store.readCreditBalance("uid-builder")).toBeCloseTo(10 - cost, 8);
+    // still fully metered for the ledger
+    expect(store.rollups.get("uid-builder")?.requestCount).toBe(1);
+  });
+
+  it("never debits subscription-rail traffic and defaults unknown owners to zero balance", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    store.creditBalances.set("uid-a", 5);
+    await store.recordUsage({ ...baseRecord, eventId: "s1", ownerUid: "uid-a" });
+    expect(await store.readCreditBalance("uid-a")).toBe(5);
+    expect(await store.readCreditBalance("uid-nobody")).toBe(0);
+  });
+
+  it("allows the final call to overshoot slightly negative — the gate blocks the next one", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    store.creditBalances.set("uid-builder", 0.0001);
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "c2",
+      ownerUid: "uid-builder",
+      debitsCreditBalance: true,
+      countsTowardSpendWindow: false,
+    });
+    expect(await store.readCreditBalance("uid-builder")).toBeLessThan(0);
+  });
+});
+
 describe("house daily allowance metering", () => {
   it("meters degraded house traffic against the owner's UTC-day allowance", async () => {
     const store = new InMemoryModelBrokerUsageStore();

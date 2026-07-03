@@ -1,3 +1,4 @@
+import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import type { CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type {
   FleetBrokerProjectAgent,
@@ -20,15 +21,15 @@ export interface UserSnapshot {
   repoUrl: string;
   mattermostUserId: string | null;
   greetingPosted: boolean;
-  initialModelProvider?: string;
-  initialModel?: string;
-  initialModelReasoningEffort?: string;
   channels: CustomerSnapshot["channels"];
   ownerName: string;
   projects?: FleetBrokerProjectRestore[];
   projectAgents?: FleetBrokerProjectAgent[];
   byotActive?: boolean;
-  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
+  systemConfig?: {
+    byot?: { provider?: string; baseUrl?: string; model?: string };
+    agentModels?: AgentModelSelections;
+  };
 }
 
 export interface CustomerContext {
@@ -704,22 +705,12 @@ async function restoreByos(
 // it reflects the just-mounted runtime, not the stale doc. byotActive + systemConfig.byot
 // drive the provider; tier drives the free-tier coach model.
 function byotUserDataFromSnapshot(snapshot: UserSnapshot): Record<string, unknown> {
-  const openclaw: Record<string, unknown> = { status: "complete" };
-  if (snapshot.initialModelProvider) {
-    openclaw.initialModelProvider = snapshot.initialModelProvider;
-  }
-  if (snapshot.initialModel) {
-    openclaw.initialModel = snapshot.initialModel;
-  }
-  if (snapshot.initialModelReasoningEffort) {
-    openclaw.initialModelReasoningEffort = snapshot.initialModelReasoningEffort;
-  }
   return {
     username: snapshot.slug,
     byotActive: snapshot.byotActive,
     systemConfig: snapshot.systemConfig,
     tier: snapshot.tier,
-    provisioning: { openclaw },
+    provisioning: { openclaw: { status: "complete" } },
   };
 }
 

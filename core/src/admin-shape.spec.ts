@@ -33,7 +33,7 @@ describe("buildCustomerSummary", () => {
       uid: "uid-1",
       displayName: "builder",
       email: "builder@example.com",
-      tier: "trial",
+      tier: "personal_free",
       subscriptionStatus: "trial",
       costUsd: 0,
       totalTokensUsed: 0,
@@ -71,8 +71,12 @@ describe("buildCustomerSummary", () => {
     );
 
     expect(summary.windowCostUsd).toBe(0.008);
-    expect(summary.windowBudgetUsd).toBeGreaterThan(0);
-    expect(summary.percentUsed).toBe(0);
+    // legacy "trial" maps to personal_free + the 7-day Personal boost
+    expect(summary.tier).toBe("personal_free");
+    expect(summary.effectiveTier).toBe("personal");
+    expect(summary.trialDaysRemaining).toBe(7);
+    expect(summary.windowBudgetUsd).toBeCloseTo(15 / 182.64, 4);
+    expect(summary.percentUsed).toBe(10); // $0.008 of the $0.082 Personal window
     expect(summary.degraded).toBe(false);
     // legacy token-window fields are gone from the admin contract
     expect(summary).not.toHaveProperty("windowTokensUsed");

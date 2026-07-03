@@ -1,5 +1,6 @@
 import type { UserSnapshot } from "./customer-lifecycle.js";
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
+import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 
 type ChannelBinding = UserSnapshot["channels"][number];
 
@@ -116,38 +117,10 @@ export function deriveSlug(uid: string, data: Record<string, unknown>): string {
   return slug;
 }
 
-function optionalInitialModelFields(
-  openclaw: Record<string, unknown> | undefined,
-): Pick<
-  UserSnapshot,
-  "initialModelProvider" | "initialModel" | "initialModelReasoningEffort"
-> {
-  const out: Pick<
-    UserSnapshot,
-    "initialModelProvider" | "initialModel" | "initialModelReasoningEffort"
-  > = {};
-  if (typeof openclaw?.initialModelProvider === "string") {
-    out.initialModelProvider = openclaw.initialModelProvider;
-  }
-  if (typeof openclaw?.initialModel === "string") {
-    out.initialModel = openclaw.initialModel;
-  }
-  if (typeof openclaw?.initialModelReasoningEffort === "string") {
-    out.initialModelReasoningEffort = openclaw.initialModelReasoningEffort;
-  }
-  return out;
-}
 
 function snapshotProvisioning(data: Record<string, unknown>): Pick<
   UserSnapshot,
-  | "gatewayId"
-  | "status"
-  | "agentIds"
-  | "repoUrl"
-  | "greetingPosted"
-  | "initialModelProvider"
-  | "initialModel"
-  | "initialModelReasoningEffort"
+  "gatewayId" | "status" | "agentIds" | "repoUrl" | "greetingPosted"
 > {
   const oc = (data.provisioning as { openclaw?: Record<string, unknown> } | undefined)?.openclaw;
   const git = (data.provisioning as { git?: Record<string, unknown> } | undefined)?.git;
@@ -157,7 +130,6 @@ function snapshotProvisioning(data: Record<string, unknown>): Pick<
     agentIds: (oc?.agentIds as string[] | undefined) ?? [],
     repoUrl: (git?.repoUrl as string | undefined) ?? "",
     greetingPosted: Boolean((oc?.greeting as { ok?: boolean } | undefined)?.ok),
-    ...optionalInitialModelFields(oc),
   };
 }
 
@@ -202,22 +174,37 @@ function byotSystemConfigFromRecord(
   return Object.keys(out).length > 0 ? { byot: out } : undefined;
 }
 
+// Per-agent model picks travel with the snapshot no matter the credential
+// state — a plain platform customer's picker choices must survive pod rolls too.
+function withAgentModels(
+  sysData: Record<string, unknown> | undefined,
+  systemConfig: SnapshotSystemConfig | undefined,
+): SnapshotSystemConfig | undefined {
+  const agentModels = parseAgentModelSelections(sysData?.agentModels);
+  if (Object.keys(agentModels).length === 0) return systemConfig;
+  return { ...(systemConfig ?? {}), agentModels };
+}
+
 export function byotSnapshotProjectionFromSystemConfig(
   sysData: Record<string, unknown> | undefined,
 ): ByotSnapshotProjection {
   const modelCredential = objectRecord(sysData?.modelCredential);
   if (modelCredential) {
-    const systemConfig = modelCredential.active === true
+    const byotConfig = modelCredential.active === true
       ? byotSystemConfigFromRecord(modelCredential)
       : undefined;
+    const systemConfig = withAgentModels(sysData, byotConfig);
     return {
-      byotActive: systemConfig !== undefined,
+      byotActive: byotConfig !== undefined,
       ...(systemConfig ? { systemConfig } : {}),
     };
   }
 
   const byot = objectRecord(sysData?.byot);
-  const systemConfig = byot ? byotSystemConfigFromRecord(byot) : undefined;
+  const systemConfig = withAgentModels(
+    sysData,
+    byot ? byotSystemConfigFromRecord(byot) : undefined,
+  );
   return {
     byotActive: null,
     ...(systemConfig ? { systemConfig } : {}),

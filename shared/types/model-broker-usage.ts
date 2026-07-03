@@ -10,6 +10,18 @@ export const MODEL_BROKER_USAGE_WINDOWS_COLLECTION = "modelBrokerUsageWindows";
 export const MODEL_BROKER_RATE_WINDOWS_COLLECTION = "modelBrokerRateWindows";
 
 export const MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION = "modelBrokerHouseDayWindows";
+export const MODEL_BROKER_CREDITS_COLLECTION = "modelBrokerCredits";
+export const MODEL_BROKER_CREDIT_TOPUPS_COLLECTION = "modelBrokerCreditTopups";
+
+export type ModelBrokerCreditTopUpSource = "checkout" | "auto_top_up";
+
+// Stored on modelBrokerCredits/{uid}; written by the billing routes, read by
+// the auto-top-up sweep and the PWA Billing tab.
+export interface ModelBrokerCreditAutoTopUp {
+  enabled: boolean;
+  thresholdUsd: number;
+  amountUsd: number;
+}
 
 export const MODEL_BROKER_USAGE_WINDOW_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
 export const MODEL_BROKER_RATE_WINDOW_MS = 60 * 1000;

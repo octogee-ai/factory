@@ -4,7 +4,10 @@ import {
   restoreByosubForAgents,
   agentIdsFromConfig,
 } from "../lib/byosub-restore.js";
-import { materializeAnthropicBrokerForAgents } from "../lib/agent-model-token-materializer.js";
+import {
+  materializeBrokerProfilesForAgents,
+  openRouterCatalogInputForBaseUrl,
+} from "../lib/agent-model-token-materializer.js";
 import {
   claudeCliRuntimeConfig,
   codexRuntimeConfig,
@@ -589,16 +592,20 @@ let configRaw: string;
     log("no changes needed");
   }
 
-  // Shared (multi-tenant) pods serve every customer-agent's anthropic through the
-  // broker with its OWN per-customer token — materialize each agent's
-  // anthropic:default broker-token profile before openclaw boots. Local write
-  // (db-less-safe); the secret-resolver fetches the token at runtime.
+  // Model-ready boot: every customer-agent gets BOTH broker provider surfaces
+  // (anthropic:default profile + the full OpenRouter catalog) before openclaw
+  // boots, so any catalog model is dynamically selectable. Local writes
+  // (db-less-safe); the secret-resolver fetches tokens at runtime.
   if (shouldMaterializeAnthropicBrokerProfiles(process.env)) {
-    const materialized = materializeAnthropicBrokerForAgents(agentIdsFromConfig(config), {
+    const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
+    const materialized = materializeBrokerProfilesForAgents(agentIdsFromConfig(config), {
       logFn: log,
+      ...(openRouterBaseUrl
+        ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
+        : {}),
     });
     if (materialized > 0) {
-      log(`anthropic broker-token profiles materialized for ${materialized} agent(s)`);
+      log(`model-ready broker profiles materialized for ${materialized} agent(s)`);
     }
   }
 

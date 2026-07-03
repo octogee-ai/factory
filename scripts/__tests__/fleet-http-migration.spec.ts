@@ -576,9 +576,8 @@ describe("createRestoreHandler", () => {
       uid: "uid-chris",
       snapshot: {
         ...RESTORE_SNAPSHOT,
-        initialModelProvider: "openrouter",
-        initialModel: "z-ai/glm-5.2",
-        initialModelReasoningEffort: "xhigh",
+        byotActive: true,
+        systemConfig: { byot: { provider: "anthropic" } },
       },
     };
     const rawBody = JSON.stringify(body);
@@ -605,13 +604,9 @@ describe("createRestoreHandler", () => {
       );
       expect(adapter.reassertByotForCustomer).toHaveBeenCalledWith(
         expect.objectContaining({
-          provisioning: {
-            openclaw: expect.objectContaining({
-              initialModelProvider: "openrouter",
-              initialModel: "z-ai/glm-5.2",
-              initialModelReasoningEffort: "xhigh",
-            }),
-          },
+          byotActive: true,
+          systemConfig: { byot: { provider: "anthropic" } },
+          provisioning: { openclaw: { status: "complete" } },
         }),
       );
       expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
@@ -623,12 +618,11 @@ describe("createRestoreHandler", () => {
     }
   });
 
-  it("refreshes same-uid broker snapshot before cohort model reassertion", async () => {
+  it("refreshes the same-uid broker snapshot before the model re-assert", async () => {
     const currentSnapshot = {
       ...RESTORE_SNAPSHOT,
-      initialModelProvider: "openrouter",
-      initialModel: "z-ai/glm-5.2",
-      initialModelReasoningEffort: "xhigh",
+      byotActive: true,
+      systemConfig: { byot: { provider: "anthropic" } },
     };
     const adapter = mkAdapter({
       loadUserSnapshot: vi.fn(async () => currentSnapshot),
@@ -662,14 +656,9 @@ describe("createRestoreHandler", () => {
     expect(adapter.loadUserSnapshot).toHaveBeenCalledWith("uid-chris");
     expect(adapter.reassertByotForCustomer).toHaveBeenCalledWith(
       expect.objectContaining({
-        provisioning: {
-          openclaw: {
-            status: "complete",
-            initialModelProvider: "openrouter",
-            initialModel: "z-ai/glm-5.2",
-            initialModelReasoningEffort: "xhigh",
-          },
-        },
+        byotActive: true,
+        systemConfig: { byot: { provider: "anthropic" } },
+        provisioning: { openclaw: { status: "complete" } },
       }),
     );
   });

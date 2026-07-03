@@ -116,9 +116,6 @@ export interface FleetBrokerUserSnapshot {
   mattermostUserId: string | null;
   customerMmUserId: string | null;
   greetingPosted: boolean;
-  initialModelProvider?: string;
-  initialModel?: string;
-  initialModelReasoningEffort?: string;
   channels: FleetBrokerChannelBinding[];
   projects: FleetBrokerProjectRestore[];
   projectAgents?: FleetBrokerProjectAgent[];

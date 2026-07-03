@@ -60,38 +60,19 @@ describe("assign-customer-gateway args", () => {
     expect(ASSIGN_CUSTOMER_GATEWAY_USAGE).toContain("--uid=UID");
   });
 
-  it("uses Current by default and Preview only for explicit cohort overrides", () => {
+  it("resolves the default gateway with per-uid overrides (cohorts are dead)", () => {
     const config = {
       defaultGatewayId: "default",
-      currentOnboardingCohortId: "sonnet-standard",
-      previewOnboardingCohortId: "glm-openrouter",
-      onboardingCohorts: {
-        "sonnet-standard": {
-          label: "Standard Sonnet",
-          gatewayId: "default",
-          provider: "anthropic" as const,
-          model: "anthropic/claude-sonnet-4-6",
-        },
-        "glm-openrouter": {
-          label: "GLM via OpenRouter",
-          gatewayId: "glm-shared",
-          provider: "openrouter" as const,
-          model: "z-ai/glm-5.2",
-          reasoningEffort: "high" as const,
-        },
-      },
-      cohortOverrides: { "uid-preview": "glm-openrouter" },
+      overrides: { "uid-pinned": "glm-shared" },
     };
 
-    expect(resolveOpsAssignmentTarget("uid-current", config)).toEqual({
-      kind: "cohort",
+    expect(resolveOpsAssignmentTarget("uid-anyone", config)).toEqual({
+      kind: "default",
       gatewayId: "default",
-      onboardingCohortId: "sonnet-standard",
     });
-    expect(resolveOpsAssignmentTarget("uid-preview", config)).toEqual({
-      kind: "cohort",
+    expect(resolveOpsAssignmentTarget("uid-pinned", config)).toEqual({
+      kind: "gateway-override",
       gatewayId: "glm-shared",
-      onboardingCohortId: "glm-openrouter",
     });
   });
 });

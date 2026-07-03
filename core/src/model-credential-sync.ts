@@ -43,14 +43,27 @@ function byotSystemConfigFromModelCredential(
   return Object.keys(byot).length > 0 ? { byot } : undefined;
 }
 
+// agentModels (per-agent picker choices) are orthogonal to the credential
+// normalization — they survive every branch, including an inactive credential
+// clearing the byot half.
+function withAgentModels(
+  userData: ModelCredentialSyncUserData,
+  systemConfig: LegacyByotSystemConfig | undefined,
+): LegacyByotSystemConfig | undefined {
+  const agentModels = userData.systemConfig?.agentModels;
+  if (!agentModels || Object.keys(agentModels).length === 0) return systemConfig;
+  return { ...(systemConfig ?? {}), agentModels };
+}
+
 export function legacyByotSyncUserDataFromModelCredentialState(
   userData: ModelCredentialSyncUserData,
 ): LegacyByotSyncUserData {
   const credential = userData.systemConfig?.modelCredential;
   if (credential) {
-    const systemConfig = credential.active === true
-      ? byotSystemConfigFromModelCredential(credential)
-      : undefined;
+    const systemConfig = withAgentModels(
+      userData,
+      credential.active === true ? byotSystemConfigFromModelCredential(credential) : undefined,
+    );
 
     return {
       ...userData,
@@ -61,9 +74,10 @@ export function legacyByotSyncUserDataFromModelCredentialState(
 
   return {
     ...userData,
-    systemConfig: userData.systemConfig?.byot
-      ? { byot: userData.systemConfig.byot }
-      : undefined,
+    systemConfig: withAgentModels(
+      userData,
+      userData.systemConfig?.byot ? { byot: userData.systemConfig.byot } : undefined,
+    ),
   };
 }
 

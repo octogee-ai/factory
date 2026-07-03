@@ -13,6 +13,10 @@
       "types": "./dist/types/index.d.ts",
       "default": "./dist/types/index.js"
     },
+    "./types/agent-models": {
+      "types": "./dist/types/agent-models.d.ts",
+      "default": "./dist/types/agent-models.js"
+    },
     "./types/agent": {
       "types": "./dist/types/agent.d.ts",
       "default": "./dist/types/agent.js"
@@ -89,9 +93,13 @@
       "types": "./dist/types/model-broker-usage.d.ts",
       "default": "./dist/types/model-broker-usage.js"
     },
-    "./types/onboarding-cohorts": {
-      "types": "./dist/types/onboarding-cohorts.d.ts",
-      "default": "./dist/types/onboarding-cohorts.js"
+    "./types/model-catalog": {
+      "types": "./dist/types/model-catalog.d.ts",
+      "default": "./dist/types/model-catalog.js"
+    },
+    "./types/orchestrator-placement": {
+      "types": "./dist/types/orchestrator-placement.d.ts",
+      "default": "./dist/types/orchestrator-placement.js"
     },
     "./types/model-credentials": {
       "types": "./dist/types/model-credentials.d.ts",
@@ -136,6 +144,9 @@
   },
   "typesVersions": {
     "*": {
+      "types/agent-models": [
+        "dist/types/agent-models.d.ts"
+      ],
       "types/agent": [
         "dist/types/agent.d.ts"
       ],
@@ -193,8 +204,11 @@
       "types/model-broker-usage": [
         "dist/types/model-broker-usage.d.ts"
       ],
-      "types/onboarding-cohorts": [
-        "dist/types/onboarding-cohorts.d.ts"
+      "types/model-catalog": [
+        "dist/types/model-catalog.d.ts"
+      ],
+      "types/orchestrator-placement": [
+        "dist/types/orchestrator-placement.d.ts"
       ],
       "types/model-credentials": [
         "dist/types/model-credentials.d.ts"

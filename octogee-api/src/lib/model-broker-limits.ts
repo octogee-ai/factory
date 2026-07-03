@@ -1,6 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 
-import { resolveTier, windowBudgetUsdForTier } from "@octogee/shared/types/billing";
+import { resolveEffectivePlan, type BillingRail } from "@octogee/shared/types/billing";
 import {
   normalizeModelBrokerTokenLimits,
   normalizeModelBrokerTokenPolicy,
@@ -16,14 +16,9 @@ import {
 export interface OwnerModelBrokerGrant {
   limits: ModelBrokerTokenLimits;
   policy: ModelBrokerTokenPolicy;
-}
-
-function timestampDate(value: unknown): Date | null {
-  if (value instanceof Date) return value;
-  const toDate = (value as { toDate?: unknown } | null | undefined)?.toDate;
-  if (typeof toDate !== "function") return null;
-  const date = toDate.call(value);
-  return date instanceof Date ? date : null;
+  // Which rail bills platform calls: subscription = window budgets; Builders
+  // ride prepaid_credits (their credit balance is the gate, not a window).
+  rail: BillingRail;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -49,23 +44,18 @@ async function readOwnerTier(
   db: Pick<Firestore, "collection"> | undefined,
   ownerUid: string | undefined,
   now: number,
-): Promise<{ spendWindowUsd: number; freeTier: boolean } | null> {
+): Promise<{ spendWindowUsd: number; freeTier: boolean; rail: BillingRail } | null> {
   if (!db || !ownerUid) return null;
   const snap = await db.collection("users").doc(ownerUid).get();
   const data = snap.data() as Record<string, unknown> | undefined;
   if (!data) return null;
-  const subscription =
-    data.subscription && typeof data.subscription === "object" && !Array.isArray(data.subscription)
-      ? (data.subscription as Record<string, unknown>)
-      : {};
-  const tier = resolveTier(data);
+  const plan = resolveEffectivePlan(data, new Date(now));
   return {
-    spendWindowUsd: windowBudgetUsdForTier(
-      tier,
-      timestampDate(subscription.trialStartedAt),
-      new Date(now),
-    ),
-    freeTier: tier === "free",
+    spendWindowUsd: plan.windowBudgetUsd,
+    // "freeTier" on the wire = the house-only policy: always degrade to the
+    // house model, never billed. Personal Free (and lapsed trials) land here.
+    freeTier: plan.modelAccess === "house_only",
+    rail: plan.tier === "builder" ? "prepaid_credits" : "subscription",
   };
 }
 
@@ -99,13 +89,17 @@ export async function resolveOwnerModelBrokerGrant(input: {
 }): Promise<OwnerModelBrokerGrant> {
   const tier = await readOwnerTier(input.db, input.ownerUid, input.now);
   const overrides = await readGatewayLimitOverrides(input.db, input.gatewayId);
+  const rail: BillingRail = tier?.rail ?? "subscription";
   const limits = normalizeModelBrokerTokenLimits({
     ...(input.defaults ?? {}),
-    ...(tier === null ? {} : { spendWindowUsd: tier.spendWindowUsd }),
+    // Prepaid-rail owners carry no window budget — the credit balance gates.
+    ...(tier === null || rail === "prepaid_credits"
+      ? {}
+      : { spendWindowUsd: tier.spendWindowUsd }),
     ...overrides,
   });
   const policy = normalizeModelBrokerTokenPolicy({ freeTier: tier?.freeTier === true });
-  return { limits, policy };
+  return { limits, policy, rail };
 }
 
 export interface LiveOwnerGrantInput {
@@ -177,6 +171,7 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
       spendWindowUsd: grant.limits.spendWindowUsd,
       requestsPerMinute: grant.limits.requestsPerMinute,
       freeTier: grant.policy.freeTier,
+      rail: grant.rail,
     });
     return grant;
   };

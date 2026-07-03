@@ -40,9 +40,6 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
             status: "complete",
             agentIds: ["octogee-acme-coach"],
             greeting: { ok: true },
-            initialModelProvider: "openrouter",
-            initialModel: "z-ai/glm-5.2",
-            initialModelReasoningEffort: "high",
           },
           git: { repoUrl: "git@x:acme.git" },
         },
@@ -59,9 +56,6 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
       repoUrl: "git@x:acme.git",
       mattermostUserId: "mm-1",
       greetingPosted: true,
-      initialModelProvider: "openrouter",
-      initialModel: "z-ai/glm-5.2",
-      initialModelReasoningEffort: "high",
       channels: ch,
       ownerName: "Acme Inc",
       byotActive: false,
@@ -342,5 +336,43 @@ describe("collectProjectAgentStates — orphaned secrets (deleted projects)", ()
     expect(states).toEqual([
       { projectId: "ghost", enabled: false, mmUserId: "bot-ghost", token: "pat-ghost" },
     ]);
+  });
+});
+
+describe("agent-model selections ride the snapshot regardless of byot state", () => {
+  const AGENT_MODELS = {
+    "octogee-acme-coach": {
+      primary: "platform-openrouter/z-ai/glm-5.2",
+      fallbacks: ["anthropic/claude-haiku-4-5"],
+    },
+  };
+
+  it("projects agentModels alongside an active modelCredential", () => {
+    expect(
+      byotSnapshotProjectionFromSystemConfig({
+        modelCredential: { active: true, provider: "anthropic" },
+        agentModels: AGENT_MODELS,
+      }).systemConfig,
+    ).toEqual({ byot: { provider: "anthropic" }, agentModels: AGENT_MODELS });
+  });
+
+  it("projects agentModels even when no credential exists (platform customer picks)", () => {
+    expect(byotSystemConfigFromDoc({ agentModels: AGENT_MODELS })).toEqual({
+      agentModels: AGENT_MODELS,
+    });
+    expect(
+      byotSnapshotProjectionFromSystemConfig({
+        modelCredential: { active: false, provider: "openai" },
+        agentModels: AGENT_MODELS,
+      }).systemConfig,
+    ).toEqual({ agentModels: AGENT_MODELS });
+  });
+
+  it("drops malformed selections at the projection boundary", () => {
+    expect(
+      byotSystemConfigFromDoc({
+        agentModels: { "octogee-acme-coach": { primary: "no-slash" }, junk: 42 },
+      }),
+    ).toBeUndefined();
   });
 });

@@ -62,18 +62,18 @@ export type {
 } from './member.js';
 
 export {
-  TRIAL_DAILY_BUDGETS_USD,
-  TRIAL_TOTAL_BUDGET_USD,
   WINDOW_LENGTH_HOURS,
   WINDOWS_PER_DAY,
-  SONNET_BLENDED_USD_PER_M_TOKENS,
-  trialDayBudgetUsd,
-  trialWindowBudgetUsd,
-  trialDayN,
-  windowBudgetUsdForTier,
+  PLAN_WINDOWS_PER_MONTH,
+  TRIAL_LENGTH_DAYS,
+  FREE_DAILY_HOUSE_TOKENS,
+  planWindowBudgetUsd,
+  resolveEffectivePlan,
   resolveTier,
-  FREE_MONTHLY_LLM_BUDGET_USD,
+  trialDayN,
+  trialDaysRemaining,
 } from './billing.js';
+export type { BillingRail, EffectivePlan } from './billing.js';
 
 export type {
   NotificationCategory,
@@ -103,31 +103,29 @@ export {
 } from './fleet-controller.js';
 
 export type {
-  OnboardingModelProvider,
-  OnboardingReasoningEffort,
-  OnboardingModelCatalogSource,
-  OnboardingModelCatalogEntry,
-  OnboardingCohortConfig,
   OnboardingOrchestratorConfig,
   OnboardingPlacementDecision,
   PlacementPointerRewriteResult,
-} from './onboarding-cohorts.js';
+} from './orchestrator-placement.js';
 export {
-  ONBOARDING_MODEL_PROVIDERS,
-  ONBOARDING_REASONING_EFFORTS,
-  ONBOARDING_MODEL_CATALOG,
-  isOnboardingModelProvider,
-  isOnboardingReasoningEffort,
-  onboardingModelCatalogForProvider,
-  onboardingModelCatalogEntryFor,
-  canonicalOnboardingModelId,
-  defaultOnboardingModelForProvider,
-  onboardingReasoningEffortsForModel,
-  isOnboardingReasoningEffortAllowed,
-  isOnboardingCohortEnabled,
   resolveOnboardingPlacementForUid,
   rewritePlacementGatewayPointers,
-} from './onboarding-cohorts.js';
+} from './orchestrator-placement.js';
+export type {
+  ModelCatalogProvider,
+  ModelCatalogSource,
+  ModelCatalogEntry,
+  ModelReasoningEffort,
+} from './model-catalog.js';
+export {
+  MODEL_CATALOG,
+  MODEL_CATALOG_PROVIDERS,
+  MODEL_REASONING_EFFORTS,
+  isModelCatalogProvider,
+  isModelReasoningEffort,
+  modelCatalogForProvider,
+  modelCatalogEntryFor,
+} from './model-catalog.js';
 
 export type {
   ModelCredentialActiveStaticProviderId,

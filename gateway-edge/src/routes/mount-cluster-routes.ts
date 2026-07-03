@@ -2,6 +2,7 @@ import { Express, RequestHandler, Router } from "express";
 
 import mattermostRoutes from "./mattermost.js";
 import openclawRoutes from "./openclaw.js";
+import agentModelRoutes from "./agent-models.js";
 import billingRoutes from "./billing/index.js";
 import modelCredentialRoutes from "./model-credentials.js";
 import legalAcceptRoutes from "./legal/accept.js";
@@ -91,6 +92,7 @@ const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/api/entities", entitiesRoutes],
   ["/api/mattermost", mattermostRoutes],
   ["/api/openclaw", openclawRoutes],
+  ["/api/agent-models", agentModelRoutes],
   ["/api/billing", billingRoutes],
   ["/api/model-credentials", modelCredentialRoutes],
   ["/api/legal", legalAcceptRoutes],

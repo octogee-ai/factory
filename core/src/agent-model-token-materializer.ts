@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 
 import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
 import { AGENTS_DIR } from "./config.js";
+import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 
 // The per-agent broker-token anthropic profile for shared (multi-tenant) pods.
 // Each customer-agent's anthropic:default resolves to its OWN owner-scoped broker
@@ -104,6 +105,34 @@ export function openRouterBrokerModelsJson(
   agentId: string,
   input: OpenRouterBrokerModelInput,
 ): OpenRouterBrokerModelsJson {
+  return openRouterBrokerCatalogJson(agentId, {
+    baseUrl: input.baseUrl,
+    models: [input],
+  });
+}
+
+export interface OpenRouterBrokerCatalogInput {
+  baseUrl: string;
+  models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens">>;
+}
+
+export function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput {
+  return {
+    baseUrl,
+    models: modelCatalogForProvider("openrouter").map((entry) => ({
+      model: entry.id,
+      ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
+    })),
+  };
+}
+
+// Model-readiness: every catalog OpenRouter model rides ONE provider entry
+// backed by the agent's own broker token — "/models switch" needs no further
+// provider surgery, and the broker's plan policy gates what actually serves.
+export function openRouterBrokerCatalogJson(
+  agentId: string,
+  input: OpenRouterBrokerCatalogInput,
+): OpenRouterBrokerModelsJson {
   return {
     providers: {
       [OPENROUTER_BROKER_PROVIDER_ID]: {
@@ -114,7 +143,9 @@ export function openRouterBrokerModelsJson(
           provider: SECRET_RESOLVER_PROVIDER,
           id: agentModelTokenSecretId(agentId, "openrouter"),
         },
-        models: [openRouterBrokerModelConfig(input)],
+        models: input.models.map((model) =>
+          openRouterBrokerModelConfig({ ...model, baseUrl: input.baseUrl }),
+        ),
       },
     },
   };
@@ -173,11 +204,22 @@ export function upsertOpenRouterBrokerModel(
   agentId: string,
   input: OpenRouterBrokerModelInput,
 ): boolean {
+  return upsertOpenRouterBrokerCatalog(agentDir, agentId, {
+    baseUrl: input.baseUrl,
+    models: [input],
+  });
+}
+
+export function upsertOpenRouterBrokerCatalog(
+  agentDir: string,
+  agentId: string,
+  input: OpenRouterBrokerCatalogInput,
+): boolean {
   const modelsPath = path.join(agentDir, "models.json");
   const markerPath = path.join(agentDir, OPENROUTER_PLATFORM_MARKER);
   const current = readJsonFile(modelsPath);
   const currentProviders = asRecord(current.providers);
-  const desired = openRouterBrokerModelsJson(agentId, input).providers[OPENROUTER_BROKER_PROVIDER_ID];
+  const desired = openRouterBrokerCatalogJson(agentId, input).providers[OPENROUTER_BROKER_PROVIDER_ID];
   const next = {
     ...current,
     providers: {
@@ -244,6 +286,54 @@ export function materializeAnthropicBrokerForAgents(
     } catch (e) {
       opts.logFn?.(
         `⚠ [agent-model-token] materialize failed for ${agentId}: ${(e as Error).message}`,
+      );
+    }
+  }
+  return count;
+}
+
+/**
+ * Model-ready boot sweep: assert BOTH broker provider surfaces per agent —
+ * the anthropic:default profile AND the full OpenRouter catalog (when the
+ * broker's OpenRouter base URL is configured). After this, switching any
+ * agent to any catalog model is a pure agents.list flip. Same tolerance
+ * semantics as the anthropic-only sweep; returns agents with any write.
+ */
+export function materializeBrokerProfilesForAgents(
+  agentIds: string[],
+  opts: {
+    agentsDir?: string;
+    openRouter?: OpenRouterBrokerCatalogInput;
+    logFn?: (m: string) => void;
+  } = {},
+): number {
+  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
+  let count = 0;
+  for (const agentId of agentIds) {
+    if (!COACH_AGENT_RE.test(agentId)) {
+      opts.logFn?.(
+        `[agent-model-token] skipping ${agentId} — only octogee-<slug>-coach agents are broker-token resolvable`,
+      );
+      continue;
+    }
+    try {
+      const agentHome = path.join(agentsDir, agentId, "agent");
+      const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
+      const wroteCatalog = opts.openRouter
+        ? upsertOpenRouterBrokerCatalog(agentHome, agentId, opts.openRouter)
+        : false;
+      if (wroteProfile || wroteCatalog) {
+        count++;
+        let openRouterState = "unconfigured";
+        if (opts.openRouter) openRouterState = wroteCatalog ? "written" : "ok";
+        opts.logFn?.(
+          `[agent-model-token] model-ready: ${agentId}` +
+            ` (anthropic ${wroteProfile ? "written" : "ok"}, openrouter ${openRouterState})`,
+        );
+      }
+    } catch (e) {
+      opts.logFn?.(
+        `⚠ [agent-model-token] model-ready materialize failed for ${agentId}: ${(e as Error).message}`,
       );
     }
   }

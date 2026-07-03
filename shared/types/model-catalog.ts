@@ -1,0 +1,85 @@
+// The platform model catalog: every model a plan with catalog access may run,
+// per billing provider. Gateways boot model-ready against this list (both
+// broker provider profiles per agent), so switching any agent to any entry is
+// a pure config flip — no provisioning, no cohorts. Plan policy (house_only vs
+// catalog) is enforced at the LLM broker, never on the pod.
+
+export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter"] as const;
+export type ModelCatalogProvider = (typeof MODEL_CATALOG_PROVIDERS)[number];
+
+export const MODEL_REASONING_EFFORTS = ["high", "xhigh"] as const;
+export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
+
+export type ModelCatalogSource = "openclaw-release" | "openrouter";
+
+export interface ModelCatalogEntry {
+  provider: ModelCatalogProvider;
+  id: string;
+  label: string;
+  source: ModelCatalogSource;
+  aliases?: readonly string[];
+  contextTokens?: number;
+  reasoningEfforts: readonly ModelReasoningEffort[];
+  defaultReasoningEffort?: ModelReasoningEffort;
+}
+
+export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
+  {
+    provider: "anthropic",
+    id: "anthropic/claude-sonnet-4-6",
+    label: "Claude Sonnet 4.6",
+    source: "openclaw-release",
+    aliases: ["claude-sonnet-4-6"],
+    reasoningEfforts: [],
+  },
+  {
+    provider: "anthropic",
+    id: "anthropic/claude-haiku-4-5",
+    label: "Claude Haiku 4.5",
+    source: "openclaw-release",
+    aliases: ["claude-haiku-4-5"],
+    reasoningEfforts: [],
+  },
+  {
+    provider: "openrouter",
+    id: "z-ai/glm-5.2",
+    label: "GLM 5.2",
+    source: "openrouter",
+    contextTokens: 1_048_576,
+    reasoningEfforts: ["high", "xhigh"],
+    defaultReasoningEffort: "xhigh",
+  },
+  {
+    provider: "openrouter",
+    id: "minimax/minimax-m3",
+    label: "MiniMax M3",
+    source: "openrouter",
+    contextTokens: 524_288,
+    reasoningEfforts: [],
+  },
+];
+
+export function isModelCatalogProvider(value: unknown): value is ModelCatalogProvider {
+  return value === "anthropic" || value === "openrouter";
+}
+
+export function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
+  return value === "high" || value === "xhigh";
+}
+
+export function modelCatalogForProvider(
+  provider: ModelCatalogProvider,
+): readonly ModelCatalogEntry[] {
+  return MODEL_CATALOG.filter((entry) => entry.provider === provider);
+}
+
+export function modelCatalogEntryFor(
+  provider: ModelCatalogProvider,
+  model: string,
+): ModelCatalogEntry | null {
+  return MODEL_CATALOG.find(
+    (entry) =>
+      entry.provider === provider &&
+      (entry.id === model || Boolean(entry.aliases?.includes(model))),
+  ) ?? null;
+}

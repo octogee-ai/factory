@@ -55,10 +55,10 @@ import {
   restoreOauthStoreForSlug,
   brokerFetchByosubCreds,
   applyCoachModelPatch,
-  applyOpenRouterPlatformCohortPatch,
   applyOauthRuntimeModelAllowlist,
   requestGatewayRestartForRuntimeChange,
   syncByotForCustomer,
+  applyAgentModelOverrides,
   markerProvidersForSlot,
 } from "./byot-sync-runtime";
 import { internalFetch } from "./internal-fetch.js";
@@ -101,9 +101,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      tier: "free",
       selectedTier: "free",
-      trialExpired: true,
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
@@ -118,38 +116,24 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      tier: "trial",
-      selectedTier: "trial",
-      trialExpired: false,
+      selectedTier: "personal_free",
+      subscription: { trialStartedAt: new Date() },
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
     expect(desired.coachModelInput).toBeNull();
   });
 
-  it("non-BYOK OpenRouter onboarding mirror derives the platform GLM coach model", () => {
+  it("paid non-BYOK customer leaves the config default model in place (no cohort pin)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      provisioning: {
-        openclaw: {
-          status: "complete",
-          initialModelProvider: "openrouter",
-          initialModel: "z-ai/glm-5.2",
-          initialModelReasoningEffort: "high",
-        },
-      },
+      selectedTier: "personal",
+      provisioning: { openclaw: { status: "complete" } },
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
-    expect(desired.coachModelInput).toEqual({
-      slug: "tester-70",
-      source: "platform-cohort",
-      provider: "openrouter",
-      model: "z-ai/glm-5.2",
-      contextTokens: 1_048_576,
-      reasoningEffort: "high",
-    });
+    expect(desired.coachModelInput).toBeNull();
   });
 
   it("unknown/absent provider falls back to anthropic (api_key default)", () => {
@@ -525,28 +509,6 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     });
   });
 
-  it("OpenRouter platform cohort → GLM primary through the platform-openrouter provider", () => {
-    expect(
-      byosCoachConfigPatch({
-        slug: "tester-70",
-        source: "platform-cohort",
-        provider: "openrouter",
-        model: "z-ai/glm-5.2",
-        reasoningEffort: "high",
-      }),
-    ).toEqual({
-      agents: {
-        defaults: { models: { "platform-openrouter/z-ai/glm-5.2": {} } },
-        list: [
-          {
-            id,
-            model: "platform-openrouter/z-ai/glm-5.2",
-          },
-        ],
-      },
-    });
-  });
-
   it("openai-codex → coach model + agentRuntime:codex; runtime allowlist owns codex plugin config", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       agents: {
@@ -694,59 +656,6 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
             { id: "octogee-zed-coach", model: "z/y" },
           ],
           defaults: { models: claudeCliDefaultModels },
-        },
-      },
-    ]);
-  });
-
-  it("OpenRouter platform cohort patches provider registry, allowlist, and coach model with the live OpenClaw shape", async () => {
-    const calls: object[] = [];
-    let replacePaths: string[] | undefined;
-    const r = await applyOpenRouterPlatformCohortPatch(
-      { slug: "tester-70", model: "z-ai/glm-5.2", contextTokens: 1_048_576 },
-      {
-        openRouterBaseUrl: () => "http://llm-broker.octogee-test.svc.cluster.local:3010/v1",
-        fetchAgentModelBrokerToken: vi.fn(async () => "octogee-model-token-live"),
-        applyConfigPatch: async (args) => {
-          calls.push(args.buildPatch(CURRENT));
-          replacePaths = args.buildReplacePaths?.(CURRENT);
-          return { mode: "rpc", attempts: 1 };
-        },
-      },
-    );
-
-    expect(r).toEqual({ patched: true, changed: true, restartRequired: true });
-    expect(replacePaths).toEqual(["agents.list"]);
-    expect(calls).toEqual([
-      {
-        models: {
-          providers: {
-            "platform-openrouter": {
-              api: "openai-completions",
-              baseUrl: "http://llm-broker.octogee-test.svc.cluster.local:3010/v1",
-              apiKey: "octogee-model-token-live",
-              models: [
-                {
-                  id: "z-ai/glm-5.2",
-                  name: "z-ai/glm-5.2",
-                  contextTokens: 1_048_576,
-                  contextWindow: 1_048_576,
-                },
-              ],
-            },
-          },
-        },
-        agents: {
-          defaults: { models: { "platform-openrouter/z-ai/glm-5.2": {} } },
-          list: [
-            {
-              id: "octogee-tester-70-coach",
-              name: "coach",
-              model: "platform-openrouter/z-ai/glm-5.2",
-              mmAccount: "a",
-            },
-            { id: "octogee-zed-coach", model: "z/y" },
-          ],
         },
       },
     ]);
@@ -923,9 +832,7 @@ describe("standard gateway — BYOS materialization", () => {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        tier: "free",
         selectedTier: "free",
-        trialExpired: true,
       },
       {
         usesLlmBrokerToken: () => true,
@@ -957,9 +864,8 @@ describe("standard gateway — BYOS materialization", () => {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        tier: "trial",
-        selectedTier: "trial",
-        trialExpired: false,
+        selectedTier: "personal_free",
+        subscription: { trialStartedAt: new Date() },
       },
       {
         isOperatorGateway: () => false,
@@ -1016,6 +922,7 @@ describe("standard gateway — BYOS materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
+        selectedTier: "personal",
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "claude-cli" } },
       },
@@ -1148,53 +1055,6 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(reloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("OpenRouter platform cohort: applies the OpenRouter runtime template and restarts the gateway", async () => {
-    const applyByotStateFn = vi.fn(() => false);
-    const materializeAnthropicFn = vi.fn(() => false);
-    const applyOpenRouterRuntimeFn = vi.fn(async () => ({
-      patched: true,
-      changed: true,
-      restartRequired: true,
-    }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
-    const requestRestartFn = vi.fn(async () => true);
-    const reloadFn = vi.fn(async () => {});
-
-    await syncByotForCustomer(
-      {
-        byotActive: false,
-        username: "tester-70",
-        provisioning: {
-          openclaw: {
-            status: "complete",
-            initialModelProvider: "openrouter",
-            initialModel: "z-ai/glm-5.2",
-            initialModelReasoningEffort: "high",
-          },
-        },
-      },
-      baseDeps({
-        applyByotState: applyByotStateFn,
-        materializeAnthropicBroker: materializeAnthropicFn,
-        applyOpenRouterPlatformCohortPatch: applyOpenRouterRuntimeFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        requestGatewayRestart: requestRestartFn,
-        triggerSecretsReload: reloadFn,
-      }),
-    );
-
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
-    expect(materializeAnthropicFn).toHaveBeenCalledWith("tester-70");
-    expect(applyOpenRouterRuntimeFn).toHaveBeenCalledWith({
-      slug: "tester-70",
-      model: "z-ai/glm-5.2",
-      contextTokens: 1_048_576,
-    });
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
-    expect(requestRestartFn).toHaveBeenCalledTimes(1);
-    expect(reloadFn).not.toHaveBeenCalled();
-  });
-
   it("anthropic BYOK: no local key (broker resolves per-owner), but the broker profile is still materialized", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
@@ -1225,6 +1085,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
+        selectedTier: "personal",
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "claude-cli" } },
       },
@@ -1251,7 +1112,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(logLines.join("\n")).toContain("byosub (claude-cli) suppressed on shared gateway");
   });
 
-  it("codex BYOS on shared with a platform cohort: runs the owner's normal tier model, not the subscription", async () => {
+  it("codex BYOS on shared (paid plan): suppressed to the platform rail, config default model stands", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
@@ -1262,13 +1123,8 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
-        provisioning: {
-          openclaw: {
-            status: "complete",
-            initialModelProvider: "anthropic",
-            initialModel: "claude-sonnet-4-6",
-          },
-        },
+        selectedTier: "personal",
+        provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       baseDeps({
@@ -1282,18 +1138,11 @@ describe("shared gateway — per-customer broker-token materialization", () => {
 
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
-    // same models + budgets as any trial/paying platform customer on shared
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        slug: "tester-70",
-        source: "platform-cohort",
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      }),
-    );
+    // same models + budgets as any paying platform customer on shared — the
+    // paid plan has no house pin, so no coach-model patch is forced.
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(reloadFn).toHaveBeenCalledTimes(1);
   });
-
   it("grok (non-anthropic) BYOK: writes the custom-provider models.json (store preserved) + materializes the anthropic fallback", async () => {
     const applyByotStateFn = vi.fn(() => true);
     const materializeFn = vi.fn(() => false);
@@ -1516,5 +1365,199 @@ describe("operator gateway — runtime sync stays narrow", () => {
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker)", () => {
+  const CURRENT = {
+    agents: {
+      list: [
+        { id: "octogee-tester-70-coach", name: "coach", model: "old", mmAccount: "a" },
+        { id: "octogee-tester-70-proj-web-coach", model: "old" },
+        { id: "octogee-zed-coach", model: "z/y" },
+      ],
+    },
+  };
+
+  it("patches each owned agent's full list; openrouter refs get a defaults.models allowlist entry", async () => {
+    const calls: object[] = [];
+    const paths: (string[] | undefined)[] = [];
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      {
+        "octogee-tester-70-coach": {
+          primary: "platform-openrouter/z-ai/glm-5.2",
+          fallbacks: ["anthropic/claude-haiku-4-5"],
+        },
+        "octogee-tester-70-proj-web-coach": {
+          primary: "anthropic/claude-sonnet-4-6",
+          fallbacks: [],
+        },
+      },
+      { houseOnly: false },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(CURRENT));
+          paths.push(args.buildReplacePaths?.(CURRENT));
+          return { mode: "rpc", attempts: 1 };
+        },
+        logFn: () => {},
+      },
+    );
+    expect(r).toBe(true);
+    expect(paths).toEqual([["agents.list"], ["agents.list"]]);
+    expect(calls[0]).toEqual({
+      agents: {
+        defaults: { models: { "platform-openrouter/z-ai/glm-5.2": {} } },
+        list: [
+          {
+            id: "octogee-tester-70-coach",
+            name: "coach",
+            model: {
+              primary: "platform-openrouter/z-ai/glm-5.2",
+              fallbacks: ["anthropic/claude-haiku-4-5"],
+            },
+            mmAccount: "a",
+          },
+          { id: "octogee-tester-70-proj-web-coach", model: "old" },
+          { id: "octogee-zed-coach", model: "z/y" },
+        ],
+      },
+    });
+    expect(calls[1]).toEqual({
+      agents: {
+        list: [
+          { id: "octogee-tester-70-coach", name: "coach", model: "old", mmAccount: "a" },
+          {
+            id: "octogee-tester-70-proj-web-coach",
+            model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+          },
+          { id: "octogee-zed-coach", model: "z/y" },
+        ],
+      },
+    });
+  });
+
+  it("ignores foreign agent ids (cross-tenant safety) and no-ops on empty input", async () => {
+    const applyConfigPatchFn = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
+    const logs: string[] = [];
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      { "octogee-zed-coach": { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] } },
+      { houseOnly: false },
+      { applyConfigPatch: applyConfigPatchFn, logFn: (m) => logs.push(m) },
+    );
+    expect(r).toBe(false);
+    expect(applyConfigPatchFn).not.toHaveBeenCalled();
+    expect(logs.join("\n")).toContain("octogee-zed-coach");
+
+    expect(
+      await applyAgentModelOverrides("tester-70", undefined, { houseOnly: false }, {
+        applyConfigPatch: applyConfigPatchFn,
+        logFn: () => {},
+      }),
+    ).toBe(false);
+  });
+
+  it("defers all overrides on a house-only plan (free pins the house model)", async () => {
+    const applyConfigPatchFn = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      { "octogee-tester-70-coach": { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] } },
+      { houseOnly: true },
+      { applyConfigPatch: applyConfigPatchFn, logFn: () => {} },
+    );
+    expect(r).toBe(false);
+    expect(applyConfigPatchFn).not.toHaveBeenCalled();
+  });
+
+  it("a failed patch on one agent does not abort the rest", async () => {
+    const applyConfigPatchFn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway busy"))
+      .mockResolvedValueOnce({ mode: "rpc", attempts: 1 });
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      {
+        "octogee-tester-70-coach": { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+        "octogee-tester-70-proj-web-coach": {
+          primary: "anthropic/claude-haiku-4-5",
+          fallbacks: [],
+        },
+      },
+      { houseOnly: false },
+      { applyConfigPatch: applyConfigPatchFn, logFn: () => {} },
+    );
+    expect(r).toBe(true);
+    expect(applyConfigPatchFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("syncByotForCustomer — agent-model overrides ride every class path", () => {
+  it("standard gateway: overrides applied after the coach-model sync with the plan's houseOnly", async () => {
+    const applyAgentModelOverridesFn = vi.fn(async () => true);
+    const agentModels = {
+      "octogee-tester-70-coach": {
+        primary: "platform-openrouter/z-ai/glm-5.2",
+        fallbacks: [] as string[],
+      },
+    };
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "personal",
+        systemConfig: { agentModels },
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: vi.fn(() => false),
+        applyCoachModelPatch: vi.fn(async () => false),
+        triggerSecretsReload: vi.fn(async () => {}),
+        applyAgentModelOverrides: applyAgentModelOverridesFn,
+      },
+    );
+
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
+      houseOnly: false,
+    });
+  });
+
+  it("shared gateway: a free-plan owner's overrides arrive houseOnly:true (deferred)", async () => {
+    const applyAgentModelOverridesFn = vi.fn(async () => false);
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "free",
+        systemConfig: {
+          agentModels: {
+            "octogee-tester-70-coach": {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: [] as string[],
+            },
+          },
+        },
+      },
+      {
+        isSharedGateway: () => true,
+        isOperatorGateway: () => false,
+        applyByotState: vi.fn(() => false),
+        applyCoachModelPatch: vi.fn(async () => false),
+        materializeAnthropicBroker: vi.fn(() => false),
+        triggerSecretsReload: vi.fn(async () => {}),
+        applyAgentModelOverrides: applyAgentModelOverridesFn,
+      },
+    );
+
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
+      "tester-70",
+      expect.objectContaining({ "octogee-tester-70-coach": expect.anything() }),
+      { houseOnly: true },
+    );
   });
 });

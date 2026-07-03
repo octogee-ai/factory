@@ -332,9 +332,6 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
       tier: "pro",
       byotActive: true,
       systemConfig: { byot: { provider: "openai", model: "gpt-4o" } },
-      initialModelProvider: "openrouter",
-      initialModel: "z-ai/glm-5.2",
-      initialModelReasoningEffort: "high",
     });
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
     expect(state.calls).toContain("reassertByotForCustomer");
@@ -346,12 +343,7 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(ud.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
     expect(ud.tier).toBe("pro");
     expect(ud.provisioning).toEqual({
-      openclaw: {
-        status: "complete",
-        initialModelProvider: "openrouter",
-        initialModel: "z-ai/glm-5.2",
-        initialModelReasoningEffort: "high",
-      },
+      openclaw: { status: "complete" },
     });
   });
 
@@ -530,9 +522,6 @@ if (ensureIdx !== -1) {
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
         greetingPosted: true,
-        initialModelProvider: "openrouter",
-        initialModel: "z-ai/glm-5.2",
-        initialModelReasoningEffort: "xhigh",
       });
       return result;
     };
@@ -540,12 +529,7 @@ if (ensureIdx !== -1) {
     await addCustomerToGateway(adapter, "uid-test");
 
     expect(state.reassertByotUserData?.provisioning).toEqual({
-      openclaw: {
-        status: "complete",
-        initialModelProvider: "openrouter",
-        initialModel: "z-ai/glm-5.2",
-        initialModelReasoningEffort: "xhigh",
-      },
+      openclaw: { status: "complete" },
     });
   });
 });

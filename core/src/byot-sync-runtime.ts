@@ -33,9 +33,12 @@ import {
 } from "./config.js";
 import {
   OPENROUTER_BROKER_PROVIDER_ID,
-  openRouterBrokerProviderConfig,
+  openRouterCatalogInputForBaseUrl,
   upsertAnthropicBrokerProfile,
+  upsertOpenRouterBrokerCatalog,
 } from "./agent-model-token-materializer.js";
+import { agentIdBelongsToSlug, type AgentModelSelections } from "@octogee/shared/types/agent-models";
+import { resolveEffectivePlan } from "@octogee/shared/types/billing";
 
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -120,6 +123,76 @@ export async function applyCoachModelPatch(
     );
     return false;
   }
+}
+
+// Per-agent model picks from the PWA catalog picker (users/{uid}/system/
+// config.agentModels). Applied last so an explicit pick wins over the cohort/
+// class default the standard sync just wrote. Absence means "leave the agent
+// alone" — partial userData from other trigger sites must never reset models.
+export async function applyAgentModelOverrides(
+  slug: string,
+  agentModels: AgentModelSelections | undefined,
+  opts: { houseOnly: boolean },
+  deps?: {
+    applyConfigPatch?: typeof applyConfigPatch;
+    logFn?: (m: string) => void;
+  },
+): Promise<boolean> {
+  const logFn = deps?.logFn ?? log;
+  const owned = Object.entries(agentModels ?? {}).filter(([agentId]) => {
+    if (agentIdBelongsToSlug(agentId, slug)) return true;
+    logFn(`⚠ [byot-sync] ${slug}: agent-model override for foreign agent ${agentId} ignored`);
+    return false;
+  });
+  if (owned.length === 0) return false;
+  if (opts.houseOnly) {
+    logFn(
+      `[byot-sync] ${slug}: agent-model overrides deferred — house-only plan pins the house model`,
+    );
+    return false;
+  }
+
+  const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
+  let patched = false;
+  for (const [agentId, selection] of owned) {
+    const model = { primary: selection.primary, fallbacks: selection.fallbacks };
+    const openRouterRefs = [selection.primary, ...selection.fallbacks].filter((ref) =>
+      ref.startsWith(`${OPENROUTER_BROKER_PROVIDER_ID}/`),
+    );
+    const buildPatch = (current: unknown) => ({
+      agents: {
+        ...(openRouterRefs.length > 0
+          ? {
+              defaults: {
+                models: Object.fromEntries(openRouterRefs.map((ref) => [ref, {}])),
+              },
+            }
+          : {}),
+        list: coachFullAgentList(current, agentId, model),
+      },
+    });
+    try {
+      await applyConfigPatchFn(
+        {
+          buildPatch,
+          buildReplacePaths: () => ["agents.list"],
+          logPrefix: `[agent-models:${slug}]`,
+        },
+        { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
+      );
+      logFn(
+        `[byot-sync] ${slug}: ${agentId} model → ${selection.primary}${
+          selection.fallbacks.length ? ` (fallback ${selection.fallbacks.join(", ")})` : ""
+        }`,
+      );
+      patched = true;
+    } catch (e) {
+      logFn(
+        `⚠ [byot-sync] agent-model override failed for ${agentId}: ${(e as Error).message}`,
+      );
+    }
+  }
+  return patched;
 }
 
 export async function applyOauthRuntimeModelAllowlist(
@@ -325,91 +398,11 @@ export async function brokerFetchByosubCreds(agentId: string): Promise<ByosubCre
   }));
 }
 
-export async function fetchAgentModelBrokerToken(input: {
-  agentId: string;
-  provider: "openrouter";
-}): Promise<string> {
-  const r = await internalFetch(`${byokBrokerBaseUrl()}/internal/byok/agent-model-token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  if (!r.ok) {
-    const body = (await r.text().catch(() => "")).slice(0, 200);
-    throw new Error(`agent-model-token ${r.status} ${body}`);
-  }
-  const data = (await r.json()) as { value?: unknown };
-  if (typeof data.value !== "string" || data.value.length === 0) {
-    throw new Error("agent-model-token: malformed broker response");
-  }
-  return data.value;
-}
 
 export interface RuntimeRegistryPatchResult {
   patched: boolean;
   changed: boolean;
   restartRequired: boolean;
-}
-
-export async function applyOpenRouterPlatformCohortPatch(
-  input: { slug: string; model: string; contextTokens?: number },
-  deps?: {
-    applyConfigPatch?: typeof applyConfigPatch;
-    fetchAgentModelBrokerToken?: typeof fetchAgentModelBrokerToken;
-    openRouterBaseUrl?: typeof configuredOpenRouterBaseUrl;
-    logFn?: (m: string) => void;
-  },
-): Promise<RuntimeRegistryPatchResult> {
-  const logFn = deps?.logFn ?? log;
-  const baseUrl = (deps?.openRouterBaseUrl ?? configuredOpenRouterBaseUrl)();
-  if (!baseUrl) {
-    logFn(`⚠ [byot-sync] ${input.slug}: OPENROUTER_BASE_URL is not configured`);
-    return { patched: false, changed: false, restartRequired: false };
-  }
-  const agentId = `octogee-${input.slug}-coach`;
-  const fetchToken = deps?.fetchAgentModelBrokerToken ?? fetchAgentModelBrokerToken;
-  let apiKey: string;
-  try {
-    apiKey = await fetchToken({ agentId, provider: "openrouter" });
-  } catch (e) {
-    logFn(
-      `⚠ [byot-sync] ${input.slug}: OpenRouter broker token materialization failed: ${(e as Error).message}`,
-    );
-    return { patched: false, changed: false, restartRequired: false };
-  }
-
-  const modelRef = `${OPENROUTER_BROKER_PROVIDER_ID}/${input.model}`;
-  const provider = openRouterBrokerProviderConfig({
-    baseUrl,
-    model: input.model,
-    apiKey,
-    ...(typeof input.contextTokens === "number" ? { contextTokens: input.contextTokens } : {}),
-  });
-  const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
-  const buildPatch = (current: unknown) => ({
-    models: { providers: { [OPENROUTER_BROKER_PROVIDER_ID]: provider } },
-    agents: {
-      defaults: { models: { [modelRef]: {} } },
-      list: coachFullAgentList(current, agentId, modelRef),
-    },
-  });
-
-  try {
-    const result = await applyConfigPatchFn(
-      {
-        buildPatch,
-        buildReplacePaths: () => ["agents.list"],
-        logPrefix: `[byot-sync:${input.slug}:openrouter]`,
-      },
-      { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
-    );
-    const changed = result.noop !== true;
-    logFn(`[byot-sync] ${input.slug}: OpenRouter platform model → ${modelRef}`);
-    return { patched: true, changed, restartRequired: changed };
-  } catch (e) {
-    logFn(`⚠ [byot-sync] ${input.slug}: OpenRouter platform patch failed: ${(e as Error).message}`);
-    return { patched: false, changed: false, restartRequired: false };
-  }
 }
 
 export async function restoreOauthStoreForSlug(
@@ -475,7 +468,7 @@ export interface SyncByotForCustomerDeps {
   requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload?: typeof triggerSecretsReload;
   materializeAnthropicBroker?: (slug: string) => boolean;
-  applyOpenRouterPlatformCohortPatch?: typeof applyOpenRouterPlatformCohortPatch;
+  applyAgentModelOverrides?: typeof applyAgentModelOverrides;
 }
 
 type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
@@ -489,12 +482,22 @@ interface SyncByotActions {
   requestGatewayRestart: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload: typeof triggerSecretsReload;
   materializeAnthropicBroker: (slug: string) => boolean;
-  applyOpenRouterPlatformCohortPatch: typeof applyOpenRouterPlatformCohortPatch;
+  applyAgentModelOverrides: typeof applyAgentModelOverrides;
 }
 
+// Model-readiness: every customer-agent gets BOTH broker provider surfaces —
+// the anthropic:default profile and the full OpenRouter catalog — so "/models
+// switch to <any catalog model>" is a pure agents.list flip. Plan policy gates
+// at the broker, so pre-wiring every provider on every agent is safe.
 function materializeAnthropicBroker(slug: string): boolean {
   const agentId = `octogee-${slug}-coach`;
-  return upsertAnthropicBrokerProfile(path.join(AGENTS_DIR, agentId, "agent"), agentId);
+  const agentHome = path.join(AGENTS_DIR, agentId, "agent");
+  const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
+  const baseUrl = configuredOpenRouterBaseUrl();
+  const wroteCatalog = baseUrl
+    ? upsertOpenRouterBrokerCatalog(agentHome, agentId, openRouterCatalogInputForBaseUrl(baseUrl))
+    : false;
+  return wroteProfile || wroteCatalog;
 }
 
 function configuredOpenRouterBaseUrl(): string | null {
@@ -513,8 +516,7 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
     materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
-    applyOpenRouterPlatformCohortPatch:
-      deps?.applyOpenRouterPlatformCohortPatch ?? applyOpenRouterPlatformCohortPatch,
+    applyAgentModelOverrides: deps?.applyAgentModelOverrides ?? applyAgentModelOverrides,
   };
 }
 
@@ -662,40 +664,15 @@ async function syncSharedBrokerByotState(
   );
 
   const materialized = actions.materializeAnthropicBroker(slug);
-  const platformOpenRouterInput =
-    desired.coachModelInput &&
-    "source" in desired.coachModelInput &&
-    desired.coachModelInput.source === "platform-cohort" &&
-    desired.coachModelInput.provider === "openrouter"
-      ? {
-          slug,
-          model: desired.coachModelInput.model,
-          ...(typeof desired.coachModelInput.contextTokens === "number"
-            ? { contextTokens: desired.coachModelInput.contextTokens }
-            : {}),
-        }
-      : null;
-  const openRouterRuntimePatch = platformOpenRouterInput
-    ? await actions.applyOpenRouterPlatformCohortPatch(platformOpenRouterInput)
-    : { patched: false, changed: false, restartRequired: false };
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
 
-  const patched = restore.present && desired.coachModelInput && !platformOpenRouterInput
+  const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
-  const oauthRestartRequested = await requestRestartIfRequired(runtimePatched, actions);
-  const openRouterRestartRequested = openRouterRuntimePatch.restartRequired
-    ? await actions.requestGatewayRestart("platform-cohort.openrouter")
-    : false;
-  const restartRequested = oauthRestartRequested || openRouterRestartRequested;
+  const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
 
   if (
-    (changed ||
-      restore.restored ||
-      materialized ||
-      openRouterRuntimePatch.patched ||
-      runtimePatched.patched ||
-      patched) &&
+    (changed || restore.restored || materialized || runtimePatched.patched || patched) &&
     !restartRequested
   ) {
     await actions.triggerSecretsReload();
@@ -715,20 +692,40 @@ export async function syncByotForCustomer(
   const slug = userData.username;
   if (!slug) return;
 
-  if (isShared()) {
-    const gate = gateSharedByosub(desired, userData, deps?.logFn ?? log);
+  await syncByotStateForClass({ slug, desired, userData, actions, isShared, isOp, usesBrokerToken, logFn: deps?.logFn });
+
+  // Explicit per-agent picks land last so they win over the class/cohort
+  // default the sync just wrote; house-only plans stay pinned to the house model.
+  await actions.applyAgentModelOverrides(slug, userData.systemConfig?.agentModels, {
+    houseOnly: resolveEffectivePlan(userData).modelAccess === "house_only",
+  });
+}
+
+async function syncByotStateForClass(args: {
+  slug: string;
+  desired: DesiredByotState;
+  userData: SyncByotUserData;
+  actions: SyncByotActions;
+  isShared: () => boolean;
+  isOp: () => boolean;
+  usesBrokerToken: () => boolean;
+  logFn?: (m: string) => void;
+}): Promise<void> {
+  const { slug, desired, userData, actions } = args;
+  if (args.isShared()) {
+    const gate = gateSharedByosub(desired, userData, args.logFn ?? log);
     await syncSharedBrokerByotState(slug, gate.desired, actions, {
       purgeAuthProfileStore: gate.suppressed,
     });
     return;
   }
 
-  if (isBrokerResolvedAnthropic(desired, usesBrokerToken())) {
+  if (isBrokerResolvedAnthropic(desired, args.usesBrokerToken())) {
     await clearBrokerResolvedAnthropic(slug, actions);
     return;
   }
 
-  if (isOp()) {
+  if (args.isOp()) {
     await syncOperatorByotState(slug, desired, actions);
     return;
   }

@@ -90,6 +90,7 @@ function app(opts: {
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
+  a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
   return a;
 }
@@ -104,6 +105,14 @@ describe("tenant enforcement middleware", () => {
   it("allows a platform-bound cron caller on an allowlisted cron route", async () => {
     const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
       .post("/internal/billing/check-trial-expiry")
+      .send({});
+
+    expect(res.status).toBe(200);
+  });
+
+  it("allows the cron caller on the auto-top-up sweep route", async () => {
+    const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
+      .post("/internal/billing/run-auto-top-ups")
       .send({});
 
     expect(res.status).toBe(200);

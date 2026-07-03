@@ -14,7 +14,6 @@ import {
 import {
   WINDOW_LENGTH_HOURS,
   resolveTier,
-  windowBudgetUsdForTier,
 } from "@octogee/shared/types/billing";
 import { isValidUsername } from "@octogee/shared/types/identity";
 export { extractRole, findSessionFiles, parseLineForUsage } from "./usage-log-tailer.js";
@@ -88,24 +87,29 @@ export interface StartUsageTrackingOptions {
 
 type FirestoreUpdate = Record<string, unknown>;
 
+// The 7-day Personal trial clock starts at first real usage — a fresh
+// personal_free owner with no trialStartedAt gets one stamped here, and
+// resolveEffectivePlan boosts them to the Personal grant for TRIAL_LENGTH_DAYS.
 function decideTrialBackfill(
-  tier: string,
+  data: FirebaseFirestore.DocumentData,
   trialStartedAt: Date | null,
   byotActive: boolean,
   now: Date,
 ): { trialStartedAt: Date | null; update: FirestoreUpdate } {
-  if (tier === "trial" && !trialStartedAt && !byotActive) {
+  if (resolveTier(data) === "personal_free" && !trialStartedAt && !byotActive) {
     return { trialStartedAt: now, update: { "subscription.trialStartedAt": now } };
   }
   return { trialStartedAt, update: {} };
 }
 
+// Legacy telemetry only: token counts for surfaces that also cover BYOSUB
+// traffic. USD budgets and throttling live at the broker; nothing reads the
+// old usage.windowCostUsd/windowBudgetUsd fields anymore.
 function buildWindowUpdates(
   usage: UsageData,
-  usageData: { windowCostUsd?: number; windowStartedAt?: Date | null },
-  windowBudgetUsd: number,
+  usageData: { windowStartedAt?: Date | null },
   now: Date,
-): { windowUpdates: FirestoreUpdate; newWindowCostUsd: number; windowStartedAt: Date | null } {
+): { windowUpdates: FirestoreUpdate } {
   const REFILL_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
   const windowStartedAt = usageData.windowStartedAt ?? null;
   const windowExpired = !windowStartedAt ||
@@ -113,23 +117,15 @@ function buildWindowUpdates(
 
   if (windowExpired) {
     return {
-      newWindowCostUsd: usage.costUsd,
-      windowStartedAt,
       windowUpdates: {
-        "usage.windowCostUsd":    usage.costUsd,
         "usage.windowTokensUsed": usage.totalTokens,
         "usage.windowStartedAt":  now,
-        "usage.windowBudgetUsd":  windowBudgetUsd,
       },
     };
   }
   return {
-    newWindowCostUsd: (usageData.windowCostUsd ?? 0) + usage.costUsd,
-    windowStartedAt,
     windowUpdates: {
-      "usage.windowCostUsd":    FieldValue.increment(usage.costUsd),
       "usage.windowTokensUsed": FieldValue.increment(usage.totalTokens),
-      "usage.windowBudgetUsd":  windowBudgetUsd,
     },
   };
 }
@@ -171,28 +167,17 @@ function usageTransactionState(args: {
   const { data, uid, agentId, usage, log } = args;
   const workspaceId = workspaceIdFromUserData(data, agentId);
   const usageData = data.usage || {};
-  const tier = resolveTier(data);
   const byotActive = data.byotActive === true;
   const now = new Date();
 
   const initialTrialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
-  const backfill = decideTrialBackfill(tier, initialTrialStartedAt, byotActive, now);
+  const backfill = decideTrialBackfill(data, initialTrialStartedAt, byotActive, now);
   if (Object.keys(backfill.update).length) {
-    log(`usage: backfilled subscription.trialStartedAt=now for trial user ${uid} (was missing)`);
+    log(`usage: started the 7-day Personal trial clock for ${uid} (first usage, no trialStartedAt)`);
   }
 
-  const windowBudgetUsd = windowBudgetUsdForTier(tier, backfill.trialStartedAt);
   const startedAt = usageData.windowStartedAt?.toDate?.() ?? null;
-  const { windowUpdates } = buildWindowUpdates(
-    usage,
-    { windowCostUsd: usageData.windowCostUsd, windowStartedAt: startedAt },
-    windowBudgetUsd,
-    now,
-  );
-
-  if (tier === "trial" && !backfill.trialStartedAt && !byotActive) {
-    log(`⚠ usage: trial user ${uid} has no subscription.trialStartedAt — running on platform key with no USD budget`);
-  }
+  const { windowUpdates } = buildWindowUpdates(usage, { windowStartedAt: startedAt }, now);
 
   return {
     workspaceId,

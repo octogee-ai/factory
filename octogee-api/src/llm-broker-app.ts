@@ -481,8 +481,9 @@ interface GateDecisionAllowed {
   // over their spend window or on the free tier. Spend exhaustion degrades — it
   // never rejects — so the builder keeps working on cheap Haiku.
   degrade: boolean;
-  degradeReason: "free" | "budget" | null;
+  degradeReason: "free" | "budget" | "credits" | null;
   windowCostUsd: number | null;
+  creditBalanceUsd: number | null;
 }
 
 interface GateDecisionDenied {
@@ -507,6 +508,7 @@ interface MeteringContext {
   now: () => number;
   onMeteringError: (err: unknown) => void;
   countsTowardSpendWindow: boolean;
+  debitsCreditBalance: boolean;
 }
 
 async function recordUsage(
@@ -549,6 +551,7 @@ async function recordUsage(
       upstreamStatus: upstream.status,
       now: ctx.now(),
       countsTowardSpendWindow: ctx.countsTowardSpendWindow,
+      debitsCreditBalance: ctx.debitsCreditBalance,
     });
   } catch (err) {
     ctx.onMeteringError(err);
@@ -612,7 +615,8 @@ async function rateWindowDenial(
 
 function gateDecisionName(gate: GateDecisionAllowed): string {
   if (!gate.degrade) return "forward";
-  return gate.degradeReason === "free" ? "degrade_free" : "degrade_budget";
+  if (gate.degradeReason === "free") return "degrade_free";
+  return gate.degradeReason === "credits" ? "degrade_credits" : "degrade_budget";
 }
 
 type GateLogger = (decision: string, extra?: Record<string, unknown>) => void;
@@ -637,7 +641,9 @@ async function grantForRecord(
   record: ModelBrokerTokenRecord,
   nowMs: number,
 ): Promise<OwnerModelBrokerGrant> {
-  if (!deps.resolveGrant) return { limits: record.limits, policy: record.policy };
+  if (!deps.resolveGrant) {
+    return { limits: record.limits, policy: record.policy, rail: "subscription" };
+  }
   return deps.resolveGrant({
     gatewayId: record.gatewayId,
     ownerUid: record.ownerUid,
@@ -650,7 +656,61 @@ const GATE_PASS: GateDecisionAllowed = {
   degrade: false,
   degradeReason: null,
   windowCostUsd: null,
+  creditBalanceUsd: null,
 };
+
+type DegradeOutcome =
+  | { kind: "denied"; decision: GateDecision }
+  | {
+      kind: "state";
+      degrade: boolean;
+      degradeReason: GateDecisionAllowed["degradeReason"];
+      windowCostUsd: number | null;
+      creditBalanceUsd: number | null;
+    };
+
+// Free tier always degrades; a prepaid builder degrades once their balance is
+// dry; a subscription plan degrades once its window budget is spent.
+async function degradeStateForGrant(
+  input: PreflightGateInput,
+  prepaid: boolean,
+  spendWindowUsd: number | null,
+): Promise<DegradeOutcome> {
+  if (input.grant.policy.freeTier) {
+    return { kind: "state", degrade: true, degradeReason: "free", windowCostUsd: null, creditBalanceUsd: null };
+  }
+  if (prepaid) {
+    if (!input.usageStore?.readCreditBalance) {
+      return {
+        kind: "denied",
+        decision: { allowed: false, status: 503, error: "model broker credit gate unavailable" },
+      };
+    }
+    const creditBalanceUsd = await input.usageStore.readCreditBalance(
+      input.record.ownerUid as string,
+    );
+    const dry = creditBalanceUsd <= 0;
+    return {
+      kind: "state",
+      degrade: dry,
+      degradeReason: dry ? "credits" : null,
+      windowCostUsd: null,
+      creditBalanceUsd,
+    };
+  }
+  if (spendWindowUsd !== null) {
+    const spend = await spendWindowGate(input, spendWindowUsd);
+    if ("allowed" in spend) return { kind: "denied", decision: spend };
+    return {
+      kind: "state",
+      degrade: spend.degrade,
+      degradeReason: spend.degrade ? "budget" : null,
+      windowCostUsd: spend.windowCostUsd,
+      creditBalanceUsd: null,
+    };
+  }
+  return { kind: "state", degrade: false, degradeReason: null, windowCostUsd: null, creditBalanceUsd: null };
+}
 
 async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
   const { grant } = input;
@@ -660,26 +720,19 @@ async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
   }
   const spendWindowUsd = grant.limits.spendWindowUsd;
   const requestsPerMinute = grant.limits.requestsPerMinute;
-  if (!grant.policy.freeTier && spendWindowUsd === null && requestsPerMinute === null) {
+  const prepaid = grant.rail === "prepaid_credits" && Boolean(input.record.ownerUid);
+  if (!prepaid && !grant.policy.freeTier && spendWindowUsd === null && requestsPerMinute === null) {
     return GATE_PASS;
   }
   try {
-    // Free tier always degrades; a paid builder degrades once their window is spent.
-    let degrade = grant.policy.freeTier;
-    let degradeReason: GateDecisionAllowed["degradeReason"] = degrade ? "free" : null;
-    let windowCostUsd: number | null = null;
-    if (!degrade && spendWindowUsd !== null) {
-      const spend = await spendWindowGate(input, spendWindowUsd);
-      if ("allowed" in spend) return spend;
-      degrade = spend.degrade;
-      degradeReason = spend.degrade ? "budget" : null;
-      windowCostUsd = spend.windowCostUsd;
-    }
+    const outcome = await degradeStateForGrant(input, prepaid, spendWindowUsd);
+    if (outcome.kind === "denied") return outcome.decision;
     if (requestsPerMinute !== null) {
       const denial = await rateWindowDenial(input, requestsPerMinute);
       if (denial) return denial;
     }
-    return { allowed: true, degrade, degradeReason, windowCostUsd };
+    const { degrade, degradeReason, windowCostUsd, creditBalanceUsd } = outcome;
+    return { allowed: true, degrade, degradeReason, windowCostUsd, creditBalanceUsd };
   } catch (err) {
     input.onMeteringError(err);
     return { allowed: false, status: 503, error: "model broker limit check failed" };
@@ -776,11 +829,13 @@ async function forwardAllowed(args: {
   fetchImpl: typeof fetch;
   upstreamBaseUrl: string;
   houseModel: string;
+  rail: OwnerModelBrokerGrant["rail"];
   usageStore?: ModelBrokerUsageStore;
   now: () => number;
   onMeteringError: (err: unknown) => void;
 }): Promise<void> {
   const { req, res, url, record, providerKey, gate } = args;
+  const prepaid = args.rail === "prepaid_credits" && Boolean(record.ownerUid);
   const degradedBody = gate.degrade ? rewriteRequestModel(req.body, args.houseModel) : null;
   const effectiveBody = degradedBody ?? req.body;
   const body =
@@ -808,8 +863,12 @@ async function forwardAllowed(args: {
         degraded: gate.degrade,
         now: args.now,
         onMeteringError: args.onMeteringError,
+        // Prepaid traffic debits the credit balance; only subscription traffic
+        // counts toward spend windows. House/degraded traffic touches neither.
         countsTowardSpendWindow:
-          providerKey.source !== "owner_model_credential" && !gate.degrade,
+          providerKey.source !== "owner_model_credential" && !gate.degrade && !prepaid,
+        debitsCreditBalance:
+          prepaid && providerKey.source !== "owner_model_credential" && !gate.degrade,
       }
     : undefined;
   await writeUpstreamResponse(upstream, res, metering);
@@ -908,6 +967,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
             spendWindowUsd: grant.limits.spendWindowUsd,
             requestsPerMinute: grant.limits.requestsPerMinute,
             freeTier: grant.policy.freeTier,
+            rail: grant.rail,
             requestModel,
             ...extra,
           });
@@ -930,6 +990,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           logGate(gateDecisionName(gate), {
             effectiveModel: gate.degrade ? houseModels[record.provider] : requestModel,
             windowCostUsd: gate.windowCostUsd,
+            creditBalanceUsd: gate.creditBalanceUsd,
           });
         }
         await forwardAllowed({
@@ -942,6 +1003,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           fetchImpl,
           upstreamBaseUrl: upstreamBaseUrls[record.provider],
           houseModel: houseModels[record.provider],
+          rail: grant.rail,
           usageStore: deps.usageStore,
           now,
           onMeteringError: deps.onMeteringError ?? (() => undefined),

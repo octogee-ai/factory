@@ -3,6 +3,7 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/billing";
 import {
+  MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_HOUSE_DAY_WINDOW_MS,
   MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION,
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
@@ -59,6 +60,10 @@ export interface ModelBrokerUsageRecordInput {
   upstreamStatus: number;
   now?: number;
   countsTowardSpendWindow?: boolean;
+  // Prepaid rail (Builders): the metering transaction also debits the owner's
+  // modelBrokerCredits balance by the priced cost. The final call may push the
+  // balance slightly negative; the pre-flight gate blocks the next one.
+  debitsCreditBalance?: boolean;
 }
 
 export interface ModelBrokerUsageStore {
@@ -66,6 +71,7 @@ export interface ModelBrokerUsageStore {
   readWindowUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot>;
   reserveRateWindow?(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot>;
   readHouseDayUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerHouseDaySnapshot>;
+  readCreditBalance?(ownerUid: string): Promise<number>;
 }
 
 export interface ModelBrokerHouseDaySnapshot {
@@ -434,6 +440,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot & Record<string, unknown>>();
   readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
   readonly houseDayWindows = new Map<string, ModelBrokerHouseDaySnapshot>();
+  readonly creditBalances = new Map<string, number>();
   private readonly eventIds = new Set<string>();
 
   async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
@@ -484,6 +491,12 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         ...latestTraceFields(input),
       });
     }
+    if (input.debitsCreditBalance === true && input.ownerUid) {
+      this.creditBalances.set(
+        input.ownerUid,
+        (this.creditBalances.get(input.ownerUid) ?? 0) - cost.total,
+      );
+    }
     if (input.degraded === true) {
       const dayStartMs = houseDayStartMs(now);
       const dayKey = windowDocId(ownerKey, dayStartMs);
@@ -514,6 +527,10 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         totalTokens: 0,
       }
     );
+  }
+
+  async readCreditBalance(ownerUid: string): Promise<number> {
+    return this.creditBalances.get(ownerUid) ?? 0;
   }
 
   async readWindowUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot> {
@@ -567,15 +584,20 @@ export function createFirestoreModelBrokerUsageStore(
       const houseDayRef = db
         .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
         .doc(windowDocId(ownerKey, dayStartMs));
+      const debitsCredits = input.debitsCreditBalance === true && Boolean(input.ownerUid);
+      const creditRef = debitsCredits
+        ? db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(input.ownerUid as string)
+        : null;
       const modelKey = modelRollupKey(input.model);
 
       await db.runTransaction(async (t) => {
         const existingEvent = await t.get(eventRef);
         if (existingEvent.exists) return;
-        const [rollupSnap, windowSnap, houseDaySnap] = await Promise.all([
+        const [rollupSnap, windowSnap, houseDaySnap, creditSnap] = await Promise.all([
           t.get(rollupRef),
           t.get(windowRef),
           input.degraded === true ? t.get(houseDayRef) : Promise.resolve(null),
+          creditRef ? t.get(creditRef) : Promise.resolve(null),
         ]);
         const rollupData = rollupSnap.data() ?? {};
         const windowData = windowSnap.data() ?? {};
@@ -620,6 +642,18 @@ export function createFirestoreModelBrokerUsageStore(
               expiresAt: expiresAt(now),
               ...latestTraceFields(input),
               ...usageDocumentTotals(windowData, input.usage, cost),
+            },
+            { merge: true },
+          );
+        }
+        if (creditRef) {
+          const creditData = creditSnap?.data() ?? {};
+          t.set(
+            creditRef,
+            {
+              ownerUid: input.ownerUid,
+              balanceUsd: numberField(creditData as Record<string, unknown>, "balanceUsd") - cost.total,
+              updatedAt: now,
             },
             { merge: true },
           );
@@ -677,6 +711,11 @@ export function createFirestoreModelBrokerUsageStore(
         totalTokens: numberField(data, "totalTokens"),
         costUsd: numberField(data, "costUsd"),
       };
+    },
+
+    async readCreditBalance(ownerUid) {
+      const snap = await db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(ownerUid).get();
+      return numberField((snap.data() ?? {}) as Record<string, unknown>, "balanceUsd");
     },
 
     async reserveRateWindow(input) {

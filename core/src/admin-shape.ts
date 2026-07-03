@@ -1,13 +1,8 @@
+import { getTierConfig } from "@octogee/shared/types/billing-tiers";
 import {
-  TIERS,
-  getTierConfig,
-  type TierName,
-} from "@octogee/shared/types/billing-tiers";
-import {
-  resolveTier,
+  resolveEffectivePlan,
   spendDegradeState,
   spendWindowPercentUsed,
-  windowBudgetUsdForTier,
 } from "@octogee/shared/types/billing";
 import {
   MODEL_BROKER_USAGE_WINDOW_MS,
@@ -49,11 +44,6 @@ function numberAt(src: CustomerDoc, key: string, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function resolvedTier(d: CustomerDoc, subscription: CustomerDoc): TierName {
-  const tier = resolveTier({ selectedTier: d.selectedTier, subscription });
-  return tier in TIERS ? tier as TierName : "trial";
-}
-
 function stringArrayAt(src: CustomerDoc, key: string): string[] {
   const value = src[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -81,6 +71,8 @@ export interface CustomerSummary {
   email:               string;
   username:            string;
   tier:                string;
+  effectiveTier:       string;
+  trialDaysRemaining:  number | null;
   subscriptionStatus:  string;
   byotActive:          boolean;
   windowCostUsd:       number;
@@ -108,25 +100,20 @@ export function buildCustomerSummary(
   broker: BrokerCustomerUsage = {},
 ): CustomerSummary {
   const subscription = objectAt(d, "subscription");
-  const tier = resolvedTier(d, subscription);
-  const tierConfig = getTierConfig(tier);
+  const now = broker.now ?? Date.now();
+  const plan = resolveEffectivePlan(d, new Date(now));
+  const tierConfig = getTierConfig(plan.tier);
   const subscriptionStatus = stringAt(subscription, "status", "trial");
   const usage = objectAt(d, "usage");
   const provisioning = objectAt(d, "provisioning");
   const openclaw = objectAt(provisioning, "openclaw");
   const mattermost = objectAt(d, "mattermost");
-  const now = broker.now ?? Date.now();
   const windowCostUsd = broker.windowCostUsd ?? 0;
   const costUsd = broker.totalCostUsd ?? 0;
-  const windowBudgetUsd = windowBudgetUsdForTier(
-    tier,
-    toDateOrNull(subscription.trialStartedAt),
-    new Date(now),
-  );
   const degraded = spendDegradeState({
-    tier,
+    modelAccess: plan.modelAccess,
     windowCostUsd,
-    windowBudgetUsd,
+    windowBudgetUsd: plan.windowBudgetUsd,
     onOwnerCredential: d.byotActive === true,
   }).degraded;
   const agentIds = stringArrayAt(openclaw, "agentIds");
@@ -139,11 +126,13 @@ export function buildCustomerSummary(
     displayName: displayNameFor(d),
     email: stringAt(d, "email"),
     username: stringAt(d, "username"),
-    tier,
+    tier: plan.tier,
+    effectiveTier: plan.effectiveTier,
+    trialDaysRemaining: plan.trialDaysRemaining,
     subscriptionStatus,
     byotActive: d.byotActive === true,
     windowCostUsd,
-    windowBudgetUsd,
+    windowBudgetUsd: plan.windowBudgetUsd,
     nextRefillAt: new Date(usageWindowStartMs(now) + MODEL_BROKER_USAGE_WINDOW_MS).toISOString(),
     totalTokensUsed: numberAt(usage, "totalTokensUsed", numberAt(usage, "tokensUsed")),
     brokerTotalTokens: broker.totalTokens ?? 0,
@@ -154,7 +143,7 @@ export function buildCustomerSummary(
     mattermostUsername: nullableStringAt(mattermost, "username"),
     agentCount: agentIds.length,
     createdAt: toISODate(d.createdAt),
-    percentUsed: spendWindowPercentUsed(windowCostUsd, windowBudgetUsd),
+    percentUsed: spendWindowPercentUsed(windowCostUsd, plan.windowBudgetUsd),
     revenueUsd,
     marginUsd: revenueUsd - costUsd,
 
@@ -164,10 +153,3 @@ export function buildCustomerSummary(
   };
 }
 
-function toDateOrNull(value: unknown): Date | null {
-  if (value instanceof Date) return value;
-  if (value && typeof (value as { toDate?: unknown }).toDate === "function") {
-    return (value as { toDate: () => Date }).toDate();
-  }
-  return null;
-}

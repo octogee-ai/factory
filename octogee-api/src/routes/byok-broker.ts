@@ -11,13 +11,12 @@ import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import {
   FREE_DAILY_HOUSE_TOKENS,
   houseAllowanceState,
-  resolveTier,
+  resolveEffectivePlan,
   spendDegradeState,
   spendWindowPercentUsed,
-  trialDaysRemaining,
-  windowBudgetUsdForTier,
 } from "@octogee/shared/types/billing";
 import {
+  MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOW_MS,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
@@ -155,20 +154,6 @@ function assignedOwnerSlug(data: Record<string, unknown>): string | null {
   return typeof slug === "string" && SLUG_RE.test(slug) ? slug : null;
 }
 
-function assignedInitialModelProvider(data: Record<string, unknown>): ModelBrokerProvider | null {
-  const provisioning =
-    data.provisioning && typeof data.provisioning === "object" && !Array.isArray(data.provisioning)
-      ? data.provisioning as Record<string, unknown>
-      : {};
-  const openclaw =
-    provisioning.openclaw && typeof provisioning.openclaw === "object" && !Array.isArray(provisioning.openclaw)
-      ? provisioning.openclaw as Record<string, unknown>
-      : {};
-  return openclaw.initialModelProvider === "openrouter" ||
-    openclaw.initialModelProvider === "anthropic"
-    ? openclaw.initialModelProvider
-    : null;
-}
 
 function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
   if (value === undefined || value === null || value === "") return "anthropic";
@@ -181,14 +166,6 @@ function financeNumber(value: unknown): number {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function toDateOrNull(value: unknown): Date | null {
-  if (value instanceof Date) return value;
-  const toDate = (value as { toDate?: unknown } | null | undefined)?.toDate;
-  if (typeof toDate !== "function") return null;
-  const date = toDate.call(value);
-  return date instanceof Date ? date : null;
 }
 
 export type AgentCredentialPath =
@@ -230,7 +207,7 @@ async function agentUsageStatusPayload(
   nowMs: number,
 ): Promise<Record<string, unknown>> {
   const windowStartMs = usageWindowStartMs(nowMs);
-  const [gatewaySnap, configSnap, windowSnap, houseDaySnap] = await Promise.all([
+  const [gatewaySnap, configSnap, windowSnap, houseDaySnap, creditSnap] = await Promise.all([
     db.collection("glmGateways").doc(gatewayId).get(),
     db.collection("users").doc(assigned.uid).collection("system").doc("config").get(),
     db
@@ -241,41 +218,36 @@ async function agentUsageStatusPayload(
       .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
       .doc(modelBrokerWindowDocId(assigned.uid, houseDayStartMs(nowMs)))
       .get(),
+    db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(assigned.uid).get(),
   ]);
 
   const userData = assigned.data;
-  const subscription =
-    userData.subscription && typeof userData.subscription === "object"
-      ? (userData.subscription as Record<string, unknown>)
-      : {};
-  const trialStartedAt = toDateOrNull(subscription.trialStartedAt);
-  const tier = resolveTier(userData);
+  const plan = resolveEffectivePlan(userData, new Date(nowMs));
   const gatewayClass = stringOrNull(gatewaySnap.data()?.gatewayClass) ?? "unknown";
   const credential = credentialPathFor(
     userData,
     (configSnap.data() ?? {}) as Record<string, unknown>,
     gatewayClass,
   );
-  const windowBudgetUsd = windowBudgetUsdForTier(tier, trialStartedAt, new Date(nowMs));
   const windowCostUsd = financeNumber(windowSnap.data()?.costUsd);
   const houseDayTokens = financeNumber(houseDaySnap.data()?.totalTokens);
   const onOwnerCredential = credential.path === "byosub" || credential.path === "byok_api_key";
   const throttle = spendDegradeState({
-    tier,
+    modelAccess: plan.modelAccess,
     windowCostUsd,
-    windowBudgetUsd,
+    windowBudgetUsd: plan.windowBudgetUsd,
     onOwnerCredential,
   });
 
   return {
     gatewayClass,
-    tier,
-    trialDaysRemaining:
-      tier === "trial" ? trialDaysRemaining(trialStartedAt, new Date(nowMs)) : null,
+    tier: plan.tier,
+    effectiveTier: plan.effectiveTier,
+    trialDaysRemaining: plan.trialDaysRemaining,
     window: {
       percentUsed: onOwnerCredential
         ? 0
-        : spendWindowPercentUsed(windowCostUsd, windowBudgetUsd),
+        : spendWindowPercentUsed(windowCostUsd, plan.windowBudgetUsd),
       nextRefillAt: new Date(windowStartMs + MODEL_BROKER_USAGE_WINDOW_MS).toISOString(),
       degraded: throttle.degraded,
       reason: throttle.reason,
@@ -286,6 +258,11 @@ async function agentUsageStatusPayload(
           usedTokens: houseDayTokens,
           limitTokens: FREE_DAILY_HOUSE_TOKENS,
         }),
+    // Builders ride the prepaid rail — their platform-model gate is the balance.
+    credits:
+      plan.tier === "builder"
+        ? { balanceUsd: financeNumber(creditSnap.data()?.balanceUsd) }
+        : null,
     credential,
   };
 }
@@ -428,11 +405,6 @@ export function createByokBrokerRoutes(opts: { db: Firestore; now?: () => number
       res.status(403).json(FORBIDDEN);
       return;
     }
-    if (provider === "openrouter" && assignedInitialModelProvider(assigned.data) !== "openrouter") {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-
     const grant = await resolveOwnerModelBrokerGrant({
       db,
       gatewayId: bound.gatewayId,

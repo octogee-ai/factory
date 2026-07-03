@@ -12,63 +12,13 @@ import {
 } from "../../shared/types/glm.js";
 import {
   resolveOnboardingPlacementForUid,
-  type OnboardingCohortConfig,
   type OnboardingOrchestratorConfig,
   type OnboardingPlacementDecision,
-} from "../../shared/types/onboarding-cohorts.js";
+} from "../../shared/types/orchestrator-placement.js";
 
 const ORCHESTRATOR_CONFIG_DOC = "config/orchestrator";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
-function isProvider(value: unknown): value is OnboardingCohortConfig["provider"] {
-  return value === "anthropic" || value === "openrouter";
-}
-
-function isReasoningEffort(
-  value: unknown,
-): value is NonNullable<OnboardingCohortConfig["reasoningEffort"]> {
-  return value === "high" || value === "xhigh";
-}
-
-function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) return undefined;
-  const out: Record<string, string> = {};
-  for (const [key, v] of Object.entries(value)) {
-    if (typeof v === "string" && v.length > 0) out[key] = v;
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function normalizeOnboardingCohorts(value: unknown): Record<string, OnboardingCohortConfig> | undefined {
-  if (!isRecord(value)) return undefined;
-  const out: Record<string, OnboardingCohortConfig> = {};
-  for (const [cohortId, raw] of Object.entries(value)) {
-    if (!isRecord(raw)) continue;
-    if (
-      typeof raw.label !== "string" ||
-      raw.label.length === 0 ||
-      !isValidGatewayId(raw.gatewayId) ||
-      !isProvider(raw.provider) ||
-      typeof raw.model !== "string" ||
-      raw.model.length === 0 ||
-      (raw.reasoningEffort !== undefined && !isReasoningEffort(raw.reasoningEffort))
-    ) {
-      continue;
-    }
-    out[cohortId] = {
-      label: raw.label,
-      gatewayId: raw.gatewayId,
-      provider: raw.provider,
-      model: raw.model,
-      ...(raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
-      ...(raw.enabled === false ? { enabled: false } : {}),
-    };
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
 
 async function readOrchestratorConfig(db: Firestore): Promise<OnboardingOrchestratorConfig | null> {
   const snap = await db.doc(ORCHESTRATOR_CONFIG_DOC).get();
@@ -85,25 +35,12 @@ async function readOrchestratorConfig(db: Firestore): Promise<OnboardingOrchestr
           ),
         )
       : undefined;
-  const onboardingCohorts = normalizeOnboardingCohorts(data.onboardingCohorts);
-  const cohortOverrides = normalizeStringRecord(data.cohortOverrides);
-  return {
-    defaultGatewayId: data.defaultGatewayId,
-    overrides,
-    ...(typeof data.currentOnboardingCohortId === "string" && data.currentOnboardingCohortId.length > 0
-      ? { currentOnboardingCohortId: data.currentOnboardingCohortId }
-      : {}),
-    ...(typeof data.previewOnboardingCohortId === "string" && data.previewOnboardingCohortId.length > 0
-      ? { previewOnboardingCohortId: data.previewOnboardingCohortId }
-      : {}),
-    ...(onboardingCohorts ? { onboardingCohorts } : {}),
-    ...(cohortOverrides ? { cohortOverrides } : {}),
-  };
+  return { defaultGatewayId: data.defaultGatewayId, overrides };
 }
 
 type AssignResult =
-  | { kind: "assigned"; uid: string; slug: string; gatewayId: string; gatewayProfile: GatewayProfile; previous: string | null; onboardingCohortId?: string }
-  | { kind: "already-assigned"; uid: string; slug: string; gatewayId: string; gatewayProfile: GatewayProfile; onboardingCohortId?: string }
+  | { kind: "assigned"; uid: string; slug: string; gatewayId: string; gatewayProfile: GatewayProfile; previous: string | null }
+  | { kind: "already-assigned"; uid: string; slug: string; gatewayId: string; gatewayProfile: GatewayProfile }
   | { kind: "not-ready"; uid: string; slug: string; reason: string };
 
 function normalizeGatewayProfile(profile: unknown): GatewayProfile {
@@ -115,39 +52,19 @@ async function readGatewayProfile(db: Firestore, gatewayId: string): Promise<Gat
   return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
 }
 
-export type OpsAssignmentTarget =
-  | { kind: "legacy-gateway-override"; gatewayId: string }
-  | { kind: "cohort"; gatewayId: string; onboardingCohortId: string }
-  | { kind: "legacy-default"; gatewayId: string }
-  | { kind: "error"; reason: "cohort-not-found" | "cohort-disabled"; onboardingCohortId: string };
+export type OpsAssignmentTarget = OnboardingPlacementDecision;
 
 export function resolveOpsAssignmentTarget(
   uid: string,
   config: OnboardingOrchestratorConfig,
 ): OpsAssignmentTarget {
-  const placement = resolveOnboardingPlacementForUid(uid, config);
-  if (placement.kind === "cohort") {
-    return { kind: "cohort", gatewayId: placement.cohort.gatewayId, onboardingCohortId: placement.cohortId };
-  }
-  if (placement.kind === "error") {
-    return { kind: "error", reason: placement.reason, onboardingCohortId: placement.cohortId };
-  }
-  return placement;
+  return resolveOnboardingPlacementForUid(uid, config);
 }
 
+// Cohort-era stamps are dead — assignment strips any left on the doc.
 function modelMetadataPatch(
   openclaw: Record<string, unknown> | undefined,
-  placement: OnboardingPlacementDecision,
 ): Record<string, unknown> {
-  if (placement.kind === "cohort") {
-    return {
-      "provisioning.openclaw.onboardingCohortId": placement.cohortId,
-      "provisioning.openclaw.initialModelProvider": placement.cohort.provider,
-      "provisioning.openclaw.initialModel": placement.cohort.model,
-      "provisioning.openclaw.initialModelReasoningEffort":
-        placement.cohort.reasoningEffort ?? FieldValue.delete(),
-    };
-  }
   const patch: Record<string, unknown> = {};
   for (const field of [
     "onboardingCohortId",
@@ -162,18 +79,7 @@ function modelMetadataPatch(
   return patch;
 }
 
-function metadataNeedsRepair(
-  openclaw: Record<string, unknown> | undefined,
-  placement: OnboardingPlacementDecision,
-): boolean {
-  if (placement.kind === "cohort") {
-    return (
-      openclaw?.onboardingCohortId !== placement.cohortId ||
-      openclaw?.initialModelProvider !== placement.cohort.provider ||
-      openclaw?.initialModel !== placement.cohort.model ||
-      openclaw?.initialModelReasoningEffort !== placement.cohort.reasoningEffort
-    );
-  }
+function metadataNeedsRepair(openclaw: Record<string, unknown> | undefined): boolean {
   return Boolean(
     openclaw &&
       ("onboardingCohortId" in openclaw ||
@@ -205,19 +111,16 @@ async function assignOne(
     return { kind: "not-ready", uid, slug, reason: "config-missing" };
   }
   const placement = resolveOnboardingPlacementForUid(uid, config);
-  if (placement.kind === "error") {
-    return { kind: "not-ready", uid, slug, reason: `cohort-invalid:${placement.cohortId}` };
-  }
-  const target = placement.kind === "cohort" ? placement.cohort.gatewayId : placement.gatewayId;
+  const target = placement.gatewayId;
   const targetProfile = await readGatewayProfile(db, target);
   const current: string | null = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;
   const currentProfile = normalizeGatewayProfile(openclaw?.gatewayProfile);
   if (current === target) {
-    if (!opts.dryRun && (currentProfile !== targetProfile || metadataNeedsRepair(openclaw, placement))) {
+    if (!opts.dryRun && (currentProfile !== targetProfile || metadataNeedsRepair(openclaw))) {
       await userRef.update({
         "provisioning.openclaw.gatewayProfile": targetProfile,
         "provisioning.openclaw.shellsEnabled": false,
-        ...modelMetadataPatch(openclaw, placement),
+        ...modelMetadataPatch(openclaw),
       });
     }
     return {
@@ -226,7 +129,6 @@ async function assignOne(
       slug,
       gatewayId: current,
       gatewayProfile: targetProfile,
-      ...(placement.kind === "cohort" ? { onboardingCohortId: placement.cohortId } : {}),
     };
   }
   if (!opts.dryRun) {
@@ -234,7 +136,7 @@ async function assignOne(
       "provisioning.openclaw.gatewayId": target,
       "provisioning.openclaw.gatewayProfile": targetProfile,
       "provisioning.openclaw.shellsEnabled": false,
-      ...modelMetadataPatch(openclaw, placement),
+      ...modelMetadataPatch(openclaw),
     });
   }
   return {
@@ -244,7 +146,6 @@ async function assignOne(
     gatewayId: target,
     gatewayProfile: targetProfile,
     previous: current,
-    ...(placement.kind === "cohort" ? { onboardingCohortId: placement.cohortId } : {}),
   };
 }
 

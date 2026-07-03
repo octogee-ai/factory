@@ -164,138 +164,56 @@ function mkAdminFleetRouteApp(opts: {
   return { app, state };
 }
 
-describe("onboarding cohort overrides by builder slug", () => {
-  it("returns the operator model catalog with onboarding cohorts", async () => {
+describe("onboarding placement (post-cohorts)", () => {
+  it("returns the placement config with default-gateway warnings", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: {
-        defaultGatewayId: "gw-anthropic",
-        currentOnboardingCohortId: "anthropic",
-        onboardingCohorts: {
-          anthropic: {
-            gatewayId: "gw-anthropic",
-            provider: "anthropic",
-            model: "anthropic/claude-sonnet-4-6",
-            label: "Current: Sonnet 4.6",
-          },
-        },
-      },
-      users: {},
-    });
-
-    const res = await request(app).get("/onboarding-cohorts").expect(200);
-
-    expect(res.body.modelCatalog).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: "anthropic",
-          id: "anthropic/claude-sonnet-4-6",
-          label: "Claude Sonnet 4.6",
-          reasoningEfforts: [],
-        }),
-        expect.objectContaining({
-          provider: "openrouter",
-          id: "z-ai/glm-5.2",
-          label: "GLM 5.2",
-          reasoningEfforts: ["high", "xhigh"],
-          defaultReasoningEffort: "xhigh",
-        }),
-        expect.objectContaining({
-          provider: "openrouter",
-          id: "minimax/minimax-m3",
-          label: "MiniMax M3",
-          reasoningEfforts: [],
-        }),
-      ]),
-    );
-  });
-
-  it("canonicalizes catalog aliases and rejects unsupported model reasoning", async () => {
-    const { app, state } = mkAdminFleetRouteApp({
-      config: {},
+      config: { defaultGatewayId: "gw-missing", overrides: {} },
       users: {},
       glmGateways: {
-        "gw-anthropic": { gatewayClass: "shared", desiredStatus: "running" },
-        "gw-glm": { gatewayClass: "shared", desiredStatus: "running" },
-        "gw-minimax": { gatewayClass: "shared", desiredStatus: "running" },
+        "gw-shared": { gatewayClass: "shared", desiredStatus: "running" },
       },
     });
 
-    await request(app)
-      .patch("/onboarding-cohorts")
-      .send({
-        currentOnboardingCohortId: "anthropic",
-        previewOnboardingCohortId: "glm",
-        onboardingCohorts: {
-          anthropic: {
-            gatewayId: "gw-anthropic",
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            label: "Current: Sonnet 4.6",
-          },
-          glm: {
-            gatewayId: "gw-glm",
-            provider: "openrouter",
-            model: "z-ai/glm-5.2",
-            reasoningEffort: "xhigh",
-            label: "Preview: GLM 5.2 XHigh",
-          },
-        },
-      })
-      .expect(200);
+    const res = await request(app).get("/onboarding-placement").expect(200);
 
-    expect(state.config.onboardingCohorts).toMatchObject({
-      anthropic: { model: "anthropic/claude-sonnet-4-6" },
-      glm: { model: "z-ai/glm-5.2", reasoningEffort: "xhigh" },
+    expect(res.body.config).toEqual({ defaultGatewayId: "gw-missing", overrides: {} });
+    expect(res.body.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "default-gateway-missing", gatewayId: "gw-missing" }),
+      ]),
+    );
+    const shared = res.body.gateways.find(
+      (g: { gatewayId: string }) => g.gatewayId === "gw-shared",
+    );
+    expect(shared).toMatchObject({ assignableAsDefault: true, defaultTarget: false });
+  });
+
+  it("PATCH validates the default gateway is a live shared gateway", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "gw-old", overrides: {} },
+      users: {},
+      glmGateways: {
+        "gw-new": { gatewayClass: "shared", desiredStatus: "running" },
+        "gw-builder": { gatewayClass: "builder", desiredStatus: "running" },
+      },
     });
 
     const rejected = await request(app)
-      .patch("/onboarding-cohorts")
-      .send({
-        currentOnboardingCohortId: "minimax",
-        previewOnboardingCohortId: null,
-        onboardingCohorts: {
-          minimax: {
-            gatewayId: "gw-minimax",
-            provider: "openrouter",
-            model: "minimax/minimax-m3",
-            reasoningEffort: "xhigh",
-            label: "MiniMax M3",
-          },
-        },
-      })
+      .patch("/onboarding-placement")
+      .send({ defaultGatewayId: "gw-builder" })
       .expect(400);
+    expect(rejected.body.error).toContain("shared gateway");
 
-    expect(rejected.body).toMatchObject({
-      error: "cohort reasoningEffort is not available for selected model",
-      cohortId: "minimax",
-      provider: "openrouter",
-      model: "minimax/minimax-m3",
-      got: "xhigh",
-    });
+    await request(app)
+      .patch("/onboarding-placement")
+      .send({ defaultGatewayId: "gw-new" })
+      .expect(200);
+    expect(state.config.defaultGatewayId).toBe("gw-new");
   });
 
-  it("stores a UID override after resolving the builder slug server-side", async () => {
+  it("stores a per-uid gateway override after resolving the builder slug server-side", async () => {
     const { app, state } = mkAdminFleetRouteApp({
-      config: {
-        defaultGatewayId: "gw-anthropic",
-        currentOnboardingCohortId: "anthropic",
-        previewOnboardingCohortId: "glm",
-        onboardingCohorts: {
-          anthropic: {
-            gatewayId: "gw-anthropic",
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            label: "Current: Sonnet 4.6",
-          },
-          glm: {
-            gatewayId: "gw-glm",
-            provider: "openrouter",
-            model: "z-ai/glm-5.2",
-            label: "Preview: GLM 5.2",
-          },
-        },
-        cohortOverrides: {},
-      },
+      config: { defaultGatewayId: "gw-default", overrides: {} },
       users: {
         "uid-alice": {
           username: "alice-old",
@@ -303,25 +221,27 @@ describe("onboarding cohort overrides by builder slug", () => {
           provisioning: { openclaw: { slug: "alice" } },
         },
       },
+      glmGateways: {
+        "gw-default": { gatewayClass: "shared", desiredStatus: "running" },
+        "gw-canary": { gatewayClass: "shared", desiredStatus: "running" },
+      },
     });
 
     const res = await request(app)
-      .put("/onboarding-cohorts/glm/overrides/by-slug/alice")
+      .put("/onboarding-placement/overrides/by-slug/alice")
+      .send({ gatewayId: "gw-canary" })
       .expect(200);
 
-    expect(state.config.cohortOverrides).toEqual({ "uid-alice": "glm" });
-    expect(res.body.config.cohortOverrides).toEqual({ "uid-alice": "glm" });
+    expect(state.config.overrides).toEqual({ "uid-alice": "gw-canary" });
+    expect(res.body.config.overrides).toEqual({ "uid-alice": "gw-canary" });
+
+    await request(app).delete("/onboarding-placement/overrides/uid-alice").expect(200);
+    expect(state.config.overrides).toEqual({});
   });
 
   it("does not report pointer drift for an operator-owned dedicated gateway outside onboarding placement", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: {
-        defaultGatewayId: "default-blue",
-        currentOnboardingCohortId: null,
-        previewOnboardingCohortId: null,
-        onboardingCohorts: {},
-        cohortOverrides: {},
-      },
+      config: { defaultGatewayId: "default-blue", overrides: {} },
       users: {
         "uid-ceckert": {
           approved: true,
@@ -359,7 +279,7 @@ describe("onboarding cohort overrides by builder slug", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-cohorts").expect(200);
+    const res = await request(app).get("/onboarding-placement").expect(200);
 
     const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-ceckert");
     expect(customer).toMatchObject({

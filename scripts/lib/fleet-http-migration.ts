@@ -254,15 +254,6 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
     systemConfig: isRecord(snapshot.systemConfig)
       ? (snapshot.systemConfig as UserSnapshot["systemConfig"])
       : undefined,
-    ...(typeof snapshot.initialModelProvider === "string"
-      ? { initialModelProvider: snapshot.initialModelProvider }
-      : {}),
-    ...(typeof snapshot.initialModel === "string"
-      ? { initialModel: snapshot.initialModel }
-      : {}),
-    ...(typeof snapshot.initialModelReasoningEffort === "string"
-      ? { initialModelReasoningEffort: snapshot.initialModelReasoningEffort }
-      : {}),
   };
 }
 

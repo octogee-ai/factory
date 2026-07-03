@@ -32,6 +32,11 @@ import {
   SETUP_STRIPE_PERSONAL_USAGE,
   SUBSCRIPTIONS,
 } from "../ops/setup-stripe-personal.js";
+import {
+  CREDIT_DENOMINATIONS_USD,
+  getTierConfig,
+  STRIPE_PRICE_IDS,
+} from "@octogee/shared/types/billing-tiers";
 
 describe("seed-orchestrator-config args", () => {
   it("validates env and default gateway before Firebase init", () => {
@@ -146,14 +151,41 @@ describe("setup-stripe-personal catalog", () => {
     expect(SETUP_STRIPE_PERSONAL_USAGE).toContain("--dry-run");
   });
 
-  it("keeps tier and one-time price keys unique", () => {
-    const recurringKeys = SUBSCRIPTIONS.flatMap((sub) => sub.prices.map((price) => price.key));
-    const oneTimeKeys = ONE_TIME.map((item) => item.key);
-    const allKeys = [...recurringKeys, ...oneTimeKeys];
+  it("sells exactly the shared Personal lineup at the shared TokenMath prices", () => {
+    expect(SUBSCRIPTIONS.map((sub) => sub.key)).toEqual([
+      "personal",
+      "personal_pro",
+      "personal_pro_max",
+    ]);
+    for (const sub of SUBSCRIPTIONS) {
+      const tier = getTierConfig(sub.key);
+      expect(sub.prices).toHaveLength(1);
+      expect(sub.prices[0].key).toBe(`${sub.key}_monthly`);
+      expect(sub.prices[0].amount).toBe(tier.monthlyPrice * 100);
+      expect(sub.prices[0].interval).toBe("month");
+      expect(sub.metadata.tier).toBe(sub.key);
+    }
+  });
 
-    expect(SUBSCRIPTIONS.map((sub) => sub.key)).toEqual(["hobby", "pro", "max"]);
-    expect(recurringKeys).toHaveLength(12);
-    expect(oneTimeKeys).toEqual(["fastpass_rush", "fastpass_allday", "overage_block_100k"]);
+  it("sells one-time credit SKUs for every shared denomination", () => {
+    expect(ONE_TIME.map((item) => item.key)).toEqual(
+      CREDIT_DENOMINATIONS_USD.map((usd) => `credit_${usd}`),
+    );
+    ONE_TIME.forEach((item, i) => {
+      expect(item.price).toBe(CREDIT_DENOMINATIONS_USD[i] * 100);
+      expect(item.metadata).toMatchObject({
+        type: "credit",
+        creditUsd: String(CREDIT_DENOMINATIONS_USD[i]),
+      });
+    });
+  });
+
+  it("emits only price keys that STRIPE_PRICE_IDS can hold", () => {
+    const allKeys = [
+      ...SUBSCRIPTIONS.flatMap((sub) => sub.prices.map((price) => price.key)),
+      ...ONE_TIME.map((item) => item.key),
+    ];
     expect(new Set(allKeys).size).toBe(allKeys.length);
+    expect([...allKeys].sort()).toEqual(Object.keys(STRIPE_PRICE_IDS).sort());
   });
 });

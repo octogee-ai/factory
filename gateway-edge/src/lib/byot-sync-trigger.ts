@@ -8,7 +8,9 @@ export interface ModelCredentialSyncUserData {
   username?: string;
   tier?: string;
   selectedTier?: string;
-  trialExpired?: boolean;
+  // resolveEffectivePlan derives trial state from subscription.trialStartedAt
+  // on the gateway side; serialize it through (Timestamps → JSON) as-is.
+  subscription?: unknown;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };
@@ -19,6 +21,7 @@ export interface ModelCredentialSyncUserData {
       baseUrl?: string;
       model?: string;
     };
+    agentModels?: Record<string, { primary: string; fallbacks: string[] }>;
   };
 }
 

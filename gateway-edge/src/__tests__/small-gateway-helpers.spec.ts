@@ -33,7 +33,6 @@ import {
   workspaceGiteaOrg,
   workspaceRepoName,
 } from "../lib/gitea-naming.js";
-import { initializeUsage } from "../billing/token-usage.js";
 
 beforeEach(() => {
   m.update.mockReset().mockResolvedValue(undefined);
@@ -53,21 +52,4 @@ describe("small gateway helpers", () => {
     expect(giteaUsername("mira")).toBe("ws-mira");
   });
 
-  it("initializes usage counters from the selected billing tier", async () => {
-    await initializeUsage("uid-1", "hobby");
-
-    expect(m.collection).toHaveBeenCalledWith("users");
-    expect(m.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        "usage.windowTokensUsed": 0,
-        "usage.totalTokensUsed": 0,
-        "usage.interactionCount": 0,
-        "usage.weeklyBudget": expect.any(Number),
-        "usage.windowSize": expect.any(Number),
-        "usage.windowStartedAt": { __serverTimestamp: true },
-        "usage.lastUpdated": { __serverTimestamp: true },
-      }),
-    );
-    expect(m.info).toHaveBeenCalledWith("Initialized usage for uid-1 (hobby)");
-  });
 });

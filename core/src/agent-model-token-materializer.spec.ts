@@ -12,6 +12,8 @@ import {
   OPENROUTER_BROKER_PROVIDER_ID,
   agentModelTokenProfileEntry,
   materializeAnthropicBrokerForAgents,
+  materializeBrokerProfilesForAgents,
+  upsertOpenRouterBrokerCatalog,
   openRouterBrokerProviderConfig,
   openRouterBrokerModelsJson,
   upsertOpenRouterBrokerModel,
@@ -148,6 +150,83 @@ describe("agent-model-token materializer", () => {
   });
 });
 
+describe("model-readiness: openrouter catalog upsert", () => {
+  let agentDir: string;
+  beforeEach(() => {
+    agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-cat-"));
+  });
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  const CATALOG = {
+    baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+    models: [
+      { model: "z-ai/glm-5.2", contextTokens: 1_048_576 },
+      { model: "minimax/minimax-m3", contextTokens: 524_288 },
+    ],
+  };
+
+  it("writes ALL catalog models under the platform-openrouter provider with the agent's broker token", () => {
+    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
+    const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
+    const provider = models.providers[OPENROUTER_BROKER_PROVIDER_ID];
+    expect(provider.apiKey.id).toBe("agent-model-token-openrouter-octogee-a-coach");
+    expect(provider.models.map((m: { id: string }) => m.id)).toEqual([
+      "z-ai/glm-5.2",
+      "minimax/minimax-m3",
+    ]);
+  });
+
+  it("is idempotent and preserves sibling custom providers", () => {
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({ providers: { grok: { api: "openai-completions", baseUrl: "x", models: [] } } }),
+    );
+    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
+    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(false);
+    const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
+    expect(models.providers.grok).toBeTruthy();
+    expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID].models).toHaveLength(2);
+  });
+});
+
+describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
+  let agentsDir: string;
+  beforeEach(() => {
+    agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-ready-"));
+  });
+  afterEach(() => {
+    fs.rmSync(agentsDir, { recursive: true, force: true });
+  });
+
+  it("asserts BOTH broker provider surfaces per agent — anthropic profile + openrouter catalog", () => {
+    const written = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+      agentsDir,
+      openRouter: {
+        baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+        models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+      },
+    });
+    expect(written).toBe(1);
+    const agentHome = path.join(agentsDir, "octogee-a-coach", "agent");
+    const store = readAuthProfileStore(agentHome) as {
+      profiles: Record<string, { keyRef: { id: string } }>;
+    };
+    expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-a-coach");
+    const models = JSON.parse(fs.readFileSync(path.join(agentHome, "models.json"), "utf8"));
+    expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID].models[0].id).toBe("z-ai/glm-5.2");
+  });
+
+  it("falls back to anthropic-only when no openrouter config is supplied", () => {
+    expect(materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir })).toBe(1);
+    expect(
+      fs.existsSync(path.join(agentsDir, "octogee-a-coach", "agent", "models.json")),
+    ).toBe(false);
+  });
+});
+
 describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
   let agentsDir: string;
   beforeEach(() => {
@@ -180,5 +259,22 @@ describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
       materializeAnthropicBrokerForAgents(["octogee-a-coach", "octogee-a-alex", "main"], { agentsDir }),
     ).toBe(1);
     expect(readAuthProfileStore(path.join(agentsDir, "octogee-a-alex", "agent"))).toBeNull();
+  });
+});
+
+describe("openRouterCatalogInputForBaseUrl", () => {
+  it("builds the catalog input from the shared MODEL_CATALOG openrouter entries", async () => {
+    const { openRouterCatalogInputForBaseUrl } = await import(
+      "./agent-model-token-materializer.js"
+    );
+    const { modelCatalogForProvider } = await import("@octogee/shared/types/model-catalog");
+    const input = openRouterCatalogInputForBaseUrl(
+      "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+    );
+    expect(input.baseUrl).toBe("http://llm-broker.octogee.svc.cluster.local:3010/v1");
+    expect(input.models.map((m) => m.model)).toEqual(
+      modelCatalogForProvider("openrouter").map((e) => e.id),
+    );
+    expect(input.models[0]).toEqual({ model: "z-ai/glm-5.2", contextTokens: 1_048_576 });
   });
 });
