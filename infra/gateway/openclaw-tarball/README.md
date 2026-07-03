@@ -333,6 +333,60 @@ pnpm build                       # ⚠ NOT build:docker — see "Why pnpm build"
 
 ✓ Build completes with no errors. `dist/` is populated.
 
+### Step 6b — Run upstream checks against the patched tree
+
+**Why this exists:** `pnpm build` compiles the runtime but does NOT type-check
+`*.test.ts` files and does not run any tests — so a patch can ship while
+leaving upstream tests red or upstream type lanes broken, and the fork build
+stays green. This bit on the 7.1-beta.1 cycle: the surgical-reload patch had
+left an upstream test asserting the old wholesale behavior silently failing
+(`config-reload.test.ts`), and would have failed upstream's `check:test-types`
+lane (existing plan literals missing the patch's new required field). Neither
+surfaced until the patch was ported to an upstream PR and `codex review`
+flagged both. Run upstream's own bar every cycle:
+
+▸
+```bash
+pnpm check
+# Focused vitest: every test file the stack touches + same-name sibling
+# tests of touched sources. src/** files run via root vitest; extension
+# files run via their own project lane.
+FILES=$( (git log ${NEW_TAG}..HEAD --name-only --pretty=format: | sort -u \
+    | grep '\.test\.ts$'; \
+  git log ${NEW_TAG}..HEAD --name-only --pretty=format: | sort -u \
+    | grep '\.ts$' | grep -v '\.test\.ts$' | sed 's|\.ts$|.test.ts|') \
+  | sort -u | while read f; do [ -f "$f" ] && echo "$f"; done)
+npx vitest run $(echo "$FILES" | grep '^src/')
+for ext in $(echo "$FILES" | grep '^extensions/' | cut -d/ -f2 | sort -u); do
+  pnpm test:extension "$ext"
+done
+```
+
+✓ `pnpm check` green (type/lint lanes, including test-file typing — `pnpm
+build` type-checks NEITHER tests NOR the exhaustiveness/lint rules) and the
+focused vitest runs green. A failure here is OURS: either a patch broke
+upstream behavior a test pins (fix the patch), or a patch changed behavior
+deliberately and the upstream test needs updating **inside the same patch
+commit** (amend the stack). Do not pack a tarball over a red Step 6b.
+
+> ⚠ Scope gotchas (learned 2026-07-02, the first 6b run — which caught 3
+> latent check violations in the then-current stack):
+> - Do NOT pass bare directories (`src/gateway`) to vitest — filters won't
+>   match and it exits "No test files found". Files or `dir/` only.
+> - Do NOT run whole subsystems (`src/gateway/`): that co-schedules e2e
+>   suites upstream never runs in one lane, and betas can ship with e2e
+>   red on the tag itself (verify any unexpected failure against the
+>   PRISTINE `${NEW_TAG}` in a fresh worktree before treating it as ours).
+> - Extension test files cannot ride the root vitest invocation — separate
+>   projects; use `pnpm test:extension <name>`.
+> - Run 6b in a fresh worktree if the checkout switched OC versions the
+>   same day: stale generated artifacts make unrelated upstream tests fail
+>   locally (model-compat/catalog class).
+>
+> Full `pnpm test` is not required per-cycle (it's ~10+ min and upstream
+> `main` CI can be red independent of us) — but run it on preview-to-current
+> **promotion** cycles as the extra safety net.
+
 ### Step 7 — Pack the tarball
 
 ▸
