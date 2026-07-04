@@ -142,8 +142,11 @@ spec:
 ---
 # GMP scrapes the KSM into Monarch. targetLabels.metadata: [] keeps the metric's
 # OWN namespace/pod labels (KSM describes other objects) instead of the scrape
-# target's — the documented fix for the kube_* label collision. The keep-list
-# bounds GMP ingestion cost to the kube_* families the boards + alerts use.
+# target's — the documented fix for the kube_* label collision.
+#
+# keep-list is the EXACT metric names the boards + gmp-rules.yaml query, not
+# whole kube_* families (see DECISIONS.md for why + the measured numbers). Add
+# a name here when a new panel/alert needs one — that's the whole contract.
 apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
@@ -159,6 +162,6 @@ spec:
       metricRelabeling:
         - action: keep
           sourceLabels: [__name__]
-          regex: kube_(pod|persistentvolumeclaim|deployment|statefulset|daemonset|node|namespace|replicaset|cronjob|job)(_.+)?
+          regex: kube_(cronjob_status_last_successful_time|daemonset_labels|deployment_(labels|status_replicas_available|status_replicas_unavailable)|namespace_(created|labels)|node_info|persistentvolumeclaim_info|pod_(container_(info|resource_limits|resource_requests|status_(last_terminated_(exitcode|reason)|ready|restarts_total|running|terminated|waiting|waiting_reason))|info|status_(phase|qos_class|ready|reason|scheduled))|statefulset_labels)
   targetLabels:
     metadata: []

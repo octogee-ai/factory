@@ -125,6 +125,17 @@ info "Applying alert ClusterRules..."
 kubectl apply -f "$REPO_DIR/helm/monitoring/gmp-rules.yaml" >/dev/null
 ok "GMP collection + rules applied"
 
+# ── GMP ingestion cost filter ───────────────────────────────────────────────
+# gmp-public/config is a GKE-managed singleton (mode=EnsureExists — created
+# once, not continuously reconciled like the ClusterNodeMonitoring CRs, so a
+# merge patch here is stable). A merge patch (not `apply`) so this only ever
+# touches spec.collection.filter, leaving managedAlertmanager.configSecret
+# (set separately, below) untouched.
+info "Applying GMP collection filter (cost)..."
+kubectl patch operatorconfig config -n gmp-public --type=merge \
+  --patch-file="$REPO_DIR/helm/monitoring/gmp-collection-filter.yaml" >/dev/null
+ok "GMP collection filter applied"
+
 # ── Managed Alertmanager (Discord) ─────────────────────────────────────────
 # The gmp-public OperatorConfig points managedAlertmanager.configSecret at
 # name=alertmanager,key=alertmanager.yaml. Substitute the Discord webhook and
