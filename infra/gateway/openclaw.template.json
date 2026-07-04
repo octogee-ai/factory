@@ -45,13 +45,13 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-sonnet-4-6"
+        "primary": "platform-openrouter/z-ai/glm-5.2"
       },
       "models": {
-        "anthropic/claude-sonnet-4-6": {
-          "alias": "sonnet",
+        "platform-openrouter/z-ai/glm-5.2": {
+          "alias": "glm",
           "params": {
-            "cacheRetention": "short"
+            "thinking": "xhigh"
           }
         },
         "anthropic/claude-haiku-4-5": {
@@ -75,7 +75,7 @@
       "maxConcurrent": 8,
       "subagents": {
         "maxConcurrent": 8,
-        "model": "anthropic/claude-sonnet-4-6",
+        "model": "platform-openrouter/z-ai/glm-5.2",
         "runTimeoutSeconds": 900
       }
     },
@@ -85,7 +85,7 @@
         "name": "Mac (${OPERATOR_AGENT_SLUG})",
         "workspace": "/home/node/.openclaw/workspace/ops",
         "agentDir": "/home/node/.openclaw/agents/${OPERATOR_AGENT_ID}/agent",
-        "model": "anthropic/claude-sonnet-4-6",
+        "model": "platform-openrouter/z-ai/glm-5.2",
         "heartbeat": {
           "every": "30m"
         },

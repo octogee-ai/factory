@@ -4,7 +4,7 @@ export const CREW_ROLES = ["coach"] as const;
 export type CrewRole = typeof CREW_ROLES[number];
 
 export const CREW_IDENTITY: Record<CrewRole, { name: string; emoji: string; model: string }> = {
-  coach: { name: "Octo", emoji: "🐙", model: "anthropic/claude-sonnet-4-6" },
+  coach: { name: "Octo", emoji: "🐙", model: "platform-openrouter/z-ai/glm-5.2" },
 };
 
 export const TIERS = ["trial", "free", "hobby", "pro", "max"] as const;

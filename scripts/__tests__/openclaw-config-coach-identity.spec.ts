@@ -7,7 +7,7 @@ import {
   type CoachIdentityDeps,
 } from "../lib/openclaw-config-builders.js";
 
-const DEFAULT_COACH = { name: "Octo", emoji: "🐙", model: "anthropic/claude-sonnet-4-6" };
+const DEFAULT_COACH = { name: "Octo", emoji: "🐙", model: "platform-openrouter/z-ai/glm-5.2" };
 
 function mkCustomer(overrides: Partial<CustomerAgentInput> = {}): CustomerAgentInput {
   return {
@@ -77,7 +77,7 @@ describe("buildCustomerAgent", () => {
       name: "Octo (chris-builds-a3f2)",
       workspace: "/home/node/.openclaw/customers/chris-builds-a3f2",
       agentDir: "/home/node/.openclaw/agents/octogee-chris-builds-a3f2-coach/agent",
-      model: "anthropic/claude-sonnet-4-6",
+      model: "platform-openrouter/z-ai/glm-5.2",
       heartbeat: { every: "60m", target: "last", lightContext: true },
       tools: { fs: { workspaceOnly: true } },
     });

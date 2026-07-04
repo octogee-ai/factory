@@ -13,6 +13,7 @@ describe("crew constants", () => {
   it("defines the coach identity and tier access matrix", () => {
     expect(CREW_ROLES).toEqual(["coach"]);
     expect(CREW_IDENTITY.coach.name).toBe("Octo");
+    expect(CREW_IDENTITY.coach.model).toBe("platform-openrouter/z-ai/glm-5.2");
     expect(TIERS).toEqual(["trial", "free", "hobby", "pro", "max"]);
     for (const tier of TIERS) {
       expect(TIER_CREW_ACCESS[tier]).toEqual(["coach"]);

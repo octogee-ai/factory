@@ -84,7 +84,7 @@ import { writeTierTemplateFiles } from "./tier-template-files.js";
 const DEFAULT_COACH = {
   name: "Octo",
   emoji: "",
-  model: "anthropic/claude-sonnet-4-6",
+  model: "platform-openrouter/z-ai/glm-5.2",
 };
 
 interface BuildBrokeredLifecycleAdapterOptions {

@@ -14,10 +14,10 @@ describe("CREW_ROLES", () => {
 });
 
 describe("CREW_IDENTITY", () => {
-  it("coach is Octo with octopus emoji and Sonnet as the provisioning default", () => {
+  it("coach is Octo with octopus emoji and GLM 5.2 via platform OpenRouter as the provisioning default", () => {
     expect(CREW_IDENTITY.coach.name).toBe("Octo");
     expect(CREW_IDENTITY.coach.emoji).toBe("🐙");
-    expect(CREW_IDENTITY.coach.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(CREW_IDENTITY.coach.model).toBe("platform-openrouter/z-ai/glm-5.2");
   });
 });
 

@@ -343,6 +343,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       "octogee-bob-coach",
       "octogee-alice-coach",
     ]);
+    const rebuiltCoach = patch.agents.list.at(-1) as { model?: string };
+    expect(rebuiltCoach.model).toBe("platform-openrouter/z-ai/glm-5.2");
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );
