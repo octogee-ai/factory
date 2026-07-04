@@ -3,6 +3,7 @@ import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import {
+  aggregateBrokerDiagnostics,
   addAdminCustomerRoutes,
   mergeDailyUsage,
   type AdminCustomerRouterDeps,
@@ -232,5 +233,49 @@ describe("POST /api/admin/customer/:uid/ops", () => {
       .expect(400);
 
     expect(res.body.error).toMatch(/unknown ops action/i);
+  });
+});
+
+describe("aggregateBrokerDiagnostics — the where-did-my-window-go projection", () => {
+  const JULY3 = Date.UTC(2026, 6, 3, 17);
+  const ev = (over: Record<string, unknown>) => ({
+    createdAt: JULY3,
+    model: "claude-sonnet-4-6",
+    totalTokens: 20_100,
+    costUsd: 0.076,
+    usage: { inputTokens: 3, outputTokens: 90, cacheCreationInputTokens: 20_009, cacheReadInputTokens: 0 },
+    costBreakdown: { input: 0.0001, output: 0.0013, cacheRead: 0, cacheWrite: 0.075 },
+    degraded: false,
+    brokerTokenSecretName: "agent-model-token-canary-glm-blue-uid1",
+    ...over,
+  });
+
+  it("aggregates per-day×model with cache-write share, decomposition, and newest-first recent calls", () => {
+    const out = aggregateBrokerDiagnostics([
+      ev({}),
+      ev({ createdAt: JULY3 + 60_000, costUsd: 0.01, costBreakdown: { input: 0.0001, output: 0.0013, cacheRead: 0.006, cacheWrite: 0.002 }, usage: { inputTokens: 1, outputTokens: 88, cacheCreationInputTokens: 281, cacheReadInputTokens: 20_002 } }),
+      ev({ createdAt: Date.UTC(2026, 6, 4, 1), model: "z-ai/glm-5.2", totalTokens: 15_600, costUsd: 0.016, costBreakdown: { input: 0.016, output: 0, cacheRead: 0, cacheWrite: 0 } }),
+      ev({ createdAt: 0 }), // no timestamp → excluded from days, not counted
+    ]);
+
+    expect(out.days).toEqual([
+      expect.objectContaining({ date: "2026-07-03", model: "claude-sonnet-4-6", requestCount: 2, cacheWriteUsd: expect.closeTo(0.077, 5) }),
+      expect.objectContaining({ date: "2026-07-04", model: "z-ai/glm-5.2", requestCount: 1 }),
+    ]);
+    expect(out.decomposition.cacheWrite).toBeCloseTo(0.077, 5);
+    expect(out.decomposition.input).toBeCloseTo(0.0162, 5);
+    expect(out.recentCalls[0]).toMatchObject({ model: "z-ai/glm-5.2", cacheWriteTokens: 20_009 });
+    expect(out.recentCalls[1]).toMatchObject({ cacheReadTokens: 20_002, degraded: false });
+    expect(out.recentCalls).toHaveLength(4);
+    expect(out.recentCalls[2].brokerTokenSecretName).toContain("canary-glm-blue");
+  });
+
+  it("caps the recent-call list", () => {
+    const out = aggregateBrokerDiagnostics(
+      Array.from({ length: 40 }, (_, i) => ev({ createdAt: JULY3 + i })),
+      25,
+    );
+    expect(out.recentCalls).toHaveLength(25);
+    expect(out.recentCalls[0].at).toBe(JULY3 + 39);
   });
 });

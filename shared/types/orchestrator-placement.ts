@@ -1,7 +1,8 @@
 // Onboarding gateway placement: which gateway a new customer lands on.
-// config/orchestrator holds ONE default plus per-uid overrides — the cohort
-// partition (per-cohort gateways + model stamping) died with the Personal
-// plans; every gateway boots model-ready and models are a per-agent pick.
+// config/orchestrator holds ONE default plus per-uid overrides, and it is
+// PLACEMENT ONLY — no model, tier, or billing meaning ever rides this doc.
+// Entitlements resolve from the account (resolveEffectivePlan); gateway class
+// is capacity/security topology. Whys: DECISIONS.md 2026-07-03.
 
 export interface OnboardingOrchestratorConfig {
   defaultGatewayId: string;

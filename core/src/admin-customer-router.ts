@@ -103,6 +103,93 @@ async function readBrokerDailyUsage(
   return days;
 }
 
+export interface BrokerDiagnostics {
+  windows: Array<{
+    windowStartMs: number;
+    totalTokens: number;
+    requestCount: number;
+    costUsd: number;
+  }>;
+  days: Array<{
+    date: string;
+    model: string;
+    totalTokens: number;
+    requestCount: number;
+    costUsd: number;
+    cacheWriteUsd: number;
+  }>;
+  decomposition: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  recentCalls: Array<{
+    at: number;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheWriteTokens: number;
+    cacheReadTokens: number;
+    costUsd: number;
+    degraded: boolean;
+    brokerTokenSecretName: string | null;
+  }>;
+}
+
+// The "where did my window go" projection: cold turns show up as cache-write
+// spikes, blue/green flips as token-name changes, model switches per day.
+export function aggregateBrokerDiagnostics(
+  events: Array<Record<string, unknown>>,
+  recentLimit = 25,
+): Pick<BrokerDiagnostics, "days" | "decomposition" | "recentCalls"> {
+  const dayMap = new Map<string, BrokerDiagnostics["days"][number]>();
+  const decomposition = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const sorted = [...events].sort(
+    (a, b) => financeNumber(b.createdAt) - financeNumber(a.createdAt),
+  );
+  for (const data of sorted) {
+    const createdAt = financeNumber(data.createdAt);
+    if (!createdAt) continue;
+    const model = typeof data.model === "string" ? data.model : "unknown";
+    const date = new Date(createdAt).toISOString().slice(0, 10);
+    const key = `${date}|${model}`;
+    const breakdown = (data.costBreakdown ?? {}) as Record<string, unknown>;
+    const day = dayMap.get(key) ?? {
+      date,
+      model,
+      totalTokens: 0,
+      requestCount: 0,
+      costUsd: 0,
+      cacheWriteUsd: 0,
+    };
+    day.totalTokens += financeNumber(data.totalTokens);
+    day.requestCount += 1;
+    day.costUsd += financeNumber(data.costUsd);
+    day.cacheWriteUsd += financeNumber(breakdown.cacheWrite);
+    dayMap.set(key, day);
+    decomposition.input += financeNumber(breakdown.input);
+    decomposition.output += financeNumber(breakdown.output);
+    decomposition.cacheRead += financeNumber(breakdown.cacheRead);
+    decomposition.cacheWrite += financeNumber(breakdown.cacheWrite);
+  }
+  const recentCalls = sorted.slice(0, recentLimit).map((data) => {
+    const usage = (data.usage ?? {}) as Record<string, unknown>;
+    return {
+      at: financeNumber(data.createdAt),
+      model: typeof data.model === "string" ? data.model : "unknown",
+      inputTokens: financeNumber(usage.inputTokens),
+      outputTokens: financeNumber(usage.outputTokens),
+      cacheWriteTokens: financeNumber(usage.cacheCreationInputTokens),
+      cacheReadTokens: financeNumber(usage.cacheReadInputTokens),
+      costUsd: financeNumber(data.costUsd),
+      degraded: data.degraded === true,
+      brokerTokenSecretName:
+        typeof data.brokerTokenSecretName === "string" ? data.brokerTokenSecretName : null,
+    };
+  });
+  return {
+    days: [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    decomposition,
+    recentCalls,
+  };
+}
+
 // Tokens/interactions come from the legacy tailer docs (they see byosub
 // traffic the broker never does); costUsd comes only from the broker series.
 // Broker-only days (e.g. logs write failed) still surface with their real cost.
@@ -277,6 +364,53 @@ export function addAdminCustomerRoutes(
   const { db, logger, FieldValue } = deps;
 
 router.get(
+    "/customers/:uid/broker-diagnostics",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const uid = req.params.uid as string;
+        const days = Math.min(30, Math.max(1, parseInt((req.query.days as string) ?? "14", 10)));
+        const now = Date.now();
+        const sinceMs = now - days * 24 * 60 * 60 * 1000;
+
+        // Window history by derived doc id — no composite index needed.
+        const windowMs = 4 * 60 * 60 * 1000;
+        const currentWindow = usageWindowStartMs(now);
+        const windowRefs = Array.from({ length: 12 }, (_, i) =>
+          db
+            .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
+            .doc(`${uid}_${currentWindow - i * windowMs}`),
+        );
+        const [windowSnaps, eventsSnap] = await Promise.all([
+          db.getAll(...windowRefs),
+          db
+            .collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION)
+            .where("ownerUid", "==", uid)
+            .where("createdAt", ">=", sinceMs)
+            .limit(BROKER_DAILY_USAGE_EVENT_LIMIT)
+            .get(),
+        ]);
+        const windows = windowSnaps
+          .filter((snap) => snap.exists)
+          .map((snap) => {
+            const data = snap.data() as Record<string, unknown>;
+            return {
+              windowStartMs: financeNumber(data.windowStartMs),
+              totalTokens: financeNumber(data.totalTokens),
+              requestCount: financeNumber(data.requestCount),
+              costUsd: financeNumber(data.costUsd),
+            };
+          })
+          .sort((a, b) => b.windowStartMs - a.windowStartMs);
+
+        res.json({
+          windows,
+          ...aggregateBrokerDiagnostics(eventsSnap.docs.map((doc) => doc.data())),
+        });
+      } catch (e) { next(e); }
+    },
+  );
+
+  router.get(
     "/customers",
     async (req: Request, res: Response, next: NextFunction) => {
       try {

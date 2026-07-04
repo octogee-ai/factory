@@ -1,7 +1,7 @@
 // The platform model catalog: every model a plan with catalog access may run,
 // per billing provider. Gateways boot model-ready against this list (both
 // broker provider profiles per agent), so switching any agent to any entry is
-// a pure config flip — no provisioning, no cohorts. Plan policy (house_only vs
+// a pure config flip — no provisioning step. Plan policy (house_only vs
 // catalog) is enforced at the LLM broker, never on the pod.
 
 export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter"] as const;

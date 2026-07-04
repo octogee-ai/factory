@@ -126,8 +126,8 @@ export async function applyCoachModelPatch(
 }
 
 // Per-agent model picks from the PWA catalog picker (users/{uid}/system/
-// config.agentModels). Applied last so an explicit pick wins over the cohort/
-// class default the standard sync just wrote. Absence means "leave the agent
+// config.agentModels). Applied last so an explicit pick wins over the class
+// default the standard sync just wrote. Absence means "leave the agent
 // alone" — partial userData from other trigger sites must never reset models.
 export async function applyAgentModelOverrides(
   slug: string,
@@ -639,7 +639,7 @@ export function gateSharedByosub(
   };
 }
 
-// eslint-disable-next-line complexity -- Shared gateways reconcile BYOT, broker profiles, OAuth allowlists, and cohort models in one ordered pass.
+// eslint-disable-next-line complexity -- Shared gateways reconcile BYOT, broker profiles, and OAuth allowlists in one ordered pass.
 async function syncSharedBrokerByotState(
   slug: string,
   desired: DesiredByotState,
@@ -694,8 +694,8 @@ export async function syncByotForCustomer(
 
   await syncByotStateForClass({ slug, desired, userData, actions, isShared, isOp, usesBrokerToken, logFn: deps?.logFn });
 
-  // Explicit per-agent picks land last so they win over the class/cohort
-  // default the sync just wrote; house-only plans stay pinned to the house model.
+  // Explicit per-agent picks land last so they win over the class default the
+  // sync just wrote; house-only plans stay pinned to the house model.
   await actions.applyAgentModelOverrides(slug, userData.systemConfig?.agentModels, {
     houseOnly: resolveEffectivePlan(userData).modelAccess === "house_only",
   });
