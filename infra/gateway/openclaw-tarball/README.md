@@ -30,7 +30,8 @@ Two triggers:
 
 Either way, the ritual is the same — you produce a new tarball, upload it
 to GCS, bump the pin in two cloudbuild files, build the base image, then
-let CI build the gateway bundle (3 sidecar images). **Cowboy is the sole
+let CI build the gateway bundle (`octogee-gateway` + `gateway-edge`, plus the
+`octogee-gateway-operator` image). **Cowboy is the sole
 deployer** — the new image sits in Artifact Registry until the operator
 triggers a rollout from the admin Gateways tab. PROD and TEST follow the
 same operator-driven path.
@@ -670,9 +671,11 @@ git push origin main
 
 ### Step 16 — Watch Release CI
 
-`releasev2.yml` orchestrates `gateway-build-operator-base.yml`, which builds the 3 sidecar
-images (gateway, gateway-edge, chat-proxy) on the same SHA via matrix.
-There's no deploy step — that's intentional, [see the architectural rule](#architectural-rule-for-this-flow).
+`releasev2.yml` orchestrates `gateway-build-operator-base.yml`, which builds the
+gateway bundle on the same SHA via matrix: `octogee-gateway` + `gateway-edge`
+(chat-proxy is folded into gateway-edge — one container, port 3001), plus the
+`octogee-gateway-operator` image. There's no deploy step — that's intentional,
+[see the architectural rule](#architectural-rule-for-this-flow).
 
 ▸
 ```bash
@@ -681,9 +684,12 @@ gh run watch <release-run-id> --exit-status
 ```
 
 ✓ All steps green. The CI run ends after the matrix builds finish; the
-new SHA is now in Artifact Registry as
-`octogee-gateway:<short-sha>`, `octogee-chat-proxy:<short-sha>`,
-`gateway-edge:<short-sha>`.
+new SHA is now in Artifact Registry as `octogee-gateway:<short-sha>` and
+`gateway-edge:<short-sha>` (plus `octogee-gateway-operator:<short-sha>`), each
+also aliased `<short-sha>-oc<version>` per matrix slot. The `gateway (prod)`
+matrix legs show `skipped` — correct: the image is env-agnostic (one AR artifact
+serves both namespaces) and gateway rollouts are operator-driven, so CI builds
+once and writes only the test desired-state marker.
 
 The release does not roll any pods. Nothing in TEST has moved yet.
 
@@ -1275,9 +1281,9 @@ The full A/B flow (real example: 5.12 vs 5.16-beta.6 lockup hunt):
    --substitutions=_IMAGE_TAG=<sha>-oc<ver>,_OPENCLAW_VERSION=<ver>,_OPENCLAW_FORK_SHA=<fork>`.
    (Once the `versions:` entry is merged, CI also regenerates these
    per-SHA — the inline build is just for getting the first bundle now.)
-6. **Retag sidecars** (`octogee-chat-proxy`, `gateway-edge`) from a main
-   SHA that has them to the `<sha>-oc<ver>` bundle tag — they're
-   OC-agnostic so they alias, not rebuild. Cowboy then deploys all three
+6. **Retag the OC-agnostic sidecar** (`gateway-edge` — chat-proxy is folded
+   into it now) from a main SHA that has it to the `<sha>-oc<ver>` bundle
+   tag — it aliases, not rebuilds. Cowboy then deploys gateway + gateway-edge
    under one `imageTag`.
 7. **Deploy via a canary**, never by rolling `gw-test`/`gw-prod` — Add
    Gateway in the admin Gateways tab with `imageTag=<sha>-oc<ver>`,
