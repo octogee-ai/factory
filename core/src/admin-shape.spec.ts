@@ -71,12 +71,12 @@ describe("buildCustomerSummary", () => {
     );
 
     expect(summary.windowCostUsd).toBe(0.008);
-    // legacy "trial" maps to personal_free + the 7-day Personal boost
+    // legacy "trial" maps to personal_free + the 7-day Personal Pro boost
     expect(summary.tier).toBe("personal_free");
-    expect(summary.effectiveTier).toBe("personal");
+    expect(summary.effectiveTier).toBe("personal_pro");
     expect(summary.trialDaysRemaining).toBe(7);
-    expect(summary.windowBudgetUsd).toBeCloseTo(15 / 182.64, 4);
-    expect(summary.percentUsed).toBe(10); // $0.008 of the $0.082 Personal window
+    expect(summary.windowBudgetUsd).toBeCloseTo(90 / 182.64, 4);
+    expect(summary.percentUsed).toBe(2); // $0.008 of the $0.493 Personal Pro trial window
     expect(summary.degraded).toBe(false);
     // legacy token-window fields are gone from the admin contract
     expect(summary).not.toHaveProperty("windowTokensUsed");
