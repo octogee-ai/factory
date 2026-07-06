@@ -54,6 +54,12 @@
             "thinking": "xhigh"
           }
         },
+        "anthropic/claude-sonnet-4-6": {
+          "alias": "sonnet",
+          "params": {
+            "cacheRetention": "short"
+          }
+        },
         "anthropic/claude-haiku-4-5": {
           "alias": "haiku",
           "params": {
@@ -85,7 +91,7 @@
         "name": "Mac (${OPERATOR_AGENT_SLUG})",
         "workspace": "/home/node/.openclaw/workspace/ops",
         "agentDir": "/home/node/.openclaw/agents/${OPERATOR_AGENT_ID}/agent",
-        "model": "platform-openrouter/z-ai/glm-5.2",
+        "model": "anthropic/claude-sonnet-4-6",
         "heartbeat": {
           "every": "30m"
         },

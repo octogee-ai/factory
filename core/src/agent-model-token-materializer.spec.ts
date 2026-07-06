@@ -10,6 +10,7 @@ import {
 import {
   agentModelTokenSecretId,
   OPENROUTER_BROKER_PROVIDER_ID,
+  OPENROUTER_BROKER_PROFILE_ID,
   agentModelTokenProfileEntry,
   materializeAnthropicBrokerForAgents,
   materializeBrokerProfilesForAgents,
@@ -115,7 +116,7 @@ describe("agent-model-token materializer", () => {
     );
     expect(
       JSON.stringify(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))),
-    ).toContain(`"id":"agent-model-token-openrouter-octogee-alice-coach"`);
+    ).toContain(`"apiKey":"${OPENROUTER_BROKER_PROFILE_ID}"`);
     expect(
       JSON.stringify(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))),
     ).not.toContain("byok-alice-openrouter");
@@ -124,6 +125,13 @@ describe("agent-model-token materializer", () => {
         OPENROUTER_BROKER_PROVIDER_ID
       ],
     ).toMatchObject({ api: "openai-completions" });
+    const store = readAuthProfileStore(agentDir) as {
+      profiles: Record<string, { provider: string; keyRef: { id: string } }>;
+    };
+    expect(store.profiles[OPENROUTER_BROKER_PROFILE_ID]).toMatchObject({
+      provider: OPENROUTER_BROKER_PROVIDER_ID,
+      keyRef: { id: "agent-model-token-openrouter-octogee-alice-coach" },
+    });
   });
 
   it("builds the top-level OpenRouter provider config with the live broker token string OpenClaw validates", () => {
@@ -171,11 +179,18 @@ describe("model-readiness: openrouter catalog upsert", () => {
     expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENROUTER_BROKER_PROVIDER_ID];
-    expect(provider.apiKey.id).toBe("agent-model-token-openrouter-octogee-a-coach");
+    expect(provider.apiKey).toBe(OPENROUTER_BROKER_PROFILE_ID);
     expect(provider.models.map((m: { id: string }) => m.id)).toEqual([
       "z-ai/glm-5.2",
       "minimax/minimax-m3",
     ]);
+    const store = readAuthProfileStore(agentDir) as {
+      profiles: Record<string, { provider: string; keyRef: { id: string } }>;
+    };
+    expect(store.profiles[OPENROUTER_BROKER_PROFILE_ID]).toMatchObject({
+      provider: OPENROUTER_BROKER_PROVIDER_ID,
+      keyRef: { id: "agent-model-token-openrouter-octogee-a-coach" },
+    });
   });
 
   it("is idempotent and preserves sibling custom providers", () => {

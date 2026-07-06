@@ -18,6 +18,9 @@ function emptyConfig(): any {
   return {};
 }
 
+const GLM_MODEL_REF = "platform-openrouter/z-ai/glm-5.2";
+const MAC_MODEL_REF = "anthropic/claude-sonnet-4-6";
+
 describe("applyPreBootPatches — tools.profile (new)", () => {
   it("sets tools.profile=coding on a config with no tools field", () => {
     const config = emptyConfig();
@@ -45,6 +48,66 @@ describe("applyPreBootPatches — tools.profile (new)", () => {
     const changed = applyPreBootPatches(config, {});
     expect(changed).toBe(false);
     expect(config.tools.profile).toBe("coding");
+  });
+});
+
+describe("applyPreBootPatches — Mac platform Anthropic pin", () => {
+  it("repairs Mac from the customer OpenRouter default without changing the customer default", () => {
+    const config: any = {
+      tools: { profile: "coding" },
+      agents: {
+        defaults: {
+          model: { primary: GLM_MODEL_REF },
+          models: {
+            [GLM_MODEL_REF]: { alias: "glm", params: { thinking: "xhigh" } },
+          },
+          subagents: { maxConcurrent: 8, model: GLM_MODEL_REF },
+        },
+        list: [
+          {
+            id: "octogee-ops-default",
+            name: "Mac (default)",
+            model: GLM_MODEL_REF,
+          },
+        ],
+      },
+    };
+
+    const changed = applyPreBootPatches(config, { GATEWAY_CLASS: "shared" });
+
+    expect(changed).toBe(true);
+    expect(config.agents.defaults.model.primary).toBe(GLM_MODEL_REF);
+    expect(config.agents.defaults.subagents.model).toBe(GLM_MODEL_REF);
+    expect(config.agents.list[0].model).toBe(MAC_MODEL_REF);
+    expect(config.auth.profiles["anthropic:default"]).toEqual({
+      provider: "anthropic",
+      mode: "api_key",
+    });
+    expect(config.agents.defaults.models[MAC_MODEL_REF]).toEqual({
+      alias: "sonnet",
+      params: { cacheRetention: "short" },
+    });
+  });
+
+  it("pins operator Mac subagents to Sonnet without changing the customer primary default", () => {
+    const config: any = {
+      tools: { profile: "coding" },
+      agents: {
+        defaults: {
+          model: { primary: GLM_MODEL_REF },
+          models: {},
+          subagents: { maxConcurrent: 8, model: GLM_MODEL_REF },
+        },
+        list: [{ id: "${OPERATOR_AGENT_ID}", name: "Mac (${OPERATOR_AGENT_SLUG})" }],
+      },
+    };
+
+    const changed = applyPreBootPatches(config, { GATEWAY_PROFILE: "operator" });
+
+    expect(changed).toBe(true);
+    expect(config.agents.defaults.model.primary).toBe(GLM_MODEL_REF);
+    expect(config.agents.defaults.subagents.model).toBe(MAC_MODEL_REF);
+    expect(config.agents.list[0].model).toBe(MAC_MODEL_REF);
   });
 });
 

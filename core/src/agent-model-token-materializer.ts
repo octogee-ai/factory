@@ -13,6 +13,7 @@ import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 const SECRET_RESOLVER_PROVIDER = "gcp-secret-manager";
 const ANTHROPIC_DEFAULT_PROFILE_ID = "anthropic:default";
 export const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
+export const OPENROUTER_BROKER_PROFILE_ID = `${OPENROUTER_BROKER_PROVIDER_ID}:default`;
 const OPENROUTER_PLATFORM_MARKER = ".platform-openrouter-managed";
 
 // Only octogee-<slug>-coach agents have a broker-token resolver grammar
@@ -25,6 +26,12 @@ const COACH_AGENT_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
 export interface AnthropicBrokerProfileEntry {
   type: "api_key";
   provider: "anthropic";
+  keyRef: { source: "exec"; provider: string; id: string };
+}
+
+export interface OpenRouterBrokerProfileEntry {
+  type: "api_key";
+  provider: typeof OPENROUTER_BROKER_PROVIDER_ID;
   keyRef: { source: "exec"; provider: string; id: string };
 }
 
@@ -51,7 +58,7 @@ export interface OpenRouterBrokerModelsJson {
   providers: Record<string, {
     api: "openai-completions";
     baseUrl: string;
-    apiKey: { source: "exec"; provider: string; id: string };
+    apiKey: string;
     models: Array<{ id: string; name: string; contextTokens?: number; contextWindow?: number }>;
   }>;
 }
@@ -101,6 +108,18 @@ export function agentModelTokenProfileEntry(agentId: string): AnthropicBrokerPro
   };
 }
 
+export function openRouterBrokerProfileEntry(agentId: string): OpenRouterBrokerProfileEntry {
+  return {
+    type: "api_key",
+    provider: OPENROUTER_BROKER_PROVIDER_ID,
+    keyRef: {
+      source: "exec",
+      provider: SECRET_RESOLVER_PROVIDER,
+      id: agentModelTokenSecretId(agentId, "openrouter"),
+    },
+  };
+}
+
 export function openRouterBrokerModelsJson(
   agentId: string,
   input: OpenRouterBrokerModelInput,
@@ -138,11 +157,7 @@ export function openRouterBrokerCatalogJson(
       [OPENROUTER_BROKER_PROVIDER_ID]: {
         api: "openai-completions",
         baseUrl: input.baseUrl,
-        apiKey: {
-          source: "exec",
-          provider: SECRET_RESOLVER_PROVIDER,
-          id: agentModelTokenSecretId(agentId, "openrouter"),
-        },
+        apiKey: OPENROUTER_BROKER_PROFILE_ID,
         models: input.models.map((model) =>
           openRouterBrokerModelConfig({ ...model, baseUrl: input.baseUrl }),
         ),
@@ -184,6 +199,20 @@ export function upsertAnthropicBrokerProfile(agentDir: string, agentId: string):
   return true;
 }
 
+export function upsertOpenRouterBrokerProfile(agentDir: string, agentId: string): boolean {
+  const store = asRecord(readAuthProfileStore(agentDir));
+  const profiles = asRecord(store.profiles);
+  const desired = openRouterBrokerProfileEntry(agentId);
+  if (JSON.stringify(profiles[OPENROUTER_BROKER_PROFILE_ID]) === JSON.stringify(desired)) {
+    return false;
+  }
+  writeAuthProfileStore(agentDir, {
+    ...store,
+    profiles: { ...profiles, [OPENROUTER_BROKER_PROFILE_ID]: desired },
+  });
+  return true;
+}
+
 function readJsonFile(pathname: string): Record<string, unknown> {
   if (!fs.existsSync(pathname)) return {};
   try {
@@ -215,6 +244,7 @@ export function upsertOpenRouterBrokerCatalog(
   agentId: string,
   input: OpenRouterBrokerCatalogInput,
 ): boolean {
+  const wroteProfile = upsertOpenRouterBrokerProfile(agentDir, agentId);
   const modelsPath = path.join(agentDir, "models.json");
   const markerPath = path.join(agentDir, OPENROUTER_PLATFORM_MARKER);
   const current = readJsonFile(modelsPath);
@@ -229,7 +259,7 @@ export function upsertOpenRouterBrokerCatalog(
   };
   const changed =
     JSON.stringify(current) !== JSON.stringify(next) || !fs.existsSync(markerPath);
-  if (!changed) return false;
+  if (!changed) return wroteProfile;
   writeJsonFile(modelsPath, next);
   fs.writeFileSync(markerPath, `${new Date().toISOString()}\n`, { mode: 0o600 });
   return true;

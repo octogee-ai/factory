@@ -9,6 +9,7 @@ import {
 
 const repoRoot = path.resolve(__dirname, "../..");
 const DEFAULT_MODEL_REF = "platform-openrouter/z-ai/glm-5.2";
+const MAC_MODEL_REF = "anthropic/claude-sonnet-4-6";
 
 function readTemplate() {
   return JSON.parse(
@@ -17,14 +18,11 @@ function readTemplate() {
 }
 
 describe("infra/gateway/openclaw.template.json — platform default model", () => {
-  it("defaults agents and subagents to GLM 5.2 via the platform OpenRouter provider", () => {
+  it("defaults customer-facing agents and subagents to GLM 5.2 via the platform OpenRouter provider", () => {
     const template = readTemplate();
 
     expect(template.agents.defaults.model.primary).toBe(DEFAULT_MODEL_REF);
     expect(template.agents.defaults.subagents.model).toBe(DEFAULT_MODEL_REF);
-    for (const agent of template.agents.list) {
-      expect(agent.model).toBe(DEFAULT_MODEL_REF);
-    }
   });
 
   it("keys the default off the shared model catalog", () => {
@@ -45,13 +43,32 @@ describe("infra/gateway/openclaw.template.json — platform default model", () =
     expect(entry.reasoningEfforts).toContain(entry.defaultReasoningEffort);
   });
 
-  it("keeps the haiku fallback pin and drops the demoted sonnet allowlist entry", () => {
+  it("pins Mac to Sonnet 4.6 on the platform Anthropic profile", () => {
+    const template = readTemplate();
+
+    expect(template.auth.profiles["anthropic:default"]).toEqual({
+      provider: "anthropic",
+      mode: "api_key",
+    });
+    expect(template.agents.list).toEqual([
+      expect.objectContaining({
+        id: "${OPERATOR_AGENT_ID}",
+        name: "Mac (${OPERATOR_AGENT_SLUG})",
+        model: MAC_MODEL_REF,
+      }),
+    ]);
+    expect(template.agents.defaults.models[MAC_MODEL_REF]).toEqual({
+      alias: "sonnet",
+      params: { cacheRetention: "short" },
+    });
+  });
+
+  it("keeps the haiku fallback pin", () => {
     const template = readTemplate();
 
     expect(template.agents.defaults.models["anthropic/claude-haiku-4-5"]).toEqual({
       alias: "haiku",
       params: { cacheRetention: "short" },
     });
-    expect(template.agents.defaults.models["anthropic/claude-sonnet-4-6"]).toBeUndefined();
   });
 });

@@ -48,6 +48,14 @@ export function shouldMaterializeAnthropicBrokerProfiles(
 type OpenClawConfig = Record<string, unknown>;
 type ByosubProvider = "openai" | "anthropic";
 
+const MAC_PLATFORM_ANTHROPIC_MODEL_REF = "anthropic/claude-sonnet-4-6";
+const MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG = {
+  alias: "sonnet",
+  params: { cacheRetention: "short" },
+};
+const MAC_AGENT_ID_TEMPLATE = "${OPERATOR_AGENT_ID}";
+const MAC_AGENT_ID_RE = /^octogee-ops-[a-z0-9][a-z0-9-]{0,62}$/;
+
 interface ByosubProviderRef {
   provider?: unknown;
   secretName?: unknown;
@@ -90,6 +98,103 @@ function applyToolsProfilePatch(
   tools.profile = "coding";
   logFn(`set tools.profile=coding (gateway policy: openclaw "coding" defaults)`);
   return true;
+}
+
+function isMacAgentEntry(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) return false;
+  return (
+    value.id === MAC_AGENT_ID_TEMPLATE ||
+    (typeof value.id === "string" && MAC_AGENT_ID_RE.test(value.id))
+  );
+}
+
+function isOperatorRuntime(env: NodeJS.ProcessEnv): boolean {
+  return env.GATEWAY_CLASS === "operator" || env.GATEWAY_PROFILE === "operator";
+}
+
+function setRecordProperty(
+  record: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): boolean {
+  if (record[key] === value) return false;
+  record[key] = value;
+  return true;
+}
+
+function ensureMacAnthropicProfile(config: OpenClawConfig): boolean {
+  const auth = ensureNullishObjectProperty(config, "auth");
+  const profiles = auth ? ensureNullishObjectProperty(auth, "profiles") : null;
+  if (!profiles) return false;
+
+  const currentProfile = objectProperty(profiles, "anthropic:default");
+  if (!currentProfile) {
+    profiles["anthropic:default"] = { provider: "anthropic", mode: "api_key" };
+    return true;
+  }
+
+  return [
+    setRecordProperty(currentProfile, "provider", "anthropic"),
+    setRecordProperty(currentProfile, "mode", "api_key"),
+  ].some(Boolean);
+}
+
+function ensureMacModelAllowlist(agents: Record<string, unknown>): boolean {
+  const defaults = ensureNullishObjectProperty(agents, "defaults");
+  const models = defaults ? ensureNullishObjectProperty(defaults, "models") : null;
+  if (!models) return false;
+  if (
+    JSON.stringify(models[MAC_PLATFORM_ANTHROPIC_MODEL_REF]) ===
+    JSON.stringify(MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG)
+  ) {
+    return false;
+  }
+
+  models[MAC_PLATFORM_ANTHROPIC_MODEL_REF] = MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG;
+  return true;
+}
+
+function pinMacAgentModels(macAgents: Record<string, unknown>[]): boolean {
+  return macAgents
+    .map((agent) => setRecordProperty(agent, "model", MAC_PLATFORM_ANTHROPIC_MODEL_REF))
+    .some(Boolean);
+}
+
+function pinOperatorMacSubagentModel(
+  agents: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (!isOperatorRuntime(env)) return false;
+  const defaults = objectProperty(agents, "defaults");
+  const subagents = defaults ? objectProperty(defaults, "subagents") : null;
+  return subagents
+    ? setRecordProperty(subagents, "model", MAC_PLATFORM_ANTHROPIC_MODEL_REF)
+    : false;
+}
+
+export function applyMacPlatformAnthropicPin(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  logFn: (msg: string) => void,
+): boolean {
+  const agents = objectProperty(config, "agents");
+  if (!agents) return false;
+
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  const macAgents = list.filter(isMacAgentEntry);
+  if (macAgents.length === 0) return false;
+
+  const changed = [
+    ensureMacAnthropicProfile(config),
+    ensureMacModelAllowlist(agents),
+    pinMacAgentModels(macAgents),
+    pinOperatorMacSubagentModel(agents, env),
+  ].some(Boolean);
+
+  if (changed) {
+    logFn(`Mac pinned to ${MAC_PLATFORM_ANTHROPIC_MODEL_REF} on anthropic:default`);
+  }
+  return changed;
 }
 
 export function applyMattermostPreBootPatches(
@@ -185,6 +290,7 @@ export function applyPreBootPatches(
   return [
     applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
+    applyMacPlatformAnthropicPin(config, env, logFn),
     applyAnthropicBaseUrlPatch(config, env, logFn),
   ].some(Boolean);
 }
