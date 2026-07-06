@@ -20,9 +20,12 @@ import {
   MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOW_MS,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
+  MODEL_BROKER_WEEK_WINDOW_MS,
+  MODEL_BROKER_WEEK_WINDOWS_COLLECTION,
   houseDayStartMs,
   modelBrokerWindowDocId,
   usageWindowStartMs,
+  weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 import { createFirestoreModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
 import type { ModelBrokerProvider } from "../lib/model-broker-tokens.js";
@@ -223,19 +226,25 @@ async function agentUsageStatusPayload(
   nowMs: number,
 ): Promise<Record<string, unknown>> {
   const windowStartMs = usageWindowStartMs(nowMs);
-  const [gatewaySnap, configSnap, windowSnap, houseDaySnap, creditSnap] = await Promise.all([
-    db.collection("glmGateways").doc(gatewayId).get(),
-    db.collection("users").doc(assigned.uid).collection("system").doc("config").get(),
-    db
-      .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-      .doc(modelBrokerWindowDocId(assigned.uid, windowStartMs))
-      .get(),
-    db
-      .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
-      .doc(modelBrokerWindowDocId(assigned.uid, houseDayStartMs(nowMs)))
-      .get(),
-    db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(assigned.uid).get(),
-  ]);
+  const weekStartMs = weekWindowStartMs(nowMs);
+  const [gatewaySnap, configSnap, windowSnap, weekSnap, houseDaySnap, creditSnap] =
+    await Promise.all([
+      db.collection("glmGateways").doc(gatewayId).get(),
+      db.collection("users").doc(assigned.uid).collection("system").doc("config").get(),
+      db
+        .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
+        .doc(modelBrokerWindowDocId(assigned.uid, windowStartMs))
+        .get(),
+      db
+        .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
+        .doc(modelBrokerWindowDocId(assigned.uid, weekStartMs))
+        .get(),
+      db
+        .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
+        .doc(modelBrokerWindowDocId(assigned.uid, houseDayStartMs(nowMs)))
+        .get(),
+      db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(assigned.uid).get(),
+    ]);
 
   const userData = assigned.data;
   const plan = resolveEffectivePlan(userData, new Date(nowMs));
@@ -246,12 +255,15 @@ async function agentUsageStatusPayload(
     gatewayClass,
   );
   const windowCostUsd = financeNumber(windowSnap.data()?.costUsd);
+  const weekCostUsd = financeNumber(weekSnap.data()?.costUsd);
   const houseDayTokens = financeNumber(houseDaySnap.data()?.totalTokens);
   const onOwnerCredential = credential.path === "byosub" || credential.path === "byok_api_key";
   const throttle = spendDegradeState({
     modelAccess: plan.modelAccess,
     windowCostUsd,
     windowBudgetUsd: plan.windowBudgetUsd,
+    weekCostUsd,
+    weekBudgetUsd: plan.weeklyBudgetUsd,
     onOwnerCredential,
   });
 
@@ -260,6 +272,12 @@ async function agentUsageStatusPayload(
     tier: plan.tier,
     effectiveTier: plan.effectiveTier,
     trialDaysRemaining: plan.trialDaysRemaining,
+    week: {
+      percentUsed: onOwnerCredential
+        ? 0
+        : spendWindowPercentUsed(weekCostUsd, plan.weeklyBudgetUsd),
+      resetAt: new Date(weekStartMs + MODEL_BROKER_WEEK_WINDOW_MS).toISOString(),
+    },
     window: {
       percentUsed: onOwnerCredential
         ? 0

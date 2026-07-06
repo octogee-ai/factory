@@ -6,7 +6,9 @@ import {
 } from "@octogee/shared/types/billing";
 import {
   MODEL_BROKER_USAGE_WINDOW_MS,
+  MODEL_BROKER_WEEK_WINDOW_MS,
   usageWindowStartMs,
+  weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 
 export function toISODate(val: unknown): string | null {
@@ -60,6 +62,7 @@ function displayNameFor(d: CustomerDoc): string {
 // telemetry only.
 export interface BrokerCustomerUsage {
   windowCostUsd?: number;
+  weekCostUsd?: number;
   totalCostUsd?: number;
   totalTokens?: number;
   now?: number;
@@ -77,6 +80,10 @@ export interface CustomerSummary {
   byotActive:          boolean;
   windowCostUsd:       number;
   windowBudgetUsd:     number;
+  weekCostUsd:         number;
+  weekBudgetUsd:       number;
+  weekPercentUsed:     number;
+  weekResetAt:         string | null;
   nextRefillAt:        string | null;
   totalTokensUsed:     number;
   brokerTotalTokens:   number;
@@ -109,12 +116,19 @@ export function buildCustomerSummary(
   const openclaw = objectAt(provisioning, "openclaw");
   const mattermost = objectAt(d, "mattermost");
   const windowCostUsd = broker.windowCostUsd ?? 0;
+  const weekCostUsd = broker.weekCostUsd ?? 0;
   const costUsd = broker.totalCostUsd ?? 0;
+  // Owner-credential (BYOSUB/BYOT) traffic never lands in a spend window, so a
+  // percentage against a zero budget would misleadingly read 100% — mirror the
+  // customer surfaces and show 0. The broker never throttles them either.
+  const onOwnerCredential = d.byotActive === true;
   const degraded = spendDegradeState({
     modelAccess: plan.modelAccess,
     windowCostUsd,
     windowBudgetUsd: plan.windowBudgetUsd,
-    onOwnerCredential: d.byotActive === true,
+    weekCostUsd,
+    weekBudgetUsd: plan.weeklyBudgetUsd,
+    onOwnerCredential,
   }).degraded;
   const agentIds = stringArrayAt(openclaw, "agentIds");
   const revenueUsd: number = isActiveStatus(subscriptionStatus)
@@ -133,6 +147,10 @@ export function buildCustomerSummary(
     byotActive: d.byotActive === true,
     windowCostUsd,
     windowBudgetUsd: plan.windowBudgetUsd,
+    weekCostUsd,
+    weekBudgetUsd: plan.weeklyBudgetUsd,
+    weekPercentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(weekCostUsd, plan.weeklyBudgetUsd),
+    weekResetAt: new Date(weekWindowStartMs(now) + MODEL_BROKER_WEEK_WINDOW_MS).toISOString(),
     nextRefillAt: new Date(usageWindowStartMs(now) + MODEL_BROKER_USAGE_WINDOW_MS).toISOString(),
     totalTokensUsed: numberAt(usage, "totalTokensUsed", numberAt(usage, "tokensUsed")),
     brokerTotalTokens: broker.totalTokens ?? 0,
@@ -143,7 +161,7 @@ export function buildCustomerSummary(
     mattermostUsername: nullableStringAt(mattermost, "username"),
     agentCount: agentIds.length,
     createdAt: toISODate(d.createdAt),
-    percentUsed: spendWindowPercentUsed(windowCostUsd, plan.windowBudgetUsd),
+    percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.windowBudgetUsd),
     revenueUsd,
     marginUsd: revenueUsd - costUsd,
 

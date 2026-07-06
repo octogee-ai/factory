@@ -9,10 +9,13 @@ import {
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOW_MS,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
+  MODEL_BROKER_WEEK_WINDOW_MS,
+  MODEL_BROKER_WEEK_WINDOWS_COLLECTION,
   houseDayStartMs,
   modelBrokerWindowDocId,
   rateWindowStartMs,
   usageWindowStartMs,
+  weekWindowStartMs,
   windowOwnerKey,
 } from "./model-broker-usage.js";
 
@@ -35,6 +38,16 @@ describe("model broker usage storage contract", () => {
   it("rounds timestamps down to usage and rate windows", () => {
     expect(usageWindowStartMs(14_400_000 + 123)).toBe(14_400_000);
     expect(rateWindowStartMs(125_999)).toBe(120_000);
+  });
+
+  it("keys the weekly spend ledger by epoch-aligned 7-day windows", () => {
+    expect(MODEL_BROKER_WEEK_WINDOWS_COLLECTION).toBe("modelBrokerWeekWindows");
+    expect(MODEL_BROKER_WEEK_WINDOW_MS).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(weekWindowStartMs(MODEL_BROKER_WEEK_WINDOW_MS + 123)).toBe(
+      MODEL_BROKER_WEEK_WINDOW_MS,
+    );
+    // 2026-07-06T10:46Z (a Monday) floors to the Thursday-epoch week start 2026-07-02
+    expect(weekWindowStartMs(Date.UTC(2026, 6, 6, 10, 46))).toBe(Date.UTC(2026, 6, 2));
   });
 
   it("keys the free house allowance by UTC day", () => {

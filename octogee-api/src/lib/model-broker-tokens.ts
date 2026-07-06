@@ -5,6 +5,7 @@ export type ModelBrokerProvider = "anthropic" | "openrouter";
 
 export interface ModelBrokerTokenLimits {
   spendWindowUsd: number | null;
+  spendWeekUsd: number | null;
   requestsPerMinute: number | null;
 }
 
@@ -104,6 +105,7 @@ export function normalizeModelBrokerTokenLimits(
 ): ModelBrokerTokenLimits {
   return {
     spendWindowUsd: nonNegativeLimit(limits?.spendWindowUsd),
+    spendWeekUsd: nonNegativeLimit(limits?.spendWeekUsd),
     requestsPerMinute: nonNegativeLimit(limits?.requestsPerMinute),
   };
 }

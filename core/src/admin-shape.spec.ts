@@ -54,10 +54,24 @@ describe("buildCustomerSummary", () => {
       buildCustomerSummary("u", { subscription: { tier: "free" }, byotActive: true }).degraded,
     ).toBe(false);
 
-    // paid tier: under window budget (broker window spend) vs over it
+    // paid tier: under both budgets vs over the burst window vs over the week
     const paid = { selectedTier: "pro", subscription: { tier: "pro" } };
     expect(buildCustomerSummary("u", paid, { windowCostUsd: 0, now: NOW }).degraded).toBe(false);
     expect(buildCustomerSummary("u", paid, { windowCostUsd: 9999, now: NOW }).degraded).toBe(true);
+    expect(buildCustomerSummary("u", paid, { weekCostUsd: 9999, now: NOW }).degraded).toBe(true);
+  });
+
+  it("shows 0% (not a zero-budget 100%) for owner-credential customers — mirrors the customer surfaces", () => {
+    // free/house-only tier + BYOT: weeklyBudgetUsd is 0, so an unguarded percentage
+    // would read 100% despite the broker never metering or throttling this traffic.
+    const summary = buildCustomerSummary(
+      "u",
+      { subscription: { tier: "free" }, byotActive: true },
+      { windowCostUsd: 5, weekCostUsd: 40, now: NOW },
+    );
+    expect(summary.percentUsed).toBe(0);
+    expect(summary.weekPercentUsed).toBe(0);
+    expect(summary.degraded).toBe(false);
   });
 
   it("uses broker spend for the window percentage and never renders legacy token windows", () => {
@@ -67,16 +81,20 @@ describe("buildCustomerSummary", () => {
         subscription: { tier: "trial", trialStartedAt: new Date(NOW) },
         usage: { windowTokensUsed: 676_435, totalTokensUsed: 1_145_873 },
       },
-      { windowCostUsd: 0.008, now: NOW },
+      { windowCostUsd: 0.008, weekCostUsd: 2.07, now: NOW },
     );
 
     expect(summary.windowCostUsd).toBe(0.008);
+    expect(summary.weekCostUsd).toBe(2.07);
     // legacy "trial" maps to personal_free + the 7-day Personal Pro boost
     expect(summary.tier).toBe("personal_free");
     expect(summary.effectiveTier).toBe("personal_pro");
     expect(summary.trialDaysRemaining).toBe(7);
-    expect(summary.windowBudgetUsd).toBeCloseTo(90 / 182.64, 4);
-    expect(summary.percentUsed).toBe(2); // $0.008 of the $0.493 Personal Pro trial window
+    // TokenMath v2: weekly defining limit, burst window = weekly × 3 / 42
+    expect(summary.weekBudgetUsd).toBeCloseTo((90 * 7) / 30.44, 4);
+    expect(summary.windowBudgetUsd).toBeCloseTo(((90 * 7) / 30.44) * (3 / 42), 4);
+    expect(summary.weekPercentUsed).toBe(10); // $2.07 of the ~$20.70 Personal Pro weekly ledger
+    expect(summary.percentUsed).toBe(1); // $0.008 of the ~$1.48 Personal Pro burst window
     expect(summary.degraded).toBe(false);
     // legacy token-window fields are gone from the admin contract
     expect(summary).not.toHaveProperty("windowTokensUsed");

@@ -1,5 +1,10 @@
 import * as crypto from "node:crypto";
-import type { Firestore } from "firebase-admin/firestore";
+import type {
+  DocumentData,
+  DocumentReference,
+  Firestore,
+  Transaction,
+} from "firebase-admin/firestore";
 
 import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/billing";
 import {
@@ -9,12 +14,15 @@ import {
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
+  MODEL_BROKER_WEEK_WINDOWS_COLLECTION,
+  MODEL_BROKER_WEEK_WINDOW_MS,
   MODEL_BROKER_RATE_WINDOWS_COLLECTION,
   MODEL_BROKER_RATE_WINDOW_MS,
   houseDayStartMs,
   modelBrokerWindowDocId as windowDocId,
   rateWindowStartMs,
   usageWindowStartMs,
+  weekWindowStartMs,
   windowOwnerKey,
 } from "@octogee/shared/types/model-broker-usage";
 
@@ -28,6 +36,8 @@ export interface AnthropicTokenUsage {
   cacheReadInputTokens: number;
 }
 
+export type ModelBrokerCostSource = "estimated" | "openrouter_reported";
+
 export interface ModelBrokerUsageCost {
   input: number;
   output: number;
@@ -36,6 +46,7 @@ export interface ModelBrokerUsageCost {
   total: number;
   pricingModel: string;
   cacheWriteTtl: AnthropicCacheWriteTtl;
+  source: ModelBrokerCostSource;
 }
 
 export type ModelBrokerUsageProviderKeySource = "platform" | "owner_model_credential";
@@ -64,14 +75,26 @@ export interface ModelBrokerUsageRecordInput {
   // modelBrokerCredits balance by the priced cost. The final call may push the
   // balance slightly negative; the pre-flight gate blocks the next one.
   debitsCreditBalance?: boolean;
+  // The upstream's own USD accounting (OpenRouter `usage.cost`). Authoritative
+  // over the static pricing table when present — the table is fallback only.
+  reportedCostUsd?: number | null;
 }
 
 export interface ModelBrokerUsageStore {
   recordUsage(input: ModelBrokerUsageRecordInput): Promise<void>;
   readWindowUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot>;
+  readWeekUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerWeekSnapshot>;
   reserveRateWindow?(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot>;
   readHouseDayUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerHouseDaySnapshot>;
   readCreditBalance?(ownerUid: string): Promise<number>;
+}
+
+export interface ModelBrokerWeekSnapshot {
+  ownerKey: string;
+  weekStartMs: number;
+  requestCount: number;
+  totalTokens: number;
+  costUsd: number;
 }
 
 export interface ModelBrokerHouseDaySnapshot {
@@ -251,6 +274,7 @@ export function estimateAnthropicCost(
     total: input + output + cacheRead + cacheWrite,
     pricingModel: prices.pricingModel,
     cacheWriteTtl,
+    source: "estimated",
   };
 }
 
@@ -270,17 +294,44 @@ export function estimateModelBrokerCost(
 ): ModelBrokerUsageCost {
   if (provider === "anthropic") return estimateAnthropicCost(model, usage, cacheWriteTtl);
   const prices = openRouterModelPricing(model);
+  const input = usd(usage.inputTokens + usage.cacheCreationInputTokens, prices.inputPerMTok);
+  const output = usd(usage.outputTokens, prices.outputPerMTok);
+  const cacheRead = usd(usage.cacheReadInputTokens, prices.cacheReadPerMTok);
   return {
-    input: usd(usage.inputTokens + usage.cacheCreationInputTokens, prices.inputPerMTok),
-    output: usd(usage.outputTokens, prices.outputPerMTok),
-    cacheRead: usd(usage.cacheReadInputTokens, prices.inputPerMTok),
+    input,
+    output,
+    cacheRead,
     cacheWrite: 0,
-    total:
-      usd(usage.inputTokens + usage.cacheCreationInputTokens, prices.inputPerMTok) +
-      usd(usage.outputTokens, prices.outputPerMTok) +
-      usd(usage.cacheReadInputTokens, prices.inputPerMTok),
+    total: input + output + cacheRead,
     pricingModel: prices.pricingModel,
     cacheWriteTtl,
+    source: "estimated",
+  };
+}
+
+// The upstream's own accounting beats any table: when OpenRouter reports
+// `usage.cost`, that USD figure is what the platform key was actually charged.
+// The estimated breakdown is rescaled to the reported total so attribution
+// still sums, and the source is stamped for TEST verification.
+export function resolveRecordedCost(
+  input: Pick<ModelBrokerUsageRecordInput, "provider" | "model" | "usage" | "reportedCostUsd">,
+  cacheWriteTtl: AnthropicCacheWriteTtl,
+): ModelBrokerUsageCost {
+  const estimated = estimateModelBrokerCost(input.provider, input.model, input.usage, cacheWriteTtl);
+  const reported = input.reportedCostUsd;
+  if (typeof reported !== "number" || !Number.isFinite(reported) || reported < 0) {
+    return estimated;
+  }
+  const scale = estimated.total > 0 ? reported / estimated.total : 0;
+  return {
+    input: estimated.total > 0 ? estimated.input * scale : reported,
+    output: estimated.output * scale,
+    cacheRead: estimated.cacheRead * scale,
+    cacheWrite: estimated.cacheWrite * scale,
+    total: reported,
+    pricingModel: estimated.pricingModel,
+    cacheWriteTtl,
+    source: "openrouter_reported",
   };
 }
 
@@ -433,6 +484,7 @@ function eventDocument(
     pricing: {
       model: input.cost.pricingModel,
       cacheWriteTtl: input.cacheWriteTtl,
+      source: input.cost.source,
     },
   };
 }
@@ -441,6 +493,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly events: Array<Record<string, unknown>> = [];
   readonly rollups = new Map<string, Record<string, unknown> & { totalTokens: number; costUsd: number; requestCount: number }>();
   readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot & Record<string, unknown>>();
+  readonly weekWindows = new Map<string, ModelBrokerWeekSnapshot & Record<string, unknown>>();
   readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
   readonly houseDayWindows = new Map<string, ModelBrokerHouseDaySnapshot>();
   readonly creditBalances = new Map<string, number>();
@@ -449,7 +502,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
     const now = input.now ?? Date.now();
     const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
-    const cost = estimateModelBrokerCost(input.provider, input.model, input.usage, cacheWriteTtl);
+    const cost = resolveRecordedCost(input, cacheWriteTtl);
     const eventId = input.eventId ?? crypto.randomUUID();
     if (this.eventIds.has(eventId)) return;
     this.eventIds.add(eventId);
@@ -491,6 +544,23 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         totalTokens: existingWindow.totalTokens + totalTokens(input.usage),
         costUsd: existingWindow.costUsd + cost.total,
         requestCount: existingWindow.requestCount + 1,
+        ...latestTraceFields(input),
+      });
+      const weekStartMs = weekWindowStartMs(now);
+      const weekKey = windowDocId(ownerKey, weekStartMs);
+      const existingWeek = this.weekWindows.get(weekKey) ?? {
+        ownerKey,
+        weekStartMs,
+        totalTokens: 0,
+        costUsd: 0,
+        requestCount: 0,
+      };
+      this.weekWindows.set(weekKey, {
+        ownerKey,
+        weekStartMs,
+        totalTokens: existingWeek.totalTokens + totalTokens(input.usage),
+        costUsd: existingWeek.costUsd + cost.total,
+        requestCount: existingWeek.requestCount + 1,
         ...latestTraceFields(input),
       });
     }
@@ -551,6 +621,21 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
     );
   }
 
+  async readWeekUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerWeekSnapshot> {
+    const now = input.now ?? Date.now();
+    const weekStartMs = weekWindowStartMs(now);
+    const ownerKey = windowOwnerKey(input);
+    return (
+      this.weekWindows.get(windowDocId(ownerKey, weekStartMs)) ?? {
+        ownerKey,
+        weekStartMs,
+        requestCount: 0,
+        totalTokens: 0,
+        costUsd: 0,
+      }
+    );
+  }
+
   async reserveRateWindow(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot> {
     const now = input.now ?? Date.now();
     const windowStartMs = rateWindowStartMs(now);
@@ -567,6 +652,129 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   }
 }
 
+interface UsageWriteArgs {
+  input: ModelBrokerUsageRecordInput;
+  cost: ModelBrokerUsageCost;
+  now: number;
+  eventId: string;
+  cacheWriteTtl: AnthropicCacheWriteTtl;
+  ownerKey: string;
+  modelKey: string;
+  windowStartMs: number;
+  weekStartMs: number;
+  dayStartMs: number;
+  countsTowardWindow: boolean;
+  refs: {
+    eventRef: DocumentReference;
+    rollupRef: DocumentReference;
+    windowRef: DocumentReference;
+    weekRef: DocumentReference;
+    houseDayRef: DocumentReference;
+    creditRef: DocumentReference | null;
+  };
+  snaps: {
+    rollup: DocumentData;
+    window: DocumentData;
+    week: DocumentData;
+    houseDay: DocumentData;
+    credit: DocumentData;
+  };
+}
+
+// The mutation half of the metering transaction. Kept separate from the reads so
+// the reads-before-writes ordering the Firestore SDK requires is obvious, and so
+// neither half individually trips the size/complexity ratchet.
+function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
+  const { input, cost, now, ownerKey, refs, snaps } = a;
+  t.set(
+    refs.eventRef,
+    eventDocument({
+      ...input,
+      eventId: a.eventId,
+      now,
+      cacheWriteTtl: a.cacheWriteTtl,
+      cost,
+      windowStartMs: a.windowStartMs,
+    }),
+  );
+  t.set(
+    refs.rollupRef,
+    {
+      ownerKey,
+      gatewayId: input.gatewayId,
+      ownerUid: input.ownerUid,
+      provider: input.provider,
+      updatedAt: now,
+      ...latestTraceFields(input),
+      ...usageDocumentTotals(snaps.rollup, input.usage, cost),
+      models: modelTotals(snaps.rollup, a.modelKey, input.model, input.usage, cost),
+    },
+    { merge: true },
+  );
+  if (a.countsTowardWindow) {
+    t.set(
+      refs.windowRef,
+      {
+        ownerKey,
+        gatewayId: input.gatewayId,
+        ownerUid: input.ownerUid,
+        provider: input.provider,
+        windowStartMs: a.windowStartMs,
+        windowLengthHours: WINDOW_LENGTH_HOURS,
+        updatedAt: now,
+        expiresAt: expiresAt(now),
+        ...latestTraceFields(input),
+        ...usageDocumentTotals(snaps.window, input.usage, cost),
+      },
+      { merge: true },
+    );
+    t.set(
+      refs.weekRef,
+      {
+        ownerKey,
+        gatewayId: input.gatewayId,
+        ownerUid: input.ownerUid,
+        provider: input.provider,
+        weekStartMs: a.weekStartMs,
+        windowLengthMs: MODEL_BROKER_WEEK_WINDOW_MS,
+        updatedAt: now,
+        expiresAt: expiresAt(now),
+        ...latestTraceFields(input),
+        ...usageDocumentTotals(snaps.week, input.usage, cost),
+      },
+      { merge: true },
+    );
+  }
+  if (refs.creditRef) {
+    t.set(
+      refs.creditRef,
+      {
+        ownerUid: input.ownerUid,
+        balanceUsd: numberField(snaps.credit, "balanceUsd") - cost.total,
+        updatedAt: now,
+      },
+      { merge: true },
+    );
+  }
+  if (input.degraded === true) {
+    t.set(
+      refs.houseDayRef,
+      {
+        ownerKey,
+        gatewayId: input.gatewayId,
+        ownerUid: input.ownerUid,
+        dayStartMs: a.dayStartMs,
+        windowLengthMs: MODEL_BROKER_HOUSE_DAY_WINDOW_MS,
+        updatedAt: now,
+        expiresAt: expiresAt(now),
+        requestCount: numberField(snaps.houseDay, "requestCount") + 1,
+        totalTokens: numberField(snaps.houseDay, "totalTokens") + totalTokens(input.usage),
+      },
+      { merge: true },
+    );
+  }
+}
+
 export function createFirestoreModelBrokerUsageStore(
   db: Pick<Firestore, "collection" | "runTransaction">,
 ): ModelBrokerUsageStore {
@@ -575,8 +783,9 @@ export function createFirestoreModelBrokerUsageStore(
       const now = input.now ?? Date.now();
       const eventId = input.eventId ?? crypto.randomUUID();
       const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
-      const cost = estimateModelBrokerCost(input.provider, input.model, input.usage, cacheWriteTtl);
+      const cost = resolveRecordedCost(input, cacheWriteTtl);
       const windowStartMs = usageWindowStartMs(now);
+      const weekStartMs = weekWindowStartMs(now);
       const ownerKey = windowOwnerKey(input);
       const dayStartMs = houseDayStartMs(now);
       const eventRef = db.collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION).doc(eventId);
@@ -584,6 +793,9 @@ export function createFirestoreModelBrokerUsageStore(
       const windowRef = db
         .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
         .doc(windowDocId(ownerKey, windowStartMs));
+      const weekRef = db
+        .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
+        .doc(windowDocId(ownerKey, weekStartMs));
       const houseDayRef = db
         .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
         .doc(windowDocId(ownerKey, dayStartMs));
@@ -593,91 +805,38 @@ export function createFirestoreModelBrokerUsageStore(
         : null;
       const modelKey = modelRollupKey(input.model);
 
+      const countsTowardWindow = input.countsTowardSpendWindow !== false;
       await db.runTransaction(async (t) => {
         const existingEvent = await t.get(eventRef);
         if (existingEvent.exists) return;
-        const [rollupSnap, windowSnap, houseDaySnap, creditSnap] = await Promise.all([
+        const [rollupSnap, windowSnap, weekSnap, houseDaySnap, creditSnap] = await Promise.all([
           t.get(rollupRef),
           t.get(windowRef),
+          countsTowardWindow ? t.get(weekRef) : Promise.resolve(null),
           input.degraded === true ? t.get(houseDayRef) : Promise.resolve(null),
           creditRef ? t.get(creditRef) : Promise.resolve(null),
         ]);
-        const rollupData = rollupSnap.data() ?? {};
-        const windowData = windowSnap.data() ?? {};
-        const houseDayData = houseDaySnap?.data() ?? {};
-
-        t.set(
-          eventRef,
-          eventDocument({
-            ...input,
-            eventId,
-            now,
-            cacheWriteTtl,
-            cost,
-            windowStartMs,
-          }),
-        );
-        t.set(
-          rollupRef,
-          {
-            ownerKey,
-            gatewayId: input.gatewayId,
-            ownerUid: input.ownerUid,
-            provider: input.provider,
-            updatedAt: now,
-            ...latestTraceFields(input),
-            ...usageDocumentTotals(rollupData, input.usage, cost),
-            models: modelTotals(rollupData, modelKey, input.model, input.usage, cost),
+        applyUsageWrites(t, {
+          input,
+          cost,
+          now,
+          eventId,
+          cacheWriteTtl,
+          ownerKey,
+          modelKey,
+          windowStartMs,
+          weekStartMs,
+          dayStartMs,
+          countsTowardWindow,
+          refs: { eventRef, rollupRef, windowRef, weekRef, houseDayRef, creditRef },
+          snaps: {
+            rollup: rollupSnap.data() ?? {},
+            window: windowSnap.data() ?? {},
+            week: weekSnap?.data() ?? {},
+            houseDay: houseDaySnap?.data() ?? {},
+            credit: creditSnap?.data() ?? {},
           },
-          { merge: true },
-        );
-        if (input.countsTowardSpendWindow !== false) {
-          t.set(
-            windowRef,
-            {
-              ownerKey,
-              gatewayId: input.gatewayId,
-              ownerUid: input.ownerUid,
-              provider: input.provider,
-              windowStartMs,
-              windowLengthHours: WINDOW_LENGTH_HOURS,
-              updatedAt: now,
-              expiresAt: expiresAt(now),
-              ...latestTraceFields(input),
-              ...usageDocumentTotals(windowData, input.usage, cost),
-            },
-            { merge: true },
-          );
-        }
-        if (creditRef) {
-          const creditData = creditSnap?.data() ?? {};
-          t.set(
-            creditRef,
-            {
-              ownerUid: input.ownerUid,
-              balanceUsd: numberField(creditData as Record<string, unknown>, "balanceUsd") - cost.total,
-              updatedAt: now,
-            },
-            { merge: true },
-          );
-        }
-        if (input.degraded === true) {
-          t.set(
-            houseDayRef,
-            {
-              ownerKey,
-              gatewayId: input.gatewayId,
-              ownerUid: input.ownerUid,
-              dayStartMs,
-              windowLengthMs: MODEL_BROKER_HOUSE_DAY_WINDOW_MS,
-              updatedAt: now,
-              expiresAt: expiresAt(now),
-              requestCount: numberField(houseDayData, "requestCount") + 1,
-              totalTokens: numberField(houseDayData, "totalTokens") + totalTokens(input.usage),
-            },
-            { merge: true },
-          );
-        }
+        });
       });
     },
 
@@ -710,6 +869,24 @@ export function createFirestoreModelBrokerUsageStore(
       return {
         ownerKey,
         windowStartMs,
+        requestCount: numberField(data, "requestCount"),
+        totalTokens: numberField(data, "totalTokens"),
+        costUsd: numberField(data, "costUsd"),
+      };
+    },
+
+    async readWeekUsage(input) {
+      const now = input.now ?? Date.now();
+      const weekStartMs = weekWindowStartMs(now);
+      const ownerKey = windowOwnerKey(input);
+      const snap = await db
+        .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
+        .doc(windowDocId(ownerKey, weekStartMs))
+        .get();
+      const data = snap.data() ?? {};
+      return {
+        ownerKey,
+        weekStartMs,
         requestCount: numberField(data, "requestCount"),
         totalTokens: numberField(data, "totalTokens"),
         costUsd: numberField(data, "costUsd"),

@@ -36,6 +36,7 @@ export function envDefaultModelBrokerLimits(
 ): Partial<ModelBrokerTokenLimits> {
   return {
     spendWindowUsd: parseOptionalLimitNumber(env.MODEL_BROKER_SPEND_WINDOW_USD),
+    spendWeekUsd: parseOptionalLimitNumber(env.MODEL_BROKER_SPEND_WEEK_USD),
     requestsPerMinute: parseOptionalLimitNumber(env.MODEL_BROKER_REQUESTS_PER_MINUTE),
   };
 }
@@ -44,7 +45,12 @@ async function readOwnerTier(
   db: Pick<Firestore, "collection"> | undefined,
   ownerUid: string | undefined,
   now: number,
-): Promise<{ spendWindowUsd: number; freeTier: boolean; rail: BillingRail } | null> {
+): Promise<{
+  spendWindowUsd: number;
+  spendWeekUsd: number;
+  freeTier: boolean;
+  rail: BillingRail;
+} | null> {
   if (!db || !ownerUid) return null;
   const snap = await db.collection("users").doc(ownerUid).get();
   const data = snap.data() as Record<string, unknown> | undefined;
@@ -52,6 +58,7 @@ async function readOwnerTier(
   const plan = resolveEffectivePlan(data, new Date(now));
   return {
     spendWindowUsd: plan.windowBudgetUsd,
+    spendWeekUsd: plan.weeklyBudgetUsd,
     // "freeTier" on the wire = the house-only policy: always degrade to the
     // house model, never billed. Personal Free (and lapsed trials) land here.
     freeTier: plan.modelAccess === "house_only",
@@ -73,9 +80,11 @@ async function readGatewayLimitOverrides(
       ? (data.modelBrokerLimits as Record<string, unknown>)
       : {};
   const spendWindowUsd = finiteNumber(raw.spendWindowUsd);
+  const spendWeekUsd = finiteNumber(raw.spendWeekUsd);
   const requestsPerMinute = finiteNumber(raw.requestsPerMinute);
   return {
     ...(spendWindowUsd === null ? {} : { spendWindowUsd }),
+    ...(spendWeekUsd === null ? {} : { spendWeekUsd }),
     ...(requestsPerMinute === null ? {} : { requestsPerMinute }),
   };
 }
@@ -92,10 +101,10 @@ export async function resolveOwnerModelBrokerGrant(input: {
   const rail: BillingRail = tier?.rail ?? "subscription";
   const limits = normalizeModelBrokerTokenLimits({
     ...(input.defaults ?? {}),
-    // Prepaid-rail owners carry no window budget — the credit balance gates.
+    // Prepaid-rail owners carry no window/week budget — the credit balance gates.
     ...(tier === null || rail === "prepaid_credits"
       ? {}
-      : { spendWindowUsd: tier.spendWindowUsd }),
+      : { spendWindowUsd: tier.spendWindowUsd, spendWeekUsd: tier.spendWeekUsd }),
     ...overrides,
   });
   const policy = normalizeModelBrokerTokenPolicy({ freeTier: tier?.freeTier === true });
@@ -169,6 +178,7 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
       gatewayId,
       ownerUid,
       spendWindowUsd: grant.limits.spendWindowUsd,
+      spendWeekUsd: grant.limits.spendWeekUsd,
       requestsPerMinute: grant.limits.requestsPerMinute,
       freeTier: grant.policy.freeTier,
       rail: grant.rail,

@@ -17,8 +17,10 @@ import {
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
+  MODEL_BROKER_WEEK_WINDOWS_COLLECTION,
   modelBrokerWindowDocId,
   usageWindowStartMs,
+  weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 
 function financeNumber(value: unknown): number {
@@ -26,7 +28,7 @@ function financeNumber(value: unknown): number {
 }
 
 // Admin USD figures come exclusively from the broker ledger; one getAll pulls
-// the current 4h window + the all-time rollup per customer.
+// the current 4h window + week ledger + the all-time rollup per customer.
 async function readBrokerCustomerUsage(
   db: Firestore,
   uids: string[],
@@ -35,18 +37,24 @@ async function readBrokerCustomerUsage(
   const usage = new Map<string, BrokerCustomerUsage>();
   if (uids.length === 0) return usage;
   const windowStartMs = usageWindowStartMs(now);
+  const weekStartMs = weekWindowStartMs(now);
   const refs = uids.flatMap((uid) => [
     db
       .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
       .doc(modelBrokerWindowDocId(uid, windowStartMs)),
+    db
+      .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
+      .doc(modelBrokerWindowDocId(uid, weekStartMs)),
     db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid),
   ]);
   const snaps = await db.getAll(...refs);
   uids.forEach((uid, i) => {
-    const windowData = snaps[i * 2]?.data() ?? {};
-    const rollupData = snaps[i * 2 + 1]?.data() ?? {};
+    const windowData = snaps[i * 3]?.data() ?? {};
+    const weekData = snaps[i * 3 + 1]?.data() ?? {};
+    const rollupData = snaps[i * 3 + 2]?.data() ?? {};
     usage.set(uid, {
       windowCostUsd: financeNumber(windowData.costUsd),
+      weekCostUsd: financeNumber(weekData.costUsd),
       totalCostUsd: financeNumber(rollupData.costUsd),
       totalTokens: financeNumber(rollupData.totalTokens),
       now,
@@ -611,6 +619,10 @@ router.get(
             lastUpdated: toISODate(usage.lastUpdated),
             windowCostUsd: summary.windowCostUsd,
             windowBudgetUsd: summary.windowBudgetUsd,
+            weekCostUsd: summary.weekCostUsd,
+            weekBudgetUsd: summary.weekBudgetUsd,
+            weekPercentUsed: summary.weekPercentUsed,
+            weekResetAt: summary.weekResetAt,
           },
           modelCredential,
           byot: { active: customerCredentialActive },

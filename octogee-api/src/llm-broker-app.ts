@@ -230,16 +230,26 @@ function readRequestMetadata(body: unknown): {
   }
 }
 
-// Degrade rewrites only the top-level `model`, preserving the rest of the request
-// (messages, cache_control breakpoints, tools). Returns null on a non-JSON body so
+// Body rewrites preserve the rest of the request (messages, cache_control
+// breakpoints, tools): degrade swaps only the top-level `model`; OpenRouter
+// chat completions additionally get `usage: {include: true}` so the response
+// carries the upstream's own USD accounting — the broker meters that reported
+// cost instead of a static table estimate. Returns null on a non-JSON body so
 // the caller forwards the original bytes unchanged.
-function rewriteRequestModel(body: unknown, model: string): Buffer | null {
-  if (!Buffer.isBuffer(body)) return null;
+function rewriteRequestBody(input: {
+  body: unknown;
+  degradeModel: string | null;
+  includeOpenRouterUsage: boolean;
+}): Buffer | null {
+  if (!Buffer.isBuffer(input.body)) return null;
+  if (!input.degradeModel && !input.includeOpenRouterUsage) return null;
   try {
-    const parsed = JSON.parse(body.toString("utf8")) as unknown;
+    const parsed = JSON.parse(input.body.toString("utf8")) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    (parsed as Record<string, unknown>).model = model;
-    return Buffer.from(JSON.stringify(parsed), "utf8");
+    const record = parsed as Record<string, unknown>;
+    if (input.degradeModel) record.model = input.degradeModel;
+    if (input.includeOpenRouterUsage) record.usage = { include: true };
+    return Buffer.from(JSON.stringify(record), "utf8");
   } catch {
     return null;
   }
@@ -308,6 +318,7 @@ interface AnthropicPayloadExtraction {
   model: string | null;
   messageId: string | null;
   invalidUsageFields: string[];
+  reportedCostUsd: number | null;
 }
 
 type PayloadUsageExtractor = (payload: unknown) => AnthropicPayloadExtraction;
@@ -325,7 +336,7 @@ function nonEmptyString(value: unknown): string | null {
 function extractAnthropicPayloadUsage(payload: unknown): AnthropicPayloadExtraction {
   const data = objectRecord(payload);
   if (!data) {
-    return { usage: null, model: null, messageId: null, invalidUsageFields: [] };
+    return { usage: null, model: null, messageId: null, invalidUsageFields: [], reportedCostUsd: null };
   }
   const message = objectRecord(data.message);
   const model = data.model ?? message?.model;
@@ -336,6 +347,7 @@ function extractAnthropicPayloadUsage(payload: unknown): AnthropicPayloadExtract
     model: nonEmptyString(model),
     messageId: nonEmptyString(messageId),
     invalidUsageFields: invalidAnthropicUsageFields(rawUsage),
+    reportedCostUsd: null,
   };
 }
 
@@ -359,22 +371,32 @@ function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+// OpenAI-format prompt_tokens INCLUDES cached tokens; split them out so cache
+// reads are priced at the discounted rate instead of full input price.
 function normalizeOpenAiUsage(value: unknown): AnthropicTokenUsage | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const data = value as Record<string, unknown>;
+  const details = objectRecord(data.prompt_tokens_details);
+  const promptTokens = numberOrZero(data.prompt_tokens);
+  const cachedTokens = Math.min(promptTokens, numberOrZero(details?.cached_tokens));
   const usage = {
-    inputTokens: numberOrZero(data.prompt_tokens),
+    inputTokens: promptTokens - cachedTokens,
     outputTokens: numberOrZero(data.completion_tokens),
     cacheCreationInputTokens: 0,
-    cacheReadInputTokens: 0,
+    cacheReadInputTokens: cachedTokens,
   };
   return totalTokens(usage) > 0 ? usage : null;
+}
+
+function reportedUsageCostUsd(rawUsage: Record<string, unknown> | null): number | null {
+  const cost = rawUsage?.cost;
+  return typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? cost : null;
 }
 
 function extractOpenRouterPayloadUsage(payload: unknown): AnthropicPayloadExtraction {
   const data = objectRecord(payload);
   if (!data) {
-    return { usage: null, model: null, messageId: null, invalidUsageFields: [] };
+    return { usage: null, model: null, messageId: null, invalidUsageFields: [], reportedCostUsd: null };
   }
   const rawUsage = data.usage;
   return {
@@ -382,6 +404,7 @@ function extractOpenRouterPayloadUsage(payload: unknown): AnthropicPayloadExtrac
     model: nonEmptyString(data.model),
     messageId: nonEmptyString(data.id),
     invalidUsageFields: invalidOpenAiUsageFields(rawUsage),
+    reportedCostUsd: reportedUsageCostUsd(objectRecord(rawUsage)),
   };
 }
 
@@ -402,6 +425,7 @@ class SseUsageCollector {
   model: string | null = null;
   messageId: string | null = null;
   invalidUsageFields: string[] = [];
+  reportedCostUsd: number | null = null;
 
   constructor(private readonly extractPayloadUsage: PayloadUsageExtractor) {}
 
@@ -439,6 +463,7 @@ class SseUsageCollector {
       this.usage = mergeAnthropicUsage(this.usage, extracted.usage);
       if (extracted.model) this.model = extracted.model;
       if (extracted.messageId) this.messageId = extracted.messageId;
+      if (extracted.reportedCostUsd !== null) this.reportedCostUsd = extracted.reportedCostUsd;
       this.invalidUsageFields.push(...extracted.invalidUsageFields);
     } catch {
       // Ignore malformed upstream event fragments; the response is still proxied verbatim.
@@ -478,11 +503,13 @@ function finishSseUsageCollection(
 interface GateDecisionAllowed {
   allowed: true;
   // Serve the house model on the house key, uncounted. True when the builder is
-  // over their spend window or on the free tier. Spend exhaustion degrades — it
-  // never rejects — so the builder keeps working on cheap Haiku.
+  // over their weekly ledger or burst window, or on the free tier. Spend
+  // exhaustion degrades — it never rejects — so the builder keeps working on
+  // the house model.
   degrade: boolean;
   degradeReason: "free" | "budget" | "credits" | null;
   windowCostUsd: number | null;
+  weekCostUsd: number | null;
   creditBalanceUsd: number | null;
 }
 
@@ -511,25 +538,37 @@ interface MeteringContext {
   debitsCreditBalance: boolean;
 }
 
+// The metered outcome of one proxied call, collected identically from a
+// buffered JSON body (AnthropicPayloadExtraction) or a streamed SSE tee
+// (SseUsageCollector).
+interface MeteredUsage {
+  usage: AnthropicTokenUsage | null;
+  model: string | null;
+  messageId: string | null;
+  reportedCostUsd: number | null;
+}
+
 async function recordUsage(
   ctx: MeteringContext,
   upstream: globalThis.Response,
-  usage: AnthropicTokenUsage | null,
-  responseModel: string | null,
-  upstreamId: string | null,
+  metered: MeteredUsage,
 ): Promise<void> {
+  const { usage, reportedCostUsd } = metered;
   if (!ctx.usageStore || !usage || totalTokens(usage) <= 0) return;
-  const model = responseModel ?? ctx.requestModel ?? "unknown";
+  const model = metered.model ?? ctx.requestModel ?? "unknown";
   const cost = estimateModelBrokerCost(ctx.record.provider, model, usage, ctx.cacheWriteTtl);
   const unknownPricing =
     ctx.record.provider === "anthropic"
       ? isUnknownAnthropicPricingModel(cost.pricingModel)
       : isUnknownOpenRouterPricingModel(cost.pricingModel);
-  if (unknownPricing) {
+  // A reported upstream cost makes the table irrelevant for this call — only a
+  // genuine fallback to estimates is worth an alert.
+  if (unknownPricing && reportedCostUsd === null) {
     ctx.onMeteringError(
       new Error(`llm-broker used fallback pricing for unknown ${providerLabel(ctx.record.provider)} model: ${model}`),
     );
   }
+  const upstreamId = metered.messageId;
   try {
     await ctx.usageStore.recordUsage({
       eventId: usageEventId(ctx.record, upstreamId, ctx.requestId),
@@ -552,6 +591,7 @@ async function recordUsage(
       now: ctx.now(),
       countsTowardSpendWindow: ctx.countsTowardSpendWindow,
       debitsCreditBalance: ctx.debitsCreditBalance,
+      reportedCostUsd,
     });
   } catch (err) {
     ctx.onMeteringError(err);
@@ -581,19 +621,47 @@ interface PreflightGateInput {
   onMeteringError: (err: unknown) => void;
 }
 
+// A budget of null means "meter not enforced for this owner" — no read, no
+// exhaustion. The read thunk preserves the store's `this` binding.
+function readMeterCost(
+  budgetUsd: number | null,
+  read: () => Promise<{ costUsd: number }>,
+): Promise<number | null> {
+  return budgetUsd === null ? Promise.resolve(null) : read().then((usage) => usage.costUsd);
+}
+
+function meterExhausted(costUsd: number | null, budgetUsd: number | null): boolean {
+  return costUsd !== null && budgetUsd !== null && costUsd >= budgetUsd;
+}
+
 async function spendWindowGate(
   input: PreflightGateInput,
-  spendWindowUsd: number,
-): Promise<{ degrade: boolean; windowCostUsd: number } | GateDecisionDenied> {
-  if (!input.usageStore?.readWindowUsage) {
+  spendWindowUsd: number | null,
+  spendWeekUsd: number | null,
+): Promise<
+  { degrade: boolean; windowCostUsd: number | null; weekCostUsd: number | null } | GateDecisionDenied
+> {
+  const missingReader =
+    (spendWindowUsd !== null && !input.usageStore?.readWindowUsage) ||
+    (spendWeekUsd !== null && !input.usageStore?.readWeekUsage);
+  if (missingReader) {
     return { allowed: false, status: 503, error: "model broker spend gate unavailable" };
   }
-  const usage = await input.usageStore.readWindowUsage({
+  const readInput = {
     gatewayId: input.record.gatewayId,
     ownerUid: input.record.ownerUid,
     now: input.now(),
-  });
-  return { degrade: usage.costUsd >= spendWindowUsd, windowCostUsd: usage.costUsd };
+  };
+  const [windowCostUsd, weekCostUsd] = await Promise.all([
+    readMeterCost(spendWindowUsd, () => input.usageStore!.readWindowUsage!(readInput)),
+    readMeterCost(spendWeekUsd, () => input.usageStore!.readWeekUsage!(readInput)),
+  ]);
+  // The week is the defining limit; the 4h window only smooths bursts.
+  return {
+    degrade: meterExhausted(weekCostUsd, spendWeekUsd) || meterExhausted(windowCostUsd, spendWindowUsd),
+    windowCostUsd,
+    weekCostUsd,
+  };
 }
 
 async function rateWindowDenial(
@@ -656,6 +724,7 @@ const GATE_PASS: GateDecisionAllowed = {
   degrade: false,
   degradeReason: null,
   windowCostUsd: null,
+  weekCostUsd: null,
   creditBalanceUsd: null,
 };
 
@@ -666,18 +735,28 @@ type DegradeOutcome =
       degrade: boolean;
       degradeReason: GateDecisionAllowed["degradeReason"];
       windowCostUsd: number | null;
+      weekCostUsd: number | null;
       creditBalanceUsd: number | null;
     };
 
 // Free tier always degrades; a prepaid builder degrades once their balance is
-// dry; a subscription plan degrades once its window budget is spent.
+// dry; a subscription plan degrades once its weekly ledger or burst window is
+// spent.
 async function degradeStateForGrant(
   input: PreflightGateInput,
   prepaid: boolean,
   spendWindowUsd: number | null,
+  spendWeekUsd: number | null,
 ): Promise<DegradeOutcome> {
   if (input.grant.policy.freeTier) {
-    return { kind: "state", degrade: true, degradeReason: "free", windowCostUsd: null, creditBalanceUsd: null };
+    return {
+      kind: "state",
+      degrade: true,
+      degradeReason: "free",
+      windowCostUsd: null,
+      weekCostUsd: null,
+      creditBalanceUsd: null,
+    };
   }
   if (prepaid) {
     if (!input.usageStore?.readCreditBalance) {
@@ -695,21 +774,30 @@ async function degradeStateForGrant(
       degrade: dry,
       degradeReason: dry ? "credits" : null,
       windowCostUsd: null,
+      weekCostUsd: null,
       creditBalanceUsd,
     };
   }
-  if (spendWindowUsd !== null) {
-    const spend = await spendWindowGate(input, spendWindowUsd);
+  if (spendWindowUsd !== null || spendWeekUsd !== null) {
+    const spend = await spendWindowGate(input, spendWindowUsd, spendWeekUsd);
     if ("allowed" in spend) return { kind: "denied", decision: spend };
     return {
       kind: "state",
       degrade: spend.degrade,
       degradeReason: spend.degrade ? "budget" : null,
       windowCostUsd: spend.windowCostUsd,
+      weekCostUsd: spend.weekCostUsd,
       creditBalanceUsd: null,
     };
   }
-  return { kind: "state", degrade: false, degradeReason: null, windowCostUsd: null, creditBalanceUsd: null };
+  return {
+    kind: "state",
+    degrade: false,
+    degradeReason: null,
+    windowCostUsd: null,
+    weekCostUsd: null,
+    creditBalanceUsd: null,
+  };
 }
 
 async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
@@ -719,20 +807,27 @@ async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
     return GATE_PASS;
   }
   const spendWindowUsd = grant.limits.spendWindowUsd;
+  const spendWeekUsd = grant.limits.spendWeekUsd;
   const requestsPerMinute = grant.limits.requestsPerMinute;
   const prepaid = grant.rail === "prepaid_credits" && Boolean(input.record.ownerUid);
-  if (!prepaid && !grant.policy.freeTier && spendWindowUsd === null && requestsPerMinute === null) {
+  if (
+    !prepaid &&
+    !grant.policy.freeTier &&
+    spendWindowUsd === null &&
+    spendWeekUsd === null &&
+    requestsPerMinute === null
+  ) {
     return GATE_PASS;
   }
   try {
-    const outcome = await degradeStateForGrant(input, prepaid, spendWindowUsd);
+    const outcome = await degradeStateForGrant(input, prepaid, spendWindowUsd, spendWeekUsd);
     if (outcome.kind === "denied") return outcome.decision;
     if (requestsPerMinute !== null) {
       const denial = await rateWindowDenial(input, requestsPerMinute);
       if (denial) return denial;
     }
-    const { degrade, degradeReason, windowCostUsd, creditBalanceUsd } = outcome;
-    return { allowed: true, degrade, degradeReason, windowCostUsd, creditBalanceUsd };
+    const { degrade, degradeReason, windowCostUsd, weekCostUsd, creditBalanceUsd } = outcome;
+    return { allowed: true, degrade, degradeReason, windowCostUsd, weekCostUsd, creditBalanceUsd };
   } catch (err) {
     input.onMeteringError(err);
     return { allowed: false, status: 503, error: "model broker limit check failed" };
@@ -756,7 +851,7 @@ async function writeBufferedUpstreamResponse(
           new Error(`${providerLabel(metering.record.provider)} usage contained invalid fields: ${extracted.invalidUsageFields.join(",")}`),
         );
       }
-      await recordUsage(metering, upstream, extracted.usage, extracted.model, extracted.messageId);
+      await recordUsage(metering, upstream, extracted);
     } catch {
       // Non-JSON success bodies are simply not meterable.
     }
@@ -800,7 +895,7 @@ async function writeStreamingUpstreamResponse(
           new Error(`${providerLabel(metering.record.provider)} usage contained invalid fields: ${collector.invalidUsageFields.join(",")}`),
         );
       }
-      await recordUsage(metering, upstream, collector.usage, collector.model, collector.messageId);
+      await recordUsage(metering, upstream, collector);
     }
   } finally {
     reader.releaseLock();
@@ -836,8 +931,15 @@ async function forwardAllowed(args: {
 }): Promise<void> {
   const { req, res, url, record, providerKey, gate } = args;
   const prepaid = args.rail === "prepaid_credits" && Boolean(record.ownerUid);
-  const degradedBody = gate.degrade ? rewriteRequestModel(req.body, args.houseModel) : null;
-  const effectiveBody = degradedBody ?? req.body;
+  const rewrittenBody = rewriteRequestBody({
+    body: req.body,
+    degradeModel: gate.degrade ? args.houseModel : null,
+    includeOpenRouterUsage:
+      record.provider === "openrouter" &&
+      req.method.toUpperCase() === "POST" &&
+      url.pathname === "/v1/chat/completions",
+  });
+  const effectiveBody = rewrittenBody ?? req.body;
   const body =
     req.method === "GET" || req.method === "HEAD"
       ? undefined
@@ -965,6 +1067,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
             path: url.pathname,
             keySource: providerKey.source,
             spendWindowUsd: grant.limits.spendWindowUsd,
+            spendWeekUsd: grant.limits.spendWeekUsd,
             requestsPerMinute: grant.limits.requestsPerMinute,
             freeTier: grant.policy.freeTier,
             rail: grant.rail,
@@ -990,6 +1093,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           logGate(gateDecisionName(gate), {
             effectiveModel: gate.degrade ? houseModels[record.provider] : requestModel,
             windowCostUsd: gate.windowCostUsd,
+            weekCostUsd: gate.weekCostUsd,
             creditBalanceUsd: gate.creditBalanceUsd,
           });
         }
