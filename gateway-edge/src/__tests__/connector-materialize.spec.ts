@@ -102,6 +102,22 @@ describe("internal connector materialize route", () => {
     });
   });
 
+  it("materializes GitHub through the same owner-runtime rail", async () => {
+    vi.mocked(readConnectorAccessToken).mockResolvedValue("gho_secret");
+
+    const res = await request(app()).get("/internal/connectors/github/materialize");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      status: "connected",
+      connectorId: "github",
+      accessToken: "gho_secret",
+    });
+    expect(readConnectorAccessToken).toHaveBeenCalledWith("uid-owner", "github", {
+      kind: "owner-runtime",
+    });
+  });
+
   it("returns a structured disconnected response when the owner has no token", async () => {
     vi.mocked(readConnectorAccessToken).mockResolvedValue(null);
 
@@ -130,28 +146,44 @@ describe("internal connector materialize route", () => {
     });
   });
 
-  it("rejects non-operator gateways before reading a token", async () => {
+  it("allows builder-class gateways because they are isolated exec-capable runtimes", async () => {
     process.env.GATEWAY_CLASS = "builder";
     process.env.GATEWAY_PROFILE = "standard";
-
-    const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
-
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({ error: "forbidden", code: "operator_gateway_required" });
-    expect(readConnectorAccessToken).not.toHaveBeenCalled();
-  });
-
-  it("rejects a non-operator desired-state gateway even when the pod env says operator", async () => {
     mocks.docs["glmGateways/bender"] = {
       gatewayId: "bender",
       ownerUid: "uid-owner",
       gatewayClass: "builder",
     };
+    vi.mocked(readConnectorAccessToken).mockResolvedValue("cf_secret");
+
+    const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "connected", accessToken: "cf_secret" });
+  });
+
+  it("rejects shared gateways before reading a token", async () => {
+    process.env.GATEWAY_CLASS = "shared";
+    process.env.GATEWAY_PROFILE = "standard";
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
 
     expect(res.status).toBe(403);
-    expect(res.body).toEqual({ error: "forbidden", code: "operator_gateway_required" });
+    expect(res.body).toEqual({ error: "forbidden", code: "owner_runtime_gateway_required" });
+    expect(readConnectorAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects a shared desired-state gateway even when the pod env says owner-runtime", async () => {
+    mocks.docs["glmGateways/bender"] = {
+      gatewayId: "bender",
+      ownerUid: "uid-owner",
+      gatewayClass: "shared",
+    };
+
+    const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "forbidden", code: "owner_runtime_gateway_required" });
     expect(readConnectorAccessToken).not.toHaveBeenCalled();
   });
 

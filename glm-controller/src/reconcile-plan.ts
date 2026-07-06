@@ -91,7 +91,7 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
     serviceAccount = { create: true };
   }
   const operatorAccess =
-    gatewayClass === "operator"
+    gatewayClass === "builder" || gatewayClass === "operator"
       ? d.operatorAccess ?? defaultOperatorGatewayAccess(d.ownerUid)
       : d.operatorAccess;
   return {

@@ -70,10 +70,12 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-connector-tools"].enabled).toBe(false);
   });
 
-  it("builder class enables OpenClaw exec/process/subagents and keeps Codex disabled", () => {
+  it("builder class enables OpenClaw exec/process/subagents plus runtime plugins", () => {
     const out = runPolicy("builder", {
+      auth: { profiles: {} },
       agents: {
         defaults: {
+          models: {},
           subagents: { maxConcurrent: 8, model: "anthropic/claude-sonnet-4-6" },
         },
       },
@@ -86,7 +88,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         allow: ["codex", "octogee-connector-tools"],
         entries: {
           codex: { enabled: true },
-          "octogee-connector-tools": { enabled: true },
+          "octogee-connector-tools": {
+            enabled: false,
+            config: { timeoutMs: 1500, baseUrl: "http://connector-tools" },
+          },
         },
       },
     });
@@ -99,9 +104,23 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       maxConcurrent: 8,
       model: "anthropic/claude-sonnet-4-6",
     });
-    expect(out.plugins.allow).toEqual([]);
-    expect(out.plugins.entries.codex.enabled).toBe(false);
-    expect(out.plugins.entries["octogee-connector-tools"].enabled).toBe(false);
+    expect(out.plugins.allow).toEqual(["codex", "octogee-connector-tools"]);
+    expect(out.plugins.entries.codex.enabled).toBe(true);
+    expect(out.plugins.entries.codex.config.appServer).toEqual({
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    });
+    expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
+      enabled: true,
+      config: { timeoutMs: 1500, baseUrl: "http://connector-tools" },
+    });
+    expect(out.auth.profiles["openai-codex:default"]).toEqual({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    expect(out.agents.defaults.models["openai/gpt-5.5"]).toEqual({
+      agentRuntime: { id: "codex" },
+    });
   });
 
   it("operator class leaves the config untouched for the operator-image patcher", () => {

@@ -30,7 +30,7 @@
     "gatewayClass": {
       "type": "string",
       "enum": ["", "shared", "builder", "operator"],
-      "description": "Product/security class. Empty derives from legacy profile. shared=multi-builder exec-off, builder=one-builder exec-on no BuilderShell, operator=one-builder operator image + BuilderShell gate."
+      "description": "Product/security class. Empty derives from legacy profile. shared=multi-builder exec-off, builder=one-builder exec-on with shell feature gate, operator=same runtime trust boundary plus operator image/BYO GCP tooling."
     },
     "imageProfile": {
       "type": "string",

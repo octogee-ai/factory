@@ -46,7 +46,10 @@ export function isConnectorTokenBrokerable(id: string): boolean {
 
 export function isConnectorAgentRuntimeTokenMaterializable(id: string): boolean {
   const def = getConnector(id);
-  if (!def || def.meta.consumption !== "agent-runtime") return false;
+  if (!def) return false;
+  if (def.meta.consumption !== "agent-runtime" && def.meta.agentRuntimeMaterializable !== true) {
+    return false;
+  }
   return def.meta.captureMethods.some((method) => method === "pat" || method === "oauth-web" || method === "device");
 }
 

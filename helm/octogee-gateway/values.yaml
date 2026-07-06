@@ -69,8 +69,8 @@ preStopFlush:
 
 # Product/security class. Empty keeps legacy behavior: profile=operator derives
 # operator; otherwise shared. Builder is one-builder, standard image, exec-on,
-# no BuilderShell. Operator is one-builder/platform-owner, operator image,
-# BuilderShell-gated, no shared platform model key.
+# shell-feature gated. Operator is the same runtime trust boundary plus the
+# operator image/BYO GCP tooling, with no shared platform model key.
 gatewayClass: ""
 
 # Installed image/tooling profile. Empty derives from gatewayClass/legacy

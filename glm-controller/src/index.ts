@@ -2160,6 +2160,7 @@ async function buildHandlers(
         gatewayClass: data.gatewayClass,
         imageProfile: data.imageProfile,
         builderSlug: data.builderSlug,
+        ownerUid: data.ownerUid,
         persistence: data.persistence,
         serviceAccountName: data.serviceAccountName,
         serviceAccount: data.serviceAccount,

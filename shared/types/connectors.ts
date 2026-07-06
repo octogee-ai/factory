@@ -53,6 +53,7 @@ export interface ConnectorMeta {
   clientSource: ConnectorClientSource;
   scopes: string[];
   platformScopes?: string[];
+  agentRuntimeMaterializable?: boolean;
   captureFields?: ConnectorCaptureField[];
   implemented: boolean;
 }
@@ -93,6 +94,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     consumption: 'platform-read',
     clientSource: 'platform',
     scopes: ['repo'],
+    agentRuntimeMaterializable: true,
     implemented: true,
   },
   {

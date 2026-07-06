@@ -31,10 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl jq python3 python3-pip python3-venv \
     sqlite3 xxd rsync \
     ca-certificates openssh-client \
-    # Developer experience (available in running pod). The terminal
-    # multiplexer that backs BuilderShell PTY sessions is operator-only
-    # (see Dockerfile.operator) — never on the shared cattle base.
-    bash-completion git vim less \
+    # Developer experience (available in running pod). tmux backs BuilderShell
+    # PTY sessions when the runtime-shell feature is enabled.
+    bash-completion git vim less tmux \
     # Code search & analysis
     ripgrep tree cloc \
     # Build tools

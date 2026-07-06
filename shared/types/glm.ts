@@ -183,17 +183,17 @@ export const OPERATOR_GATEWAY_DEFAULT_PERSISTENCE: GatewayPersistenceSpec = {
 
 export const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec = {
   shellsEnabled: false,
-  reason: "operator-trust-boundary-not-provisioned",
+  reason: "runtime-trust-boundary-not-provisioned",
 };
 
-// An operator-class gateway with a Builder owner IS a provisioned tenant boundary
-// (single owner, exec on, owner-only shell auth in gateway-edge), so it gets
-// BuilderShell. Un-owned operator gateways stay locked.
+// A builder/operator gateway with a Builder owner IS a provisioned runtime
+// boundary (exec on, owner-only shell auth in gateway-edge), so it can get
+// BuilderShell. Un-owned runtime gateways stay locked.
 export function defaultOperatorGatewayAccess(
   ownerUid: string | null | undefined,
 ): OperatorGatewayAccessSpec {
   return ownerUid
-    ? { shellsEnabled: true, reason: "owned-operator-gateway" }
+    ? { shellsEnabled: true, reason: "owned-runtime-gateway" }
     : OPERATOR_GATEWAY_LOCKED_ACCESS;
 }
 
@@ -246,12 +246,16 @@ export function isGatewayClassShellAccessEnabled(
   gatewayClass: GatewayClass | undefined,
   operatorAccess: OperatorGatewayAccessSpec | undefined,
 ): boolean {
-  return gatewayClass === "operator" && operatorAccess?.shellsEnabled === true;
+  return (
+    (gatewayClass === "builder" || gatewayClass === "operator") &&
+    operatorAccess?.shellsEnabled === true
+  );
 }
 
 // The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
-// shellsEnabled). A Builder gets BuilderShell when placed on an operator-class
-// gateway they OWN; a guest migrated onto someone else's operator gateway does not.
+// shellsEnabled). A Builder gets BuilderShell when placed on a shell-enabled
+// builder/operator gateway they OWN; a guest migrated onto someone else's
+// gateway does not.
 export function resolveUserGatewayShellState(
   data:
     | {

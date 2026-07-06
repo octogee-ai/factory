@@ -4,8 +4,8 @@
 //
 // Auth: mints a custom token for OPERATOR_UID (admin) via the Admin SDK, then
 // exchanges it for an ID token at identitytoolkit, so the request hits
-// POST /api/projects exactly like the PWA would — including the operator-only
-// repoSource gate.
+// POST /api/projects exactly like the PWA would — including the current
+// GitHub repoSource product gate.
 //
 // Usage (run once per repo):
 //   GCLOUD_PROJECT=octogee-test \

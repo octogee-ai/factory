@@ -197,7 +197,7 @@ describe("github-backed project create", () => {
       .set({ role: "admin" });
   }
 
-  it("rejects a non-admin caller (Phase 1 is operator-only) with 403 and writes no doc", async () => {
+  it("rejects a caller without the GitHub project feature with 403 and writes no doc", async () => {
     mockMmContextOk();
     const app = createApp();
 

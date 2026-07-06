@@ -391,7 +391,7 @@ expect(state.specs.get("bender")?.imageRepository).toBe(REPO);
             serviceAccount: { create: true },
             operatorAccess: {
               shellsEnabled: false,
-              reason: "operator-trust-boundary-not-provisioned",
+              reason: "runtime-trust-boundary-not-provisioned",
             },
           },
         ],
@@ -438,8 +438,40 @@ expect(state.specs.get("bender")?.imageRepository).toBe(REPO);
     expect(state.specs.get("bender")?.serviceAccount).toMatchObject({ create: true });
     expect(state.specs.get("bender")?.operatorAccess).toMatchObject({
       shellsEnabled: false,
-      reason: "operator-trust-boundary-not-provisioned",
+      reason: "runtime-trust-boundary-not-provisioned",
     });
+  });
+
+  it("same sha/class still converges missing builder runtime access without operator ServiceAccount defaults", async () => {
+    const state: FakeState = {
+      specs: new Map([
+        [
+          "jack",
+          {
+            gatewayId: "jack",
+            imageRepository: REPO,
+            imageTag: "sha1",
+            gatewayClass: "builder",
+            ownerUid: "uid-jack",
+          },
+        ],
+      ]),
+      helmInstances: new Map([["jack", { repository: REPO, tag: "sha1" }]]),
+      heartbeats: new Map([["jack", { version: "sha1", lastHeartbeatAt: 0 }]]),
+    };
+    const deps = makeDeps(state);
+    const result = await createRolloutHandler(deps)(
+      mkOp({ input: { gatewayId: "jack", imageTag: "sha1", gatewayClass: "builder" } }),
+      makeCtx(),
+    );
+    expect(result.success).toBe(true);
+    expect(deps.updateGlmGatewayImage).toHaveBeenCalled();
+    expect(state.specs.get("jack")?.operatorAccess).toMatchObject({
+      shellsEnabled: true,
+      reason: "owned-runtime-gateway",
+    });
+    expect(state.specs.get("jack")?.serviceAccountName).toBeUndefined();
+    expect(state.specs.get("jack")?.serviceAccount).toBeUndefined();
   });
 });
 

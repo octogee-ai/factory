@@ -3,7 +3,7 @@
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
-{{- $operatorShellsEnabled := and (eq $gatewayClass "operator") (.Values.operatorAccess.shellsEnabled | default false) -}}
+{{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
 {{- end -}}
@@ -201,7 +201,7 @@ spec:
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
             # Image profile (standard vs operator) — read by
-            # entrypoint.sh to gate operator-only boot steps such as the
+            # entrypoint.sh to gate operator-image boot steps such as the
             # Claude Code first-run stamper.
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
@@ -235,11 +235,11 @@ spec:
             # secret-resolver → POST /internal/byok/agent-model-token. The broker
             # resolves platform-or-BYOK per owner and meters per ownerUid.
             {{- end }}
-            {{- if eq $gatewayClass "operator" }}
-            # Operator gateway shells run inside the tenant shell container,
+            {{- if $operatorShellsEnabled }}
+            # Builder/operator gateway shells run inside the tenant shell container,
             # which intentionally does not inherit the platform-wide
             # INTERNAL_SERVICE_KEY. The builder-shell port is exposed only
-            # for explicitly unlocked operator gateways and is still scoped
+            # for explicitly unlocked runtime gateways and is still scoped
             # by the per-gateway NetworkPolicy + shell ticket flow.
             - name: BUILDER_SHELL_REQUIRE_KEY
               value: "false"

@@ -94,7 +94,11 @@ export function resolveBuilderShellInternalAuthSecret(
     };
   }
 
-  if (env.GATEWAY_PROFILE === "operator") {
+  if (
+    env.GATEWAY_CLASS === "builder" ||
+    env.GATEWAY_CLASS === "operator" ||
+    (!env.GATEWAY_CLASS && env.GATEWAY_PROFILE === "operator")
+  ) {
     const serviceAccountToken = readProjectedServiceAccountToken(env);
     if (serviceAccountToken) {
       return {

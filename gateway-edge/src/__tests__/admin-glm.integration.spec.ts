@@ -498,7 +498,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       sizingTier: "large",
       operatorAccess: {
         shellsEnabled: false,
-        reason: "operator-trust-boundary-not-provisioned",
+        reason: "runtime-trust-boundary-not-provisioned",
       },
       serviceAccountName: "octogee-gw-canary",
       serviceAccount: {
@@ -532,7 +532,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       builderSlug: "jack",
       operatorAccess: {
         shellsEnabled: true,
-        reason: "owned-operator-gateway",
+        reason: "owned-runtime-gateway",
       },
       operatorReservation: {
         status: "reserved",
@@ -552,7 +552,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     });
   });
 
-  it("creates a builder-class standard gateway for a real owner without operator access", async () => {
+  it("creates a builder-class standard gateway for a real owner with runtime access state", async () => {
     usersDocs["uid-jack"] = {
       username: "jack",
       provisioning: { openclaw: { slug: "jack" } },
@@ -575,9 +575,12 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       gatewayClass: "builder",
       ownerUid: "uid-jack",
       builderSlug: "jack",
+      operatorAccess: {
+        shellsEnabled: true,
+        reason: "owned-runtime-gateway",
+      },
     });
     expect(gwWrite?.data).not.toHaveProperty("imageProfile");
-    expect(gwWrite?.data).not.toHaveProperty("operatorAccess");
     expect(gwWrite?.data).not.toHaveProperty("serviceAccountName");
     expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
 
@@ -1015,7 +1018,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       sizingTier: "large",
       operatorAccess: {
         shellsEnabled: true,
-        reason: "owned-operator-gateway",
+        reason: "owned-runtime-gateway",
       },
       serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },
@@ -1143,7 +1146,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       sizingTier: "medium",
       operatorAccess: {
         shellsEnabled: true,
-        reason: "owned-operator-gateway",
+        reason: "owned-runtime-gateway",
       },
       serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },

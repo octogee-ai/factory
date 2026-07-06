@@ -157,7 +157,10 @@ function runnerBlockSource(): string {
   );
 }
 
-function runRunnerBlock(profile: string, opts: { operatorShellsEnabled?: string } = {}): {
+function runRunnerBlock(
+  profile: string,
+  opts: { operatorShellsEnabled?: string; gatewayClass?: string } = {},
+): {
   status: number | null;
   stderr: string;
   runners: string[];
@@ -165,7 +168,7 @@ function runRunnerBlock(profile: string, opts: { operatorShellsEnabled?: string 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "entrypoint-runners-"));
   try {
     const marker = path.join(tmp, "runners");
-    const gatewayClass = profile === "operator" ? "operator" : "shared";
+    const gatewayClass = opts.gatewayClass ?? (profile === "operator" ? "operator" : "shared");
     const script = `
       set -e
       log() { echo "$*" >&2; }
@@ -214,7 +217,22 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     ]);
   });
 
-  it("starts builder-shell only on explicitly unlocked operator gateways", () => {
+  it("starts builder-shell on explicitly unlocked builder gateways", () => {
+    const result = runRunnerBlock("standard", {
+      gatewayClass: "builder",
+      operatorShellsEnabled: "true",
+    });
+    expect(result.status).toBe(0);
+    expect(result.runners).toEqual([
+      "fleet-controller",
+      "site-build",
+      "preview-proxy",
+      "byosub-syncback",
+      "builder-shell",
+    ]);
+  });
+
+  it("starts builder-shell on explicitly unlocked operator gateways", () => {
     const result = runRunnerBlock("operator", { operatorShellsEnabled: "true" });
     expect(result.status).toBe(0);
     expect(result.runners).toContain("fleet-controller");

@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { CONNECTOR_CATALOG } from "@octogee/shared/types/connectors";
-import { getConnector, connectorRedirectUri } from '../lib/connectors/index.js';
+import {
+  getConnector,
+  connectorRedirectUri,
+  isConnectorAgentRuntimeTokenMaterializable,
+  isConnectorTokenBrokerable,
+} from '../lib/connectors/index.js';
 import { catalogMeta } from '../lib/connectors/def.js';
 
 afterEach(() => {
@@ -72,13 +77,16 @@ describe('connector registry (gateway-edge)', () => {
     expect(getConnector('not-a-connector')).toBeUndefined();
   });
 
-  it('github: oauth-web + device + pat, platform-read, repo scope', () => {
+  it('github: oauth-web + device + pat, platform-read, repo scope, owner-runtime materializable', () => {
     const def = getConnector('github');
     expect(def).toBeDefined();
     expect(def!.meta.id).toBe('github');
     expect(def!.meta.consumption).toBe('platform-read');
+    expect(def!.meta.agentRuntimeMaterializable).toBe(true);
     expect(def!.meta.captureMethods).toEqual(['oauth-web', 'device', 'pat']);
     expect(def!.meta.scopes).toEqual(['repo']);
+    expect(isConnectorTokenBrokerable('github')).toBe(true);
+    expect(isConnectorAgentRuntimeTokenMaterializable('github')).toBe(true);
     expect(def!.oauth).toMatchObject({
       authorizeUrl: 'https://github.com/login/oauth/authorize',
       tokenUrl: 'https://github.com/login/oauth/access_token',

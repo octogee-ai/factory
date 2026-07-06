@@ -109,7 +109,7 @@ async function accessAuthorized(
 ): Promise<boolean> {
   if (!safeDocId(uid) || !bound.ownerUid) return false;
   if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
-    return uid === bound.ownerUid && (await gatewayHasOperatorClass(db, bound.gatewayId));
+    return uid === bound.ownerUid && (await gatewayHasOwnerRuntimeClass(db, bound.gatewayId));
   }
   if (uid === bound.ownerUid) return true;
 
@@ -118,10 +118,10 @@ async function accessAuthorized(
   return projectAccessAuthorized(db, uid, connectorId, access);
 }
 
-async function gatewayHasOperatorClass(db: Firestore, gatewayId: string): Promise<boolean> {
+async function gatewayHasOwnerRuntimeClass(db: Firestore, gatewayId: string): Promise<boolean> {
   const snap = await db.doc(`glmGateways/${gatewayId}`).get();
   const data = snap.data() as Record<string, unknown> | undefined;
-  return data?.gatewayClass === "operator";
+  return data?.gatewayClass === "builder" || data?.gatewayClass === "operator";
 }
 
 function connectorAllowedForAccess(

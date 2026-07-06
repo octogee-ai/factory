@@ -72,7 +72,7 @@ describe("gateway class/profile resolution", () => {
 });
 
 describe("defaultOperatorGatewayAccess", () => {
-  it("grants shells to an owned operator gateway and locks an un-owned one", () => {
+  it("grants shells to an owned runtime gateway and locks an un-owned one", () => {
     expect(defaultOperatorGatewayAccess("uid-chris")).toMatchObject({ shellsEnabled: true });
     expect(defaultOperatorGatewayAccess(null)).toMatchObject({ shellsEnabled: false });
     expect(defaultOperatorGatewayAccess(undefined)).toMatchObject({ shellsEnabled: false });
@@ -92,6 +92,20 @@ describe("resolveUserGatewayShellState", () => {
         "uid-chris",
       ),
     ).toEqual({ gatewayProfile: "operator", shellsEnabled: true });
+  });
+
+  it("enables BuilderShell for the owner of a builder-class gateway with shells on", () => {
+    expect(
+      resolveUserGatewayShellState(
+        {
+          gatewayClass: "builder",
+          imageProfile: "standard",
+          ownerUid: "uid-chris",
+          operatorAccess: { shellsEnabled: true },
+        },
+        "uid-chris",
+      ),
+    ).toEqual({ gatewayProfile: "standard", shellsEnabled: true });
   });
 
   it("honors a co-owner", () => {

@@ -3594,10 +3594,15 @@ router.post(
         const gatewayClass = resolveGatewayClass(body);
         const imageProfile = resolveGatewayImageProfile(body);
         const persistence = resolveGatewayPersistence(imageProfile, undefined);
+        const ownerRuntimeDefaults =
+          gatewayClass === "builder" || gatewayClass === "operator"
+            ? {
+                operatorAccess: defaultOperatorGatewayAccess(owner.ok.ownerUid),
+              }
+            : {};
         const operatorDefaults =
           gatewayClass === "operator"
             ? {
-                operatorAccess: defaultOperatorGatewayAccess(owner.ok.ownerUid),
                 serviceAccountName: operatorGatewayServiceAccountName(body.gatewayId),
                 serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
               }
@@ -3616,6 +3621,7 @@ router.post(
             gatewayClass,
             ...(imageProfile !== "standard" ? { imageProfile } : {}),
             ...(persistence ? { persistence } : {}),
+            ...ownerRuntimeDefaults,
             ...operatorDefaults,
             ...owner.ok,
             ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),

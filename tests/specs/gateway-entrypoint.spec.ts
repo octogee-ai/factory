@@ -161,7 +161,7 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(guardBlock).toMatch(/!= "operator"/);
   });
 
-  it("gates builder-shell behind operator class and explicit shell unlock", () => {
+  it("gates builder-shell behind runtime class and explicit shell unlock", () => {
     expect(entrypoint).toMatch(/supervise_runner\s+builder-shell\s+5000\b/);
     const builderIdx = entrypoint.indexOf("supervise_runner builder-shell");
     const guardBlock = entrypoint.slice(
@@ -169,12 +169,12 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
       builderIdx,
     );
     expect(guardBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
-    expect(guardBlock).toMatch(/operator/);
+    expect(guardBlock).toMatch(/!= "shared"/);
     expect(guardBlock).toMatch(/OPERATOR_SHELLS_ENABLED/);
     expect(guardBlock).toMatch(/true/);
     expect(entrypoint).toMatch(/export BUILDER_SHELL_REQUIRE_KEY/);
     expect(entrypoint).toMatch(
-      /Builder-shell disabled: operator trust boundary is not provisioned/,
+      /Builder-shell disabled: runtime shell access is not enabled/,
     );
   });
 

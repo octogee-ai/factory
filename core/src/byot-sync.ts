@@ -63,9 +63,9 @@ export interface CoachModelPatch {
   };
 }
 
-// Standard (shared/builder) gateways run the codex app-server SANDBOXED —
-// workspace-write + never is autonomous-but-confined, NOT the operator-only
-// danger-full-access YOLO (infra/gateway/apply-operator-codex-sandbox.mjs).
+// Shared gateways run the codex app-server sandboxed. Builder/operator runtime
+// gateways get their broader app-server policy from the gateway class boot
+// policy and this fallback must not downgrade an existing runtime policy.
 export const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
   sandbox: "workspace-write",
   approvalPolicy: "never",

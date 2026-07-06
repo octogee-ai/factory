@@ -17,6 +17,10 @@ const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_chat_set_identity",
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
+const CODEX_MODEL = "openai/gpt-5.5";
+const CODEX_PROFILE = "openai-codex:default";
+const RUNTIME_CODEX_SANDBOX = "danger-full-access";
+const RUNTIME_CODEX_APPROVAL_POLICY = "never";
 
 function removeDeniedTools(value, deniedTools) {
   if (!Array.isArray(value)) return value;
@@ -46,16 +50,6 @@ function allowOctogeeWorkflowTools(config) {
   config.tools.alsoAllow = addTools(config.tools.alsoAllow, OCTOGEE_WORKFLOW_TOOLS);
 }
 
-function disableCodex(config) {
-  config.plugins ??= {};
-  if (Array.isArray(config.plugins.allow)) {
-    config.plugins.allow = config.plugins.allow.filter((id) => id !== "codex");
-  }
-  config.plugins.entries ??= {};
-  config.plugins.entries.codex ??= {};
-  config.plugins.entries.codex.enabled = false;
-}
-
 function disableConnectorTools(config) {
   config.plugins ??= {};
   if (Array.isArray(config.plugins.allow)) {
@@ -64,6 +58,56 @@ function disableConnectorTools(config) {
   config.plugins.entries ??= {};
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN] ??= {};
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = false;
+}
+
+function ensureCodexAuthProfile(config) {
+  config.auth ??= {};
+  config.auth.profiles ??= {};
+  config.auth.profiles[CODEX_PROFILE] = {
+    provider: "openai-codex",
+    mode: "oauth",
+  };
+}
+
+function ensureCodexRuntimeModel(config) {
+  config.agents ??= {};
+  config.agents.defaults ??= {};
+  config.agents.defaults.models ??= {};
+  config.agents.defaults.models[CODEX_MODEL] = { agentRuntime: { id: "codex" } };
+}
+
+function allowPlugin(config, id) {
+  config.plugins ??= {};
+  if (Array.isArray(config.plugins.allow)) {
+    if (!config.plugins.allow.includes(id)) config.plugins.allow.push(id);
+  } else {
+    config.plugins.allow = [id];
+  }
+  config.plugins.entries ??= {};
+}
+
+function enableCodexAppServer(config) {
+  allowPlugin(config, "codex");
+  config.plugins.entries.codex ??= {};
+  config.plugins.entries.codex.enabled = true;
+  config.plugins.entries.codex.config ??= {};
+  config.plugins.entries.codex.config.appServer ??= {};
+  config.plugins.entries.codex.config.appServer.sandbox = RUNTIME_CODEX_SANDBOX;
+  config.plugins.entries.codex.config.appServer.approvalPolicy = RUNTIME_CODEX_APPROVAL_POLICY;
+}
+
+function enableConnectorTools(config) {
+  allowPlugin(config, CONNECTOR_TOOLS_PLUGIN);
+  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN] ??= {};
+  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = true;
+  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config ??= {};
+}
+
+function enableRuntimePlugins(config) {
+  ensureCodexAuthProfile(config);
+  ensureCodexRuntimeModel(config);
+  enableCodexAppServer(config);
+  enableConnectorTools(config);
 }
 
 // A shared pod may run a BYOS subscription's codex harness, but it MUST stay
@@ -113,8 +157,7 @@ function applyBuilderPolicy(config) {
   config.tools.subagents.tools ??= {};
   config.tools.subagents.tools.deny = removeDeniedTools(config.tools.subagents.tools.deny, EXEC_TOOLS);
   allowOctogeeWorkflowTools(config);
-  disableCodex(config);
-  disableConnectorTools(config);
+  enableRuntimePlugins(config);
 }
 
 function resolveGatewayClass(env) {

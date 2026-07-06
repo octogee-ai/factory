@@ -16,9 +16,9 @@ function nonBlank(value: string | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
-function isOperatorGateway(): boolean {
+function isOwnerRuntimeGateway(): boolean {
   const gatewayClass = nonBlank(process.env.GATEWAY_CLASS);
-  if (gatewayClass) return gatewayClass === "operator";
+  if (gatewayClass) return gatewayClass === "builder" || gatewayClass === "operator";
   return nonBlank(process.env.GATEWAY_PROFILE) === "operator";
 }
 
@@ -27,8 +27,8 @@ function stringField(data: Record<string, unknown> | undefined, key: string): st
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function isOperatorGatewayDesiredState(data: Record<string, unknown> | undefined): boolean {
-  return data?.gatewayClass === "operator";
+function isOwnerRuntimeGatewayDesiredState(data: Record<string, unknown> | undefined): boolean {
+  return data?.gatewayClass === "builder" || data?.gatewayClass === "operator";
 }
 
 function paramString(value: unknown): string | null {
@@ -40,18 +40,18 @@ async function readDoc(path: string): Promise<Record<string, unknown> | undefine
   return snap.exists ? (snap.data() as Record<string, unknown> | undefined) : undefined;
 }
 
-async function resolveOperatorOwnerUid(
+async function resolveOwnerRuntimeOwnerUid(
   res: Response,
 ): Promise<string | null> {
-  if (!isOperatorGateway()) {
-    res.status(403).json({ error: "forbidden", code: "operator_gateway_required" });
+  if (!isOwnerRuntimeGateway()) {
+    res.status(403).json({ error: "forbidden", code: "owner_runtime_gateway_required" });
     return null;
   }
 
   const gatewayId = nonBlank(process.env.GATEWAY_ID);
   const builderSlug = nonBlank(process.env.GATEWAY_BUILDER_SLUG);
   if (!gatewayId || !builderSlug) {
-    logger.error("[connectors/materialize] operator gateway owner env is incomplete", {
+    logger.error("[connectors/materialize] runtime gateway owner env is incomplete", {
       gatewayId: Boolean(gatewayId),
       builderSlug: Boolean(builderSlug),
     });
@@ -75,14 +75,14 @@ async function resolveOperatorOwnerUid(
   }
 
   const gateway = await readDoc(`glmGateways/${gatewayId}`);
-  if (!isOperatorGatewayDesiredState(gateway)) {
-    res.status(403).json({ error: "forbidden", code: "operator_gateway_required" });
+  if (!isOwnerRuntimeGatewayDesiredState(gateway)) {
+    res.status(403).json({ error: "forbidden", code: "owner_runtime_gateway_required" });
     return null;
   }
 
   const gatewayOwnerUid = stringField(gateway, "ownerUid");
   if (!gatewayOwnerUid) {
-    logger.error("[connectors/materialize] operator gateway desired state has no ownerUid", {
+    logger.error("[connectors/materialize] runtime gateway desired state has no ownerUid", {
       gatewayId,
       builderSlug,
       ownerUid,
@@ -93,7 +93,7 @@ async function resolveOperatorOwnerUid(
     return null;
   }
   if (gatewayOwnerUid !== ownerUid) {
-    logger.warn("[connectors/materialize] operator gateway owner mismatch", {
+    logger.warn("[connectors/materialize] runtime gateway owner mismatch", {
       gatewayId,
       builderSlug,
       ownerUid,
@@ -124,7 +124,7 @@ router.get(
       return;
     }
 
-    const ownerUid = await resolveOperatorOwnerUid(res);
+    const ownerUid = await resolveOwnerRuntimeOwnerUid(res);
     if (!ownerUid) return;
 
     try {

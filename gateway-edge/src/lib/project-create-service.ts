@@ -79,7 +79,7 @@ type RepoSourceResult =
 
 function resolveCreateRepoSource(repoSource: unknown, isAdmin: boolean): RepoSourceResult {
   if (repoSource === undefined || repoSource === null) return { ok: true, value: null };
-  if (!isAdmin) return { ok: false, status: 403, error: "GitHub-backed projects are operator-only" };
+  if (!isAdmin) return { ok: false, status: 403, error: "GitHub-backed projects are not enabled for this account" };
   if (!isValidGithubRepoSource(repoSource)) {
     return { ok: false, status: 400, error: "Invalid repoSource (expected { provider: 'github', owner, repo })" };
   }

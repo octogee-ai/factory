@@ -359,7 +359,7 @@ const out = helmTemplate();
     expect(svc).not.toMatch(/migration-rsync/);
   });
 
-  it("does not expose builder-shell on locked operator gateways", () => {
+  it("does not expose builder-shell on locked runtime gateways", () => {
     const out = helmTemplate("octogee-gw-default", { profile: "operator" });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
@@ -372,7 +372,7 @@ const out = helmTemplate();
     expect(svc).not.toMatch(/name:\s*builder-shell/);
   });
 
-  it("exposes builder-shell only after explicit operator shell access is enabled", () => {
+  it("exposes builder-shell after explicit runtime shell access is enabled", () => {
     const out = helmTemplate("octogee-gw-default", {
       profile: "operator",
       "operatorAccess.shellsEnabled": "true",
@@ -387,6 +387,25 @@ const out = helmTemplate();
       /- name:\s*BUILDER_SHELL_REQUIRE_KEY[\s\S]*?value:\s*"false"/,
     );
     expect(gw).not.toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
+
+    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    expect(svc).toMatch(/name:\s*builder-shell\s*\n\s*port:\s*3005\s*\n\s*targetPort:\s*3005/);
+  });
+
+  it("exposes builder-shell on builder gateways when shell access is enabled", () => {
+    const out = helmTemplate("octogee-gw-default", {
+      gatewayClass: "builder",
+      "operatorAccess.shellsEnabled": "true",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/containerPort:\s*3005\s*\n\s*name:\s*builder-shell/);
+    expect(gw).toMatch(
+      /- name:\s*OPERATOR_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
+    );
+    expect(gw).toMatch(
+      /- name:\s*BUILDER_SHELL_REQUIRE_KEY[\s\S]*?value:\s*"false"/,
+    );
 
     const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
     expect(svc).toMatch(/name:\s*builder-shell\s*\n\s*port:\s*3005\s*\n\s*targetPort:\s*3005/);
@@ -979,7 +998,7 @@ function splitNetworkPolicyRules(np: string): { restricted: string; open: string
   return { restricted: np.slice(fromIdx, openIdx), open: np.slice(openIdx) };
 }
 
-describe("helm/octogee-gateway/ — operator-profile NetworkPolicy port allowlist", () => {
+describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist", () => {
   it("restricts :3005 (builder-shell) to same-instance pods — the backstop intent", () => {
     const np = findDoc(
       helmTemplate("octogee-gw-default", {
@@ -994,6 +1013,21 @@ describe("helm/octogee-gateway/ — operator-profile NetworkPolicy port allowlis
     expect(restricted).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*default/);
     expect(restricted).toMatch(/port:\s*3005/);
     expect(restricted).not.toMatch(/port:\s*3003/);
+  });
+
+  it("renders the same builder-shell backstop for builder gateways when shells are enabled", () => {
+    const np = findDoc(
+      helmTemplate("octogee-gw-default", {
+        gatewayClass: "builder",
+        "operatorAccess.shellsEnabled": "true",
+      }),
+      "NetworkPolicy",
+      "octogee-gateway-builder-shell-default",
+    );
+    expect(np).not.toBeNull();
+    const { restricted } = splitNetworkPolicyRules(np!);
+    expect(restricted).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*default/);
+    expect(restricted).toMatch(/port:\s*3005/);
   });
 
   it("allows other pod ports from any source — listed in a rule WITHOUT `from:` so the LB / sibling workloads / Prometheus can reach them", () => {
@@ -1053,12 +1087,12 @@ expect(open).toMatch(/port:\s*18789/);
     expect(open).not.toMatch(/port:\s*30873/);
   });
 
-  it("is NOT rendered for standard-profile gateways (cattle don't expose :3005 so no backstop needed)", () => {
+  it("is NOT rendered for shared gateways (cattle don't expose :3005 so no backstop needed)", () => {
     const out = helmTemplate();
     expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
   });
 
-  it("is NOT rendered for locked operator gateways before tenant shell access is provisioned", () => {
+  it("is NOT rendered for locked runtime gateways before shell access is provisioned", () => {
     const out = helmTemplate("octogee-gw-default", { profile: "operator" });
     expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
   });

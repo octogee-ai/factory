@@ -191,7 +191,7 @@ describe("buildInstancesMap", () => {
       serviceAccount: { create: true },
       operatorAccess: {
         shellsEnabled: false,
-        reason: "operator-trust-boundary-not-provisioned",
+        reason: "runtime-trust-boundary-not-provisioned",
       },
     });
   });
@@ -201,6 +201,19 @@ describe("buildInstancesMap", () => {
       mkDesired({ gatewayId: "bender", profile: "operator", ownerUid: "uid-chris" }),
     ]);
     expect(map.bender.operatorAccess).toMatchObject({ shellsEnabled: true });
+  });
+
+  it("enables runtime access for an owned builder gateway without Operator Workload Identity", () => {
+    const map = buildInstancesMap([
+      mkDesired({ gatewayId: "jack", gatewayClass: "builder", ownerUid: "uid-jack" }),
+    ]);
+    expect(map.jack.operatorAccess).toMatchObject({
+      shellsEnabled: true,
+      reason: "owned-runtime-gateway",
+    });
+    expect(map.jack.serviceAccountName).toBe("octogee-gw-jack");
+    expect(map.jack.serviceAccount).toEqual({ create: true });
+    expect(map.jack.operatorAccess?.platformMetadataEgress).toBeUndefined();
   });
 
   it("injects resolved apiserver egress CIDRs into an owned operator gateway with shells", () => {

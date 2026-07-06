@@ -386,6 +386,11 @@ if [ -f "$OPENCLAW_DIR/openclaw.json" ]; then
   /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Pre-boot: hydrating native GitHub CLI auth from connector state..."
+  "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
+fi
+
 # ── Pre-boot: per-gateway Mac ops MM identity (#998/#1482) ───────────────
 # Replaces the shared `mac-gw-prod` user with mac-${GATEWAY_ID} so two
 # gateways in the same env stop fighting for one MM session. Mattermost admin
@@ -445,18 +450,18 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
   supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
 fi
 
-# Builder-shell PTY server — operator class plus explicit access unlock only.
-# Cattle and locked operator gateways own no shells; their Helm Service omits the
+# Builder-shell PTY server — runtime class plus explicit access unlock only.
+# Shared and locked runtime gateways own no shells; their Helm Service omits the
 # builder-shell port. BUILDER_SHELL_REQUIRE_KEY enforces the INTERNAL_SERVICE_KEY
 # header on :3005 (defense-in-depth over K8s-namespace isolation) so a compromised
 # same-namespace pod can't bypass chat-proxy's Origin allowlist + ticket discipline.
-# No tmux→Firestore reconciler runs here: operator pods are db-less (no platform
+# No tmux→Firestore reconciler runs here: runtime pods are db-less (no platform
 # credentials), so dead-shell reconciliation must move to a Cowboy-side design.
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "operator" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
   export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
   supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
-elif [ "$GATEWAY_CLASS_EFFECTIVE" = "operator" ]; then
-  log "Builder-shell disabled: operator trust boundary is not provisioned"
+elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Builder-shell disabled: runtime shell access is not enabled"
 fi
 
 # ── Runner metrics exporter (all profiles) ──────────────────────────────────

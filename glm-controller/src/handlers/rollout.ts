@@ -1,7 +1,7 @@
 import {
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
-  OPERATOR_GATEWAY_LOCKED_ACCESS,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  defaultOperatorGatewayAccess,
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
@@ -37,6 +37,7 @@ export interface CurrentGatewaySpec {
   gatewayClass?: GatewayClass;
   imageProfile?: GatewayImageProfile;
   builderSlug?: string;
+  ownerUid?: string;
   persistence?: GatewayPersistenceSpec;
   serviceAccountName?: string;
   serviceAccount?: GatewayServiceAccountSpec;
@@ -76,7 +77,7 @@ export interface RolloutDeps {
   
   readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeatVersion | null>;
 
-  // True while a BuilderShell is attached (operator-class gateways only). A roll
+  // True while a BuilderShell is attached (builder/operator gateways only). A roll
   // defers rather than dropping a live shell; the defer sweeper retries when idle.
   readShellActivity: (gatewayId: string) => Promise<{ hasActiveSession: boolean }>;
 
@@ -295,12 +296,20 @@ function resolveOperatorSafetyDefaults(
   gatewayClass: GatewayClass,
   current: CurrentGatewaySpec,
 ): OperatorSafetyDefaults {
-  if (gatewayClass !== "operator") {
+  if (gatewayClass === "shared") {
     return {
       serviceAccountName: current.serviceAccountName,
       serviceAccount: current.serviceAccount,
       operatorAccess: current.operatorAccess,
       defaultsMissing: false,
+    };
+  }
+  if (gatewayClass === "builder") {
+    return {
+      serviceAccountName: current.serviceAccountName,
+      serviceAccount: current.serviceAccount,
+      operatorAccess: current.operatorAccess ?? defaultOperatorGatewayAccess(current.ownerUid),
+      defaultsMissing: !current.operatorAccess,
     };
   }
   const generatedServiceAccountName = operatorGatewayServiceAccountName(gatewayId);
@@ -318,7 +327,7 @@ function resolveOperatorSafetyDefaults(
       shouldUseLockedServiceAccount || shouldCreateLockedServiceAccount
         ? OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT
         : current.serviceAccount,
-    operatorAccess: current.operatorAccess ?? OPERATOR_GATEWAY_LOCKED_ACCESS,
+    operatorAccess: current.operatorAccess ?? defaultOperatorGatewayAccess(current.ownerUid),
     defaultsMissing:
       shouldUseLockedServiceAccount || shouldCreateLockedServiceAccount || !current.operatorAccess,
   };
