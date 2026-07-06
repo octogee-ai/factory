@@ -109,6 +109,31 @@ describe("applyPreBootPatches — Mac platform Anthropic pin", () => {
     expect(config.agents.defaults.subagents.model).toBe(MAC_MODEL_REF);
     expect(config.agents.list[0].model).toBe(MAC_MODEL_REF);
   });
+
+  it("does not claim the Anthropic profile was repaired when auth has an invalid shape", () => {
+    const logs: string[] = [];
+    const config: any = {
+      auth: "legacy-invalid-auth",
+      tools: { profile: "coding" },
+      agents: {
+        defaults: { models: {} },
+        list: [{ id: "octogee-ops-default", model: GLM_MODEL_REF }],
+      },
+    };
+
+    const changed = applyPreBootPatches(
+      config,
+      { GATEWAY_CLASS: "shared" },
+      (msg) => logs.push(msg),
+    );
+
+    expect(changed).toBe(true);
+    expect(config.auth).toBe("legacy-invalid-auth");
+    expect(config.agents.list[0].model).toBe(MAC_MODEL_REF);
+    expect(logs).toContain(
+      "Mac pinned to anthropic/claude-sonnet-4-6 (auth profile not repaired: invalid auth/profiles shape)",
+    );
+  });
 });
 
 describe("applyPreBootPatches — MM commands.native", () => {

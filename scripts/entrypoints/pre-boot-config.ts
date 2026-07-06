@@ -122,21 +122,32 @@ function setRecordProperty(
   return true;
 }
 
-function ensureMacAnthropicProfile(config: OpenClawConfig): boolean {
+function ensureMacAnthropicProfile(config: OpenClawConfig): {
+  changed: boolean;
+  available: boolean;
+} {
   const auth = ensureNullishObjectProperty(config, "auth");
   const profiles = auth ? ensureNullishObjectProperty(auth, "profiles") : null;
-  if (!profiles) return false;
+  if (!profiles) return { changed: false, available: false };
 
   const currentProfile = objectProperty(profiles, "anthropic:default");
   if (!currentProfile) {
     profiles["anthropic:default"] = { provider: "anthropic", mode: "api_key" };
-    return true;
+    return { changed: true, available: true };
   }
 
-  return [
+  const changed = [
     setRecordProperty(currentProfile, "provider", "anthropic"),
     setRecordProperty(currentProfile, "mode", "api_key"),
   ].some(Boolean);
+  return { changed, available: true };
+}
+
+function macPinLogMessage(profileAvailable: boolean): string {
+  const base = `Mac pinned to ${MAC_PLATFORM_ANTHROPIC_MODEL_REF}`;
+  return profileAvailable
+    ? `${base} on anthropic:default`
+    : `${base} (auth profile not repaired: invalid auth/profiles shape)`;
 }
 
 function ensureMacModelAllowlist(agents: Record<string, unknown>): boolean {
@@ -184,15 +195,16 @@ export function applyMacPlatformAnthropicPin(
   const macAgents = list.filter(isMacAgentEntry);
   if (macAgents.length === 0) return false;
 
+  const profile = ensureMacAnthropicProfile(config);
   const changed = [
-    ensureMacAnthropicProfile(config),
+    profile.changed,
     ensureMacModelAllowlist(agents),
     pinMacAgentModels(macAgents),
     pinOperatorMacSubagentModel(agents, env),
   ].some(Boolean);
 
   if (changed) {
-    logFn(`Mac pinned to ${MAC_PLATFORM_ANTHROPIC_MODEL_REF} on anthropic:default`);
+    logFn(macPinLogMessage(profile.available));
   }
   return changed;
 }

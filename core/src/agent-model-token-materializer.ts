@@ -149,7 +149,7 @@ export function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBro
 // backed by the agent's own broker token — "/models switch" needs no further
 // provider surgery, and the broker's plan policy gates what actually serves.
 export function openRouterBrokerCatalogJson(
-  agentId: string,
+  _agentId: string,
   input: OpenRouterBrokerCatalogInput,
 ): OpenRouterBrokerModelsJson {
   return {
