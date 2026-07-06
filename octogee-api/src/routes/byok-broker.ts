@@ -38,6 +38,8 @@ import {
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 const FORBIDDEN = { error: "forbidden" } as const;
+const VALID_AGENT_ID_REQUIRED = { error: "valid agentId required" } as const;
+const UNSUPPORTED_PROVIDER = { error: "unsupported provider" } as const;
 // This broker materializes ONLY byosub OAuth credentials. A byosub secret id is
 // `byosub-<uid>-<provider>` (gateway-edge/src/lib/byosub.ts byosubSecretName) —
 // the raw mixed-case Firebase uid plus exactly the two OAuth-sub providers.
@@ -71,6 +73,7 @@ function parseByokApiKeyId(id: string): { slug: string; provider: string; versio
 // keyRef; a generous TTL spans a normal agent session (so it is not re-minted
 // mid-session) while still bounding how long stale tokens linger before TTL cleanup.
 const AGENT_MODEL_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+const DEFAULT_PLATFORM_OPENAI_EMBEDDING_SECRET_NAME = "OPENAI_API_KEY";
 
 // Mirrors gateway-edge/src/routes/byosub.ts: a byosub OAuth flow is short-lived.
 const BYOSUB_FLOW_TTL_MS = 60 * 60 * 1000;
@@ -158,6 +161,19 @@ function assignedOwnerSlug(data: Record<string, unknown>): string | null {
 function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
   if (value === undefined || value === null || value === "") return "anthropic";
   return value === "anthropic" || value === "openrouter" ? value : null;
+}
+
+function requestedEmbeddingProvider(value: unknown): "openai" | null {
+  return value === "openai" ? "openai" : null;
+}
+
+function platformOpenAiEmbeddingSecretName(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = env.OPENAI_EMBEDDINGS_SECRET_NAME?.trim();
+  return configured && configured.length > 0
+    ? configured
+    : DEFAULT_PLATFORM_OPENAI_EMBEDDING_SECRET_NAME;
 }
 
 function financeNumber(value: unknown): number {
@@ -317,10 +333,58 @@ async function handleByosubCred(
   res.json({ credentials, ...(skipped.length > 0 ? { skipped } : {}) });
 }
 
-export function createByokBrokerRoutes(opts: { db: Firestore; now?: () => number }): Router {
+async function handlePlatformEmbeddingKey(
+  db: Firestore,
+  readPlatformSecret: (name: string, version?: string) => Promise<string>,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const bound = boundGateway(req, res);
+  if (!bound) return;
+
+  const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
+  if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
+    res.status(400).json(VALID_AGENT_ID_REQUIRED);
+    return;
+  }
+  const provider = requestedEmbeddingProvider(
+    (req.body as { provider?: unknown } | undefined)?.provider,
+  );
+  if (!provider) {
+    res.status(400).json(UNSUPPORTED_PROVIDER);
+    return;
+  }
+
+  const assigned = await findAssignedOrInboundMigratingUserByAgentId(
+    db,
+    bound.gatewayId,
+    agentId,
+  );
+  if (!assigned) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+
+  const value = (await readPlatformSecret(
+    platformOpenAiEmbeddingSecretName(),
+    "latest",
+  )).trim();
+  if (!value) {
+    res.status(500).json({ error: "empty platform embedding key" });
+    return;
+  }
+  res.json({ value, provider });
+}
+
+export function createByokBrokerRoutes(opts: {
+  db: Firestore;
+  now?: () => number;
+  readSecret?: (name: string, version?: string) => Promise<string>;
+}): Router {
   const router = Router();
   const { db } = opts;
   const now = opts.now ?? Date.now;
+  const readPlatformSecret = opts.readSecret ?? readSecret;
 
   // Materialize a byosub OAuth credential (ChatGPT/codex or Claude/claude-cli)
   // for a gateway that cannot reach Secret Manager directly (cattle pods are
@@ -334,7 +398,7 @@ export function createByokBrokerRoutes(opts: { db: Firestore; now?: () => number
 
     const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
     if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
-      res.status(400).json({ error: "valid agentId required" });
+      res.status(400).json(VALID_AGENT_ID_REQUIRED);
       return;
     }
 
@@ -373,6 +437,10 @@ export function createByokBrokerRoutes(opts: { db: Firestore; now?: () => number
     res.json({ value });
   });
 
+  router.post("/platform-embedding-key", async (req, res) => {
+    await handlePlatformEmbeddingKey(db, readPlatformSecret, req, res);
+  });
+
   // Mint an owner-scoped broker token for one customer-agent on a shared
   // (multi-tenant) gateway. The agent resolves anthropic through the broker with
   // its OWN token, so the broker resolves per-owner (platform key, or the owner's
@@ -385,14 +453,14 @@ export function createByokBrokerRoutes(opts: { db: Firestore; now?: () => number
 
     const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
     if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
-      res.status(400).json({ error: "valid agentId required" });
+      res.status(400).json(VALID_AGENT_ID_REQUIRED);
       return;
     }
     const provider = requestedModelProvider(
       (req.body as { provider?: unknown } | undefined)?.provider,
     );
     if (!provider) {
-      res.status(400).json({ error: "unsupported provider" });
+      res.status(400).json(UNSUPPORTED_PROVIDER);
       return;
     }
 
@@ -448,7 +516,7 @@ export function createByokBrokerRoutes(opts: { db: Firestore; now?: () => number
 
     const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
     if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
-      res.status(400).json({ error: "valid agentId required" });
+      res.status(400).json(VALID_AGENT_ID_REQUIRED);
       return;
     }
     const assigned = await findAssignedOrInboundMigratingUserByAgentId(
@@ -489,7 +557,7 @@ export function createByokBrokerRoutes(opts: { db: Firestore; now?: () => number
       provider?: unknown;
     };
     if (typeof body.agentId !== "string" || !isSafeAgentId(body.agentId)) {
-      res.status(400).json({ error: "valid agentId required" });
+      res.status(400).json(VALID_AGENT_ID_REQUIRED);
       return;
     }
     if (typeof body.flowId !== "string" || !SAFE_FLOW_ID_RE.test(body.flowId)) {

@@ -25,6 +25,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function activationAgentForTarget(
+  manifestAgent: Record<string, unknown>,
+  currentAgent: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!currentAgent || !hasOwn(currentAgent, "model")) return manifestAgent;
+  return { ...manifestAgent, model: currentAgent.model };
+}
+
 export function activationManifestTarPath(slug: string): string {
   return path.join(MIGRATION_ACTIVATION_DIR, slug, MIGRATION_ACTIVATION_FILE);
 }
@@ -162,13 +174,18 @@ export async function applyOpenClawActivationManifest(
         const currentAgents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
         const currentBindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
         const currentAccounts = cfg.channels?.mattermost?.accounts ?? {};
+        const currentAgent = currentAgents.find(
+          (entry): entry is Record<string, unknown> =>
+            isRecord(entry) && entry.id === manifest.agentId,
+        );
+        const agent = activationAgentForTarget(manifest.agent, currentAgent);
         return {
           agents: {
             list: [
               ...currentAgents.filter(
                 (entry) => !(isRecord(entry) && entry.id === manifest.agentId),
               ),
-              manifest.agent,
+              agent,
             ],
           },
           bindings: [

@@ -340,6 +340,72 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
   });
 });
 
+describe("applyPreBootPatches — memory search embeddings", () => {
+  it("does not add memory search SecretRefs unless embeddings are enabled", () => {
+    const config: any = {
+      tools: { profile: "coding" },
+      agents: { list: [{ id: "octogee-tester20-coach", name: "Gene" }] },
+    };
+
+    const changed = applyPreBootPatches(config, {});
+
+    expect(changed).toBe(false);
+    expect(config.agents.list[0].memorySearch).toBeUndefined();
+  });
+
+  it("configures coach agents with a platform OpenAI-compatible embedding SecretRef", () => {
+    const config: any = {
+      tools: { profile: "coding" },
+      agents: {
+        list: [
+          { id: "octogee-tester20-coach", name: "Gene" },
+          { id: "octogee-ops-default", name: "Mac" },
+          {
+            id: "octogee-custom-coach",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    };
+
+    const changed = applyPreBootPatches(config, { OPENAI_EMBEDDINGS_ENABLED: "true" });
+
+    expect(changed).toBe(true);
+    expect(config.agents.list[0].memorySearch).toEqual({
+      provider: "openai-compatible",
+      remote: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "platform-openai-embedding-octogee-tester20-coach",
+        },
+      },
+      model: "text-embedding-3-small",
+    });
+    expect(config.agents.list[1].memorySearch).toBeUndefined();
+    expect(config.agents.list[2].memorySearch).toEqual({ enabled: false });
+  });
+
+  it("uses operator-selected embedding endpoint and model when provided", () => {
+    const config: any = {
+      tools: { profile: "coding" },
+      agents: { list: [{ id: "octogee-tester20-coach" }] },
+    };
+
+    applyPreBootPatches(config, {
+      OPENAI_EMBEDDINGS_ENABLED: "true",
+      OPENAI_EMBEDDINGS_BASE_URL: "https://embeddings.internal.example/v1/",
+      OPENAI_EMBEDDINGS_MODEL: "custom-embed-v1",
+    });
+
+    expect(config.agents.list[0].memorySearch.remote.baseUrl).toBe(
+      "https://embeddings.internal.example/v1",
+    );
+    expect(config.agents.list[0].memorySearch.model).toBe("custom-embed-v1");
+  });
+});
+
 describe("applyMattermostPreBootPatches — non-object preservation", () => {
   it("does not replace existing non-object account or commands values", () => {
     const config: any = {

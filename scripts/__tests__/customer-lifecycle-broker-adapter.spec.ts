@@ -113,6 +113,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
     const client = mkClient();
     const rpc = {
+      gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
       channelsStatus: vi.fn(async () => ({
         channelAccounts: {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
@@ -139,6 +140,13 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(mocks.removeActivationManifest).toHaveBeenCalledWith(
       expect.stringContaining(".openclaw"),
       "tester10",
+    );
+    expect(rpc.gatewayRestartRequest).toHaveBeenCalledWith({
+      reason: "migration-activation:tester10",
+      skipDeferral: true,
+    });
+    expect(rpc.gatewayRestartRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      rpc.channelsStatus.mock.invocationCallOrder[0],
     );
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();

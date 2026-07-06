@@ -256,6 +256,9 @@ export function estimateAnthropicCost(
 
 function openRouterModelPricing(model: string): AnthropicPricing {
   const normalized = model.toLowerCase();
+  if (normalized === "z-ai/glm-5.2" || normalized.startsWith("z-ai/glm-5.2-")) {
+    return OPENROUTER_PRICING["z-ai/glm-5.2"];
+  }
   return OPENROUTER_PRICING[normalized] ?? UNKNOWN_OPENROUTER_FALLBACK_PRICING;
 }
 

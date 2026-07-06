@@ -115,7 +115,7 @@ describe("migration activation manifest", () => {
     };
     expect(patch.agents.list).toEqual([
       { id: "octogee-bob-coach" },
-      { id: "octogee-alice-coach", model: "custom-model" },
+      { id: "octogee-alice-coach", model: "old" },
     ]);
     expect(patch.channels.mattermost.accounts).toHaveProperty("default");
     expect(patch.channels.mattermost.accounts).toHaveProperty("alice-coach");
@@ -129,6 +129,54 @@ describe("migration activation manifest", () => {
     expect(configPatch.mock.calls[0][2]).toEqual({
       replacePaths: ["agents.list", "bindings"],
     });
+  });
+
+  it("preserves the target gateway's current coach model when activation replays stale agent metadata", async () => {
+    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+      hash: "h2",
+      config: patch,
+    }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            list: [
+              {
+                id: "octogee-alice-coach",
+                model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] },
+              },
+            ],
+          },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest({
+      ...manifest(),
+      agent: {
+        id: "octogee-alice-coach",
+        name: "Gene (alice)",
+        model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] },
+        identity: { name: "Gene", emoji: ":sparkles:" },
+      },
+    }, { rpc: rpc as never, log: vi.fn() });
+
+    const patch = configPatch.mock.calls[0][0] as {
+      agents: { list: Array<{ id: string; model?: unknown; name?: string }> };
+    };
+    expect(patch.agents.list).toEqual([
+      {
+        id: "octogee-alice-coach",
+        name: "Gene (alice)",
+        model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] },
+        identity: { name: "Gene", emoji: ":sparkles:" },
+      },
+    ]);
   });
 
   it("confirms the residual account's arrays when importing over residue (re-import case)", async () => {

@@ -55,6 +55,10 @@ const MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG = {
 };
 const MAC_AGENT_ID_TEMPLATE = "${OPERATOR_AGENT_ID}";
 const MAC_AGENT_ID_RE = /^octogee-ops-[a-z0-9][a-z0-9-]{0,62}$/;
+const COACH_AGENT_ID_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
+const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
+const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small";
 
 interface ByosubProviderRef {
   provider?: unknown;
@@ -106,6 +110,10 @@ function isMacAgentEntry(value: unknown): value is Record<string, unknown> {
     value.id === MAC_AGENT_ID_TEMPLATE ||
     (typeof value.id === "string" && MAC_AGENT_ID_RE.test(value.id))
   );
+}
+
+function isCoachAgentEntry(value: unknown): value is Record<string, unknown> & { id: string } {
+  return isPlainObject(value) && typeof value.id === "string" && COACH_AGENT_ID_RE.test(value.id);
 }
 
 function isOperatorRuntime(env: NodeJS.ProcessEnv): boolean {
@@ -294,6 +302,67 @@ export function applyAnthropicBaseUrlPatch(
   return changed;
 }
 
+function normalizedNonEmpty(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+function normalizedBaseUrl(value: string | undefined): string {
+  let baseUrl = normalizedNonEmpty(value, DEFAULT_OPENAI_EMBEDDINGS_BASE_URL);
+  while (baseUrl.endsWith("/")) {
+    baseUrl = baseUrl.slice(0, -1);
+  }
+  return baseUrl;
+}
+
+function platformOpenAiEmbeddingSecretId(agentId: string): string {
+  return `platform-openai-embedding-${agentId}`;
+}
+
+function platformOpenAiEmbeddingMemorySearch(
+  agentId: string,
+  env: NodeJS.ProcessEnv,
+): Record<string, unknown> {
+  return {
+    provider: PLATFORM_EMBEDDING_PROVIDER,
+    remote: {
+      baseUrl: normalizedBaseUrl(env.OPENAI_EMBEDDINGS_BASE_URL),
+      apiKey: {
+        source: "exec",
+        provider: "gcp-secret-manager",
+        id: platformOpenAiEmbeddingSecretId(agentId),
+      },
+    },
+    model: normalizedNonEmpty(env.OPENAI_EMBEDDINGS_MODEL, DEFAULT_OPENAI_EMBEDDINGS_MODEL),
+  };
+}
+
+function envFlagEnabled(value: string | undefined): boolean {
+  return /^(1|true|yes|on)$/iu.test(value ?? "");
+}
+
+export function applyMemorySearchPlatformEmbeddingsPatch(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  logFn: (msg: string) => void,
+): boolean {
+  if (!envFlagEnabled(env.OPENAI_EMBEDDINGS_ENABLED)) {
+    return false;
+  }
+  const agents = objectProperty(config, "agents");
+  const list = Array.isArray(agents?.list) ? agents.list : [];
+  const patched = list
+    .filter(isCoachAgentEntry)
+    .filter((agent) => agent.memorySearch === undefined)
+    .map((agent) => {
+      agent.memorySearch = platformOpenAiEmbeddingMemorySearch(agent.id, env);
+      return agent.id;
+    });
+  if (patched.length === 0) return false;
+  logFn(`memory search embeddings configured for ${patched.length} coach agent(s)`);
+  return true;
+}
+
 export function applyPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -304,6 +373,7 @@ export function applyPreBootPatches(
     applyMattermostPreBootPatches(config, env, logFn),
     applyMacPlatformAnthropicPin(config, env, logFn),
     applyAnthropicBaseUrlPatch(config, env, logFn),
+    applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),
   ].some(Boolean);
 }
 

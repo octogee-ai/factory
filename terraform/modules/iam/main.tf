@@ -88,6 +88,12 @@ resource "google_storage_bucket_iam_member" "api_storage_object_admin" {
   member = "serviceAccount:${google_service_account.api.email}"
 }
 
+resource "google_service_account_iam_member" "api_self_token_creator" {
+  service_account_id = google_service_account.api.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.api.email}"
+}
+
 # ── LLM broker runtime grants ───────────────────────────────────────────────
 # The broker resolves Anthropic keys off-pod and records usage/cap counters.
 # It must not inherit octogee-api's Firebase admin, Secret Manager admin,

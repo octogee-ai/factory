@@ -11,9 +11,9 @@
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "npx vitest run __tests__",
     "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "test:emulator": "node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --config vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
+    "test:emulator": "node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --firebase-config ../firebase.json --config vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
     "pretest:emulator:one": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "test:emulator:one": "node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --config vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
+    "test:emulator:one": "node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --firebase-config ../firebase.json --config vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
     "audit-coverage": "tsx ops/audit-coverage.ts",
     "scope": "tsx ops/scope.ts"
   },

@@ -1691,10 +1691,16 @@ export function resolveOpenClawStateDir(): string {
 }
 
 export interface SessionsJson {
-  sessions: Array<{
-    sessionId?: string;
-    status?: "running" | "done" | "failed" | "killed" | "timeout";
-  }>;
+  sessions: AgentSessionEntry[];
+}
+
+export interface AgentSessionEntry {
+  sessionId?: string;
+  status?: "running" | "done" | "failed" | "killed" | "timeout";
+}
+
+function isAgentSessionEntry(value: unknown): value is AgentSessionEntry {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export async function readAgentSessions(
@@ -1704,8 +1710,11 @@ export async function readAgentSessions(
   const sessionsPath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
   try {
     const raw = await fs.readFile(sessionsPath, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<SessionsJson>;
-    return parsed.sessions ?? [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    const sessions = (parsed as Partial<SessionsJson>).sessions;
+    if (Array.isArray(sessions)) return sessions.filter(isAgentSessionEntry);
+    return Object.values(parsed).filter(isAgentSessionEntry);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return [];

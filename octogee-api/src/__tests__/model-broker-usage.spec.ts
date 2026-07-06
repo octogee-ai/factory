@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   InMemoryModelBrokerUsageStore,
   estimateAnthropicCost,
+  estimateModelBrokerCost,
+  isUnknownOpenRouterPricingModel,
   mergeAnthropicUsage,
   modelRollupKey,
   normalizeAnthropicUsage,
@@ -101,6 +103,20 @@ describe("model broker usage helpers", () => {
       total: 60,
       pricingModel: "unknown-fable-fallback",
     });
+  });
+
+  it("prices dated OpenRouter GLM 5.2 responses as the canonical GLM model", () => {
+    const cost = estimateModelBrokerCost("openrouter", "z-ai/glm-5.2-20260616", {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+    });
+
+    expect(cost.pricingModel).toBe("openrouter:z-ai/glm-5.2");
+    expect(isUnknownOpenRouterPricingModel(cost.pricingModel)).toBe(false);
+    expect(cost.input).toBe(0.94);
+    expect(cost.output).toBe(3);
   });
 
   it("keeps rollup keys and usage windows stable", () => {

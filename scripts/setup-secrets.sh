@@ -327,6 +327,36 @@ else
   warn "OPENROUTER_API_KEY not found in .env or Secret Manager — skipping optional octogee-openrouter"
 fi
 
+# ── 6c. OpenAI embeddings API key ─────────────────────────────────────────
+info "OPENAI_API_KEY (memory search embeddings)"
+set +u
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+OPENAI_EMBEDDINGS_API_KEY="${OPENAI_EMBEDDINGS_API_KEY:-}"
+set -u
+[[ -z "$OPENAI_API_KEY" && -n "$OPENAI_EMBEDDINGS_API_KEY" ]] && OPENAI_API_KEY="$OPENAI_EMBEDDINGS_API_KEY"
+OPENAI_API_KEY_SOURCE="env"
+if [[ -z "$OPENAI_API_KEY" ]]; then
+  OPENAI_API_KEY=$(sm_get OPENAI_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+  OPENAI_API_KEY_SOURCE="secret-manager"
+fi
+if [[ -n "$OPENAI_API_KEY" ]]; then
+  if [[ "$OPENAI_API_KEY_SOURCE" == "env" ]]; then
+    if gcloud secrets describe OPENAI_API_KEY --project="$FIREBASE_PROJECT" >/dev/null 2>&1; then
+      echo -n "$OPENAI_API_KEY" | gcloud secrets versions add OPENAI_API_KEY \
+        --data-file=- \
+        --project="$FIREBASE_PROJECT" >/dev/null
+    else
+      echo -n "$OPENAI_API_KEY" | gcloud secrets create OPENAI_API_KEY \
+        --data-file=- \
+        --project="$FIREBASE_PROJECT" \
+        --replication-policy=user-managed --locations=us-central1 >/dev/null
+    fi
+  fi
+  ok "Secret Manager: OPENAI_API_KEY"
+else
+  warn "OPENAI_API_KEY not found in .env or Secret Manager ($FIREBASE_PROJECT) — memory search embeddings remain disabled until the key is seeded and OPENAI_EMBEDDINGS_ENABLED=true"
+fi
+
 # ── 7. Brave API key ──────────────────────────────────────────────────────
 info "octogee-brave"
 set +u; BRAVE_API_KEY="${BRAVE_API_KEY:-}"; set -u
@@ -746,6 +776,7 @@ status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
 status "social-notification-bearer" "${SOCIAL_NOTIFICATION_BEARER:-}"
 status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
 status "octogee-openrouter" "${OPENROUTER_API_KEY:-}"
+status "openai-embeddings" "${OPENAI_API_KEY:-}"
 status "resend-secrets / api_key" "${RESEND_API_KEY:-}"
 status "resend-secrets / from_email" "${RESEND_FROM_EMAIL:-}"
 status "github-oauth / client_id" "${GITHUB_CLIENT_ID:-}"

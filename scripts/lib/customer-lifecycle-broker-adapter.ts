@@ -368,6 +368,19 @@ async function waitForAccountHealthy(
   return false;
 }
 
+async function requestActivationRestart(ctx: BrokerCtx, slug: string): Promise<void> {
+  try {
+    await ctx.rpc.gatewayRestartRequest({
+      reason: `migration-activation:${slug}`,
+      skipDeferral: true,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`[import:${slug}] gateway restart request failed after activation: ${message}`);
+  }
+  ctx.log(`[import:${slug}] requested gateway restart after activation import`);
+}
+
 async function scheduleBootGreetingCron(
   ctx: BrokerCtx,
   params: { slug: string; agentId: string; accountId: string },
@@ -491,6 +504,7 @@ async function activateImportedCustomer(
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
   await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
+  await requestActivationRestart(ctx, slug);
 
   ctx.log(
     `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,

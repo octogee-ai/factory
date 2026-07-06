@@ -109,6 +109,8 @@ function parseByokApiKeyId(id) {
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
 const AGENT_MODEL_TOKEN_ID_RE =
   /^agent-model-token-(?:(?<provider>openrouter)-)?(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+const PLATFORM_OPENAI_EMBEDDING_ID_RE =
+  /^platform-openai-embedding-(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
 
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
@@ -148,6 +150,18 @@ function audit(line) {
   process.stderr.write(`[secret-resolver/audit] ${line}\n`);
 }
 
+const VALID_ID_GRAMMAR_MESSAGE =
+  "id does not match byok-{slug}-{provider}[/version], agent-model-token-octogee-{slug}-coach, agent-model-token-openrouter-octogee-{slug}-coach, or platform-openai-embedding-octogee-{slug}-coach";
+
+function scopedSlugForId(id) {
+  const byok = parseByokApiKeyId(id);
+  if (byok) return byok.slug;
+  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
+  if (agentToken?.groups) return agentToken.groups.slug;
+  const platformEmbedding = id.match(PLATFORM_OPENAI_EMBEDDING_ID_RE);
+  return platformEmbedding?.groups?.slug ?? null;
+}
+
 /** Validate a single id against grammar + known-slug allowlist. Returns
  *  null on success, or an error message string to surface in `errors[id]`.
  *  KNOWN_SLUGS is always a Set — `loadKnownSlugs` returns an empty Set on
@@ -156,12 +170,8 @@ function validateId(id) {
   if (typeof id !== "string" || id.length === 0 || id.length > 256) {
     return `id is not a non-empty string ≤256 chars`;
   }
-  const byok = parseByokApiKeyId(id);
-  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
-  if (!byok && !agentToken?.groups) {
-    return `id does not match byok-{slug}-{provider}[/version], agent-model-token-octogee-{slug}-coach, or agent-model-token-openrouter-octogee-{slug}-coach`;
-  }
-  const slug = byok?.slug ?? agentToken?.groups?.slug;
+  const slug = scopedSlugForId(id);
+  if (!slug) return VALID_ID_GRAMMAR_MESSAGE;
   if (!KNOWN_SLUGS.has(slug)) {
     return `slug "${slug}" has no provisioned agent dir`;
   }
@@ -196,15 +206,22 @@ export async function resolveOne(id, deps = {}) {
   // other id is a byok-* key. Both routes return { value } and roster-scope
   // server-side (the resolver holds no GCP creds and no agent identity).
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
-  const { route, payload } = agentToken
-    ? {
-        route: "/internal/byok/agent-model-token",
-        payload: {
-          agentId: agentToken.groups.agentId,
-          ...(agentToken.groups.provider ? { provider: agentToken.groups.provider } : {}),
-        },
-      }
-    : { route: "/internal/byok/api-key", payload: { id } };
+  const platformEmbedding = id.match(PLATFORM_OPENAI_EMBEDDING_ID_RE);
+  let route = "/internal/byok/api-key";
+  let payload = { id };
+  if (agentToken) {
+    route = "/internal/byok/agent-model-token";
+    payload = {
+      agentId: agentToken.groups.agentId,
+      ...(agentToken.groups.provider ? { provider: agentToken.groups.provider } : {}),
+    };
+  } else if (platformEmbedding) {
+    route = "/internal/byok/platform-embedding-key";
+    payload = {
+      agentId: platformEmbedding.groups.agentId,
+      provider: "openai",
+    };
+  }
   const res = await fetchImpl(`${BROKER_BASE_URL}${route}`, {
     method: "POST",
     headers,

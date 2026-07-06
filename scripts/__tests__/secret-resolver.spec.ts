@@ -223,8 +223,27 @@ describe("secret-resolver — defense-in-depth", () => {
     }
   });
 
+  it("accepts a platform OpenAI embedding ref for a known slug", async () => {
+    const id = "platform-openai-embedding-octogee-alice-coach";
+    const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
+    const out = await runResolver(envFor(), stdin);
+    const res = parseResponse(out.stdout);
+    expect(out.stderr).toContain(`accept id="${id}"`);
+    if (res.errors?.[id]) {
+      expect(res.errors[id].message).not.toMatch(/^Refused by resolver:/);
+    }
+  });
+
   it("refuses an agent-model-token ref for an unknown slug (same allowlist as byok)", async () => {
     const id = "agent-model-token-octogee-eve-coach";
+    const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
+    const out = await runResolver(envFor(), stdin);
+    const res = parseResponse(out.stdout);
+    expect(res.errors?.[id]?.message).toMatch(/no provisioned agent dir/);
+  });
+
+  it("refuses a platform OpenAI embedding ref for an unknown slug", async () => {
+    const id = "platform-openai-embedding-octogee-eve-coach";
     const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
     const out = await runResolver(envFor(), stdin);
     const res = parseResponse(out.stdout);
@@ -276,6 +295,23 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
     expect(JSON.parse(seen!.init.body)).toEqual({
       agentId: "octogee-tester5-coach",
       provider: "openrouter",
+    });
+  });
+
+  it("routes a platform OpenAI embedding id to /internal/byok/platform-embedding-key", async () => {
+    let seen: { url: string; init: { body: string } } | undefined;
+    const v = await resolveOne("platform-openai-embedding-octogee-tester5-coach", {
+      token: "ksa-tok",
+      fetchImpl: async (url, init) => {
+        seen = { url, init };
+        return { ok: true, status: 200, json: async () => ({ value: "sk-openai-embedding" }) };
+      },
+    });
+    expect(v).toBe("sk-openai-embedding");
+    expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/platform-embedding-key`);
+    expect(JSON.parse(seen!.init.body)).toEqual({
+      agentId: "octogee-tester5-coach",
+      provider: "openai",
     });
   });
 
