@@ -89,6 +89,24 @@ describe("syncCoachIdentity", () => {
     expect(mockRemoveWorkspaceBlob).not.toHaveBeenCalled();
   });
 
+  it("uploads the MM avatar before writing avatarVersion — the client re-fetches on the Firestore bump, so the image must already be live", async () => {
+    await syncCoachIdentity("u1", { name: "Scout", avatarPng: PNG }, { slug: "alice" });
+    expect(mockUploadAvatar).toHaveBeenCalledTimes(1);
+    expect(mockSet).toHaveBeenCalledTimes(1);
+    expect(mockUploadAvatar.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSet.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("writes agents/{uid} before the MM name push for name-only updates — a failed MM rename can't strand the write", async () => {
+    await syncCoachIdentity("u1", { name: "Scout" });
+    expect(mockSet).toHaveBeenCalledTimes(1);
+    expect(mockMmApi).toHaveBeenCalledTimes(1);
+    expect(mockSet.mock.invocationCallOrder[0]).toBeLessThan(
+      mockMmApi.mock.invocationCallOrder[0],
+    );
+  });
+
   it("requires a slug to persist an avatar", async () => {
     await expect(syncCoachIdentity("u1", { avatarPng: PNG })).rejects.toThrow(/slug required/);
   });

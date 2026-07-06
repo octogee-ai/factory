@@ -94,8 +94,17 @@ export async function syncCoachIdentity(
 
   if (updated.length === 0) return [];
 
-  await db.doc(`agents/${uid}`).set(update, { merge: true });
-  await syncCoachToMattermost(uid, patch, agent);
+  // Only the avatar constrains ordering: the client re-fetches the MM image the
+  // instant avatarVersion changes, so the upload must land first. Name-only
+  // updates stay Firestore-first — the app reads the name from Firestore and the
+  // MM bot rename is best-effort, so a failed MM call can't strand the write.
+  if (patch.avatarPng) {
+    await syncCoachToMattermost(uid, patch, agent);
+    await db.doc(`agents/${uid}`).set(update, { merge: true });
+  } else {
+    await db.doc(`agents/${uid}`).set(update, { merge: true });
+    await syncCoachToMattermost(uid, patch, agent);
+  }
   return updated;
 }
 
