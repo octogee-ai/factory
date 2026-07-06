@@ -97,7 +97,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     ).toBe(false);
   });
 
-  it("free post-trial non-BYOK derives a Haiku coach-model patch without local BYOT materialization", () => {
+  it("free post-trial non-BYOK derives the GLM house-model patch without local BYOT materialization", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
@@ -107,7 +107,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     expect(desired.input).toBeNull();
     expect(desired.coachModelInput).toEqual({
       slug: "tester-70",
-      model: "anthropic/claude-haiku-4-5",
+      model: "platform-openrouter/z-ai/glm-5.2",
       source: "free-tier",
     });
   });
@@ -476,11 +476,11 @@ describe("brokerFetchByosubCreds — gateway-side broker client (no silent failu
   });
 });
 
-// Every BYOK coach model is a primary+fallback chain to the cheap platform
-// (haiku) baseline (B6).
+// Every BYOK coach model is a primary+fallback chain to the platform house
+// model baseline (B6).
 const withFallback = (primary: string) => ({
   primary,
-  fallbacks: ["anthropic/claude-haiku-4-5"],
+  fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
 });
 
 const claudeCliDefaultModels = {
@@ -497,15 +497,15 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "anthropic" })).toBeNull();
   });
 
-  it("free-tier platform baseline → Haiku primary with no BYOK credential profile", () => {
+  it("free-tier platform baseline → GLM primary with no BYOK credential profile", () => {
     expect(
       byosCoachConfigPatch({
         slug: "tester-70",
-        model: "anthropic/claude-haiku-4-5",
+        model: "platform-openrouter/z-ai/glm-5.2",
         source: "free-tier",
       }),
     ).toEqual({
-      agents: { list: [{ id, model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] } }] },
+      agents: { list: [{ id, model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] } }] },
     });
   });
 
@@ -821,7 +821,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
 });
 
 describe("standard gateway — BYOS materialization", () => {
-  it("free post-trial non-BYOK customer removes local BYOT state, patches Haiku, and reloads", async () => {
+  it("free post-trial non-BYOK customer removes local BYOT state, patches GLM, and reloads", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
@@ -848,7 +848,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
-      model: "anthropic/claude-haiku-4-5",
+      model: "platform-openrouter/z-ai/glm-5.2",
       source: "free-tier",
     });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);

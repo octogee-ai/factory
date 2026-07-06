@@ -37,7 +37,7 @@ const BYOT_MARKER = ".byot-managed";
 export type ByotInput = ModelCredentialConfigInput;
 export interface FreeTierCoachModelInput {
   slug: string;
-  model: typeof PLATFORM_FALLBACK_MODEL;
+  model: typeof PLATFORM_HOUSE_MODEL;
   source: "free-tier";
 }
 
@@ -71,11 +71,10 @@ export const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
   approvalPolicy: "never",
 };
 
-// The always-available platform fallback. The gateway's platform key serves
-// anthropic models on every class; haiku is the cheap free-tier + fallback
-// baseline (Builders BYOK for pricier models). A failed/exhausted BYOK provider
-// degrades here rather than leaving the coach credential-less.
-const PLATFORM_FALLBACK_MODEL = "anthropic/claude-haiku-4-5";
+// The always-available platform house model. A failed/exhausted BYOK provider
+// degrades here rather than leaving the coach credential-less, and house-only
+// plans pin the coach here so config, status, and broker routing agree.
+const PLATFORM_HOUSE_MODEL = "platform-openrouter/z-ai/glm-5.2";
 
 export function byosCoachConfigPatch(
   input: CoachModelInput | null,
@@ -100,7 +99,7 @@ export function byosCoachConfigPatch(
       list: [
         {
           id: agentIdForSlug(input.slug),
-          model: { primary: cfg.agentModelOverride, fallbacks: [PLATFORM_FALLBACK_MODEL] },
+          model: { primary: cfg.agentModelOverride, fallbacks: [PLATFORM_HOUSE_MODEL] },
         },
       ],
     },
@@ -188,7 +187,7 @@ function freeTierCoachModelInput(
 ): FreeTierCoachModelInput | null {
   const plan = resolveEffectivePlan(userData);
   return plan.modelAccess === "house_only"
-    ? { slug, model: PLATFORM_FALLBACK_MODEL, source: "free-tier" }
+    ? { slug, model: PLATFORM_HOUSE_MODEL, source: "free-tier" }
     : null;
 }
 
