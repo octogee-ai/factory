@@ -110,6 +110,14 @@ function proxyHttp(
     path: target.path,
     headers: requestHeaders(req, origin),
   }, (proxyRes) => {
+    proxyRes.on("error", (err) => {
+      log("[gateway-router] upstream response socket error", {
+        gatewayId: target.gatewayId,
+        surface: target.surface,
+        error: err.message,
+      });
+      res.destroy();
+    });
     res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
     proxyRes.pipe(res);
   });
@@ -119,11 +127,33 @@ function proxyHttp(
       surface: target.surface,
       error: err instanceof Error ? err.message : String(err),
     });
-    if (!res.headersSent) {
-      res.writeHead(502, { "content-type": "application/json" });
+    if (res.headersSent) {
+      // Mid-stream failure: the status line is already on the wire, so the only
+      // honest signal left is a truncated connection — never a JSON tail glued
+      // onto a partial body.
+      res.destroy();
+      return;
     }
+    res.writeHead(502, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "gateway upstream unavailable" }));
   });
+  req.on("error", (err) => {
+    log("[gateway-router] client request socket error", {
+      gatewayId: target.gatewayId,
+      surface: target.surface,
+      error: err.message,
+    });
+    proxyReq.destroy();
+  });
+  res.on("error", (err) => {
+    log("[gateway-router] client response socket error", {
+      gatewayId: target.gatewayId,
+      surface: target.surface,
+      error: err.message,
+    });
+    proxyReq.destroy();
+  });
+  res.on("close", () => proxyReq.destroy());
   req.pipe(proxyReq);
 }
 
@@ -140,6 +170,15 @@ function proxyUpgrade(
   log: CreateGatewayRouterOptions["log"],
 ): void {
   const origin = new URL(target.origin);
+  const logSocketError = (side: "client" | "upstream") => (err: Error) => {
+    log("[gateway-router] websocket proxy socket error", {
+      gatewayId: target.gatewayId,
+      surface: target.surface,
+      side,
+      error: err.message,
+    });
+  };
+  socket.on("error", logSocketError("client"));
   const proxyReq = http.request({
     protocol: "http:",
     hostname: origin.hostname,
@@ -152,7 +191,11 @@ function proxyUpgrade(
       upgrade: req.headers.upgrade ?? "websocket",
     },
   });
+  socket.on("close", () => proxyReq.destroy());
   proxyReq.on("upgrade", (proxyRes, proxySocket, proxyHead) => {
+    proxySocket.on("error", logSocketError("upstream"));
+    proxySocket.on("close", () => socket.destroy());
+    socket.on("close", () => proxySocket.destroy());
     socket.write(
       `HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage}\r\n` +
         Object.entries(proxyRes.headers)
@@ -173,7 +216,9 @@ function proxyUpgrade(
       surface: target.surface,
       error: err instanceof Error ? err.message : String(err),
     });
-    socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+    if (!socket.destroyed) {
+      socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+    }
   });
   proxyReq.end();
 }
@@ -211,6 +256,9 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
       targetOriginForGateway: opts.targetOriginForGateway,
     });
     if (!target) {
+      socket.on("error", (err) => {
+        opts.log("[gateway-router] websocket reject socket error", { error: err.message });
+      });
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }

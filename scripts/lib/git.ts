@@ -33,13 +33,27 @@ export function errMessage(err: unknown): string {
 }
 
 export function execErrStderr(err: unknown): string {
+  return execErrStream(err, "stderr");
+}
+
+export function execErrStdout(err: unknown): string {
+  return execErrStream(err, "stdout");
+}
+
+export function execErrCode(err: unknown): number | null {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === "number" ? status : null;
+}
+
+function execErrStream(err: unknown, stream: "stderr" | "stdout"): string {
   if (
     err &&
     typeof err === "object" &&
-    "stderr" in err &&
-    typeof (err as { stderr?: { toString?: () => string } }).stderr?.toString === "function"
+    stream in err &&
+    typeof (err as Record<string, { toString?: () => string } | undefined>)[stream]?.toString ===
+      "function"
   ) {
-    return (err as { stderr: { toString: () => string } }).stderr.toString().trim();
+    return (err as Record<string, { toString: () => string }>)[stream].toString().trim();
   }
   return "";
 }
@@ -127,10 +141,12 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
       env,
     }).trim();
   } catch (err: unknown) {
-    const stderr = execErrStderr(err);
+    const detail =
+      [execErrStderr(err), execErrStdout(err)].filter(Boolean).join(" | ") || errMessage(err);
+    const code = execErrCode(err);
     const safeArgs = args.replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
-    const safeErr = (stderr || errMessage(err)).replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
-    log(`⚠ [git] exec failed: git ${safeArgs} → ${safeErr}`);
+    const safeDetail = detail.replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
+    log(`⚠ [git] exec failed: git ${safeArgs} → code=${code ?? "?"} ${safeDetail}`);
     return null;
   }
 }

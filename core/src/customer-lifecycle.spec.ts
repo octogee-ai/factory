@@ -1197,6 +1197,22 @@ releaseFirst();
   });
 });
 
+describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the migration-critical path", () => {
+  beforeEach(() => {
+    _resetInFlightUidsForTests();
+  });
+
+  it("does not call blobSyncForSlug during restore — the source rsync + the post-online loop own blob backfill", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+
+    const result = await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
+
+    expect(state.calls).not.toContain("blobSyncForSlug");
+    expect(result.steps).not.toContain("blob-sync");
+    expect(result.steps).toContain("verify-channel-ready");
+  });
+});
+
 describe("restoreCustomerRuntimeFromSnapshot — same-uid in-flight dedup", () => {
   beforeEach(() => {
     _resetInFlightUidsForTests();

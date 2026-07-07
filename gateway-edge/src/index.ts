@@ -58,6 +58,8 @@ export function createApp(opts: CreateAppOptions = {}) {
 // entrypoint below explicitly boots the production sidecar surface.
 const surface = opts.surface ?? "cluster";
 const app = express();
+// client → GCLB (appends client-ip, lb-ip) → gateway-router → this app
+app.set("trust proxy", 2);
 
 const metricsRegistry = new Registry();
 collectDefaultMetrics({ register: metricsRegistry });

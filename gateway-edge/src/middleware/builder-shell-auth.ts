@@ -51,7 +51,7 @@ async function handleBuilderShellInternalAuth(
 
   if (!valid) {
     logger.warn(
-      `Builder-shell internal auth rejected from ${req.ip} — invalid ${secret.mode} credential`,
+      `Builder-shell internal auth rejected from ${req.socket.remoteAddress} — invalid ${secret.mode} credential`,
     );
     res.status(401).json({ error: "Invalid internal service key" });
     return;

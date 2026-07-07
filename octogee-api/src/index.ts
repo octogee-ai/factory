@@ -71,6 +71,8 @@ export function createApp(opts: CreateAppOptions = {}) {
   validateStripePriceIds();
 
   const app = express();
+  // client → GCLB (appends client-ip, lb-ip) → this app
+  app.set("trust proxy", 2);
 
   const metricsRegistry = new Registry();
   collectDefaultMetrics({ register: metricsRegistry });

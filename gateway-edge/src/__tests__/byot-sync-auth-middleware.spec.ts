@@ -106,4 +106,24 @@ describe("requireByotSyncInternalAuth", () => {
       expect.stringContaining("model credential sync internal auth rejected from"),
     );
   });
+
+  it("logs the socket peer, never spoofable XFF, even on a trust-proxy app", async () => {
+    process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "sync-secret";
+    const instance = app();
+    instance.set("trust proxy", 2);
+
+    await request(instance)
+      .post("/sync")
+      .set("X-Forwarded-For", "6.6.6.6, 7.7.7.7")
+      .set("X-Byot-Sync-Timestamp", `${Date.now()}`)
+      .set("X-Byot-Sync-Signature", "bad")
+      .send({ username: "mira" })
+      .expect(401, { error: "Invalid internal auth" });
+
+    const line = h.logger.warn.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => l.includes("rejected from"));
+    expect(line).toContain("127.0.0.1");
+    expect(line).not.toContain("6.6.6.6");
+  });
 });

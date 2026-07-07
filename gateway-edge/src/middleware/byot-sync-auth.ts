@@ -60,7 +60,9 @@ async function handleModelCredentialSyncInternalAuth(
     return;
   }
 
-  logger.warn(`model credential sync internal auth rejected from ${req.ip}`);
+  logger.warn(
+    `model credential sync internal auth rejected from ${req.socket.remoteAddress}`,
+  );
   res.status(401).json({ error: "Invalid internal auth" });
 }
 

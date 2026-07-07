@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
-import { AddressInfo } from "node:net";
+import net, { AddressInfo } from "node:net";
+import { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import {
   createGatewayRouter,
@@ -35,6 +36,8 @@ function requestText(url: string, headers: Record<string, string>): Promise<{ st
         body += chunk;
       });
       res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      res.on("error", reject);
+      res.on("aborted", () => reject(new Error("response aborted")));
     });
     req.on("error", reject);
     req.end();
@@ -245,5 +248,137 @@ describe("createGatewayRouter", () => {
         log: () => undefined,
       }),
     ).toThrow(/preview host/i);
+  });
+});
+
+describe("createGatewayRouter socket resilience — a proxied socket error must never kill the process", () => {
+  interface Harness {
+    routerPort: number;
+    upstreamSockets: net.Socket[];
+    routerClientSockets: Duplex[];
+    logged: Array<{ message: string; meta?: Record<string, unknown> }>;
+  }
+
+  async function startProxiedPair(upstream: http.Server): Promise<Harness> {
+    const upstreamSockets: net.Socket[] = [];
+    upstream.on("connection", (s) => upstreamSockets.push(s));
+    const upstreamPort = await listen(upstream);
+    const logged: Harness["logged"] = [];
+    const router = createGatewayRouter({
+      namespace: "octogee",
+      previewHost: "preview.octogee.com",
+      targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
+      log: (message, meta) => logged.push({ message, meta }),
+    });
+    const routerClientSockets: Duplex[] = [];
+    router.on("upgrade", (_req, socket) => routerClientSockets.push(socket));
+    const routerPort = await listen(router);
+    return { routerPort, upstreamSockets, routerClientSockets, logged };
+  }
+
+  function wsUpstream(): http.Server {
+    const upstream = http.createServer();
+    const wss = new WebSocketServer({ server: upstream });
+    wss.on("connection", (ws) => ws.send("hello"));
+    return upstream;
+  }
+
+  async function openProxiedWs(routerPort: number): Promise<WebSocket> {
+    const ws = new WebSocket(`ws://127.0.0.1:${routerPort}/g/bender-blue/mm/websocket`, {
+      headers: { host: "api.octogee.com" },
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timed out establishing proxied ws")), 2_000);
+      ws.on("message", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      ws.on("error", reject);
+    });
+    ws.on("error", () => undefined);
+    return ws;
+  }
+
+  it("logs + closes the upstream side when the client socket errors mid-WebSocket (the prod read-ETIMEDOUT crash)", async () => {
+    const harness = await startProxiedPair(wsUpstream());
+    await openProxiedWs(harness.routerPort);
+    const upstreamClosed = new Promise<void>((resolve) =>
+      harness.upstreamSockets[0].once("close", () => resolve()),
+    );
+
+    harness.routerClientSockets[0].destroy(new Error("read ETIMEDOUT"));
+
+    await upstreamClosed;
+    expect(
+      harness.logged.some(
+        (entry) =>
+          entry.message.includes("socket error") &&
+          entry.meta?.gatewayId === "bender-blue" &&
+          String(entry.meta?.error).includes("read ETIMEDOUT"),
+      ),
+    ).toBe(true);
+  });
+
+  it("logs + closes the client side when the upstream resets mid-WebSocket", async () => {
+    const harness = await startProxiedPair(wsUpstream());
+    const ws = await openProxiedWs(harness.routerPort);
+    const clientClosed = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+
+    for (const s of harness.upstreamSockets) s.resetAndDestroy();
+
+    await clientClosed;
+    expect(
+      harness.logged.some(
+        (entry) => entry.message.includes("socket error") && entry.meta?.gatewayId === "bender-blue",
+      ),
+    ).toBe(true);
+  });
+
+  it("aborts the pending upstream upgrade when the client socket dies before the upgrade completes", async () => {
+    const heldUpstreamSockets: Duplex[] = [];
+    const upstream = http.createServer();
+    upstream.on("upgrade", (_req, socket) => {
+      socket.on("error", () => undefined);
+      socket.on("end", () => socket.destroy());
+      socket.resume();
+      heldUpstreamSockets.push(socket);
+    });
+    const harness = await startProxiedPair(upstream);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.routerPort}/g/bender-blue/mm/websocket`, {
+      headers: { host: "api.octogee.com" },
+    });
+    ws.on("error", () => undefined);
+    await vi.waitFor(() => {
+      expect(heldUpstreamSockets.length).toBe(1);
+      expect(harness.routerClientSockets.length).toBe(1);
+    });
+    const upstreamClosed = new Promise<void>((resolve) =>
+      heldUpstreamSockets[0].once("close", () => resolve()),
+    );
+
+    harness.routerClientSockets[0].destroy(new Error("read ETIMEDOUT"));
+
+    await upstreamClosed;
+  });
+
+  it("survives an upstream reset mid-HTTP-response and keeps serving", async () => {
+    const upstream = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("partial");
+      setTimeout(() => req.socket.resetAndDestroy(), 50);
+    });
+    const harness = await startProxiedPair(upstream);
+
+    await expect(
+      requestText(`http://127.0.0.1:${harness.routerPort}/g/bender-blue/byosub/health`, {
+        host: "api.octogee.com",
+      }),
+    ).rejects.toThrow();
+
+    const health = await requestText(`http://127.0.0.1:${harness.routerPort}/health`, {
+      host: "api.octogee.com",
+    });
+    expect(health.status).toBe(200);
   });
 });

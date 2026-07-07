@@ -383,9 +383,6 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   }
   throwIfAborted(signal, uid);
 
-  steps.push(...(await runBlobSync(adapter, slug)));
-  throwIfAborted(signal, uid);
-
   const byos = await restoreByos(adapter, slug);
   steps.push(...byos.steps);
   throwIfAborted(signal, uid);
