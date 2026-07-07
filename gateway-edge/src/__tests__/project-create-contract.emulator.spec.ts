@@ -86,6 +86,9 @@ async function seedCaller(): Promise<void> {
     uid: CALLER_UID,
     username: USERNAME,
     workspaceId: USERNAME,
+    // Paid tier (unlimited projects) so the create-contract cases clear the
+    // maxProjects gate; the gate is covered in project-create-service.spec.ts.
+    subscription: { tier: "personal_pro_max", status: "active" },
   });
   await db
     .collection("users")

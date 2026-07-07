@@ -3,6 +3,7 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { isValidUsername } from "@octogee/shared/types/identity";
+import { pickPlanInputs } from "@octogee/shared/types/billing";
 import type {
   FleetBrokerBlobSignedUrl,
   FleetBrokerChannelBinding,
@@ -782,9 +783,7 @@ function snapshotBaseFields(
     repoUrl: stringAt(data, "provisioning.git.repoUrl"),
     mattermostUserId,
     customerMmUserId: mattermostUserId,
-    ...(data.selectedTier !== undefined ? { selectedTier: data.selectedTier } : {}),
-    ...(data.subscription !== undefined ? { subscription: data.subscription } : {}),
-    ...(data.trialStartedAt !== undefined ? { trialStartedAt: data.trialStartedAt } : {}),
+    ...pickPlanInputs(data),
     greetingPosted: snapshotGreetingPosted(data),
     ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
     email: stringAt(data, "email"),

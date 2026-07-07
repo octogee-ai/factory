@@ -14,7 +14,7 @@ import {
   type AgentModelSelections,
 } from "@octogee/shared/types/agent-models";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
-import { resolveEffectivePlan } from "@octogee/shared/types/billing";
+import { pickPlanInputs, resolveBillingProfile } from "@octogee/shared/types/billing";
 
 const router = Router();
 
@@ -91,10 +91,11 @@ function triggerAgentModelSync(args: {
     subscription?: unknown;
     trialStartedAt?: unknown;
   };
-  // The gateway re-runs resolveEffectivePlan on this payload before applying the picks.
-  // Every TierResolvable field travels: a trial user's catalog access hangs entirely on
-  // subscription.trialStartedAt / trialStartedAt, and an omission silently degrades the
-  // sync to house_only ("agent-model overrides deferred") while this PUT reports success.
+  // The gateway re-runs resolveBillingProfile on this payload before applying the picks.
+  // Every plan input travels: a trial user's catalog access hangs on trialStartedAt and a
+  // builder's on builderSubscription — an omission silently degrades the sync to house_only
+  // ("agent-model overrides deferred") while this PUT reports success (pickPlanInputs is the
+  // single forwarding point that keeps that from recurring per-field).
   triggerGatewayModelCredentialSync({
     gatewayId,
     userData: {
@@ -102,9 +103,7 @@ function triggerAgentModelSync(args: {
       username: args.slug,
       provisioning: { openclaw: { status: "complete" } },
       ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
-      ...(typeof user.selectedTier === "string" ? { selectedTier: user.selectedTier } : {}),
-      ...(user.subscription ? { subscription: user.subscription } : {}),
-      ...(user.trialStartedAt !== undefined ? { trialStartedAt: user.trialStartedAt } : {}),
+      ...pickPlanInputs(user as Record<string, unknown>),
       systemConfig: projection.systemConfig,
     },
   });
@@ -114,7 +113,7 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
   try {
     const uid = req.uid!;
     const sysData = await readSystemConfig(uid);
-    const plan = resolveEffectivePlan(req.user ?? {});
+    const plan = resolveBillingProfile(req.user ?? {});
     const slug = slugFromRequest(req);
     res.json({
       modelAccess: plan.modelAccess,
@@ -142,7 +141,7 @@ async function gateSelectionRequest(
   if (!agentIdBelongsToSlug(agentId, slug)) {
     return { ok: false, status: 403, error: `Agent ${agentId} is not yours` };
   }
-  const plan = resolveEffectivePlan(req.user ?? {});
+  const plan = resolveBillingProfile(req.user ?? {});
   if (plan.modelAccess === "house_only") {
     return { ok: false, status: 402, error: "The model picker is available on paid plans" };
   }

@@ -136,6 +136,21 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     expect(desired.coachModelInput).toBeNull();
   });
 
+  it("a builderSubscription owner (no paid Personal plan) gets no house pin — catalog coach", () => {
+    const desired = deriveDesiredByotState({
+      ...ON,
+      byotActive: false,
+      selectedTier: "personal_free",
+      builderSubscription: { tier: "hobby", status: "active" },
+      provisioning: { openclaw: { status: "complete" } },
+    });
+    expect(desired.enabled).toBe(false);
+    expect(desired.input).toBeNull();
+    // catalog access = no free-tier house-model pin (the split-brain bug: this
+    // was pinned to the house model before resolveBillingProfile).
+    expect(desired.coachModelInput).toBeNull();
+  });
+
   it("unknown/absent provider falls back to anthropic (api_key default)", () => {
     expect(deriveDesiredByotState({ ...ON }).input).toEqual({
       slug: "tester-70",
@@ -1559,5 +1574,37 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
       expect.objectContaining({ "octogee-tester-70-coach": expect.anything() }),
       { houseOnly: true },
     );
+  });
+
+  it("a builderSubscription owner (no paid Personal plan) is NOT house-only — catalog picks apply", async () => {
+    const applyAgentModelOverridesFn = vi.fn(async () => true);
+    const agentModels = {
+      "octogee-tester-70-coach": {
+        primary: "platform-openrouter/z-ai/glm-5.2",
+        fallbacks: [] as string[],
+      },
+    };
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "personal_free",
+        builderSubscription: { tier: "hobby", status: "active" },
+        systemConfig: { agentModels },
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: vi.fn(() => false),
+        applyCoachModelPatch: vi.fn(async () => false),
+        triggerSecretsReload: vi.fn(async () => {}),
+        applyAgentModelOverrides: applyAgentModelOverridesFn,
+      },
+    );
+
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
+      houseOnly: false,
+    });
   });
 });

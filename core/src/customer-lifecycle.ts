@@ -10,6 +10,7 @@ import {
   ADD_CUSTOMER_DEADLINE_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "@octogee/shared/types/fleet-controller";
+import { pickPlanInputs } from "@octogee/shared/types/billing";
 
 export interface UserSnapshot {
   uid: string;
@@ -31,6 +32,7 @@ export interface UserSnapshot {
   // Timestamps arrive JSON-serialized and asDate parses those shapes.
   selectedTier?: unknown;
   subscription?: unknown;
+  builderSubscription?: unknown;
   trialStartedAt?: unknown;
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };
@@ -713,12 +715,10 @@ function byotUserDataFromSnapshot(snapshot: UserSnapshot): Record<string, unknow
     byotActive: snapshot.byotActive,
     systemConfig: snapshot.systemConfig,
     tier: snapshot.tier,
-    // Full TierResolvable set: the reassert's resolveEffectivePlan must see the same
-    // plan the trusted side resolved, or a trial user's agent-model picks defer to
-    // house_only on every mount/roll.
-    ...(snapshot.selectedTier !== undefined ? { selectedTier: snapshot.selectedTier } : {}),
-    ...(snapshot.subscription !== undefined ? { subscription: snapshot.subscription } : {}),
-    ...(snapshot.trialStartedAt !== undefined ? { trialStartedAt: snapshot.trialStartedAt } : {}),
+    // Full plan-input set: the reassert's resolveBillingProfile must see the same
+    // plan the trusted side resolved, or a trial/builder user's agent-model picks
+    // defer to house_only on every mount/roll.
+    ...pickPlanInputs(snapshot as unknown as Record<string, unknown>),
     provisioning: { openclaw: { status: "complete" } },
   };
 }

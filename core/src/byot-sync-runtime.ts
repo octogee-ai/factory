@@ -38,7 +38,7 @@ import {
   upsertOpenRouterBrokerCatalog,
 } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, type AgentModelSelections } from "@octogee/shared/types/agent-models";
-import { resolveEffectivePlan } from "@octogee/shared/types/billing";
+import { resolveBillingProfile } from "@octogee/shared/types/billing";
 
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -697,7 +697,7 @@ export async function syncByotForCustomer(
   // Explicit per-agent picks land last so they win over the class default the
   // sync just wrote; house-only plans stay pinned to the house model.
   await actions.applyAgentModelOverrides(slug, userData.systemConfig?.agentModels, {
-    houseOnly: resolveEffectivePlan(userData).modelAccess === "house_only",
+    houseOnly: resolveBillingProfile(userData).modelAccess === "house_only",
   });
 }
 

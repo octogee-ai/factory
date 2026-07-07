@@ -125,6 +125,9 @@ export interface FleetBrokerUserSnapshot {
   // resolved instead of silently degrading to house_only.
   selectedTier?: unknown;
   subscription?: unknown;
+  // Builder infra subscription (pricing v3) — travels so the pod resolves a
+  // credits-rail builder as catalog, not house_only.
+  builderSubscription?: unknown;
   trialStartedAt?: unknown;
   ownerName: string;
   email: string;

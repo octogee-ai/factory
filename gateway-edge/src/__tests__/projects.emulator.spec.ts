@@ -40,6 +40,10 @@ async function seedCaller(uid: string, username = "alice", workspaceId = "alice"
   await db.collection("users").doc(uid).set({
     username,
     workspaceId,
+    // A paid tier (unlimited projects) so these provisioning-mechanics tests
+    // clear the maxProjects gate; the gate itself is covered in
+    // project-create-service.spec.ts.
+    subscription: { tier: "personal_pro_max", status: "active" },
     provisioning: { openclaw: { slug: workspaceId } },
   });
   await db
@@ -699,6 +703,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     await db.collection("users").doc(CALLER_UID).set({
       username: "victim",
       workspaceId: "victim",
+      subscription: { tier: "personal_pro_max", status: "active" },
       provisioning: { openclaw: { slug: "alice" } },
     });
     mockGetWorkspaceMmContext.mockResolvedValue({

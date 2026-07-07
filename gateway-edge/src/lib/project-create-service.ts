@@ -11,6 +11,7 @@ import {
 import { projectRepoName } from "./gitea-naming.js";
 import { provisionProjectRepo } from "../routes/projects/provisioning.js";
 import { isValidGithubRepoSource } from "./github.js";
+import { resolveEntitlements } from "@octogee/shared/types/billing";
 import type { FleetBrokerProjectCreateInput } from "@octogee/shared/types/fleet-broker";
 
 const RESERVED_PROJECT_SLUGS = new Set([
@@ -97,11 +98,17 @@ export async function createProjectForActor(
   const planResult = buildProjectCreatePlan(actor, input);
   if (!planResult.ok) return planResult.result;
   const plan = planResult.plan;
+
   const projectRef = db.doc(`workspaces/${plan.workspaceId}/projects/${plan.slug}`);
   const existing = await projectRef.get();
   if (existing.exists) {
+    // Deterministic 409 before the plan gate — a duplicate slug is a slug
+    // problem, not an upgrade prompt, and this avoids the aggregate count read.
     return bad(409, "A project with this slug already exists in your workspace");
   }
+
+  const limitFailure = await enforceProjectLimit(plan);
+  if (limitFailure) return limitFailure;
 
   await writeProvisioningProject(projectRef, plan);
   await writeProjectOwnerMember(projectRef, plan.uid);
@@ -131,6 +138,35 @@ export async function createProjectForActor(
       channelId: channelResult.mmChannelId,
     },
   };
+}
+
+// Per-plan project ceiling (pricing v3): Personal Free 0, Personal 1, Pro 5,
+// Pro Max + any Builder unlimited. Counts only the actor's OWN projects in the
+// workspace (membership is independent), and skips the read entirely on an
+// unlimited plan. A 402 so the client can route to upgrade.
+async function enforceProjectLimit(
+  plan: ProjectCreatePlan,
+): Promise<ProjectCreateResult | null> {
+  const maxProjects = resolveEntitlements(plan.userData ?? {}).maxProjects;
+  if (maxProjects === "unlimited") return null;
+
+  // Personal Free (0) can never create — 402 without the count read.
+  if (maxProjects <= 0) {
+    return bad(402, "Projects are available on paid plans — upgrade to start building", { maxProjects });
+  }
+
+  const owned = await db
+    .collection(`workspaces/${plan.workspaceId}/projects`)
+    .where("ownerUid", "==", plan.uid)
+    .count()
+    .get();
+  if (owned.data().count < maxProjects) return null;
+
+  return bad(
+    402,
+    `Your plan includes ${maxProjects} project${maxProjects === 1 ? "" : "s"}. Upgrade for more.`,
+    { maxProjects },
+  );
 }
 
 function buildProjectCreatePlan(

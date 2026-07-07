@@ -362,6 +362,20 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(ud.subscription).toEqual({ trialStartedAt: { _seconds: 1_783_500_000, _nanoseconds: 0 } });
   });
 
+  it("forwards builderSubscription to the reassert — a credits builder's picks must not defer to house_only at mount", async () => {
+    state.user = snap({
+      tier: "personal_free",
+      builderSubscription: { tier: "hobby", status: "active" },
+      systemConfig: {
+        agentModels: { "octogee-test-coach": { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] } },
+      },
+    });
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const ud = state.reassertByotUserData ?? {};
+    expect(ud.builderSubscription).toEqual({ tier: "hobby", status: "active" });
+  });
+
   it("a byot re-assert failure is non-fatal — the mount still completes", async () => {
     state.reassertByotShouldFail = true;
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");

@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { resolveEffectivePlan } from "@octogee/shared/types/billing";
+import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import {
   buildModelCredentialConfigForProvider,
@@ -140,6 +140,10 @@ export function deriveDesiredByotState(userData: {
   tier?: string;
   selectedTier?: string;
   subscription?: unknown;
+  // Builder infra subscription (pricing v3): resolveBillingProfile reads it so a
+  // credits-rail builder resolves catalog, not house_only.
+  builderSubscription?: unknown;
+  trialStartedAt?: unknown;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };
@@ -185,7 +189,7 @@ function freeTierCoachModelInput(
   slug: string,
   userData: Parameters<typeof deriveDesiredByotState>[0],
 ): FreeTierCoachModelInput | null {
-  const plan = resolveEffectivePlan(userData);
+  const plan = resolveBillingProfile(userData);
   return plan.modelAccess === "house_only"
     ? { slug, model: PLATFORM_HOUSE_MODEL, source: "free-tier" }
     : null;

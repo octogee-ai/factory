@@ -7,11 +7,14 @@ export interface ModelCredentialSyncUserData {
   byotActive?: boolean;
   username?: string;
   tier?: string;
-  selectedTier?: string;
-  // resolveEffectivePlan derives trial state from subscription.trialStartedAt
-  // on the gateway side; serialize it through (Timestamps → JSON) as-is —
-  // asDate parses the serialized {_seconds}/{seconds}/ISO shapes.
+  // Plan inputs travel as-is (pickPlanInputs); the resolver tolerates non-string
+  // shapes, so they mirror subscription/builderSubscription as `unknown`.
+  selectedTier?: unknown;
+  // resolveBillingProfile derives trial + builder state from these on the
+  // gateway side; serialize them through (Timestamps → JSON) as-is — asDate
+  // parses the serialized {_seconds}/{seconds}/ISO shapes.
   subscription?: unknown;
+  builderSubscription?: unknown;
   trialStartedAt?: unknown;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: {
