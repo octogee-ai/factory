@@ -368,17 +368,26 @@ async function waitForAccountHealthy(
   return false;
 }
 
-async function requestActivationRestart(ctx: BrokerCtx, slug: string): Promise<void> {
+async function logActivatedCoachModel(ctx: BrokerCtx, slug: string): Promise<void> {
   try {
-    await ctx.rpc.gatewayRestartRequest({
-      reason: `migration-activation:${slug}`,
-      skipDeferral: true,
-    });
+    const agentId = customerCoachAgentId(slug);
+    const { config } = await ctx.rpc.configGet();
+    const list = (config as { agents?: { list?: unknown[] } } | undefined)?.agents?.list;
+    const agent = Array.isArray(list)
+      ? (list.find((e) => !!e && typeof e === "object" && (e as { id?: unknown }).id === agentId) as
+          | { model?: unknown }
+          | undefined)
+      : undefined;
+    ctx.log(
+      `[import:${slug}] post-activation coach model=${JSON.stringify(agent?.model ?? null)} (config-patch hot-reload)`,
+    );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`[import:${slug}] gateway restart request failed after activation: ${message}`);
+    ctx.log(
+      `[import:${slug}] post-activation coach model diagnostic unavailable: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
-  ctx.log(`[import:${slug}] requested gateway restart after activation import`);
 }
 
 async function scheduleBootGreetingCron(
@@ -504,7 +513,9 @@ async function activateImportedCustomer(
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
   await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
-  await requestActivationRestart(ctx, slug);
+  ctx.log(
+    `[import:${slug}] activation relies on config-patch hot-reload; no explicit gateway restart requested`,
+  );
 
   ctx.log(
     `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,
@@ -516,6 +527,7 @@ async function activateImportedCustomer(
   if (!healthy) {
     throw new Error(`[import:${slug}] channel did not reach running+connected after activation`);
   }
+  await logActivatedCoachModel(ctx, slug);
   ctx.log(`[import:${slug}] activation complete`);
 }
 

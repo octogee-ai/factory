@@ -119,6 +119,10 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         },
       })),
+      configGet: vi.fn(async () => ({
+        config: { agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] } },
+        hash: "cfg-hash",
+      })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
       client,
@@ -141,13 +145,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect.stringContaining(".openclaw"),
       "tester10",
     );
-    expect(rpc.gatewayRestartRequest).toHaveBeenCalledWith({
-      reason: "migration-activation:tester10",
-      skipDeferral: true,
-    });
-    expect(rpc.gatewayRestartRequest.mock.invocationCallOrder[0]).toBeLessThan(
-      rpc.channelsStatus.mock.invocationCallOrder[0],
-    );
+    expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
   });
