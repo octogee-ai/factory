@@ -515,7 +515,7 @@ interface GateDecisionAllowed {
 
 interface GateDecisionDenied {
   allowed: false;
-  status: 429 | 503;
+  status: 402 | 429 | 503;
   error: string;
   retryAfterSeconds?: number;
 }
@@ -689,6 +689,12 @@ function gateDecisionName(gate: GateDecisionAllowed): string {
 
 type GateLogger = (decision: string, extra?: Record<string, unknown>) => void;
 
+function deniedDecisionName(status: GateDecisionDenied["status"]): string {
+  if (status === 402) return "denied_no_token_path";
+  if (status === 429) return "rate_limited";
+  return "gate_unavailable";
+}
+
 function sendGateDenied(
   res: ExpressResponse,
   gate: GateDecisionDenied,
@@ -697,7 +703,7 @@ function sendGateDenied(
   if (gate.retryAfterSeconds) {
     res.setHeader("retry-after", String(gate.retryAfterSeconds));
   }
-  logGate(gate.status === 429 ? "rate_limited" : "gate_unavailable", {
+  logGate(deniedDecisionName(gate.status), {
     status: gate.status,
     error: gate.error,
   });
@@ -769,6 +775,20 @@ async function degradeStateForGrant(
       input.record.ownerUid as string,
     );
     const dry = creditBalanceUsd <= 0;
+    // Builders paying for infrastructure have no house fallback: a dry balance
+    // (and no attached paid Personal plan or BYOSUB) is a hard deny, not a
+    // degrade — pricing v3's "paying customers pay for tokens" rule.
+    if (dry && input.grant.policy.houseFallback === false) {
+      return {
+        kind: "denied",
+        decision: {
+          allowed: false,
+          status: 402,
+          error:
+            "no active token path — attach a paid Personal plan, add prepaid credits, or bring your own subscription",
+        },
+      };
+    }
     return {
       kind: "state",
       degrade: dry,

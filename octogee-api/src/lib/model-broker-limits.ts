@@ -1,6 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 
-import { resolveEffectivePlan, type BillingRail } from "@octogee/shared/types/billing";
+import { resolveBillingProfile, type BillingRail } from "@octogee/shared/types/billing";
 import {
   normalizeModelBrokerTokenLimits,
   normalizeModelBrokerTokenPolicy,
@@ -49,20 +49,23 @@ async function readOwnerTier(
   spendWindowUsd: number;
   spendWeekUsd: number;
   freeTier: boolean;
+  houseFallback: boolean;
   rail: BillingRail;
 } | null> {
   if (!db || !ownerUid) return null;
   const snap = await db.collection("users").doc(ownerUid).get();
   const data = snap.data() as Record<string, unknown> | undefined;
   if (!data) return null;
-  const plan = resolveEffectivePlan(data, new Date(now));
+  const profile = resolveBillingProfile(data, new Date(now));
   return {
-    spendWindowUsd: plan.windowBudgetUsd,
-    spendWeekUsd: plan.weeklyBudgetUsd,
+    spendWindowUsd: profile.windowBudgetUsd,
+    spendWeekUsd: profile.weeklyBudgetUsd,
     // "freeTier" on the wire = the house-only policy: always degrade to the
     // house model, never billed. Personal Free (and lapsed trials) land here.
-    freeTier: plan.modelAccess === "house_only",
-    rail: plan.tier === "builder" ? "prepaid_credits" : "subscription",
+    freeTier: profile.modelAccess === "house_only",
+    // Builders with no live paid token path get denied instead of degraded.
+    houseFallback: profile.houseFallback,
+    rail: profile.rail,
   };
 }
 
@@ -107,7 +110,10 @@ export async function resolveOwnerModelBrokerGrant(input: {
       : { spendWindowUsd: tier.spendWindowUsd, spendWeekUsd: tier.spendWeekUsd }),
     ...overrides,
   });
-  const policy = normalizeModelBrokerTokenPolicy({ freeTier: tier?.freeTier === true });
+  const policy = normalizeModelBrokerTokenPolicy({
+    freeTier: tier?.freeTier === true,
+    houseFallback: tier?.houseFallback !== false,
+  });
   return { limits, policy, rail };
 }
 

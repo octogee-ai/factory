@@ -12,9 +12,13 @@ export interface ModelBrokerTokenLimits {
 // Plan/routing policy, distinct from spend limits. `freeTier` means "always serve
 // the house model on the house key, never billed" — degrade unconditionally rather
 // than only on window exhaustion. Paid tiers carry `freeTier: false` and degrade
-// only when their `spendWindowUsd` is exhausted.
+// only when their `spendWindowUsd` is exhausted. `houseFallback: false` (builders
+// paying for infrastructure with no live token path) turns exhaustion into a hard
+// deny instead of a house-model degrade — pricing v3's "paying customers pay for
+// tokens" rule.
 export interface ModelBrokerTokenPolicy {
   freeTier: boolean;
+  houseFallback: boolean;
 }
 
 export type ModelBrokerTokenTraceSource = "gateway_model_key_issuer" | "shared_agent_model_token";
@@ -115,6 +119,7 @@ export function normalizeModelBrokerTokenPolicy(
 ): ModelBrokerTokenPolicy {
   return {
     freeTier: policy?.freeTier === true,
+    houseFallback: policy?.houseFallback !== false,
   };
 }
 
