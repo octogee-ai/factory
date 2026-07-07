@@ -407,6 +407,56 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(snap?.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
   });
 
+  it("loadUserSnapshot carries projectAgents from the broker snapshot (a re-ensure must see the Vegas toggle state)", async () => {
+    const client = mkClient({
+      userSnapshot: vi.fn(async () =>
+        fullSnapshot({
+          projectAgents: [
+            { projectId: "camp", enabled: true, mmUserId: "mm-proj", token: "proj-pat" },
+          ],
+        }),
+      ),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+
+    expect(snap?.projectAgents).toEqual([
+      { projectId: "camp", enabled: true, mmUserId: "mm-proj", token: "proj-pat" },
+    ]);
+  });
+
+  it("seedUserSnapshotForMigration replaces a stale cached snapshot so a re-ensure applies fresh content", async () => {
+    // The reconcile's fingerprint source fetches fresh snapshots every tick and seeds
+    // them here; without the seed, loadUserSnapshot would serve the boot-time cache
+    // forever and a content-drift re-ensure would re-apply stale state while the
+    // bookkeeping records the new fingerprint as applied.
+    const userSnapshot = vi.fn(async () => fullSnapshot({ projectAgents: [] }));
+    const client = mkClient({ userSnapshot });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    await adapter.loadUserSnapshot("uid-tester10"); // populates the cache
+    adapter.seedUserSnapshotForMigration?.(
+      fullSnapshot({
+        projectAgents: [{ projectId: "camp", enabled: true, mmUserId: "mm", token: "pat" }],
+      }),
+    );
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+    expect(snap?.projectAgents).toEqual([
+      { projectId: "camp", enabled: true, mmUserId: "mm", token: "pat" },
+    ]);
+    expect(userSnapshot).toHaveBeenCalledTimes(1); // second read served from the seeded cache
+  });
+
   it("reassertByotForCustomer delegates to the brokered model credential sync with the userData verbatim", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),

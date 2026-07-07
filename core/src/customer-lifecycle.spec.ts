@@ -347,6 +347,21 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     });
   });
 
+  it("forwards the plan-resolution fields (subscription/selectedTier/trialStartedAt) to the reassert — a trial user's model picks must not defer to house_only at mount", async () => {
+    state.user = snap({
+      tier: "trial",
+      subscription: { trialStartedAt: { _seconds: 1_783_500_000, _nanoseconds: 0 } },
+      systemConfig: {
+        agentModels: { "octogee-test-coach": { primary: "platform-openrouter/minimax/minimax-m3", fallbacks: [] } },
+      },
+    });
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const ud = state.reassertByotUserData ?? {};
+    expect(ud.tier).toBe("trial");
+    expect(ud.subscription).toEqual({ trialStartedAt: { _seconds: 1_783_500_000, _nanoseconds: 0 } });
+  });
+
   it("a byot re-assert failure is non-fatal — the mount still completes", async () => {
     state.reassertByotShouldFail = true;
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");

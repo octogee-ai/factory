@@ -66,6 +66,51 @@ type ApplyCoachIdentity = (input: {
   avatarPng?: Buffer;
 }) => Promise<string[]>;
 
+// Chat broker: the gateway skill is a thin client; PAT resolution + MM reads run
+// HERE so no chat PAT ever reaches the injection-reachable agent runtime. The
+// identity's PAT is the capability boundary (workspace agent → Builder PAT,
+// project agent → its bot's project-scoped PAT).
+interface ChatBrokerIdentity {
+  pat: string;
+  excludeMmUserId: string;
+  /** Agent bot's own credential — used only for the `unread` read cursor. */
+  unread: { pat: string; mmUserId: string };
+  slug: string;
+  siteUrl: string;
+}
+
+type ExecuteChatSearch = (
+  identity: ChatBrokerIdentity,
+  params: {
+    query: string;
+    scope?: "current_channel" | "all_visible";
+    limit?: number;
+    currentChannelId?: string;
+  },
+) => Promise<Record<string, unknown>>;
+
+type ExecuteChatHistory = (
+  identity: ChatBrokerIdentity,
+  params: {
+    channel?: string;
+    direction?: string;
+    cursor?: string;
+    limit?: number;
+    fromUsername?: string;
+    currentChannelId?: string;
+  },
+) => Promise<Record<string, unknown>>;
+
+type ResolveChatIdentity = (
+  db: Firestore,
+  input: { uid: string; slug: string; agentId: string },
+) => Promise<{
+  lane: "workspace" | "project";
+  pat: string;
+  excludeMmUserId: string;
+  unread: { pat: string; mmUserId: string };
+}>;
+
 interface FleetBrokerRouteDeps {
   provisionMattermost?: (input: {
     uid: string;
@@ -85,6 +130,9 @@ interface FleetBrokerRouteDeps {
   applyCoachIdentity?: ApplyCoachIdentity;
   createBlobSignedUrl?: CreateBlobSignedUrl;
   mintMacOpsToken?: MintMacOpsToken;
+  executeChatSearch?: ExecuteChatSearch;
+  executeChatHistory?: ExecuteChatHistory;
+  resolveChatIdentity?: ResolveChatIdentity;
 }
 
 const BLOB_SIGNED_URL_TTL_MS = 10 * 60 * 1000;
@@ -137,6 +185,27 @@ const defaultApplyCoachIdentity: ApplyCoachIdentity = async (input) => {
     { name: input.name, persona: input.persona, avatarPng: input.avatarPng },
     { slug: input.slug },
   );
+};
+
+const defaultExecuteChatSearch: ExecuteChatSearch = async (identity, params) => {
+  const { executeChatSearch } = await import(
+    "../../../gateway-edge/src/lib/chat-broker/execute.js"
+  );
+  return executeChatSearch(identity, params);
+};
+
+const defaultExecuteChatHistory: ExecuteChatHistory = async (identity, params) => {
+  const { executeChatHistory } = await import(
+    "../../../gateway-edge/src/lib/chat-broker/execute.js"
+  );
+  return executeChatHistory(identity, params);
+};
+
+const defaultResolveChatIdentity: ResolveChatIdentity = async (db, input) => {
+  const { resolveChatIdentity } = await import(
+    "../../../gateway-edge/src/lib/chat-broker/resolve-pat.js"
+  );
+  return resolveChatIdentity(db, input);
 };
 
 const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
@@ -713,6 +782,9 @@ function snapshotBaseFields(
     repoUrl: stringAt(data, "provisioning.git.repoUrl"),
     mattermostUserId,
     customerMmUserId: mattermostUserId,
+    ...(data.selectedTier !== undefined ? { selectedTier: data.selectedTier } : {}),
+    ...(data.subscription !== undefined ? { subscription: data.subscription } : {}),
+    ...(data.trialStartedAt !== undefined ? { trialStartedAt: data.trialStartedAt } : {}),
     greetingPosted: snapshotGreetingPosted(data),
     ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
     email: stringAt(data, "email"),
@@ -804,6 +876,9 @@ type ResolvedFleetBrokerRouteDeps = {
   applyCoachIdentity: ApplyCoachIdentity;
   createBlobSignedUrl: CreateBlobSignedUrl;
   mintMacOpsToken: MintMacOpsToken;
+  executeChatSearch: ExecuteChatSearch;
+  executeChatHistory: ExecuteChatHistory;
+  resolveChatIdentity: ResolveChatIdentity;
 };
 
 function resolveFleetBrokerRouteDeps(
@@ -820,6 +895,9 @@ function resolveFleetBrokerRouteDeps(
     applyCoachIdentity: opts.applyCoachIdentity ?? defaultApplyCoachIdentity,
     createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,
     mintMacOpsToken: opts.mintMacOpsToken ?? defaultMintMacOpsToken,
+    executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
+    executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
+    resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
   };
 }
 
@@ -1214,8 +1292,135 @@ function installGatewayOpsRoutes(
   });
 }
 
+// A chat-broker caller is validated in three layers, all lane-uniform:
+// gateway binding (boundGateway) -> workspace assigned to that gateway ->
+// agent id parses AND belongs to that workspace with a minted PAT
+// (resolveChatIdentity — the secret's existence IS the capability, so a
+// disabled project agent gets a refusal, never a broader token).
+async function requireAssignedChatIdentity(
+  deps: ResolvedFleetBrokerRouteDeps,
+  req: Request,
+  res: Response,
+): Promise<{ identity: ChatBrokerIdentity; slug: string } | null> {
+  const bound = boundGateway(req, res);
+  if (!bound) return null;
+  const body = objectBody(req);
+  const slug = typeof body.workspaceSlug === "string" ? body.workspaceSlug : "";
+  if (!isValidUsername(slug)) {
+    res.status(400).json({ error: "invalid_workspace_slug" });
+    return null;
+  }
+  const agentId = validAgentId(body.agentId);
+  if (!agentId) {
+    res.status(400).json({ error: "invalid_agent_id" });
+    return null;
+  }
+  // Strict scheme check — the value lands in permalinks returned to the agent.
+  const siteUrl = typeof body.siteUrl === "string" && /^https?:\/\//.test(body.siteUrl)
+    ? body.siteUrl
+    : "";
+  if (!siteUrl) {
+    res.status(400).json({ error: "invalid_site_url" });
+    return null;
+  }
+  const uid = await findAssignedUidBySlug(deps.db, bound.gatewayId, slug);
+  if (!uid) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  try {
+    const resolved = await deps.resolveChatIdentity(deps.db, { uid, slug, agentId });
+    return {
+      slug,
+      identity: {
+        pat: resolved.pat,
+        excludeMmUserId: resolved.excludeMmUserId,
+        unread: resolved.unread,
+        slug,
+        siteUrl,
+      },
+    };
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    if (code === "invalid-agent") {
+      res.status(400).json({ error: "invalid_agent_id", code });
+      return null;
+    }
+    if (
+      code === "foreign-agent" ||
+      code === "no-builder-pat" ||
+      code === "no-coach-identity" ||
+      code === "no-project-pat"
+    ) {
+      res.status(403).json({ error: "forbidden", code });
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function respondChatBrokerError(res: Response, err: unknown): Promise<void> {
+  const { chatBrokerErrorStatus } = await import(
+    "../../../gateway-edge/src/lib/chat-broker/execute.js"
+  );
+  const { status, code } = chatBrokerErrorStatus(err);
+  res.status(status).json({
+    error: err instanceof Error ? err.message : String(err),
+    code,
+  });
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : undefined;
+}
+
 function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db, renderAvatar, applyCoachIdentity } = deps;
+
+  router.post("/agent/chat-search", async (req, res) => {
+    const assigned = await requireAssignedChatIdentity(deps, req, res);
+    if (!assigned) return;
+    const body = objectBody(req);
+    const query = typeof body.query === "string" ? body.query.trim() : "";
+    if (query.length < 2) {
+      res.status(400).json({ error: "invalid_query" });
+      return;
+    }
+    try {
+      const payload = await deps.executeChatSearch(assigned.identity, {
+        query,
+        scope: body.scope === "current_channel" ? "current_channel" : "all_visible",
+        limit: optionalInt(body.limit),
+        currentChannelId: optionalString(body.currentChannelId),
+      });
+      res.json(payload);
+    } catch (err) {
+      await respondChatBrokerError(res, err);
+    }
+  });
+
+  router.post("/agent/chat-history", async (req, res) => {
+    const assigned = await requireAssignedChatIdentity(deps, req, res);
+    if (!assigned) return;
+    const body = objectBody(req);
+    try {
+      const payload = await deps.executeChatHistory(assigned.identity, {
+        channel: optionalString(body.channel),
+        direction: optionalString(body.direction),
+        cursor: optionalString(body.cursor),
+        limit: optionalInt(body.limit),
+        fromUsername: optionalString(body.fromUsername),
+        currentChannelId: optionalString(body.currentChannelId),
+      });
+      res.json(payload);
+    } catch (err) {
+      await respondChatBrokerError(res, err);
+    }
+  });
 
   router.post("/agent/set-coach-identity", async (req, res) => {
     const assigned = await requireAssignedAgentWorkspace(db, req, res);

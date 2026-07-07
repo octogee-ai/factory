@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mmSearch, MmSearchScopeError } from "../mm-search.js";
+import { mmSearch, MmSearchScopeError } from "../lib/chat-broker/mm-search.js";
 
 interface FakeClient {
   get: (path: string, pat: string) => Promise<any>;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mmHistory, HistoryParamError } from "../mm-history.js";
+import { mmHistory, HistoryParamError } from "../lib/chat-broker/mm-history.js";
 
 const COACH = "coach-uid-26-chars-abcdefgh";
 const CH = "ch1id26charlongabcdefghij";

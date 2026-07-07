@@ -26,6 +26,12 @@ export interface UserSnapshot {
   projects?: FleetBrokerProjectRestore[];
   projectAgents?: FleetBrokerProjectAgent[];
   byotActive?: boolean;
+  // Plan-resolution inputs (TierResolvable): resolveEffectivePlan on the gateway needs
+  // these to grant a trial/paid user their catalog access at mount-time reassert;
+  // Timestamps arrive JSON-serialized and asDate parses those shapes.
+  selectedTier?: unknown;
+  subscription?: unknown;
+  trialStartedAt?: unknown;
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };
     agentModels?: AgentModelSelections;
@@ -710,6 +716,12 @@ function byotUserDataFromSnapshot(snapshot: UserSnapshot): Record<string, unknow
     byotActive: snapshot.byotActive,
     systemConfig: snapshot.systemConfig,
     tier: snapshot.tier,
+    // Full TierResolvable set: the reassert's resolveEffectivePlan must see the same
+    // plan the trusted side resolved, or a trial user's agent-model picks defer to
+    // house_only on every mount/roll.
+    ...(snapshot.selectedTier !== undefined ? { selectedTier: snapshot.selectedTier } : {}),
+    ...(snapshot.subscription !== undefined ? { subscription: snapshot.subscription } : {}),
+    ...(snapshot.trialStartedAt !== undefined ? { trialStartedAt: snapshot.trialStartedAt } : {}),
     provisioning: { openclaw: { status: "complete" } },
   };
 }

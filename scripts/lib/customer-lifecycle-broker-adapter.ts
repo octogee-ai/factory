@@ -181,7 +181,11 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     channels: snapshot.channels,
     ownerName: snapshot.ownerName,
     projects: snapshot.projects,
+    projectAgents: snapshot.projectAgents,
     byotActive: snapshot.byotActive,
+    selectedTier: snapshot.selectedTier,
+    subscription: snapshot.subscription,
+    trialStartedAt: snapshot.trialStartedAt,
     systemConfig: snapshot.systemConfig,
   };
 }

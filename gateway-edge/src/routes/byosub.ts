@@ -296,6 +296,8 @@ function tierFieldsFromRequest(req: Request): Record<string, unknown> {
   return {
     ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
     ...(typeof user.selectedTier === "string" ? { selectedTier: user.selectedTier } : {}),
+    ...(user.subscription ? { subscription: user.subscription } : {}),
+    ...(user.trialStartedAt !== undefined ? { trialStartedAt: user.trialStartedAt } : {}),
     ...(typeof user.trialExpired === "boolean" ? { trialExpired: user.trialExpired } : {}),
   };
 }

@@ -119,6 +119,13 @@ export interface FleetBrokerUserSnapshot {
   channels: FleetBrokerChannelBinding[];
   projects: FleetBrokerProjectRestore[];
   projectAgents?: FleetBrokerProjectAgent[];
+  // Plan-resolution inputs (TierResolvable). Firestore Timestamps JSON-serialize as
+  // {_seconds,_nanoseconds}; asDate in shared/types/billing parses those shapes, so the
+  // pod-side resolveEffectivePlan grants the same catalog/trial access the trusted side
+  // resolved instead of silently degrading to house_only.
+  selectedTier?: unknown;
+  subscription?: unknown;
+  trialStartedAt?: unknown;
   ownerName: string;
   email: string;
   displayName: string;

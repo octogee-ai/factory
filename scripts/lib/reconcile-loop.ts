@@ -19,6 +19,13 @@ export interface ReconcileLoopDeps {
   getEvictObserved: () => string[];
   /** Desired: slugs this gateway should host (eligible + assigned here). */
   readDesired: () => Promise<string[]>;
+  /** Content-stale: mount-observed slugs whose APPLIED config no longer matches their
+   *  desired snapshot (e.g. a project-agent toggle changed the snapshot after the mount
+   *  completed). Membership is unchanged, so the desired−observed set-difference would
+   *  skip them; folding them back into toMount is what makes the reconcile converge
+   *  CONTENT, not just the mounted set. Optional — a caller without a fingerprint source
+   *  reverts to pure membership convergence. */
+  getContentStale?: () => string[];
   /** Idempotent mount/restore — safe to call every tick until observed catches up. */
   ensureSlug: (slug: string) => Promise<EnsureOutcome>;
   unmountSlug: (slug: string) => Promise<UnmountOutcome>;
@@ -59,8 +66,14 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
   const mountObserved = new Set(deps.getMountObserved());
   const evictObserved = new Set(deps.getEvictObserved());
   const desired = new Set(await deps.readDesired());
+  const contentStale = new Set(deps.getContentStale?.() ?? []);
 
-  const toMount = [...desired].filter((s) => !mountObserved.has(s) && !inFlight.has(s));
+  // A desired slug is (re-)ensured when it is not yet mount-observed OR its applied
+  // content has drifted. Staleness never resurrects an unassigned slug — the filter is
+  // over `desired`, so a stale slug that is no longer desired falls through to evict.
+  const toMount = [...desired].filter(
+    (s) => (!mountObserved.has(s) || contentStale.has(s)) && !inFlight.has(s),
+  );
   const toEvict = [...evictObserved].filter((s) => !desired.has(s) && !inFlight.has(s));
 
   if (toMount.length === 0 && toEvict.length === 0) return;

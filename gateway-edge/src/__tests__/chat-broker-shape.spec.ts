@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shapeBundle, type MmChannelMeta, type MmUserMeta } from "../shape.js";
+import { shapeBundle, type MmChannelMeta, type MmUserMeta } from "../lib/chat-broker/shape.js";
 
 const COACH_USER_ID = "coach-uid-26-chars-abcdefgh";
 const SITE = "https://mattermost.octogee.com";

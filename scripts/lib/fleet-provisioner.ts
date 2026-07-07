@@ -1,4 +1,5 @@
 import express from "express";
+import * as path from "node:path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
 import type { Server } from "http";
@@ -35,6 +36,8 @@ import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapt
 import { addCustomerToGateway, removeCustomerFromGateway } from "./customer-lifecycle.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { startReconcileLoop } from "./reconcile-loop.js";
+import { selectStaleAndSeed } from "./content-convergence.js";
+import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
 import { mountByosubDeviceAuth } from "./byosub-device-auth-http.js";
@@ -105,6 +108,14 @@ export interface StartFleetOptions {
   /** Credential-less local mount reconcile: trusted octogee-api returns the
    * assigned roster for this gateway identity. */
   readDesiredSlugs?: () => Promise<string[]>;
+  /** Content-convergence source: slug → fingerprint of the config-affecting snapshot
+   *  slice (see snapshot-fingerprint.ts). When provided, it BOTH drives the desired
+   *  roster (its keys) and lets the reconcile re-ensure an already-mounted customer whose
+   *  fingerprint drifted — the level-triggered path a project-agent toggle rides. Takes
+   *  precedence over readDesiredSlugs. Left unset on gateways whose add-path short-circuits
+   *  a coach-wired resync (operator), where a false "applied" fingerprint would mask an
+   *  unpatched config. */
+  readDesiredFingerprints?: () => Promise<Map<string, string>>;
   /** Trusted-side mounted mirror writer used when the pod has no Firestore. */
   stampMounted?: (uid: string, mounted: boolean) => Promise<void>;
   /** Trusted-side reconcile error mirror used when the pod has no Firestore. */
@@ -270,10 +281,48 @@ function startMaybeReconcileLoop(params: {
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
 }): () => void {
   const { provision, opts, wrappedAdapter, runtime, stampMounted } = params;
-  const readDesired =
-    opts.readDesiredSlugs ??
-    (opts.db ? () => readAssignedSlugsForGateway(opts.db!, opts.gatewayId) : null);
+
+  // Content-convergence bookkeeping (only when a fingerprint source is wired). desiredFp
+  // is refreshed every tick by readDesired; appliedFp records the fingerprint that was
+  // live at each customer's last successful ensure. getContentStale reports mounted
+  // customers where the two diverge — the signal that makes a snapshot-only change (e.g.
+  // a project-agent toggle) reconverge without a remount. appliedFp mirrors to disk
+  // (when openclawDir is known) so a container restart with the emptyDir intact does not
+  // lazy-seed pending changes away — see applied-fingerprint-store.ts.
+  const fingerprintSource = opts.readDesiredFingerprints;
+  const desiredFp = new Map<string, string>();
+  const appliedFpFile =
+    fingerprintSource && opts.openclawDir
+      ? path.join(opts.openclawDir, "applied-fingerprints.json")
+      : null;
+  const appliedFp = appliedFpFile ? loadAppliedFingerprints(appliedFpFile) : new Map<string, string>();
+  const persistAppliedFp = (): void => {
+    if (!appliedFpFile) return;
+    try {
+      saveAppliedFingerprints(appliedFpFile, appliedFp);
+    } catch (err) {
+      opts.log(`[reconcile] ⚠ applied-fingerprint persist failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  let readDesired: (() => Promise<string[]>) | null = null;
+  if (fingerprintSource) {
+    readDesired = async () => {
+      const next = await fingerprintSource();
+      desiredFp.clear();
+      for (const [slug, fp] of next) desiredFp.set(slug, fp);
+      return [...next.keys()];
+    };
+  } else if (opts.readDesiredSlugs) {
+    readDesired = opts.readDesiredSlugs;
+  } else if (opts.db) {
+    readDesired = () => readAssignedSlugsForGateway(opts.db!, opts.gatewayId);
+  }
   if (!provision || !readDesired) return () => undefined;
+
+  const getContentStale = fingerprintSource
+    ? (): string[] => selectStaleAndSeed(getMountObservedSlugs(wrappedAdapter), desiredFp, appliedFp)
+    : undefined;
   return startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: RECONCILE_LOOP_INTERVAL_MS,
@@ -293,6 +342,7 @@ function startMaybeReconcileLoop(params: {
       return getMountObservedSlugs(wrappedAdapter);
     },
     getEvictObserved: () => getEvictObservedSlugs(wrappedAdapter),
+    ...(getContentStale ? { getContentStale } : {}),
     readDesired,
     ensureSlug: async (slug: string) => {
       const uid = await wrappedAdapter.uidForSlug(slug);
@@ -303,6 +353,15 @@ function startMaybeReconcileLoop(params: {
       // completion marker so mount-observed now includes this slug. Until it lands, a
       // coach-wired-but-incomplete mount stays in toMount and is re-ensured.
       wrappedAdapter.writeMountMarker?.(slug);
+      // Record the fingerprint that is now applied on disk so this customer is no longer
+      // reported stale — until its desired fingerprint next changes.
+      if (fingerprintSource) {
+        const fp = desiredFp.get(slug);
+        if (fp !== undefined) {
+          appliedFp.set(slug, fp);
+          persistAppliedFp();
+        }
+      }
       return result.newCustomer ? "mounted" : "noop";
     },
     onEnsureError: (slug, message) => recordReconcileError(opts, slug, message),
@@ -312,6 +371,7 @@ function startMaybeReconcileLoop(params: {
       if (uid) {
         const result = await removeCustomerFromGateway(wrappedAdapter, uid);
         await stampMounted(uid, false);
+        if (appliedFp.delete(slug)) persistAppliedFp();
         return result.wasMounted ? "drained" : "noop";
       }
 
@@ -322,6 +382,7 @@ function startMaybeReconcileLoop(params: {
           await wrappedAdapter.deleteCustomerDir(slug);
         }
         wrappedAdapter.onUnmounted?.(slug);
+        if (appliedFp.delete(slug)) persistAppliedFp();
         return "deleted-user";
       } catch (err) {
         throw new Error(
@@ -422,7 +483,7 @@ export async function startFleetController(
     reportState,
     localReconcile: opts.localReconcile === true,
     hasDb: !!opts.db,
-    hasBrokeredRoster: !!opts.readDesiredSlugs,
+    hasBrokeredRoster: !!opts.readDesiredSlugs || !!opts.readDesiredFingerprints,
   });
   const stateDeps = createStateDeps(opts, caps.needsStateDeps);
   const adapter = buildFleetAdapter(opts);

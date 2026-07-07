@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resolveTeamId, resolveChannelId, _resetTeamCachesForTests, MmResolveError } from "../team.js";
+import { resolveTeamId, resolveChannelId, _resetTeamCachesForTests, MmResolveError } from "../lib/chat-broker/team.js";
 
 interface FakeFetcher {
   get: (path: string, pat: string) => Promise<any>;

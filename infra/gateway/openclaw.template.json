@@ -217,9 +217,7 @@
       "octogee-chat-tools": {
         "enabled": true,
         "config": {
-          "mattermostUrl": "${MM_URL}",
           "siteUrl": "${MM_SITE_URL}",
-          "patCacheTtlSeconds": 300,
           "brokerUrl": "${FLEET_BROKER_URL}",
           "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}",
           "customersRoot": "${CUSTOMERS_DIR}"

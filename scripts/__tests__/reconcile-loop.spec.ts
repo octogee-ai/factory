@@ -265,6 +265,55 @@ describe("reconcileFleet — ensure outcome surfaced (best-effort lastError mirr
   });
 });
 
+describe("reconcileFleet — content convergence (mounted-but-stale re-ensured)", () => {
+  it("re-ensures a mounted slug whose config content drifted, without a remount", async () => {
+    // The Vegas repro: a project-agent toggle changes the customer's snapshot while
+    // it's already fully mounted. Membership is unchanged (still desired, still
+    // mount-observed), so the set-difference alone would skip it — content staleness
+    // must pull it back into toMount so the new project agent binding lands.
+    const d = mkDeps({
+      ...observed(["a"]),
+      readDesired: async () => ["a"],
+      getContentStale: () => ["a"],
+    });
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual(["a"]);
+    expect(d.evicted).toEqual([]);
+  });
+
+  it("does NOT re-ensure a mounted slug whose content is current", async () => {
+    const d = mkDeps({
+      ...observed(["a", "b"]),
+      readDesired: async () => ["a", "b"],
+      getContentStale: () => [],
+    });
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual([]);
+  });
+
+  it("never ensures a stale slug that is not desired (staleness cannot resurrect an unassigned slug)", async () => {
+    const d = mkDeps({
+      getMountObserved: () => ["gone"],
+      getEvictObserved: () => [],
+      readDesired: async () => [],
+      getContentStale: () => ["gone"],
+    });
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual([]);
+  });
+
+  it("does not double-drive a slug that is both unmounted and reported stale", async () => {
+    const d = mkDeps({
+      getMountObserved: () => [],
+      getEvictObserved: () => [],
+      readDesired: async () => ["a"],
+      getContentStale: () => ["a"],
+    });
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual(["a"]); // exactly once
+  });
+});
+
 describe("startReconcileLoop", () => {
   it("reconciles on each interval tick and stops cleanly", async () => {
     vi.useFakeTimers();

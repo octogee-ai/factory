@@ -86,17 +86,25 @@ function triggerAgentModelSync(args: {
   });
   const user = args.req.user as {
     byotActive?: unknown;
+    tier?: unknown;
     selectedTier?: unknown;
     subscription?: unknown;
+    trialStartedAt?: unknown;
   };
+  // The gateway re-runs resolveEffectivePlan on this payload before applying the picks.
+  // Every TierResolvable field travels: a trial user's catalog access hangs entirely on
+  // subscription.trialStartedAt / trialStartedAt, and an omission silently degrades the
+  // sync to house_only ("agent-model overrides deferred") while this PUT reports success.
   triggerGatewayModelCredentialSync({
     gatewayId,
     userData: {
       byotActive: projection.byotActive ?? user.byotActive === true,
       username: args.slug,
       provisioning: { openclaw: { status: "complete" } },
+      ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
       ...(typeof user.selectedTier === "string" ? { selectedTier: user.selectedTier } : {}),
       ...(user.subscription ? { subscription: user.subscription } : {}),
+      ...(user.trialStartedAt !== undefined ? { trialStartedAt: user.trialStartedAt } : {}),
       systemConfig: projection.systemConfig,
     },
   });

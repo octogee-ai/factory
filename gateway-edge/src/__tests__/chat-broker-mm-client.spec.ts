@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createMmClient, MmFetchError } from "../mm-client.js";
+import { createMmClient, MmFetchError } from "../lib/chat-broker/mm-client.js";
 
 interface CapturedFetch {
   url: string;
