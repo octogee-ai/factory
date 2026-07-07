@@ -151,9 +151,10 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.gatewayEdge,
       JOBS.gatewayEdgeEmulator,
       JOBS.glmController,
+      JOBS.tests,
     ],
     reason:
-      "@octogee/core is consumed by scripts + octogee-api (via scripts/lib re-export shims) + gateway-edge + glm-controller (direct package import)",
+      "@octogee/core is consumed by scripts + octogee-api (via scripts/lib re-export shims) + gateway-edge + glm-controller (direct package import); tests/specs' readSrc() helpers (model-credential-materializer, byot-sync-apply, gateway-rpc-local-exceptions specs) also fall back to reading core/src directly for logic that moved out of scripts/lib",
   },
   {
     when: "test-helpers/",
@@ -164,15 +165,16 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.octogeeApiEmulator,
       JOBS.functions,
       JOBS.functionsEmulator,
+      JOBS.tests,
     ],
     reason:
-      "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs",
+      "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",
   },
   {
-    when: "gateway-edge/src/",
-    jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator],
+    when: "gateway-edge/",
+    jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator, JOBS.tests],
     reason:
-      "octogee-api compiles gateway-edge route Routers (cross-package imports) and its emulator specs mount them via createApp()",
+      "octogee-api compiles gateway-edge route Routers (cross-package imports) and its emulator specs mount them via createApp(); tests/specs also imports gateway-edge/src/billing/provider-key-format.js directly (byok-provider-registry-parity.spec.ts) and sweeps gateway-edge/package.json's firebase-admin range (firebase-admin-major-alignment.spec.ts)",
   },
   {
     when: "site/firestore.rules",
@@ -183,6 +185,56 @@ export const EDGES: readonly ScopeEdge[] = [
     when: "site/firestore.indexes.json",
     jobs: [JOBS.firestoreRules],
     reason: "index shape drives rules-test expectations",
+  },
+  // tests/specs imports/reads app/site/scripts/functions/octogee-api source
+  // directly (see #2130/#2134: an app/src/routes/appRoutes.ts change merged
+  // without running `test (tests)`, even though app-route-helpers.spec.ts
+  // asserts on it, and main went latently red). Ownership alone routes these
+  // paths to their own package job only; these edges make tests/specs'
+  // cross-package dependencies a hazard the scope resolver actually knows
+  // about — whether via `import`, a dynamic `import()`, or a raw
+  // readFileSync() source-text parity check.
+  {
+    when: "app/src/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs imports app/src source directly (app-route-helpers.spec.ts → routes/appRoutes, context-channel-selection.spec.ts → lib/contextChannelSelection, deferred-action.spec.ts → lib/deferredAction, sizing-cost-lockstep.spec.ts → lib/sizing, activity-wire-contract.spec.ts → hooks/useActivityChannel + activity-rows/ActivityRow)",
+  },
+  {
+    when: "site/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs reads site/ source directly: site/src/lib/* (explore-loader, public-builder-loader, public-jsonld, site-pricing-parity specs), site/firebase.json (site-hosting-security.spec.ts), and site/package.json's firebase-admin range (firebase-admin-major-alignment.spec.ts)",
+  },
+  {
+    when: "scripts/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs reads scripts/ source directly beyond lib/: scripts/lib/* (byot-auth-profiles, byot-sync, auth-profile-sqlite, key-fingerprint, model-credential-materializer, usage-log-line specs), scripts/secret-resolver.mjs + scripts/entrypoints/fleet-controller.ts (byok-provider-registry-parity, gateway-entrypoint, gateway-rpc-local-exceptions specs), scripts/setup-secrets.sh + scripts/verify-secrets.sh (byot-sync-secret-management, openrouter-platform-secret-management specs), scripts/rebuild-matrix-bases.sh (gateway-base-refresh.spec.ts), and internal-routing-guard.spec.ts walks the entire scripts/ tree",
+  },
+  {
+    when: "functions/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs reads functions/ source directly: functions/src/social/aggregators + functions/src/triggers/social.ts (social-edges, internal-routing-guard specs) and functions/package.json's firebase-admin range (firebase-admin-major-alignment.spec.ts)",
+  },
+  {
+    when: "octogee-api/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs reads octogee-api/src source directly: routes/byok-broker.ts (byok-provider-registry-parity.spec.ts), src/index.ts (helm-octogee-api-ingress.spec.ts), routes/fleet-broker.ts (model-credential-snapshot-projection.spec.ts); octogee-api/package.json's firebase-admin range is also swept (firebase-admin-major-alignment.spec.ts)",
+  },
+  {
+    when: "glm-controller/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs/firebase-admin-major-alignment.spec.ts sweeps glm-controller/package.json's firebase-admin range — the exact regression (#1521) that spec exists to catch",
+  },
+  {
+    when: "acceptance/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs/firebase-admin-major-alignment.spec.ts sweeps acceptance/package.json's firebase-admin range",
   },
 ];
 
