@@ -28,11 +28,13 @@ import {
 } from "../ops/set-admin-role.js";
 import {
   ONE_TIME,
-  parseSetupStripePersonalMode,
-  SETUP_STRIPE_PERSONAL_USAGE,
+  parseSetupStripePlansMode,
+  SETUP_STRIPE_PLANS_USAGE,
   SUBSCRIPTIONS,
-} from "../ops/setup-stripe-personal.js";
+} from "../ops/setup-stripe-plans.js";
 import {
+  ANNUAL_PRICE_MULTIPLIER,
+  BUILDER_TIERS,
   CREDIT_DENOMINATIONS_USD,
   getTierConfig,
   STRIPE_PRICE_IDS,
@@ -142,28 +144,62 @@ describe("scope CLI glue", () => {
   });
 });
 
-describe("setup-stripe-personal catalog", () => {
+describe("setup-stripe-plans catalog", () => {
   it("requires exactly one execution mode", () => {
-    expect(parseSetupStripePersonalMode(["--dry-run"])).toBe("dry-run");
-    expect(parseSetupStripePersonalMode(["--execute"])).toBe("execute");
-    expect(parseSetupStripePersonalMode([])).toBeNull();
-    expect(parseSetupStripePersonalMode(["--dry-run", "--execute"])).toBeNull();
-    expect(SETUP_STRIPE_PERSONAL_USAGE).toContain("--dry-run");
+    expect(parseSetupStripePlansMode(["--dry-run"])).toBe("dry-run");
+    expect(parseSetupStripePlansMode(["--execute"])).toBe("execute");
+    expect(parseSetupStripePlansMode([])).toBeNull();
+    expect(parseSetupStripePlansMode(["--dry-run", "--execute"])).toBeNull();
+    expect(SETUP_STRIPE_PLANS_USAGE).toContain("--dry-run");
   });
 
-  it("sells exactly the shared Personal lineup at the shared TokenMath prices", () => {
-    expect(SUBSCRIPTIONS.map((sub) => sub.key)).toEqual([
+  it("sells the Personal lineup at the shared TokenMath prices, monthly + annual", () => {
+    const personal = SUBSCRIPTIONS.filter((sub) => !sub.key.startsWith("builder_"));
+    expect(personal.map((sub) => sub.key)).toEqual([
       "personal",
       "personal_pro",
       "personal_pro_max",
     ]);
-    for (const sub of SUBSCRIPTIONS) {
+    for (const sub of personal) {
       const tier = getTierConfig(sub.key);
-      expect(sub.prices).toHaveLength(1);
-      expect(sub.prices[0].key).toBe(`${sub.key}_monthly`);
-      expect(sub.prices[0].amount).toBe(tier.monthlyPrice * 100);
-      expect(sub.prices[0].interval).toBe("month");
+      expect(sub.prices).toHaveLength(2);
+      expect(sub.prices[0]).toMatchObject({
+        key: `${sub.key}_monthly`,
+        amount: tier.monthlyPrice * 100,
+        interval: "month",
+      });
+      expect(sub.prices[1]).toMatchObject({
+        key: `${sub.key}_annual`,
+        amount: tier.monthlyPrice * ANNUAL_PRICE_MULTIPLIER * 100,
+        interval: "year",
+      });
       expect(sub.metadata.tier).toBe(sub.key);
+    }
+  });
+
+  it("sells the self-serve Builder ladder at infra-only prices, monthly + annual", () => {
+    const builders = SUBSCRIPTIONS.filter((sub) => sub.key.startsWith("builder_"));
+    expect(builders.map((sub) => sub.key)).toEqual([
+      "builder_hobby",
+      "builder_pro",
+      "builder_team",
+    ]);
+    for (const sub of builders) {
+      const builderTier = BUILDER_TIERS[sub.key.replace("builder_", "") as keyof typeof BUILDER_TIERS];
+      const monthly = builderTier.monthlyPrice;
+      if (monthly === null) throw new Error(`${sub.key} is not self-serve sellable`);
+      expect(sub.prices).toHaveLength(2);
+      expect(sub.prices[0]).toMatchObject({
+        key: `${sub.key}_monthly`,
+        amount: monthly * 100,
+        interval: "month",
+      });
+      expect(sub.prices[1]).toMatchObject({
+        key: `${sub.key}_annual`,
+        amount: monthly * ANNUAL_PRICE_MULTIPLIER * 100,
+        interval: "year",
+      });
+      expect(sub.metadata.builderTier).toBe(builderTier.name);
     }
   });
 
