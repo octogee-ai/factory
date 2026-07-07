@@ -21,9 +21,8 @@ function file(): string {
 
 describe("applied fingerprint store", () => {
   it("round-trips the map across a process restart", () => {
-    // The reconcile's appliedFp bookkeeping must survive a container restart with the
-    // disk intact — otherwise every mounted slug lazy-seeds as "current" on the first
-    // tick and a toggle that landed during the downtime never converges.
+    // The reconcile's appliedFp bookkeeping survives a container restart with the
+    // disk intact, so an unchanged fleet does not re-ensure after every restart.
     const applied = new Map([
       ["alice", "fp-1"],
       ["bob", "fp-2"],

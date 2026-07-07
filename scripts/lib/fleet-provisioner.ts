@@ -36,7 +36,7 @@ import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapt
 import { addCustomerToGateway, removeCustomerFromGateway } from "./customer-lifecycle.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { startReconcileLoop } from "./reconcile-loop.js";
-import { selectStaleAndSeed } from "./content-convergence.js";
+import { selectStale } from "./content-convergence.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
@@ -288,7 +288,8 @@ function startMaybeReconcileLoop(params: {
   // customers where the two diverge — the signal that makes a snapshot-only change (e.g.
   // a project-agent toggle) reconverge without a remount. appliedFp mirrors to disk
   // (when openclawDir is known) so a container restart with the emptyDir intact does not
-  // lazy-seed pending changes away — see applied-fingerprint-store.ts.
+  // re-ensure an unchanged fleet; a MISSING entry is stale by definition — see
+  // content-convergence.ts and applied-fingerprint-store.ts.
   const fingerprintSource = opts.readDesiredFingerprints;
   const desiredFp = new Map<string, string>();
   const appliedFpFile =
@@ -321,7 +322,7 @@ function startMaybeReconcileLoop(params: {
   if (!provision || !readDesired) return () => undefined;
 
   const getContentStale = fingerprintSource
-    ? (): string[] => selectStaleAndSeed(getMountObservedSlugs(wrappedAdapter), desiredFp, appliedFp)
+    ? (): string[] => selectStale(getMountObservedSlugs(wrappedAdapter), desiredFp, appliedFp)
     : undefined;
   return startReconcileLoop({
     gatewayId: opts.gatewayId,

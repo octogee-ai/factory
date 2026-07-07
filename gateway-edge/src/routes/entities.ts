@@ -41,6 +41,8 @@ interface MmUser {
   username: string;
   first_name: string;
   last_name: string;
+  /** Epoch ms when the MM account was deactivated; 0 for active users. */
+  delete_at?: number;
 }
 
 interface RemovalTarget {
@@ -236,8 +238,14 @@ async function buildMemberResponses(
     fetchMmUsersById(mmUserIds, callerToken),
     hydrateFromFirestore(mmUserIds),
   ]);
+  // MM's DELETE /users/{id} only DEACTIVATES, and deactivated users remain
+  // channel members — a retired project-agent bot would linger in the list
+  // looking active. Drop them here; reactivation (toggle back on) restores them.
+  const active = mmMembers.filter(
+    (member) => (mmUsersById.get(member.user_id)?.delete_at ?? 0) === 0,
+  );
   return sortMembers(
-    mmMembers.map((member) => memberResponse(member, mmUsersById, firestoreByMmId, ownerUserId)),
+    active.map((member) => memberResponse(member, mmUsersById, firestoreByMmId, ownerUserId)),
   );
 }
 

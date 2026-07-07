@@ -1,15 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-// On-disk mirror of the reconcile's applied-fingerprint bookkeeping. appliedFp in
-// memory alone cannot survive a container restart with the emptyDir intact: on the
-// first tick every mounted slug would lazy-seed as "current" (content-convergence.ts)
-// and a snapshot change that landed during the downtime would not converge until the
-// NEXT change. Persisting next to the customer state closes that window; a fresh pod
-// has no file AND no mounted customers, so everything re-ensures and re-records anyway.
+// On-disk mirror of the reconcile's applied-fingerprint bookkeeping. Persistence keeps
+// a container restart with the emptyDir intact from forgetting what was applied; a
+// missing entry is treated as STALE (content-convergence.ts), so forgetting would mean
+// a needless-but-harmless re-ensure sweep, never a masked change.
 //
-// Corrupt or missing files load as empty — the reconcile then lazy-seeds exactly as it
-// does for a legacy boot, which is degraded-but-correct, never wedged.
+// Corrupt or missing files load as empty — every mounted customer then re-ensures once,
+// which is the post-roll convergence sweep, not a failure mode.
 
 export function loadAppliedFingerprints(filePath: string): Map<string, string> {
   let raw: string;

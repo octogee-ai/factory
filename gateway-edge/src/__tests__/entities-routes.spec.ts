@@ -209,6 +209,71 @@ describe("entities routes", () => {
     ]);
   });
 
+  it("excludes deactivated MM users — a retired project-agent bot must not linger in Members", async () => {
+    // MM's DELETE /users/{id} only deactivates; deactivated users stay channel
+    // members. The Vegas toggle-off retires the project bot this way, so the
+    // members list must drop delete_at>0 users or the bot appears still-active.
+    h.resolveWorkspaceUid.mockResolvedValue("owner-1");
+    h.getWorkspaceMmContext.mockResolvedValue({ generalChannelId: "general-ch" });
+    h.docs.set("users/owner-1", { mattermost: { userId: "mm-owner" }, firstName: "Owner" });
+    h.mmApi.mockImplementation(async (path: string) => {
+      if (path === "/channels/general-ch/members") {
+        return [
+          { user_id: "mm-owner", channel_id: "general-ch", roles: "" },
+          { user_id: "mm-retired-bot", channel_id: "general-ch", roles: "" },
+        ];
+      }
+      if (path === "/users/ids") {
+        return [
+          { id: "mm-owner", username: "owner-mm", first_name: "Owner", last_name: "" },
+          {
+            id: "mm-retired-bot",
+            username: "acme-proj-camp-coach",
+            first_name: "Buddy",
+            last_name: "",
+            delete_at: 1_783_500_000_000,
+          },
+        ];
+      }
+      throw new Error(`unexpected mmApi path: ${path}`);
+    });
+
+    const res = await request(app()).get("/api/entities/workspace/acme/members");
+
+    expect(res.status).toBe(200);
+    expect(res.body.members.map((m: { mmUserId: string }) => m.mmUserId)).toEqual(["mm-owner"]);
+  });
+
+  it("keeps members whose /users/ids hydration is missing — the filter fails OPEN, never vanishing members", async () => {
+    // The deactivated filter keys off delete_at from /users/ids. A member absent
+    // from that response (partial hydration) must be KEPT — memberResponse already
+    // renders a user_id fallback for exactly this case; dropping them would make
+    // real members silently vanish on an MM hiccup.
+    h.resolveWorkspaceUid.mockResolvedValue("owner-1");
+    h.getWorkspaceMmContext.mockResolvedValue({ generalChannelId: "general-ch" });
+    h.docs.set("users/owner-1", { mattermost: { userId: "mm-owner" }, firstName: "Owner" });
+    h.mmApi.mockImplementation(async (path: string) => {
+      if (path === "/channels/general-ch/members") {
+        return [
+          { user_id: "mm-owner", channel_id: "general-ch", roles: "" },
+          { user_id: "mm-unhydrated", channel_id: "general-ch", roles: "" },
+        ];
+      }
+      if (path === "/users/ids") {
+        return [{ id: "mm-owner", username: "owner-mm", first_name: "Owner", last_name: "" }];
+      }
+      throw new Error(`unexpected mmApi path: ${path}`);
+    });
+
+    const res = await request(app()).get("/api/entities/workspace/acme/members");
+
+    expect(res.status).toBe(200);
+    expect(res.body.members.map((m: { mmUserId: string }) => m.mmUserId).sort()).toEqual([
+      "mm-owner",
+      "mm-unhydrated",
+    ]);
+  });
+
   it("removes a project member from Mattermost and the project member document", async () => {
     h.uid = "owner-1";
     h.readProject.mockResolvedValue({ ownerUid: "owner-1" });
