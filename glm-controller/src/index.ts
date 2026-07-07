@@ -1206,12 +1206,12 @@ function startDeferredRolloutSweeperForController(
     hasInFlightRollout: async (gatewayId) => {
       const snap = await db
         .collection(GLM_OPERATIONS_COLLECTION)
-        .where("gatewayId", "==", gatewayId)
+        .where("kind", "==", "rollout")
         .get();
       return snap.docs.some((d) => {
-        const data = d.data() as { kind?: unknown; status?: unknown };
+        const data = d.data() as { gatewayId?: unknown; status?: unknown };
         return (
-          data.kind === "rollout" &&
+          (gatewayId === undefined || data.gatewayId === gatewayId) &&
           (data.status === "pending" || data.status === "running")
         );
       });
@@ -1968,6 +1968,25 @@ async function buildHandlers(
     return { success: result.success, error: result.error };
   };
   const blueGreenDeps: BlueGreenRolloutDeps = {
+    readTargetState: async (gatewayId) => {
+      const [glmSnap, hbSnap, assignedSnap] = await Promise.all([
+        db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get(),
+        db.collection("gateways").doc(gatewayId).get(),
+        db
+          .collection("users")
+          .where("provisioning.openclaw.gatewayId", "==", gatewayId)
+          .limit(1)
+          .get(),
+      ]);
+      const hbMounted = hbSnap.data()?.mountedCustomers;
+      const glmData = glmSnap.data() as { imageTag?: unknown } | undefined;
+      return {
+        exists: glmSnap.exists,
+        imageTag: typeof glmData?.imageTag === "string" ? glmData.imageTag : null,
+        assigned: !assignedSnap.empty,
+        mounted: Array.isArray(hbMounted) && hbMounted.length > 0,
+      };
+    },
     createSiblingInstance: async ({
       sourceGatewayId,
       targetGatewayId,
