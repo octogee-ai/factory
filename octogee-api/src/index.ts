@@ -11,6 +11,7 @@ import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-
 import internalBillingRoutes from "../../gateway-edge/src/routes/internal/billing.js";
 import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/gitea-admin.js";
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
+import { validateStripePriceIds } from "../../gateway-edge/src/lib/stripe-price-ids.js";
 import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
@@ -65,6 +66,10 @@ export function shouldEnforceTenantBinding(req: Request): boolean {
 }
 
 export function createApp(opts: CreateAppOptions = {}) {
+  // Fail the rollout, not customer checkouts, if the stripe-secrets price_ids
+  // value is malformed JSON.
+  validateStripePriceIds();
+
   const app = express();
 
   const metricsRegistry = new Registry();

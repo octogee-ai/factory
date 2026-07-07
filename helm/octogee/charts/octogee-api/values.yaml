@@ -67,6 +67,10 @@ secrets:
     secretName: stripe-secrets
     secretKey: webhook_secret
     optional: true
+  - envName: STRIPE_PRICE_IDS
+    secretName: stripe-secrets
+    secretKey: price_ids
+    optional: true
   - envName: GITEA_TOKEN
     secretName: gitea-token
     secretKey: token
