@@ -1,5 +1,6 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FieldValue } from "firebase-admin/firestore";
 
 interface FirestoreCall {
   collection: string;
@@ -1953,6 +1954,94 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
       .send({ to: "canary" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already/i);
+  });
+
+  it("returns 409 with the blocking op while a migration for the customer is already pending or running (Retry double-click)", async () => {
+    usersDocs["uid-alice"] = {
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+    };
+    glmOperationsDocs.unshift({
+      id: "op-mig-live",
+      data: {
+        kind: "migrate-customer",
+        status: "pending",
+        inputUid: "uid-alice",
+        input: { uid: "uid-alice", toGatewayId: "canary" },
+      },
+    });
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/customers/uid-alice/migrate")
+      .send({ to: "canary" });
+    expect(res.status).toBe(409);
+    expect(res.body.operationId).toBe("op-mig-live");
+    const created = calls.find((c) => c.collection === "glmOperations" && c.op === "add");
+    expect(created).toBeUndefined();
+  });
+});
+
+describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reconcile evict", () => {
+  it("clears provisioning.openclaw.gatewayId and reports where the customer was", async () => {
+    usersDocs["uid-alice"] = {
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default-green" } },
+    };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/customers/uid-alice/unassign")
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ unassigned: true, uid: "uid-alice", from: "default-green" });
+    const update = calls.find(
+      (c) => c.collection === "users" && c.op === "doc.update" && c.docId === "uid-alice",
+    );
+    expect(update?.data?.["provisioning.openclaw.gatewayId"]).toEqual(FieldValue.delete());
+    expect(update?.data?.["provisioning.openclaw.gatewayAssignedAt"]).toEqual(FieldValue.delete());
+    expect(update?.data?.["provisioning.openclaw.gatewayProfile"]).toEqual(FieldValue.delete());
+    expect(update?.data?.["provisioning.openclaw.shellsEnabled"]).toEqual(FieldValue.delete());
+  });
+
+  it("returns 404 for an unknown customer", async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/customers/uid-ghost/unassign")
+      .send({});
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 409 when the customer is already unassigned", async () => {
+    usersDocs["uid-alice"] = { username: "alice", provisioning: { openclaw: { slug: "alice" } } };
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/customers/uid-alice/unassign")
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already unassigned/i);
+  });
+
+  it("returns 409 while a migration for the customer is pending or running", async () => {
+    usersDocs["uid-alice"] = {
+      username: "alice",
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default-green" } },
+    };
+    glmOperationsDocs.unshift({
+      id: "op-mig-1",
+      data: {
+        kind: "migrate-customer",
+        status: "running",
+        inputUid: "uid-alice",
+        input: { uid: "uid-alice", toGatewayId: "default-blue" },
+      },
+    });
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/admin/customers/uid-alice/unassign")
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.operationId).toBe("op-mig-1");
+    const update = calls.find((c) => c.collection === "users" && c.op === "doc.update");
+    expect(update).toBeUndefined();
   });
 });
 

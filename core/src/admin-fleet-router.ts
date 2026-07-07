@@ -6,7 +6,7 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { type Firestore } from "firebase-admin/firestore";
+import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -3976,6 +3976,23 @@ router.get(
     },
   );
 
+  async function findInFlightMigrateOp(
+    uid: string,
+  ): Promise<{ id: string } | null> {
+    const opsSnap = await db
+      .collection(GLM_OPERATIONS_COLLECTION)
+      .where("inputUid", "==", uid)
+      .get();
+    const doc = opsSnap.docs.find((d) => {
+      const data = d.data() as { kind?: unknown; status?: unknown };
+      return (
+        data.kind === OP_KIND_MIGRATE_CUSTOMER &&
+        (data.status === "pending" || data.status === "running")
+      );
+    });
+    return doc ? { id: doc.id } : null;
+  }
+
   router.post(
     "/customers/:uid/migrate",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -3986,6 +4003,16 @@ router.get(
           res
             .status(400)
             .json({ error: "missing target gateway", required: ["to"] });
+          return;
+        }
+        const inFlight = await findInFlightMigrateOp(uid);
+        if (inFlight) {
+          res.status(409).json({
+            error:
+              "a migration for this customer is already pending or running",
+            operationId: inFlight.id,
+            uid,
+          });
           return;
         }
         const targetSnap = await db
@@ -4037,6 +4064,61 @@ router.get(
           },
         });
         res.status(202).json({ operationId });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  // Clears the assignment only; the customer's gateway reconcile evicts the
+  // mount on its next pass (level-triggered), and the customer surfaces as
+  // pending-placement for the operator.
+  router.post(
+    "/customers/:uid/unassign",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const uid = req.params.uid as string;
+        const userSnap = await db.collection("users").doc(uid).get();
+        if (!userSnap.exists) {
+          res.status(404).json({ error: "user not found", uid });
+          return;
+        }
+        const currentGatewayId = readUserGatewayId(
+          userSnap.data() as Record<string, unknown> | undefined,
+        );
+        if (!currentGatewayId) {
+          res.status(409).json({ error: "customer is already unassigned", uid });
+          return;
+        }
+        const inFlight = await findInFlightMigrateOp(uid);
+        if (inFlight) {
+          res.status(409).json({
+            error:
+              "a migration for this customer is pending or running — let it finish or fail before unassigning",
+            operationId: inFlight.id,
+            uid,
+          });
+          return;
+        }
+        // Symmetric inverse of cutoverUserGatewayAndMarkMounted: drop the
+        // assignment AND its sibling mirrors, so no stale gatewayProfile/
+        // shellsEnabled outlives the gateway they described.
+        await db
+          .collection("users")
+          .doc(uid)
+          .update({
+            "provisioning.openclaw.gatewayId": FieldValue.delete(),
+            "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
+            "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
+            "provisioning.openclaw.shellsEnabled": FieldValue.delete(),
+          });
+        const actor = (req as ActorRequest).uid ?? "unknown";
+        deps.logger.info("admin unassigned customer from gateway", {
+          actor,
+          uid,
+          from: currentGatewayId,
+        });
+        res.json({ unassigned: true, uid, from: currentGatewayId });
       } catch (e) {
         next(e);
       }

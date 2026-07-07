@@ -2101,10 +2101,25 @@ async function buildHandlers(
             return null;
           },
           enqueueMigrateOp: async ({ uid: u, fromGatewayId: from, toGatewayId: to }) => {
+            // Cosmetic ops-feed label only — a failed read must never fail the drain.
+            let builderSlug: string | null = null;
+            try {
+              const userSnap = await db.collection("users").doc(u).get();
+              builderSlug = slugFromAssignedUser(
+                userSnap.data() as Record<string, unknown> | undefined,
+              );
+            } catch (err) {
+              logFn(
+                `[rollout-bluegreen] ⚠ builderSlug resolve failed for ${u} — enqueueing unlabelled: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            }
             const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
             await opRef.set(
               buildBlueGreenMigrateOpDoc({
                 uid: u,
+                ...(builderSlug ? { builderSlug } : {}),
                 fromGatewayId: from,
                 toGatewayId: to,
                 createdAt: Date.now(),
