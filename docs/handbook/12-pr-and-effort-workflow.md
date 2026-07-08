@@ -53,20 +53,23 @@ its own green commit (TDD + full suite + tsc + eslint green before each commit);
 run the review agent **once at the end**, not per-feature. Used deliberately for
 the app-shell decomposition (#958). Still no self-merge.
 
-## Docs & small-config: PR required (branch protection is ON)
+## Docs & small-config go direct to main
 
-`main` is branch-protected (verified live: `required_pull_request_reviews`
-present, required status checks `gitleaks`/`osv-scanner`/`eslint`/`test-gate`,
-`enforce_admins:false`). A non-admin `git push origin HEAD:main` will be
-**rejected** — there is no clean direct-push path anymore, including for pure
-docs. Fresh branch → `gh pr create` → merge, even for a one-paragraph doc fix.
-(`enforce_admins:false` means an operator/admin token *can* bypass and push
-directly, which skips every check — that's the operator's call to make, not
-an agent's default.)
-- **Carve-out (unchanged):** anything touching `cloudbuild*.yaml` /
-  `oc-build-matrix.yaml` / `Dockerfile.base` / `entrypoint.sh` auto-fires a
-  prod base-image rebuild + Release CI on merge — treat with extra review
-  care even though it's "just" a PR.
+- Pure docs (`docs/`, `README.md`, code comments, CLAUDE.md, this handbook) and
+  small, easily-revertible ops/helm config (e.g. a compute-class default) →
+  fresh branch, `git push origin HEAD:main`, **no PR**. Operator policy
+  (2026-07-08): PRs burn Copilot review minutes, which are reserved for final
+  code PRs.
+- **How this works with branch protection:** `main` requires a PR with status
+  checks (`gitleaks`/`osv-scanner`/`eslint`/`test-gate`) but has
+  `enforce_admins:false` — and agent sessions here run on the operator's admin
+  credentials, so the direct push is an admin bypass that works by design. It
+  skips every check; that's accepted for docs by operator policy. A non-admin
+  push would be rejected.
+- **Carve-out:** anything touching `cloudbuild*.yaml` / `oc-build-matrix.yaml` /
+  `Dockerfile.base` / `entrypoint.sh` goes via branch + PR — those auto-fire a
+  prod base-image rebuild + Release CI, so a direct push is an unreviewed prod
+  mutation. If unsure, PR.
 
 ## Git hygiene
 

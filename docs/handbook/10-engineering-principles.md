@@ -37,7 +37,7 @@ operator is on call for every silent failure.
 
 ## Greenfield posture
 
-Pre-customer means breaking changes are cheap and correctness is the priority.
+Pre-broad-customer, breaking changes are cheap and correctness is the priority.
 
 - No migrations, no API versioning, no backwards-compat shims, no `_var` renames
   for compat. Just change the code — clean breaks over compat hacks.
