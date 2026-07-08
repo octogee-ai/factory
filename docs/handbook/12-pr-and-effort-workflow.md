@@ -81,8 +81,14 @@ the app-shell decomposition (#958). Still no self-merge.
 
 ## Supervised subagents & the council of experts
 
-Larger efforts may be delegated to coding subagents (any vendor — Claude,
-Codex, …) working under a supervisor. The contract:
+Larger efforts are delegated to coding subagents working under a supervisor,
+fanned out across **Sonnet 5** (Claude Agent tool) and **Codex gpt-5.5 at
+xhigh effort** (`codex exec --full-auto -m gpt-5.5 -c
+model_reasoning_effort="xhigh" --cd <worktree> "<task>"`) as work is spec'ed.
+Standing operator grant (2026-07-08): **auto-completion approved** — once the
+council review passes, the supervisor pushes the branch, opens the PR, and
+drives review fixups without waiting for operator sign-off. The operator
+still merges. The contract:
 
 - **Isolation:** every subagent works in its OWN git worktree on a fresh
   branch off `origin/main` (`git worktree add .claude/worktrees/<name> -B
