@@ -226,6 +226,12 @@ Scope guardrails:
 - Server-trusted field on a client-writable doc ⇒ check the rules even if the
   PR didn't touch them (the API write-gate is bypassable via a direct client
   SDK write — an unprotected server-trusted field is a P0 confused-deputy).
+- A proposal to deny client READ of `users/{uid}/*` (own-uid path) is usually
+  the wrong fix, not a missing one — the data IS the user's own, they're
+  authenticated as themselves, and the actual secret material (API keys)
+  lives in Secret Manager, never Firestore. The right fix for an
+  over-exposed field (a key fingerprint, a secret name) is hiding it in the
+  UI render, not restricting the read at the rules layer.
 - New variant on a shared abstraction ⇒ audit EVERY consumer, not just the
   changed files (sibling consumers silently accept the new variant and
   mis-operate). Binary if/else branches over a widened union deserve special
