@@ -45,6 +45,7 @@ describe("core firebase bootstrap", () => {
     expect(module.FIREBASE_PROJECT_ID).toBe("octogee-test");
     expect(module.OCTOGEE_ENV).toBe("test");
     expect(mocks.initializeApp).toHaveBeenCalledWith({
+      projectId: "octogee-test",
       storageBucket: "octogee-test.firebasestorage.app",
     });
     expect(mocks.getFirestore).toHaveBeenCalledTimes(1);
@@ -63,6 +64,20 @@ describe("core firebase bootstrap", () => {
     expect(module.OCTOGEE_ENV).toBe("prod");
     expect(mocks.initializeApp).not.toHaveBeenCalled();
     expect(mocks.getFirestore).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits projectId so firebase-admin auto-resolves when no project env is set", async () => {
+    vi.stubEnv("FIREBASE_PROJECT_ID", "");
+    vi.stubEnv("GCLOUD_PROJECT", "");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const { module, mocks } = await loadFirebase([]);
+
+    expect(module.FIREBASE_PROJECT_ID).toBe("unknown");
+    expect(mocks.initializeApp).toHaveBeenCalledWith({
+      storageBucket: "unknown.firebasestorage.app",
+    });
+    expect(mocks.initializeApp.mock.calls[0][0]).not.toHaveProperty("projectId");
   });
 
   it("surfaces unknown environment for unrecognized project ids", async () => {
