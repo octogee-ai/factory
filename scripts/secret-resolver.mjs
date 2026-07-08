@@ -108,7 +108,7 @@ function parseByokApiKeyId(id) {
 // exec protocol passes no requesting-agent context (see the header note), so the
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
 const AGENT_MODEL_TOKEN_ID_RE =
-  /^agent-model-token-(?:(?<provider>openrouter)-)?(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+  /^agent-model-token-(?:(?<provider>openrouter|openai)-)?(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
 const PLATFORM_OPENAI_EMBEDDING_ID_RE =
   /^platform-openai-embedding-(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
 
@@ -151,7 +151,7 @@ function audit(line) {
 }
 
 const VALID_ID_GRAMMAR_MESSAGE =
-  "id does not match byok-{slug}-{provider}[/version], agent-model-token-octogee-{slug}-coach, agent-model-token-openrouter-octogee-{slug}-coach, or platform-openai-embedding-octogee-{slug}-coach";
+  "id does not match byok-{slug}-{provider}[/version], agent-model-token-octogee-{slug}-coach, agent-model-token-{openrouter|openai}-octogee-{slug}-coach, or platform-openai-embedding-octogee-{slug}-coach";
 
 function scopedSlugForId(id) {
   const byok = parseByokApiKeyId(id);

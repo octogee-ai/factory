@@ -4,13 +4,13 @@
 // a pure config flip — no provisioning step. Plan policy (house_only vs
 // catalog) is enforced at the LLM broker, never on the pod.
 
-export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter"] as const;
+export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai"] as const;
 export type ModelCatalogProvider = (typeof MODEL_CATALOG_PROVIDERS)[number];
 
 export const MODEL_REASONING_EFFORTS = ["high", "xhigh"] as const;
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
 
-export type ModelCatalogSource = "openclaw-release" | "openrouter";
+export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai";
 
 export interface ModelCatalogEntry {
   provider: ModelCatalogProvider;
@@ -57,10 +57,26 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     contextTokens: 524_288,
     reasoningEfforts: [],
   },
+  {
+    provider: "openrouter",
+    id: "deepseek/deepseek-v4-pro",
+    label: "DeepSeek V4 Pro",
+    source: "openrouter",
+    contextTokens: 1_048_576,
+    reasoningEfforts: [],
+  },
+  {
+    provider: "openai",
+    id: "gpt-5.4-mini",
+    label: "GPT-5.4 Mini",
+    source: "openai",
+    contextTokens: 400_000,
+    reasoningEfforts: [],
+  },
 ];
 
 export function isModelCatalogProvider(value: unknown): value is ModelCatalogProvider {
-  return value === "anthropic" || value === "openrouter";
+  return value === "anthropic" || value === "openrouter" || value === "openai";
 }
 
 export function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {

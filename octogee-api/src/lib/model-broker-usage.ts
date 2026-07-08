@@ -9,8 +9,6 @@ import type {
 import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/billing";
 import {
   MODEL_BROKER_CREDITS_COLLECTION,
-  MODEL_BROKER_HOUSE_DAY_WINDOW_MS,
-  MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION,
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
@@ -18,7 +16,6 @@ import {
   MODEL_BROKER_WEEK_WINDOW_MS,
   MODEL_BROKER_RATE_WINDOWS_COLLECTION,
   MODEL_BROKER_RATE_WINDOW_MS,
-  houseDayStartMs,
   modelBrokerWindowDocId as windowDocId,
   rateWindowStartMs,
   usageWindowStartMs,
@@ -26,7 +23,7 @@ import {
   windowOwnerKey,
 } from "@octogee/shared/types/model-broker-usage";
 
-export type ModelBrokerUsageProvider = "anthropic" | "openrouter";
+export type ModelBrokerUsageProvider = "anthropic" | "openrouter" | "openai";
 export type AnthropicCacheWriteTtl = "5m" | "1h";
 
 export interface AnthropicTokenUsage {
@@ -85,7 +82,6 @@ export interface ModelBrokerUsageStore {
   readWindowUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot>;
   readWeekUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerWeekSnapshot>;
   reserveRateWindow?(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot>;
-  readHouseDayUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerHouseDaySnapshot>;
   readCreditBalance?(ownerUid: string): Promise<number>;
 }
 
@@ -95,13 +91,6 @@ export interface ModelBrokerWeekSnapshot {
   requestCount: number;
   totalTokens: number;
   costUsd: number;
-}
-
-export interface ModelBrokerHouseDaySnapshot {
-  ownerKey: string;
-  dayStartMs: number;
-  requestCount: number;
-  totalTokens: number;
 }
 
 export interface ModelBrokerUsageWindowReadInput {
@@ -168,8 +157,15 @@ const ANTHROPIC_PRICING: Record<string, AnthropicPricing> = {
 const UNKNOWN_MODEL_FALLBACK_PRICING = pricing(10, 50, "unknown-fable-fallback");
 const OPENROUTER_PRICING: Record<string, AnthropicPricing> = {
   "z-ai/glm-5.2": pricing(0.94, 3, "openrouter:z-ai/glm-5.2"),
+  "deepseek/deepseek-v4-pro": pricing(0.435, 0.87, "openrouter:deepseek/deepseek-v4-pro"),
 };
 const UNKNOWN_OPENROUTER_FALLBACK_PRICING = pricing(1, 5, "openrouter:unknown-fallback");
+// Snapshot from the OpenAI API pricing page, verified 2026-07-08:
+// https://developers.openai.com/api/docs/pricing (cached input = 10% of input).
+const OPENAI_PRICING: Record<string, AnthropicPricing> = {
+  "gpt-5.4-mini": pricing(0.75, 4.5, "openai:gpt-5.4-mini"),
+};
+const UNKNOWN_OPENAI_FALLBACK_PRICING = pricing(2.5, 15, "openai:unknown-fallback");
 
 function pricing(inputPerMTok: number, outputPerMTok: number, pricingModel: string): AnthropicPricing {
   return {
@@ -286,6 +282,19 @@ function openRouterModelPricing(model: string): AnthropicPricing {
   return OPENROUTER_PRICING[normalized] ?? UNKNOWN_OPENROUTER_FALLBACK_PRICING;
 }
 
+function openAiModelPricing(model: string): AnthropicPricing {
+  const normalized = model.toLowerCase();
+  return (
+    OPENAI_PRICING[normalized] ??
+    Object.entries(OPENAI_PRICING).find(([id]) => normalized.startsWith(`${id}-`))?.[1] ??
+    UNKNOWN_OPENAI_FALLBACK_PRICING
+  );
+}
+
+export function isUnknownOpenAiPricingModel(pricingModel: string): boolean {
+  return pricingModel === UNKNOWN_OPENAI_FALLBACK_PRICING.pricingModel;
+}
+
 export function estimateModelBrokerCost(
   provider: ModelBrokerUsageProvider,
   model: string,
@@ -293,7 +302,7 @@ export function estimateModelBrokerCost(
   cacheWriteTtl: AnthropicCacheWriteTtl = "5m",
 ): ModelBrokerUsageCost {
   if (provider === "anthropic") return estimateAnthropicCost(model, usage, cacheWriteTtl);
-  const prices = openRouterModelPricing(model);
+  const prices = provider === "openai" ? openAiModelPricing(model) : openRouterModelPricing(model);
   const input = usd(usage.inputTokens + usage.cacheCreationInputTokens, prices.inputPerMTok);
   const output = usd(usage.outputTokens, prices.outputPerMTok);
   const cacheRead = usd(usage.cacheReadInputTokens, prices.cacheReadPerMTok);
@@ -495,7 +504,6 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot & Record<string, unknown>>();
   readonly weekWindows = new Map<string, ModelBrokerWeekSnapshot & Record<string, unknown>>();
   readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
-  readonly houseDayWindows = new Map<string, ModelBrokerHouseDaySnapshot>();
   readonly creditBalances = new Map<string, number>();
   private readonly eventIds = new Set<string>();
 
@@ -570,36 +578,6 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         (this.creditBalances.get(input.ownerUid) ?? 0) - cost.total,
       );
     }
-    if (input.degraded === true) {
-      const dayStartMs = houseDayStartMs(now);
-      const dayKey = windowDocId(ownerKey, dayStartMs);
-      const existingDay = this.houseDayWindows.get(dayKey) ?? {
-        ownerKey,
-        dayStartMs,
-        totalTokens: 0,
-        requestCount: 0,
-      };
-      this.houseDayWindows.set(dayKey, {
-        ownerKey,
-        dayStartMs,
-        totalTokens: existingDay.totalTokens + totalTokens(input.usage),
-        requestCount: existingDay.requestCount + 1,
-      });
-    }
-  }
-
-  async readHouseDayUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerHouseDaySnapshot> {
-    const now = input.now ?? Date.now();
-    const dayStartMs = houseDayStartMs(now);
-    const ownerKey = windowOwnerKey(input);
-    return (
-      this.houseDayWindows.get(windowDocId(ownerKey, dayStartMs)) ?? {
-        ownerKey,
-        dayStartMs,
-        requestCount: 0,
-        totalTokens: 0,
-      }
-    );
   }
 
   async readCreditBalance(ownerUid: string): Promise<number> {
@@ -662,21 +640,18 @@ interface UsageWriteArgs {
   modelKey: string;
   windowStartMs: number;
   weekStartMs: number;
-  dayStartMs: number;
   countsTowardWindow: boolean;
   refs: {
     eventRef: DocumentReference;
     rollupRef: DocumentReference;
     windowRef: DocumentReference;
     weekRef: DocumentReference;
-    houseDayRef: DocumentReference;
     creditRef: DocumentReference | null;
   };
   snaps: {
     rollup: DocumentData;
     window: DocumentData;
     week: DocumentData;
-    houseDay: DocumentData;
     credit: DocumentData;
   };
 }
@@ -756,23 +731,6 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
       { merge: true },
     );
   }
-  if (input.degraded === true) {
-    t.set(
-      refs.houseDayRef,
-      {
-        ownerKey,
-        gatewayId: input.gatewayId,
-        ownerUid: input.ownerUid,
-        dayStartMs: a.dayStartMs,
-        windowLengthMs: MODEL_BROKER_HOUSE_DAY_WINDOW_MS,
-        updatedAt: now,
-        expiresAt: expiresAt(now),
-        requestCount: numberField(snaps.houseDay, "requestCount") + 1,
-        totalTokens: numberField(snaps.houseDay, "totalTokens") + totalTokens(input.usage),
-      },
-      { merge: true },
-    );
-  }
 }
 
 export function createFirestoreModelBrokerUsageStore(
@@ -787,7 +745,6 @@ export function createFirestoreModelBrokerUsageStore(
       const windowStartMs = usageWindowStartMs(now);
       const weekStartMs = weekWindowStartMs(now);
       const ownerKey = windowOwnerKey(input);
-      const dayStartMs = houseDayStartMs(now);
       const eventRef = db.collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION).doc(eventId);
       const rollupRef = db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(ownerKey);
       const windowRef = db
@@ -796,9 +753,6 @@ export function createFirestoreModelBrokerUsageStore(
       const weekRef = db
         .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
         .doc(windowDocId(ownerKey, weekStartMs));
-      const houseDayRef = db
-        .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
-        .doc(windowDocId(ownerKey, dayStartMs));
       const debitsCredits = input.debitsCreditBalance === true && Boolean(input.ownerUid);
       const creditRef = debitsCredits
         ? db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(input.ownerUid as string)
@@ -809,11 +763,10 @@ export function createFirestoreModelBrokerUsageStore(
       await db.runTransaction(async (t) => {
         const existingEvent = await t.get(eventRef);
         if (existingEvent.exists) return;
-        const [rollupSnap, windowSnap, weekSnap, houseDaySnap, creditSnap] = await Promise.all([
+        const [rollupSnap, windowSnap, weekSnap, creditSnap] = await Promise.all([
           t.get(rollupRef),
           t.get(windowRef),
           countsTowardWindow ? t.get(weekRef) : Promise.resolve(null),
-          input.degraded === true ? t.get(houseDayRef) : Promise.resolve(null),
           creditRef ? t.get(creditRef) : Promise.resolve(null),
         ]);
         applyUsageWrites(t, {
@@ -826,35 +779,16 @@ export function createFirestoreModelBrokerUsageStore(
           modelKey,
           windowStartMs,
           weekStartMs,
-          dayStartMs,
           countsTowardWindow,
-          refs: { eventRef, rollupRef, windowRef, weekRef, houseDayRef, creditRef },
+          refs: { eventRef, rollupRef, windowRef, weekRef, creditRef },
           snaps: {
             rollup: rollupSnap.data() ?? {},
             window: windowSnap.data() ?? {},
             week: weekSnap?.data() ?? {},
-            houseDay: houseDaySnap?.data() ?? {},
             credit: creditSnap?.data() ?? {},
           },
         });
       });
-    },
-
-    async readHouseDayUsage(input) {
-      const now = input.now ?? Date.now();
-      const dayStartMs = houseDayStartMs(now);
-      const ownerKey = windowOwnerKey(input);
-      const snap = await db
-        .collection(MODEL_BROKER_HOUSE_DAY_WINDOWS_COLLECTION)
-        .doc(windowDocId(ownerKey, dayStartMs))
-        .get();
-      const data = snap.data() ?? {};
-      return {
-        ownerKey,
-        dayStartMs,
-        requestCount: numberField(data, "requestCount"),
-        totalTokens: numberField(data, "totalTokens"),
-      };
     },
 
     async readWindowUsage(input) {

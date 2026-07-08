@@ -1,7 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
-import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
+import {
+  catalogEntryForModelRef,
+  OPENAI_PLATFORM_PROVIDER_ID,
+  OPENROUTER_PLATFORM_PROVIDER_ID,
+  type AgentModelSelections,
+} from "@octogee/shared/types/agent-models";
+import { DEFAULT_FREE_TIER_MODEL_REF } from "@octogee/shared/types/platform-config";
 import {
   buildModelCredentialConfigForProvider,
   claudeCliRuntimeConfig,
@@ -37,11 +43,15 @@ const BYOT_MARKER = ".byot-managed";
 export type ByotInput = ModelCredentialConfigInput;
 export interface FreeTierCoachModelInput {
   slug: string;
-  model: typeof PLATFORM_HOUSE_MODEL;
+  model: string;
   source: "free-tier";
 }
 
-export type CoachModelInput = ByotInput | FreeTierCoachModelInput;
+// The BYOK coach input plus the operator's free-tier dial ref — the fallback
+// chain's platform baseline follows the dial, not a compiled constant.
+export type ByotCoachModelInput = ByotInput & { houseModelRef?: string };
+
+export type CoachModelInput = ByotCoachModelInput | FreeTierCoachModelInput;
 
 // A per-agent BYOS model override. codex (a plugin) pins agentRuntime:{id:codex}
 // to route a gpt-5.5 override through the codex harness; claude-cli (a core
@@ -71,18 +81,50 @@ export const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
   approvalPolicy: "never",
 };
 
-// The always-available platform house model. A failed/exhausted BYOK provider
-// degrades here rather than leaving the coach credential-less, and house-only
-// plans pin the coach here so config, status, and broker routing agree.
-const PLATFORM_HOUSE_MODEL = "platform-openrouter/z-ai/glm-5.2";
+// The always-available platform house model: the operator's free-tier dial
+// (snapshot freeTierModelRef), compiled default DEFAULT_FREE_TIER_MODEL_REF.
+// A failed/exhausted BYOK provider degrades here rather than leaving the
+// coach credential-less, and house-only plans pin the coach here so config,
+// status, and broker routing agree. Refs are revalidated against the catalog
+// at this trust boundary.
+function houseModelRefFrom(ref: unknown): string {
+  return typeof ref === "string" && catalogEntryForModelRef(ref)
+    ? ref
+    : DEFAULT_FREE_TIER_MODEL_REF;
+}
+
+// A platform-provider ref (openrouter/openai) may sit outside the boot
+// template's model set — declare it in agents.defaults.models (the picker
+// path's pattern) so the pin resolves on every pod. Anthropic refs are
+// declared by the boot materializer.
+export function isPlatformProviderRef(ref: string): boolean {
+  return (
+    ref.startsWith(`${OPENROUTER_PLATFORM_PROVIDER_ID}/`) ||
+    ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`)
+  );
+}
+
+function platformModelsDef(refs: string[]): { models: RuntimeModelsDef } | null {
+  const platformRefs = refs.filter(isPlatformProviderRef);
+  if (platformRefs.length === 0) return null;
+  return { models: Object.fromEntries(platformRefs.map((ref) => [ref, {}])) };
+}
+
+function runtimeModelsForProvider(provider: string): RuntimeModelsDef | null {
+  if (provider === "openai-codex") return codexRuntimeConfig().modelsDef;
+  if (provider === "claude-cli") return claudeCliRuntimeConfig().modelsDef;
+  return null;
+}
 
 export function byosCoachConfigPatch(
   input: CoachModelInput | null,
 ): CoachModelPatch | null {
   if (!input) return null;
   if ("source" in input) {
+    const defaults = platformModelsDef([input.model]);
     return {
       agents: {
+        ...(defaults ? { defaults } : {}),
         list: [
           {
             id: agentIdForSlug(input.slug),
@@ -94,20 +136,23 @@ export function byosCoachConfigPatch(
   }
   const cfg = buildModelCredentialConfigForProvider(input);
   if (cfg.agentModelOverride == null) return null;
+  const houseModelRef = houseModelRefFrom(input.houseModelRef);
   const patch: CoachModelPatch = {
     agents: {
       list: [
         {
           id: agentIdForSlug(input.slug),
-          model: { primary: cfg.agentModelOverride, fallbacks: [PLATFORM_HOUSE_MODEL] },
+          model: { primary: cfg.agentModelOverride, fallbacks: [houseModelRef] },
         },
       ],
     },
   };
-  if (input.provider === "openai-codex") {
-    patch.agents.defaults = { models: codexRuntimeConfig().modelsDef };
-  } else if (input.provider === "claude-cli") {
-    patch.agents.defaults = { models: claudeCliRuntimeConfig().modelsDef };
+  const runtimeModels = runtimeModelsForProvider(input.provider);
+  const houseDefaults = platformModelsDef([houseModelRef]);
+  if (runtimeModels || houseDefaults) {
+    patch.agents.defaults = {
+      models: { ...(runtimeModels ?? {}), ...(houseDefaults?.models ?? {}) },
+    };
   }
   return patch;
 }
@@ -144,6 +189,9 @@ export function deriveDesiredByotState(userData: {
   // credits-rail builder resolves catalog, not house_only.
   builderSubscription?: unknown;
   trialStartedAt?: unknown;
+  // The operator's free-tier model dial, stamped on the snapshot by the
+  // trusted side; revalidated here against the catalog.
+  freeTierModelRef?: unknown;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };
@@ -166,7 +214,7 @@ export function deriveDesiredByotState(userData: {
   return {
     enabled: true,
     input,
-    coachModelInput: input,
+    coachModelInput: { ...input, houseModelRef: houseModelRefFrom(userData.freeTierModelRef) },
   };
 }
 
@@ -191,7 +239,7 @@ function freeTierCoachModelInput(
 ): FreeTierCoachModelInput | null {
   const plan = resolveBillingProfile(userData);
   return plan.modelAccess === "house_only"
-    ? { slug, model: PLATFORM_HOUSE_MODEL, source: "free-tier" }
+    ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "free-tier" }
     : null;
 }
 

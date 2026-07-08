@@ -9,11 +9,15 @@ import {
 } from "./auth-profile-sqlite.js";
 import {
   agentModelTokenSecretId,
+  OPENAI_BROKER_PROVIDER_ID,
+  OPENAI_BROKER_PROFILE_ID,
   OPENROUTER_BROKER_PROVIDER_ID,
   OPENROUTER_BROKER_PROFILE_ID,
   agentModelTokenProfileEntry,
   materializeAnthropicBrokerForAgents,
   materializeBrokerProfilesForAgents,
+  openAiCatalogInputForBaseUrl,
+  upsertOpenAiBrokerCatalog,
   upsertOpenRouterBrokerCatalog,
   openRouterBrokerProviderConfig,
   openRouterBrokerModelsJson,
@@ -207,6 +211,58 @@ describe("model-readiness: openrouter catalog upsert", () => {
   });
 });
 
+describe("model-readiness: openai catalog upsert", () => {
+  let agentDir: string;
+  beforeEach(() => {
+    agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-oai-"));
+  });
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  const CATALOG = {
+    baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+    models: [{ model: "gpt-5.4-mini", contextTokens: 400_000 }],
+  };
+
+  it("writes catalog models under platform-openai with the agent's openai broker token", () => {
+    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
+    const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
+    const provider = models.providers[OPENAI_BROKER_PROVIDER_ID];
+    expect(provider.api).toBe("openai-completions");
+    expect(provider.apiKey).toBe(OPENAI_BROKER_PROFILE_ID);
+    expect(provider.models.map((m: { id: string }) => m.id)).toEqual(["gpt-5.4-mini"]);
+    const store = readAuthProfileStore(agentDir) as {
+      profiles: Record<string, { provider: string; keyRef: { id: string } }>;
+    };
+    expect(store.profiles[OPENAI_BROKER_PROFILE_ID]).toMatchObject({
+      provider: OPENAI_BROKER_PROVIDER_ID,
+      keyRef: { id: "agent-model-token-openai-octogee-a-coach" },
+    });
+  });
+
+  it("coexists with the platform-openrouter provider entry", () => {
+    upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", {
+      baseUrl: CATALOG.baseUrl,
+      models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+    });
+    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
+    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(false);
+    const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
+    expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID]).toBeTruthy();
+    expect(models.providers[OPENAI_BROKER_PROVIDER_ID]).toBeTruthy();
+  });
+});
+
+describe("openAiCatalogInputForBaseUrl", () => {
+  it("builds the catalog input from the shared MODEL_CATALOG openai entries", () => {
+    const input = openAiCatalogInputForBaseUrl(
+      "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+    );
+    expect(input.models).toEqual([{ model: "gpt-5.4-mini", contextTokens: 400_000 }]);
+  });
+});
+
 describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
   let agentsDir: string;
   beforeEach(() => {
@@ -216,12 +272,16 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
     fs.rmSync(agentsDir, { recursive: true, force: true });
   });
 
-  it("asserts BOTH broker provider surfaces per agent — anthropic profile + openrouter catalog", () => {
+  it("asserts EVERY broker provider surface per agent — anthropic profile + openrouter + openai catalogs", () => {
     const written = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,
       openRouter: {
         baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
         models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+      },
+      openAi: {
+        baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+        models: [{ model: "gpt-5.4-mini", contextTokens: 400_000 }],
       },
     });
     expect(written).toBe(1);
@@ -232,6 +292,7 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
     expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-a-coach");
     const models = JSON.parse(fs.readFileSync(path.join(agentHome, "models.json"), "utf8"));
     expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID].models[0].id).toBe("z-ai/glm-5.2");
+    expect(models.providers[OPENAI_BROKER_PROVIDER_ID].models[0].id).toBe("gpt-5.4-mini");
   });
 
   it("falls back to anthropic-only when no openrouter config is supplied", () => {

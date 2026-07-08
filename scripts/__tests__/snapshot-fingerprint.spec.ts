@@ -124,6 +124,15 @@ describe("snapshotConfigFingerprint", () => {
     ).not.toBe(base);
   });
 
+  it("changes when the operator flips the free-tier model dial (fleet-wide re-pin within a tick)", () => {
+    const base = snapshotConfigFingerprint(snap());
+    expect(
+      snapshotConfigFingerprint(
+        snap({ freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro" }),
+      ),
+    ).not.toBe(base);
+  });
+
   it("changes when the coach identity, token, or model config changes", () => {
     const base = snapshotConfigFingerprint(snap());
     expect(snapshotConfigFingerprint(snap({ coachIdentity: { name: "Buddy", emoji: "🐶" } }))).not.toBe(base);

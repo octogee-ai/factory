@@ -23,6 +23,7 @@ const MAX_MODEL_REF_LENGTH = 128;
 const AGENT_ID_PATTERN = /^octogee-[a-z0-9][a-z0-9-]*-coach$/;
 
 export const OPENROUTER_PLATFORM_PROVIDER_ID = "platform-openrouter";
+export const OPENAI_PLATFORM_PROVIDER_ID = "platform-openai";
 
 export function isValidModelRef(value: unknown): value is string {
   return (
@@ -33,9 +34,9 @@ export function isValidModelRef(value: unknown): value is string {
 }
 
 export function modelRefForCatalogEntry(entry: ModelCatalogEntry): string {
-  return entry.provider === "openrouter"
-    ? `${OPENROUTER_PLATFORM_PROVIDER_ID}/${entry.id}`
-    : entry.id;
+  if (entry.provider === "openrouter") return `${OPENROUTER_PLATFORM_PROVIDER_ID}/${entry.id}`;
+  if (entry.provider === "openai") return `${OPENAI_PLATFORM_PROVIDER_ID}/${entry.id}`;
+  return entry.id;
 }
 
 export function platformModelRefs(): string[] {

@@ -5,6 +5,7 @@ import {
   byosCoachConfigPatch,
   coachFullAgentList,
   deriveDesiredByotState,
+  isPlatformProviderRef,
   platformCoachModelInputForUser,
   STANDARD_CODEX_APP_SERVER,
   type CoachModelInput,
@@ -32,9 +33,10 @@ import {
   usesLlmBrokerToken,
 } from "./config.js";
 import {
-  OPENROUTER_BROKER_PROVIDER_ID,
+  openAiCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
   upsertAnthropicBrokerProfile,
+  upsertOpenAiBrokerCatalog,
   upsertOpenRouterBrokerCatalog,
 } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, type AgentModelSelections } from "@octogee/shared/types/agent-models";
@@ -156,15 +158,15 @@ export async function applyAgentModelOverrides(
   let patched = false;
   for (const [agentId, selection] of owned) {
     const model = { primary: selection.primary, fallbacks: selection.fallbacks };
-    const openRouterRefs = [selection.primary, ...selection.fallbacks].filter((ref) =>
-      ref.startsWith(`${OPENROUTER_BROKER_PROVIDER_ID}/`),
+    const platformRefs = [selection.primary, ...selection.fallbacks].filter(
+      isPlatformProviderRef,
     );
     const buildPatch = (current: unknown) => ({
       agents: {
-        ...(openRouterRefs.length > 0
+        ...(platformRefs.length > 0
           ? {
               defaults: {
-                models: Object.fromEntries(openRouterRefs.map((ref) => [ref, {}])),
+                models: Object.fromEntries(platformRefs.map((ref) => [ref, {}])),
               },
             }
           : {}),
@@ -497,11 +499,23 @@ function materializeAnthropicBroker(slug: string): boolean {
   const wroteCatalog = baseUrl
     ? upsertOpenRouterBrokerCatalog(agentHome, agentId, openRouterCatalogInputForBaseUrl(baseUrl))
     : false;
-  return wroteProfile || wroteCatalog;
+  const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
+  const wroteOpenAi = openAiBaseUrl
+    ? upsertOpenAiBrokerCatalog(agentHome, agentId, openAiCatalogInputForBaseUrl(openAiBaseUrl))
+    : false;
+  return wroteProfile || wroteCatalog || wroteOpenAi;
 }
 
 function configuredOpenRouterBaseUrl(): string | null {
   const raw = process.env.OPENROUTER_BASE_URL?.trim();
+  return raw || null;
+}
+
+// Deliberately NOT OPENAI_BASE_URL — that name would repoint BYOK-openai and
+// the embeddings flows at the broker. This env only feeds the platform-openai
+// broker provider profile.
+function configuredPlatformOpenAiBaseUrl(): string | null {
+  const raw = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
   return raw || null;
 }
 

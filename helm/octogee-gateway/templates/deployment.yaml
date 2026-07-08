@@ -227,6 +227,10 @@ spec:
               value: {{ $llmBrokerUrl | quote }}
             - name: OPENROUTER_BASE_URL
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            # platform-openai broker provider profile. NOT OPENAI_BASE_URL —
+            # that name would repoint BYOK-openai and embeddings at the broker.
+            - name: PLATFORM_OPENAI_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
             {{- if eq $gatewayClass "shared" }}
             # Shared (multi-tenant) pods carry NO pod-level provider key. Each
             # customer-agent's anthropic:default is its OWN per-customer broker token

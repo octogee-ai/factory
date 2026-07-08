@@ -12,6 +12,14 @@ import { listGatewayBuilds } from "@octogee/core/artifact-registry";
 import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
 import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
 import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "@octogee/core/firebase-auth-helpers";
+import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
+import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
+import {
+  DEFAULT_FREE_TIER_MODEL_REF,
+  PLATFORM_CONFIG_COLLECTION,
+  PLATFORM_MODEL_CONFIG_DOC,
+  parsePlatformModelConfig,
+} from "@octogee/shared/types/platform-config";
 
 const router = Router();
 router.use(requireAdmin);
@@ -37,6 +45,64 @@ addAdminFleetRoutes(router, {
     const { getAuth } = await import("firebase-admin/auth");
     await deleteAuthUserLib(uid, getAuth());
   },
+});
+
+// The operator's platform model dials (platformConfig/models). Today one dial:
+// the free-tier house model — the broker's free-degrade target and the pod-side
+// house pin both follow it. GET always reports the EFFECTIVE value (a stored
+// ref that left the catalog reads as the compiled default, same as the broker
+// resolves it).
+const platformModelDoc = () =>
+  db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_MODEL_CONFIG_DOC);
+
+router.get("/platform-config", async (_req, res) => {
+  try {
+    const snap = await platformModelDoc().get();
+    const parsed = parsePlatformModelConfig(snap.data());
+    if (snap.data() !== undefined && !parsed) {
+      logger.warn("[admin] platformConfig/models carries a non-catalog freeTierModelRef — serving the compiled default", {
+        freeTierModelRef: (snap.data() as { freeTierModelRef?: unknown })?.freeTierModelRef,
+      });
+    }
+    res.json({
+      freeTierModelRef: parsed?.freeTierModelRef ?? DEFAULT_FREE_TIER_MODEL_REF,
+      defaultFreeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      catalog: MODEL_CATALOG.map((entry) => ({
+        ref: modelRefForCatalogEntry(entry),
+        label: entry.label,
+        provider: entry.provider,
+      })),
+    });
+  } catch (err) {
+    logger.error("[admin] platform-config read failed", { err });
+    res.status(500).json({ error: "platform_config_read_failed" });
+  }
+});
+
+router.put("/platform-config", async (req, res) => {
+  const parsed = parsePlatformModelConfig(req.body);
+  if (!parsed) {
+    res.status(400).json({ error: "invalid_model_ref" });
+    return;
+  }
+  try {
+    await platformModelDoc().set(
+      {
+        freeTierModelRef: parsed.freeTierModelRef,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: req.uid ?? null,
+      },
+      { merge: true },
+    );
+    logger.info("[admin] free-tier model dial set", {
+      freeTierModelRef: parsed.freeTierModelRef,
+      updatedBy: req.uid,
+    });
+    res.json({ ok: true, freeTierModelRef: parsed.freeTierModelRef });
+  } catch (err) {
+    logger.error("[admin] platform-config write failed", { err });
+    res.status(500).json({ error: "platform_config_write_failed" });
+  }
 });
 
 // One-shot config check: Resend API key real, webhook secret real, sender

@@ -407,6 +407,43 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(snap?.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
   });
 
+  it("loadUserSnapshot carries builderSubscription — a credits-rail builder must not resolve house_only at mount", async () => {
+    const client = mkClient({
+      userSnapshot: vi.fn(async () =>
+        fullSnapshot({
+          selectedTier: "personal_free",
+          builderSubscription: { tier: "hobby", status: "active" },
+        }),
+      ),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+
+    expect(snap?.builderSubscription).toEqual({ tier: "hobby", status: "active" });
+  });
+
+  it("loadUserSnapshot carries the free-tier dial ref (the house pin must follow the operator)", async () => {
+    const client = mkClient({
+      userSnapshot: vi.fn(async () =>
+        fullSnapshot({ freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro" }),
+      ),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+
+    expect(snap?.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+  });
+
   it("loadUserSnapshot carries projectAgents from the broker snapshot (a re-ensure must see the Vegas toggle state)", async () => {
     const client = mkClient({
       userSnapshot: vi.fn(async () =>

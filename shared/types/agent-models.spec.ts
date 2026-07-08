@@ -11,12 +11,15 @@ import {
 import { MODEL_CATALOG, modelCatalogEntryFor } from "./model-catalog";
 
 describe("model refs", () => {
-  it("anthropic entries ride their catalog id; openrouter rides the platform-openrouter provider", () => {
+  it("anthropic entries ride their catalog id; openrouter/openai ride their platform provider ids", () => {
     expect(
       modelRefForCatalogEntry(modelCatalogEntryFor("anthropic", "anthropic/claude-sonnet-4-6")!),
     ).toBe("anthropic/claude-sonnet-4-6");
     expect(modelRefForCatalogEntry(modelCatalogEntryFor("openrouter", "z-ai/glm-5.2")!)).toBe(
       "platform-openrouter/z-ai/glm-5.2",
+    );
+    expect(modelRefForCatalogEntry(modelCatalogEntryFor("openai", "gpt-5.4-mini")!)).toBe(
+      "platform-openai/gpt-5.4-mini",
     );
   });
 

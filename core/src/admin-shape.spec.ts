@@ -138,9 +138,17 @@ describe("buildCustomerSummary", () => {
     expect(
       buildCustomerSummary("u", paid, { windowCostUsd: 9_999, now: NOW }).percentUsed,
     ).toBe(100);
-    // post-trial (no trialStartedAt) → zero budget → fully used
+    // non-subscription plan (builder tier) → zero budget → fully used
     expect(
-      buildCustomerSummary("u", { subscription: { tier: "trial" } }, { now: NOW }).percentUsed,
+      buildCustomerSummary("u", { selectedTier: "builder" }, { now: NOW }).percentUsed,
+    ).toBe(100);
+  });
+
+  it("meters a post-trial free user against the $1 weekly house allowance", () => {
+    const free = { subscription: { tier: "trial" } };
+    expect(buildCustomerSummary("u", free, { now: NOW }).percentUsed).toBe(0);
+    expect(
+      buildCustomerSummary("u", free, { windowCostUsd: 9_999, now: NOW }).percentUsed,
     ).toBe(100);
   });
 });

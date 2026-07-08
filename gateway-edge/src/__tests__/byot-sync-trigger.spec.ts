@@ -10,6 +10,22 @@ vi.mock("../lib/internal-fetch", () => ({
     internalFetchSpy(url, init, opts),
 }));
 
+let platformModelDoc: Record<string, unknown> | undefined;
+let platformModelDocError: Error | null = null;
+
+vi.mock("../lib/db", () => ({
+  db: {
+    collection: () => ({
+      doc: () => ({
+        get: async () => {
+          if (platformModelDocError) throw platformModelDocError;
+          return { data: () => platformModelDoc };
+        },
+      }),
+    }),
+  },
+}));
+
 const modelCredentialSyncTrigger = await import("../lib/byot-sync-trigger.js");
 const {
   gatewayModelCredentialSyncUrl,
@@ -45,6 +61,8 @@ function expectedSignature(body: unknown, timestamp: string, secret: string): st
 describe("model credential sync trigger", () => {
   beforeEach(() => {
     internalFetchSpy.mockReset();
+    platformModelDoc = undefined;
+    platformModelDocError = null;
     delete process.env.K8S_NAMESPACE;
     delete process.env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE;
     delete process.env.INTERNAL_SERVICE_KEY;
@@ -71,18 +89,24 @@ describe("model credential sync trigger", () => {
     expect("triggerGatewayByotSync" in modelCredentialSyncTrigger).toBe(false);
   });
 
-  it("POSTs the userData through internalFetch with a model credential sync HMAC", async () => {
+  it("POSTs the userData through internalFetch with a model credential sync HMAC, enriched with the free-tier dial", async () => {
     internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
     await postGatewayModelCredentialSync({
       gatewayId: "bender",
       userData,
       env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
     });
+    // No dial doc → the compiled default rides along; the pod-side derive must
+    // never fall back to its constant on a push while the fleet is dialed away.
+    const enriched = {
+      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      ...userData,
+    };
     expect(internalFetchSpy).toHaveBeenCalledWith(
       "http://gateway-edge-bender.octogee-test.svc.cluster.local:3001/api/g/bender/internal/model-credential-sync",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify(userData),
+        body: JSON.stringify(enriched),
       }),
       expect.objectContaining({ internalServiceKey: "" }),
     );
@@ -91,9 +115,36 @@ describe("model credential sync trigger", () => {
     const timestamp = headers.get("x-byot-sync-timestamp");
     expect(timestamp).toMatch(/^\d+$/);
     expect(headers.get("x-byot-sync-signature")).toBe(
-      expectedSignature(userData, timestamp!, "sync-secret"),
+      expectedSignature(enriched, timestamp!, "sync-secret"),
     );
     expect(headers.get("x-k8s-sa-token")).toBeNull();
+  });
+
+  it("carries the operator's dialed free-tier model on every push payload", async () => {
+    platformModelDoc = { freeTierModelRef: "anthropic/claude-haiku-4-5" };
+    internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+    await postGatewayModelCredentialSync({
+      gatewayId: "bender",
+      userData,
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+    });
+    const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
+    expect(body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
+  });
+
+  it("serves the compiled default when the dial read fails (loud, never blocking the sync)", async () => {
+    platformModelDocError = new Error("firestore down");
+    internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+    const warns: string[] = [];
+    await postGatewayModelCredentialSync({
+      gatewayId: "bender",
+      userData,
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+      logWarn: (m) => warns.push(m),
+    });
+    const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
+    expect(body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(warns.join("\n")).toContain("free-tier dial");
   });
 
   it("fails before network I/O when no BYOT sync signing secret or legacy service key is configured", async () => {

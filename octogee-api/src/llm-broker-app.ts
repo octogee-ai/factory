@@ -19,6 +19,7 @@ import type {
 import {
   estimateModelBrokerCost,
   isUnknownAnthropicPricingModel,
+  isUnknownOpenAiPricingModel,
   isUnknownOpenRouterPricingModel,
   mergeAnthropicUsage,
   normalizeAnthropicUsage,
@@ -27,6 +28,13 @@ import {
   type AnthropicTokenUsage,
   type ModelBrokerUsageStore,
 } from "./lib/model-broker-usage.js";
+import type { ResolvedFreeTierModel } from "@octogee/shared/types/platform-config";
+import {
+  MODEL_BROKER_USAGE_WINDOW_MS,
+  MODEL_BROKER_WEEK_WINDOW_MS,
+  usageWindowStartMs,
+  weekWindowStartMs,
+} from "@octogee/shared/types/model-broker-usage";
 
 export interface LlmBrokerAppDeps {
   store: Pick<ModelBrokerTokenStore, "lookupToken">;
@@ -39,6 +47,10 @@ export interface LlmBrokerAppDeps {
   // served on the platform "house" key and not billed to the builder's window.
   houseModel?: string;
   providerHouseModels?: Partial<Record<ModelBrokerProvider, string | undefined>>;
+  // The operator's free-tier dial (platformConfig/models). Free-tier degrades
+  // rewrite to this model when the token's provider matches; budget/credit
+  // degrades keep the per-provider house model.
+  resolveFreeTierModel?: () => Promise<ResolvedFreeTierModel | null>;
   fetchImpl?: typeof fetch;
   now?: () => number;
   bodyLimit?: string;
@@ -54,8 +66,10 @@ export interface LlmBrokerAppDeps {
 
 const DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_OPENROUTER_UPSTREAM_BASE_URL = "https://openrouter.ai/api";
+const DEFAULT_OPENAI_UPSTREAM_BASE_URL = "https://api.openai.com";
 const DEFAULT_HOUSE_MODEL = "claude-haiku-4-5";
 const DEFAULT_OPENROUTER_HOUSE_MODEL = "z-ai/glm-5.2";
+const DEFAULT_OPENAI_HOUSE_MODEL = "gpt-5.4-mini";
 const DEFAULT_BODY_LIMIT = "32mb";
 const MAX_SSE_METERING_BUFFER_CHARS = 1_000_000;
 
@@ -65,6 +79,8 @@ const ALLOWED_ANTHROPIC_ENDPOINTS = new Set([
   "POST /v1/messages/count_tokens",
 ]);
 
+// OpenAI and OpenRouter both speak the openai-completions surface — one
+// endpoint set serves both providers.
 const ALLOWED_OPENROUTER_ENDPOINTS = new Set([
   "GET /v1/models",
   "POST /v1/chat/completions",
@@ -415,7 +431,14 @@ function usageExtractor(provider: ModelBrokerProvider): PayloadUsageExtractor {
 }
 
 function providerLabel(provider: ModelBrokerProvider): string {
-  return provider === "anthropic" ? "Anthropic" : "OpenRouter";
+  if (provider === "anthropic") return "Anthropic";
+  return provider === "openai" ? "OpenAI" : "OpenRouter";
+}
+
+function isUnknownPricingModel(provider: ModelBrokerProvider, pricingModel: string): boolean {
+  if (provider === "anthropic") return isUnknownAnthropicPricingModel(pricingModel);
+  if (provider === "openai") return isUnknownOpenAiPricingModel(pricingModel);
+  return isUnknownOpenRouterPricingModel(pricingModel);
 }
 
 class SseUsageCollector {
@@ -557,10 +580,7 @@ async function recordUsage(
   if (!ctx.usageStore || !usage || totalTokens(usage) <= 0) return;
   const model = metered.model ?? ctx.requestModel ?? "unknown";
   const cost = estimateModelBrokerCost(ctx.record.provider, model, usage, ctx.cacheWriteTtl);
-  const unknownPricing =
-    ctx.record.provider === "anthropic"
-      ? isUnknownAnthropicPricingModel(cost.pricingModel)
-      : isUnknownOpenRouterPricingModel(cost.pricingModel);
+  const unknownPricing = isUnknownPricingModel(ctx.record.provider, cost.pricingModel);
   // A reported upstream cost makes the table irrelevant for this call — only a
   // genuine fallback to estimates is worth an alert.
   if (unknownPricing && reportedCostUsd === null) {
@@ -745,16 +765,15 @@ type DegradeOutcome =
       creditBalanceUsd: number | null;
     };
 
-// Free tier always degrades; a prepaid builder degrades once their balance is
-// dry; a subscription plan degrades once its weekly ledger or burst window is
-// spent.
-async function degradeStateForGrant(
+// Free tier rides the house model against the same weekly-ledger + burst
+// machinery as paid plans — but it is already on the floor model, so an
+// exhausted allowance locks until the meter refills instead of degrading.
+async function freeTierGateOutcome(
   input: PreflightGateInput,
-  prepaid: boolean,
   spendWindowUsd: number | null,
   spendWeekUsd: number | null,
 ): Promise<DegradeOutcome> {
-  if (input.grant.policy.freeTier) {
+  if (spendWindowUsd === null && spendWeekUsd === null) {
     return {
       kind: "state",
       degrade: true,
@@ -763,6 +782,48 @@ async function degradeStateForGrant(
       weekCostUsd: null,
       creditBalanceUsd: null,
     };
+  }
+  const spend = await spendWindowGate(input, spendWindowUsd, spendWeekUsd);
+  if ("allowed" in spend) return { kind: "denied", decision: spend };
+  if (spend.degrade) {
+    const now = input.now();
+    const weekSpent = meterExhausted(spend.weekCostUsd, spendWeekUsd);
+    const refillAtMs = weekSpent
+      ? weekWindowStartMs(now) + MODEL_BROKER_WEEK_WINDOW_MS
+      : usageWindowStartMs(now) + MODEL_BROKER_USAGE_WINDOW_MS;
+    return {
+      kind: "denied",
+      decision: {
+        allowed: false,
+        status: 429,
+        error:
+          // Meter-neutral (weekly ledger OR burst window) and deliberately
+          // token/USD-free: user surfaces never see cost mechanics.
+          "free plan allowance exhausted — resumes at the next refill, or upgrade for a bigger budget",
+        retryAfterSeconds: Math.max(1, Math.ceil((refillAtMs - now) / 1000)),
+      },
+    };
+  }
+  return {
+    kind: "state",
+    degrade: true,
+    degradeReason: "free",
+    windowCostUsd: spend.windowCostUsd,
+    weekCostUsd: spend.weekCostUsd,
+    creditBalanceUsd: null,
+  };
+}
+
+// A prepaid builder degrades once their balance is dry; a subscription plan
+// degrades once its weekly ledger or burst window is spent.
+async function degradeStateForGrant(
+  input: PreflightGateInput,
+  prepaid: boolean,
+  spendWindowUsd: number | null,
+  spendWeekUsd: number | null,
+): Promise<DegradeOutcome> {
+  if (input.grant.policy.freeTier) {
+    return freeTierGateOutcome(input, spendWindowUsd, spendWeekUsd);
   }
   if (prepaid) {
     if (!input.usageStore?.readCreditBalance) {
@@ -934,6 +995,63 @@ async function writeUpstreamResponse(
   }
 }
 
+async function effectiveHouseModel(args: {
+  gate: GateDecisionAllowed;
+  provider: ModelBrokerProvider;
+  houseModels: Record<ModelBrokerProvider, string>;
+  resolveFreeTierModel: LlmBrokerAppDeps["resolveFreeTierModel"];
+  onError: (err: unknown) => void;
+}): Promise<string> {
+  const houseModel = args.houseModels[args.provider];
+  if (!args.gate.degrade || args.gate.degradeReason !== "free" || !args.resolveFreeTierModel) {
+    return houseModel;
+  }
+  try {
+    const dial = await args.resolveFreeTierModel();
+    return dial && dial.provider === args.provider ? dial.upstreamModelId : houseModel;
+  } catch (err) {
+    args.onError(err);
+    return houseModel;
+  }
+}
+
+async function logAndForwardAllowed(args: {
+  req: Request;
+  res: ExpressResponse;
+  url: URL;
+  record: ModelBrokerTokenRecord;
+  providerKey: ModelBrokerProviderKey;
+  gate: GateDecisionAllowed;
+  fetchImpl: typeof fetch;
+  upstreamBaseUrl: string;
+  houseModels: Record<ModelBrokerProvider, string>;
+  resolveFreeTierModel: LlmBrokerAppDeps["resolveFreeTierModel"];
+  requestModel: string | null;
+  logGate: GateLogger;
+  rail: OwnerModelBrokerGrant["rail"];
+  usageStore?: ModelBrokerUsageStore;
+  now: () => number;
+  onMeteringError: (err: unknown) => void;
+}): Promise<void> {
+  const { gate, record } = args;
+  const houseModel = await effectiveHouseModel({
+    gate,
+    provider: record.provider,
+    houseModels: args.houseModels,
+    resolveFreeTierModel: args.resolveFreeTierModel,
+    onError: args.onMeteringError,
+  });
+  if (args.req.method.toUpperCase() === "POST") {
+    args.logGate(gateDecisionName(gate), {
+      effectiveModel: gate.degrade ? houseModel : args.requestModel,
+      windowCostUsd: gate.windowCostUsd,
+      weekCostUsd: gate.weekCostUsd,
+      creditBalanceUsd: gate.creditBalanceUsd,
+    });
+  }
+  await forwardAllowed({ ...args, houseModel });
+}
+
 async function forwardAllowed(args: {
   req: Request;
   res: ExpressResponse;
@@ -986,9 +1104,13 @@ async function forwardAllowed(args: {
         now: args.now,
         onMeteringError: args.onMeteringError,
         // Prepaid traffic debits the credit balance; only subscription traffic
-        // counts toward spend windows. House/degraded traffic touches neither.
+        // counts toward spend windows. A paid plan's degraded house traffic is
+        // on the house — but for the free tier the house model IS the plan, so
+        // its traffic debits the weekly allowance ledger.
         countsTowardSpendWindow:
-          providerKey.source !== "owner_model_credential" && !gate.degrade && !prepaid,
+          providerKey.source !== "owner_model_credential" &&
+          !prepaid &&
+          (!gate.degrade || gate.degradeReason === "free"),
         debitsCreditBalance:
           prepaid && providerKey.source !== "owner_model_credential" && !gate.degrade,
       }
@@ -1013,6 +1135,12 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
         DEFAULT_OPENROUTER_UPSTREAM_BASE_URL,
       ),
     ),
+    openai: trimTrailingSlash(
+      configuredString(
+        deps.providerUpstreamBaseUrls?.openai,
+        DEFAULT_OPENAI_UPSTREAM_BASE_URL,
+      ),
+    ),
   };
   const houseModels: Record<ModelBrokerProvider, string> = {
     anthropic: configuredString(
@@ -1023,6 +1151,10 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
     openrouter: configuredString(
       deps.providerHouseModels?.openrouter,
       DEFAULT_OPENROUTER_HOUSE_MODEL,
+    ),
+    openai: configuredString(
+      deps.providerHouseModels?.openai,
+      DEFAULT_OPENAI_HOUSE_MODEL,
     ),
   };
   const now = deps.now ?? Date.now;
@@ -1036,6 +1168,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
       providers: {
         anthropic: Boolean(deps.providerKeys.anthropic),
         openrouter: Boolean(deps.providerKeys.openrouter),
+        openai: Boolean(deps.providerKeys.openai),
       },
     });
   });
@@ -1109,15 +1242,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           sendGateDenied(res, gate, logGate);
           return;
         }
-        if (req.method.toUpperCase() === "POST") {
-          logGate(gateDecisionName(gate), {
-            effectiveModel: gate.degrade ? houseModels[record.provider] : requestModel,
-            windowCostUsd: gate.windowCostUsd,
-            weekCostUsd: gate.weekCostUsd,
-            creditBalanceUsd: gate.creditBalanceUsd,
-          });
-        }
-        await forwardAllowed({
+        await logAndForwardAllowed({
           req,
           res,
           url,
@@ -1126,7 +1251,10 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           gate,
           fetchImpl,
           upstreamBaseUrl: upstreamBaseUrls[record.provider],
-          houseModel: houseModels[record.provider],
+          houseModels,
+          resolveFreeTierModel: deps.resolveFreeTierModel,
+          requestModel,
+          logGate,
           rail: grant.rail,
           usageStore: deps.usageStore,
           now,

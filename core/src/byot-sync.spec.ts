@@ -97,7 +97,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     ).toBe(false);
   });
 
-  it("free post-trial non-BYOK derives the GLM house-model patch without local BYOT materialization", () => {
+  it("free post-trial non-BYOK derives the compiled DeepSeek house pin without local BYOT materialization", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
@@ -107,8 +107,47 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     expect(desired.input).toBeNull();
     expect(desired.coachModelInput).toEqual({
       slug: "tester-70",
-      model: "platform-openrouter/z-ai/glm-5.2",
+      model: "platform-openrouter/deepseek/deepseek-v4-pro",
       source: "free-tier",
+    });
+  });
+
+  it("free-tier pin follows the snapshot's operator dial (freeTierModelRef)", () => {
+    const desired = deriveDesiredByotState({
+      ...ON,
+      byotActive: false,
+      selectedTier: "free",
+      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+    });
+    expect(desired.coachModelInput).toEqual({
+      slug: "tester-70",
+      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      source: "free-tier",
+    });
+  });
+
+  it("a non-catalog freeTierModelRef is rejected at the trust boundary — compiled default pin", () => {
+    const desired = deriveDesiredByotState({
+      ...ON,
+      byotActive: false,
+      selectedTier: "free",
+      freeTierModelRef: "platform-openrouter/evil/model",
+    });
+    expect(desired.coachModelInput).toEqual({
+      slug: "tester-70",
+      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      source: "free-tier",
+    });
+  });
+
+  it("BYOK coach input carries the dial ref so the fallback chain follows the operator", () => {
+    const desired = deriveDesiredByotState({
+      ...ON,
+      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+    });
+    expect(desired.coachModelInput).toMatchObject({
+      slug: "tester-70",
+      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
     });
   });
 
@@ -492,10 +531,13 @@ describe("brokerFetchByosubCreds — gateway-side broker client (no silent failu
 });
 
 // Every BYOK coach model is a primary+fallback chain to the platform house
-// model baseline (B6).
+// model baseline (B6) — the operator's free-tier dial, compiled default
+// DeepSeek V4 Pro on the OpenRouter platform key.
+const HOUSE_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+const HOUSE_DEFAULTS = { [HOUSE_REF]: {} };
 const withFallback = (primary: string) => ({
   primary,
-  fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+  fallbacks: [HOUSE_REF],
 });
 
 const claudeCliDefaultModels = {
@@ -512,15 +554,113 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "anthropic" })).toBeNull();
   });
 
-  it("free-tier platform baseline → GLM primary with no BYOK credential profile", () => {
+  it("free-tier anthropic pin → bare primary, no fallback, no defaults entry", () => {
     expect(
       byosCoachConfigPatch({
         slug: "tester-70",
-        model: "platform-openrouter/z-ai/glm-5.2",
+        model: "anthropic/claude-haiku-4-5",
         source: "free-tier",
       }),
     ).toEqual({
-      agents: { list: [{ id, model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] } }] },
+      agents: { list: [{ id, model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] } }] },
+    });
+  });
+
+  it("free-tier openai pin → declares the platform-openai ref in agents.defaults.models", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        model: "platform-openai/gpt-5.4-mini",
+        source: "free-tier",
+      }),
+    ).toEqual({
+      agents: {
+        defaults: { models: { "platform-openai/gpt-5.4-mini": {} } },
+        list: [
+          {
+            id,
+            model: { primary: "platform-openai/gpt-5.4-mini", fallbacks: [] },
+          },
+        ],
+      },
+    });
+  });
+
+  it("BYOK fallback on an openai dial declares the platform-openai ref in defaults", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        provider: "openai",
+        houseModelRef: "platform-openai/gpt-5.4-mini",
+      }),
+    ).toEqual({
+      agents: {
+        defaults: { models: { "platform-openai/gpt-5.4-mini": {} } },
+        list: [
+          {
+            id,
+            model: { primary: "openai/gpt-5", fallbacks: ["platform-openai/gpt-5.4-mini"] },
+          },
+        ],
+      },
+    });
+  });
+
+  it("free-tier openrouter pin → declares the ref in agents.defaults.models so a dial outside the boot template resolves", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        model: "platform-openrouter/deepseek/deepseek-v4-pro",
+        source: "free-tier",
+      }),
+    ).toEqual({
+      agents: {
+        defaults: { models: { "platform-openrouter/deepseek/deepseek-v4-pro": {} } },
+        list: [
+          {
+            id,
+            model: { primary: "platform-openrouter/deepseek/deepseek-v4-pro", fallbacks: [] },
+          },
+        ],
+      },
+    });
+  });
+
+  it("BYOK fallback follows the input's dial ref and declares an openrouter ref in defaults", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        provider: "openai",
+        houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      }),
+    ).toEqual({
+      agents: {
+        defaults: { models: { "platform-openrouter/deepseek/deepseek-v4-pro": {} } },
+        list: [
+          {
+            id,
+            model: {
+              primary: "openai/gpt-5",
+              fallbacks: ["platform-openrouter/deepseek/deepseek-v4-pro"],
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  it("a non-catalog houseModelRef on a BYOK input falls back to the compiled default", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        provider: "openai",
+        houseModelRef: "platform-openrouter/evil/model",
+      }),
+    ).toEqual({
+      agents: {
+        defaults: { models: HOUSE_DEFAULTS },
+        list: [{ id, model: withFallback("openai/gpt-5") }],
+      },
     });
   });
 
@@ -528,7 +668,9 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       agents: {
         list: [{ id, model: withFallback("openai/gpt-5.5") }],
-        defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+        defaults: {
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } }, ...HOUSE_DEFAULTS },
+        },
       },
     });
   });
@@ -538,15 +680,18 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
       agents: {
         list: [{ id, model: withFallback("claude-cli/claude-opus-4-8") }],
         defaults: {
-          models: claudeCliDefaultModels,
+          models: { ...claudeCliDefaultModels, ...HOUSE_DEFAULTS },
         },
       },
     });
   });
 
-  it("openai (api_key) → coach model only, NO agentRuntime pin", () => {
+  it("openai (api_key) → coach model + the house fallback's defaults entry, NO agentRuntime pin", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai" })).toEqual({
-      agents: { list: [{ id, model: withFallback("openai/gpt-5") }] },
+      agents: {
+        defaults: { models: HOUSE_DEFAULTS },
+        list: [{ id, model: withFallback("openai/gpt-5") }],
+      },
     });
   });
 
@@ -558,7 +703,12 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
         baseUrl: "https://llm.example.com",
         model: "llama-3.1-70b",
       }),
-    ).toEqual({ agents: { list: [{ id, model: withFallback("custom-tester-70/llama-3.1-70b") }] } });
+    ).toEqual({
+      agents: {
+        defaults: { models: HOUSE_DEFAULTS },
+        list: [{ id, model: withFallback("custom-tester-70/llama-3.1-70b") }],
+      },
+    });
   });
 });
 
@@ -618,6 +768,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(calls).toEqual([
       {
         agents: {
+          defaults: { models: HOUSE_DEFAULTS },
           list: [
             { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
@@ -646,7 +797,9 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
             { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5.5"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
-          defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+          defaults: {
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } }, ...HOUSE_DEFAULTS },
+          },
         },
       },
     ]);
@@ -670,7 +823,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
             { id: "octogee-tester-70-coach", name: "coach", model: withFallback("claude-cli/claude-opus-4-8"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
-          defaults: { models: claudeCliDefaultModels },
+          defaults: { models: { ...claudeCliDefaultModels, ...HOUSE_DEFAULTS } },
         },
       },
     ]);
@@ -863,7 +1016,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
-      model: "platform-openrouter/z-ai/glm-5.2",
+      model: "platform-openrouter/deepseek/deepseek-v4-pro",
       source: "free-tier",
     });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
@@ -958,7 +1111,10 @@ describe("standard gateway — BYOS materialization", () => {
     };
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", input);
     expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith(input);
+    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+      ...input,
+      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+    });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
@@ -1003,6 +1159,7 @@ describe("standard gateway — BYOS materialization", () => {
       provider: "openai-codex",
       baseUrl: undefined,
       model: undefined,
+      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
     });
     expect(requestGatewayRestartFn).toHaveBeenCalledTimes(1);
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
@@ -1251,6 +1408,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       provider: "openai-codex",
       baseUrl: undefined,
       model: undefined,
+      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
     });
     expect(requestGatewayRestartFn).toHaveBeenCalledTimes(1);
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
@@ -1346,6 +1504,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
           defaults: {
             models: {
               "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              ...HOUSE_DEFAULTS,
             },
           },
         },
@@ -1449,6 +1608,33 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
           },
           { id: "octogee-zed-coach", model: "z/y" },
         ],
+      },
+    });
+  });
+
+  it("declares a platform-openai pick in defaults.models like an openrouter one", async () => {
+    const calls: object[] = [];
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      {
+        "octogee-tester-70-coach": {
+          primary: "platform-openai/gpt-5.4-mini",
+          fallbacks: [],
+        },
+      },
+      { houseOnly: false },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(CURRENT));
+          return { mode: "rpc", attempts: 1 };
+        },
+        logFn: () => {},
+      },
+    );
+    expect(r).toBe(true);
+    expect(calls[0]).toMatchObject({
+      agents: {
+        defaults: { models: { "platform-openai/gpt-5.4-mini": {} } },
       },
     });
   });

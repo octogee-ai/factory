@@ -271,6 +271,12 @@ llmBroker:
     name: octogee-openrouter
     key: api_key
     optional: true
+  # optional:true ⇒ pods start without the secret; the broker 503s openai
+  # traffic until the operator creates octogee-openai (see the PR runbook).
+  openaiProviderSecret:
+    name: octogee-openai
+    key: api_key
+    optional: true
   resources:
     requests:
       cpu: 100m

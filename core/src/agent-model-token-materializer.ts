@@ -15,6 +15,9 @@ const ANTHROPIC_DEFAULT_PROFILE_ID = "anthropic:default";
 export const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
 export const OPENROUTER_BROKER_PROFILE_ID = `${OPENROUTER_BROKER_PROVIDER_ID}:default`;
 const OPENROUTER_PLATFORM_MARKER = ".platform-openrouter-managed";
+export const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
+export const OPENAI_BROKER_PROFILE_ID = `${OPENAI_BROKER_PROVIDER_ID}:default`;
+const OPENAI_PLATFORM_MARKER = ".platform-openai-managed";
 
 // Only octogee-<slug>-coach agents have a broker-token resolver grammar
 // (AGENT_MODEL_TOKEN_ID_RE in secret-resolver.mjs). The boot sweep must skip any
@@ -35,7 +38,7 @@ export interface OpenRouterBrokerProfileEntry {
   keyRef: { source: "exec"; provider: string; id: string };
 }
 
-export type AgentModelBrokerProvider = "anthropic" | "openrouter";
+export type AgentModelBrokerProvider = "anthropic" | "openrouter" | "openai";
 
 export interface OpenRouterBrokerModelInput {
   baseUrl: string;
@@ -67,8 +70,8 @@ export function agentModelTokenSecretId(
   agentId: string,
   provider: AgentModelBrokerProvider = "anthropic",
 ): string {
-  if (provider === "openrouter") return `agent-model-token-openrouter-${agentId}`;
-  return `agent-model-token-${agentId}`;
+  if (provider === "anthropic") return `agent-model-token-${agentId}`;
+  return `agent-model-token-${provider}-${agentId}`;
 }
 
 export function openRouterBrokerProviderConfig(
@@ -120,6 +123,24 @@ export function openRouterBrokerProfileEntry(agentId: string): OpenRouterBrokerP
   };
 }
 
+export interface OpenAiBrokerProfileEntry {
+  type: "api_key";
+  provider: typeof OPENAI_BROKER_PROVIDER_ID;
+  keyRef: { source: "exec"; provider: string; id: string };
+}
+
+export function openAiBrokerProfileEntry(agentId: string): OpenAiBrokerProfileEntry {
+  return {
+    type: "api_key",
+    provider: OPENAI_BROKER_PROVIDER_ID,
+    keyRef: {
+      source: "exec",
+      provider: SECRET_RESOLVER_PROVIDER,
+      id: agentModelTokenSecretId(agentId, "openai"),
+    },
+  };
+}
+
 export function openRouterBrokerModelsJson(
   agentId: string,
   input: OpenRouterBrokerModelInput,
@@ -139,6 +160,16 @@ export function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBro
   return {
     baseUrl,
     models: modelCatalogForProvider("openrouter").map((entry) => ({
+      model: entry.id,
+      ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
+    })),
+  };
+}
+
+export function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput {
+  return {
+    baseUrl,
+    models: modelCatalogForProvider("openai").map((entry) => ({
       model: entry.id,
       ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
     })),
@@ -200,15 +231,22 @@ export function upsertAnthropicBrokerProfile(agentDir: string, agentId: string):
 }
 
 export function upsertOpenRouterBrokerProfile(agentDir: string, agentId: string): boolean {
+  return upsertBrokerProfile(agentDir, OPENROUTER_BROKER_PROFILE_ID, openRouterBrokerProfileEntry(agentId));
+}
+
+export function upsertOpenAiBrokerProfile(agentDir: string, agentId: string): boolean {
+  return upsertBrokerProfile(agentDir, OPENAI_BROKER_PROFILE_ID, openAiBrokerProfileEntry(agentId));
+}
+
+function upsertBrokerProfile(agentDir: string, profileId: string, desired: unknown): boolean {
   const store = asRecord(readAuthProfileStore(agentDir));
   const profiles = asRecord(store.profiles);
-  const desired = openRouterBrokerProfileEntry(agentId);
-  if (JSON.stringify(profiles[OPENROUTER_BROKER_PROFILE_ID]) === JSON.stringify(desired)) {
+  if (JSON.stringify(profiles[profileId]) === JSON.stringify(desired)) {
     return false;
   }
   writeAuthProfileStore(agentDir, {
     ...store,
-    profiles: { ...profiles, [OPENROUTER_BROKER_PROFILE_ID]: desired },
+    profiles: { ...profiles, [profileId]: desired },
   });
   return true;
 }
@@ -244,22 +282,54 @@ export function upsertOpenRouterBrokerCatalog(
   agentId: string,
   input: OpenRouterBrokerCatalogInput,
 ): boolean {
-  const wroteProfile = upsertOpenRouterBrokerProfile(agentDir, agentId);
+  return upsertPlatformBrokerCatalog(agentDir, input, {
+    providerId: OPENROUTER_BROKER_PROVIDER_ID,
+    profileId: OPENROUTER_BROKER_PROFILE_ID,
+    marker: OPENROUTER_PLATFORM_MARKER,
+    wroteProfile: upsertOpenRouterBrokerProfile(agentDir, agentId),
+  });
+}
+
+export function upsertOpenAiBrokerCatalog(
+  agentDir: string,
+  agentId: string,
+  input: OpenRouterBrokerCatalogInput,
+): boolean {
+  return upsertPlatformBrokerCatalog(agentDir, input, {
+    providerId: OPENAI_BROKER_PROVIDER_ID,
+    profileId: OPENAI_BROKER_PROFILE_ID,
+    marker: OPENAI_PLATFORM_MARKER,
+    wroteProfile: upsertOpenAiBrokerProfile(agentDir, agentId),
+  });
+}
+
+function upsertPlatformBrokerCatalog(
+  agentDir: string,
+  input: OpenRouterBrokerCatalogInput,
+  ids: { providerId: string; profileId: string; marker: string; wroteProfile: boolean },
+): boolean {
   const modelsPath = path.join(agentDir, "models.json");
-  const markerPath = path.join(agentDir, OPENROUTER_PLATFORM_MARKER);
+  const markerPath = path.join(agentDir, ids.marker);
   const current = readJsonFile(modelsPath);
   const currentProviders = asRecord(current.providers);
-  const desired = openRouterBrokerCatalogJson(agentId, input).providers[OPENROUTER_BROKER_PROVIDER_ID];
+  const desired = {
+    api: "openai-completions" as const,
+    baseUrl: input.baseUrl,
+    apiKey: ids.profileId,
+    models: input.models.map((model) =>
+      openRouterBrokerModelConfig({ ...model, baseUrl: input.baseUrl }),
+    ),
+  };
   const next = {
     ...current,
     providers: {
       ...currentProviders,
-      [OPENROUTER_BROKER_PROVIDER_ID]: desired,
+      [ids.providerId]: desired,
     },
   };
   const changed =
     JSON.stringify(current) !== JSON.stringify(next) || !fs.existsSync(markerPath);
-  if (!changed) return wroteProfile;
+  if (!changed) return ids.wroteProfile;
   writeJsonFile(modelsPath, next);
   fs.writeFileSync(markerPath, `${new Date().toISOString()}\n`, { mode: 0o600 });
   return true;
@@ -329,11 +399,20 @@ export function materializeAnthropicBrokerForAgents(
  * agent to any catalog model is a pure agents.list flip. Same tolerance
  * semantics as the anthropic-only sweep; returns agents with any write.
  */
+function catalogState(
+  configured: OpenRouterBrokerCatalogInput | undefined,
+  wrote: boolean,
+): string {
+  if (!configured) return "unconfigured";
+  return wrote ? "written" : "ok";
+}
+
 export function materializeBrokerProfilesForAgents(
   agentIds: string[],
   opts: {
     agentsDir?: string;
     openRouter?: OpenRouterBrokerCatalogInput;
+    openAi?: OpenRouterBrokerCatalogInput;
     logFn?: (m: string) => void;
   } = {},
 ): number {
@@ -352,13 +431,16 @@ export function materializeBrokerProfilesForAgents(
       const wroteCatalog = opts.openRouter
         ? upsertOpenRouterBrokerCatalog(agentHome, agentId, opts.openRouter)
         : false;
-      if (wroteProfile || wroteCatalog) {
+      const wroteOpenAi = opts.openAi
+        ? upsertOpenAiBrokerCatalog(agentHome, agentId, opts.openAi)
+        : false;
+      if (wroteProfile || wroteCatalog || wroteOpenAi) {
         count++;
-        let openRouterState = "unconfigured";
-        if (opts.openRouter) openRouterState = wroteCatalog ? "written" : "ok";
         opts.logFn?.(
           `[agent-model-token] model-ready: ${agentId}` +
-            ` (anthropic ${wroteProfile ? "written" : "ok"}, openrouter ${openRouterState})`,
+            ` (anthropic ${wroteProfile ? "written" : "ok"},` +
+            ` openrouter ${catalogState(opts.openRouter, wroteCatalog)},` +
+            ` openai ${catalogState(opts.openAi, wroteOpenAi)})`,
         );
       }
     } catch (e) {

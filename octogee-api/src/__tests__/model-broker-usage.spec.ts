@@ -5,6 +5,7 @@ import {
   InMemoryModelBrokerUsageStore,
   estimateAnthropicCost,
   estimateModelBrokerCost,
+  isUnknownOpenAiPricingModel,
   isUnknownOpenRouterPricingModel,
   mergeAnthropicUsage,
   modelRollupKey,
@@ -156,6 +157,40 @@ describe("OpenRouter cost estimation", () => {
     expect(cost.input).toBe(1);
     expect(cost.output).toBe(5);
     expect(cost.cacheRead).toBeCloseTo(0.1);
+  });
+
+  it("prices DeepSeek V4 Pro (the free-tier default) from the table, not the fallback", () => {
+    const cost = estimateModelBrokerCost("openrouter", "deepseek/deepseek-v4-pro", MILLION_EACH);
+    expect(cost.pricingModel).toBe("openrouter:deepseek/deepseek-v4-pro");
+    expect(cost.input).toBeCloseTo(0.435);
+    expect(cost.output).toBeCloseTo(0.87);
+    expect(cost.cacheRead).toBeCloseTo(0.0435);
+  });
+});
+
+describe("OpenAI cost estimation", () => {
+  const MILLION_EACH = {
+    inputTokens: 1_000_000,
+    outputTokens: 1_000_000,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 1_000_000,
+  };
+
+  it("prices gpt-5.4-mini per the OpenAI table with 10% cached input", () => {
+    const cost = estimateModelBrokerCost("openai", "gpt-5.4-mini", MILLION_EACH);
+    expect(cost.pricingModel).toBe("openai:gpt-5.4-mini");
+    expect(cost.input).toBeCloseTo(0.75);
+    expect(cost.output).toBeCloseTo(4.5);
+    expect(cost.cacheRead).toBeCloseTo(0.075);
+    expect(cost.cacheWrite).toBe(0);
+    expect(cost.total).toBeCloseTo(5.325);
+  });
+
+  it("prices unknown OpenAI models at the fallback rate and flags them", () => {
+    const cost = estimateModelBrokerCost("openai", "gpt-99", MILLION_EACH);
+    expect(cost.pricingModel).toBe("openai:unknown-fallback");
+    expect(isUnknownOpenAiPricingModel(cost.pricingModel)).toBe(true);
+    expect(isUnknownOpenAiPricingModel("openai:gpt-5.4-mini")).toBe(false);
   });
 });
 
@@ -329,58 +364,3 @@ describe("prepaid credit debits", () => {
   });
 });
 
-describe("house daily allowance metering", () => {
-  it("meters degraded house traffic against the owner's UTC-day allowance", async () => {
-    const store = new InMemoryModelBrokerUsageStore();
-    await store.recordUsage({
-      ...baseRecord,
-      eventId: "h1",
-      ownerUid: "uid-free",
-      degraded: true,
-      countsTowardSpendWindow: false,
-    });
-    await store.recordUsage({
-      ...baseRecord,
-      eventId: "h2",
-      ownerUid: "uid-free",
-      degraded: true,
-      countsTowardSpendWindow: false,
-    });
-    const day = await store.readHouseDayUsage({
-      gatewayId: "shared-blue",
-      ownerUid: "uid-free",
-      now: 10_000,
-    });
-    expect(day.totalTokens).toBe(300); // 2 × (100 in + 50 out)
-    expect(day.requestCount).toBe(2);
-  });
-
-  it("does not meter paid (non-degraded) traffic against the house allowance", async () => {
-    const store = new InMemoryModelBrokerUsageStore();
-    await store.recordUsage({ ...baseRecord, eventId: "paid", ownerUid: "uid-a" });
-    const day = await store.readHouseDayUsage({
-      gatewayId: "shared-blue",
-      ownerUid: "uid-a",
-      now: 10_000,
-    });
-    expect(day.totalTokens).toBe(0);
-    expect(day.requestCount).toBe(0);
-  });
-
-  it("keeps house-day counters isolated per owner", async () => {
-    const store = new InMemoryModelBrokerUsageStore();
-    await store.recordUsage({
-      ...baseRecord,
-      eventId: "fa",
-      ownerUid: "uid-a",
-      degraded: true,
-      countsTowardSpendWindow: false,
-    });
-    const other = await store.readHouseDayUsage({
-      gatewayId: "shared-blue",
-      ownerUid: "uid-b",
-      now: 10_000,
-    });
-    expect(other.totalTokens).toBe(0);
-  });
-});

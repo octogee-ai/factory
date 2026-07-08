@@ -90,6 +90,9 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     selectedTier: snapshot.selectedTier ?? null,
     subscription: planSubscriptionSlice(snapshot.subscription),
     trialStartedAt: snapshot.trialStartedAt ?? null,
+    // The operator's free-tier dial: a flip must re-ensure every mounted
+    // house-only customer, not wait for the next roll.
+    freeTierModelRef: snapshot.freeTierModelRef ?? null,
   };
   return fnv1a64Hex(stableStringify(configSlice));
 }

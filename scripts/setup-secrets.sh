@@ -327,8 +327,8 @@ else
   warn "OPENROUTER_API_KEY not found in .env or Secret Manager — skipping optional octogee-openrouter"
 fi
 
-# ── 6c. OpenAI embeddings API key ─────────────────────────────────────────
-info "OPENAI_API_KEY (memory search embeddings)"
+# ── 6c. OpenAI API key (llm-broker platform provider + embeddings) ────────
+info "OPENAI_API_KEY (llm-broker platform provider + memory search embeddings)"
 set +u
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 OPENAI_EMBEDDINGS_API_KEY="${OPENAI_EMBEDDINGS_API_KEY:-}"
@@ -353,8 +353,11 @@ if [[ -n "$OPENAI_API_KEY" ]]; then
     fi
   fi
   ok "Secret Manager: OPENAI_API_KEY"
+  # The llm-broker's platform-openai provider rides the same key (gpt-5.4-mini
+  # via the free-tier dial); optional in helm, so absence only 503s openai traffic.
+  ksecret octogee-openai --from-literal=api_key="$OPENAI_API_KEY"
 else
-  warn "OPENAI_API_KEY not found in .env or Secret Manager ($FIREBASE_PROJECT) — memory search embeddings remain disabled until the key is seeded and OPENAI_EMBEDDINGS_ENABLED=true"
+  warn "OPENAI_API_KEY not found in .env or Secret Manager ($FIREBASE_PROJECT) — memory search embeddings stay disabled and the llm-broker serves no platform-openai traffic until the key is seeded"
 fi
 
 # ── 7. Brave API key ──────────────────────────────────────────────────────

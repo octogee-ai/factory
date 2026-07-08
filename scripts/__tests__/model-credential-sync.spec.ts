@@ -138,7 +138,10 @@ describe("syncModelCredentialsForCustomer", () => {
     };
     expect(applyModelCredentialState).toHaveBeenCalledWith("tester-70", input);
     expect(restoreOauthStoreForSlug).toHaveBeenCalledWith("tester-70");
-    expect(applyCoachModelPatch).toHaveBeenCalledWith(input);
+    expect(applyCoachModelPatch).toHaveBeenCalledWith({
+      ...input,
+      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+    });
     expect(triggerSecretsReload).toHaveBeenCalledTimes(1);
   });
 });

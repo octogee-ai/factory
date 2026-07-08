@@ -67,7 +67,6 @@ export {
   WINDOWS_PER_WEEK,
   WINDOW_BURST_MULTIPLIER,
   TRIAL_LENGTH_DAYS,
-  FREE_DAILY_HOUSE_TOKENS,
   planWeeklyBudgetUsd,
   planWindowBudgetUsd,
   resolveEffectivePlan,

@@ -185,7 +185,9 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     byotActive: snapshot.byotActive,
     selectedTier: snapshot.selectedTier,
     subscription: snapshot.subscription,
+    builderSubscription: snapshot.builderSubscription,
     trialStartedAt: snapshot.trialStartedAt,
+    freeTierModelRef: snapshot.freeTierModelRef,
     systemConfig: snapshot.systemConfig,
   };
 }

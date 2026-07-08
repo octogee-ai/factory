@@ -6,6 +6,7 @@ import {
 } from "../lib/byosub-restore.js";
 import {
   materializeBrokerProfilesForAgents,
+  openAiCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
 } from "../lib/agent-model-token-materializer.js";
 import {
@@ -43,6 +44,22 @@ export function shouldMaterializeAnthropicBrokerProfiles(
     gatewayClass === "operator" ||
     (!gatewayClass && profile === "operator")
   );
+}
+
+export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
+  openRouter?: ReturnType<typeof openRouterCatalogInputForBaseUrl>;
+  openAi?: ReturnType<typeof openAiCatalogInputForBaseUrl>;
+} {
+  const openRouterBaseUrl = env.OPENROUTER_BASE_URL?.trim();
+  const platformOpenAiBaseUrl = env.PLATFORM_OPENAI_BASE_URL?.trim();
+  return {
+    ...(openRouterBaseUrl
+      ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
+      : {}),
+    ...(platformOpenAiBaseUrl
+      ? { openAi: openAiCatalogInputForBaseUrl(platformOpenAiBaseUrl) }
+      : {}),
+  };
 }
 
 type OpenClawConfig = Record<string, unknown>;
@@ -780,17 +797,14 @@ let configRaw: string;
     log("no changes needed");
   }
 
-  // Model-ready boot: every customer-agent gets BOTH broker provider surfaces
-  // (anthropic:default profile + the full OpenRouter catalog) before openclaw
-  // boots, so any catalog model is dynamically selectable. Local writes
-  // (db-less-safe); the secret-resolver fetches tokens at runtime.
+  // Model-ready boot: every customer-agent gets EVERY broker provider surface
+  // (anthropic:default profile + the OpenRouter and OpenAI catalogs) before
+  // openclaw boots, so any catalog model is dynamically selectable. Local
+  // writes (db-less-safe); the secret-resolver fetches tokens at runtime.
   if (shouldMaterializeAnthropicBrokerProfiles(process.env)) {
-    const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
     const materialized = materializeBrokerProfilesForAgents(agentIdsFromConfig(config), {
       logFn: log,
-      ...(openRouterBaseUrl
-        ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
-        : {}),
+      ...platformBrokerCatalogOpts(process.env),
     });
     if (materialized > 0) {
       log(`model-ready broker profiles materialized for ${materialized} agent(s)`);

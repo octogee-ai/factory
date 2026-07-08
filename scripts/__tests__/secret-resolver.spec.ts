@@ -223,6 +223,17 @@ describe("secret-resolver — defense-in-depth", () => {
     }
   });
 
+  it("accepts an OpenAI agent-model-token ref for a known slug", async () => {
+    const id = "agent-model-token-openai-octogee-alice-coach";
+    const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
+    const out = await runResolver(envFor(), stdin);
+    const res = parseResponse(out.stdout);
+    expect(out.stderr).toContain(`accept id="${id}"`);
+    if (res.errors?.[id]) {
+      expect(res.errors[id].message).not.toMatch(/^Refused by resolver:/);
+    }
+  });
+
   it("accepts a platform OpenAI embedding ref for a known slug", async () => {
     const id = "platform-openai-embedding-octogee-alice-coach";
     const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
@@ -295,6 +306,23 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
     expect(JSON.parse(seen!.init.body)).toEqual({
       agentId: "octogee-tester5-coach",
       provider: "openrouter",
+    });
+  });
+
+  it("routes an OpenAI agent-model-token id with an explicit provider", async () => {
+    let seen: { url: string; init: { body: string } } | undefined;
+    const v = await resolveOne("agent-model-token-openai-octogee-tester5-coach", {
+      token: "ksa-tok",
+      fetchImpl: async (url, init) => {
+        seen = { url, init };
+        return { ok: true, status: 200, json: async () => ({ value: "ogk_shared-1_oai" }) };
+      },
+    });
+    expect(v).toBe("ogk_shared-1_oai");
+    expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/agent-model-token`);
+    expect(JSON.parse(seen!.init.body)).toEqual({
+      agentId: "octogee-tester5-coach",
+      provider: "openai",
     });
   });
 

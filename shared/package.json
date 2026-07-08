@@ -109,6 +109,10 @@
       "types": "./dist/types/notifications.d.ts",
       "default": "./dist/types/notifications.js"
     },
+    "./types/platform-config": {
+      "types": "./dist/types/platform-config.d.ts",
+      "default": "./dist/types/platform-config.js"
+    },
     "./types/openclaw-wire": {
       "types": "./dist/types/openclaw-wire.d.ts",
       "default": "./dist/types/openclaw-wire.js"

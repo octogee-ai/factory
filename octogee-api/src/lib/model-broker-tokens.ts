@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
 
-export type ModelBrokerProvider = "anthropic" | "openrouter";
+export type ModelBrokerProvider = "anthropic" | "openrouter" | "openai";
 
 export interface ModelBrokerTokenLimits {
   spendWindowUsd: number | null;
