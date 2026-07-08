@@ -102,8 +102,12 @@ Codex, …) working under a supervisor. The contract:
   codex exec review --base origin/main -m gpt-5.5 -c model_reasoning_effort="xhigh" "<brief>"
   ```
 
-  Pin the model and effort explicitly (`xhigh` is the CLI's max tier). Every
-  finding from EITHER reviewer is re-verified against the code before acting;
+  Pin the model and effort explicitly (`xhigh` is the CLI's max tier). The
+  operator's standing call: the expert second review is **almost always worth
+  it — time is the constraint, not tokens** — so default to running it on any
+  nontrivial diff (your own included), skipping only when wall-clock genuinely
+  forbids. Every finding from EITHER reviewer is re-verified against the code
+  before acting;
   genuine disagreements go to the operator with both opinions, never a silent
   tiebreak. Only after the council passes does the supervisor push and open
   the PR (which then gets the normal per-PR review below).

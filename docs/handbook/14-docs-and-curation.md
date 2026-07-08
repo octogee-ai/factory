@@ -42,6 +42,20 @@ something in memory becomes load-bearing, *promote it* — commit the canonical 
 the repo and shrink the memory entry to a pointer. (OpenClaw provides platform-agent
 memory; we don't rebuild it, and we don't let either memory substitute for repo docs.)
 
+## The knowledge-home rule (agents)
+
+Durable knowledge belongs in the repo, shared with EVERY agent working here —
+Claude, Codex, whoever comes next. Private agent memory (e.g. `~/.claude`
+memories) holds pointers into the Handbook and session/collaboration state,
+never the canonical copy of process knowledge, gotchas, runbooks, or
+references. When you learn something durable mid-session, its home is a
+Handbook chapter (or DECISIONS.md for a why, or the module's spec for a what)
+— write it there first, then point your memory at it. A note that exists only
+in one agent's memory is knowledge the team doesn't have.
+
+Every substantive Handbook change appends an entry to
+[90 — Playbook Release Notes](90-release-notes.md).
+
 ## Lifecycle rules
 
 - **Specs are disposable.** Delete a spec when its work lands (≥90% done counts): history
