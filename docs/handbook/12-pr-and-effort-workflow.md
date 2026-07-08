@@ -105,8 +105,17 @@ still merges. The contract:
   CLI review from the agent's worktree:
 
   ```
-  codex exec review --base origin/main -m gpt-5.5 -c model_reasoning_effort="xhigh" "<brief>"
+  cd <agent worktree> && codex exec -m gpt-5.5 -c model_reasoning_effort="xhigh" "<review brief>" < /dev/null
   ```
+
+  Invocation gotchas, learned the hard way: **always close stdin
+  (`< /dev/null`)** — `codex exec` appends piped stdin to the prompt and a
+  backgrounded shell's open stdin pipe makes it wait for EOF forever (four
+  council runs sat 2–3 hours doing nothing). Don't pipe its output through
+  `tail`/`grep` either — you lose live progress. The `codex exec review`
+  subcommand is unsuitable for council briefs: it rejects `--cd` and its
+  `--base` flag is mutually exclusive with a custom prompt; use plain
+  `codex exec` and have the brief run `git diff origin/main...HEAD` itself.
 
   Pin the model and effort explicitly (`xhigh` is the CLI's max tier). The
   operator's standing call: the expert second review is **almost always worth
