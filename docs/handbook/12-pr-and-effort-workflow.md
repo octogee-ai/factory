@@ -4,7 +4,7 @@ slug: 12-pr-and-effort-workflow
 order: 12
 part: Dev Workflow
 audience: [agent]
-description: Spec-first for larger efforts, fewer PRs off main, the per-PR review agent, severity-tiered fixups, and the git-hygiene rules.
+description: Spec-first for larger efforts, fewer PRs off main, the per-PR review agent, severity-tiered fixups, and the git-hygiene rules (branch protection, squash-merge cleanup, origin/main freshness).
 updated: 2026-07-08
 ---
 
@@ -53,15 +53,20 @@ its own green commit (TDD + full suite + tsc + eslint green before each commit);
 run the review agent **once at the end**, not per-feature. Used deliberately for
 the app-shell decomposition (#958). Still no self-merge.
 
-## Docs & small-config go direct to main
+## Docs & small-config: PR required (branch protection is ON)
 
-- Pure docs (`docs/`, `README.md`, code comments, CLAUDE.md, this handbook) and
-  small, easily-revertible ops/helm config (e.g. a compute-class default) →
-  fresh branch, `git push origin HEAD:main`, **no PR**.
-- **Carve-out:** anything touching `cloudbuild*.yaml` / `oc-build-matrix.yaml` /
-  `Dockerfile.base` / `entrypoint.sh` goes via branch + PR — those auto-fire a
-  prod base-image rebuild + Release CI, so a direct push is an unreviewed prod
-  mutation. If unsure, PR.
+`main` is branch-protected (verified live: `required_pull_request_reviews`
+present, required status checks `gitleaks`/`osv-scanner`/`eslint`/`test-gate`,
+`enforce_admins:false`). A non-admin `git push origin HEAD:main` will be
+**rejected** — there is no clean direct-push path anymore, including for pure
+docs. Fresh branch → `gh pr create` → merge, even for a one-paragraph doc fix.
+(`enforce_admins:false` means an operator/admin token *can* bypass and push
+directly, which skips every check — that's the operator's call to make, not
+an agent's default.)
+- **Carve-out (unchanged):** anything touching `cloudbuild*.yaml` /
+  `oc-build-matrix.yaml` / `Dockerfile.base` / `entrypoint.sh` auto-fires a
+  prod base-image rebuild + Release CI on merge — treat with extra review
+  care even though it's "just" a PR.
 
 ## Git hygiene
 
@@ -70,11 +75,39 @@ the app-shell decomposition (#958). Still no self-merge.
   bundled verify+commit+push can land work on the wrong branch. Run
   `git branch --show-current` + `git status --short` as a *separate* step first.
   Prefer a dedicated worktree for agent PR work.
+- **Cut branches from a freshly-fetched `origin/main`, not local `main`.**
+  Local `main` in this repo is routinely AHEAD of `origin/main` with the
+  operator's unpushed, unrelated in-flight commits — branching off it silently
+  carries those commits into your PR (CI's per-PR lint/eslint runs the whole
+  tree, so an unrelated file can redden your PR). Prefer
+  `git worktree add -b <branch> <path> origin/main` from the start; if you
+  already branched off local main, `git fetch origin main && git rebase
+  --onto origin/main <old-local-main-sha>` and verify `git log --oneline
+  origin/main..HEAD` shows ONLY your commits before opening the PR.
 - **After the operator confirms a merge,** default to cleanup (don't ask):
-  `git checkout main && git pull --ff-only`, then `git branch -d <branch>`
-  (lowercase `-d` fails loudly if unmerged — the safety net), then
-  `git worktree remove <path>` (no `--force`). Never escalate to `-D`/`--force`
-  autonomously — if `-d` refuses, surface the state and let the operator decide.
+  `git checkout main && git pull --ff-only`, then `git branch -d <branch>`.
+  **This repo always squash-merges**, so `-d` will reliably refuse
+  "not fully merged" as a false positive (the branch's commits are never
+  literal ancestors of the squash commit) — that refusal is not evidence of
+  unmerged work. Independently confirm the squash landed
+  (`git log origin/main --oneline | grep '(#<PR>)'` and/or `git show
+  origin/main:<path>` contains the change), then `git branch -D <branch>` —
+  safe once confirmed (content is in `main` + the reflog). Then
+  `git worktree remove <path>` (no `--force`; a dirty tree refusing removal
+  means stop and look, don't force it). Never `-D`/`--force` *without* that
+  positive verification — if you can't confirm the squash landed, surface the
+  state and let the operator decide.
+- **Periodic multi-worktree/branch sweep** (when asked to "clean up local
+  worktrees and branches" — this repo accrues dozens from parallel agents):
+  `git fetch --prune origin` first (refreshes `[gone]` = squash-merged
+  signal). Remove worktrees with no live agent process attached (check via
+  `lsof`) and no uncommitted source edits; re-check liveness at removal time,
+  not just at sweep start. Delete branches that are an ancestor of
+  `origin/main`, `[gone]` upstream, or pushed-with-zero-ahead (all
+  recoverable). **Never** auto-delete a branch whose tip is absent from both
+  `origin/main` and any remote — that is the only truly unrecoverable
+  deletion; surface it and let the operator decide. Never touch a checked-out
+  branch's worktree or kill a live agent process.
 - **No CI sleep-polling.** After pushing, do at most one `gh pr checks` snapshot,
   report, and stop. The operator drives the merge. For a genuine wait, use
   ScheduleWakeup, not a foreground sleep loop.
@@ -202,6 +235,21 @@ Scope guardrails:
   and silently win in `a || b` resolution chains.
 - If the PR touches notifications / fan-out / any async pipeline, confirm
   idempotency and the dedup story.
+- New internal broker endpoint (an in-process op relocated behind an HTTP
+  route) ⇒ treat it as a fresh trust boundary: does it re-validate every input
+  the in-process caller used to implicitly guarantee (e.g. an
+  already-slug-validated caller vs. a raw HTTP body)? Does it fail loud on
+  misconfiguration (never a silent 200 no-op)? Does the guarding credential's
+  reach match what's claimed, and does it carry BOTH its npm deps and its
+  env/secrets onto the new host (a relocated op can 200 while silently
+  no-op'ing if either is missing)?
+- New controller-side Kubernetes call (Cowboy/glm-controller, octogee-api)
+  ⇒ a live `kubectl` test from your own laptop context proves nothing about
+  RBAC — your context is cluster-admin, the controller runs under a
+  least-privilege Helm `Role`. Confirm the Role grants the exact
+  resource+subresource+verb (`pods/exec`, `deployments/scale`, `pods/log` are
+  each separate grants, not implied by the parent resource) via a
+  helm-template test, not a live probe.
 - Do not rewrite the PR. Suggest changes; don't produce replacement files.
 
 Return plain markdown, 400–1200 words depending on PR size. Don't pad.
@@ -215,6 +263,10 @@ fixup-summary PR comment (P0 addressed / P1 addressed / Deferred), then notify
 the operator with the PR URL and a one-line status. Re-verify every review
 finding against the CURRENT branch head before acting — reviews of an earlier
 push go stale. After posting the PR, poll Copilot's review comments and
-address or answer each inline finding.
+address or answer each inline finding — but the near-universal
+`copilot-pull-request-reviewer` PR-level comment "unable to review... reached
+their quota limit" has no `comment_id` and nothing to act on; confirm zero
+real inline threads (`gh api repos/.../pulls/<n>/comments`) and move on rather
+than treating it as a finding.
 
 Related: [10 — Engineering Principles](10-engineering-principles.md), [11 — Testing](11-testing.md), [13 — Repo Conventions](13-repo-conventions.md).
