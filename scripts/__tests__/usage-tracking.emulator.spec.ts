@@ -49,7 +49,7 @@ async function readDoc(p: string): Promise<Record<string, unknown> | null> {
 const today = new Date().toISOString().slice(0, 10);
 
 describe("reportUsage — v3.1 workspace paths", () => {
-  it("writes to workspaces/{slug}/usage_{sessions,models,summary} (and not the deprecated user-subtree)", async () => {
+  it("writes workspaces/{slug}/usage_models with a TTL stamp (and not the deprecated user-subtree)", async () => {
     await seedUser("eckert-uid", {
       selectedTier: "pro",
       subscription: { tier: "pro" },
@@ -77,11 +77,13 @@ describe("reportUsage — v3.1 workspace paths", () => {
       gatewayId: "gw-test",
     });
 
-    expect(await readDoc(`workspaces/eckert/usage_sessions/${today}`)).not.toBeNull();
-    expect(
-      await readDoc(`workspaces/eckert/usage_models/anthropic_claude-haiku-4-5_${today}`),
-    ).not.toBeNull();
-    expect(await readDoc("workspaces/eckert/usage_summary/current")).not.toBeNull();
+    const model = await readDoc(`workspaces/eckert/usage_models/anthropic_claude-haiku-4-5_${today}`);
+    expect(model).not.toBeNull();
+    // usage_models is the surviving telemetry; it stamps expiresAt so the TTL
+    // policy drains it. usage_sessions/usage_summary are retired (no writes).
+    expect(model?.expiresAt).toBeTruthy();
+    expect(await readDoc(`workspaces/eckert/usage_sessions/${today}`)).toBeNull();
+    expect(await readDoc("workspaces/eckert/usage_summary/current")).toBeNull();
 
     const deprecatedSnap = await db
       .collection("users")
@@ -91,7 +93,7 @@ describe("reportUsage — v3.1 workspace paths", () => {
     expect(deprecatedSnap.empty).toBe(true);
   });
 
-it("session + model + summary docs carry (role, model, slug, gateway, tokens, cost) — no per-turn key fingerprint", async () => {
+it("the usage_models doc carries (role, model, slug, tokens, cost) — no per-turn key fingerprint", async () => {
     await seedUser("chris-uid", { selectedTier: "pro", usage: {} });
     const agentDir = makeAgentDir("christopher");
 
@@ -115,46 +117,27 @@ it("session + model + summary docs carry (role, model, slug, gateway, tokens, co
       gatewayId: "gw-test",
     });
 
-    const session = await readDoc(`workspaces/christopher/usage_sessions/${today}`);
     const model = await readDoc(
       `workspaces/christopher/usage_models/anthropic_claude-sonnet-4-6_${today}`,
     );
-    const summary = await readDoc("workspaces/christopher/usage_summary/current");
+    // usage_sessions/usage_summary are retired — the admin panel now sources
+    // sessions + summary from the broker event stream.
+    expect(await readDoc(`workspaces/christopher/usage_sessions/${today}`)).toBeNull();
+    expect(await readDoc("workspaces/christopher/usage_summary/current")).toBeNull();
 
-    expect(session).not.toBeNull();
     expect(model).not.toBeNull();
-    expect(summary).not.toBeNull();
-
-    expect(session?.gatewayId).toBe("gw-test");
-    expect(session?.workspaceId).toBe("christopher");
-    expect(session?.tokensUsed).toBe(35);
-    expect(session?.costUsd).toBeCloseTo(0.01);
-    expect(session?.interactions).toBe(1);
-    expect((session?.roles as Record<string, number>)?.builder).toBe(35);
-    expect((session?.token_breakdown as Record<string, number>)?.input).toBe(10);
-    expect((session?.token_breakdown as Record<string, number>)?.output).toBe(20);
-    expect((session?.token_breakdown as Record<string, number>)?.cacheRead).toBe(5);
-
     expect(model?.model).toBe("anthropic/claude-sonnet-4-6");
     expect(model?.role).toBe("builder");
     expect(model?.workspaceId).toBe("christopher");
     expect(model?.tokens).toBe(35);
     expect(model?.cost_usd).toBeCloseTo(0.01);
     expect(model?.interaction_count).toBe(1);
+    expect((model?.token_breakdown as Record<string, number>)?.input).toBe(10);
+    expect((model?.token_breakdown as Record<string, number>)?.cacheRead).toBe(5);
 
-    expect(summary?.workspaceId).toBe("christopher");
-    expect(summary?.totalTokens).toBe(35);
-    expect(summary?.totalCostUsd).toBeCloseTo(0.01);
-    expect(summary?.totalInteractions).toBe(1);
-    expect(
-      (summary?.modelCosts as Record<string, number>)["anthropic_claude-sonnet-4-6"],
-    ).toBeCloseTo(0.01);
-
-    for (const doc of [session, model, summary]) {
-      expect(doc).not.toHaveProperty("keyFingerprint");
-      expect(doc).not.toHaveProperty("keyFingerprints");
-      expect(doc).not.toHaveProperty("lastKeyFingerprint");
-    }
+    expect(model).not.toHaveProperty("keyFingerprint");
+    expect(model).not.toHaveProperty("keyFingerprints");
+    expect(model).not.toHaveProperty("lastKeyFingerprint");
   });
 
   it("user-level write does NOT carry lastKeyFingerprint", async () => {
@@ -293,29 +276,6 @@ describe("reportUsage — nested-object contract (no dotted-literal field names)
     });
   }
 
-  it("usage_sessions: roles is a NESTED object (not a 'roles.<role>' literal field)", async () => {
-    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
-    const session = await readDoc(`workspaces/alice/usage_sessions/${today}`);
-    expect(session?.roles).toBeTypeOf("object");
-    expect((session?.roles as Record<string, number>).coach).toBe(35);
-    
-    expect(Object.keys(session ?? {})).not.toContain("roles.coach");
-  });
-
-  it("usage_sessions: token_breakdown is a NESTED object (not 'token_breakdown.input' literals)", async () => {
-    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
-    const session = await readDoc(`workspaces/alice/usage_sessions/${today}`);
-    expect(session?.token_breakdown).toBeTypeOf("object");
-    const tb = session?.token_breakdown as Record<string, number>;
-    expect(tb.input).toBe(10);
-    expect(tb.output).toBe(20);
-    expect(tb.cacheRead).toBe(5);
-    expect(tb.cacheWrite).toBe(0);
-    for (const k of ["input", "output", "cacheRead", "cacheWrite"]) {
-      expect(Object.keys(session ?? {})).not.toContain(`token_breakdown.${k}`);
-    }
-  });
-
   it("usage_models: token_breakdown is a NESTED object", async () => {
     await callOnce({ uid: "u1", slug: "alice", role: "coach" });
     const model = await readDoc(
@@ -328,17 +288,6 @@ describe("reportUsage — nested-object contract (no dotted-literal field names)
     for (const k of ["input", "output", "cacheRead", "cacheWrite"]) {
       expect(Object.keys(model ?? {})).not.toContain(`token_breakdown.${k}`);
     }
-  });
-
-  it("usage_summary: modelCosts is a NESTED object (not 'modelCosts.<modelKey>' literal)", async () => {
-    await callOnce({ uid: "u1", slug: "alice", role: "coach" });
-    const summary = await readDoc("workspaces/alice/usage_summary/current");
-    expect(summary?.modelCosts).toBeTypeOf("object");
-    const mc = summary?.modelCosts as Record<string, number>;
-    expect(mc["anthropic_claude-sonnet-4-6"]).toBeCloseTo(0.01);
-    expect(Object.keys(summary ?? {})).not.toContain(
-      "modelCosts.anthropic_claude-sonnet-4-6",
-    );
   });
 
   it("users/{uid}/usage_logs: breakdown is a NESTED object (not 'breakdown.<role>' / 'breakdown.input' literals)", async () => {
@@ -363,9 +312,7 @@ it("no doc written by reportUsage has any top-level field name containing `.`", 
     await callOnce({ uid: "u1", slug: "alice", role: "coach" });
     const docs = await Promise.all([
       readDoc(`users/u1/usage_logs/${today}`),
-      readDoc(`workspaces/alice/usage_sessions/${today}`),
       readDoc(`workspaces/alice/usage_models/anthropic_claude-sonnet-4-6_${today}`),
-      readDoc("workspaces/alice/usage_summary/current"),
     ]);
     for (const [i, doc] of docs.entries()) {
       const dotted = Object.keys(doc ?? {}).filter((k) => k.includes("."));
@@ -396,55 +343,13 @@ describe("reportUsage — accumulation across multiple calls", () => {
         gatewayId: "gw-test",
       });
     }
-    const session = await readDoc(`workspaces/acme/usage_sessions/${today}`);
-    expect(session?.tokensUsed).toBe(70);
-    expect(session?.interactions).toBe(2);
-    expect(session?.costUsd).toBeCloseTo(0.02);
-    expect((session?.roles as Record<string, number>).coach).toBe(70);
+    const model = await readDoc(`workspaces/acme/usage_models/anthropic_claude-sonnet-4-6_${today}`);
+    expect(model?.tokens).toBe(70);
+    expect(model?.interaction_count).toBe(2);
+    expect(model?.cost_usd).toBeCloseTo(0.02);
   });
 
-  it("two calls with DIFFERENT roles populate distinct roles.* entries (both accumulate to session.tokensUsed)", async () => {
-    await seedUser("u-roles", { selectedTier: "pro", usage: {} });
-    const agentDirCoach = makeAgentDir("acme");
-    const agentDirBuilder = makeAgentDir("acme");
-    await reportUsage({
-      db: db as never,
-      agentId: "octogee-acme-coach",
-      role: "coach",
-      agentDir: agentDirCoach,
-      usage: {
-        input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
-        totalTokens: 35, costUsd: 0.01,
-        model: "anthropic/claude-sonnet-4-6",
-        costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      agentToUid: new Map([["octogee-acme-coach", "u-roles"]]),
-      log: () => {},
-      gatewayId: "gw-test",
-    });
-    await reportUsage({
-      db: db as never,
-      agentId: "octogee-acme-coach",
-      role: "builder",
-      agentDir: agentDirBuilder,
-      usage: {
-        input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
-        totalTokens: 100, costUsd: 0.05,
-        model: "anthropic/claude-sonnet-4-6",
-        costBreakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      agentToUid: new Map([["octogee-acme-coach", "u-roles"]]),
-      log: () => {},
-      gatewayId: "gw-test",
-    });
-    const session = await readDoc(`workspaces/acme/usage_sessions/${today}`);
-    const roles = session?.roles as Record<string, number>;
-    expect(roles.coach).toBe(35);
-    expect(roles.builder).toBe(100);
-    expect(session?.tokensUsed).toBe(135);
-  });
-
-  it("two calls with DIFFERENT models populate distinct summary.modelCosts.* entries", async () => {
+  it("two calls with DIFFERENT models write distinct usage_models docs", async () => {
     await seedUser("u-models", { selectedTier: "pro", usage: {} });
     const agentDir = makeAgentDir("acme");
     for (const m of ["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"]) {
@@ -464,11 +369,10 @@ describe("reportUsage — accumulation across multiple calls", () => {
         gatewayId: "gw-test",
       });
     }
-    const summary = await readDoc("workspaces/acme/usage_summary/current");
-    const mc = summary?.modelCosts as Record<string, number>;
-    expect(mc["anthropic_claude-sonnet-4-6"]).toBeCloseTo(0.01);
-    expect(mc["anthropic_claude-haiku-4-5"]).toBeCloseTo(0.001);
-    expect(summary?.totalCostUsd).toBeCloseTo(0.011);
+    const sonnet = await readDoc(`workspaces/acme/usage_models/anthropic_claude-sonnet-4-6_${today}`);
+    const haiku = await readDoc(`workspaces/acme/usage_models/anthropic_claude-haiku-4-5_${today}`);
+    expect(sonnet?.cost_usd).toBeCloseTo(0.01);
+    expect(haiku?.cost_usd).toBeCloseTo(0.001);
   });
 
   it("token_breakdown accumulates across two calls on the same role+model+date", async () => {
@@ -491,8 +395,8 @@ describe("reportUsage — accumulation across multiple calls", () => {
         gatewayId: "gw-test",
       });
     }
-    const session = await readDoc(`workspaces/acme/usage_sessions/${today}`);
-    const tb = session?.token_breakdown as Record<string, number>;
+    const model = await readDoc(`workspaces/acme/usage_models/anthropic_claude-sonnet-4-6_${today}`);
+    const tb = model?.token_breakdown as Record<string, number>;
     expect(tb.input).toBe(20);
     expect(tb.output).toBe(40);
     expect(tb.cacheRead).toBe(10);
@@ -501,7 +405,7 @@ describe("reportUsage — accumulation across multiple calls", () => {
 });
 
 describe("reportUsage — privacy invariants (no key-fingerprint fields)", () => {
-  it("workspace session/model/summary docs carry no keyFingerprint / keyFingerprints / lastKeyFingerprint", async () => {
+  it("the usage_models doc carries no keyFingerprint / keyFingerprints / lastKeyFingerprint", async () => {
     await seedUser("u-priv", { selectedTier: "pro", usage: {} });
     const agentDir = makeAgentDir("acme");
     await reportUsage({
@@ -519,15 +423,9 @@ describe("reportUsage — privacy invariants (no key-fingerprint fields)", () =>
       log: () => {},
       gatewayId: "gw-test",
     });
-    const docs = await Promise.all([
-      readDoc(`workspaces/acme/usage_sessions/${today}`),
-      readDoc(`workspaces/acme/usage_models/anthropic_claude-sonnet-4-6_${today}`),
-      readDoc("workspaces/acme/usage_summary/current"),
-    ]);
-    for (const doc of docs) {
-      expect(doc).not.toHaveProperty("keyFingerprint");
-      expect(doc).not.toHaveProperty("keyFingerprints");
-      expect(doc).not.toHaveProperty("lastKeyFingerprint");
-    }
+    const doc = await readDoc(`workspaces/acme/usage_models/anthropic_claude-sonnet-4-6_${today}`);
+    expect(doc).not.toHaveProperty("keyFingerprint");
+    expect(doc).not.toHaveProperty("keyFingerprints");
+    expect(doc).not.toHaveProperty("lastKeyFingerprint");
   });
 });

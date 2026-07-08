@@ -221,25 +221,10 @@ function usageLogData(args: {
   };
 }
 
-function workspaceSessionData(args: {
-  today: string;
-  usage: UsageData;
-  gatewayId: string;
-  workspaceId: string;
-  role: string;
-}): FirestoreUpdate {
-  const { today, usage, gatewayId, workspaceId, role } = args;
-  return {
-    date:            today,
-    tokensUsed:      FieldValue.increment(usage.totalTokens),
-    costUsd:         FieldValue.increment(usage.costUsd),
-    interactions:    FieldValue.increment(1),
-    gatewayId,
-    workspaceId,
-    roles: { [role]: FieldValue.increment(usage.totalTokens) },
-    token_breakdown: tokenBreakdownIncrements(usage),
-  };
-}
+// 180d, matching the broker ledger. expiresAt is refreshed on every write, so a
+// model's telemetry doc expires 180d after its LAST use (a Firestore TTL policy
+// on workspaces/*/usage_models drains it) — inactive workspaces self-clean.
+const USAGE_MODEL_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 function workspaceModelData(args: {
   today: string;
@@ -258,21 +243,7 @@ function workspaceModelData(args: {
     role,
     lastUsedAt:        FieldValue.serverTimestamp(),
     token_breakdown:   tokenBreakdownIncrements(usage),
-  };
-}
-
-function workspaceSummaryData(args: {
-  usage: UsageData;
-  workspaceId: string;
-}): FirestoreUpdate {
-  const { usage, workspaceId } = args;
-  return {
-    workspaceId,
-    totalTokens:        FieldValue.increment(usage.totalTokens),
-    totalCostUsd:       FieldValue.increment(usage.costUsd),
-    totalInteractions:  FieldValue.increment(1),
-    lastUpdated:        FieldValue.serverTimestamp(),
-    modelCosts: { [modelKey(usage.model)]: FieldValue.increment(usage.costUsd) },
+    expiresAt:         new Date(Date.now() + USAGE_MODEL_TTL_MS),
   };
 }
 
@@ -287,22 +258,17 @@ function writeWorkspaceUsageDocuments(
     role: string;
   },
 ): void {
+  // usage_models is the surviving per-workspace telemetry (token volume incl.
+  // BYOSUB, read by the customer usage panel + admin detail). usage_sessions and
+  // usage_summary were retired: their only reader was the admin usage panel,
+  // which now sources sessions + summary from the broker event stream (the
+  // billing truth). A one-shot deletes their legacy docs.
   const ids = workspaceUsageDocumentIds(args.usage.model, args.today);
   const wsRef = db.collection("workspaces").doc(args.workspaceId);
 
   t.set(
-    wsRef.collection("usage_sessions").doc(ids.sessionId),
-    workspaceSessionData(args),
-    { merge: true },
-  );
-  t.set(
     wsRef.collection("usage_models").doc(ids.modelId),
     workspaceModelData(args),
-    { merge: true },
-  );
-  t.set(
-    wsRef.collection("usage_summary").doc(ids.summaryId),
-    workspaceSummaryData(args),
     { merge: true },
   );
 }

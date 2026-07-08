@@ -13,6 +13,7 @@ import {
   type CustomerSummary,
 } from "./admin-shape.js";
 import { getTierConfig, type TierName } from "@octogee/shared/types/billing-tiers";
+import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
 import {
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
@@ -674,7 +675,6 @@ router.get(
 
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
-        const cutoffStr = cutoff.toISOString().slice(0, 10);
 
         const slugs = warnIfNoSlug(
           logger,
@@ -682,59 +682,50 @@ router.get(
           uid,
         );
 
-        const workspaces = await Promise.all(
-          slugs.map(async (slug) => {
-            const wsRef = db.collection("workspaces").doc(slug);
-            const summaryRef  = wsRef.collection("usage_summary").doc("current");
-            const sessionsRef = wsRef.collection("usage_sessions");
-            const modelsRef   = wsRef.collection("usage_models");
+        // Cost is the billing truth from the broker's per-owner event stream —
+        // the self-report ledger (usage_models) records openclaw's $0-for-GLM
+        // cost. The broker meters per OWNER, so the platform usage/cost belongs
+        // to the account: attribute it to the primary workspace and leave any
+        // additional cards empty so a multi-workspace owner is never
+        // double-counted. Owner-credential (BYOSUB) traffic never reaches the
+        // broker and carries $0 platform cost — correct for a cost panel.
+        const series = await readOwnerBrokerUsageSeries(db, uid, cutoff.getTime(), logger);
+        const displayName =
+          (userData.displayName as string) || (userData.username as string) || "";
 
-            const [summarySnap, sessionsSnap, modelsSnap] = await Promise.all([
-              summaryRef.get(),
-              sessionsRef.where("date", ">=", cutoffStr).orderBy("date", "desc").get(),
-              modelsRef.where("date", ">=", cutoffStr).get(),
-            ]);
-
-            const summary = summarySnap.exists ? summarySnap.data()! : {};
-            const sessions = sessionsSnap.docs.map((d) => {
-              const sd = d.data();
-              return {
-                date: sd.date || d.id,
-                tokensUsed: sd.tokensUsed || 0,
-                costUsd: sd.costUsd || 0,
-                interactions: sd.interactions || 0,
-                roles: sd.roles || {},
-              };
-            });
-            const models = modelsSnap.docs.map((d) => {
-              const md = d.data();
-              return {
-                id: d.id,
-                date: md.date || d.id.split("_").slice(-1)[0] || "",
-                model: md.model || d.id.split("_").slice(0, -1).join("_"),
-                tokens: md.tokens || 0,
-                cost_usd: md.cost_usd || 0,
-                interaction_count: md.interaction_count || 0,
-                role: md.role || "coach",
-                lastUsedAt: toISODate(md.lastUsedAt),
-              };
-            });
-
-            return {
-              workspaceId: slug,
-              displayName: userData.displayName || userData.username || slug,
-              summary: {
-                totalTokens: Number(summary.totalTokens) || 0,
-                totalCostUsd: Number(summary.totalCostUsd) || 0,
-                totalInteractions: Number(summary.totalInteractions) || 0,
-                lastUpdated: toISODate(summary.lastUpdated),
-                modelCosts: summary.modelCosts || {},
-              },
-              sessions,
-              models,
-            };
-          }),
-        );
+        const workspaces = slugs.map((slug, i) => {
+          const s = i === 0 ? series : null;
+          return {
+            workspaceId: slug,
+            displayName: displayName || slug,
+            summary: {
+              totalTokens: s?.totalTokens ?? 0,
+              totalCostUsd: s?.totalCostUsd ?? 0,
+              totalInteractions: s?.totalCalls ?? 0,
+              lastUpdated: null,
+              modelCosts: Object.fromEntries(
+                (s?.models ?? []).map((m) => [m.model.replace(/\//g, "_"), m.costUsd]),
+              ),
+            },
+            sessions: (s?.sessions ?? []).map((d) => ({
+              date: d.date,
+              tokensUsed: d.tokens,
+              costUsd: d.costUsd,
+              interactions: d.calls,
+              roles: {},
+            })),
+            models: (s?.models ?? []).map((m) => ({
+              id: m.model,
+              date: "",
+              model: m.model,
+              tokens: m.tokens,
+              cost_usd: m.costUsd,
+              interaction_count: m.calls,
+              role: "platform",
+              lastUsedAt: m.lastUsedAt ? new Date(m.lastUsedAt).toISOString() : null,
+            })),
+          };
+        });
 
         const noSessions = workspaces.every(
           (w) => w.summary.totalTokens === 0 && w.sessions.length === 0,
