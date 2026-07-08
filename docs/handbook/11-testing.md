@@ -4,7 +4,7 @@ slug: 11-testing
 order: 11
 part: Dev Workflow
 audience: [agent]
-description: Where tests live, Vitest-only rules, the import-graph coverage audit, and the scripts/ test-gate nuance.
+description: Where tests live, Vitest-only rules, the import-graph coverage audit, live/emulator-spec discipline, and the scripts/ test-gate nuance.
 updated: 2026-07-08
 ---
 
@@ -64,6 +64,65 @@ It ranks modules by churn × size and flags only those with **no test importing
 them** (both suffixes, relative + `@/`/`@shared` aliases resolved). Caveat in its
 output: app/server integration suites cover routes transitively — confirm the top
 candidate has no transitive net before investing.
+
+## Emulator specs must hit the real emulator, never a stub db
+
+A `*.emulator.spec.ts` (or any test claiming integration fidelity for a
+db-backed path) MUST use the real Firestore/Auth emulator — never an inline
+`{ collection, doc, where, get }` stub or `buildFirestoreStub`. A stub encodes
+your *assumption* of the query's behavior; it stays green while real Firestore
+(indexes, query shape, collectionGroup needs) diverges, which is exactly how
+the activity bridge shipped inert in TEST. Pure-logic unit tests spying on a
+non-db collaborator are unaffected — this targets faking the db/integration
+point itself.
+
+- `@octogee/test-helpers/firestore-emulator`: `getAdminDb()` to seed,
+  `setupEmulatorTest()` (fail-loud `requireEmulator()` + per-test reset),
+  `useAuthToken(uid)` / `getIdTokenForUid(uid)` mint a REAL emulator ID token
+  — covers Auth-gated routes too, not just Firestore reads.
+- Run via `npm run test:emulator` (glob `src/__tests__/**/*.emulator.spec.ts`).
+  Plain `npm test` **excludes** emulator specs; a bare `npx vitest run`
+  does **not** exclude them and will hang waiting for a real emulator.
+  Placing an `.emulator.spec.ts` outside `src/__tests__/**` means it silently
+  never runs in either config.
+- Don't route around a brittle mock by deleting the integration test — patch
+  the shared test-helper infra so everyone benefits (an octogee-api spec with
+  `vi.mock(".../gateway-edge/src/lib/db")` is debt to migrate onto this
+  pattern, not a model to copy).
+
+## Live tests (`tests/live/*.live.spec.ts`) must self-clean at every depth
+
+`test-live.yml` runs these against deployed TEST (api-test.octogee.com +
+`octogee-test` Firestore) on a cron. Any live spec that provisions real
+resources (reservations, customers, gateways) must tear them down on **every**
+depth/branch it can run, not only its deepest "activate" path — a provisioning
+live spec that cleaned up only on `activate` minted a ghost operator gateway
+in TEST every night because the cron's *default* depth was the shallower
+`request` (reserve-only). Before adding or reviewing a provisioning
+`*.live.spec.ts`, verify cleanup runs on the cron's default path specifically,
+not only a manual `workflow_dispatch` deep mode.
+
+## Tests that shell out to real git break on CI two ways local git config masks
+
+A test that inits a temp repo and drives real `git` (init/commit/rebase/merge)
+passes locally and breaks on the CI runner:
+
+- **Default branch.** CI `git init` creates `master` (no `init.defaultBranch`
+  set) — a fixture that later checks out `main` fails. Fix: `git init -b main`.
+- **No committer identity.** CI runners have no global `user.name`/`user.email`.
+  Passing `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env to your own setup commits isn't
+  enough if the **code under test** runs its own `git commit`/`rebase
+  --continue` against *ambient* config — it fails silently ("Committer
+  identity unknown") and the operation just doesn't advance. Fix: `git config
+  user.email`/`user.name` **repo-locally** in the fixture.
+
+Verify locally the CI way before trusting green: `GIT_CONFIG_GLOBAL=/dev/null
+GIT_CONFIG_SYSTEM=/dev/null npx vitest run <file>` strips your global identity
+and `init.defaultBranch`, reproducing the bare runner. Same session, same
+class of miss: a bare `"git"`/`"npm"` command name in `execFileSync` trips
+`sonarjs/no-os-command-from-path` under `--max-warnings=0` — use an absolute
+path or `process.execPath`/`process.env.npm_execpath`, never a
+`$PATH`-resolved name.
 
 ## Verification discipline
 
