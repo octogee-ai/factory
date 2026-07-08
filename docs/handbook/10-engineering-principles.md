@@ -4,8 +4,8 @@ slug: 10-engineering-principles
 order: 10
 part: Dev Workflow
 audience: [agent]
-description: How we write code here — TDD, no silent failures, fix root cause, greenfield, no narrative comments, calibrated effort.
-updated: 2026-05-28
+description: How we write code here — TDD, no silent failures, fix root cause, greenfield (code vs. real user data), no narrative comments, paying down debt net-first, calibrated effort.
+updated: 2026-07-08
 ---
 
 # Engineering Principles
@@ -41,6 +41,15 @@ Pre-customer means breaking changes are cheap and correctness is the priority.
 
 - No migrations, no API versioning, no backwards-compat shims, no `_var` renames
   for compat. Just change the code — clean breaks over compat hacks.
+- **Past pure-greenfield for real user DATA, still greenfield for code.**
+  Quiet friends-and-family users exist now — code/routes/API/schema shape
+  still gets clean breaks (no redirect routes, no versioning), but a change
+  that moves/renames/removes a field on `users/*`, `workspaces/*`,
+  `projects/*` (or other user-facing docs) needs a real migration: idempotent,
+  dry-run-first, tested against the emulator, `--dry-run` then `--apply` on
+  test then prod. Cattle/fleet state (`glmGateways`, gateways, shells) stays
+  teardown-recoverable — no migration needed there. Breaking the code is
+  free; silently orphaning a quiet user's data is a real regression.
 - **Teardown over surgery:** when state is tangled and no real data is at risk,
   nuke + rebuild beats an intricate manual recovery (the corollary of "PVC data
   is critical" — which flips the moment there's real customer data).
@@ -67,6 +76,31 @@ Pre-customer means breaking changes are cheap and correctness is the priority.
 - If `npm ci`/CI breaks on latest, **investigate why** — never pin back to silence
   it. A red CI on a fresh install is a signal. (Verify a fresh install + test pass
   for native/build-sensitive deps like node-pty before merging the bump.)
+
+## Paying down debt: net-first, then cut
+
+Eslint warning counts are a *lagging* indicator — the real smell is test
+coverage inversely correlated with churn × criticality. When tackling a
+tangled/high-blast-radius file, write the characterization test (pin the
+intended behavior, mock at the seams so it survives the refactor) for the
+highest churn×blast-radius file **first**; the refactor/split/lint cleanup
+falls out cheaply and safely once the net is in place. Don't fix latent bugs
+found *inside* a behavior-preserving refactor — queue them as separate
+root-cause PRs so the refactor stays reviewable as one unit of thought. Use
+the import-graph coverage audit ([11 — Testing](11-testing.md)) to find the
+next target — never a filename glob.
+
+## Reusable atoms over inline one-offs
+
+When the same visual or interaction pattern (spinner, button variant, modal,
+empty state, …) appears a **third** time, stop and extract a reusable
+primitive instead of shipping a fourth inline copy — first and second
+occurrences are fine to leave inline. Sweep the existing call-sites onto the
+new primitive in the same PR; don't leave half the codebase on the old
+pattern. API shape: `size`/`tone`-style props for the ~90% case with
+`className` passthrough for outliers, not every internal knob exposed.
+Reusable primitives with a typed API still get a contract test even under
+the relaxed-TDD-for-UI rule ([11 — Testing](11-testing.md)).
 
 ## Calibrated effort
 
