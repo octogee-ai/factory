@@ -5,7 +5,7 @@ order: 11
 part: Dev Workflow
 audience: [agent]
 description: Where tests live, Vitest-only rules, the import-graph coverage audit, and the scripts/ test-gate nuance.
-updated: 2026-05-28
+updated: 2026-07-08
 ---
 
 # Testing
@@ -64,6 +64,19 @@ It ranks modules by churn × size and flags only those with **no test importing
 them** (both suffixes, relative + `@/`/`@shared` aliases resolved). Caveat in its
 output: app/server integration suites cover routes transitively — confirm the top
 candidate has no transitive net before investing.
+
+## Verification discipline
+
+- **Never judge a test run through a pipe.** `npm test 2>&1 | grep -E "Tests"`
+  reports *grep's* exit status, not the suite's — a red suite whose output
+  matches the grep looks green. This shipped a broken rules test to CI on
+  #2145. Capture the real exit: `npm test > /tmp/x.log 2>&1; echo "exit: $?"`,
+  then read the log; or trust the summary COUNTS (`N failed`), never pipeline
+  status.
+- **Sweep sibling specs on every behavior flip.** When you change a default,
+  a shape, or a shared derivation, grep ALL specs pinning the old value
+  (including other packages) before running suites — config-pinning
+  assertions are deliberate here, and they will catch you if you don't.
 
 ## The scripts/ test-gate carve-out is narrow
 

@@ -5,7 +5,7 @@ order: 12
 part: Dev Workflow
 audience: [agent]
 description: Spec-first for larger efforts, fewer PRs off main, the per-PR review agent, severity-tiered fixups, and the git-hygiene rules.
-updated: 2026-05-28
+updated: 2026-07-08
 ---
 
 # PR & Effort Workflow
@@ -79,15 +79,123 @@ the app-shell decomposition (#958). Still no self-merge.
   report, and stop. The operator drives the merge. For a genuine wait, use
   ScheduleWakeup, not a foreground sleep loop.
 
+## Supervised subagents & the council of experts
+
+Larger efforts may be delegated to coding subagents (any vendor — Claude,
+Codex, …) working under a supervisor. The contract:
+
+- **Isolation:** every subagent works in its OWN git worktree on a fresh
+  branch off `origin/main` (`git worktree add .claude/worktrees/<name> -B
+  <branch> origin/main`). A subagent must verify it is not sitting in a shared
+  checkout before touching anything — two writers in one worktree trample each
+  other's branch state.
+- **No-push protocol:** the subagent implements with full TDD, commits
+  locally, and does NOT push or open a PR. Its final report is the
+  deliverable: what it built + deviations (with whys), UI states for visual
+  review, discoveries affecting future design passes, per-suite pass counts
+  with REAL exit codes, and commit hashes.
+- **Council of experts review:** the supervisor reviews every report twice —
+  once itself with full codebase context, and once via an independent Codex
+  CLI review from the agent's worktree:
+
+  ```
+  codex exec review --base origin/main -m gpt-5.5 -c model_reasoning_effort="xhigh" "<brief>"
+  ```
+
+  Pin the model and effort explicitly (`xhigh` is the CLI's max tier). Every
+  finding from EITHER reviewer is re-verified against the code before acting;
+  genuine disagreements go to the operator with both opinions, never a silent
+  tiebreak. Only after the council passes does the supervisor push and open
+  the PR (which then gets the normal per-PR review below).
+
 <a id="review-prompt"></a>
 ## Review-agent prompt template
 
-The canonical per-PR review prompt (severity-tagged findings, criteria weighted
-by PR type, prior-PR continuity check, summary verdict) is maintained verbatim.
-The current copy lives in the operator's memory and should be hoisted here when
-next touched; until then, do not re-derive it ad hoc — ask for the canonical
-template. Key contract: three sections (Findings P0/P1/P2 with file:line +
-suggested change; What's right; Summary verdict), 400–1200 words, read the full
-diff, check the referenced spec, flag orphan references.
+The canonical per-PR review prompt. Use it verbatim (fill the {braces}) —
+re-deriving it each time causes criteria drift.
 
-Related: [10 — Engineering Principles](10-engineering-principles.md), [13 — Repo Conventions](13-repo-conventions.md).
+```
+You are reviewing PR #{N} in the Octogee monorepo at {repo path}.
+
+Context:
+- Spec: {path to docs/ spec file}
+- This PR: {one-line description}
+- Branch: {branch-name}
+- Prior PRs on this epic: {list of merged PR numbers, or "none"}
+
+Your job: read the PR like a senior engineer who did not write it. Produce a
+review in three sections.
+
+1. **Findings**, each tagged with severity:
+   - **P0 — blocker**: correctness bug, security hole, broken invariant,
+     regression, spec violation that changes behavior.
+   - **P1 — should-fix**: maintainability issue, unclear code, missing test,
+     minor drift from spec, documentation gap.
+   - **P2 — nice-to-have**: style, naming, refactor suggestion, future
+     consideration.
+
+   For each finding: file:line reference, one-paragraph description, and
+   concrete suggested change.
+
+2. **What's right.** One paragraph. Not cheerleading — note genuinely good
+   decisions worth preserving. This calibrates the review and confirms you
+   actually read the code.
+
+3. **Summary verdict.** One of: "merge as-is", "merge after P0 fixes",
+   "merge after P0+P1 fixes", "needs redesign discussion."
+
+Review criteria, weighted by PR type — match the emphasis before reading:
+| PR type | Heavy weight | Light weight |
+|---|---|---|
+| Docs | Spec coherence, internal consistency, clarity | Security, scalability |
+| Pure deletion | Orphan references, coverage of removed surface, is anything still calling it, rules changes | Scalability, performance |
+| Refactor | Behavior preservation, test coverage, API stability for callers | New architecture concerns |
+| Feature | Completeness vs spec, security, scalability, maintainability, test coverage | (none — full review) |
+| Migration/provisioning | MM + Gitea + Secret Manager interaction correctness, idempotency, failure mode, rollback, telemetry | Style |
+
+All PR types: check prior-PR continuity — did this PR contradict or undo
+something from recent merged PRs?
+
+Fetch the diff:
+  gh pr diff {N}
+  gh pr view {N} --json body,commits,files
+
+Diff ONLY via `gh pr diff {N}` (merge-base / three-dot). NEVER a two-dot
+`git diff` against a possibly-drifted base — it renders commits that landed on
+main after the branch point as phantom reverts. Cross-check the file list with
+`gh pr view {N} --json files` before asserting any file is touched.
+
+Scope guardrails:
+- Read the full diff. Do not skim.
+- Check the spec at the referenced path — flag any drift.
+- Flag orphan references: grep for names/paths/functions deleted or renamed.
+- If the PR touches Firestore rules, confirm firestore-rules-tests/ covers
+  the new surface.
+- Server-trusted field on a client-writable doc ⇒ check the rules even if the
+  PR didn't touch them (the API write-gate is bypassable via a direct client
+  SDK write — an unprotected server-trusted field is a P0 confused-deputy).
+- New variant on a shared abstraction ⇒ audit EVERY consumer, not just the
+  changed files (sibling consumers silently accept the new variant and
+  mis-operate). Binary if/else branches over a widened union deserve special
+  attention.
+- Field RELOCATION ⇒ re-check read PRECEDENCE, not just presence — a value
+  that used to be absent (fallback fired) can become present-but-defaulted
+  and silently win in `a || b` resolution chains.
+- If the PR touches notifications / fan-out / any async pipeline, confirm
+  idempotency and the dedup story.
+- Do not rewrite the PR. Suggest changes; don't produce replacement files.
+
+Return plain markdown, 400–1200 words depending on PR size. Don't pad.
+```
+
+**Fixup phase, by severity:** P0 always before requesting operator review.
+P1 if the full set is under ~30 minutes; else fix the most valuable 2–3 and
+defer the rest with one-line justifications. P2 deferred by default, captured
+in the PR comment ("noted, not addressing") with one-line reasons. Post a
+fixup-summary PR comment (P0 addressed / P1 addressed / Deferred), then notify
+the operator with the PR URL and a one-line status. Re-verify every review
+finding against the CURRENT branch head before acting — reviews of an earlier
+push go stale. After posting the PR, poll Copilot's review comments and
+address or answer each inline finding.
+
+Related: [10 — Engineering Principles](10-engineering-principles.md), [11 — Testing](11-testing.md), [13 — Repo Conventions](13-repo-conventions.md).
