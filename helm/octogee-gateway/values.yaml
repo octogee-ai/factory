@@ -155,6 +155,9 @@ env:
   gitApiUrl: ""
   gitSshHost: ""
   llmBrokerUrl: ""  # auto-computed from release namespace for builder-class gateways
+  openaiEmbeddingsEnabled: "true"
+  openaiEmbeddingsBaseUrl: "https://api.openai.com/v1"
+  openaiEmbeddingsModel: "text-embedding-3-small"
   openclawLogLevel: "info"
   fleetControllerPort: "3003"
   migrationRsyncPort: "30873"

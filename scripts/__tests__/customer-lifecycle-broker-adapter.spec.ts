@@ -306,6 +306,13 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
 describe("buildBrokeredLifecycleAdapter add config patch", () => {
   beforeEach(() => {
     patchMocks.applyConfigPatch.mockClear();
+    vi.stubEnv("OPENAI_EMBEDDINGS_ENABLED", "true");
+    vi.stubEnv("OPENAI_EMBEDDINGS_BASE_URL", "https://api.openai.com/v1");
+    vi.stubEnv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("preserves unrelated agents while explicitly confirming the full agent list replacement", async () => {
@@ -361,6 +368,18 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     ]);
     const rebuiltCoach = patch.agents.list.at(-1) as { model?: string };
     expect(rebuiltCoach.model).toBe("platform-openrouter/z-ai/glm-5.2");
+    expect(rebuiltCoach.memorySearch).toEqual({
+      provider: "openai-compatible",
+      remote: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "platform-openai-embedding-octogee-alice-coach",
+        },
+      },
+      model: "text-embedding-3-small",
+    });
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );

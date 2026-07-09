@@ -190,6 +190,28 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toMatch(/name:\s*gateway-broker-sa-token\s*\n\s*projected:\s*\n\s*sources:\s*\n\s*-\s*serviceAccountToken:\s*\n\s*path:\s*token\s*\n\s*audience:\s*octogee-api\s*\n\s*expirationSeconds:\s*3600/);
   });
 
+  it("enables OpenAI-compatible memory search embeddings for coach agents", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+
+    expect(gw).toMatch(/name:\s*OPENAI_EMBEDDINGS_ENABLED\s*\n\s*value:\s*"true"/);
+    expect(gw).toMatch(/name:\s*OPENAI_EMBEDDINGS_BASE_URL\s*\n\s*value:\s*"https:\/\/api\.openai\.com\/v1"/);
+    expect(gw).toMatch(/name:\s*OPENAI_EMBEDDINGS_MODEL\s*\n\s*value:\s*"text-embedding-3-small"/);
+  });
+
+  it("respects an explicit OpenAI-compatible embeddings disable override", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-no-embeddings", {
+        "env.openaiEmbeddingsEnabled": "false",
+      }),
+      "Deployment",
+      "octogee-gateway-default",
+    ) ?? "";
+    const gw = containerBlock(dep, "gateway");
+
+    expect(gw).toMatch(/name:\s*OPENAI_EMBEDDINGS_ENABLED\s*\n\s*value:\s*"false"/);
+  });
+
   it("operator profile uses the same tenant-bound broker token without mounting the sidecar token path", () => {
     const dep =
       findDoc(

@@ -28,6 +28,7 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/byok/byosub-cred",
   "/internal/byok/api-key",
   "/internal/byok/agent-model-token",
+  "/internal/byok/platform-embedding-key",
   "/internal/byok/byosub-flow",
 ]);
 

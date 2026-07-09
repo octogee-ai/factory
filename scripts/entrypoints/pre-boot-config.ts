@@ -13,6 +13,10 @@ import {
   claudeCliRuntimeConfig,
   codexRuntimeConfig,
 } from "../lib/model-credential-materializer.js";
+import {
+  platformOpenAiEmbeddingMemorySearch,
+  platformOpenAiEmbeddingsEnabled,
+} from "../lib/openclaw-config-builders.js";
 
 const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
@@ -73,9 +77,6 @@ const MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG = {
 const MAC_AGENT_ID_TEMPLATE = "${OPERATOR_AGENT_ID}";
 const MAC_AGENT_ID_RE = /^octogee-ops-[a-z0-9][a-z0-9-]{0,62}$/;
 const COACH_AGENT_ID_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
-const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
-const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small";
 
 interface ByosubProviderRef {
   provider?: unknown;
@@ -319,51 +320,12 @@ export function applyAnthropicBaseUrlPatch(
   return changed;
 }
 
-function normalizedNonEmpty(value: string | undefined, fallback: string): string {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : fallback;
-}
-
-function normalizedBaseUrl(value: string | undefined): string {
-  let baseUrl = normalizedNonEmpty(value, DEFAULT_OPENAI_EMBEDDINGS_BASE_URL);
-  while (baseUrl.endsWith("/")) {
-    baseUrl = baseUrl.slice(0, -1);
-  }
-  return baseUrl;
-}
-
-function platformOpenAiEmbeddingSecretId(agentId: string): string {
-  return `platform-openai-embedding-${agentId}`;
-}
-
-function platformOpenAiEmbeddingMemorySearch(
-  agentId: string,
-  env: NodeJS.ProcessEnv,
-): Record<string, unknown> {
-  return {
-    provider: PLATFORM_EMBEDDING_PROVIDER,
-    remote: {
-      baseUrl: normalizedBaseUrl(env.OPENAI_EMBEDDINGS_BASE_URL),
-      apiKey: {
-        source: "exec",
-        provider: "gcp-secret-manager",
-        id: platformOpenAiEmbeddingSecretId(agentId),
-      },
-    },
-    model: normalizedNonEmpty(env.OPENAI_EMBEDDINGS_MODEL, DEFAULT_OPENAI_EMBEDDINGS_MODEL),
-  };
-}
-
-function envFlagEnabled(value: string | undefined): boolean {
-  return /^(1|true|yes|on)$/iu.test(value ?? "");
-}
-
 export function applyMemorySearchPlatformEmbeddingsPatch(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   logFn: (msg: string) => void,
 ): boolean {
-  if (!envFlagEnabled(env.OPENAI_EMBEDDINGS_ENABLED)) {
+  if (!platformOpenAiEmbeddingsEnabled(env)) {
     return false;
   }
   const agents = objectProperty(config, "agents");

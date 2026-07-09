@@ -241,6 +241,12 @@ spec:
             # that name would repoint BYOK-openai and embeddings at the broker.
             - name: PLATFORM_OPENAI_BASE_URL
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            - name: OPENAI_EMBEDDINGS_ENABLED
+              value: {{ .Values.env.openaiEmbeddingsEnabled | toString | quote }}
+            - name: OPENAI_EMBEDDINGS_BASE_URL
+              value: {{ .Values.env.openaiEmbeddingsBaseUrl | toString | quote }}
+            - name: OPENAI_EMBEDDINGS_MODEL
+              value: {{ .Values.env.openaiEmbeddingsModel | toString | quote }}
             {{- if eq $gatewayClass "shared" }}
             # Shared (multi-tenant) pods carry NO pod-level provider key. Each
             # customer-agent's anthropic:default is its OWN per-customer broker token

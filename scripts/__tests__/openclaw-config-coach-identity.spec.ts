@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import {
   buildCustomerAgent,
   fetchCoachIdentities,
+  platformOpenAiEmbeddingMemorySearch,
+  platformOpenAiEmbeddingsEnabled,
   resolveCoachIdentity,
   type CustomerAgentInput,
   type CoachIdentityDeps,
@@ -88,6 +90,57 @@ describe("buildCustomerAgent", () => {
       mkCustomer({ slug: "chris-shop", coach: { ...DEFAULT_COACH, name: "Scout" } }),
     );
     expect(agent.name).toBe("Scout (chris-shop)");
+  });
+
+  it("preserves caller-provided memory search config", () => {
+    const memorySearch = platformOpenAiEmbeddingMemorySearch(
+      "octogee-chris-builds-a3f2-coach",
+      {},
+    );
+
+    const agent = buildCustomerAgent(mkCustomer({ memorySearch }));
+
+    expect(agent.memorySearch).toEqual({
+      provider: "openai-compatible",
+      remote: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "platform-openai-embedding-octogee-chris-builds-a3f2-coach",
+        },
+      },
+      model: "text-embedding-3-small",
+    });
+  });
+});
+
+describe("platformOpenAiEmbeddingMemorySearch", () => {
+  it("normalizes the operator-selected endpoint and model", () => {
+    expect(
+      platformOpenAiEmbeddingMemorySearch("octogee-alice-coach", {
+        OPENAI_EMBEDDINGS_BASE_URL: "https://embeddings.example.test/v1/",
+        OPENAI_EMBEDDINGS_MODEL: "custom-embed-v1",
+      }),
+    ).toEqual({
+      provider: "openai-compatible",
+      remote: {
+        baseUrl: "https://embeddings.example.test/v1",
+        apiKey: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "platform-openai-embedding-octogee-alice-coach",
+        },
+      },
+      model: "custom-embed-v1",
+    });
+  });
+
+  it("treats only explicit true-like env values as enabled", () => {
+    expect(platformOpenAiEmbeddingsEnabled({ OPENAI_EMBEDDINGS_ENABLED: "true" })).toBe(true);
+    expect(platformOpenAiEmbeddingsEnabled({ OPENAI_EMBEDDINGS_ENABLED: "1" })).toBe(true);
+    expect(platformOpenAiEmbeddingsEnabled({ OPENAI_EMBEDDINGS_ENABLED: "false" })).toBe(false);
+    expect(platformOpenAiEmbeddingsEnabled({})).toBe(false);
   });
 });
 

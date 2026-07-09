@@ -66,6 +66,8 @@ import {
   buildMattermostAccounts,
   buildProjectAgentAccounts,
   buildProjectAgents,
+  platformOpenAiEmbeddingMemorySearch,
+  platformOpenAiEmbeddingsEnabled,
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
@@ -268,6 +270,9 @@ async function applyAddCustomerConfigPatch(
       emoji: identity.emoji,
       model: DEFAULT_COACH.model,
     },
+    ...(platformOpenAiEmbeddingsEnabled()
+      ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
+      : {}),
   });
   const projectAgents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
   const projectAgentEntries = buildProjectAgents({

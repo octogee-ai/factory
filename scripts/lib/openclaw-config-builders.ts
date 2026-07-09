@@ -1,5 +1,50 @@
 import { projectAgentId } from "../../shared/types/identity.js";
 
+const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
+const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small";
+
+function normalizedNonEmpty(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+function normalizedBaseUrl(value: string | undefined): string {
+  let baseUrl = normalizedNonEmpty(value, DEFAULT_OPENAI_EMBEDDINGS_BASE_URL);
+  while (baseUrl.endsWith("/")) {
+    baseUrl = baseUrl.slice(0, -1);
+  }
+  return baseUrl;
+}
+
+export function platformOpenAiEmbeddingSecretId(agentId: string): string {
+  return `platform-openai-embedding-${agentId}`;
+}
+
+export function platformOpenAiEmbeddingMemorySearch(
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  return {
+    provider: PLATFORM_EMBEDDING_PROVIDER,
+    remote: {
+      baseUrl: normalizedBaseUrl(env.OPENAI_EMBEDDINGS_BASE_URL),
+      apiKey: {
+        source: "exec",
+        provider: "gcp-secret-manager",
+        id: platformOpenAiEmbeddingSecretId(agentId),
+      },
+    },
+    model: normalizedNonEmpty(env.OPENAI_EMBEDDINGS_MODEL, DEFAULT_OPENAI_EMBEDDINGS_MODEL),
+  };
+}
+
+export function platformOpenAiEmbeddingsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return /^(1|true|yes|on)$/iu.test(env.OPENAI_EMBEDDINGS_ENABLED ?? "");
+}
+
 export interface ProjectRestoreInput {
   customerSlug: string;
   projectSlug: string;
@@ -25,6 +70,7 @@ export interface CustomerAgentInput {
   customerDir: string;
   agentDir: string;
   coach: { name: string; emoji: string; model: string };
+  memorySearch?: Record<string, unknown>;
 }
 
 export function buildCustomerAgent(
@@ -32,7 +78,7 @@ export function buildCustomerAgent(
 ): Record<string, unknown> {
   const agentId = `octogee-${c.slug}-coach`;
 
-return {
+  const agent: Record<string, unknown> = {
     id: agentId,
     name: `${c.coach.name} (${c.slug})`,
     workspace: c.customerDir,
@@ -42,6 +88,10 @@ return {
     heartbeat: { every: "60m", target: "last", lightContext: true },
     tools: { fs: { workspaceOnly: true } },
   };
+  if (c.memorySearch) {
+    agent.memorySearch = c.memorySearch;
+  }
+  return agent;
 }
 
 export interface CoachIdentityDeps {
