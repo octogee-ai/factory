@@ -154,7 +154,6 @@ export async function claimProvisioningSlot(ctx: ProvisioningContext): Promise<v
 
 export function createCustomerDirectories(ctx: ProvisioningContext): void {
   fs.mkdirSync(path.join(ctx.customerDir, "projects"), { recursive: true });
-  fs.mkdirSync(path.join(ctx.customerDir, "memory"), { recursive: true });
   fs.mkdirSync(path.join(ctx.customerDir, "ideas"), { recursive: true });
   fs.mkdirSync(path.join(ctx.customerDir, ".system"), { recursive: true });
 }
@@ -162,7 +161,7 @@ export function createCustomerDirectories(ctx: ProvisioningContext): void {
 export async function writeCustomerTemplateFiles(
   ctx: ProvisioningContext,
 ): Promise<void> {
-  const written = writeTierTemplateFilesImpl(ctx.customerDir, ctx.tier, ctx.templateVars, ctx.today);
+  const written = writeTierTemplateFilesImpl(ctx.customerDir, ctx.tier, ctx.templateVars);
   log(
     written.length
       ? `Template files ensured from tiers/${ctx.tier}/ — wrote ${written.join(", ")}`

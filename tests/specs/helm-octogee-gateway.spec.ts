@@ -630,6 +630,24 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).not.toMatch(/name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token/);
   });
 
+  it("mac-ops-bootstrap derives + exports the operator agent id before openclaw.template envsubst (an empty-id agents.list[0] degrades every agents.list patch to whole-list replacement)", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const bootstrap = containerBlock(dep, "mac-ops-bootstrap");
+    const envsubstIdx = bootstrap.indexOf(
+      "envsubst < /octogee/infra/gateway/openclaw.template.json",
+    );
+    const slugIdx = bootstrap.indexOf('OPERATOR_AGENT_SLUG="${GATEWAY_BUILDER_SLUG:-$GATEWAY_ID}"');
+    const idIdx = bootstrap.indexOf('OPERATOR_AGENT_ID="octogee-ops-${OPERATOR_AGENT_SLUG}"');
+    expect(envsubstIdx).toBeGreaterThan(-1);
+    expect(slugIdx).toBeGreaterThan(-1);
+    expect(idIdx).toBeGreaterThan(-1);
+    expect(slugIdx).toBeLessThan(envsubstIdx);
+    expect(idIdx).toBeLessThan(envsubstIdx);
+    expect(bootstrap).toMatch(/export OPERATOR_AGENT_SLUG\b/);
+    expect(bootstrap).toMatch(/export OPERATOR_AGENT_ID\b/);
+    expect(bootstrap).toMatch(/name:\s*GATEWAY_BUILDER_SLUG\b/);
+  });
+
   it("omits the Mattermost admin-PAT bootstrap init container on operator gateways", () => {
     const dep =
       findDoc(

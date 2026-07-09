@@ -153,6 +153,13 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
   // userData must carry byotActive + systemConfig.byot (hydrated into the mount snapshot).
   reassertByotForCustomer: (userData: Record<string, unknown>) => Promise<void>;
 
+  // Re-assert the platform-managed context files (AGENTS.md/TOOLS.md) for house_only
+  // plans — the same convergence semantics as reassertByotForCustomer: idempotent,
+  // only-on-drift, runs at provision AND on fresh-pod re-mount. A no-op for any plan
+  // with catalog model access (paid, or a live trial boost), including a customer who
+  // WAS house_only and has since upgraded — that's how ownership returns to them.
+  reassertConvergedContextFilesForCustomer: (userData: Record<string, unknown>) => Promise<void>;
+
   listProjectsNeedingClone: (slug: string) => Promise<
     Array<{ projectSlug: string; giteaRepoName: string }>
   >;
@@ -227,6 +234,7 @@ export type AddCustomerStep =
   | "blob-sync"
   | "byosub-restore"
   | "byot-reassert"
+  | "context-files-reassert"
   | "project-clone"
   | "mattermost-provision"
   | "config-patch"
@@ -399,7 +407,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push("config-patch");
   throwIfAborted(signal, uid);
 
-  steps.push(...(await reassertByot(adapter, snapshot)));
+  steps.push(...(await reassertConvergedState(adapter, snapshot)));
   throwIfAborted(signal, uid);
 
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
@@ -513,7 +521,7 @@ async function addCustomerToGatewayInner(
   steps.push("config-patch");
   throwIfAborted(signal, uid);
 
-  steps.push(...(await reassertByot(adapter, snapshot)));
+  steps.push(...(await reassertConvergedState(adapter, snapshot)));
   throwIfAborted(signal, uid);
 
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
@@ -747,20 +755,39 @@ async function refreshSnapshotForReassert(
   }
 }
 
-async function reassertByot(
+// Re-asserts BYOT model auth and the platform-converged context files
+// (AGENTS.md/TOOLS.md for house_only plans) off ONE fresh snapshot fetch —
+// both are idempotent/non-fatal convergence steps that must run on every
+// provision AND re-mount, but they are independent failure domains: one
+// failing must never skip the other, and neither should cost a customer a
+// second Firestore read.
+async function reassertConvergedState(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
 ): Promise<AddCustomerStep[]> {
   const refreshed = await refreshSnapshotForReassert(adapter, snapshot);
+  const userData = byotUserDataFromSnapshot(refreshed);
+  const steps: AddCustomerStep[] = [];
+
   try {
-    await adapter.reassertByotForCustomer(byotUserDataFromSnapshot(refreshed));
-    return ["byot-reassert"];
+    await adapter.reassertByotForCustomer(userData);
+    steps.push("byot-reassert");
   } catch (err) {
     adapter.log(
       `[add:${snapshot.slug}] ⚠ byot re-assert failed (non-fatal; retry on next sync/re-mount): ${String(err)}`,
     );
-    return [];
   }
+
+  try {
+    await adapter.reassertConvergedContextFilesForCustomer(userData);
+    steps.push("context-files-reassert");
+  } catch (err) {
+    adapter.log(
+      `[add:${snapshot.slug}] ⚠ context-file re-assert failed (non-fatal; retry on next sync/re-mount): ${String(err)}`,
+    );
+  }
+
+  return steps;
 }
 
 async function cloneMissingProjects(

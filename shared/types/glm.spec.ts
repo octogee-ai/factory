@@ -1,12 +1,42 @@
 import { describe, it, expect } from "vitest";
 import {
   defaultOperatorGatewayAccess,
+  deriveGatewayIdentity,
   isValidGatewayId,
+  isValidNewGatewayId,
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveUserGatewayShellState,
 } from "./glm";
+
+describe("deriveGatewayIdentity", () => {
+  it("uses the explicit gateway field when present", () => {
+    expect(deriveGatewayIdentity("default-blue", "default")).toBe("default");
+    expect(deriveGatewayIdentity("bender", "bender")).toBe("bender");
+  });
+
+  it("ignores a non-string explicit value and falls back to convention-parse", () => {
+    expect(deriveGatewayIdentity("default-blue", undefined)).toBe("default");
+    expect(deriveGatewayIdentity("default-blue", null)).toBe("default");
+    expect(deriveGatewayIdentity("default-blue", 42)).toBe("default");
+  });
+
+  it("strips a trailing -blue or -green roll-role suffix by convention", () => {
+    expect(deriveGatewayIdentity("default-blue")).toBe("default");
+    expect(deriveGatewayIdentity("default-green")).toBe("default");
+  });
+
+  it("treats an id without a roll-role suffix as its own bare identity", () => {
+    expect(deriveGatewayIdentity("bender")).toBe("bender");
+    expect(deriveGatewayIdentity("jack")).toBe("jack");
+  });
+
+  it("does not strip -blue/-green from the middle of an id, only a trailing suffix", () => {
+    expect(deriveGatewayIdentity("blue-team")).toBe("blue-team");
+    expect(deriveGatewayIdentity("green-house")).toBe("green-house");
+  });
+});
 
 describe("operatorGatewayServiceAccountName", () => {
   it("prefixes the bare gateway id with the operator KSA prefix", () => {
@@ -46,6 +76,38 @@ describe("isValidGatewayId", () => {
     ]) {
       expect(isValidGatewayId(bad)).toBe(false);
     }
+  });
+});
+
+describe("isValidNewGatewayId", () => {
+  it("accepts ordinary bare identities", () => {
+    expect(isValidNewGatewayId("default")).toBe(true);
+    expect(isValidNewGatewayId("bender")).toBe(true);
+    expect(isValidNewGatewayId("mountain-mama")).toBe(true);
+  });
+
+  it("rejects ids ending in the reserved -blue/-green roll-role suffixes — they would mis-group under the convention fallback", () => {
+    expect(isValidNewGatewayId("team-blue")).toBe(false);
+    expect(isValidNewGatewayId("team-green")).toBe(false);
+    expect(isValidNewGatewayId("default-blue")).toBe(false);
+  });
+
+  it("still allows the words blue/green anywhere but as a trailing roll-role suffix", () => {
+    expect(isValidNewGatewayId("blue-team")).toBe(true);
+    expect(isValidNewGatewayId("bluegreen")).toBe(true);
+    expect(isValidNewGatewayId("blue")).toBe(true);
+    expect(isValidNewGatewayId("green")).toBe(true);
+  });
+
+  it("keeps every base isValidGatewayId rejection", () => {
+    for (const bad of ["", "Bender", "-bender", "a".repeat(33), undefined, 123]) {
+      expect(isValidNewGatewayId(bad)).toBe(false);
+    }
+  });
+
+  it("existing suffixed INSTANCE ids stay valid for routing/rollout — only new-gateway creation reserves the suffix", () => {
+    expect(isValidGatewayId("default-blue")).toBe(true);
+    expect(isValidGatewayId("default-green")).toBe(true);
   });
 });
 

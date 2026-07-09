@@ -91,7 +91,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     fs.writeFileSync(path.join(dir, "SOUL.md"), "USER-EDITED SOUL\n", "utf-8");
 
     const { writeTierTemplateFiles } = await load();
-    const written = writeTierTemplateFiles(dir, "hobby", { slug: "alice" }, "2026-05-30");
+    const written = writeTierTemplateFiles(dir, "hobby", { slug: "alice" });
 
     expect(fs.existsSync(path.join(dir, "AGENTS.md"))).toBe(true);
     expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe("USER-EDITED SOUL\n");
@@ -109,7 +109,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     );
 
     const { writeTierTemplateFiles } = await load();
-    writeTierTemplateFiles(dir, "hobby", {}, "2026-05-30");
+    writeTierTemplateFiles(dir, "hobby", {});
 
     const gitignore = fs.readFileSync(path.join(dir, ".gitignore"), "utf-8");
     expect(gitignore).not.toMatch(/^AGENTS\.md$/m);
@@ -123,7 +123,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     const dir = customerDir("bob");
 
     const { writeTierTemplateFiles } = await load();
-    const written = writeTierTemplateFiles(dir, "hobby", {}, "2026-05-30");
+    const written = writeTierTemplateFiles(dir, "hobby", {});
 
     for (const f of ["AGENTS.md", "SOUL.md", "TOOLS.md"]) {
       expect(fs.existsSync(path.join(dir, f))).toBe(true);
@@ -139,21 +139,19 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     const dir = customerDir("legacy");
 
     const { writeTierTemplateFiles } = await load();
-    const written = writeTierTemplateFiles(dir, "hobby", {}, "2026-05-30");
+    const written = writeTierTemplateFiles(dir, "hobby", {});
 
     expect(written.filter((item) => item.endsWith("/"))).toEqual([]);
-    expect(fs.readdirSync(dir).sort()).toEqual(["AGENTS.md", "memory"]);
+    expect(fs.readdirSync(dir).sort()).toEqual(["AGENTS.md"]);
   });
 
   it("is a no-op when every file already exists", async () => {
     seedTier("hobby", ["AGENTS.md"]);
     const dir = customerDir("carol");
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "EXISTING\n", "utf-8");
-    fs.mkdirSync(path.join(dir, "memory"), { recursive: true });
-    fs.writeFileSync(path.join(dir, "memory", "2026-05-30.md"), "NOTE\n", "utf-8");
 
     const { writeTierTemplateFiles } = await load();
-    const written = writeTierTemplateFiles(dir, "hobby", {}, "2026-05-30");
+    const written = writeTierTemplateFiles(dir, "hobby", {});
 
     expect(written).toEqual([]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("EXISTING\n");
@@ -166,7 +164,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     const dir = customerDir("dave");
 
     const { writeTierTemplateFiles } = await load();
-    writeTierTemplateFiles(dir, "hobby", { slug: "dave" }, "2026-05-30");
+    writeTierTemplateFiles(dir, "hobby", { slug: "dave" });
 
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("Hello dave\n");
   });

@@ -21,10 +21,10 @@ function readTemplate() {
 }
 
 describe("infra/gateway/openclaw.template.json — standard gateway exec-off posture", () => {
-  it("denies exec for standard agents and subagents", () => {
+  it("denies exec/process/subagents/sessions_spawn for standard agents, exec/process for subagents", () => {
     const template = readTemplate();
 
-    expect(template.tools.deny).toEqual(["exec", "process"]);
+    expect(template.tools.deny).toEqual(["exec", "process", "subagents", "sessions_spawn"]);
     expect(template.tools.exec).toEqual({ mode: "deny" });
     expect(template.tools.subagents.tools.deny).toEqual(["exec", "process"]);
   });

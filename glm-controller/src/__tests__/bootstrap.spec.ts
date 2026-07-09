@@ -48,6 +48,7 @@ describe("computeBootstrapWrites", () => {
         gatewayId: "bender",
         doc: {
           gatewayId: "bender",
+          gateway: "bender",
           imageRepository: REPO,
           imageTag: "00750cf",
           gatewayClass: "shared",
@@ -57,6 +58,20 @@ describe("computeBootstrapWrites", () => {
         },
       },
     ]);
+  });
+
+  it("derives the gateway identity from a blue/green-suffixed map key by convention", () => {
+    const writes = computeBootstrapWrites(
+      {
+        "default-blue": {
+          enabled: true,
+          image: { repository: REPO, tag: "00750cf" },
+          gatewayId: "default-blue",
+        },
+      },
+      new Set(),
+    );
+    expect(writes[0]?.doc.gateway).toBe("default");
   });
 
   it("returns an empty list when every helm instance is already registered (no-op steady state)", () => {
@@ -74,6 +89,7 @@ describe("computeBootstrapWrites", () => {
     const def = writes.find((w) => w.gatewayId === "default");
     expect(def?.doc).toEqual({
       gatewayId: "default",
+      gateway: "default",
       imageRepository: REPO,
       imageTag: "00750cf",
       gatewayClass: "shared",

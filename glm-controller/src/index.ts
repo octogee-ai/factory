@@ -68,6 +68,13 @@ import {
   type OperationHandlers,
 } from "./operation-router.js";
 import { createOperationContext } from "./operation-context.js";
+import {
+  decideOperationClaim,
+  isSeriallyExclusiveKind,
+  type OperationRef,
+  type PendingOperationRef,
+} from "./operation-queue.js";
+import { buildOperationCompletionUpdate } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { computeBootstrapWrites } from "./bootstrap.js";
 import {
@@ -990,65 +997,212 @@ export function startOperationWorker(deps: ControllerDeps): () => void {
   return unsub;
 }
 
+// How often the queue drain re-scans pending ops. It exists for two cases the
+// onSnapshot listener above can't see: an op queued behind a conflicting rollout
+// (unblocked when the OTHER doc changes, not this one) and a retry whose backoff
+// has elapsed (unblocked by time passing, not a Firestore event). Cadence mirrors
+// the stuck-op-reaper / rollout-defer-sweeper level-triggered pattern.
+export const OPERATION_QUEUE_DRAIN_MS_DEFAULT = 20_000;
+
 // Op kinds safe to re-drive after a controller restart (idempotent orchestrators).
 // The blue/green rollout is the long, repoint-then-migrate op that strands a pool if
 // abandoned mid-flight; its migrate sub-ops are re-issued by the rollout re-drive, so
 // they are intentionally NOT resumed directly.
 const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set(["rollout"]);
 
-async function processOperation(
+// Claim, queue, or skip a pending op in one transaction: reads the OTHER
+// running AND pending ops of the same serially-exclusive kind alongside the
+// candidate doc so the queue decision (operation-queue.ts) and the write it
+// produces are atomic — two rollout ops evaluated back-to-back can never both
+// see "no conflict". The pending read is what keeps the onSnapshot fast path
+// FIFO per scope: a newly created op queues behind an older already-queued one
+// instead of jumping ahead of it.
+async function attemptClaimOrQueueOperation(
   op: Operation,
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
-): Promise<void> {
-  let claimed = false;
+): Promise<{ outcome: "claimed" | "queued" | "skipped"; fresh?: Operation }> {
   try {
-    claimed = await deps.db.runTransaction(async (txn) => {
+    return await deps.db.runTransaction(async (txn) => {
       const fresh = await txn.get(ref);
-      if (!fresh.exists) return false;
+      if (!fresh.exists) return { outcome: "skipped" as const };
       const data = fresh.data() as Operation | undefined;
-      if (data?.status !== "pending") return false;
+      if (!data) return { outcome: "skipped" as const };
+
+      let runningOpsSameKind: OperationRef[] = [];
+      let pendingOpsSameKind: PendingOperationRef[] = [];
+      if (isSeriallyExclusiveKind(op.kind)) {
+        const opsOfKind = deps.db
+          .collection(GLM_OPERATIONS_COLLECTION)
+          .where("kind", "==", op.kind);
+        const [runningSnap, pendingSnap] = await Promise.all([
+          txn.get(opsOfKind.where("status", "==", "running")),
+          txn.get(opsOfKind.where("status", "==", "pending")),
+        ]);
+        runningOpsSameKind = runningSnap.docs.map((d) => ({
+          id: d.id,
+          kind: op.kind,
+          input: (d.data() as Operation).input,
+        }));
+        pendingOpsSameKind = pendingSnap.docs.map((d) => {
+          const pendingData = d.data() as Operation;
+          return {
+            id: d.id,
+            kind: op.kind,
+            input: pendingData.input,
+            createdAt: pendingData.createdAt,
+          };
+        });
+      }
+
+      const decision = decideOperationClaim({
+        op: {
+          id: op.id,
+          kind: op.kind,
+          status: data.status,
+          createdAt: data.createdAt,
+          nextAttemptAt: data.nextAttemptAt,
+          input: data.input,
+        },
+        now: Date.now(),
+        runningOpsSameKind,
+        pendingOpsSameKind,
+      });
+
+      if (decision.outcome === "skip") return { outcome: "skipped" as const };
+      if (decision.outcome === "queue") {
+        if (data.waitingOn !== decision.waitingOn) {
+          txn.update(ref, { waitingOn: decision.waitingOn });
+        }
+        return { outcome: "queued" as const };
+      }
       const now = Date.now();
-      txn.update(ref, { status: "running", startedAt: now, lastProgressAt: now });
-      return true;
+      txn.update(ref, {
+        status: "running",
+        startedAt: now,
+        lastProgressAt: now,
+        waitingOn: FieldValue.delete(),
+        nextAttemptAt: FieldValue.delete(),
+      });
+      // The completion write derives attempts/attemptHistory from the op the
+      // handler ran with — hand back the transaction's fresh read so a stale
+      // worker snapshot can't reset the retry cap or drop history.
+      return { outcome: "claimed" as const, fresh: { ...data, id: op.id, startedAt: now } };
     });
   } catch (err) {
     deps.log(
       `[glm-controller] claim transaction failed op=${op.id}: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return { outcome: "skipped" };
+  }
+}
+
+export async function processOperation(
+  op: Operation,
+  ref: FirebaseFirestore.DocumentReference,
+  deps: ControllerDeps,
+): Promise<void> {
+  const claim = await attemptClaimOrQueueOperation(op, ref, deps);
+  if (claim.outcome === "queued") {
+    deps.log(`[glm-controller] op=${op.id} kind=${op.kind} queued — waiting on a conflicting op`);
     return;
   }
-  if (!claimed) {
-    deps.log(`[glm-controller] op=${op.id} already claimed — skipping`);
-    return;
-  }
+  if (claim.outcome !== "claimed" || !claim.fresh) return;
 
   deps.log(`[glm-controller] claim op=${op.id} kind=${op.kind}`);
-  await runClaimedOperation(op, ref, deps);
+  await runClaimedOperation(claim.fresh, ref, deps);
+}
+
+// Re-scan every pending op (FIFO by createdAt) and try to claim each. The
+// correctness net for (a) an op queued behind a since-finished conflicting op,
+// and (b) a retry whose backoff window has elapsed — see OPERATION_QUEUE_DRAIN_MS_DEFAULT.
+export async function drainPendingOperationsOnce(deps: ControllerDeps): Promise<void> {
+  // Equality-only query, FIFO sort in memory: status+createdAt has no
+  // composite index and must never need one — an orderBy here throws
+  // FAILED_PRECONDITION in the real Firestore and silently kills the drain.
+  const snap = await deps.db
+    .collection(GLM_OPERATIONS_COLLECTION)
+    .where("status", "==", "pending")
+    .get();
+  const ops = snap.docs
+    .map((doc) => ({ op: { ...(doc.data() as Operation), id: doc.id }, ref: doc.ref }))
+    .sort((a, b) => (a.op.createdAt ?? 0) - (b.op.createdAt ?? 0));
+  for (const { op, ref } of ops) {
+    await processOperation(op, ref, deps);
+  }
+}
+
+// Terminally fail a sub-op its parent has given up on. Only a `pending` doc is
+// touched (a pending op is by definition unclaimed, so pending→failed is
+// race-free inside the transaction); a running op is left to finish — that
+// exposure predates the queue. Without this, a timed-out rollout's parked
+// retry would be re-driven by the drain long after the roll was abandoned,
+// migrating a customer onto a target the rollout already walked away from.
+export async function abandonPendingOperation(
+  db: FirebaseFirestore.Firestore,
+  opId: string,
+  reason: string,
+): Promise<boolean> {
+  const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc(opId);
+  return db.runTransaction(async (txn) => {
+    const snap = await txn.get(ref);
+    if (!snap.exists) return false;
+    const data = snap.data() as Operation | undefined;
+    if (data?.status !== "pending") return false;
+    txn.update(ref, {
+      status: "failed",
+      error: reason,
+      completedAt: Date.now(),
+      nextAttemptAt: FieldValue.delete(),
+      waitingOn: FieldValue.delete(),
+    });
+    return true;
+  });
+}
+
+export function startOperationQueueDrain(
+  deps: ControllerDeps,
+  intervalMs: number = OPERATION_QUEUE_DRAIN_MS_DEFAULT,
+): () => void {
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (stopped) return;
+    drainPendingOperationsOnce(deps).catch((err) => {
+      deps.log(
+        `[glm-controller] ⚠ operation queue drain failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }, intervalMs);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 // Re-adopt an op the previous controller instance left `running` (orphaned by a
 // deploy/restart mid-op) and re-drive it. Bumps the liveness heartbeat so the
 // stuck-op reaper gives the resumed run a fresh budget, and records resumeCount.
+// The op stays `running` throughout — a resumed rollout still holds the serial
+// lock other pending rollout ops queue behind.
 async function reAdoptAndRunOperation(
   op: Operation,
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
-  let adopted = false;
+  let adopted: Operation | null = null;
   try {
     adopted = await deps.db.runTransaction(async (txn) => {
       const fresh = await txn.get(ref);
-      if (!fresh.exists) return false;
+      if (!fresh.exists) return null;
       const data = fresh.data() as Operation | undefined;
-      if (data?.status !== "running") return false;
+      if (data?.status !== "running") return null;
       const now = Date.now();
       txn.update(ref, {
         startedAt: now,
         lastProgressAt: now,
         resumeCount: (typeof data.resumeCount === "number" ? data.resumeCount : 0) + 1,
       });
-      return true;
+      return { ...data, id: op.id, startedAt: now };
     });
   } catch (err) {
     deps.log(
@@ -1060,12 +1214,13 @@ async function reAdoptAndRunOperation(
     deps.log(`[glm-controller] op=${op.id} no longer running — skip resume`);
     return;
   }
-  await runClaimedOperation(op, ref, deps);
+  await runClaimedOperation(adopted, ref, deps);
 }
 
 // Run an op whose status is already `running` (freshly claimed or re-adopted):
-// invoke its handler, persisting step progress (with a liveness heartbeat) and the
-// terminal result.
+// invoke its handler, persist step progress (with a liveness heartbeat), then
+// complete it — or, for a transient failure under the attempt cap, requeue it to
+// `pending` with backoff (operation-retry.ts) instead of failing it terminally.
 async function runClaimedOperation(
   op: Operation,
   ref: FirebaseFirestore.DocumentReference,
@@ -1080,13 +1235,14 @@ async function runClaimedOperation(
   });
 
   const result = await routeOperation(op, deps.handlers, ctx);
-  await ref.update({
-    status: result.success ? "succeeded" : "failed",
-    completedAt: Date.now(),
-    steps: steps.length > 0 ? steps : result.steps,
-    error: result.error ?? FieldValue.delete(),
-    rolledBack: result.rolledBack ?? false,
+  const completion = buildOperationCompletionUpdate({
+    op: { attempts: op.attempts, attemptHistory: op.attemptHistory },
+    result,
+    steps,
+    now: Date.now(),
   });
+  await ref.update(completion);
+
   if (result.success) {
     try {
       await completeOperatorReservationAfterMigration(
@@ -1098,11 +1254,18 @@ async function runClaimedOperation(
         `[glm-controller] ⚠ operator reservation completion failed op=${op.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    deps.log(`[glm-controller] op=${op.id} → succeeded`);
+    return;
   }
 
-  const status = result.success ? "succeeded" : "failed";
-  const errSuffix = result.error ? ` (${result.error})` : "";
-  deps.log(`[glm-controller] op=${op.id} → ${status}${errSuffix}`);
+  if (completion.status === "pending") {
+    deps.log(
+      `[glm-controller] op=${op.id} attempt ${String(completion.attempts)} failed transiently — ${result.error ?? "unknown error"} — retrying`,
+    );
+    return;
+  }
+
+  deps.log(`[glm-controller] op=${op.id} → failed (${result.error})`);
 }
 
 export function buildOperatorHeartbeatPollerDeps(
@@ -1256,6 +1419,7 @@ function startControllerBackgroundTasks({
 }: ControllerBackgroundTasksDeps): ControllerStopper[] {
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
+  const stopOperationQueueDrain = startOperationQueueDrain(deps);
   const stopPoller = startOperatorHeartbeatPoller(
     buildOperatorHeartbeatPollerDeps(db, log, fleetControllerPrivateKey),
     OPERATOR_HEARTBEAT_POLL_MS,
@@ -1327,6 +1491,7 @@ function startControllerBackgroundTasks({
   return [
     stopReconciler,
     stopWorker,
+    stopOperationQueueDrain,
     stopPoller,
     stopReaper,
     stopStuckOpReaper,
@@ -2138,6 +2303,8 @@ async function buildHandlers(
           timeoutMs: 600_000,
           pollIntervalMs: 2_000,
           log: logFn,
+          abandonPendingOp: (opId) =>
+            abandonPendingOperation(db, opId, "abandoned: parent rollout gave up waiting (timeout)"),
         },
       ),
     hasSharedPlacementPointer: async (gatewayId) => {

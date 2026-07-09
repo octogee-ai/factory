@@ -129,6 +129,18 @@ describe("GET /api/admin/gateways", () => {
     expect(blue.heartbeatAgeMs).toBeLessThan(5_000);
   });
 
+  it("projects the durable gateway identity, convention-derived when no glmGateways doc carries the field yet", async () => {
+    const res = await request(app).get("/api/admin/gateways");
+    const blue = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-blue");
+    const green = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-green");
+    const stale = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-stale");
+    // Blue/green siblings share one gateway identity by convention-parse.
+    expect(blue.gateway).toBe("gw-test");
+    expect(green.gateway).toBe("gw-test");
+    // An id without a roll-role suffix is its own bare identity.
+    expect(stale.gateway).toBe("gw-test-stale");
+  });
+
   it("rolls up gateway counts including derived unreachable, and customers mounted", async () => {
     // unreachable is derived from heartbeat age (gw-test-stale is 5m stale), not a written status.
     const res = await request(app).get("/api/admin/gateways");

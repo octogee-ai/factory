@@ -42,6 +42,8 @@ giteaReadShouldThrow: boolean;
   blobSyncShouldFail: boolean;
   reassertByotShouldFail?: boolean;
   reassertByotUserData?: Record<string, unknown>;
+  reassertContextFilesShouldFail?: boolean;
+  reassertContextFilesUserData?: Record<string, unknown>;
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
   healthy: boolean;
@@ -153,6 +155,11 @@ state.giteaRegisteredPubKey = pubKey;
       record("reassertByotForCustomer");
       state.reassertByotUserData = userData;
       if (state.reassertByotShouldFail) throw new Error("byot reassert failed");
+    },
+    reassertConvergedContextFilesForCustomer: async (userData) => {
+      record("reassertConvergedContextFilesForCustomer");
+      state.reassertContextFilesUserData = userData;
+      if (state.reassertContextFilesShouldFail) throw new Error("context-file reassert failed");
     },
 
     listProjectsNeedingClone: async () => state.pendingProjects,
@@ -276,6 +283,7 @@ expect(result.steps).toEqual([
       "mattermost-provision",
       "config-patch",
       "byot-reassert",
+      "context-files-reassert",
       "verify-channel-ready",
       "schedule-greeting-cron",
       "mark-complete",
@@ -382,6 +390,42 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(state.calls).toContain("reassertByotForCustomer");
     expect(result.steps).not.toContain("byot-reassert");
     expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("forwards the same plan-resolution fields to the context-file reassert as the byot reassert", async () => {
+    state.user = snap({
+      tier: "personal_free",
+      builderSubscription: { tier: "hobby", status: "active" },
+    });
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.calls).toContain("reassertConvergedContextFilesForCustomer");
+    const ud = state.reassertContextFilesUserData ?? {};
+    expect(ud.username).toBe("test");
+    expect(ud.tier).toBe("personal_free");
+    expect(ud.builderSubscription).toEqual({ tier: "hobby", status: "active" });
+  });
+
+  it("a context-file re-assert failure is non-fatal — the mount still completes", async () => {
+    state.reassertContextFilesShouldFail = true;
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(state.calls).toContain("reassertConvergedContextFilesForCustomer");
+    expect(result.steps).not.toContain("context-files-reassert");
+    expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("a byot re-assert failure does not skip the context-file reassert (independent failure domains)", async () => {
+    state.reassertByotShouldFail = true;
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(result.steps).not.toContain("byot-reassert");
+    expect(result.steps).toContain("context-files-reassert");
+  });
+
+  it("a context-file re-assert failure does not skip the byot reassert (independent failure domains)", async () => {
+    state.reassertContextFilesShouldFail = true;
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(result.steps).toContain("byot-reassert");
+    expect(result.steps).not.toContain("context-files-reassert");
   });
 
   it("writes provisioning.git.repoUrl IMMEDIATELY after the repo init succeeds", async () => {

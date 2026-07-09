@@ -458,6 +458,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(gwWrite?.docId).toBe("canary");
     expect(gwWrite?.data).toMatchObject({
       gatewayId: "canary",
+      gateway: "canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       desiredStatus: "running",
@@ -477,6 +478,22 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({ gatewayId: "x" });
     expect(res.status).toBe(400);
+  });
+
+  it("rejects new gateway ids ending in the reserved -blue/-green roll-role suffixes", async () => {
+    const app = buildApp();
+    for (const gatewayId of ["team-blue", "team-green"]) {
+      const res = await request(app).post("/api/admin/gateways").send({
+        gatewayId,
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "abc1234",
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/reserved for roll roles/);
+      expect(
+        calls.find((c) => c.collection === "glmGateways" && c.docId === gatewayId),
+      ).toBeUndefined();
+    }
   });
 
   it("persists sizingTier and profile when supplied in the body", async () => {

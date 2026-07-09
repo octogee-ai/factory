@@ -23,6 +23,9 @@ const patchMocks = vi.hoisted(() => ({
 const modelCredentialMocks = vi.hoisted(() => ({
   syncModelCredentialsForCustomer: vi.fn(async () => undefined),
 }));
+const contextFileConvergenceMocks = vi.hoisted(() => ({
+  reassertConvergedContextFilesForSlug: vi.fn(() => []),
+}));
 
 vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/migration-activation-manifest.js")>();
@@ -45,6 +48,13 @@ vi.mock("../lib/model-credential-sync-runtime.js", async (importOriginal) => {
   return {
     ...actual,
     syncModelCredentialsForCustomer: modelCredentialMocks.syncModelCredentialsForCustomer,
+  };
+});
+vi.mock("../lib/context-file-convergence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/context-file-convergence.js")>();
+  return {
+    ...actual,
+    reassertConvergedContextFilesForSlug: contextFileConvergenceMocks.reassertConvergedContextFilesForSlug,
   };
 });
 
@@ -237,7 +247,7 @@ describe("buildBrokeredLifecycleAdapter template files", () => {
       "Agent alice\n",
     );
     expect(fsSync.existsSync(path.join(customerDir, "TOOLS.md"))).toBe(true);
-    expect(fsSync.existsSync(path.join(customerDir, "memory", "2026-06-25.md"))).toBe(true);
+    expect(fsSync.existsSync(path.join(customerDir, "memory"))).toBe(false);
     expect(fsSync.readFileSync(path.join(customerDir, ".gitignore"), "utf-8")).toBe(
       ".ssh/\n",
     );

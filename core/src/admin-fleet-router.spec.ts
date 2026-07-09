@@ -9,6 +9,7 @@ import {
   parseDedicatedGatewayIdlePatch,
   projectDedicatedGatewayIdleSettings,
   projectGatewayReservation,
+  projectGatewaySummary,
 } from "./admin-fleet-router.js";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -39,6 +40,38 @@ describe("projectGatewayReservation — Spot is the default for every class", ()
     const r = projectGatewayReservation({ profile: "operator", gatewayClass: "operator" });
     expect(r.type).toBe("spot");
     expect(r.computeClass).toBe("octogee-gateway-test-spot");
+  });
+});
+
+// Step 1 of the Fleet regroup (GATEWAY-RELEASES-SPEC): every row projects its
+// durable "gateway" identity so the client can group blue/green siblings under
+// one card without an id/route migration.
+describe("projectGatewaySummary — gateway identity projection", () => {
+  it("uses the explicit glmGateways.gateway field when present", () => {
+    const summary = projectGatewaySummary(
+      { id: "default-blue", data: () => ({ gatewayId: "default-blue" }) },
+      { gatewayId: "default-blue", gateway: "default" },
+      Date.now(),
+    );
+    expect(summary.gateway).toBe("default");
+  });
+
+  it("falls back to convention-parse (strip trailing -blue/-green) when the field is absent", () => {
+    const summary = projectGatewaySummary(
+      { id: "bender-green", data: () => ({ gatewayId: "bender-green" }) },
+      { gatewayId: "bender-green" },
+      Date.now(),
+    );
+    expect(summary.gateway).toBe("bender");
+  });
+
+  it("treats an unsuffixed id as its own bare gateway identity", () => {
+    const summary = projectGatewaySummary(
+      { id: "jack", data: () => ({ gatewayId: "jack" }) },
+      { gatewayId: "jack" },
+      Date.now(),
+    );
+    expect(summary.gateway).toBe("jack");
   });
 });
 

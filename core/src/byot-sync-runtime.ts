@@ -5,6 +5,7 @@ import {
   byosCoachConfigPatch,
   coachFullAgentList,
   deriveDesiredByotState,
+  FREE_TIER_COACH_TOOLS,
   isPlatformProviderRef,
   platformCoachModelInputForUser,
   STANDARD_CODEX_APP_SERVER,
@@ -88,7 +89,7 @@ export async function applyCoachModelPatch(
   if (!input) return false;
   const patch = byosCoachConfigPatch(input);
   if (!patch) return false;
-  const { id: agentId, model } = patch.agents.list[0];
+  const { id: agentId, model, tools } = patch.agents.list[0];
   const modelPrimary = typeof model === "string" ? model : model.primary;
   const modelFallbacks = typeof model === "string" ? [] : model.fallbacks;
   const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
@@ -100,9 +101,12 @@ export async function applyCoachModelPatch(
   // dropped. replacePaths confirms the wholesale replacement (the load-bearing
   // half of the prod adapter's full-list pattern). Rebuilt per attempt against the
   // freshly-fetched config (hash-mismatch safe; see coachFullAgentList).
+  // tools convergence rides the same full-list patch: the free-tier trim when
+  // the entry carries it, an explicit strip (null) for every catalog-access
+  // input so an upgrade removes the trim on the next re-assert.
   const buildPatch = (current: unknown) => ({
     ...patch,
-    agents: { ...patch.agents, list: coachFullAgentList(current, agentId, model) },
+    agents: { ...patch.agents, list: coachFullAgentList(current, agentId, model, tools ?? null) },
   });
   try {
     await applyConfigPatchFn(
@@ -123,6 +127,59 @@ export async function applyCoachModelPatch(
     logFn(
       `⚠ [byot-sync] coach-model patch failed for ${input.slug}: ${(e as Error).message}`,
     );
+    return false;
+  }
+}
+
+// Plan-gated tools reassert for syncs that ship no coach-model patch (catalog
+// plan, no BYOK, no explicit pick — the config-default coach). The model
+// patch converges tools whenever it ships; this covers the remaining lapse/
+// upgrade transitions so the free-tier trim appears and disappears exactly
+// like the model pin does. Model untouched (model:null).
+export async function applyCoachToolsConvergence(
+  slug: string,
+  houseOnly: boolean,
+  deps?: {
+    applyConfigPatch?: typeof applyConfigPatch;
+    logFn?: (m: string) => void;
+  },
+): Promise<boolean> {
+  const logFn = deps?.logFn ?? log;
+  const agentId = `octogee-${slug}-coach`;
+  const tools = houseOnly ? FREE_TIER_COACH_TOOLS : null;
+  const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
+  // A missing coach entry means there is nothing to converge — succeeding
+  // silently here would mask an unmounted/half-mounted customer on the very
+  // path that exists to repair upgrade/lapse drift. Fail loudly instead; the
+  // next sync/re-mount retries.
+  const buildPatch = (current: unknown) => {
+    const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
+    const agents = Array.isArray(list) ? list : [];
+    const coachPresent = agents.some(
+      (a) => a !== null && typeof a === "object" && (a as { id?: unknown }).id === agentId,
+    );
+    if (!coachPresent) {
+      throw new Error(
+        `coach entry ${agentId} missing from agents.list — nothing to converge (customer not mounted on this pod?)`,
+      );
+    }
+    return { agents: { list: coachFullAgentList(current, agentId, null, tools) } };
+  };
+  try {
+    await applyConfigPatchFn(
+      {
+        buildPatch,
+        buildReplacePaths: () => ["agents.list"],
+        logPrefix: `[coach-tools:${slug}]`,
+      },
+      { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
+    );
+    logFn(
+      `[byot-sync] ${slug}: coach tools ${houseOnly ? "trimmed to the free-tier surface" : "converged to the inherited gateway surface"}`,
+    );
+    return true;
+  } catch (e) {
+    logFn(`⚠ [byot-sync] coach-tools convergence failed for ${slug}: ${(e as Error).message}`);
     return false;
   }
 }
@@ -161,6 +218,11 @@ export async function applyAgentModelOverrides(
     const platformRefs = [selection.primary, ...selection.fallbacks].filter(
       isPlatformProviderRef,
     );
+    // Overrides only run for catalog plans (house-only defers above), so the
+    // coach's rebuild also strips a lingering free-tier trim (fingerprint-
+    // gated). The trim is coach-only, so every other owned agent's tools keys
+    // are left untouched.
+    const toolsConvergence = agentId === `octogee-${slug}-coach` ? null : undefined;
     const buildPatch = (current: unknown) => ({
       agents: {
         ...(platformRefs.length > 0
@@ -170,7 +232,7 @@ export async function applyAgentModelOverrides(
               },
             }
           : {}),
-        list: coachFullAgentList(current, agentId, model),
+        list: coachFullAgentList(current, agentId, model, toolsConvergence),
       },
     });
     try {
@@ -466,6 +528,7 @@ export interface SyncByotForCustomerDeps {
   applyByotState?: typeof applyByotState;
   restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch?: typeof applyCoachModelPatch;
+  applyCoachToolsConvergence?: typeof applyCoachToolsConvergence;
   applyOauthRuntimeModelAllowlist?: typeof applyOauthRuntimeModelAllowlist;
   requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload?: typeof triggerSecretsReload;
@@ -480,6 +543,7 @@ interface SyncByotActions {
   applyByotState: typeof applyByotState;
   restoreOauthStoreForSlug: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch: typeof applyCoachModelPatch;
+  applyCoachToolsConvergence: typeof applyCoachToolsConvergence;
   applyOauthRuntimeModelAllowlist: typeof applyOauthRuntimeModelAllowlist;
   requestGatewayRestart: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload: typeof triggerSecretsReload;
@@ -525,6 +589,7 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     applyByotState: deps?.applyByotState ?? applyByotState,
     restoreOauthStoreForSlug: deps?.restoreOauthStoreForSlug ?? restoreOauthStoreForSlug,
     applyCoachModelPatch: deps?.applyCoachModelPatch ?? applyCoachModelPatch,
+    applyCoachToolsConvergence: deps?.applyCoachToolsConvergence ?? applyCoachToolsConvergence,
     applyOauthRuntimeModelAllowlist:
       deps?.applyOauthRuntimeModelAllowlist ?? applyOauthRuntimeModelAllowlist,
     requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
@@ -708,11 +773,33 @@ export async function syncByotForCustomer(
 
   await syncByotStateForClass({ slug, desired, userData, actions, isShared, isOp, usesBrokerToken, logFn: deps?.logFn });
 
+  await convergeCoachToolsIfNoModelPatch(slug, desired, userData, actions);
+
   // Explicit per-agent picks land last so they win over the class default the
   // sync just wrote; house-only plans stay pinned to the house model.
   await actions.applyAgentModelOverrides(slug, userData.systemConfig?.agentModels, {
     houseOnly: resolveBillingProfile(userData).modelAccess === "house_only",
   });
+}
+
+// When a coach-model patch ships it converges tools inline; whenever no patch
+// will ship — config-default coach (catalog, no BYOK, no pick) OR a
+// no-model-override BYOK provider like plain anthropic — the plan-gated tools
+// reassert must run standalone, or an upgrade/lapse (and the BYOK carve-out:
+// BYOK-active house_only keeps the inherited surface) would never converge.
+// The trim target follows the model-pin gate exactly: only the free-tier
+// house pin trims, and that pin always ships its own patch.
+async function convergeCoachToolsIfNoModelPatch(
+  slug: string,
+  desired: DesiredByotState,
+  userData: SyncByotUserData,
+  actions: SyncByotActions,
+): Promise<void> {
+  const modelPatchWillShip =
+    desired.coachModelInput != null && byosCoachConfigPatch(desired.coachModelInput) != null;
+  if (modelPatchWillShip || userData.provisioning?.openclaw?.status !== "complete") return;
+  const trimTarget = desired.coachModelInput != null && "source" in desired.coachModelInput;
+  await actions.applyCoachToolsConvergence(slug, trimTarget);
 }
 
 async function syncByotStateForClass(args: {

@@ -115,6 +115,14 @@ spec:
                 . "$OPERATOR_ENV"
                 set +a
               fi
+              # Same derivation as entrypoint.sh: agents.list[0].id must render
+              # non-empty on EVERY path that envsubsts the template — an
+              # empty-id base entry disables openclaw's id-keyed agents.list
+              # merge for the pod's whole life (whole-list replacement only).
+              OPERATOR_AGENT_SLUG="${GATEWAY_BUILDER_SLUG:-$GATEWAY_ID}"
+              export OPERATOR_AGENT_SLUG
+              OPERATOR_AGENT_ID="octogee-ops-${OPERATOR_AGENT_SLUG}"
+              export OPERATOR_AGENT_ID
               if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
                 envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
                 chmod 600 "$OPENCLAW_DIR/openclaw.json"
@@ -123,6 +131,8 @@ spec:
           env:
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
+            - name: GATEWAY_BUILDER_SLUG
+              value: {{ .Values.builderSlug | quote }}
             - name: MM_URL
               value: {{ .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
             - name: MM_SITE_URL

@@ -68,6 +68,10 @@
       "types": "./dist/config.d.ts",
       "default": "./dist/config.js"
     },
+    "./context-file-convergence": {
+      "types": "./dist/context-file-convergence.d.ts",
+      "default": "./dist/context-file-convergence.js"
+    },
     "./customer-lifecycle": {
       "types": "./dist/customer-lifecycle.d.ts",
       "default": "./dist/customer-lifecycle.js"
@@ -315,6 +319,9 @@
       ],
       "config": [
         "dist/config.d.ts"
+      ],
+      "context-file-convergence": [
+        "dist/context-file-convergence.d.ts"
       ],
       "customer-lifecycle": [
         "dist/customer-lifecycle.d.ts"

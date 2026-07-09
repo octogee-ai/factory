@@ -12,19 +12,20 @@ import {
   GLM_OPERATIONS_COLLECTION,
   GATEWAY_CLASSES,
   GATEWAY_IMAGE_PROFILES,
-  GATEWAY_ID_REQUIREMENT,
   GATEWAY_PROFILES,
+  NEW_GATEWAY_ID_REQUIREMENT,
   OPERATOR_GATEWAY_RESERVATIONS_COLLECTION,
   defaultOperatorGatewayAccess,
   resolveUserGatewayShellState,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-  isValidGatewayId,
+  isValidNewGatewayId,
   isGatewayClass,
   isGatewayProfile,
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveGatewayPersistence,
+  deriveGatewayIdentity,
   type GatewayClass,
   type GatewayImageProfile,
   type GatewayProfile,
@@ -1078,7 +1079,7 @@ export function projectGatewaySummary(
   glmDoc: GlmDoc | undefined,
   now: number,
 ): {
-  gatewayId: string; status: string;
+  gatewayId: string; gateway: string; status: string;
   desiredStatus: AdminGatewayDesiredStatus | null;
   imageTag: string | null; openclawVersion: string | null;
   mountedCustomers: unknown[];
@@ -1098,6 +1099,7 @@ export function projectGatewaySummary(
   const reservation = projectGatewayReservation(glmDoc);
   return {
     gatewayId,
+    gateway: deriveGatewayIdentity(gatewayId, glmDoc?.gateway),
     status: typeof data.status === "string" ? data.status : requestedGatewayStatus(desiredStatus),
     desiredStatus,
     imageTag: projectImageTag(data, glmDoc),
@@ -1527,12 +1529,12 @@ function validateAddGatewayRequiredFields(
       },
     };
   }
-  if (!isValidGatewayId(body.gatewayId)) {
+  if (!isValidNewGatewayId(body.gatewayId)) {
     return {
       error: {
         status: 400,
         body: {
-          error: GATEWAY_ID_REQUIREMENT,
+          error: NEW_GATEWAY_ID_REQUIREMENT,
           got: body.gatewayId,
         },
       },
@@ -3612,6 +3614,7 @@ router.post(
           .doc(body.gatewayId)
           .set({
             gatewayId: body.gatewayId,
+            gateway: body.gatewayId,
             imageRepository: body.imageRepository,
             imageTag: body.imageTag,
             desiredStatus: "running",

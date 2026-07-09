@@ -1,17 +1,10 @@
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
-import {
-  createMigrateCustomerHandler,
-  _resetMigrationConcurrencyForTests,
-} from "../handlers/migrate-customer";
+import { createMigrateCustomerHandler } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
-
-afterEach(() => {
-  _resetMigrationConcurrencyForTests();
-});
 
 const SNAPSHOT: FleetBrokerUserSnapshot = {
   uid: "uid-alice",
@@ -330,144 +323,6 @@ describe("createMigrateCustomerHandler — input validation", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/already/i);
     expect(client.quiesce).not.toHaveBeenCalled();
-  });
-});
-
-describe("createMigrateCustomerHandler — per-target concurrency cap", () => {
-  function deferredClient(): {
-    client: MigrationClient;
-    release: () => void;
-  } {
-    let releaseFn: () => void = () => {};
-    const gate = new Promise<void>((r) => {
-      releaseFn = r;
-    });
-    const client: MigrationClient = {
-      restoreTarget: vi.fn(async ({ migrationId, slug }) => ({
-        migrationId,
-        slug,
-        restored: true,
-        steps: [],
-      })) as MigrationClient["restoreTarget"],
-      quiesce: vi.fn(async ({ migrationId, slug }) => ({
-        migrationId,
-        slug,
-        drained: true,
-        runningCount: 0,
-      })) as MigrationClient["quiesce"],
-      transferState: vi.fn(async ({ migrationId, slug }) => {
-        await gate;
-        return { migrationId, slug, imported: true };
-      }) as MigrationClient["transferState"],
-      verifyTarget: vi.fn(async ({ migrationId, slug }) => ({
-        migrationId,
-        slug,
-        ready: true,
-        checks: {
-          customerDir: true,
-          coachWired: true,
-          mountMarked: true,
-          accountHealthy: true,
-        },
-      })) as MigrationClient["verifyTarget"],
-      unmount: vi.fn(async ({ migrationId, slug }) => ({
-        migrationId,
-        slug,
-        unmounted: true,
-      })) as MigrationClient["unmount"],
-    };
-    return { client, release: releaseFn };
-  }
-
-  it("rejects a second migration targeting the same gateway while one is in-flight", async () => {
-    const { client: c1, release } = deferredClient();
-    const { deps: d1 } = makeDeps({}, c1);
-
-    const handler1 = createMigrateCustomerHandler(d1);
-    const inflight = handler1(mkOp({ input: { uid: "uid-1", toGatewayId: "gw-green" } }), makeCtx());
-
-    const { deps: d2 } = makeDeps({
-      readUser: vi.fn(async (_uid: string) => ({ slug: "bob", currentGatewayId: "gw-blue" })),
-    });
-    const handler2 = createMigrateCustomerHandler(d2);
-    const second = await handler2(
-      mkOp({ id: "op-2", input: { uid: "uid-2", toGatewayId: "gw-green" } }),
-      makeCtx(),
-    );
-
-    expect(second.success).toBe(false);
-    expect(second.error).toMatch(/concurrency.*gw-green|already.*in-flight.*gw-green/i);
-
-    release();
-    const first = await inflight;
-    expect(first.success).toBe(true);
-  });
-
-  it("allows a second migration to a different target gateway in parallel", async () => {
-    const { client: c1, release } = deferredClient();
-    const { deps: d1 } = makeDeps({}, c1);
-    const handler1 = createMigrateCustomerHandler(d1);
-    const inflight1 = handler1(
-      mkOp({ input: { uid: "uid-1", toGatewayId: "gw-green" } }),
-      makeCtx(),
-    );
-
-    const { deps: d2 } = makeDeps({
-      readUser: vi.fn(async (_uid: string) => ({ slug: "bob", currentGatewayId: "gw-blue" })),
-    });
-    const handler2 = createMigrateCustomerHandler(d2);
-    const second = await handler2(
-      mkOp({ id: "op-2", input: { uid: "uid-2", toGatewayId: "gw-purple" } }),
-      makeCtx(),
-    );
-
-    expect(second.success).toBe(true);
-    release();
-    await inflight1;
-  });
-
-  it("releases the slot after a successful migration so a follow-up can run", async () => {
-    const { deps: d1 } = makeDeps();
-    const handler1 = createMigrateCustomerHandler(d1);
-    const first = await handler1(
-      mkOp({ input: { uid: "uid-1", toGatewayId: "gw-green" } }),
-      makeCtx(),
-    );
-    expect(first.success).toBe(true);
-
-    const { deps: d2 } = makeDeps({
-      readUser: vi.fn(async (_uid: string) => ({ slug: "bob", currentGatewayId: "gw-blue" })),
-    });
-    const handler2 = createMigrateCustomerHandler(d2);
-    const second = await handler2(
-      mkOp({ id: "op-2", input: { uid: "uid-2", toGatewayId: "gw-green" } }),
-      makeCtx(),
-    );
-    expect(second.success).toBe(true);
-  });
-
-  it("releases the slot even when a migration fails so a retry can run", async () => {
-    const client = happyClient();
-    client.transferState = vi.fn(async () => {
-      throw new Error("export: 500 boom");
-    }) as MigrationClient["transferState"];
-    const { deps: d1 } = makeDeps({}, client);
-    const handler1 = createMigrateCustomerHandler(d1);
-    const first = await handler1(
-      mkOp({ input: { uid: "uid-1", toGatewayId: "gw-green" } }),
-      makeCtx(),
-    );
-    expect(first.success).toBe(false);
-
-    const { deps: d2 } = makeDeps({
-      readUser: vi.fn(async (_uid: string) => ({ slug: "alice", currentGatewayId: "gw-blue" })),
-    });
-    const handler2 = createMigrateCustomerHandler(d2);
-    const second = await handler2(
-      mkOp({ id: "op-2", input: { uid: "uid-1", toGatewayId: "gw-green" } }),
-      makeCtx(),
-    );
-    expect(second.success).toBe(true);
   });
 });
 

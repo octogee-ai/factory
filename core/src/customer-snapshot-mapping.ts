@@ -1,6 +1,7 @@
 import type { UserSnapshot } from "./customer-lifecycle.js";
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
+import { pickPlanInputs } from "@octogee/shared/types/billing";
 
 type ChannelBinding = UserSnapshot["channels"][number];
 
@@ -233,5 +234,6 @@ export function mapUserDocToSnapshot(
     byotActive: Boolean(data.byotActive),
     ...snapshotIdentity(data, slug),
     ...snapshotProvisioning(data),
+    ...pickPlanInputs(data),
   };
 }

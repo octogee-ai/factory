@@ -63,12 +63,48 @@ interface CodexAppServerPatch {
   sandbox: string;
   approvalPolicy: string;
 }
+// House-only coaches carry a per-agent tools override (openclaw
+// agents.list[].tools, resolved by resolveEffectiveToolPolicy: an agent-level
+// profile/alsoAllow replaces the global one). "minimal" keeps only
+// session_status; alsoAllow re-adds exactly what a free coach conversation
+// needs — the fs group, web, memory recall, and the Octogee platform skills
+// free users are entitled to. Everything else in the fleet's coding profile
+// (cron, sessions_*, goals/plan/skill_workshop, media generation,
+// code_execution, x_search) is schema weight the $1/week plan can't afford on
+// first load. Catalog plans carry NO override and inherit the gateway default.
+export interface FreeTierCoachToolsBlock {
+  profile: "minimal";
+  alsoAllow: string[];
+}
+
+export const FREE_TIER_COACH_TOOLS: FreeTierCoachToolsBlock = {
+  profile: "minimal",
+  alsoAllow: [
+    "read",
+    "write",
+    "edit",
+    "apply_patch",
+    "web_search",
+    "web_fetch",
+    "memory_search",
+    "memory_get",
+    "octogee_chat_search",
+    "octogee_chat_history",
+    "octogee_chat_set_identity",
+    "workspace_commit",
+    "preview_start",
+    "preview_stop",
+    "preview_list",
+    "octogee_publish",
+  ],
+};
+
 export interface CoachModelPatch {
   agents: {
     // Primary+fallback chain: the Builder's BYOK model, with the platform model
     // as the fallback so an unavailable/exhausted BYOK provider degrades to the
     // platform key instead of leaving a credential-less coach (B6).
-    list: Array<{ id: string; model: CoachModelRef }>;
+    list: Array<{ id: string; model: CoachModelRef; tools?: FreeTierCoachToolsBlock }>;
     defaults?: { models: RuntimeModelsDef };
   };
 }
@@ -129,6 +165,7 @@ export function byosCoachConfigPatch(
           {
             id: agentIdForSlug(input.slug),
             model: { primary: input.model, fallbacks: [] },
+            tools: FREE_TIER_COACH_TOOLS,
           },
         ],
       },
@@ -161,6 +198,45 @@ function isAgentRecord(a: unknown): a is { id?: unknown } {
   return a !== null && typeof a === "object" && !Array.isArray(a);
 }
 
+// The strip may only remove what the platform itself wrote: an exact
+// fingerprint of FREE_TIER_COACH_TOOLS. A customer-authored or legacy
+// profile/alsoAllow never matches and survives the catalog convergence.
+function isPlatformFreeTierToolsBlock(existing: Record<string, unknown>): boolean {
+  const alsoAllow = existing.alsoAllow;
+  return (
+    existing.profile === FREE_TIER_COACH_TOOLS.profile &&
+    Array.isArray(alsoAllow) &&
+    alsoAllow.length === FREE_TIER_COACH_TOOLS.alsoAllow.length &&
+    FREE_TIER_COACH_TOOLS.alsoAllow.every((tool, i) => alsoAllow[i] === tool)
+  );
+}
+
+// Tools convergence for the coach entry, applied alongside the model update:
+// a FreeTierCoachToolsBlock merges over the entry's existing tools (fs guards
+// and any other keys preserved — the free plan is platform-tuned, so the block
+// wins over prior profile/alsoAllow values); null strips ONLY the platform's
+// own free-tier block (fingerprint-gated) so an upgraded customer returns to
+// the inherited gateway-wide surface without losing fs.workspaceOnly or any
+// customer-authored tools keys.
+function convergedCoachToolsValue(
+  existing: unknown,
+  tools: FreeTierCoachToolsBlock | null,
+): Record<string, unknown> | undefined {
+  const base: Record<string, unknown> = isAgentRecord(existing)
+    ? { ...(existing as Record<string, unknown>) }
+    : {};
+  if (tools) {
+    delete base.profile;
+    delete base.alsoAllow;
+    return { ...base, profile: tools.profile, alsoAllow: [...tools.alsoAllow] };
+  }
+  if (isPlatformFreeTierToolsBlock(base)) {
+    delete base.profile;
+    delete base.alsoAllow;
+  }
+  return Object.keys(base).length > 0 ? base : undefined;
+}
+
 // The coach-model config.patch must ship the FULL agents.list — the coach's
 // model updated, every sibling agent preserved verbatim — not a single-entry
 // list. openclaw's id-keyed array merge (config/merge-patch.ts) upserts by id
@@ -169,14 +245,31 @@ function isAgentRecord(a: unknown): a is { id?: unknown } {
 // and trips the destructive-array guard (observed live 2026-06-23). A full list
 // is safe under both the id-keyed merge and the wholesale fallback — no entries
 // are removed either way.
+//
+// model:null leaves the entry's model untouched (plan-only tools reassert);
+// tools:undefined leaves its tools untouched (pure model update).
 export function coachFullAgentList(
   current: unknown,
   agentId: string,
-  model: CoachModelPatch["agents"]["list"][number]["model"],
+  model: CoachModelPatch["agents"]["list"][number]["model"] | null,
+  tools?: FreeTierCoachToolsBlock | null,
 ): unknown[] {
   const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
   const agents = Array.isArray(list) ? list : [];
-  return agents.map((a) => (isAgentRecord(a) && a.id === agentId ? { ...a, model } : a));
+  return agents.map((a) => {
+    if (!(isAgentRecord(a) && a.id === agentId)) return a;
+    const next: Record<string, unknown> = { ...(a as Record<string, unknown>) };
+    if (model !== null) next.model = model;
+    if (tools !== undefined) {
+      const converged = convergedCoachToolsValue(next.tools, tools);
+      if (converged === undefined) {
+        delete next.tools;
+      } else {
+        next.tools = converged;
+      }
+    }
+    return next;
+  });
 }
 
 export function deriveDesiredByotState(userData: {

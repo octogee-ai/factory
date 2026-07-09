@@ -49,12 +49,18 @@ vi.mock("child_process", async () => {
 
 vi.mock("./internal-fetch", () => ({ internalFetch: vi.fn() }));
 
-import { deriveDesiredByotState, byosCoachConfigPatch, coachFullAgentList } from "./byot-sync.js";
+import {
+  deriveDesiredByotState,
+  byosCoachConfigPatch,
+  coachFullAgentList,
+  FREE_TIER_COACH_TOOLS,
+} from "./byot-sync.js";
 import {
   triggerSecretsReload,
   restoreOauthStoreForSlug,
   brokerFetchByosubCreds,
   applyCoachModelPatch,
+  applyCoachToolsConvergence,
   applyOauthRuntimeModelAllowlist,
   requestGatewayRestartForRuntimeChange,
   syncByotForCustomer,
@@ -562,7 +568,15 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
         source: "free-tier",
       }),
     ).toEqual({
-      agents: { list: [{ id, model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] } }] },
+      agents: {
+        list: [
+          {
+            id,
+            model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] },
+            tools: FREE_TIER_COACH_TOOLS,
+          },
+        ],
+      },
     });
   });
 
@@ -580,6 +594,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
           {
             id,
             model: { primary: "platform-openai/gpt-5.4-mini", fallbacks: [] },
+            tools: FREE_TIER_COACH_TOOLS,
           },
         ],
       },
@@ -620,6 +635,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
           {
             id,
             model: { primary: "platform-openrouter/deepseek/deepseek-v4-pro", fallbacks: [] },
+            tools: FREE_TIER_COACH_TOOLS,
           },
         ],
       },
@@ -736,6 +752,225 @@ describe("coachFullAgentList — full-list upsert (coach model updated, every si
   });
 });
 
+describe("tier-derived coach tools — house_only trims the model-visible tool surface", () => {
+  const id = "octogee-tester-70-coach";
+
+  it("pins the keep-list: minimal profile + the free-coach alsoAllow set", () => {
+    expect(FREE_TIER_COACH_TOOLS).toEqual({
+      profile: "minimal",
+      alsoAllow: [
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+        "web_search",
+        "web_fetch",
+        "memory_search",
+        "memory_get",
+        "octogee_chat_search",
+        "octogee_chat_history",
+        "octogee_chat_set_identity",
+        "workspace_commit",
+        "preview_start",
+        "preview_stop",
+        "preview_list",
+        "octogee_publish",
+      ],
+    });
+  });
+
+  it("never lists a globally-denied tool (exec/process/subagents/sessions_spawn stay denied fleet-wide)", () => {
+    for (const denied of ["exec", "process", "subagents", "sessions_spawn"]) {
+      expect(FREE_TIER_COACH_TOOLS.alsoAllow).not.toContain(denied);
+    }
+  });
+
+  it("house_only (free-tier source) entry carries the tools block", () => {
+    const patch = byosCoachConfigPatch({
+      slug: "tester-70",
+      model: "anthropic/claude-haiku-4-5",
+      source: "free-tier",
+    });
+    expect(patch?.agents.list[0].tools).toEqual(FREE_TIER_COACH_TOOLS);
+  });
+
+  it("catalog-access (BYOK) entry carries NO tools override — inherits the gateway default", () => {
+    const patch = byosCoachConfigPatch({ slug: "tester-70", provider: "openai" });
+    expect(patch?.agents.list[0]).not.toHaveProperty("tools");
+  });
+
+  it("coachFullAgentList merges the block over existing entry tools (fs.workspaceOnly preserved), siblings untouched", () => {
+    const current = {
+      agents: {
+        list: [
+          { id, name: "coach", model: "old", tools: { fs: { workspaceOnly: true } } },
+          { id: "octogee-zed-coach", model: "z/y", tools: { fs: { workspaceOnly: true } } },
+        ],
+      },
+    };
+    expect(
+      coachFullAgentList(current, id, withFallback("m"), FREE_TIER_COACH_TOOLS),
+    ).toEqual([
+      {
+        id,
+        name: "coach",
+        model: withFallback("m"),
+        tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+      },
+      { id: "octogee-zed-coach", model: "z/y", tools: { fs: { workspaceOnly: true } } },
+    ]);
+  });
+
+  it("coachFullAgentList with tools:null strips profile/alsoAllow but keeps fs — upgrade restores the inherited surface", () => {
+    const current = {
+      agents: {
+        list: [
+          {
+            id,
+            model: "old",
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+          },
+        ],
+      },
+    };
+    expect(coachFullAgentList(current, id, withFallback("m"), null)).toEqual([
+      { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true } } },
+    ]);
+  });
+
+  it("coachFullAgentList with model:null converges tools without touching the model (plan-only reassert)", () => {
+    const current = {
+      agents: { list: [{ id, model: "keep-me", tools: { fs: { workspaceOnly: true } } }] },
+    };
+    expect(coachFullAgentList(current, id, null, FREE_TIER_COACH_TOOLS)).toEqual([
+      {
+        id,
+        model: "keep-me",
+        tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+      },
+    ]);
+  });
+
+  it("stripping the only tools keys drops the tools field entirely rather than shipping tools:{}", () => {
+    const current = {
+      agents: { list: [{ id, model: "old", tools: { ...FREE_TIER_COACH_TOOLS } }] },
+    };
+    expect(coachFullAgentList(current, id, null, null)).toEqual([{ id, model: "old" }]);
+  });
+
+  it("tools:undefined leaves the entry's tools untouched (pure model update, legacy call shape)", () => {
+    const current = {
+      agents: {
+        list: [{ id, model: "old", tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS } }],
+      },
+    };
+    expect(coachFullAgentList(current, id, withFallback("m"))).toEqual([
+      { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS } },
+    ]);
+  });
+
+  it("strip is fingerprint-gated: a customer-authored profile/alsoAllow that is NOT the platform block survives the catalog convergence", () => {
+    const authored = { profile: "full", alsoAllow: ["browser"] };
+    const current = {
+      agents: { list: [{ id, model: "old", tools: { fs: { workspaceOnly: true }, ...authored } }] },
+    };
+    expect(coachFullAgentList(current, id, withFallback("m"), null)).toEqual([
+      { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true }, ...authored } },
+    ]);
+  });
+
+  it("strip is fingerprint-gated: a partially-matching block (same profile, different alsoAllow) survives too", () => {
+    const legacy = { profile: "minimal", alsoAllow: ["read", "write"] };
+    const current = { agents: { list: [{ id, model: "old", tools: legacy }] } };
+    expect(coachFullAgentList(current, id, null, null)).toEqual([
+      { id, model: "old", tools: legacy },
+    ]);
+  });
+
+  it("the house_only merge still overwrites a customer-authored block — the free plan is platform-tuned (accepted tradeoff)", () => {
+    const current = {
+      agents: { list: [{ id, model: "old", tools: { profile: "full", alsoAllow: ["browser"] } }] },
+    };
+    expect(coachFullAgentList(current, id, null, FREE_TIER_COACH_TOOLS)).toEqual([
+      { id, model: "old", tools: { ...FREE_TIER_COACH_TOOLS } },
+    ]);
+  });
+});
+
+describe("applyCoachToolsConvergence — plan-gated tools reassert when no model patch ships", () => {
+  const id = "octogee-tester-70-coach";
+  const CURRENT = {
+    agents: {
+      list: [
+        { id, model: "picked/model", tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS } },
+        { id: "octogee-zed-coach", model: "z/y" },
+      ],
+    },
+  };
+
+  it("catalog (houseOnly:false) strips a lingering trim on the next re-assert without touching the model", async () => {
+    const calls: object[] = [];
+    let replacePaths: string[] | undefined;
+    const r = await applyCoachToolsConvergence("tester-70", false, {
+      applyConfigPatch: async (args) => {
+        calls.push(args.buildPatch(CURRENT));
+        replacePaths = args.buildReplacePaths?.(CURRENT);
+        return { mode: "rpc", attempts: 1 };
+      },
+    });
+    expect(r).toBe(true);
+    expect(replacePaths).toEqual(["agents.list"]);
+    expect(calls).toEqual([
+      {
+        agents: {
+          list: [
+            { id, model: "picked/model", tools: { fs: { workspaceOnly: true } } },
+            { id: "octogee-zed-coach", model: "z/y" },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("houseOnly:true re-asserts the trim (model untouched)", async () => {
+    const calls: object[] = [];
+    const r = await applyCoachToolsConvergence("tester-70", true, {
+      applyConfigPatch: async (args) => {
+        calls.push(args.buildPatch({ agents: { list: [{ id, model: "house/pin" }] } }));
+        return { mode: "rpc", attempts: 1 };
+      },
+    });
+    expect(r).toBe(true);
+    expect(calls).toEqual([
+      { agents: { list: [{ id, model: "house/pin", tools: { ...FREE_TIER_COACH_TOOLS } }] } },
+    ]);
+  });
+
+  it("returns false and logs loudly when the coach entry is absent — never a silent success on the repair path", async () => {
+    const logs: string[] = [];
+    const r = await applyCoachToolsConvergence("tester-70", false, {
+      applyConfigPatch: async (args) => {
+        args.buildPatch({ agents: { list: [{ id: "octogee-zed-coach", model: "z/y" }] } });
+        return { mode: "rpc", attempts: 1 };
+      },
+      logFn: (m) => logs.push(m),
+    });
+    expect(r).toBe(false);
+    expect(logs.join("\n")).toMatch(/⚠.*octogee-tester-70-coach.*missing/);
+    expect(logs.join("\n")).not.toMatch(/converged/);
+  });
+
+  it("never throws — a failed apply returns false (retried next sync)", async () => {
+    const r = await applyCoachToolsConvergence("tester-70", false, {
+      applyConfigPatch: async () => {
+        throw new Error("config.patch hash-mismatch exhausted");
+      },
+      logFn: () => {},
+    });
+    expect(r).toBe(false);
+  });
+});
+
 describe("applyCoachModelPatch — applies the durable patch, best-effort", () => {
   const CURRENT = {
     agents: {
@@ -772,6 +1007,82 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
           list: [
             { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5"), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("free-tier input ships the tools trim merged into the coach's existing entry tools", async () => {
+    const withTools = {
+      agents: {
+        list: [
+          { id: "octogee-tester-70-coach", model: "old", tools: { fs: { workspaceOnly: true } } },
+          { id: "octogee-zed-coach", model: "z/y" },
+        ],
+      },
+    };
+    const calls: object[] = [];
+    const r = await applyCoachModelPatch(
+      { slug: "tester-70", model: HOUSE_REF, source: "free-tier" },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(withTools));
+          return { mode: "rpc", attempts: 1 };
+        },
+      },
+    );
+    expect(r).toBe(true);
+    expect(calls).toEqual([
+      {
+        agents: {
+          defaults: { models: HOUSE_DEFAULTS },
+          list: [
+            {
+              id: "octogee-tester-70-coach",
+              model: { primary: HOUSE_REF, fallbacks: [] },
+              tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            },
+            { id: "octogee-zed-coach", model: "z/y" },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("a catalog (BYOK) model patch strips a lingering free-tier trim — upgrade removes it on the next re-assert", async () => {
+    const trimmed = {
+      agents: {
+        list: [
+          {
+            id: "octogee-tester-70-coach",
+            model: "old",
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+          },
+        ],
+      },
+    };
+    const calls: object[] = [];
+    const r = await applyCoachModelPatch(
+      { slug: "tester-70", provider: "openai" },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(trimmed));
+          return { mode: "rpc", attempts: 1 };
+        },
+      },
+    );
+    expect(r).toBe(true);
+    expect(calls).toEqual([
+      {
+        agents: {
+          defaults: { models: HOUSE_DEFAULTS },
+          list: [
+            {
+              id: "octogee-tester-70-coach",
+              model: withFallback("openai/gpt-5"),
+              tools: { fs: { workspaceOnly: true } },
+            },
           ],
         },
       },
@@ -1022,9 +1333,10 @@ describe("standard gateway — BYOS materialization", () => {
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("trial non-BYOK customer leaves the template model untouched", async () => {
+  it("trial non-BYOK customer leaves the template model untouched — but tools convergence still runs (catalog strip)", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
     await syncByotForCustomer(
@@ -1039,12 +1351,14 @@ describe("standard gateway — BYOS materialization", () => {
         isOperatorGateway: () => false,
         applyByotState: applyByotStateFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
+        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 
@@ -1052,6 +1366,7 @@ describe("standard gateway — BYOS materialization", () => {
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyCoachToolsConvergenceFn = vi.fn(async () => false);
     const materializeFn = vi.fn(() => false);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
@@ -1068,6 +1383,7 @@ describe("standard gateway — BYOS materialization", () => {
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
+        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
         materializeAnthropicBroker: materializeFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
@@ -1077,6 +1393,9 @@ describe("standard gateway — BYOS materialization", () => {
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    // anthropic BYOK ships no model patch → the standalone convergence covers
+    // the BYOK carve-out (inherited surface) on this path too.
+    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
@@ -1201,6 +1520,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     isSharedGateway: () => true,
     isOperatorGateway: () => false,
     applyCoachModelPatch: vi.fn(async () => false),
+    applyCoachToolsConvergence: vi.fn(async () => false),
     triggerSecretsReload: vi.fn(async () => {}),
     ...overrides,
   });
@@ -1531,6 +1851,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
+        applyCoachToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
@@ -1607,6 +1928,71 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
             model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
           },
           { id: "octogee-zed-coach", model: "z/y" },
+        ],
+      },
+    });
+  });
+
+  it("strips the platform trim ONLY on the coach — a project agent's tools keys are untouched by its own override", async () => {
+    const withBlocks = {
+      agents: {
+        list: [
+          {
+            id: "octogee-tester-70-coach",
+            model: "old",
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+          },
+          {
+            id: "octogee-tester-70-proj-web-coach",
+            model: "old",
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+          },
+        ],
+      },
+    };
+    const calls: object[] = [];
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      {
+        "octogee-tester-70-coach": { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+        "octogee-tester-70-proj-web-coach": { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+      },
+      { houseOnly: false },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(withBlocks));
+          return { mode: "rpc", attempts: 1 };
+        },
+        logFn: () => {},
+      },
+    );
+    expect(r).toBe(true);
+    const pick = { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] };
+    expect(calls[0]).toEqual({
+      agents: {
+        list: [
+          { id: "octogee-tester-70-coach", model: pick, tools: { fs: { workspaceOnly: true } } },
+          {
+            id: "octogee-tester-70-proj-web-coach",
+            model: "old",
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+          },
+        ],
+      },
+    });
+    expect(calls[1]).toEqual({
+      agents: {
+        list: [
+          {
+            id: "octogee-tester-70-coach",
+            model: "old",
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+          },
+          {
+            id: "octogee-tester-70-proj-web-coach",
+            model: pick,
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+          },
         ],
       },
     });
@@ -1716,6 +2102,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         isOperatorGateway: () => false,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
+        applyCoachToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
       },
@@ -1784,6 +2171,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         isOperatorGateway: () => false,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
+        applyCoachToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
       },
@@ -1792,5 +2180,109 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
       houseOnly: false,
     });
+  });
+});
+
+describe("syncByotForCustomer — tools convergence wiring", () => {
+  it("house-only free customer: the coach-model patch carries the trim; the standalone convergence does not double-fire", async () => {
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "free",
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: vi.fn(() => false),
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        triggerSecretsReload: vi.fn(async () => {}),
+      },
+    );
+
+    expect(applyCoachModelPatchFn).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "free-tier" }),
+    );
+    expect(applyCoachToolsConvergenceFn).not.toHaveBeenCalled();
+  });
+
+  it("paid catalog customer with no model pick: the standalone convergence strips a lingering trim (upgrade path)", async () => {
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "personal",
+        subscription: { tier: "personal", status: "active" },
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: vi.fn(() => false),
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        triggerSecretsReload: vi.fn(async () => {}),
+      },
+    );
+
+    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
+  });
+
+  it("house_only + anthropic BYOK (no coach-model patch ships): tools convergence still runs and targets the inherited surface", async () => {
+    const applyCoachModelPatchFn = vi.fn(async () => false);
+    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "free",
+        systemConfig: { byot: { provider: "anthropic" } },
+      },
+      {
+        isOperatorGateway: () => false,
+        usesLlmBrokerToken: () => false,
+        applyByotState: vi.fn(() => false),
+        restoreOauthStoreForSlug: vi.fn(async () => ({ restored: false, present: true })),
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        triggerSecretsReload: vi.fn(async () => {}),
+      },
+    );
+
+    // anthropic BYOK produces no per-agent model override (byosCoachConfigPatch
+    // → null), so without the standalone convergence the stale trim would
+    // outlive the documented BYOK carve-out forever.
+    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
+  });
+
+  it("incomplete provisioning: no tools convergence — the coach entry may not exist yet", async () => {
+    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "in_progress" } },
+        selectedTier: "personal",
+      },
+      {
+        isOperatorGateway: () => false,
+        applyByotState: vi.fn(() => false),
+        applyCoachModelPatch: vi.fn(async () => false),
+        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        triggerSecretsReload: vi.fn(async () => {}),
+      },
+    );
+
+    expect(applyCoachToolsConvergenceFn).not.toHaveBeenCalled();
   });
 });

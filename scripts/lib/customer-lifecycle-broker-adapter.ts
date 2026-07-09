@@ -80,6 +80,7 @@ import {
   removeActivationManifest,
 } from "./migration-activation-manifest.js";
 import { writeTierTemplateFiles } from "./tier-template-files.js";
+import { reassertConvergedContextFilesForSlug } from "./context-file-convergence.js";
 
 const DEFAULT_COACH = {
   name: "Octo",
@@ -195,7 +196,6 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
 function ensureCustomerDirectories(slug: string): void {
   const dir = path.join(CUSTOMERS_DIR, slug);
   fs.mkdirSync(path.join(dir, "projects"), { recursive: true });
-  fs.mkdirSync(path.join(dir, "memory"), { recursive: true });
   fs.mkdirSync(path.join(dir, "ideas"), { recursive: true });
   fs.mkdirSync(path.join(dir, ".system"), { recursive: true });
 }
@@ -204,7 +204,7 @@ async function writeCustomerTemplateFiles(ctx: CustomerContext): Promise<void> {
   fs.mkdirSync(path.join(ctx.customerDir, "projects"), { recursive: true });
   fs.mkdirSync(path.join(ctx.customerDir, "ideas"), { recursive: true });
   fs.mkdirSync(path.join(ctx.customerDir, ".system"), { recursive: true });
-  writeTierTemplateFiles(ctx.customerDir, ctx.tier, ctx.templateVars, ctx.today);
+  writeTierTemplateFiles(ctx.customerDir, ctx.tier, ctx.templateVars);
 }
 
 async function listProjectsNeedingClone(
@@ -640,6 +640,11 @@ export function buildBrokeredLifecycleAdapter(
     restoreByosubForAgent: async () => ({ restored: false, present: false }),
     reassertByotForCustomer: (userData) =>
       syncModelCredentialsForCustomer(userData as Parameters<typeof syncModelCredentialsForCustomer>[0]),
+    reassertConvergedContextFilesForCustomer: async (userData) => {
+      reassertConvergedContextFilesForSlug(
+        userData as Parameters<typeof reassertConvergedContextFilesForSlug>[0],
+      );
+    },
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
     cloneProjectRepo,
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),

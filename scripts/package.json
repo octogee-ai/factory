@@ -8,6 +8,7 @@
     "provision": "tsx entrypoints/fleet-controller.ts",
     "fleet": "tsx ops/fleet.ts",
     "bump-gateway-imagetag": "tsx ops/bump-gateway-imagetag.ts",
+    "backfill-gateway-field": "tsx ops/backfill-gateway-field.ts",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "npx vitest run __tests__",
     "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",

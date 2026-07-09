@@ -13,6 +13,15 @@ export type GatewayImageProfile = (typeof GATEWAY_IMAGE_PROFILES)[number];
 
 export interface GatewayDesiredState {
   gatewayId: string;
+
+  /**
+   * Durable identity this instance belongs to (`default`, `bender`) — bare,
+   * never blue/green-suffixed. Explicit on every instance written after the
+   * gateway field landed; older docs derive it from gatewayId by convention
+   * via deriveGatewayIdentity until backfilled.
+   */
+  gateway?: string;
+
   imageRepository: string;
   imageTag: string;
 
@@ -224,6 +233,37 @@ function isGatewayIdEndpoint(code: number): boolean {
   return (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
 }
 
+const ROLL_ROLE_SUFFIXES = ["-blue", "-green"] as const;
+
+export const NEW_GATEWAY_ID_REQUIREMENT =
+  `${GATEWAY_ID_REQUIREMENT}; the -blue/-green suffixes are reserved for roll roles`;
+
+// Creation-time validator: roll-role suffixes are reserved so the
+// deriveGatewayIdentity convention fallback is safe by construction.
+// Instance ids minted by the blue/green machinery (default-blue) stay valid
+// under isValidGatewayId for routing and reconciliation.
+export function isValidNewGatewayId(id: unknown): id is string {
+  if (!isValidGatewayId(id)) return false;
+  return !ROLL_ROLE_SUFFIXES.some((suffix) => id.endsWith(suffix));
+}
+
+// Resolves the durable gateway identity for an instance: the explicit
+// `gateway` field when present, else a naming-convention fallback that
+// strips a trailing -blue/-green roll-role suffix. Instance ids without that
+// suffix are their own bare identity (dedicated gateways, never rolled).
+export function deriveGatewayIdentity(
+  gatewayId: string,
+  explicitGateway?: unknown,
+): string {
+  if (typeof explicitGateway === "string" && explicitGateway.length > 0) {
+    return explicitGateway;
+  }
+  for (const suffix of ROLL_ROLE_SUFFIXES) {
+    if (gatewayId.endsWith(suffix)) return gatewayId.slice(0, -suffix.length);
+  }
+  return gatewayId;
+}
+
 export function operatorGatewayServiceAccountName(gatewayId: string): string {
   return `${OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
 }
@@ -341,6 +381,28 @@ export interface Operation {
   lastProgressAt?: number;
   // Incremented each time a controller re-adopts this op after a restart (observability).
   resumeCount?: number;
+  // A serially-exclusive op (e.g. rollout) parked pending because a conflicting op of
+  // the same kind is running. Human-readable, e.g. "bender-blue → bender-green". Cleared
+  // once the op is claimed.
+  waitingOn?: string | null;
+  // Set when a transient failure schedules an automatic retry; the op stays `pending`
+  // until this passes. Cleared once claimed.
+  nextAttemptAt?: number | null;
+  // Total handler invocations so far (first run = 1), capped at MAX_OPERATION_ATTEMPTS.
+  attempts?: number;
+  // One entry per FAILED attempt — retried or terminal — preserving that attempt's
+  // steps/error/classification (the live `steps` field resets on retry). Successful
+  // completions append nothing.
+  attemptHistory?: OperationAttemptRecord[];
+}
+
+export interface OperationAttemptRecord {
+  attempt: number;
+  startedAt: number;
+  completedAt: number;
+  error: string;
+  classification: "transient" | "terminal";
+  steps: OperationStep[];
 }
 
 export interface HelmInstanceValue {

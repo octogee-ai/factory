@@ -100,6 +100,33 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect(mapUserDocToSnapshot("u", { username: "a" }, channels).channels).toBe(channels);
     expect(() => mapUserDocToSnapshot("u2", {}, ch)).toThrow(/cannot derive slug/);
   });
+
+  it("carries the plan-resolution inputs (selectedTier/subscription/builderSubscription/trialStartedAt) — dropping any silently degrades a trial/builder user to house_only at mount-time reassert", () => {
+    const snap = mapUserDocToSnapshot(
+      "u1",
+      {
+        username: "acme",
+        tier: "personal_free",
+        selectedTier: "personal_pro",
+        subscription: { tier: "personal_pro", status: "active" },
+        builderSubscription: { tier: "hobby", status: "active" },
+        trialStartedAt: "2026-07-08T00:00:00.000Z",
+      },
+      ch,
+    );
+    expect(snap.selectedTier).toBe("personal_pro");
+    expect(snap.subscription).toEqual({ tier: "personal_pro", status: "active" });
+    expect(snap.builderSubscription).toEqual({ tier: "hobby", status: "active" });
+    expect(snap.trialStartedAt).toBe("2026-07-08T00:00:00.000Z");
+  });
+
+  it("keeps absent plan inputs absent (no undefined keys written into the snapshot)", () => {
+    const snap = mapUserDocToSnapshot("u", { username: "a" }, ch);
+    expect("selectedTier" in snap).toBe(false);
+    expect("subscription" in snap).toBe(false);
+    expect("builderSubscription" in snap).toBe(false);
+    expect("trialStartedAt" in snap).toBe(false);
+  });
 });
 
 describe("channel-doc shaping (workspaces/{slug} producer → UserSnapshot.channels consumer)", () => {

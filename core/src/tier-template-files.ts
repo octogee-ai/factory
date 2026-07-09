@@ -4,7 +4,12 @@ import * as path from "path";
 import { TEMPLATES_DIR } from "./config.js";
 import { applyTemplatePlaceholders } from "./helpers.js";
 
-const CUSTOMER_OWNED_CONTEXT_FILES = new Set(["AGENTS.md", "TOOLS.md"]);
+// The platform owns exactly AGENTS.md + TOOLS.md; SOUL.md/USER.md/MEMORY.md are
+// the customer's, BOOTSTRAP.md is transient. These two carry no per-customer
+// personalization placeholders (unlike SOUL.md/USER.md's {{ownerName}}) — the
+// property that makes them safe for context-file-convergence.ts to re-assert
+// unconditionally for house_only plans.
+export const PLATFORM_CONVERGED_CONTEXT_FILES = new Set(["AGENTS.md", "TOOLS.md"]);
 
 function templatesRoot(): string {
   return process.env.OCTOGEE_TEMPLATES_DIR || TEMPLATES_DIR;
@@ -24,7 +29,7 @@ export function listTierTemplateFiles(tier: string): string[] {
     .sort();
 }
 
-function readTierTemplateFile(
+export function readTierTemplateFile(
   tier: string,
   filename: string,
   vars: Record<string, string>,
@@ -43,7 +48,7 @@ function removeLegacyContextIgnores(customerDir: string): boolean {
   const original = fs.readFileSync(gitignorePath, "utf-8");
   const filtered = original
     .split(/\r?\n/)
-    .filter((line) => !CUSTOMER_OWNED_CONTEXT_FILES.has(line.trim()))
+    .filter((line) => !PLATFORM_CONVERGED_CONTEXT_FILES.has(line.trim()))
     .join("\n");
   if (filtered === original) return false;
 
@@ -51,11 +56,12 @@ function removeLegacyContextIgnores(customerDir: string): boolean {
   return true;
 }
 
+// No memory/ seed here: openclaw does memory, not Octogee — its session-memory
+// hook mkdirs the directory on demand and every native reader tolerates absence.
 export function writeTierTemplateFiles(
   customerDir: string,
   tier: string,
   templateVars: Record<string, string>,
-  today: string,
 ): string[] {
   const written: string[] = [];
 
@@ -64,17 +70,6 @@ export function writeTierTemplateFiles(
     if (fs.existsSync(dest)) continue;
     fs.writeFileSync(dest, readTierTemplateFile(tier, file, templateVars), "utf-8");
     written.push(file);
-  }
-
-  fs.mkdirSync(path.join(customerDir, "memory"), { recursive: true });
-  const memNote = path.join(customerDir, "memory", `${today}.md`);
-  if (!fs.existsSync(memNote)) {
-    fs.writeFileSync(
-      memNote,
-      `# Coach - ${today}\n\n- Workspace provisioned via Octogee.\n`,
-      "utf-8",
-    );
-    written.push(`memory/${today}.md`);
   }
 
   if (removeLegacyContextIgnores(customerDir)) {

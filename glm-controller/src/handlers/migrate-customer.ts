@@ -11,26 +11,11 @@ import {
   type ReportedStep,
 } from "@octogee/core/fleet-migration-runner";
 
-export const MAX_CONCURRENT_MIGRATIONS_PER_TARGET = 1;
-
-const inFlightPerTarget = new Map<string, number>();
-
-export function _resetMigrationConcurrencyForTests(): void {
-  inFlightPerTarget.clear();
-}
-
-function tryAcquireTargetSlot(gatewayId: string): boolean {
-  const count = inFlightPerTarget.get(gatewayId) ?? 0;
-  if (count >= MAX_CONCURRENT_MIGRATIONS_PER_TARGET) return false;
-  inFlightPerTarget.set(gatewayId, count + 1);
-  return true;
-}
-
-function releaseTargetSlot(gatewayId: string): void {
-  const count = inFlightPerTarget.get(gatewayId) ?? 0;
-  if (count <= 1) inFlightPerTarget.delete(gatewayId);
-  else inFlightPerTarget.set(gatewayId, count - 1);
-}
+// At most one migration per target gateway at a time (mirrors the
+// fleet-migration-runner's one-slot-per-target transfer capacity). Enforced
+// durably, before this handler ever runs, by the operation queue in index.ts
+// (operation-queue.ts scopes migrate-customer exclusivity by toGatewayId); a
+// conflicting request is queued there, not rejected here.
 
 export interface UserGatewayInfo {
   slug: string;
@@ -107,76 +92,64 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       };
     }
 
-    if (!tryAcquireTargetSlot(toGatewayId)) {
-      return {
-        steps: [],
-        success: false,
-        error: `concurrency limit: target gateway ${toGatewayId} already has ${MAX_CONCURRENT_MIGRATIONS_PER_TARGET} migration(s) in-flight; retry after the current one completes`,
-      };
-    }
-
+    const migrationId = deps.genMigrationId();
+    let fromUrl: string;
+    let toUrl: string;
+    let restoreSnapshot: FleetBrokerUserSnapshot | null;
     try {
-      const migrationId = deps.genMigrationId();
-      let fromUrl: string;
-      let toUrl: string;
-      let restoreSnapshot: FleetBrokerUserSnapshot | null;
-      try {
-        fromUrl = await deps.resolveGatewayUrl(user.currentGatewayId);
-        toUrl = await deps.resolveGatewayUrl(toGatewayId);
-        restoreSnapshot = await deps.readUserSnapshot(uid);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { steps: [], success: false, error: message };
-      }
-      if (!restoreSnapshot) {
-        return { steps: [], success: false, error: `durable snapshot not found for ${uid}` };
-      }
-      const urls = new Map<string, string>([
-        [user.currentGatewayId, fromUrl],
-        [toGatewayId, toUrl],
-      ]);
-      const client = deps.buildClient((gatewayId) => {
-        const url = urls.get(gatewayId);
-        if (!url) {
-          throw new Error(
-            `migration client called with unexpected gatewayId: ${gatewayId}`,
-          );
-        }
-        return url;
-      });
-
-      const result = await runMigration(
-        {
-          migrationId,
-          uid,
-          slug: user.slug,
-          fromGatewayId: user.currentGatewayId,
-          toGatewayId,
-          restoreSnapshot,
-          includeActivationManifest: true,
-          sourceDisposable,
-        },
-        {
-          client,
-          cutoverFirestore: async (uid, toGatewayId, slug) => {
-            await deps.cutoverFirestore(uid, toGatewayId, slug);
-          },
-          log: deps.log,
-          reportStep: async (rep: ReportedStep) => {
-            const step = reportedToOperationStep(rep, deps.now());
-            await ctx.reportStep(step);
-          },
-        },
-      );
-
-      return {
-        steps: [],
-        success: result.success,
-        error: result.errorAt?.error,
-        rolledBack: result.rolledBack,
-      };
-    } finally {
-      releaseTargetSlot(toGatewayId);
+      fromUrl = await deps.resolveGatewayUrl(user.currentGatewayId);
+      toUrl = await deps.resolveGatewayUrl(toGatewayId);
+      restoreSnapshot = await deps.readUserSnapshot(uid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { steps: [], success: false, error: message };
     }
+    if (!restoreSnapshot) {
+      return { steps: [], success: false, error: `durable snapshot not found for ${uid}` };
+    }
+    const urls = new Map<string, string>([
+      [user.currentGatewayId, fromUrl],
+      [toGatewayId, toUrl],
+    ]);
+    const client = deps.buildClient((gatewayId) => {
+      const url = urls.get(gatewayId);
+      if (!url) {
+        throw new Error(
+          `migration client called with unexpected gatewayId: ${gatewayId}`,
+        );
+      }
+      return url;
+    });
+
+    const result = await runMigration(
+      {
+        migrationId,
+        uid,
+        slug: user.slug,
+        fromGatewayId: user.currentGatewayId,
+        toGatewayId,
+        restoreSnapshot,
+        includeActivationManifest: true,
+        sourceDisposable,
+      },
+      {
+        client,
+        cutoverFirestore: async (uid, toGatewayId, slug) => {
+          await deps.cutoverFirestore(uid, toGatewayId, slug);
+        },
+        log: deps.log,
+        reportStep: async (rep: ReportedStep) => {
+          const step = reportedToOperationStep(rep, deps.now());
+          await ctx.reportStep(step);
+        },
+      },
+    );
+
+    return {
+      steps: [],
+      success: result.success,
+      error: result.errorAt?.error,
+      rolledBack: result.rolledBack,
+    };
   };
 }

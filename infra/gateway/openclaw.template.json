@@ -103,10 +103,11 @@
     ]
   },
   "tools": {
+    "profile": "coding",
     "elevated": {
       "enabled": false
     },
-    "deny": ["exec", "process"],
+    "deny": ["exec", "process", "subagents", "sessions_spawn"],
     "alsoAllow": [
       "preview_start",
       "preview_stop",
