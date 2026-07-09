@@ -919,7 +919,11 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
       },
     });
     expect(r).toBe(true);
-    expect(replacePaths).toEqual(["agents.list"]);
+    expect(replacePaths).toEqual([
+      "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
+    ]);
     expect(calls).toEqual([
       {
         agents: {
@@ -981,7 +985,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     },
   };
 
-  it("openai api_key input → ships the FULL agents.list + replacePaths:[agents.list], only the coach's model updated", async () => {
+  it("openai api_key input → ships the FULL agents.list + the full-agent-list replacePaths set (incl. per-entry shrink confirmations), only the coach's model updated", async () => {
     const calls: object[] = [];
     let replacePaths: string[] | undefined;
     const r = await applyCoachModelPatch(
@@ -997,9 +1001,15 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(r).toBe(true);
     // Load-bearing: an id-less base agent flips agents.list to wholesale, where
     // the guard (arrayPreservesBaseEntries) flags the re-modeled coach entry as
-    // "removed" unless this exact path is confirmed. Without it applyConfigPatch
-    // rejects the patch permanently and the coach silently stays on the platform key.
-    expect(replacePaths).toEqual(["agents.list"]);
+    // "removed" unless this exact path is confirmed. The per-entry wildcard paths
+    // cover the id-keyed case, where the guard descends INTO the coach entry and
+    // names its shrunk arrays individually. Without them applyConfigPatch rejects
+    // the patch permanently and the coach silently stays on the platform key.
+    expect(replacePaths).toEqual([
+      "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
+    ]);
     expect(calls).toEqual([
       {
         agents: {
@@ -1011,6 +1021,43 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
         },
       },
     ]);
+  });
+
+  it("BYOK-override → house-pin transition (fallbacks [house] → []) confirms the per-entry shrink via agents.list[].model.fallbacks (incident 2026-07-09)", async () => {
+    const overriddenCoach = {
+      agents: {
+        list: [
+          {
+            id: "octogee-tester-70-coach",
+            name: "coach",
+            model: withFallback("openai/gpt-5"),
+            mmAccount: "a",
+          },
+          { id: "octogee-zed-coach", model: "z/y" },
+        ],
+      },
+    };
+    const calls: Array<{ agents: { list: Array<{ id: string; model?: unknown }> } }> = [];
+    let replacePaths: string[] | undefined;
+    const r = await applyCoachModelPatch(
+      { slug: "tester-70", model: HOUSE_REF, source: "free-tier" },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(overriddenCoach) as (typeof calls)[number]);
+          replacePaths = args.buildReplacePaths?.(overriddenCoach);
+          return { mode: "rpc", attempts: 1 };
+        },
+      },
+    );
+    expect(r).toBe(true);
+    const coach = calls[0].agents.list.find((a) => a.id === "octogee-tester-70-coach");
+    expect(coach?.model).toEqual({ primary: HOUSE_REF, fallbacks: [] });
+    // The guard descends into id-keyed entries: the shrunk fallbacks array is
+    // reported as agents.list[].model.fallbacks and "agents.list" alone does
+    // NOT confirm it — the exact refusal observed live on every reconcile tick.
+    expect(replacePaths).toContain("agents.list[].model.fallbacks");
+    expect(replacePaths).toContain("agents.list[].tools.alsoAllow");
+    expect(replacePaths).toContain("agents.list");
   });
 
   it("free-tier input ships the tools trim merged into the coach's existing entry tools", async () => {
@@ -1900,7 +1947,12 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
       },
     );
     expect(r).toBe(true);
-    expect(paths).toEqual([["agents.list"], ["agents.list"]]);
+    const fullListPaths = [
+      "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
+    ];
+    expect(paths).toEqual([fullListPaths, fullListPaths]);
     expect(calls[0]).toEqual({
       agents: {
         defaults: { models: { "platform-openrouter/z-ai/glm-5.2": {} } },

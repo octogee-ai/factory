@@ -127,7 +127,12 @@ describe("migration activation manifest", () => {
     // destructive-array guard requires the intent confirmed via replacePaths. (No
     // alice-coach account in this base config, so the derived set is agents+bindings.)
     expect(configPatch.mock.calls[0][2]).toEqual({
-      replacePaths: ["agents.list", "bindings"],
+      replacePaths: [
+        "agents.list",
+        "agents.list[].model.fallbacks",
+        "agents.list[].tools.alsoAllow",
+        "bindings",
+      ],
     });
   });
 
@@ -211,6 +216,8 @@ describe("migration activation manifest", () => {
     expect(configPatch.mock.calls[0][2]).toEqual({
       replacePaths: [
         "agents.list",
+        "agents.list[].model.fallbacks",
+        "agents.list[].tools.alsoAllow",
         "bindings",
         "channels.mattermost.accounts.alice-coach.groupAllowFrom",
       ],

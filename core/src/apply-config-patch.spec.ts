@@ -8,6 +8,7 @@ import {
   customerConfigFullAgentListReplacePaths,
   customerConfigReplacePaths,
   filterOutCustomerBindings,
+  fullAgentListReplacePaths,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
 } from "./apply-config-patch.js";
@@ -730,14 +731,26 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
   });
 });
 
+describe("fullAgentListReplacePaths — the guard confirmation set for full agents.list patches", () => {
+  it("confirms the list itself plus the per-entry arrays the platform rewrites — the guard descends into id-keyed entries and names shrunk nested arrays individually", () => {
+    expect(fullAgentListReplacePaths()).toEqual([
+      "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
+    ]);
+  });
+});
+
 describe("customerConfigReplacePaths — the customer-scoped guard confirmation set", () => {
   it("confirms bindings without flipping agents.list upserts into replacement", () => {
     expect(customerConfigReplacePaths({}, "alice")).toEqual(["bindings"]);
   });
 
-  it("adds agents.list only for callers that intentionally send the full replacement list", () => {
+  it("adds the full-agent-list set only for callers that intentionally send the full replacement list", () => {
     expect(customerConfigFullAgentListReplacePaths({}, "alice")).toEqual([
       "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
       "bindings",
     ]);
   });
@@ -764,6 +777,8 @@ describe("customerConfigReplacePaths — the customer-scoped guard confirmation 
     ]);
     expect(customerConfigFullAgentListReplacePaths(current, "alice")).toEqual([
       "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
       "bindings",
       "channels.mattermost.accounts.alice-coach.groupAllowFrom",
       "channels.mattermost.accounts.alice-coach.nested.deep.list",

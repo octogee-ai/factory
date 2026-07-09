@@ -502,13 +502,34 @@ export function customerConfigReplacePaths(current: unknown, slug: string): stri
 }
 
 /**
+ * The guard confirmation set for any patch that ships the full `agents.list`.
+ * `agents.list` alone is NOT enough: the gateway's destructive-array guard
+ * descends INTO id-keyed array entries and reports a shrunk nested array as its
+ * own `agents.list[].<field>` path, filtered against replacePaths individually
+ * (openclaw server-methods/config.ts, collectDestructiveIdKeyedArrayEntryPatchPaths).
+ * The per-entry arrays the platform itself rewrites: `model.fallbacks` shrinks on
+ * the BYOK-override → house-pin transition ({primary, fallbacks: [house]} →
+ * {primary: house, fallbacks: []}) and whenever a string model replaces an object
+ * one; `tools.alsoAllow` shrinks when the free-tier trim overwrites a different
+ * existing block. Observed live 2026-07-09: every reconcile tick refused with
+ * "would remove entries from array path(s): agents.list[].model.fallbacks".
+ */
+export function fullAgentListReplacePaths(): string[] {
+  return [
+    "agents.list",
+    "agents.list[].model.fallbacks",
+    "agents.list[].tools.alsoAllow",
+  ];
+}
+
+/**
  * The replacePaths set for customer config patches that intentionally ship the full
  * post-filter `agents.list` from the current config. Only use this when the patch's
  * `agents.list` is a complete replacement candidate, not a single-agent upsert.
  */
 export function customerConfigFullAgentListReplacePaths(current: unknown, slug: string): string[] {
   return [
-    "agents.list",
+    ...fullAgentListReplacePaths(),
     ...customerConfigReplacePaths(current, slug),
   ];
 }

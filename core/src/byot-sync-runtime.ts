@@ -23,7 +23,7 @@ import {
   type ByosubProvider,
   type ByosubRef,
 } from "./byosub-restore.js";
-import { applyConfigPatch } from "./apply-config-patch.js";
+import { applyConfigPatch, fullAgentListReplacePaths } from "./apply-config-patch.js";
 import {
   AGENTS_DIR,
   GATEWAY_CLASS,
@@ -94,12 +94,15 @@ export async function applyCoachModelPatch(
   const modelFallbacks = typeof model === "string" ? [] : model.fallbacks;
   const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
   // Ship the FULL agents.list (coach model updated, siblings preserved verbatim)
-  // WITH replacePaths:["agents.list"]. On a multi-agent gateway an id-less base
+  // WITH fullAgentListReplacePaths(). On a multi-agent gateway an id-less base
   // agent disables id-keyed merge for agents.list, so the destructive-array guard
   // falls back to arrayPreservesBaseEntries — a deep-equal base↔merged check that
   // flags the coach entry we just re-modeled as "removed" even though no entry is
-  // dropped. replacePaths confirms the wholesale replacement (the load-bearing
-  // half of the prod adapter's full-list pattern). Rebuilt per attempt against the
+  // dropped; "agents.list" confirms the wholesale replacement. On an all-id base
+  // the guard instead descends INTO the coach entry and names its shrunk arrays
+  // (model.fallbacks on the override → house-pin transition, tools.alsoAllow on a
+  // trim rewrite) as agents.list[].* paths needing their own confirmation — the
+  // per-entry wildcard half of the set. Rebuilt per attempt against the
   // freshly-fetched config (hash-mismatch safe; see coachFullAgentList).
   // tools convergence rides the same full-list patch: the free-tier trim when
   // the entry carries it, an explicit strip (null) for every catalog-access
@@ -112,7 +115,7 @@ export async function applyCoachModelPatch(
     await applyConfigPatchFn(
       {
         buildPatch,
-        buildReplacePaths: () => ["agents.list"],
+        buildReplacePaths: () => fullAgentListReplacePaths(),
         logPrefix: `[byot-sync:${input.slug}]`,
       },
       { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
@@ -169,7 +172,7 @@ export async function applyCoachToolsConvergence(
     await applyConfigPatchFn(
       {
         buildPatch,
-        buildReplacePaths: () => ["agents.list"],
+        buildReplacePaths: () => fullAgentListReplacePaths(),
         logPrefix: `[coach-tools:${slug}]`,
       },
       { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
@@ -239,7 +242,7 @@ export async function applyAgentModelOverrides(
       await applyConfigPatchFn(
         {
           buildPatch,
-          buildReplacePaths: () => ["agents.list"],
+          buildReplacePaths: () => fullAgentListReplacePaths(),
           logPrefix: `[agent-models:${slug}]`,
         },
         { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
