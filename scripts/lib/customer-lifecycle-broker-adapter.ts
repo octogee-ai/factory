@@ -24,6 +24,7 @@ import {
   type UserSnapshot,
 } from "./customer-lifecycle.js";
 import {
+  AGENTS_DIR,
   CUSTOMER_KEYS_DIR,
   CUSTOMERS_DIR,
   OPENCLAW_CONFIG,
@@ -260,11 +261,13 @@ async function applyAddCustomerConfigPatch(
   }
 
   const agentId = `octogee-${snapshot.slug}-coach`;
+  const agentDir = path.join(AGENTS_DIR, agentId, "agent");
+  await fsp.mkdir(agentDir, { recursive: true });
   const agentEntry = buildCustomerAgent({
     uid: snapshot.uid,
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
-    agentDir: path.join(OPENCLAW_DIR, "agents", agentId, "agent"),
+    agentDir,
     coach: {
       name: identity.name,
       emoji: identity.emoji,
@@ -278,7 +281,7 @@ async function applyAddCustomerConfigPatch(
   const projectAgentEntries = buildProjectAgents({
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
-    agentsDir: path.join(OPENCLAW_DIR, "agents"),
+    agentsDir: AGENTS_DIR,
     coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
     projectAgents,
   });

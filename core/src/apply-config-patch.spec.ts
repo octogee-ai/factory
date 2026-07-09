@@ -811,7 +811,7 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
     },
   };
 
-  it("drops ALL of the customer's agents (coach + project) and appends the new set, leaving other tenants alone", () => {
+  it("drops ALL of the customer's agents (coach + project) and replaces them at the first customer-owned slot, leaving other tenants alone", () => {
     const list = replaceCustomerAgentsInFullAgentList(current, "alice", [
       { id: "octogee-alice-coach" },
       { id: "octogee-alice-proj-orbit-coach" },
@@ -819,10 +819,10 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
 
     expect(list.map((a) => (a as { id: string }).id)).toEqual([
       "octogee-mac-default",
-      "octogee-bob-coach",
-      "octogee-bob-proj-app-coach",
       "octogee-alice-coach",
       "octogee-alice-proj-orbit-coach",
+      "octogee-bob-coach",
+      "octogee-bob-proj-app-coach",
     ]);
   });
 
@@ -835,6 +835,38 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
     expect(list.map((a) => (a as { id: string }).id)).toEqual([
       "octogee-alice-b-coach",
       "octogee-alice-coach",
+    ]);
+  });
+
+  it("replaces the customer slice in place so redacted SecretRef paths for sibling agents stay stable", () => {
+    const list = replaceCustomerAgentsInFullAgentList(
+      {
+        agents: {
+          list: [
+            { id: "octogee-mac-default" },
+            { id: "octogee-alice-coach", stale: true },
+            {
+              id: "octogee-bob-coach",
+              memorySearch: {
+                remote: {
+                  apiKey: {
+                    __redacted: true,
+                    id: "platform-openai-embedding-octogee-bob-coach",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+      "alice",
+      [{ id: "octogee-alice-coach" }],
+    );
+
+    expect(list.map((a) => (a as { id: string }).id)).toEqual([
+      "octogee-mac-default",
+      "octogee-alice-coach",
+      "octogee-bob-coach",
     ]);
   });
 });

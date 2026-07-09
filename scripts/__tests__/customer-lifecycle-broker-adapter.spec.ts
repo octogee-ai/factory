@@ -363,12 +363,14 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const patch = args.buildPatch(current);
     expect(patch.agents.list.map((agent) => agent.id)).toEqual([
       "octogee-mac-default",
-      "octogee-bob-coach",
       "octogee-alice-coach",
+      "octogee-bob-coach",
     ]);
-    const rebuiltCoach = patch.agents.list.at(-1) as { model?: string };
-    expect(rebuiltCoach.model).toBe("platform-openrouter/z-ai/glm-5.2");
-    expect(rebuiltCoach.memorySearch).toEqual({
+    const rebuiltCoach = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach") as
+      | { model?: string; memorySearch?: unknown }
+      | undefined;
+    expect(rebuiltCoach?.model).toBe("platform-openrouter/z-ai/glm-5.2");
+    expect(rebuiltCoach?.memorySearch).toEqual({
       provider: "openai-compatible",
       remote: {
         baseUrl: "https://api.openai.com/v1",
@@ -596,9 +598,9 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     });
 
     expect(patch.agents.list.map((a) => a.id)).toEqual([
-      "octogee-bob-coach",
       "octogee-alice-coach",
       "octogee-alice-proj-orbit-coach",
+      "octogee-bob-coach",
     ]);
     expect(
       Object.fromEntries(

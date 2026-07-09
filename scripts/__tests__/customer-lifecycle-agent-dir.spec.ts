@@ -1,0 +1,150 @@
+import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { Firestore } from "firebase-admin/firestore";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
+import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
+import type { UserSnapshot } from "../lib/customer-lifecycle.js";
+
+interface RuntimeMock {
+  tempRoot: string;
+  agentsDir: string;
+  applyConfigPatch: ReturnType<typeof vi.fn>;
+}
+
+const userSnapshot: UserSnapshot = {
+  uid: "uid-alice",
+  slug: "alice",
+  tier: "standard",
+  gatewayId: "default-blue",
+  status: "complete",
+  agentIds: [],
+  repoUrl: "",
+  mattermostUserId: "mm-alice",
+  greetingPosted: false,
+  channels: [],
+  ownerName: "Alice",
+};
+
+const brokerSnapshot: FleetBrokerUserSnapshot = {
+  ...userSnapshot,
+  customerMmUserId: "mm-alice",
+  coachToken: "pat-1",
+  coachMmUserId: "mm-alice-coach",
+  projects: [],
+};
+
+function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
+  return {
+    assignedUsers: vi.fn(async () => []),
+    uidForSlug: vi.fn(async () => snapshot.uid),
+    userSnapshot: vi.fn(async () => snapshot),
+    setProvisioningStatus: vi.fn(async () => undefined),
+    setRepoUrl: vi.fn(async () => undefined),
+    provisionMattermost: vi.fn(async () => ({})),
+    setMattermostFields: vi.fn(async () => undefined),
+    setGreetingResult: vi.fn(async () => undefined),
+    setAgentIds: vi.fn(async () => undefined),
+    setMounted: vi.fn(async () => undefined),
+    recordReconcileError: vi.fn(async () => undefined),
+    clearReconcileError: vi.fn(async () => undefined),
+    notifySignup: vi.fn(async () => undefined),
+    macOpsToken: vi.fn(async () => ({
+      gatewayId: "default-blue",
+      username: "alice",
+      mmUserId: "mm-user",
+      token: "token",
+    })),
+    recordUsageEvent: vi.fn(async () => undefined),
+    blobDownloadUrl: vi.fn(async () => ({
+      url: "https://example.com/download",
+      method: "GET",
+      gcsPath: "customers/alice/file",
+      expiresAt: new Date(0).toISOString(),
+    })),
+    blobUploadUrl: vi.fn(async () => ({
+      url: "https://example.com/upload",
+      method: "PUT",
+      gcsPath: "customers/alice/file",
+      expiresAt: new Date(0).toISOString(),
+    })),
+  };
+}
+
+async function withRuntimeMock(fn: (runtime: RuntimeMock) => Promise<void>): Promise<void> {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "customer-agent-dir-"));
+  const agentsDir = path.join(tempRoot, "agents");
+  const applyConfigPatch = vi.fn(async () => {
+    expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent"))).toBe(true);
+    return { mode: "rpc" as const, attempts: 1 };
+  });
+  vi.resetModules();
+  vi.doMock("../lib/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../lib/config.js")>();
+    return {
+      ...actual,
+      OPENCLAW_DIR: tempRoot,
+      OPENCLAW_CONFIG: path.join(tempRoot, "openclaw.json"),
+      AGENTS_DIR: agentsDir,
+      CUSTOMERS_DIR: path.join(tempRoot, "customers"),
+      CUSTOMER_KEYS_DIR: path.join(tempRoot, "customer-keys"),
+    };
+  });
+  vi.doMock("../lib/apply-config-patch.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../lib/apply-config-patch.js")>();
+    return { ...actual, applyConfigPatch };
+  });
+  try {
+    await fn({ tempRoot, agentsDir, applyConfigPatch });
+  } finally {
+    vi.doUnmock("../lib/config.js");
+    vi.doUnmock("../lib/apply-config-patch.js");
+    vi.resetModules();
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+describe("customer lifecycle config patch agent directories", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("broker adapter creates the coach agent dir before adding the customer config", async () => {
+    await withRuntimeMock(async ({ agentsDir, applyConfigPatch }) => {
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: {} as GatewayRpcClient,
+        log: vi.fn(),
+      });
+
+      await adapter.applyAddCustomerConfigPatch(userSnapshot, { _coachPersonalToken: "pat-1" });
+
+      expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent"))).toBe(true);
+      expect(applyConfigPatch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("prod adapter creates the coach agent dir before adding the customer config", async () => {
+    await withRuntimeMock(async ({ agentsDir, applyConfigPatch }) => {
+      const { buildProductionLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-prod-adapter.js"
+      );
+      const adapter = buildProductionLifecycleAdapter({
+        db: {} as Firestore,
+        rpc: {} as GatewayRpcClient,
+        log: vi.fn(),
+      });
+
+      await adapter.applyAddCustomerConfigPatch(userSnapshot, { _coachPersonalToken: "pat-1" });
+
+      expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent"))).toBe(true);
+      expect(applyConfigPatch).toHaveBeenCalledTimes(1);
+    });
+  });
+});

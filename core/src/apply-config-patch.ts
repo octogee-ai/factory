@@ -426,12 +426,21 @@ export function replaceCustomerAgentsInFullAgentList(
 ): unknown[] {
   const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
   const currentAgents = Array.isArray(list) ? list : [];
-  return [
-    ...currentAgents.filter(
-      (agent) => !(isPlainObject(agent) && isCustomerAgentId(agent.id, slug)),
-    ),
-    ...agentEntries,
-  ];
+  const next: unknown[] = [];
+  let inserted = false;
+  for (const agent of currentAgents) {
+    const customerOwned = isPlainObject(agent) && isCustomerAgentId(agent.id, slug);
+    if (customerOwned) {
+      if (!inserted) {
+        next.push(...agentEntries);
+        inserted = true;
+      }
+      continue;
+    }
+    next.push(agent);
+  }
+  if (!inserted) next.push(...agentEntries);
+  return next;
 }
 
 export function filterOutCustomerBindings<T extends { agentId?: unknown }>(
